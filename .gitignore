@@ -1,0 +1,24 @@
+.DS_Store
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local data — backtests, caches, labeled outcomes
+*.sqlite
+*.sqlite3
+*.db
+/data/
+/out/
+/reports/
+
+# Secrets
+.env
+.env.*
+!.env.example
