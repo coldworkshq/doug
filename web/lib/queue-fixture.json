@@ -1,0 +1,365 @@
+{
+  "summary": {
+    "open": 12,
+    "flagged": 2,
+    "cleared": 10,
+    "threshold": 0.62
+  },
+  "items": [
+    {
+      "pr": {
+        "number": 9612,
+        "title": "Reconcile ledger against session org context",
+        "author": "atlas",
+        "author_type": "agent",
+        "additions": 480,
+        "deletions": 140,
+        "files": [
+          "billing/ledger/reconcile.go",
+          "billing/ledger/orgctx.go",
+          "auth/session/context.go",
+          "migrations/0042_ledger_org_id.sql"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 240,
+        "days_since_last_human_commit": 12,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.99,
+        "band": "flagged",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "boundary-plus-migration",
+            "label": "Sensitive area and a migration in the same diff",
+            "weight": 0.35
+          },
+          {
+            "rule": "rubber-stamp",
+            "label": "Approved in under five minutes by one reviewer on a large diff",
+            "weight": 0.25
+          },
+          {
+            "rule": "no-test-delta",
+            "label": "Sizeable change, no test files touched",
+            "weight": 0.2
+          },
+          {
+            "rule": "sensitive-path",
+            "label": "Touches an auth, billing, or security path",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9577,
+        "title": "Refactor notification dispatch",
+        "author": "mercury",
+        "author_type": "agent",
+        "additions": 820,
+        "deletions": 320,
+        "files": [
+          "notify/dispatch.ts",
+          "notify/router.ts",
+          "notify/email/render.ts",
+          "notify/sms/render.ts"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 180,
+        "days_since_last_human_commit": 90,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.64,
+        "band": "flagged",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "rubber-stamp",
+            "label": "Approved in under five minutes by one reviewer on a large diff",
+            "weight": 0.25
+          },
+          {
+            "rule": "no-test-delta",
+            "label": "Sizeable change, no test files touched",
+            "weight": 0.2
+          },
+          {
+            "rule": "agent-in-stale-module",
+            "label": "Agent-authored change in a module without recent human commits",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9598,
+        "title": "Bump stripe-node 14 -> 16",
+        "author": "patchbot[bot]",
+        "author_type": "agent",
+        "additions": 60,
+        "deletions": 40,
+        "files": [
+          "package.json",
+          "package-lock.json"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 45,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.44,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "dep-change-no-test-delta",
+            "label": "Dependency change with zero test delta — green CI is anti-signal here",
+            "weight": 0.25
+          },
+          {
+            "rule": "agent-in-stale-module",
+            "label": "Agent-authored change in a module without recent human commits",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9604,
+        "title": "Add retry to export worker",
+        "author": "mercury",
+        "author_type": "agent",
+        "additions": 40,
+        "deletions": 8,
+        "files": [
+          "workers/export/retry.go",
+          "workers/export/security/backoff.go"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 60,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.34,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "agent-in-stale-module",
+            "label": "Agent-authored change in a module without recent human commits",
+            "weight": 0.15
+          },
+          {
+            "rule": "sensitive-path",
+            "label": "Touches an auth, billing, or security path",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9581,
+        "title": "Update pricing experiment flags",
+        "author": "dana",
+        "author_type": "human",
+        "additions": 22,
+        "deletions": 9,
+        "files": [
+          "config/experiments/pricing.yaml",
+          "billing/flags.go"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 3600,
+        "days_since_last_human_commit": 2,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.19,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "sensitive-path",
+            "label": "Touches an auth, billing, or security path",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9601,
+        "title": "Fix typo in onboarding email",
+        "author": "sam",
+        "author_type": "human",
+        "additions": 2,
+        "deletions": 2,
+        "files": [
+          "notify/email/templates/onboarding.txt"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 900,
+        "days_since_last_human_commit": 1,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9599,
+        "title": "Add unit tests for retry helper",
+        "author": "sam",
+        "author_type": "human",
+        "additions": 140,
+        "deletions": 0,
+        "files": [
+          "internal/http/retry_test.go"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 5400,
+        "days_since_last_human_commit": 1,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9596,
+        "title": "Update README badges",
+        "author": "atlas",
+        "author_type": "agent",
+        "additions": 6,
+        "deletions": 6,
+        "files": [
+          "README.md"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 3,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9590,
+        "title": "Extract date formatting helper",
+        "author": "maya",
+        "author_type": "human",
+        "additions": 90,
+        "deletions": 60,
+        "files": [
+          "internal/fmt/dates.go",
+          "internal/fmt/dates_test.go"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 7200,
+        "days_since_last_human_commit": 0,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9588,
+        "title": "Bump dev-only lint plugin",
+        "author": "patchbot[bot]",
+        "author_type": "agent",
+        "additions": 12,
+        "deletions": 12,
+        "files": [
+          "package.json",
+          "package-lock.json",
+          "eslint.config.mjs",
+          "tests/lint.spec.ts"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 1800,
+        "days_since_last_human_commit": 4,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9585,
+        "title": "Document webhook retry semantics",
+        "author": "maya",
+        "author_type": "human",
+        "additions": 55,
+        "deletions": 3,
+        "files": [
+          "docs/webhooks.md"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 2400,
+        "days_since_last_human_commit": 0,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    },
+    {
+      "pr": {
+        "number": 9583,
+        "title": "Add index on events.created_at",
+        "author": "dana",
+        "author_type": "human",
+        "additions": 18,
+        "deletions": 0,
+        "files": [
+          "migrations/0041_events_created_at_idx.sql",
+          "internal/store/events_test.go"
+        ],
+        "approvals": 2,
+        "approval_latency_s": 10800,
+        "days_since_last_human_commit": 0,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.04,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": []
+      }
+    }
+  ]
+}

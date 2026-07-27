@@ -32,9 +32,27 @@ Routing is deterministic — no model invocation, fractions of a cent per PR:
 
 Diff size is deliberately de-weighted. It predicts poorly once the rest are controlled for.
 
+## Repo layout
+
+- `api/` — Python 3.14 + FastAPI, managed with uv. The routing core: `magpie/features.py` (PR metadata → feature vector, pure) and `magpie/scoring.py` (features → verdict, as named weighted rules). `GET /v1/queue` serves a scored demo queue; `POST /webhooks/github` is an HMAC-verified stub until the Live Gate phase.
+- `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing page and `/queue`, the scored review queue. Reads the live API when it's up, falls back to a bundled fixture when it isn't.
+
+```sh
+make dev    # API on :8000, web on :3000
+make test   # API test suite
+make lint   # ruff + eslint
+```
+
+Both services ship Dockerfiles built for Cloud Run (respect `PORT`, scale to zero):
+
+```sh
+gcloud run deploy magpie-api --source api
+gcloud run deploy magpie-web --source web --set-env-vars MAGPIE_API_URL=<api url>
+```
+
 ## Status
 
-**Pre-build.** Nothing here is installable yet.
+**Pre-build.** The scoring rules exist and are tested, but they encode priors, not measurements — no backtest has validated the weights yet.
 
 The whole idea rests on one claim: that a small set of cheaply-computable structural features captures a disproportionate share of bad changes. If flagging 10% of PRs catches 40% of the trouble instead of 70%, this is an expensive random sampler and it should be abandoned.
 
