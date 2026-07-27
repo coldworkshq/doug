@@ -44,7 +44,7 @@ export function ScoreStrip({
           ticks={[0, 0.25, 0.5, 0.75, 1]}
           tickLine={false}
           axisLine={{ stroke: "var(--border)" }}
-          tick={{ fontSize: 10, fontFamily: "var(--font-plex-mono)" }}
+          tick={{ fontSize: 10, fontFamily: "var(--font-geist-mono)" }}
         />
         <YAxis type="number" dataKey="y" domain={[0, maxStack + 1]} hide />
         <ReferenceLine
@@ -55,7 +55,7 @@ export function ScoreStrip({
             value: `threshold ${threshold}`,
             position: "top",
             fontSize: 10,
-            fontFamily: "var(--font-plex-mono)",
+            fontFamily: "var(--font-geist-mono)",
             fill: "var(--sheen)",
           }}
         />

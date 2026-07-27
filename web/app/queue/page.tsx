@@ -1,7 +1,6 @@
 import Link from "next/link";
 
 import { ScoreStrip } from "@/components/score-strip";
-import { Badge } from "@/components/ui/badge";
 import { applyThreshold, getQueue } from "@/lib/api";
 
 const PRESETS = [0.5, 0.62, 0.8];
@@ -28,31 +27,39 @@ export default async function QueuePage({
 
   return (
     <main className="mx-auto w-full max-w-5xl px-6">
-      <nav className="flex items-baseline justify-between border-b py-5">
+      <nav className="flex items-center justify-between py-6">
         <Link
           href="/"
-          className="font-mono text-sm font-semibold tracking-tight"
+          className="font-heading text-lg font-semibold tracking-tight"
         >
-          <span className="text-sheen">✦</span> magpie
+          <span className="text-iridescent">✦</span> magpie
         </Link>
-        <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+        <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
+          <span
+            className={
+              "size-1.5 rounded-full " +
+              (source === "live" ? "animate-pulse bg-clear" : "bg-muted-foreground")
+            }
+          />
           {source === "live" ? "live api" : "bundled fixture"}
         </span>
       </nav>
 
-      <section className="border-b py-10">
+      <section className="py-10">
         <div className="flex flex-wrap items-end justify-between gap-6">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Review queue
             </p>
-            <h1 className="mt-2 text-4xl font-medium tracking-tight">
+            <h1 className="font-heading mt-2 text-4xl font-semibold tracking-tight md:text-5xl">
               {queue.summary.open} open.{" "}
-              <span className="text-flag">{queue.summary.flagged} need you.</span>
+              <span className="text-flag">
+                {queue.summary.flagged} need you.
+              </span>
             </h1>
           </div>
-          <div className="font-mono text-xs">
-            <span className="mr-3 uppercase tracking-widest text-muted-foreground">
+          <div className="glass flex items-center gap-1 rounded-full p-1.5 font-mono text-xs">
+            <span className="px-2 uppercase tracking-widest text-muted-foreground">
               threshold
             </span>
             {PRESETS.map((t) => (
@@ -60,8 +67,10 @@ export default async function QueuePage({
                 key={t}
                 href={`/queue?threshold=${t}`}
                 className={
-                  "mr-2 border px-2 py-1 transition-colors hover:border-sheen hover:text-sheen " +
-                  (t === threshold ? "border-sheen text-sheen" : "")
+                  "rounded-full px-3 py-1 transition-colors " +
+                  (t === threshold
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-white/10")
                 }
               >
                 {t.toFixed(2)}
@@ -69,7 +78,7 @@ export default async function QueuePage({
             ))}
           </div>
         </div>
-        <div className="mt-8">
+        <div className="glass mt-8 rounded-2xl p-6">
           <ScoreStrip
             points={queue.items.map((i) => ({
               score: i.verdict.score,
@@ -80,9 +89,15 @@ export default async function QueuePage({
         </div>
       </section>
 
-      <section className="divide-y">
+      <section className="space-y-3 pb-10">
         {queue.items.map(({ pr, verdict }) => (
-          <article key={pr.number} className="grid gap-3 py-6 md:grid-cols-[5rem_1fr_auto]">
+          <article
+            key={pr.number}
+            className={
+              "glass grid gap-3 rounded-2xl p-6 transition-transform hover:-translate-y-0.5 md:grid-cols-[5rem_1fr_auto] " +
+              (verdict.band === "flagged" ? "border-flag/30" : "")
+            }
+          >
             <p
               className={
                 "font-mono text-2xl " +
@@ -92,7 +107,7 @@ export default async function QueuePage({
               {verdict.score.toFixed(2)}
             </p>
             <div>
-              <h2 className="text-lg font-medium">
+              <h2 className="font-heading text-lg font-medium">
                 <span className="mr-2 font-mono text-sm text-muted-foreground">
                   #{pr.number}
                 </span>
@@ -118,22 +133,21 @@ export default async function QueuePage({
                 </ul>
               )}
             </div>
-            <Badge
-              variant="outline"
+            <span
               className={
-                "h-fit self-start font-mono uppercase " +
+                "h-fit self-start rounded-full px-3 py-1 font-mono text-xs uppercase tracking-wide " +
                 (verdict.band === "flagged"
-                  ? "border-flag text-flag"
-                  : "border-clear/50 text-clear")
+                  ? "bg-flag/15 text-flag"
+                  : "bg-clear/10 text-clear")
               }
             >
               {verdict.band === "flagged" ? "needs you" : "cleared"}
-            </Badge>
+            </span>
           </article>
         ))}
       </section>
 
-      <footer className="border-t py-8 font-mono text-xs text-muted-foreground">
+      <footer className="border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
         Scores are deterministic and legible — every point of weight is a named
         rule. No model read any of this code.
       </footer>

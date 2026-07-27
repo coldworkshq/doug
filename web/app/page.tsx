@@ -37,36 +37,40 @@ export default async function Home() {
 
   return (
     <main className="mx-auto w-full max-w-5xl px-6">
-      <nav className="flex items-baseline justify-between border-b py-5">
-        <span className="font-mono text-sm font-semibold tracking-tight">
-          <span className="text-sheen">✦</span> magpie
+      <nav className="flex items-center justify-between py-6">
+        <span className="font-heading text-lg font-semibold tracking-tight">
+          <span className="text-iridescent">✦</span> magpie
         </span>
-        <span className="flex gap-6 font-mono text-xs uppercase tracking-widest">
-          <Link href="/queue" className="hover:text-sheen">
+        <span className="glass flex items-center gap-1 rounded-full px-1.5 py-1.5 font-mono text-xs">
+          <Link
+            href="/queue"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+          >
             Queue
           </Link>
           <a
             href="https://github.com/drewjst/magpie"
-            className="hover:text-sheen"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
           >
             GitHub
           </a>
         </span>
       </nav>
 
-      <section className="grid gap-10 border-b py-20 md:grid-cols-[1fr_auto]">
+      <section className="grid gap-10 py-20 md:grid-cols-[1fr_auto] md:py-24">
         <div>
           <p
-            className="animate-rise font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground"
+            className="animate-rise glass inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
             style={{ animationDelay: "0ms" }}
           >
-            Field notes on code review · No. 001
+            <span className="size-1.5 rounded-full bg-sheen" /> pre-build · the
+            backtest comes first
           </p>
           <h1
-            className="animate-rise mt-6 max-w-xl text-5xl leading-[1.05] font-medium tracking-tight md:text-6xl"
+            className="animate-rise font-heading mt-6 max-w-xl text-5xl leading-[1.02] font-semibold tracking-tight md:text-7xl"
             style={{ animationDelay: "80ms" }}
           >
-            Most pull requests <em className="text-sheen">don&rsquo;t</em> need
+            Most PRs <span className="text-iridescent">don&rsquo;t</span> need
             you.
           </h1>
           <p
@@ -78,18 +82,18 @@ export default async function Home() {
             wrong, it says so — in public.
           </p>
           <div
-            className="animate-rise mt-10 flex gap-4"
+            className="animate-rise mt-10 flex flex-wrap gap-3"
             style={{ animationDelay: "240ms" }}
           >
             <Link
               href="/queue"
-              className="bg-primary px-5 py-2.5 font-mono text-sm text-primary-foreground transition-colors hover:bg-sheen"
+              className="rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-transform hover:-translate-y-0.5"
             >
               See the queue
             </Link>
             <a
               href="https://github.com/drewjst/magpie"
-              className="border px-5 py-2.5 font-mono text-sm transition-colors hover:border-sheen hover:text-sheen"
+              className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
             >
               Read the thesis →
             </a>
@@ -97,31 +101,36 @@ export default async function Home() {
         </div>
 
         <div
-          className="animate-rise self-end border p-6 md:w-64"
+          className="animate-rise glass relative self-end overflow-hidden rounded-2xl p-6 md:w-64"
           style={{ animationDelay: "320ms" }}
         >
-          <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
-            Today&rsquo;s ledger
+          <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            Today&rsquo;s queue
           </p>
           <dl className="mt-4 space-y-3 font-mono">
             <div className="flex items-baseline justify-between">
               <dt className="text-xs text-muted-foreground">open</dt>
-              <dd className="text-3xl">{summary.open}</dd>
+              <dd className="text-3xl font-medium">{summary.open}</dd>
             </div>
             <div className="flex items-baseline justify-between">
               <dt className="text-xs text-muted-foreground">need you</dt>
-              <dd className="text-3xl text-flag">{summary.flagged}</dd>
+              <dd className="text-3xl font-medium text-flag">
+                {summary.flagged}
+              </dd>
             </div>
             <div className="flex items-baseline justify-between">
               <dt className="text-xs text-muted-foreground">cleared</dt>
-              <dd className="text-3xl text-clear">{summary.cleared}</dd>
+              <dd className="text-3xl font-medium text-clear">
+                {summary.cleared}
+              </dd>
             </div>
           </dl>
         </div>
       </section>
 
-      <section className="border-b py-14">
-        <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
+      <section className="glass rounded-2xl p-8">
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
           The open queue, pinned by risk
         </p>
         <div className="mt-6">
@@ -135,14 +144,14 @@ export default async function Home() {
         </div>
       </section>
 
-      <section className="grid gap-px border-b bg-border py-0 md:grid-cols-3">
+      <section className="grid gap-4 py-16 md:grid-cols-3">
         {RULES.map((r) => (
           <div
             key={r.n}
-            className="group bg-background p-8 transition-colors hover:bg-card"
+            className="glass group rounded-2xl p-8 transition-transform hover:-translate-y-1"
           >
-            <p className="font-mono text-xs text-muted-foreground">{r.n}</p>
-            <h2 className="mt-3 text-xl font-medium group-hover:text-sheen">
+            <span className="text-iridescent font-mono text-sm">{r.n}</span>
+            <h2 className="font-heading mt-3 text-xl font-semibold">
               {r.title}
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
@@ -152,44 +161,86 @@ export default async function Home() {
         ))}
       </section>
 
-      <section className="grid gap-10 border-b py-14 md:grid-cols-2">
+      <section className="grid gap-10 pb-16 md:grid-cols-2">
         <div>
-          <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
             What it reads
           </p>
-          <ul className="mt-5 space-y-2 font-mono text-sm">
+          <ul className="mt-5 flex flex-wrap gap-2">
             {READS.map((r) => (
-              <li key={r} className="flex items-baseline gap-3">
-                <span className="text-sheen">✦</span> {r}
+              <li
+                key={r}
+                className="glass rounded-full px-3.5 py-1.5 font-mono text-xs transition-colors hover:bg-white/10"
+              >
+                {r}
               </li>
             ))}
           </ul>
-          <p className="mt-5 max-w-sm text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-6 max-w-sm text-sm leading-relaxed text-muted-foreground">
             Metadata only. No model reads a diff unless the score says it
             should — that&rsquo;s the routing economics that make review free
             for the 90% that don&rsquo;t need it.
           </p>
         </div>
 
-        <div className="border border-foreground p-8">
-          <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
-            Specimen — miss rate
+        <div className="glass relative overflow-hidden rounded-2xl p-8">
+          <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            Published miss rate
           </p>
-          <p className="mt-6 font-mono text-7xl text-muted-foreground">—</p>
-          <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
+          <p className="text-iridescent font-heading mt-4 text-7xl font-semibold">
+            —
+          </p>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
             No production data yet. The number goes here, good or bad, with a
             date next to it. That&rsquo;s the product.
           </p>
         </div>
       </section>
 
-      <footer className="flex flex-wrap items-baseline justify-between gap-2 py-8 font-mono text-xs text-muted-foreground">
+      <section className="glass relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
+        <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-70" />
+        <div
+          className="pointer-events-none absolute inset-0 opacity-20"
+          style={{
+            background:
+              "radial-gradient(40rem 16rem at 50% 120%, oklch(0.7 0.12 195 / 60%), transparent 70%)",
+          }}
+        />
+        <h2 className="font-heading mx-auto max-w-lg text-3xl font-semibold tracking-tight md:text-4xl">
+          Watch the queue <span className="text-iridescent">thin out</span>.
+        </h2>
+        <p className="mx-auto mt-4 max-w-md text-muted-foreground">
+          The demo queue is live now — twelve PRs, two worth your time, and
+          the receipts for every score.
+        </p>
+        <div className="mt-8 flex justify-center gap-3">
+          <Link
+            href="/queue"
+            className="rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-transform hover:-translate-y-0.5"
+          >
+            Open the queue
+          </Link>
+          <a
+            href="https://github.com/drewjst/magpie"
+            className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
+          >
+            Star on GitHub
+          </a>
+        </div>
+      </section>
+
+      <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
         <span>
-          <span className="text-sheen">✦</span> magpie · routes, never blocks
+          <span className="text-iridescent">✦</span> magpie · routes, never
+          blocks
         </span>
         <span>
           FSL-1.1-ALv2 ·{" "}
-          <a href="https://github.com/drewjst/magpie" className="hover:text-sheen">
+          <a
+            href="https://github.com/drewjst/magpie"
+            className="transition-colors hover:text-foreground"
+          >
             drewjst/magpie
           </a>
         </span>
