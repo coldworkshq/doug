@@ -42,6 +42,6 @@ That's testable on public data before a service exists — reconstruct the featu
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+[FSL-1.1-ALv2](LICENSE.md) — Functional Source License. Read it, run it internally, modify it, learn from it. The one thing you can't do is ship it as a competing commercial product or service. It converts to Apache-2.0 automatically two years after each version is published.
 
-The code is open because the code was never the moat. What can't be copied is a labeled set of routing verdicts paired with what actually happened afterward, and that lives outside this repository.
+Source-available rather than open source, and deliberately so: the point is freedom without free-riding, not enclosure.
