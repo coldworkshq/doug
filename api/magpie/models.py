@@ -38,7 +38,11 @@ class Features(BaseModel):
     migration: bool
     lockfile: bool
     manifest: bool
+    runtime_dep: bool = False
+    dev_tool_dep: bool = False
     sensitive_path: bool
+    hotspot_path: bool = False
+    config_flag: bool = False
     test_files: int
     code_files: int
     agent_authored: bool

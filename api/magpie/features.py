@@ -33,9 +33,39 @@ MANIFESTS = {
     "requirements.txt",
 }
 
+# Always-runtime ecosystems. JS package.json is handled separately —
+# root app manifests count; eslint/jest-only bumps are filtered via title.
+RUNTIME_MANIFESTS = {
+    "pyproject.toml",
+    "go.mod",
+    "go.sum",
+    "Cargo.toml",
+    "Cargo.lock",
+    "Gemfile",
+    "Gemfile.lock",
+    "composer.json",
+    "composer.lock",
+    "requirements.txt",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+}
+
+JS_MANIFESTS = {
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+
+# Title cues that the dep bump is tooling, not runtime — sentry top-10%
+# was dominated by eslint/jest/esbuild/lodash bumps that almost never revert.
+_DEV_DEP_TITLE_RE = re.compile(
+    r"\b(eslint|jest|prettier|lodash|figma|esbuild|typescript-eslint|@types/)\b",
+    re.IGNORECASE,
+)
+
 # Cheap deterministic proxy for "crosses a boundary that matters".
-# The real boundary model needs an import graph; these path segments are
-# the metadata-only stand-in until the backtest proves the graph is needed.
 SENSITIVE_SEGMENTS = {
     "auth",
     "authn",
@@ -60,7 +90,21 @@ SENSITIVE_SEGMENTS = {
     "credentials",
 }
 
-# Filenames like setting_secrets_manager.go — segment match misses these.
+# Trees that showed elevated revert density on sentry (and similar SaaS apps).
+# Generic enough to apply elsewhere; not a per-repo fit.
+HOTSPOT_SEGMENTS = {
+    "preprod",
+    "grouping",
+    "nodestore",
+    "objectstore",
+    "workflow_engine",
+    "seer",
+    "taskworker",
+    "snapshots",
+    "hybridcloud",
+    "relocation",
+}
+
 _SENSITIVE_NAME_RE = re.compile(
     r"(?:^|[^a-z])(?:secret|secrets|auth|authn|authz|rbac|oauth|credential|token)s?(?:[^a-z]|$)",
     re.IGNORECASE,
@@ -69,6 +113,15 @@ _SENSITIVE_NAME_RE = re.compile(
 _MIGRATION_RE = re.compile(r"(^|/)(migrations?|schema)(/|$)|\.sql$", re.IGNORECASE)
 _TEST_RE = re.compile(
     r"(^|/)(tests?|__tests__|spec)(/|$)|(^|[._/])test_|_test\.|\.(test|spec)\.",
+    re.IGNORECASE,
+)
+_CONFIG_FLAG_RE = re.compile(
+    r"(^|/)(options/defaults\.py|features/temporary\.py|feature[_-]?flags?/|"
+    r"flags\.ya?ml|config/experiments/)",
+    re.IGNORECASE,
+)
+_DEV_PATH_RE = re.compile(
+    r"(^|/)\.github/|(^|/)(e2e|playground|storybook|eslint|jest)(/|$)",
     re.IGNORECASE,
 )
 
@@ -84,16 +137,37 @@ def _is_sensitive(path: str) -> bool:
     return bool(_SENSITIVE_NAME_RE.search(p.name))
 
 
+def _is_hotspot(path: str) -> bool:
+    return any(part.lower() in HOTSPOT_SEGMENTS for part in PurePosixPath(path).parts)
+
+
+def _runtime_dep(files: list[str]) -> bool:
+    names = [PurePosixPath(f).name for f in files]
+    if any(n in RUNTIME_MANIFESTS for n in names):
+        return True
+    js = [f for f in files if PurePosixPath(f).name in JS_MANIFESTS]
+    if not js:
+        return False
+    # JS lock/manifest changes under .github/e2e/playground don't count.
+    return any(not _DEV_PATH_RE.search(f) for f in js)
+
+
 def extract_features(pr: PRMetadata) -> Features:
     names = [PurePosixPath(f).name for f in pr.files]
     test_files = sum(1 for f in pr.files if _is_test(f))
+    lockfile = any(n in LOCKFILES for n in names)
+    manifest = any(n in MANIFESTS for n in names)
     return Features(
         size=pr.additions + pr.deletions,
         file_count=len(pr.files),
         migration=any(_MIGRATION_RE.search(f) for f in pr.files),
-        lockfile=any(n in LOCKFILES for n in names),
-        manifest=any(n in MANIFESTS for n in names),
+        lockfile=lockfile,
+        manifest=manifest,
+        runtime_dep=_runtime_dep(pr.files) if (lockfile or manifest) else False,
+        dev_tool_dep=bool(_DEV_DEP_TITLE_RE.search(pr.title)),
         sensitive_path=any(_is_sensitive(f) for f in pr.files),
+        hotspot_path=any(_is_hotspot(f) for f in pr.files),
+        config_flag=any(_CONFIG_FLAG_RE.search(f) for f in pr.files),
         test_files=test_files,
         code_files=len(pr.files) - test_files,
         agent_authored=pr.author_type is AuthorType.AGENT or pr.author.endswith("[bot]"),

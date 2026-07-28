@@ -37,6 +37,34 @@ def test_dep_bump_without_tests_scores_but_clears_alone():
     assert v.band is Band.CLEARED
 
 
+def test_eslint_dep_bump_does_not_fire_dep_rule():
+    v = score(
+        _pr(
+            title="build(deps): bump eslint from 8 to 9",
+            files=["package.json", "package-lock.json"],
+        ),
+        threshold=0.62,
+    )
+    assert "dep-change-no-test-delta" not in {r.rule for r in v.reasons}
+
+
+def test_hotspot_and_config_flag_rules():
+    v = score(
+        _pr(
+            files=[
+                "src/sentry/preprod/snapshots/tasks.py",
+                "src/sentry/options/defaults.py",
+            ],
+            additions=40,
+            deletions=5,
+        ),
+        threshold=0.62,
+    )
+    rules = {r.rule for r in v.reasons}
+    assert "hotspot-path" in rules
+    assert "config-flag" in rules
+
+
 def test_size_alone_never_flags():
     # 10k-line diff with tests, slow multi-reviewer approval: no rule fires.
     v = score(

@@ -56,3 +56,25 @@ def test_test_files_counted():
 def test_bot_suffix_counts_as_agent():
     f = extract_features(_pr(author="patchbot[bot]", author_type=AuthorType.HUMAN))
     assert f.agent_authored
+
+
+def test_runtime_dep_and_hotspot_and_config_flag():
+    f = extract_features(
+        _pr(
+            title="Bump py deps",
+            files=[
+                "pyproject.toml",
+                "src/sentry/preprod/api.py",
+                "src/sentry/features/temporary.py",
+            ],
+        )
+    )
+    assert f.runtime_dep
+    assert f.hotspot_path
+    assert f.config_flag
+    assert not f.dev_tool_dep
+
+
+def test_dev_tool_title_detected():
+    f = extract_features(_pr(title="chore(ui): Upgrade jest to 30.4", files=["package.json"]))
+    assert f.dev_tool_dep

@@ -119,7 +119,7 @@
         "reasons": [
           {
             "rule": "dep-change-no-test-delta",
-            "label": "Dependency change with zero test delta — green CI is anti-signal here",
+            "label": "Runtime dependency change with zero test delta",
             "weight": 0.25
           },
           {
@@ -183,7 +183,7 @@
         "url": null
       },
       "verdict": {
-        "score": 0.19,
+        "score": 0.34,
         "band": "cleared",
         "threshold": 0.62,
         "reasons": [
@@ -191,6 +191,41 @@
             "rule": "sensitive-path",
             "label": "Touches an auth, billing, or security path",
             "weight": 0.15
+          },
+          {
+            "rule": "config-flag",
+            "label": "Touches feature flags or runtime options defaults",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9583,
+        "title": "Add index on events.created_at",
+        "author": "dana",
+        "author_type": "human",
+        "additions": 18,
+        "deletions": 0,
+        "files": [
+          "migrations/0041_events_created_at_idx.sql",
+          "internal/store/events_test.go"
+        ],
+        "approvals": 2,
+        "approval_latency_s": 10800,
+        "days_since_last_human_commit": 0,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.24,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "migration",
+            "label": "Touches a schema migration",
+            "weight": 0.2
           }
         ]
       }
@@ -327,30 +362,6 @@
         ],
         "approvals": 1,
         "approval_latency_s": 2400,
-        "days_since_last_human_commit": 0,
-        "url": null
-      },
-      "verdict": {
-        "score": 0.04,
-        "band": "cleared",
-        "threshold": 0.62,
-        "reasons": []
-      }
-    },
-    {
-      "pr": {
-        "number": 9583,
-        "title": "Add index on events.created_at",
-        "author": "dana",
-        "author_type": "human",
-        "additions": 18,
-        "deletions": 0,
-        "files": [
-          "migrations/0041_events_created_at_idx.sql",
-          "internal/store/events_test.go"
-        ],
-        "approvals": 2,
-        "approval_latency_s": 10800,
         "days_since_last_human_commit": 0,
         "url": null
       },

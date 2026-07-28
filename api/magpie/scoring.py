@@ -37,8 +37,6 @@ def _rules(f: Features) -> list[Reason]:
             )
         )
     elif f.migration:
-        # Standalone migrations bite even outside auth/billing — learned from
-        # sentry#117084 (org-slug reservation drop), cleared at base score.
         reasons.append(
             Reason(
                 rule="migration",
@@ -47,11 +45,18 @@ def _rules(f: Features) -> list[Reason]:
             )
         )
 
-    if (f.lockfile or f.manifest) and f.test_files == 0:
+    # Runtime dep bumps only — tooling bumps (eslint/jest/…) dominated the
+    # false-alarm head of the sentry queue and almost never reverted.
+    if (
+        (f.lockfile or f.manifest)
+        and f.test_files == 0
+        and f.runtime_dep
+        and not f.dev_tool_dep
+    ):
         reasons.append(
             Reason(
                 rule="dep-change-no-test-delta",
-                label="Dependency change with zero test delta — green CI is anti-signal here",
+                label="Runtime dependency change with zero test delta",
                 weight=0.25,
             )
         )
@@ -97,6 +102,24 @@ def _rules(f: Features) -> list[Reason]:
             Reason(
                 rule="sensitive-path",
                 label="Touches an auth, billing, or security path",
+                weight=0.15,
+            )
+        )
+
+    if f.hotspot_path:
+        reasons.append(
+            Reason(
+                rule="hotspot-path",
+                label="Touches a historically high-revert area (preprod, grouping, infra…)",
+                weight=0.20,
+            )
+        )
+
+    if f.config_flag:
+        reasons.append(
+            Reason(
+                rule="config-flag",
+                label="Touches feature flags or runtime options defaults",
                 weight=0.15,
             )
         )
