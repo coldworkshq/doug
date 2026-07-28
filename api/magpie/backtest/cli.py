@@ -1,11 +1,16 @@
 """magpie-backtest: replay a repo's history, measure the capture curve.
 
 Usage:
-    uv run magpie-backtest owner/repo [--limit 300] [--token ...]
+    uv run magpie-backtest owner/repo [--limit 500] [--before 2026-06-15]
 
 The kill criterion, from the thesis: if flagging ~10% of PRs captures
 ~40% of defect-inducing changes instead of ~70%, Magpie is an expensive
 random sampler. This command produces that number.
+
+Default labeling is git history (treeless clone, zero API quota for
+labels). The scored set is a contiguous harvest window — known defects
+are *not* preferentially injected, because that would bias the capture
+curve used for the kill criterion. Widen --limit to raise defect n.
 """
 
 import argparse
@@ -15,6 +20,7 @@ import sys
 from pathlib import Path
 
 from .curve import capture_curve, rule_stats
+from .git_labels import find_reverted_prs
 from .harvest import harvest, resolve_token, search_reverts
 from .label import label_defects
 from .replay import replay
@@ -39,6 +45,12 @@ def main() -> int:
         help="only harvest PRs created before this date (YYYY-MM-DD); "
         "guards against right-censoring — young PRs haven't had time to be reverted",
     )
+    ap.add_argument(
+        "--labels",
+        choices=("git", "api", "both"),
+        default="git",
+        help="defect label source (default: git — dense, zero API quota)",
+    )
     ap.add_argument("--output", type=Path, default=None, help="JSON report path")
     args = ap.parse_args()
 
@@ -50,13 +62,32 @@ def main() -> int:
     if token is None:
         print("warning: no GitHub token found; unauthenticated rate limit is 60/hr")
 
+    git_defects: set[int] = set()
+    if args.labels in ("git", "both"):
+        print(f"labeling defects from git history of {owner}/{repo}…")
+        git_defects = find_reverted_prs(owner, repo, args.cache_dir, token=token)
+        print(f"  {len(git_defects)} PR numbers referenced by revert commits")
+
     print(f"harvesting {args.limit} merged PRs from {owner}/{repo}…")
     prs = harvest(owner, repo, args.limit, token, args.cache_dir, before=args.before)
-    reverts = search_reverts(owner, repo, token, args.cache_dir)
-    defects = label_defects(prs, extra_reverts=reverts)
+    seen = {p.number for p in prs}
+
+    defects: set[int] = set()
+    api_revert_count = 0
+    if args.labels in ("api", "both"):
+        reverts = search_reverts(owner, repo, token, args.cache_dir)
+        api_revert_count = len(reverts)
+        defects |= label_defects(prs, extra_reverts=reverts)
+    if args.labels in ("git", "both"):
+        # Contiguous window ∩ git labels. No outcome-dependent injection —
+        # that would bias capture@10% used for the kill criterion.
+        defects |= seen & git_defects
+
     print(
-        f"{len(prs)} merged PRs · {len(reverts)} revert PRs repo-wide · "
-        f"{len(defects)} in-window PRs labeled defect-inducing"
+        f"{len(prs)} scored PRs · "
+        f"{api_revert_count} API revert PRs · "
+        f"{len(git_defects)} git-labeled defect numbers · "
+        f"{len(defects)} in-window labeled defect-inducing"
     )
 
     if not defects:
@@ -93,6 +124,10 @@ def main() -> int:
             {
                 "repo": f"{owner}/{repo}",
                 "prs": len(prs),
+                "sampling": "contiguous_window",
+                "label_source": args.labels,
+                "before": args.before,
+                "git_defects_total": len(git_defects),
                 "defects": sorted(defects),
                 "capture": {
                     f"{f:.2f}": round(magpie.capture_at(f), 4) for f in FLAG_RATES

@@ -32,11 +32,17 @@ Env: `MAGPIE_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `MAGPIE_CORS_OR
 uv run magpie-backtest owner/repo --limit 500 --before 2026-06-15
 ```
 
-Harvests merged-PR metadata (3 REST calls per PR, cached in
-`.backtest-cache/`), labels defect-inducing PRs via revert anchors
-(in-window plus a repo-wide revert search), replays the same
-extract/score path the webhook uses, and prints the capture curve
-against size-only and random baselines plus per-rule precision.
+**Labels (default: `--labels git`)** come from a treeless clone
+(`git clone --filter=tree:0`) — squash-merge subjects embed PR numbers,
+so revert commits resolve to original PRs across *all* history at zero
+API cost. The scored set is a contiguous harvest window (no
+outcome-dependent injection — that would bias capture@10%). Widen
+`--limit` to raise defect n. `--labels api|both` keeps the search-API path.
+
+**Features** are still harvested over the REST API (3 calls/PR, cached
+in `.backtest-cache/`). The replay uses the same extract/score path the
+webhook will. Report: capture curve vs size-only and random, plus
+per-rule precision.
 
 `--before` matters: young PRs haven't had time to be reverted, so
 sampling the newest history deflates the defect rate (right-censoring).
