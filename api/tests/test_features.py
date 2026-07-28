@@ -23,6 +23,18 @@ def test_sensitive_path_segment():
     assert f.sensitive_path
 
 
+def test_sensitive_accesscontrol_and_rbac():
+    assert extract_features(_pr(files=["pkg/services/accesscontrol/api.go"])).sensitive_path
+    assert extract_features(_pr(files=["pkg/services/rbac/roles.go"])).sensitive_path
+
+
+def test_sensitive_filename_substring():
+    # grafana#123834 — secrets in the filename, not as a directory segment.
+    assert extract_features(
+        _pr(files=["pkg/setting/setting_secrets_manager.go"])
+    ).sensitive_path
+
+
 def test_sensitive_requires_whole_segment():
     # "authors" contains "auth" but is not an auth path.
     f = extract_features(_pr(files=["blog/authors/list.py"]))

@@ -36,6 +36,16 @@ def _rules(f: Features) -> list[Reason]:
                 weight=0.35,
             )
         )
+    elif f.migration:
+        # Standalone migrations bite even outside auth/billing — learned from
+        # sentry#117084 (org-slug reservation drop), cleared at base score.
+        reasons.append(
+            Reason(
+                rule="migration",
+                label="Touches a schema migration",
+                weight=0.20,
+            )
+        )
 
     if (f.lockfile or f.manifest) and f.test_files == 0:
         reasons.append(

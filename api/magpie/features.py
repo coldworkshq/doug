@@ -40,14 +40,31 @@ SENSITIVE_SEGMENTS = {
     "auth",
     "authn",
     "authz",
+    "accesscontrol",
+    "rbac",
+    "acl",
+    "permission",
+    "permissions",
     "billing",
     "payments",
     "payment",
     "security",
+    "secret",
     "secrets",
     "iam",
+    "identity",
+    "oauth",
+    "session",
     "ledger",
+    "credential",
+    "credentials",
 }
+
+# Filenames like setting_secrets_manager.go — segment match misses these.
+_SENSITIVE_NAME_RE = re.compile(
+    r"(?:^|[^a-z])(?:secret|secrets|auth|authn|authz|rbac|oauth|credential|token)s?(?:[^a-z]|$)",
+    re.IGNORECASE,
+)
 
 _MIGRATION_RE = re.compile(r"(^|/)(migrations?|schema)(/|$)|\.sql$", re.IGNORECASE)
 _TEST_RE = re.compile(
@@ -61,7 +78,10 @@ def _is_test(path: str) -> bool:
 
 
 def _is_sensitive(path: str) -> bool:
-    return any(part.lower() in SENSITIVE_SEGMENTS for part in PurePosixPath(path).parts)
+    p = PurePosixPath(path)
+    if any(part.lower() in SENSITIVE_SEGMENTS for part in p.parts):
+        return True
+    return bool(_SENSITIVE_NAME_RE.search(p.name))
 
 
 def extract_features(pr: PRMetadata) -> Features:
