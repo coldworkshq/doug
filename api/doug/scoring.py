@@ -121,6 +121,12 @@ def _rules(f: Features) -> list[Reason]:
             )
         )
 
+    # v4 note (2026-07-28): rules built on refactor_title/pure_modification/
+    # deletion_leaning were tried and REMOVED — pre-registered holdout eval
+    # dropped capture@20% from 42% to 23% (train lifts at n=16 defects were
+    # noise; the rules diluted the hotspot band). The features stay extracted
+    # for recalibration once the label set is materially larger.
+
     return reasons
 
 

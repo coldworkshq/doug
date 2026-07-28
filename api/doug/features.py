@@ -125,6 +125,12 @@ _DEV_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Conventional-commit refactor prefix ("ref(scope):", "refactor:").
+_REFACTOR_TITLE_RE = re.compile(r"^\s*(ref|refactor)[(:!]", re.IGNORECASE)
+
+# Below this churn a "refactor" or deletion is trivial noise.
+_MIN_SHAPE_CHURN = 20
+
 
 def _is_test(path: str) -> bool:
     return bool(_TEST_RE.search(path))
@@ -185,6 +191,20 @@ def extract_features(
         config_flag=any(_CONFIG_FLAG_RE.search(f) for f in pr.files),
         test_files=test_files,
         code_files=len(pr.files) - test_files,
+        refactor_title=bool(_REFACTOR_TITLE_RE.match(pr.title)),
+        # Every file edited in place, nothing new added: behavior change
+        # hiding inside "no functional change". Unknown statuses (old
+        # caches, details not fetched) never count — unknown ≠ signal.
+        pure_modification=(
+            pr.files_modified is not None
+            and len(pr.files) > 0
+            and pr.files_modified == len(pr.files)
+            and pr.additions + pr.deletions >= _MIN_SHAPE_CHURN
+        ),
+        deletion_leaning=(
+            pr.deletions >= 1.5 * pr.additions
+            and pr.additions + pr.deletions >= _MIN_SHAPE_CHURN
+        ),
         agent_authored=pr.author_type is AuthorType.AGENT or pr.author.endswith("[bot]"),
         approvals=pr.approvals,
         approval_latency_s=pr.approval_latency_s,

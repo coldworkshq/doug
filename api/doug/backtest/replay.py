@@ -33,6 +33,16 @@ def to_metadata(pr: HarvestedPR) -> PRMetadata:
         approvals=pr.approvals,
         approval_latency_s=_latency_s(pr),
         days_since_last_human_commit=None,
+        files_added=(
+            sum(1 for f in pr.file_details if f.status == "added")
+            if pr.file_details is not None
+            else None
+        ),
+        files_modified=(
+            sum(1 for f in pr.file_details if f.status == "modified")
+            if pr.file_details is not None
+            else None
+        ),
     )
 
 

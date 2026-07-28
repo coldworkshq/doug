@@ -29,6 +29,10 @@ class PRMetadata(BaseModel):
     approval_latency_s: int | None = None
     # None = unknown (e.g. new repo, no history fetched). Never guessed.
     days_since_last_human_commit: int | None = None
+    # File-status counts from the same list-files call that yields `files`.
+    # None = statuses not fetched (old caches); never inferred from names.
+    files_added: int | None = None
+    files_modified: int | None = None
     url: str | None = None
 
 
@@ -46,6 +50,9 @@ class Features(BaseModel):
     config_flag: bool = False
     test_files: int
     code_files: int
+    refactor_title: bool = False
+    pure_modification: bool = False
+    deletion_leaning: bool = False
     agent_authored: bool
     approvals: int
     approval_latency_s: int | None

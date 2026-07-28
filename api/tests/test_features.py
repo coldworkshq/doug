@@ -78,3 +78,49 @@ def test_runtime_dep_and_hotspot_and_config_flag():
 def test_dev_tool_title_detected():
     f = extract_features(_pr(title="chore(ui): Upgrade jest to 30.4", files=["package.json"]))
     assert f.dev_tool_dep
+
+
+# --- v4 light-diff features --------------------------------------------------
+
+
+def test_refactor_title_detected():
+    pr = PRMetadata(number=1, title="ref(modal): use standard backdrop", author="d")
+    assert extract_features(pr).refactor_title
+
+
+def test_plain_fix_title_is_not_refactor():
+    pr = PRMetadata(number=1, title="fix(api): handle null repo", author="d")
+    assert not extract_features(pr).refactor_title
+
+
+def test_pure_modification_requires_known_statuses():
+    # files_modified unknown (old cache / no details fetched) must never
+    # count as pure modification — unknown is never guessed as a signal.
+    pr = PRMetadata(number=1, title="t", author="d", files=["a.py"], additions=30)
+    assert not extract_features(pr).pure_modification
+
+
+def test_pure_modification_all_files_modified():
+    pr = PRMetadata(
+        number=1, title="t", author="d", files=["a.py", "b.py"],
+        additions=25, deletions=5, files_added=0, files_modified=2,
+    )
+    assert extract_features(pr).pure_modification
+
+
+def test_new_file_breaks_pure_modification():
+    pr = PRMetadata(
+        number=1, title="t", author="d", files=["a.py", "b.py"],
+        additions=25, deletions=5, files_added=1, files_modified=1,
+    )
+    assert not extract_features(pr).pure_modification
+
+
+def test_deletion_leaning():
+    pr = PRMetadata(number=1, title="t", author="d", additions=10, deletions=40)
+    assert extract_features(pr).deletion_leaning
+
+
+def test_small_deletions_not_deletion_leaning():
+    pr = PRMetadata(number=1, title="t", author="d", additions=2, deletions=8)
+    assert not extract_features(pr).deletion_leaning
