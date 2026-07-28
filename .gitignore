@@ -22,3 +22,5 @@ venv/
 .env
 .env.*
 !.env.example
+.backtest-cache/
+backtest-*.json

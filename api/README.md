@@ -25,3 +25,19 @@ uv run ruff check .     # lint
 - `magpie/fixtures/queue.json` — demo queue used by `/v1/queue` until the Live Gate exists.
 
 Env: `MAGPIE_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `MAGPIE_CORS_ORIGINS`.
+
+## Backtest (Phase 0)
+
+```sh
+uv run magpie-backtest owner/repo --limit 500 --before 2026-06-15
+```
+
+Harvests merged-PR metadata (3 REST calls per PR, cached in
+`.backtest-cache/`), labels defect-inducing PRs via revert anchors
+(in-window plus a repo-wide revert search), replays the same
+extract/score path the webhook uses, and prints the capture curve
+against size-only and random baselines plus per-rule precision.
+
+`--before` matters: young PRs haven't had time to be reverted, so
+sampling the newest history deflates the defect rate (right-censoring).
+Auth comes from `--token`, `GITHUB_TOKEN`, or `gh auth token`.

@@ -1,0 +1,91 @@
+"""Capture-curve math.
+
+The curve answers the only question that matters: if Magpie flags the
+top X% of PRs by score, what share of the defect-inducing ones are in
+that set? Scores are coarse, so many PRs tie; flagging is only defined
+at distinct-score boundaries and we interpolate linearly between them —
+equivalent to random ordering within a tied block, which is the honest
+treatment rather than an accidental favorable sort.
+"""
+
+from pydantic import BaseModel
+
+
+class CurvePoint(BaseModel):
+    flag_rate: float
+    capture_rate: float
+
+
+class Curve(BaseModel):
+    points: list[CurvePoint]
+    auc: float
+
+    def capture_at(self, flag_rate: float) -> float:
+        pts = self.points
+        for (a, b) in zip(pts, pts[1:], strict=False):
+            if a.flag_rate <= flag_rate <= b.flag_rate:
+                if b.flag_rate == a.flag_rate:
+                    return b.capture_rate
+                t = (flag_rate - a.flag_rate) / (b.flag_rate - a.flag_rate)
+                return a.capture_rate + t * (b.capture_rate - a.capture_rate)
+        return 1.0
+
+
+def capture_curve(scored: list[tuple[float, bool]]) -> Curve:
+    """scored: (score, is_defect) per PR. Higher score = flagged earlier."""
+    n = len(scored)
+    total_defects = sum(1 for _, d in scored if d)
+    if n == 0 or total_defects == 0:
+        return Curve(points=[CurvePoint(flag_rate=0, capture_rate=0)], auc=0.0)
+
+    by_score = sorted(scored, key=lambda x: x[0], reverse=True)
+    points = [CurvePoint(flag_rate=0.0, capture_rate=0.0)]
+    flagged = caught = 0
+    i = 0
+    while i < n:
+        j = i
+        while j < n and by_score[j][0] == by_score[i][0]:
+            caught += by_score[j][1]
+            j += 1
+        flagged = j
+        points.append(
+            CurvePoint(flag_rate=flagged / n, capture_rate=caught / total_defects)
+        )
+        i = j
+
+    auc = 0.0
+    for (a, b) in zip(points, points[1:], strict=False):
+        auc += (b.flag_rate - a.flag_rate) * (a.capture_rate + b.capture_rate) / 2
+    return Curve(points=points, auc=round(auc, 4))
+
+
+class RuleStat(BaseModel):
+    rule: str
+    fired: int
+    defects_hit: int
+    precision: float
+    lift: float
+
+
+def rule_stats(
+    fired_rules: list[list[str]], defects: list[bool]
+) -> list[RuleStat]:
+    n = len(defects)
+    base_rate = sum(defects) / n if n else 0.0
+    stats: list[RuleStat] = []
+    all_rules = sorted({r for rules in fired_rules for r in rules})
+    for rule in all_rules:
+        hits = [d for rules, d in zip(fired_rules, defects, strict=False) if rule in rules]
+        fired = len(hits)
+        defects_hit = sum(hits)
+        precision = defects_hit / fired if fired else 0.0
+        stats.append(
+            RuleStat(
+                rule=rule,
+                fired=fired,
+                defects_hit=defects_hit,
+                precision=round(precision, 4),
+                lift=round(precision / base_rate, 2) if base_rate else 0.0,
+            )
+        )
+    return sorted(stats, key=lambda s: s.lift, reverse=True)
