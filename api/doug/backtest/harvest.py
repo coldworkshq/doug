@@ -240,6 +240,13 @@ def harvest(
     partial = cache_dir / f"{owner}-{repo}-{limit}{suffix}.partial.jsonl"
     harvested = asyncio.run(_harvest(owner, repo, limit, token, before, partial))
 
+    # Offset pagination can repeat a PR when a rate-limit retry re-fetches a
+    # page boundary; one PR must never become two rows in the sample.
+    unique: dict[int, HarvestedPR] = {}
+    for pr in harvested:
+        unique.setdefault(pr.number, pr)
+    harvested = list(unique.values())
+
     cache.write_text(json.dumps([p.model_dump() for p in harvested], indent=1))
     partial.unlink(missing_ok=True)
     return harvested

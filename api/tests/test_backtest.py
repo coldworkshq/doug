@@ -240,3 +240,14 @@ def test_rule_stats_lift():
     assert stats[0].fired == 2
     assert stats[0].precision == 0.5
     assert stats[0].lift == 2.0  # base rate 25%, rule precision 50%
+
+
+def test_harvest_dedupes_listing(tmp_path, monkeypatch):
+    # Offset pagination can repeat a PR when a rate-limit retry re-fetches
+    # a page boundary; one PR must never become two rows in the sample.
+    async def fake_harvest(owner, repo, limit, token, before, partial):
+        return [_pr(1), _pr(2), _pr(1)]
+
+    monkeypatch.setattr(harvest_mod, "_harvest", fake_harvest)
+    result = harvest_mod.harvest("o", "r", 3, None, tmp_path)
+    assert [p.number for p in result] == [1, 2]
