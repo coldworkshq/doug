@@ -12,9 +12,12 @@ import subprocess
 from pathlib import Path
 
 from githubkit import GitHub
+from githubkit.retry import RETRY_SERVER_ERROR, RetryChainDecision, RetryRateLimit
 from pydantic import BaseModel
 
-CONCURRENCY = 8
+CONCURRENCY = 4
+# Default githubkit only retries a rate-limit once; long harvests need more.
+_RETRY = RetryChainDecision(RetryRateLimit(max_retry=6), RETRY_SERVER_ERROR)
 
 
 class HarvestedPR(BaseModel):
@@ -90,7 +93,7 @@ async def _enrich(gh: GitHub, owner: str, repo: str, pull, sem: asyncio.Semaphor
 async def _harvest(
     owner: str, repo: str, limit: int, token: str | None, before: str | None
 ) -> list[HarvestedPR]:
-    async with GitHub(token) as gh:
+    async with GitHub(token, auto_retry=_RETRY) as gh:
         merged = []
         seen = 0
         async for pull in gh.rest.paginate(
@@ -132,7 +135,7 @@ async def _harvest(
 
 
 async def _search_reverts(owner: str, repo: str, token: str | None) -> list[tuple[str, str]]:
-    async with GitHub(token) as gh:
+    async with GitHub(token, auto_retry=_RETRY) as gh:
         results = []
         async for item in gh.rest.paginate(
             gh.rest.search.async_issues_and_pull_requests,
