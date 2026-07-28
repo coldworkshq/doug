@@ -137,8 +137,16 @@ def _is_sensitive(path: str) -> bool:
     return bool(_SENSITIVE_NAME_RE.search(p.name))
 
 
-def _is_hotspot(path: str) -> bool:
-    return any(part.lower() in HOTSPOT_SEGMENTS for part in PurePosixPath(path).parts)
+def _is_hotspot(path: str, extra: set[str] | None = None) -> bool:
+    parts = [p.lower() for p in PurePosixPath(path).parts]
+    hot = HOTSPOT_SEGMENTS | (extra or set())
+    if any(p in hot for p in parts):
+        return True
+    # Learned bigrams like "preprod/api".
+    for a, b in zip(parts, parts[1:], strict=False):
+        if f"{a}/{b}" in hot:
+            return True
+    return False
 
 
 def _runtime_dep(files: list[str]) -> bool:
@@ -152,11 +160,17 @@ def _runtime_dep(files: list[str]) -> bool:
     return any(not _DEV_PATH_RE.search(f) for f in js)
 
 
-def extract_features(pr: PRMetadata) -> Features:
+def extract_features(
+    pr: PRMetadata, extra_hotspots: set[str] | None = None
+) -> Features:
     names = [PurePosixPath(f).name for f in pr.files]
     test_files = sum(1 for f in pr.files if _is_test(f))
     lockfile = any(n in LOCKFILES for n in names)
     manifest = any(n in MANIFESTS for n in names)
+    dep_names = LOCKFILES | MANIFESTS
+    dep_only = (lockfile or manifest) and all(
+        PurePosixPath(f).name in dep_names or _is_test(f) for f in pr.files
+    )
     return Features(
         size=pr.additions + pr.deletions,
         file_count=len(pr.files),
@@ -165,8 +179,9 @@ def extract_features(pr: PRMetadata) -> Features:
         manifest=manifest,
         runtime_dep=_runtime_dep(pr.files) if (lockfile or manifest) else False,
         dev_tool_dep=bool(_DEV_DEP_TITLE_RE.search(pr.title)),
+        dep_only=dep_only,
         sensitive_path=any(_is_sensitive(f) for f in pr.files),
-        hotspot_path=any(_is_hotspot(f) for f in pr.files),
+        hotspot_path=any(_is_hotspot(f, extra_hotspots) for f in pr.files),
         config_flag=any(_CONFIG_FLAG_RE.search(f) for f in pr.files),
         test_files=test_files,
         code_files=len(pr.files) - test_files,

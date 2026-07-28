@@ -89,13 +89,33 @@ def test_threshold_is_respected():
     assert lax.band is Band.CLEARED
 
 
-def test_unknown_module_recency_never_fires_stale_rule():
+def test_bot_authored_non_dep_fires_agent_rule():
+    v = score(
+        _pr(author="bot[bot]", files=["src/x.py"], additions=10, deletions=2),
+        threshold=0.62,
+    )
+    assert "agent-authored" in {r.rule for r in v.reasons}
+
+
+def test_bot_dep_bump_skips_agent_rule():
     v = score(
         _pr(
-            author="bot[bot]",
-            files=["src/x.py"],
-            days_since_last_human_commit=None,
+            author="dependabot[bot]",
+            files=["package.json", "package-lock.json"],
         ),
         threshold=0.62,
     )
-    assert "agent-in-stale-module" not in {r.rule for r in v.reasons}
+    assert "agent-authored" not in {r.rule for r in v.reasons}
+
+
+def test_bot_mixed_code_and_lockfile_keeps_agent_rule():
+    v = score(
+        _pr(
+            author="bot[bot]",
+            files=["src/auth/session.py", "package.json"],
+            additions=40,
+            deletions=5,
+        ),
+        threshold=0.62,
+    )
+    assert "agent-authored" in {r.rule for r in v.reasons}

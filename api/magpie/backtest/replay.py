@@ -36,10 +36,13 @@ def to_metadata(pr: HarvestedPR) -> PRMetadata:
     )
 
 
-def replay(prs: list[HarvestedPR]) -> list[tuple[HarvestedPR, float, list[str]]]:
+def replay(
+    prs: list[HarvestedPR],
+    extra_hotspots: set[str] | None = None,
+) -> list[tuple[HarvestedPR, float, list[str]]]:
     """Score each harvested PR. Returns (pr, score, fired rule ids)."""
     out = []
     for pr in prs:
-        verdict = score(to_metadata(pr))
+        verdict = score(to_metadata(pr), extra_hotspots=extra_hotspots)
         out.append((pr, verdict.score, [r.rule for r in verdict.reasons]))
     return out

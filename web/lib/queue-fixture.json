@@ -1,8 +1,8 @@
 {
   "summary": {
     "open": 12,
-    "flagged": 2,
-    "cleared": 10,
+    "flagged": 1,
+    "cleared": 11,
     "threshold": 0.62
   },
   "items": [
@@ -46,6 +46,11 @@
             "weight": 0.2
           },
           {
+            "rule": "agent-authored",
+            "label": "Authored by a bot / agent account",
+            "weight": 0.12
+          },
+          {
             "rule": "sensitive-path",
             "label": "Touches an auth, billing, or security path",
             "weight": 0.15
@@ -73,8 +78,8 @@
         "url": null
       },
       "verdict": {
-        "score": 0.64,
-        "band": "flagged",
+        "score": 0.61,
+        "band": "cleared",
         "threshold": 0.62,
         "reasons": [
           {
@@ -88,79 +93,9 @@
             "weight": 0.2
           },
           {
-            "rule": "agent-in-stale-module",
-            "label": "Agent-authored change in a module without recent human commits",
-            "weight": 0.15
-          }
-        ]
-      }
-    },
-    {
-      "pr": {
-        "number": 9598,
-        "title": "Bump stripe-node 14 -> 16",
-        "author": "patchbot[bot]",
-        "author_type": "agent",
-        "additions": 60,
-        "deletions": 40,
-        "files": [
-          "package.json",
-          "package-lock.json"
-        ],
-        "approvals": 0,
-        "approval_latency_s": null,
-        "days_since_last_human_commit": 45,
-        "url": null
-      },
-      "verdict": {
-        "score": 0.44,
-        "band": "cleared",
-        "threshold": 0.62,
-        "reasons": [
-          {
-            "rule": "dep-change-no-test-delta",
-            "label": "Runtime dependency change with zero test delta",
-            "weight": 0.25
-          },
-          {
-            "rule": "agent-in-stale-module",
-            "label": "Agent-authored change in a module without recent human commits",
-            "weight": 0.15
-          }
-        ]
-      }
-    },
-    {
-      "pr": {
-        "number": 9604,
-        "title": "Add retry to export worker",
-        "author": "mercury",
-        "author_type": "agent",
-        "additions": 40,
-        "deletions": 8,
-        "files": [
-          "workers/export/retry.go",
-          "workers/export/security/backoff.go"
-        ],
-        "approvals": 0,
-        "approval_latency_s": null,
-        "days_since_last_human_commit": 60,
-        "url": null
-      },
-      "verdict": {
-        "score": 0.34,
-        "band": "cleared",
-        "threshold": 0.62,
-        "reasons": [
-          {
-            "rule": "agent-in-stale-module",
-            "label": "Agent-authored change in a module without recent human commits",
-            "weight": 0.15
-          },
-          {
-            "rule": "sensitive-path",
-            "label": "Touches an auth, billing, or security path",
-            "weight": 0.15
+            "rule": "agent-authored",
+            "label": "Authored by a bot / agent account",
+            "weight": 0.12
           }
         ]
       }
@@ -202,6 +137,71 @@
     },
     {
       "pr": {
+        "number": 9604,
+        "title": "Add retry to export worker",
+        "author": "mercury",
+        "author_type": "agent",
+        "additions": 40,
+        "deletions": 8,
+        "files": [
+          "workers/export/retry.go",
+          "workers/export/security/backoff.go"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 60,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.31,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "agent-authored",
+            "label": "Authored by a bot / agent account",
+            "weight": 0.12
+          },
+          {
+            "rule": "sensitive-path",
+            "label": "Touches an auth, billing, or security path",
+            "weight": 0.15
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9598,
+        "title": "Bump stripe-node 14 -> 16",
+        "author": "patchbot[bot]",
+        "author_type": "agent",
+        "additions": 60,
+        "deletions": 40,
+        "files": [
+          "package.json",
+          "package-lock.json"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 45,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.29,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "dep-change-no-test-delta",
+            "label": "Runtime dependency change with zero test delta",
+            "weight": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
         "number": 9583,
         "title": "Add index on events.created_at",
         "author": "dana",
@@ -226,6 +226,67 @@
             "rule": "migration",
             "label": "Touches a schema migration",
             "weight": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9596,
+        "title": "Update README badges",
+        "author": "atlas",
+        "author_type": "agent",
+        "additions": 6,
+        "deletions": 6,
+        "files": [
+          "README.md"
+        ],
+        "approvals": 0,
+        "approval_latency_s": null,
+        "days_since_last_human_commit": 3,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.16,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "agent-authored",
+            "label": "Authored by a bot / agent account",
+            "weight": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "pr": {
+        "number": 9588,
+        "title": "Bump dev-only lint plugin",
+        "author": "patchbot[bot]",
+        "author_type": "agent",
+        "additions": 12,
+        "deletions": 12,
+        "files": [
+          "package.json",
+          "package-lock.json",
+          "eslint.config.mjs",
+          "tests/lint.spec.ts"
+        ],
+        "approvals": 1,
+        "approval_latency_s": 1800,
+        "days_since_last_human_commit": 4,
+        "url": null
+      },
+      "verdict": {
+        "score": 0.16,
+        "band": "cleared",
+        "threshold": 0.62,
+        "reasons": [
+          {
+            "rule": "agent-authored",
+            "label": "Authored by a bot / agent account",
+            "weight": 0.12
           }
         ]
       }
@@ -278,29 +339,6 @@
     },
     {
       "pr": {
-        "number": 9596,
-        "title": "Update README badges",
-        "author": "atlas",
-        "author_type": "agent",
-        "additions": 6,
-        "deletions": 6,
-        "files": [
-          "README.md"
-        ],
-        "approvals": 0,
-        "approval_latency_s": null,
-        "days_since_last_human_commit": 3,
-        "url": null
-      },
-      "verdict": {
-        "score": 0.04,
-        "band": "cleared",
-        "threshold": 0.62,
-        "reasons": []
-      }
-    },
-    {
-      "pr": {
         "number": 9590,
         "title": "Extract date formatting helper",
         "author": "maya",
@@ -314,32 +352,6 @@
         "approvals": 1,
         "approval_latency_s": 7200,
         "days_since_last_human_commit": 0,
-        "url": null
-      },
-      "verdict": {
-        "score": 0.04,
-        "band": "cleared",
-        "threshold": 0.62,
-        "reasons": []
-      }
-    },
-    {
-      "pr": {
-        "number": 9588,
-        "title": "Bump dev-only lint plugin",
-        "author": "patchbot[bot]",
-        "author_type": "agent",
-        "additions": 12,
-        "deletions": 12,
-        "files": [
-          "package.json",
-          "package-lock.json",
-          "eslint.config.mjs",
-          "tests/lint.spec.ts"
-        ],
-        "approvals": 1,
-        "approval_latency_s": 1800,
-        "days_since_last_human_commit": 4,
         "url": null
       },
       "verdict": {

@@ -18,9 +18,6 @@ DEFAULT_THRESHOLD = 0.62
 _FAST_APPROVAL_S = 5 * 60
 _LARGE_DIFF = 400
 _MEDIUM_DIFF = 300
-_STALE_MODULE_DAYS = 30
-
-
 def default_threshold() -> float:
     return float(os.environ.get("MAGPIE_THRESHOLD", DEFAULT_THRESHOLD))
 
@@ -84,16 +81,16 @@ def _rules(f: Features) -> list[Reason]:
             )
         )
 
-    if (
-        f.agent_authored
-        and f.days_since_last_human_commit is not None
-        and f.days_since_last_human_commit > _STALE_MODULE_DAYS
-    ):
+    # days_since_last_human_commit is usually unknown in the backtest
+    # (and often live); bot authorship alone is the reachable signal.
+    # Skip pure dep-only bumps — already covered by dep-change. Mixed
+    # bot PRs (code + lockfile) still get this signal.
+    if f.agent_authored and not f.dep_only:
         reasons.append(
             Reason(
-                rule="agent-in-stale-module",
-                label="Agent-authored change in a module without recent human commits",
-                weight=0.15,
+                rule="agent-authored",
+                label="Authored by a bot / agent account",
+                weight=0.12,
             )
         )
 
@@ -127,9 +124,13 @@ def _rules(f: Features) -> list[Reason]:
     return reasons
 
 
-def score(pr: PRMetadata, threshold: float | None = None) -> Verdict:
+def score(
+    pr: PRMetadata,
+    threshold: float | None = None,
+    extra_hotspots: set[str] | None = None,
+) -> Verdict:
     thr = default_threshold() if threshold is None else threshold
-    reasons = _rules(extract_features(pr))
+    reasons = _rules(extract_features(pr, extra_hotspots=extra_hotspots))
     total = min(0.99, BASE_SCORE + sum(r.weight for r in reasons))
     band = Band.FLAGGED if total >= thr else Band.CLEARED
     return Verdict(score=round(total, 2), band=band, threshold=thr, reasons=reasons)

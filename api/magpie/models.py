@@ -40,6 +40,7 @@ class Features(BaseModel):
     manifest: bool
     runtime_dep: bool = False
     dev_tool_dep: bool = False
+    dep_only: bool = False
     sensitive_path: bool
     hotspot_path: bool = False
     config_flag: bool = False

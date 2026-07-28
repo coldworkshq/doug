@@ -22,6 +22,7 @@ from pathlib import Path
 from .curve import capture_curve, rule_stats
 from .git_labels import find_reverted_prs
 from .harvest import harvest, resolve_token, search_reverts
+from .hotspots import learn_hotspot_segments
 from .label import label_defects
 from .replay import replay
 
@@ -118,6 +119,47 @@ def main() -> int:
             f"· precision {s.precision:>6.1%} · lift {s.lift:>5.2f}x"
         )
 
+    # Time-split holdout: learn hotspots on the older half only, score the newer.
+    # Requires defects in *both* halves so capture_at can't collapse to 100%.
+    holdout = None
+    if len(prs) >= 200 and len(defects) >= 8:
+        ordered = sorted(prs, key=lambda p: p.created_at)
+        mid = len(ordered) // 2
+        train, test = ordered[:mid], ordered[mid:]
+        train_defs = {p.number for p in train} & defects
+        test_defs = {p.number for p in test} & defects
+        if len(train_defs) >= 4 and len(test_defs) >= 4:
+            learned = learn_hotspot_segments(train, train_defs)
+            print(
+                f"\nholdout: train n={len(train)} defects={len(train_defs)} · "
+                f"test n={len(test)} defects={len(test_defs)} · "
+                f"learned hotspots={sorted(learned)[:12]}"
+            )
+            test_scored = replay(test, extra_hotspots=learned)
+            hold = capture_curve(
+                [(s, pr.number in test_defs) for pr, s, _ in test_scored]
+            )
+            print(
+                f"holdout capture @10%={hold.capture_at(0.10):.0%}  "
+                f"@20%={hold.capture_at(0.20):.0%}  AUC={hold.auc:.3f}"
+            )
+            holdout = {
+                "train_prs": len(train),
+                "test_prs": len(test),
+                "train_defects": len(train_defs),
+                "test_defects": len(test_defs),
+                "learned_hotspots": sorted(learned),
+                "capture": {
+                    f"{f:.2f}": round(hold.capture_at(f), 4) for f in FLAG_RATES
+                },
+                "auc": hold.auc,
+            }
+        else:
+            print(
+                f"\nholdout skipped — need ≥4 defects in each half "
+                f"(train={len(train_defs)}, test={len(test_defs)})"
+            )
+
     out = args.output or Path(f"backtest-{owner}-{repo}.json")
     out.write_text(
         json.dumps(
@@ -135,6 +177,7 @@ def main() -> int:
                 "auc": {"magpie": magpie.auc, "size_only": size.auc},
                 "curve": [p.model_dump() for p in magpie.points],
                 "rules": [s.model_dump() for s in stats],
+                "holdout": holdout,
             },
             indent=1,
         )
