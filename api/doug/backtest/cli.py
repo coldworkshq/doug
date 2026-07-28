@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .curve import capture_curve, rule_stats
 from .git_labels import find_reverted_prs
-from .harvest import harvest, resolve_token, search_reverts
+from .harvest import backfill_file_details, harvest, resolve_token, search_reverts
 from .hotspots import learn_hotspot_segments
 from .label import label_defects
 from .replay import replay
@@ -53,6 +53,12 @@ def main() -> int:
         help="defect label source (default: git — dense, zero API quota)",
     )
     ap.add_argument("--output", type=Path, default=None, help="JSON report path")
+    ap.add_argument(
+        "--backfill-details",
+        action="store_true",
+        help="fetch per-file stats + patch text for cached PRs missing them "
+        "(~1 request/PR; checkpointed, resumable)",
+    )
     args = ap.parse_args()
 
     owner, _, repo = args.repo.partition("/")
@@ -71,6 +77,12 @@ def main() -> int:
 
     print(f"harvesting {args.limit} merged PRs from {owner}/{repo}…")
     prs = harvest(owner, repo, args.limit, token, args.cache_dir, before=args.before)
+    if args.backfill_details:
+        n = backfill_file_details(
+            owner, repo, args.limit, token, args.cache_dir, before=args.before
+        )
+        print(f"  backfilled file details for {n} PRs")
+        prs = harvest(owner, repo, args.limit, token, args.cache_dir, before=args.before)
     seen = {p.number for p in prs}
 
     defects: set[int] = set()

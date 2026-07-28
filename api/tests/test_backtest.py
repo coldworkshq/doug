@@ -6,7 +6,13 @@ import pytest
 
 from doug.backtest import harvest as harvest_mod
 from doug.backtest.curve import capture_curve, rule_stats
-from doug.backtest.harvest import HarvestedPR, _enrich_all, _load_partial
+from doug.backtest.harvest import (
+    FileDetail,
+    HarvestedPR,
+    _enrich_all,
+    _load_partial,
+    backfill_file_details,
+)
 from doug.backtest.label import label_defects
 from doug.backtest.replay import to_metadata
 
@@ -132,6 +138,73 @@ def test_partial_removed_after_final_cache_written(tmp_path, monkeypatch):
     assert [p.number for p in result] == [1]
     assert (tmp_path / "o-r-1.json").exists()
     assert not stale.exists()  # checkpoint cleaned up once the real cache lands
+
+
+# --- file-details backfill --------------------------------------------------
+# v4 light-diff features need per-file stats + patch text. Old caches predate
+# the field; backfill fetches only what's missing, checkpointed like harvest.
+
+
+def _detail(name: str = "src/a.py") -> FileDetail:
+    return FileDetail(filename=name, status="modified", additions=3, deletions=1, patch="@@ -1 +1 @@")
+
+
+def test_old_cache_loads_with_details_absent(tmp_path):
+    (tmp_path / "o-r-1.json").write_text(json.dumps([_pr(1).model_dump(exclude={"file_details"})]))
+    result = harvest_mod.harvest("o", "r", 1, None, tmp_path)
+    assert result[0].file_details is None  # None = never fetched, [] = fetched-and-empty
+
+
+def test_backfill_fetches_only_missing(tmp_path, monkeypatch):
+    cache = tmp_path / "o-r-2.json"
+    done = _pr(1, file_details=[_detail()])
+    todo = _pr(2)
+    cache.write_text(json.dumps([done.model_dump(), todo.model_dump()]))
+    fetched = []
+
+    async def fake_fetch(gh, owner, repo, number, sem):
+        fetched.append(number)
+        return [_detail("src/b.py")]
+
+    monkeypatch.setattr(harvest_mod, "_fetch_file_details", fake_fetch)
+    n = backfill_file_details("o", "r", 2, None, tmp_path)
+
+    assert fetched == [2] and n == 1  # PR 1 already had details, no API spend
+    reloaded = harvest_mod.harvest("o", "r", 2, None, tmp_path)
+    assert [p.file_details is not None for p in reloaded] == [True, True]
+    assert reloaded[1].file_details[0].filename == "src/b.py"
+    assert not (tmp_path / "o-r-2.details.jsonl").exists()
+
+
+def test_backfill_checkpoint_survives_failure(tmp_path, monkeypatch):
+    cache = tmp_path / "o-r-2.json"
+    original = json.dumps([_pr(1).model_dump(), _pr(2).model_dump()])
+    cache.write_text(original)
+
+    async def flaky_fetch(gh, owner, repo, number, sem):
+        if number == 2:
+            raise RuntimeError("rate limit")
+        return [_detail()]
+
+    monkeypatch.setattr(harvest_mod, "_fetch_file_details", flaky_fetch)
+    with pytest.raises(RuntimeError):
+        backfill_file_details("o", "r", 2, None, tmp_path)
+
+    assert cache.read_text() == original  # money cache untouched on failure
+    sidecar = tmp_path / "o-r-2.details.jsonl"
+    assert sidecar.exists()  # PR 1's fetch survived
+
+    calls = []
+
+    async def fake_fetch(gh, owner, repo, number, sem):
+        calls.append(number)
+        return [_detail()]
+
+    monkeypatch.setattr(harvest_mod, "_fetch_file_details", fake_fetch)
+    n = backfill_file_details("o", "r", 2, None, tmp_path)
+    assert calls == [2]  # PR 1 came from the sidecar — no API re-spend
+    assert n == 2  # but both PRs' details landed in the cache this call
+    assert all(p.file_details for p in harvest_mod.harvest("o", "r", 2, None, tmp_path))
 
 
 # --- curve math -------------------------------------------------------------
