@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from magpie.api import app
+from doug.api import app
 
 client = TestClient(app)
 

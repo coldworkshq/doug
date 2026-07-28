@@ -1,5 +1,5 @@
-from magpie.features import extract_features
-from magpie.models import AuthorType, PRMetadata
+from doug.features import extract_features
+from doug.models import AuthorType, PRMetadata
 
 
 def _pr(**kw) -> PRMetadata:

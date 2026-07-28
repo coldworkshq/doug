@@ -52,7 +52,7 @@
 }
 
 :root {
-  /* Dark SaaS palette with an iridescent magpie-feather accent. */
+  /* Dark SaaS palette with an iridescent accent. */
   --sheen: oklch(0.82 0.12 190);
   --flag: oklch(0.72 0.16 40);
   --clear: oklch(0.78 0.11 165);
@@ -175,7 +175,7 @@
   .animate-rise {
     animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  /* Magpie-feather gradient, for text and hairline accents. */
+  /* Brand gradient, for text and hairline accents. */
   .text-iridescent {
     background: var(--iridescent);
     -webkit-background-clip: text;

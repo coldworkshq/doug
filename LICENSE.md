@@ -6,7 +6,7 @@ FSL-1.1-ALv2
 
 ## Notice
 
-Copyright 2026 Magpie
+Copyright 2026 Doug
 
 ## Terms and Conditions
 

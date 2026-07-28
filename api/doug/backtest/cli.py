@@ -1,10 +1,10 @@
-"""magpie-backtest: replay a repo's history, measure the capture curve.
+"""doug-backtest: replay a repo's history, measure the capture curve.
 
 Usage:
-    uv run magpie-backtest owner/repo [--limit 500] [--before 2026-06-15]
+    uv run doug-backtest owner/repo [--limit 500] [--before 2026-06-15]
 
 The kill criterion, from the thesis: if flagging ~10% of PRs captures
-~40% of defect-inducing changes instead of ~70%, Magpie is an expensive
+~40% of defect-inducing changes instead of ~70%, Doug is an expensive
 random sampler. This command produces that number.
 
 Default labeling is git history (treeless clone, zero API quota for
@@ -33,7 +33,7 @@ FLAG_RATES = [0.05, 0.10, 0.20, 0.30]
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="magpie-backtest", description=__doc__)
+    ap = argparse.ArgumentParser(prog="doug-backtest", description=__doc__)
     ap.add_argument("repo", help="owner/repo, e.g. astral-sh/ruff")
     ap.add_argument("--limit", type=int, default=300, help="merged PRs to harvest")
     ap.add_argument("--token", default=None, help="GitHub token (default: env or gh)")
@@ -96,17 +96,17 @@ def main() -> int:
         return 1
 
     scored = replay(prs)
-    magpie = capture_curve([(s, pr.number in defects) for pr, s, _ in scored])
+    doug = capture_curve([(s, pr.number in defects) for pr, s, _ in scored])
     size = capture_curve(
         [(float(pr.additions + pr.deletions), pr.number in defects) for pr, _, _ in scored]
     )
 
-    print(f"\n{'flag rate':>10} {'magpie':>8} {'size-only':>10} {'random':>8}")
+    print(f"\n{'flag rate':>10} {'doug':>8} {'size-only':>10} {'random':>8}")
     for f in FLAG_RATES:
         print(
-            f"{f:>10.0%} {magpie.capture_at(f):>8.0%} {size.capture_at(f):>10.0%} {f:>8.0%}"
+            f"{f:>10.0%} {doug.capture_at(f):>8.0%} {size.capture_at(f):>10.0%} {f:>8.0%}"
         )
-    print(f"\nAUC — magpie {magpie.auc:.3f} · size-only {size.auc:.3f} · random 0.500")
+    print(f"\nAUC — doug {doug.auc:.3f} · size-only {size.auc:.3f} · random 0.500")
 
     stats = rule_stats(
         [rules for _, _, rules in scored], [pr.number in defects for pr, _, _ in scored]
@@ -172,10 +172,10 @@ def main() -> int:
                 "git_defects_total": len(git_defects),
                 "defects": sorted(defects),
                 "capture": {
-                    f"{f:.2f}": round(magpie.capture_at(f), 4) for f in FLAG_RATES
+                    f"{f:.2f}": round(doug.capture_at(f), 4) for f in FLAG_RATES
                 },
-                "auc": {"magpie": magpie.auc, "size_only": size.auc},
-                "curve": [p.model_dump() for p in magpie.points],
+                "auc": {"doug": doug.auc, "size_only": size.auc},
+                "curve": [p.model_dump() for p in doug.points],
                 "rules": [s.model_dump() for s in stats],
                 "holdout": holdout,
             },

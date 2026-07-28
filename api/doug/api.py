@@ -13,11 +13,11 @@ from . import __version__
 from .models import Band, PRMetadata, QueueItem, QueueResponse, QueueSummary, Verdict
 from .scoring import default_threshold, score
 
-app = FastAPI(title="Magpie", version=__version__)
+app = FastAPI(title="Doug", version=__version__)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("MAGPIE_CORS_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=os.environ.get("DOUG_CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -34,7 +34,7 @@ def score_pr(pr: PRMetadata) -> Verdict:
 
 
 def _load_fixture() -> list[PRMetadata]:
-    raw = resources.files("magpie").joinpath("fixtures/queue.json").read_text()
+    raw = resources.files("doug").joinpath("fixtures/queue.json").read_text()
     return [PRMetadata.model_validate(item) for item in json.loads(raw)]
 
 

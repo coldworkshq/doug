@@ -18,9 +18,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Magpie — most pull requests don't need you",
+  title: "Doug — most pull requests don't need you",
   description:
-    "Risk-routed code review. Magpie scores every PR from metadata, routes the handful that need human eyes, and publishes its miss rate.",
+    "Risk-routed code review. Doug scores every PR from metadata, routes the handful that need human eyes, and publishes its miss rate.",
 };
 
 export default function RootLayout({

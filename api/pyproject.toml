@@ -1,7 +1,7 @@
 [project]
-name = "magpie-api"
+name = "doug-api"
 version = "0.1.0"
-description = "Magpie — risk-routed code review. Deterministic routing API."
+description = "Doug — risk-routed code review. Deterministic routing API."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -18,14 +18,14 @@ dev = [
 ]
 
 [project.scripts]
-magpie-backtest = "magpie.backtest.cli:main"
+doug-backtest = "doug.backtest.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "magpie"
+module-name = "doug"
 module-root = ""
 
 [tool.ruff]

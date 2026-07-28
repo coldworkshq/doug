@@ -1,7 +1,14 @@
-from magpie.backtest.curve import capture_curve, rule_stats
-from magpie.backtest.harvest import HarvestedPR
-from magpie.backtest.label import label_defects
-from magpie.backtest.replay import to_metadata
+import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from doug.backtest import harvest as harvest_mod
+from doug.backtest.curve import capture_curve, rule_stats
+from doug.backtest.harvest import HarvestedPR, _enrich_all, _load_partial
+from doug.backtest.label import label_defects
+from doug.backtest.replay import to_metadata
 
 
 def _pr(number: int, title: str = "t", body: str = "", **kw) -> HarvestedPR:
@@ -71,6 +78,60 @@ def test_bot_author_mapped_to_agent():
 
 def test_module_recency_never_guessed():
     assert to_metadata(_pr(1)).days_since_last_human_commit is None
+
+
+# --- harvest checkpoint/resume ----------------------------------------------
+# A multi-hour harvest spans GitHub rate windows and can be killed mid-run;
+# without incremental checkpoints every interruption re-spends the full quota.
+
+
+def test_resume_skips_already_enriched(tmp_path, monkeypatch):
+    partial = tmp_path / "run.partial.jsonl"
+    partial.write_text(json.dumps(_pr(1).model_dump()) + "\n")
+    enriched_numbers = []
+
+    async def fake_enrich(gh, owner, repo, pull, sem):
+        enriched_numbers.append(pull.number)
+        return _pr(pull.number)
+
+    monkeypatch.setattr(harvest_mod, "_enrich", fake_enrich)
+    pulls = [SimpleNamespace(number=1), SimpleNamespace(number=2)]
+    result = asyncio.run(_enrich_all(None, "o", "r", pulls, partial))
+
+    assert enriched_numbers == [2]  # PR 1 came from the checkpoint, no API spend
+    assert [p.number for p in result] == [1, 2]  # listing order preserved
+    assert set(_load_partial(partial)) == {1, 2}
+
+
+def test_progress_survives_mid_run_failure(tmp_path, monkeypatch):
+    partial = tmp_path / "run.partial.jsonl"
+
+    async def fake_enrich(gh, owner, repo, pull, sem):
+        if pull.number == 2:
+            raise RuntimeError("rate limit")
+        return _pr(pull.number)
+
+    monkeypatch.setattr(harvest_mod, "_enrich", fake_enrich)
+    pulls = [SimpleNamespace(number=1), SimpleNamespace(number=2)]
+    with pytest.raises(RuntimeError):
+        asyncio.run(_enrich_all(None, "o", "r", pulls, partial))
+
+    assert set(_load_partial(partial)) == {1}  # PR 1's work is not lost
+
+
+def test_partial_removed_after_final_cache_written(tmp_path, monkeypatch):
+    async def fake_harvest(owner, repo, limit, token, before, partial):
+        return [_pr(1)]
+
+    monkeypatch.setattr(harvest_mod, "_harvest", fake_harvest)
+    stale = tmp_path / "o-r-1.partial.jsonl"
+    stale.write_text(json.dumps(_pr(1).model_dump()) + "\n")
+
+    result = harvest_mod.harvest("o", "r", 1, None, tmp_path)
+
+    assert [p.number for p in result] == [1]
+    assert (tmp_path / "o-r-1.json").exists()
+    assert not stale.exists()  # checkpoint cleaned up once the real cache lands
 
 
 # --- curve math -------------------------------------------------------------

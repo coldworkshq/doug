@@ -32,7 +32,7 @@ export default async function QueuePage({
           href="/"
           className="font-heading text-lg font-semibold tracking-tight"
         >
-          <span className="text-iridescent">✦</span> magpie
+          <span className="text-iridescent">✦</span> doug
         </Link>
         <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
           <span

@@ -90,8 +90,53 @@ async def _enrich(gh: GitHub, owner: str, repo: str, pull, sem: asyncio.Semaphor
     )
 
 
+def _load_partial(path: Path) -> dict[int, HarvestedPR]:
+    if not path.exists():
+        return {}
+    prs = (
+        HarvestedPR.model_validate(json.loads(line))
+        for line in path.read_text().splitlines()
+        if line.strip()
+    )
+    return {pr.number: pr for pr in prs}
+
+
+async def _enrich_all(
+    gh, owner: str, repo: str, merged: list, partial: Path | None
+) -> list[HarvestedPR]:
+    # Checkpoint each enriched PR to a JSONL sidecar: a multi-hour harvest
+    # spans rate-limit windows and can be killed mid-run; without this,
+    # every interruption re-spends the whole quota.
+    done = _load_partial(partial) if partial else {}
+    if done:
+        print(f"  resuming: {len(done)} PRs already enriched in checkpoint", flush=True)
+    sem = asyncio.Semaphore(CONCURRENCY)
+    count = 0
+
+    async def one(pull) -> HarvestedPR:
+        nonlocal count
+        if (hit := done.get(pull.number)) is not None:
+            result = hit
+        else:
+            result = await _enrich(gh, owner, repo, pull, sem)
+            if partial is not None:
+                with partial.open("a") as f:
+                    f.write(json.dumps(result.model_dump()) + "\n")
+        count += 1
+        if count % 50 == 0:
+            print(f"  enriched {count}/{len(merged)}…", flush=True)
+        return result
+
+    return list(await asyncio.gather(*(one(p) for p in merged)))
+
+
 async def _harvest(
-    owner: str, repo: str, limit: int, token: str | None, before: str | None
+    owner: str,
+    repo: str,
+    limit: int,
+    token: str | None,
+    before: str | None,
+    partial: Path | None = None,
 ) -> list[HarvestedPR]:
     async with GitHub(token, auto_retry=_RETRY) as gh:
         merged = []
@@ -120,18 +165,7 @@ async def _harvest(
                 break  # mostly-unmerged history; stop scanning
 
         print(f"  listing done: {len(merged)} merged PRs; enriching…", flush=True)
-        sem = asyncio.Semaphore(CONCURRENCY)
-        done = 0
-
-        async def enrich_with_progress(pull) -> HarvestedPR:
-            nonlocal done
-            result = await _enrich(gh, owner, repo, pull, sem)
-            done += 1
-            if done % 50 == 0:
-                print(f"  enriched {done}/{len(merged)}…", flush=True)
-            return result
-
-        return list(await asyncio.gather(*(enrich_with_progress(p) for p in merged)))
+        return await _enrich_all(gh, owner, repo, merged, partial)
 
 
 async def _search_reverts(owner: str, repo: str, token: str | None) -> list[tuple[str, str]]:
@@ -175,8 +209,10 @@ def harvest(
     if cache.exists():
         return [HarvestedPR.model_validate(x) for x in json.loads(cache.read_text())]
 
-    harvested = asyncio.run(_harvest(owner, repo, limit, token, before))
-
     cache_dir.mkdir(parents=True, exist_ok=True)
+    partial = cache_dir / f"{owner}-{repo}-{limit}{suffix}.partial.jsonl"
+    harvested = asyncio.run(_harvest(owner, repo, limit, token, before, partial))
+
     cache.write_text(json.dumps([p.model_dump() for p in harvested], indent=1))
+    partial.unlink(missing_ok=True)
     return harvested

@@ -1,6 +1,6 @@
 """Capture-curve math.
 
-The curve answers the only question that matters: if Magpie flags the
+The curve answers the only question that matters: if Doug flags the
 top X% of PRs by score, what share of the defect-inducing ones are in
 that set? Scores are coarse, so many PRs tie; flagging is only defined
 at distinct-score boundaries and we interpolate linearly between them —

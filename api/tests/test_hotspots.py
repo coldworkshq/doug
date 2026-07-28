@@ -1,5 +1,5 @@
-from magpie.backtest.harvest import HarvestedPR
-from magpie.backtest.hotspots import learn_hotspot_segments
+from doug.backtest.harvest import HarvestedPR
+from doug.backtest.hotspots import learn_hotspot_segments
 
 
 def _pr(number: int, files: list[str]) -> HarvestedPR:

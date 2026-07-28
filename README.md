@@ -1,18 +1,18 @@
-<h1 align="center">Magpie</h1>
+<h1 align="center">Doug</h1>
 
 <p align="center"><em>62 open. 5 need you.</em></p>
 
 ---
 
-Most pull requests don't need a human. Magpie works out which ones do.
+Most pull requests don't need a human. Doug works out which ones do.
 
-Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Magpie inverts it: cheap deterministic analysis scores every PR, most are cleared, and only the small fraction that carries real risk gets a deep look.
+Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Doug inverts it: cheap deterministic analysis scores every PR, most are cleared, and only the small fraction that carries real risk gets a deep look.
 
-The name is the pitch. A magpie ignores the whole field and picks out the few bright things in it.
+Doug is a Saint Bernard. The breed has had one job for three centuries: find the traveler buried in the snow, and bring help. That's the product — find the pull request that's in trouble, and bring a human. Doug doesn't dig you out himself, and he doesn't bark at every hiker on the trail.
 
 ## Three rules
 
-**Route, never block.** The PR proceeds either way. Magpie only decides who has to look. Tools that block get disabled.
+**Route, never block.** The PR proceeds either way. Doug only decides who has to look. Tools that block get disabled.
 
 **Never write code, never open a PR.** The moment it authors, it owns the authorship.
 
@@ -34,7 +34,7 @@ Diff size is deliberately de-weighted. It predicts poorly once the rest are cont
 
 ## Repo layout
 
-- `api/` — Python 3.14 + FastAPI, managed with uv. The routing core: `magpie/features.py` (PR metadata → feature vector, pure) and `magpie/scoring.py` (features → verdict, as named weighted rules). `GET /v1/queue` serves a scored demo queue; `POST /webhooks/github` is an HMAC-verified stub until the Live Gate phase.
+- `api/` — Python 3.14 + FastAPI, managed with uv. The routing core: `doug/features.py` (PR metadata → feature vector, pure) and `doug/scoring.py` (features → verdict, as named weighted rules). `GET /v1/queue` serves a scored demo queue; `POST /webhooks/github` is an HMAC-verified stub until the Live Gate phase.
 - `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing page and `/queue`, the scored review queue. Reads the live API when it's up, falls back to a bundled fixture when it isn't.
 
 ```sh
@@ -46,8 +46,8 @@ make lint   # ruff + eslint
 Both services ship Dockerfiles built for Cloud Run (respect `PORT`, scale to zero):
 
 ```sh
-gcloud run deploy magpie-api --source api
-gcloud run deploy magpie-web --source web --set-env-vars MAGPIE_API_URL=<api url>
+gcloud run deploy doug-api --source api
+gcloud run deploy doug-web --source web --set-env-vars DOUG_API_URL=<api url>
 ```
 
 ## Status

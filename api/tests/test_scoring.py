@@ -1,5 +1,5 @@
-from magpie.models import Band, PRMetadata
-from magpie.scoring import score
+from doug.models import Band, PRMetadata
+from doug.scoring import score
 
 
 def _pr(**kw) -> PRMetadata:

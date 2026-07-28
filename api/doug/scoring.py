@@ -19,7 +19,7 @@ _FAST_APPROVAL_S = 5 * 60
 _LARGE_DIFF = 400
 _MEDIUM_DIFF = 300
 def default_threshold() -> float:
-    return float(os.environ.get("MAGPIE_THRESHOLD", DEFAULT_THRESHOLD))
+    return float(os.environ.get("DOUG_THRESHOLD", DEFAULT_THRESHOLD))
 
 
 def _rules(f: Features) -> list[Reason]:

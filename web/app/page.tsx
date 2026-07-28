@@ -7,17 +7,17 @@ const RULES = [
   {
     n: "01",
     title: "Route, never block",
-    body: "Magpie orders attention. It holds no merge hostage, gates no pipeline, and adds zero seconds to a cleared PR.",
+    body: "Doug orders attention. It holds no merge hostage, gates no pipeline, and adds zero seconds to a cleared PR.",
   },
   {
     n: "02",
     title: "Never writes code",
-    body: "A reviewer that also writes is marking its own homework. Magpie decides where eyes go — it never generates a fix.",
+    body: "A reviewer that also writes is marking its own homework. Doug decides where eyes go — it never generates a fix.",
   },
   {
     n: "03",
     title: "Publishes its miss rate",
-    body: "Every escaped defect Magpie cleared is counted, dated, and published. If the number is bad, you'll see it here first.",
+    body: "Every escaped defect Doug cleared is counted, dated, and published. If the number is bad, you'll see it here first.",
   },
 ];
 
@@ -39,7 +39,7 @@ export default async function Home() {
     <main className="mx-auto w-full max-w-5xl px-6">
       <nav className="flex items-center justify-between py-6">
         <span className="font-heading text-lg font-semibold tracking-tight">
-          <span className="text-iridescent">✦</span> magpie
+          <span className="text-iridescent">✦</span> doug
         </span>
         <span className="glass flex items-center gap-1 rounded-full px-1.5 py-1.5 font-mono text-xs">
           <Link
@@ -49,7 +49,7 @@ export default async function Home() {
             Queue
           </Link>
           <a
-            href="https://github.com/drewjst/magpie"
+            href="https://github.com/drewjst/doug"
             className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
           >
             GitHub
@@ -77,7 +77,7 @@ export default async function Home() {
             className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted-foreground"
             style={{ animationDelay: "160ms" }}
           >
-            Magpie reads the metadata, scores the risk, and routes the handful
+            Doug reads the metadata, scores the risk, and routes the handful
             that need human eyes. Everything else clears. When it&rsquo;s
             wrong, it says so — in public.
           </p>
@@ -92,7 +92,7 @@ export default async function Home() {
               See the queue
             </Link>
             <a
-              href="https://github.com/drewjst/magpie"
+              href="https://github.com/drewjst/doug"
               className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
             >
               Read the thesis →
@@ -222,7 +222,7 @@ export default async function Home() {
             Open the queue
           </Link>
           <a
-            href="https://github.com/drewjst/magpie"
+            href="https://github.com/drewjst/doug"
             className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
           >
             Star on GitHub
@@ -232,16 +232,16 @@ export default async function Home() {
 
       <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
         <span>
-          <span className="text-iridescent">✦</span> magpie · routes, never
+          <span className="text-iridescent">✦</span> doug · routes, never
           blocks
         </span>
         <span>
           FSL-1.1-ALv2 ·{" "}
           <a
-            href="https://github.com/drewjst/magpie"
+            href="https://github.com/drewjst/doug"
             className="transition-colors hover:text-foreground"
           >
-            drewjst/magpie
+            drewjst/doug
           </a>
         </span>
       </footer>

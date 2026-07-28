@@ -2,12 +2,12 @@
 
 # Run both services for local dev (API :8000, web :3000).
 dev:
-	(cd api && uv run uvicorn magpie.api:app --reload) & \
+	(cd api && uv run uvicorn doug.api:app --reload) & \
 	(cd web && npm run dev) & \
 	wait
 
 api-dev:
-	cd api && uv run uvicorn magpie.api:app --reload
+	cd api && uv run uvicorn doug.api:app --reload
 
 web-dev:
 	cd web && npm run dev
@@ -23,5 +23,5 @@ build:
 	cd web && npm run build
 
 docker:
-	docker build -t magpie-api ./api
-	docker build -t magpie-web ./web
+	docker build -t doug-api ./api
+	docker build -t doug-web ./web

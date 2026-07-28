@@ -1,4 +1,4 @@
-from magpie.backtest.git_labels import parse_revert_targets, pr_titles_from_subjects
+from doug.backtest.git_labels import parse_revert_targets, pr_titles_from_subjects
 
 
 def test_squash_title_map_ignores_reverts_and_merges():
