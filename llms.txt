@@ -1,0 +1,83 @@
+# Doug — risk-routed code review
+
+> Doug scores every pull request deterministically against the repository's own
+> defect history, clears the safe majority, and routes the risky few to a human
+> with evidence attached. Never blocks a merge. Status: EARLY PREVIEW — the
+> public surface today is the backtest CLI. Site: https://drewjst.github.io/doug/
+> Docs: https://drewjst.github.io/doug/docs/ · Repo: https://github.com/drewjst/doug
+
+## Status legend
+- AVAILABLE: works today
+- PREVIEW: exists, gated, in training
+- PLANNED: described so you can see the direction; does not exist yet
+
+## Quickstart (AVAILABLE)
+Requirements: Python 3.12+, uv, a GitHub token (env or `gh` CLI; unauthenticated = 60 req/hr).
+
+    git clone https://github.com/drewjst/doug && cd doug/api
+    uv sync
+    uv run doug-backtest getsentry/sentry --limit 5000 --before 2026-06-15 --labels git
+
+A run: labels defect-inducing PRs from revert anchors in git history (dense, zero
+API quota), harvests merged PRs into a resumable local cache (.backtest-cache/),
+replays Doug's scoring, prints capture / cleared-band / per-rule / holdout tables.
+Tip: pass --before a few weeks back to dodge right-censoring (young PRs haven't
+had time to be reverted).
+
+## CLI reference — doug-backtest (AVAILABLE)
+    doug-backtest <owner/repo> [flags]
+
+- repo (positional, required): owner/repo, e.g. astral-sh/ruff
+- --limit INT (default 300): merged PRs to harvest
+- --before YYYY-MM-DD: only PRs created before this date (right-censoring guard)
+- --labels git|api|both (default git): defect label source
+- --token STR: GitHub token (default: env, then gh CLI)
+- --cache-dir PATH (default .backtest-cache): harvest cache; reusable, seeds bigger runs
+- --output PATH: also write the full JSON report
+- --backfill-details: fetch per-file stats + patch text for cached PRs (~1 req/PR, resumable)
+
+Harvests are checkpointed — kill and relaunch with the same command to resume.
+
+## Concepts
+- Capture curve (AVAILABLE): reading only the top-scored N% of PRs (the budget),
+  what share of defect-inducing PRs lands in that band? capture@budget is the
+  headline routing metric; AUC summarizes across budgets. Every report includes a
+  size-only baseline — if Doug can't beat "biggest diff first," don't pay for Doug.
+- Hotspots (AVAILABLE): path segments where the repo's own past defects cluster,
+  learned per repo from a rolling window. Measured on sentry: 2.34x revert lift.
+  Hotspot vocabulary does NOT transfer between repos; per-repo learning is the mechanism.
+- Defect labels (AVAILABLE): a PR is defect-inducing when later history reverts it.
+  Sources: git (revert anchors in history; default), api (GitHub revert-PR search),
+  both (union, intersected with the harvested window — no outcome-dependent injection).
+  Known limits: reverts under-count defects; a small % of labels show timestamp
+  anomalies under triage.
+- Cleared band (AVAILABLE): the product claim is about CLEARED PRs. density_lift =
+  cleared-band defect density vs merging blind; <1 means clearing carries
+  information, =1 means merging blind. This is the trust metric; capture@budget is
+  the routing metric.
+
+## The report (AVAILABLE)
+Printed tables: capture curve (doug/size-only/random + AUC), cleared band
+(cleared, missed, miss rate, density_lift per budget), per-rule precision
+(fired/hit/precision/lift — dead rules stay in the table), time-split holdout
+(hotspots learned on the older half only; needs >=200 PRs, >=8 defects, >=4 per
+half, else honestly omitted). Misses are listed by PR number so you can read the
+ones Doug got wrong. JSON schema is early-preview; printed tables are the stable contract.
+
+## MCP — Pattern Garden (PREVIEW, in training)
+An MCP server a coding agent queries BEFORE writing. Serves outcome-anchored
+patterns distilled from public-repo history: per problem shape, the solution
+variants people actually write, each carrying its revert record, survival record,
+and citations to real PRs. Planned tools: doug.ask (describe the change, get
+variants ranked by outcome evidence) and doug.check (submit a draft diff, get
+losing-variant matches). Gated on evidence: patterns ship only after outcome
+deltas replicate across repos. First domain: schema migrations. No dates promised.
+
+## REST API (PLANNED — not live)
+Sketch: GET /v1/queue (routed queue with scores + receipts), GET
+/v1/prs/:number/receipt (evidence trail behind a verdict), GET /v1/scoreboard
+(published miss rates per author type — public by design).
+
+## Honesty notes
+All published numbers are scoped to the repo they were measured on (sentry unless
+stated). Misses are published, not buried. Doug never blocks a merge.
