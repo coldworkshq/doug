@@ -51,7 +51,8 @@
   .gh:hover{border-color:var(--ink3)}
 
   /* ---------- LAYOUT ---------- */
-  .frame{display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1480px;margin:0 auto;padding-top:56px}
+  /* full-bleed: the code rail must reach the right viewport edge — no white gutter */
+  .frame{display:grid;grid-template-columns:250px minmax(0,1fr);padding-top:56px}
   @media(max-width:900px){.frame{grid-template-columns:1fr}}
 
   /* ---------- SIDEBAR ---------- */
@@ -73,9 +74,9 @@
 
   /* ---------- CONTENT ROWS (Stripe two-col) ---------- */
   .content{min-width:0}
-  .row{display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,32%,390px);gap:0;border-bottom:1px solid var(--line)}
+  .row{display:grid;grid-template-columns:minmax(0,1fr) clamp(320px,34%,560px);gap:0;border-bottom:1px solid var(--line)}
   @media(max-width:1100px){.row{grid-template-columns:1fr}}
-  .prose{padding:52px 44px;min-width:0}
+  .prose{padding:52px 44px;min-width:0;max-width:820px}
   @media(max-width:1100px){.prose{padding:40px 24px}}
   .codecol{background:var(--night);border-left:1px solid var(--night-line);padding:44px 20px;min-width:0}
   @media(max-width:1100px){.codecol{border-left:none;padding:30px 24px}}

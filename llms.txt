@@ -80,4 +80,5 @@ Sketch: GET /v1/queue (routed queue with scores + receipts), GET
 
 ## Honesty notes
 All published numbers are scoped to the repo they were measured on (sentry unless
-stated). Misses are published, not buried. Doug never blocks a merge.
+stated). They are single-repo results: cross-repo replication is in progress and
+not yet demonstrated. Misses are published, not buried. Doug never blocks a merge.
