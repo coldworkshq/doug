@@ -35,18 +35,27 @@ REPO = ("getsentry", "sentry")
 LIMIT, BEFORE = 5000, "2026-06-15"
 
 RATES = [0.05, 0.10, 0.20, 0.30]
-BLOCK = 250
-RUN_UP = 500  # history reserved before the first scored block
+BLOCK = 500
+RUN_UP = 2000  # history reserved before the first scored block
 
 K_GRID = [8, 12, 16, 24]
-D_GRID = [30, 60, 90, 180]
+D_GRID = [30, 60, 90, 180]  # now meaningful: 250-day span, not 40
 
 
 def load():
-    """Train half only, ordered by merge time, plus dated labels."""
+    """Train side only, ordered by merge time, plus dated labels.
+
+    The train side is now two harvests: the older-10k (strictly before
+    2026-03-20) plus the older half of the 5000 sample. Both are older than
+    the newer-2500 holdout by construction, so combining them grows training
+    history without touching it — 12,500 PRs / 182 defects / 250 days, against
+    2,500 / 35 / 40 when this eval first ran and was too underpowered to
+    decide anything.
+    """
     prs = harvest(*REPO, LIMIT, None, CACHE, before=BEFORE)
     # Train/holdout split stays on created_at, matching every prior run.
     train = sorted(prs, key=lambda p: p.created_at)[: len(prs) // 2]
+    train += harvest(*REPO, 10000, None, CACHE, before="2026-03-20")
     # The rolling axis is merge time: that is when a PR enters the history a
     # learner can see.
     train.sort(key=lambda p: p.merged_at)
@@ -124,10 +133,22 @@ def main() -> int:
         f"{len(frozen_set)} segments learned"
     )
 
+    # POST-HOC arm, added after seeing that every bounded window lost to
+    # frozen: if sample size beats recency, the winner should be an expanding
+    # window that re-learns on ALL history to date. Labelled exploratory
+    # because it was not pre-registered.
+    def expanding(as_of):
+        w, defs = rolling_window(train, labels, as_of, min_defects=10**6, max_days=36500)
+        return learn_hotspot_segments(w, defs)
+
+    expanding_res, _, exp_sets = evaluate(train, labels, expanding)
+
     print(f"\npooled over {n} defects (defect-weighted across blocks)")
     print(header)
     print(row("static", static_res, n, frozen_res))
     print(row("frozen (today)", frozen_res, n))
+    print(row("expanding *post-hoc*", expanding_res, n, frozen_res)
+          + f"   churn {churn(exp_sets):.2f}")
 
     results = {}
     for k in K_GRID:
