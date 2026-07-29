@@ -15,7 +15,11 @@ from githubkit import GitHub
 from githubkit.retry import RETRY_SERVER_ERROR, RetryChainDecision, RetryRateLimit
 from pydantic import BaseModel
 
-CONCURRENCY = 4
+# Enrichment is ~3 requests/PR and latency-bound, not quota-bound: at 4 this
+# drew ~2000 req/hr against a 5000/hr limit, which turned a 12k-PR harvest
+# into an 18-hour run. 10 saturates the quota instead, and the retry chain
+# absorbs the rate-limit pauses that come with it.
+CONCURRENCY = 10
 # Default githubkit only retries a rate-limit once; long harvests need more.
 _RETRY = RetryChainDecision(RetryRateLimit(max_retry=6), RETRY_SERVER_ERROR)
 
