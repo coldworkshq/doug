@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doug Docs — CLI, concepts & API</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FCFCFA; --bg2:#F6F5F1; --card:#FFFFFF;
+    --ink:#111311; --ink2:#545852; --ink3:#8A8E86;
+    --line:#E7E5DE; --line2:#D9D6CD;
+    --accent:#D1571E; --accent-ink:#A83F0F; --accent-soft:#FBEFE6;
+    --ok:#177A50; --ok-soft:#E7F4EC;
+    --warn:#9A6B12; --warn-soft:#FBF3DC;
+    --plan:#5B6470; --plan-soft:#EDEFF2;
+    --night:#101210; --night2:#0B0D0B; --night-line:#2A2E29;
+    --sans:'Geist',system-ui,sans-serif;
+    --mono:'Geist Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.65;
+    -webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  ::selection{background:var(--accent-soft)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+  /* ---------- TOP BAR ---------- */
+  .topbar{position:fixed;inset:0 0 auto 0;height:56px;z-index:60;display:flex;align-items:center;gap:18px;
+    padding:0 20px;background:rgba(252,252,250,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;text-decoration:none;font-weight:600;font-size:16px}
+  .brand .docs{color:var(--ink3);font-weight:500}
+  .ver{font-family:var(--mono);font-size:11.5px;color:var(--accent-ink);background:var(--accent-soft);
+    border-radius:99px;padding:4px 11px;font-weight:600}
+  .topspace{flex:1}
+  .toplink{font-size:13.5px;font-weight:500;color:var(--ink2);text-decoration:none}
+  .toplink:hover{color:var(--ink)}
+  .gh{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;text-decoration:none;
+    border:1px solid var(--line2);border-radius:9px;padding:7px 13px}
+  .gh:hover{border-color:var(--ink3)}
+
+  /* ---------- LAYOUT ---------- */
+  .frame{display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1480px;margin:0 auto;padding-top:56px}
+  @media(max-width:900px){.frame{grid-template-columns:1fr}}
+
+  /* ---------- SIDEBAR ---------- */
+  .side{position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto;padding:26px 18px 40px;
+    border-right:1px solid var(--line)}
+  @media(max-width:900px){.side{display:none}}
+  .search{width:100%;font-family:var(--sans);font-size:13.5px;color:var(--ink);background:var(--card);
+    border:1px solid var(--line2);border-radius:9px;padding:8px 12px;margin-bottom:22px}
+  .search::placeholder{color:var(--ink3)}
+  .group{margin-bottom:24px}
+  .group .g{font-size:11.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);
+    margin-bottom:8px;padding-left:10px}
+  .group a{display:flex;align-items:center;gap:8px;font-size:13.8px;color:var(--ink2);text-decoration:none;
+    padding:6px 10px;border-radius:8px;border-left:2px solid transparent}
+  .group a:hover{background:var(--bg2);color:var(--ink)}
+  .group a.active{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.plan{background:var(--plan)}
+
+  /* ---------- CONTENT ROWS (Stripe two-col) ---------- */
+  .content{min-width:0}
+  .row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,46%);gap:0;border-bottom:1px solid var(--line)}
+  @media(max-width:1100px){.row{grid-template-columns:1fr}}
+  .prose{padding:52px 44px;min-width:0}
+  @media(max-width:1100px){.prose{padding:40px 24px}}
+  .codecol{background:var(--night);border-left:1px solid var(--night-line);padding:52px 30px;min-width:0}
+  @media(max-width:1100px){.codecol{border-left:none;padding:30px 24px}}
+  .codecol .sticky{position:sticky;top:84px}
+  .row.full{grid-template-columns:1fr}
+  .row.full .prose{max-width:820px}
+
+  .kick{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent-ink);font-weight:600;margin:0 0 10px}
+  h1{font-size:34px;font-weight:700;letter-spacing:-.035em;line-height:1.1;margin:0 0 14px}
+  h2{font-size:24px;font-weight:700;letter-spacing:-.025em;margin:0 0 12px;scroll-margin-top:76px}
+  h3{font-size:16.5px;font-weight:600;letter-spacing:-.01em;margin:26px 0 8px}
+  p{margin:0 0 14px;color:var(--ink2)}
+  p b,li b{color:var(--ink);font-weight:600}
+  .prose ul{margin:0 0 14px;padding-left:20px;color:var(--ink2)}
+  .prose li{margin-bottom:6px}
+  code.inline{font-family:var(--mono);font-size:.88em;background:var(--bg2);border:1px solid var(--line);
+    border-radius:6px;padding:1px 6px;color:var(--accent-ink)}
+
+  .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.06em;text-transform:uppercase;border-radius:99px;padding:4px 11px;vertical-align:3px;margin-left:10px}
+  .b-ok{background:var(--ok-soft);color:var(--ok)}
+  .b-warn{background:var(--warn-soft);color:var(--warn)}
+  .b-plan{background:var(--plan-soft);color:var(--plan)}
+
+  .callout{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--card);
+    border-radius:10px;padding:14px 18px;margin:18px 0;font-size:14px;color:var(--ink2)}
+  .callout b{color:var(--ink)}
+
+  /* params table */
+  .params{margin:16px 0 4px;border-top:1px solid var(--line)}
+  .param{display:grid;grid-template-columns:200px 1fr;gap:16px;padding:13px 0;border-bottom:1px solid var(--line)}
+  @media(max-width:640px){.param{grid-template-columns:1fr;gap:4px}}
+  .param .pn{font-family:var(--mono);font-size:13px;font-weight:600;word-break:break-all}
+  .param .pt{font-family:var(--mono);font-size:11.5px;color:var(--ink3);display:block;margin-top:3px;font-weight:400}
+  .param .pd{font-size:13.8px;color:var(--ink2)}
+  .param .pd code{font-family:var(--mono);font-size:.9em;color:var(--accent-ink)}
+
+  /* ---------- CODE BLOCKS ---------- */
+  .block{background:var(--night2);border:1px solid var(--night-line);border-radius:12px;overflow:hidden;margin-bottom:18px}
+  .bhead{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--night-line)}
+  .bhead .t{font-family:var(--mono);font-size:11.5px;color:#6E756D;letter-spacing:.04em}
+  .bhead .sp{flex:1}
+  .copy{font-family:var(--mono);font-size:11px;color:#8A9188;background:transparent;border:1px solid var(--night-line);
+    border-radius:6px;padding:4px 10px;cursor:pointer;transition:all .15s}
+  .copy:hover{color:#E7EBE5;border-color:#4A504A}
+  .bcode{padding:16px 18px;font-family:var(--mono);font-size:12.6px;line-height:1.8;color:#C7CEC6;
+    overflow-x:auto;white-space:pre}
+  .bcode .cm{color:#5C645B}   /* comment */
+  .bcode .fn{color:#EFA167}   /* function/flag */
+  .bcode .st{color:#A8C7A0}   /* string */
+  .bcode .ok{color:#5CC98B}
+  .bcode .hot{color:#EF7B66}
+  .bcode .dim{color:#79817A}
+  .bcode .wt{color:#EDEFEA}
+  .bcode .kw{color:#8FBBD9}
+
+  /* ---------- FOOTER ---------- */
+  .docfoot{padding:36px 44px 60px;display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);
+    font-size:11.5px;color:var(--ink3)}
+  .docfoot .sp{flex:1}
+  .docfoot a{color:var(--ink2)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../">
+    <svg width="24" height="24" viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="32" cy="30" r="21" fill="#fff" stroke="#111311" stroke-width="3"/>
+      <path d="M12 28 C6 15, 19 8, 24 14 L20 29 Z" fill="#D1571E" stroke="#111311" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M52 28 C58 15, 45 8, 40 14 L44 29 Z" fill="#D1571E" stroke="#111311" stroke-width="3" stroke-linejoin="round"/>
+      <circle cx="25" cy="29" r="2.7" fill="#111311"/><circle cx="39" cy="29" r="2.7" fill="#111311"/>
+      <ellipse cx="32" cy="38" rx="4.8" ry="3.8" fill="#111311"/>
+    </svg>
+    Doug <span class="docs">/ Docs</span>
+  </a>
+  <span class="ver">v0 · early preview</span>
+  <div class="topspace"></div>
+  <a class="toplink" href="../#scoreboard">The scoreboard</a>
+  <a class="gh" href="https://github.com/drewjst/doug">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+    GitHub
+  </a>
+</div>
+
+<div class="frame">
+
+  <!-- ============ SIDEBAR ============ -->
+  <nav class="side">
+    <input class="search" id="filter" type="search" placeholder="Filter sections…" aria-label="Filter docs sections">
+    <div class="group">
+      <div class="g">Getting started</div>
+      <a href="#introduction"><span class="dot ok"></span>Introduction</a>
+      <a href="#quickstart"><span class="dot ok"></span>Quickstart</a>
+    </div>
+    <div class="group">
+      <div class="g">Concepts</div>
+      <a href="#risk-routing"><span class="dot ok"></span>Risk routing</a>
+      <a href="#labels"><span class="dot ok"></span>Defect labels</a>
+      <a href="#cleared-band"><span class="dot ok"></span>The cleared band</a>
+    </div>
+    <div class="group">
+      <div class="g">Reference</div>
+      <a href="#cli"><span class="dot ok"></span>CLI · doug-backtest</a>
+      <a href="#report"><span class="dot ok"></span>The report</a>
+    </div>
+    <div class="group">
+      <div class="g">Coming up</div>
+      <a href="#mcp"><span class="dot warn"></span>MCP · Pattern Garden</a>
+      <a href="#api"><span class="dot plan"></span>REST API</a>
+    </div>
+    <div class="group">
+      <div class="g">Meta</div>
+      <a href="#changelog"><span class="dot ok"></span>Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ============ CONTENT ============ -->
+  <main class="content">
+
+    <!-- INTRODUCTION -->
+    <section class="row" id="introduction">
+      <div class="prose">
+        <p class="kick">Getting started</p>
+        <h1>Doug Documentation</h1>
+        <p><b>Doug is risk-routed code review for the agent era.</b> He scores every pull request
+          deterministically against your repository's own defect history, clears the safe majority,
+          and routes the risky few to a human — with evidence attached. He never blocks a merge.</p>
+        <p>Today the public surface is the <b>backtest CLI</b>: replay your repo's merged history,
+          label defect-inducing PRs from revert anchors in git, and measure exactly what Doug would
+          have caught. The report is the demo — and the same numbers we publish for ourselves.</p>
+        <div class="callout"><b>Early preview.</b> Doug is in active development. Everything marked
+          <span class="badge b-ok" style="vertical-align:0">Available</span> works today; things marked
+          <span class="badge b-warn" style="vertical-align:0">Preview</span> or
+          <span class="badge b-plan" style="vertical-align:0">Planned</span> are described so you can
+          see where this is going — not to pretend they exist.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">THE SHAPE OF DOUG</span></div>
+          <div class="bcode"><span class="cm"># 1 · replay history, honestly</span>
+<span class="wt">doug-backtest</span> <span class="st">your-org/your-repo</span>
+
+<span class="cm"># 2 · route the live queue          [preview]</span>
+<span class="dim">62 open → 5 need you · rest cleared w/ receipts</span>
+
+<span class="cm"># 3 · ask before you write          [in training]</span>
+<span class="fn">doug.ask</span>(<span class="st">"backfill NOT NULL on a hot table"</span>)</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- QUICKSTART -->
+    <section class="row" id="quickstart">
+      <div class="prose">
+        <h2>Quickstart <span class="badge b-ok">Available</span></h2>
+        <p>Backtest any public repository in one command. No account, no server — the CLI talks to
+          GitHub, caches locally, and prints the full scoreboard.</p>
+        <h3>Requirements</h3>
+        <ul>
+          <li>Python 3.12+ and <code class="inline">uv</code> (or pip)</li>
+          <li>A GitHub token — picked up from the environment or the <code class="inline">gh</code> CLI.
+            Without one you get the unauthenticated 60 req/hr limit, which is only enough for tiny runs.</li>
+        </ul>
+        <h3>What a run does</h3>
+        <ul>
+          <li>Labels defect-inducing PRs from <b>revert anchors in git history</b> (dense, zero API quota)</li>
+          <li>Harvests merged PRs into a resumable local cache (<code class="inline">.backtest-cache/</code>)</li>
+          <li>Replays Doug's scoring over the window and prints capture, cleared-band, per-rule, and holdout tables</li>
+        </ul>
+        <div class="callout"><b>Tip — dodge right-censoring:</b> young PRs haven't had time to be
+          reverted yet. Pass <code class="inline">--before</code> with a date at least a few weeks back
+          so every PR in the window had a fair chance to fail.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">TERMINAL</span><span class="sp"></span><button class="copy">copy</button></div>
+          <div class="bcode"><span class="cm"># install (from the repo, for now)</span>
+<span class="dim">$</span> <span class="wt">git clone https://github.com/drewjst/doug &amp;&amp; cd doug/api</span>
+<span class="dim">$</span> <span class="wt">uv sync</span>
+
+<span class="cm"># backtest a year of history</span>
+<span class="dim">$</span> <span class="wt">uv run doug-backtest getsentry/sentry \
+    --limit 5000 --before 2026-06-15 --labels git</span></div>
+        </div>
+        <div class="block">
+          <div class="bhead"><span class="t">OUTPUT (ABRIDGED, REAL RUN)</span></div>
+          <div class="bcode"><span class="dim">5000 scored PRs · 67 in-window labeled defect-inducing</span>
+
+<span class="wt"> flag rate     doug  size-only   random</span>
+       10%      14%         8%      10%
+       20%     <span class="ok">36%</span>        19%      20%
+       30%     <span class="ok">57%</span>        31%      30%
+
+<span class="dim">AUC — doug 0.640 · size-only 0.552 · random 0.500</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- RISK ROUTING -->
+    <section class="row" id="risk-routing">
+      <div class="prose">
+        <h2>Risk routing <span class="badge b-ok">Available</span></h2>
+        <p>Doug's core claim is a <b>capture curve</b>: reading only the top-scored <i>N</i>% of PRs
+          (the "budget"), what share of defect-inducing PRs land inside that band?</p>
+        <p>Scoring is <b>deterministic</b> — no model in the hot path, nothing leaves your machine.
+          The signal that carries most of the weight is <b>learned hotspots</b>: path segments where
+          your repo's own past defects cluster. On sentry, PRs touching learned hotspots revert at
+          <b>2.34×</b> the base rate; hotspots drift over time, so they're learned from a rolling window,
+          not hard-coded.</p>
+        <ul>
+          <li><b>capture@budget</b> — headline routing metric: % of defect PRs caught at a given flag rate</li>
+          <li><b>AUC</b> — budget-independent summary across all flag rates</li>
+          <li><b>size-only baseline</b> — every report shows it; if Doug can't beat "biggest diff first," you should not pay for Doug</li>
+        </ul>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">PER-RULE PRECISION (SENTRY, TRAIN HALF)</span></div>
+          <div class="bcode"><span class="wt">rule                    fired   hit   lift</span>
+hotspot_path              581    19  <span class="ok">2.34x</span>
+refactor_pure_mod         332     9  1.94x
+deletion_leaning          214     4  <span class="hot">0.82x</span>  <span class="cm"># dead — kept honest</span>
+
+<span class="cm"># every rule ships with its receipts;
+# rules that don't pay get reported, not hidden</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- LABELS -->
+    <section class="row" id="labels">
+      <div class="prose">
+        <h2>Defect labels <span class="badge b-ok">Available</span></h2>
+        <p>A backtest is only as honest as its labels. Doug labels a PR <b>defect-inducing</b> when
+          later history reverts it — the revert is an engineer's own on-the-record verdict that the
+          change was bad.</p>
+        <h3>Label sources (<code class="inline">--labels</code>)</h3>
+        <div class="params">
+          <div class="param"><div><span class="pn">git</span><span class="pt">default</span></div>
+            <div class="pd">Parse revert anchors out of git history directly. Dense, zero API quota,
+            and reproducible from a clone alone.</div></div>
+          <div class="param"><div><span class="pn">api</span></div>
+            <div class="pd">Search GitHub for revert PRs via the API. Sparser but catches reverts
+            that never say "revert" in the commit subject.</div></div>
+          <div class="param"><div><span class="pn">both</span></div>
+            <div class="pd">Union of the two. Labels are intersected with the harvested window —
+            no outcome-dependent injection, which would bias the capture numbers.</div></div>
+        </div>
+        <div class="callout"><b>Known limits, stated plainly:</b> reverts under-count defects
+          (hotfixes without reverts are missed), and ~6% of git labels on sentry show timestamp
+          anomalies we're still triaging. The labels are good enough to rank on; we publish their
+          weaknesses along with the wins.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">HOW A LABEL IS BORN</span></div>
+          <div class="bcode"><span class="cm"># merged PR #4821 — "migrate retry-queue table"</span>
+<span class="dim">merge  2026-03-02</span>  <span class="wt">a41f9c2</span>
+
+<span class="cm"># nine days later:</span>
+<span class="dim">commit 2026-03-11</span>  <span class="wt">e77d201</span>
+<span class="st">"Revert 'migrate retry-queue table' (#4821)"</span>
+
+<span class="hot">→ #4821 labeled defect-inducing</span>
+<span class="cm"># an engineer said so, in the record, at the time</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- CLEARED BAND -->
+    <section class="row" id="cleared-band">
+      <div class="prose">
+        <h2>The cleared band <span class="badge b-ok">Available</span></h2>
+        <p>Capture describes the flagged band. The product actually sells the <b>other one</b>:
+          "auto-merge what Doug cleared" is a claim about defect density <i>among cleared PRs</i>.</p>
+        <p>The report's cleared-band table answers it directly: at each budget, how many PRs were
+          cleared, how many defects slipped through (the <b>miss rate</b>), and the cleared band's
+          defect density versus merging blind — <b>density_lift</b>.</p>
+        <ul>
+          <li><code class="inline">density_lift &lt; 1</code> — clearing carries information; cleared PRs are safer than average</li>
+          <li><code class="inline">density_lift = 1</code> — Doug's clearance is worthless; you're merging blind</li>
+        </ul>
+        <p>This is the trust product's headline metric, the way capture@budget is the routing
+          product's. It's also the number that decides whether an auto-merge claim would be honest
+          at a given budget — and at tight budgets, today, it wouldn't be. We say so.</p>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">CLEARED BAND (SHAPE)</span></div>
+          <div class="bcode"><span class="wt"> flag  cleared  missed  miss rate  vs base</span>
+  10%    4,500    ~58       86%      0.96x
+  20%    4,000    ~43       64%      0.80x
+  30%    3,500    ~29       43%     <span class="ok"> 0.61x</span>
+
+<span class="cm"># reading: at a 30% budget the cleared band
+# carries 0.61× the blind-merge defect density.
+# honest, not yet publishable — n is small.</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- CLI -->
+    <section class="row" id="cli">
+      <div class="prose">
+        <h2>CLI · doug-backtest <span class="badge b-ok">Available</span></h2>
+        <p>Replay a repository's merged-PR history and print the full scoreboard. Harvests are
+          cached and checkpointed — kill it and relaunch any time; it resumes.</p>
+        <div class="params">
+          <div class="param"><div><span class="pn">repo</span><span class="pt">positional · required</span></div>
+            <div class="pd"><code>owner/repo</code>, e.g. <code>astral-sh/ruff</code></div></div>
+          <div class="param"><div><span class="pn">--limit</span><span class="pt">int · default 300</span></div>
+            <div class="pd">Merged PRs to harvest, newest-first within the window.</div></div>
+          <div class="param"><div><span class="pn">--before</span><span class="pt">YYYY-MM-DD</span></div>
+            <div class="pd">Only harvest PRs created before this date — the right-censoring guard.</div></div>
+          <div class="param"><div><span class="pn">--labels</span><span class="pt">git | api | both · default git</span></div>
+            <div class="pd">Defect label source. See <a href="#labels">Defect labels</a>.</div></div>
+          <div class="param"><div><span class="pn">--token</span><span class="pt">string</span></div>
+            <div class="pd">GitHub token. Default: environment, then the <code>gh</code> CLI.</div></div>
+          <div class="param"><div><span class="pn">--cache-dir</span><span class="pt">path · default .backtest-cache</span></div>
+            <div class="pd">Harvest cache location. Safe to reuse across runs; seeds bigger runs from smaller ones.</div></div>
+          <div class="param"><div><span class="pn">--output</span><span class="pt">path</span></div>
+            <div class="pd">Write the full JSON report here as well as printing tables.</div></div>
+          <div class="param"><div><span class="pn">--backfill-details</span><span class="pt">flag</span></div>
+            <div class="pd">Fetch per-file stats + patch text for cached PRs missing them (~1 request/PR; checkpointed, resumable).</div></div>
+        </div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">EXAMPLES</span><span class="sp"></span><button class="copy">copy</button></div>
+          <div class="bcode"><span class="cm"># quick look, 300 PRs</span>
+<span class="dim">$</span> <span class="wt">doug-backtest astral-sh/ruff</span>
+
+<span class="cm"># serious run: deep window, censoring guard,</span>
+<span class="cm"># patch-level detail, JSON report</span>
+<span class="dim">$</span> <span class="wt">doug-backtest grafana/grafana \
+    --limit 12000 \
+    --before 2026-06-15 \
+    --labels git \
+    --backfill-details \
+    --output report.json</span>
+
+<span class="cm"># resume after a kill — same command, cache does the rest</span>
+<span class="dim">$</span> <span class="wt">doug-backtest grafana/grafana --limit 12000 \
+    --before 2026-06-15</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- REPORT -->
+    <section class="row" id="report">
+      <div class="prose">
+        <h2>The report <span class="badge b-ok">Available</span></h2>
+        <p>Every run prints four tables; <code class="inline">--output</code> writes the same data
+          as JSON. The report is designed to be <b>checked</b>, not admired — misses are listed by
+          PR number so you can go read the ones Doug got wrong.</p>
+        <h3>Sections</h3>
+        <ul>
+          <li><b>Capture curve</b> — doug vs size-only vs random, at each flag rate, plus AUC</li>
+          <li><b>Cleared band</b> — cleared count, missed defects, miss rate, density_lift per budget</li>
+          <li><b>Per-rule precision</b> — every scoring rule: fired / hit / precision / lift. Dead rules stay in the table</li>
+          <li><b>Time-split holdout</b> — hotspots learned on the older half only, scored on the newer half;
+            requires ≥200 PRs and ≥8 defects with ≥4 in each half, otherwise it's honestly omitted</li>
+        </ul>
+        <div class="callout"><b>Schema stability:</b> early preview — field names may still move.
+          The printed tables are the stable contract for now; treat the JSON as versioned-by-commit.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">REPORT.JSON (SKETCH)</span></div>
+          <div class="bcode">{
+  <span class="st">"repo"</span>: <span class="st">"getsentry/sentry"</span>,
+  <span class="st">"window"</span>: { <span class="st">"prs"</span>: <span class="kw">5000</span>, <span class="st">"defects"</span>: <span class="kw">67</span> },
+  <span class="st">"capture"</span>: { <span class="st">"auc"</span>: <span class="kw">0.640</span>, <span class="st">"at"</span>: { <span class="st">"0.2"</span>: <span class="kw">0.36</span> } },
+  <span class="st">"cleared_band"</span>: [ { <span class="st">"flag_rate"</span>: <span class="kw">0.3</span>,
+      <span class="st">"density_lift"</span>: <span class="kw">0.61</span>, <span class="dim">…</span> } ],
+  <span class="st">"rules"</span>: [ { <span class="st">"rule"</span>: <span class="st">"hotspot_path"</span>,
+      <span class="st">"lift"</span>: <span class="kw">2.34</span>, <span class="dim">…</span> } ],
+  <span class="st">"holdout"</span>: { <span class="dim">…</span> },
+  <span class="st">"misses"</span>: [ <span class="kw">4821</span>, <span class="kw">3977</span>, <span class="dim">…</span> ]
+}</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- MCP -->
+    <section class="row" id="mcp">
+      <div class="prose">
+        <h2>MCP · Pattern Garden <span class="badge b-warn">Preview — in training</span></h2>
+        <p>The Pattern Garden is an MCP server your coding agent queries <b>before it writes</b>.
+          It serves <b>outcome-anchored patterns</b> distilled from public-repo history: for a given
+          problem shape, the solution variants people actually write — each carrying its revert
+          record, its survival record, and citations to real PRs.</p>
+        <p>Base models trained on public code learned what's <i>common</i>. The garden knows what's
+          <i>fit</i>, because every pattern is joined to what production did next. Frequency isn't fitness.</p>
+        <h3>Planned tools</h3>
+        <div class="params">
+          <div class="param"><div><span class="pn">doug.ask</span><span class="pt">tool · preview</span></div>
+            <div class="pd">Describe the change you're about to make; get known variants ranked by
+            outcome evidence, with failure modes and citations.</div></div>
+          <div class="param"><div><span class="pn">doug.check</span><span class="pt">tool · planned</span></div>
+            <div class="pd">Submit a draft diff; get back any losing-variant matches with the
+            cross-repo record attached.</div></div>
+        </div>
+        <div class="callout"><b>Status, honestly:</b> the garden is gated on our own evidence bar —
+          patterns ship only after their outcome deltas replicate across repos. First domain:
+          schema migrations. No dates promised until the probes pass.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">MCP · PREVIEW</span></div>
+          <div class="bcode"><span class="fn">doug.ask</span>(<span class="st">"backfill a NOT NULL column on a hot table"</span>)
+
+<span class="cm">→ 2 variants known · 412 episodes · 87 repos</span>
+<span class="ok">✓ dual-write → backfill → enforce</span>
+  <span class="dim">survives 3.1yr median under churn · 289 receipts</span>
+<span class="hot">✗ single-pass ALTER + backfill</span>
+  <span class="dim">reverted 31/123 · lock storms on &gt;10M rows</span>
+
+<span class="cm">→ failure modes: lock timeout · replica lag
+→ citations: sentry#38112 · grafana#71204 · +29</span></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- API -->
+    <section class="row" id="api">
+      <div class="prose">
+        <h2>REST API <span class="badge b-plan">Planned</span></h2>
+        <p>The hosted product will expose the same objects the CLI prints today. Sketched here so
+          you can see the shape early — <b>none of this is live</b>.</p>
+        <div class="params">
+          <div class="param"><div><span class="pn">GET /v1/queue</span><span class="pt">planned</span></div>
+            <div class="pd">The routed queue: open PRs with scores, verdicts, and receipts.</div></div>
+          <div class="param"><div><span class="pn">GET /v1/prs/:number/receipt</span><span class="pt">planned</span></div>
+            <div class="pd">The full evidence trail behind a verdict — rules fired, hotspot history, pattern matches.</div></div>
+          <div class="param"><div><span class="pn">GET /v1/scoreboard</span><span class="pt">planned</span></div>
+            <div class="pd">Published calibration: miss rates per author type, over time. Public by design.</div></div>
+        </div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">SKETCH — NOT LIVE</span></div>
+          <div class="bcode"><span class="dim">$</span> <span class="wt">curl https://api.doug.dev/v1/prs/4821/receipt</span>
+{
+  <span class="st">"verdict"</span>: <span class="st">"needs_human"</span>,
+  <span class="st">"routed_to"</span>: <span class="st">"maya"</span>,
+  <span class="st">"evidence"</span>: [
+    { <span class="st">"rule"</span>: <span class="st">"hotspot_path"</span>, <span class="st">"lift"</span>: <span class="kw">2.34</span> },
+    { <span class="st">"pattern"</span>: <span class="st">"dual_write_no_guard"</span>,
+      <span class="st">"seen"</span>: <span class="kw">214</span>, <span class="st">"reverted"</span>: <span class="kw">31</span> }
+  ]
+}</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- CHANGELOG -->
+    <section class="row full" id="changelog">
+      <div class="prose">
+        <h2>Changelog</h2>
+        <div class="params">
+          <div class="param"><div><span class="pn">2026-07</span></div>
+            <div class="pd">Backtest hardening: checkpoint/resume harvests, cache seeding, listing dedupe,
+            <code>--backfill-details</code> (per-file stats + patch text). Cleared-band metric shipped.
+            Rolling-window hotspot learning built; verdict pending deeper history. This docs site.</div></div>
+          <div class="param"><div><span class="pn">2026-07</span></div>
+            <div class="pd">Renamed to Doug (after a Saint Bernard). Landing page live.
+            Replays published for sentry, grafana, ruff.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="docfoot">
+      <span>© 2026 Doug · early preview · numbers from real replays, preview figures marked as such</span>
+      <span class="sp"></span>
+      <a href="../">doug home</a>
+      <a href="https://github.com/drewjst/doug">github</a>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // copy buttons — copy the sibling code block's text
+  document.querySelectorAll('.copy').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var code = btn.closest('.block').querySelector('.bcode');
+      navigator.clipboard && navigator.clipboard.writeText(code.textContent).then(function(){
+        btn.textContent = 'copied!';
+        setTimeout(function(){ btn.textContent = 'copy'; }, 1400);
+      });
+    });
+  });
+
+  // sidebar filter
+  document.getElementById('filter').addEventListener('input', function(){
+    var q = this.value.toLowerCase();
+    document.querySelectorAll('.side .group').forEach(function(g){
+      var any = false;
+      g.querySelectorAll('a').forEach(function(a){
+        var hit = a.textContent.toLowerCase().indexOf(q) !== -1;
+        a.style.display = hit ? '' : 'none';
+        if (hit) any = true;
+      });
+      g.style.display = any ? '' : 'none';
+    });
+  });
+
+  // active-section highlight
+  var links = document.querySelectorAll('.side .group a[href^="#"]');
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting && map[e.target.id]) {
+        links.forEach(function(a){ a.classList.remove('active'); });
+        map[e.target.id].classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('section[id]').forEach(function(s){ obs.observe(s); });
+</script>
+</body>
+</html>
