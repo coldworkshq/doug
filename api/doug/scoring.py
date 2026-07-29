@@ -121,11 +121,16 @@ def _rules(f: Features) -> list[Reason]:
             )
         )
 
-    # v4 note (2026-07-28): rules built on refactor_title/pure_modification/
-    # deletion_leaning were tried and REMOVED — pre-registered holdout eval
-    # dropped capture@20% from 42% to 23% (train lifts at n=16 defects were
-    # noise; the rules diluted the hotspot band). The features stay extracted
-    # for recalibration once the label set is materially larger.
+    # v4 shape rules (refactor_title / pure_modification / deletion_leaning)
+    # were tried TWICE and are out. Attempt 1 (w=0.20) failed a pre-registered
+    # holdout. Attempt 2 swept w on the train half alone and the rule proved
+    # *structurally* inert at the 20–30% budgets the thesis targets: its 9
+    # train defects are 4 already inside the hotspot band and 5 outside at
+    # only 1.57× lift, so promoting them can only displace 2.34× hotspot PRs.
+    # A shape rule cannot pay here unless it fires where hotspot doesn't.
+    # See scripts/tune_refactor_weight.py and the phase-0 notes.
+    # Features stay extracted — they cost nothing and a bigger label set may
+    # revive them for the *within*-band ordering they do seem to help.
 
     return reasons
 
