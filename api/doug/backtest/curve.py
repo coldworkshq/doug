@@ -59,6 +59,48 @@ def capture_curve(scored: list[tuple[float, bool]]) -> Curve:
     return Curve(points=points, auc=round(auc, 4))
 
 
+class ClearedBand(BaseModel):
+    flag_rate: float
+    cleared_prs: int
+    cleared_defects: float
+    miss_rate: float
+    density: float
+    density_lift: float
+
+
+def cleared_band(
+    curve: Curve, n: int, total_defects: int, flag_rate: float
+) -> ClearedBand:
+    """What is left behind when the top `flag_rate` is routed for review.
+
+    Capture measures the flagged band; this measures the other one — and the
+    other one is what the product actually sells. "Auto-merge what Doug
+    cleared" is a claim about defect density among *cleared* PRs, not about
+    recall among flagged ones.
+
+    `density_lift` is the number to watch: cleared-band defect density over
+    the population's base rate. Below 1 means clearing carries information;
+    at 1 the cleared band is exactly as risky as merging blind, no matter how
+    good the capture number looks.
+    """
+    cleared_prs = round(n * (1 - flag_rate))
+    miss_rate = 1 - curve.capture_at(flag_rate)
+    cleared_defects = total_defects * miss_rate
+    density = cleared_defects / cleared_prs if cleared_prs else 0.0
+    base = total_defects / n if n else 0.0
+    # Unrounded on purpose: miss_rate is exactly 1 - capture_at, and rounding
+    # a field that carries an identity breaks it for callers. Formatting is
+    # the CLI's job.
+    return ClearedBand(
+        flag_rate=flag_rate,
+        cleared_prs=cleared_prs,
+        cleared_defects=cleared_defects,
+        miss_rate=miss_rate,
+        density=density,
+        density_lift=density / base if base else 0.0,
+    )
+
+
 class RuleStat(BaseModel):
     rule: str
     fired: int

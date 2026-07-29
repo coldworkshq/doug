@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from doug.backtest import harvest as harvest_mod
-from doug.backtest.curve import capture_curve, rule_stats
+from doug.backtest.curve import capture_curve, cleared_band, rule_stats
 from doug.backtest.harvest import (
     FileDetail,
     HarvestedPR,
@@ -146,7 +146,9 @@ def test_partial_removed_after_final_cache_written(tmp_path, monkeypatch):
 
 
 def _detail(name: str = "src/a.py") -> FileDetail:
-    return FileDetail(filename=name, status="modified", additions=3, deletions=1, patch="@@ -1 +1 @@")
+    return FileDetail(
+        filename=name, status="modified", additions=3, deletions=1, patch="@@ -1 +1 @@"
+    )
 
 
 def test_old_cache_loads_with_details_absent(tmp_path):
@@ -251,3 +253,39 @@ def test_harvest_dedupes_listing(tmp_path, monkeypatch):
     monkeypatch.setattr(harvest_mod, "_harvest", fake_harvest)
     result = harvest_mod.harvest("o", "r", 3, None, tmp_path)
     assert [p.number for p in result] == [1, 2]
+
+
+def test_cleared_band_is_empty_of_defects_when_ranking_is_perfect():
+    # 2 defects, both ranked top. Flag 20% of 10 PRs and the cleared band is
+    # clean — the only case where auto-merging what Doug cleared is free.
+    scored = [(0.9, True), (0.8, True)] + [(0.1 * i / 100, False) for i in range(8)]
+    band = cleared_band(capture_curve(scored), n=10, total_defects=2, flag_rate=0.20)
+    assert band.cleared_prs == 8
+    assert band.cleared_defects == pytest.approx(0.0)
+    assert band.miss_rate == pytest.approx(0.0)
+    assert band.density == pytest.approx(0.0)
+    assert band.density_lift == pytest.approx(0.0)
+
+
+def test_cleared_band_matches_base_rate_when_ranking_is_uninformative():
+    # All scores tied => flagging is random => the cleared band is exactly as
+    # risky as the population. density_lift ~1 means clearing told you nothing.
+    scored = [(0.5, i < 10) for i in range(100)]
+    band = cleared_band(capture_curve(scored), n=100, total_defects=10, flag_rate=0.20)
+    assert band.density_lift == pytest.approx(1.0, abs=0.01)
+    assert band.miss_rate == pytest.approx(0.8, abs=0.01)
+
+
+def test_cleared_band_miss_rate_is_the_complement_of_capture():
+    scored = [(float(100 - i), i % 7 == 0) for i in range(100)]
+    curve = capture_curve(scored)
+    total = sum(1 for _, d in scored if d)
+    for r in (0.10, 0.20, 0.30):
+        band = cleared_band(curve, n=100, total_defects=total, flag_rate=r)
+        assert band.miss_rate == pytest.approx(1 - curve.capture_at(r))
+
+
+def test_cleared_band_reports_zero_lift_for_an_empty_population():
+    band = cleared_band(capture_curve([]), n=0, total_defects=0, flag_rate=0.20)
+    assert band.density == 0.0
+    assert band.density_lift == 0.0

@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from .curve import capture_curve, rule_stats
+from .curve import capture_curve, cleared_band, rule_stats
 from .git_labels import find_reverted_prs
 from .harvest import backfill_file_details, harvest, resolve_token, search_reverts
 from .hotspots import learn_hotspot_segments
@@ -120,6 +120,23 @@ def main() -> int:
         )
     print(f"\nAUC — doug {doug.auc:.3f} · size-only {size.auc:.3f} · random 0.500")
 
+    # Capture describes the flagged band. The product sells the other one:
+    # "auto-merge what Doug cleared" is a claim about defect density among
+    # cleared PRs. density_lift < 1 means clearing carries information;
+    # at 1 the cleared band is exactly as risky as merging blind.
+    base_rate = len(defects) / len(prs)
+    bands = [cleared_band(doug, len(prs), len(defects), f) for f in FLAG_RATES]
+    print(f"\ncleared band (base defect rate {base_rate:.2%}):")
+    print(
+        f"{'flag rate':>10} {'cleared':>9} {'missed':>8} "
+        f"{'miss rate':>10} {'density':>9} {'vs base':>9}"
+    )
+    for b in bands:
+        print(
+            f"{b.flag_rate:>10.0%} {b.cleared_prs:>9} {b.cleared_defects:>8.1f} "
+            f"{b.miss_rate:>10.0%} {b.density:>9.2%} {b.density_lift:>8.2f}x"
+        )
+
     stats = rule_stats(
         [rules for _, _, rules in scored], [pr.number in defects for pr, _, _ in scored]
     )
@@ -155,6 +172,13 @@ def main() -> int:
                 f"holdout capture @10%={hold.capture_at(0.10):.0%}  "
                 f"@20%={hold.capture_at(0.20):.0%}  AUC={hold.auc:.3f}"
             )
+            hold_bands = [
+                cleared_band(hold, len(test), len(test_defs), f) for f in FLAG_RATES
+            ]
+            print(
+                "holdout cleared-band density vs base: "
+                + " · ".join(f"@{b.flag_rate:.0%} {b.density_lift:.2f}x" for b in hold_bands)
+            )
             holdout = {
                 "train_prs": len(train),
                 "test_prs": len(test),
@@ -165,6 +189,7 @@ def main() -> int:
                     f"{f:.2f}": round(hold.capture_at(f), 4) for f in FLAG_RATES
                 },
                 "auc": hold.auc,
+                "cleared_band": [b.model_dump() for b in hold_bands],
             }
         else:
             print(
@@ -187,6 +212,8 @@ def main() -> int:
                     f"{f:.2f}": round(doug.capture_at(f), 4) for f in FLAG_RATES
                 },
                 "auc": {"doug": doug.auc, "size_only": size.auc},
+                "base_defect_rate": base_rate,
+                "cleared_band": [b.model_dump() for b in bands],
                 "curve": [p.model_dump() for p in doug.points],
                 "rules": [s.model_dump() for s in stats],
                 "holdout": holdout,
