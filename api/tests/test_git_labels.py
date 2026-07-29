@@ -1,6 +1,8 @@
 from doug.backtest.git_labels import (
+    Commit,
     parse_revert_targets,
     parse_revert_targets_dated,
+    pr_numbers_by_sha,
     pr_titles_from_subjects,
 )
 
@@ -76,10 +78,10 @@ def test_non_revert_subjects_ignored():
 def test_dated_targets_report_when_the_label_became_knowable():
     # git log is newest-first.
     entries = [
-        ("2026-05-01T00:00:00+00:00", 'Revert "Add rate limiter" (#44)'),
-        ("2026-01-02T00:00:00+00:00", "Add rate limiter (#40)"),
+        Commit(date="2026-05-01T00:00:00+00:00", subject='Revert "Add rate limiter" (#44)'),
+        Commit(date="2026-01-02T00:00:00+00:00", subject="Add rate limiter (#40)"),
     ]
-    titles = pr_titles_from_subjects([s for _, s in entries])
+    titles = pr_titles_from_subjects([c.subject for c in entries])
     assert parse_revert_targets_dated(entries, titles) == {
         40: "2026-05-01T00:00:00+00:00"
     }
@@ -89,8 +91,8 @@ def test_dated_targets_keep_the_earliest_revert():
     # A re-revert (re-land, then revert again) must not push the label's
     # knowable-from date later — the first revert is when we could have known.
     entries = [
-        ("2026-06-01T00:00:00+00:00", 'Revert "Add caching (#100)" (#103)'),
-        ("2026-03-01T00:00:00+00:00", 'Revert "Add caching (#100)" (#101)'),
+        Commit(date="2026-06-01T00:00:00+00:00", subject='Revert "Add caching (#100)" (#103)'),
+        Commit(date="2026-03-01T00:00:00+00:00", subject='Revert "Add caching (#100)" (#101)'),
     ]
     dated = parse_revert_targets_dated(entries, {})
     assert dated == {100: "2026-03-01T00:00:00+00:00"}
@@ -99,3 +101,75 @@ def test_dated_targets_keep_the_earliest_revert():
 def test_undated_wrapper_still_returns_bare_numbers():
     subjects = ["Add rate limiter (#40)", 'Revert "Add rate limiter" (#44)']
     assert parse_revert_targets(subjects, pr_titles_from_subjects(subjects)) == {40}
+
+
+# --- sha-based revert resolution ------------------------------------------
+# Grafana-style reverts quote a title with no PR number, so the title map is
+# the only fallback and it misses 36% of them. `This reverts commit <sha>` is
+# in 75% of those bodies and resolves exactly.
+
+
+def test_sha_resolves_revert_whose_subject_has_no_number():
+    commits = [
+        Commit(
+            sha="b" * 40,
+            date="2026-05-01T00:00:00+00:00",
+            subject='Revert "Wire up config metrics correctly"',
+            body="This reverts commit " + "a" * 40 + ".",
+        ),
+        Commit(
+            sha="a" * 40,
+            date="2026-01-02T00:00:00+00:00",
+            subject="Wire up config metrics (#77)",
+        ),
+    ]
+    # Title map cannot help — the quoted title differs from the PR title.
+    assert parse_revert_targets_dated(commits, {}) == {77: "2026-05-01T00:00:00+00:00"}
+
+
+def test_abbreviated_sha_resolves():
+    full = "c" * 40
+    commits = [
+        Commit(sha="d" * 40, date="2026-05-01T00:00:00+00:00",
+               subject='Revert "Thing"', body=f"This reverts commit {full[:8]}."),
+        Commit(sha=full, date="2026-01-01T00:00:00+00:00", subject="Thing (#5)"),
+    ]
+    assert parse_revert_targets_dated(commits, {}) == {5: "2026-05-01T00:00:00+00:00"}
+
+
+def test_ambiguous_sha_prefix_is_not_guessed():
+    # Two commits share a 7-char prefix; resolving either would be a coin flip.
+    commits = [
+        Commit(sha="e" * 40, date="2026-05-01T00:00:00+00:00",
+               subject='Revert "Thing"', body="This reverts commit " + "f" * 7 + "."),
+        Commit(sha="f" * 7 + "1" * 33, date="2026-01-01T00:00:00+00:00", subject="A (#1)"),
+        Commit(sha="f" * 7 + "2" * 33, date="2026-01-01T00:00:00+00:00", subject="B (#2)"),
+    ]
+    assert parse_revert_targets_dated(commits, {}) == {}
+
+
+def test_sha_of_a_commit_with_no_pr_number_resolves_nothing():
+    commits = [
+        Commit(sha="1" * 40, date="2026-05-01T00:00:00+00:00",
+               subject='Revert "Direct push"', body="This reverts commit " + "2" * 40 + "."),
+        Commit(sha="2" * 40, date="2026-01-01T00:00:00+00:00", subject="Direct push, no PR"),
+    ]
+    assert parse_revert_targets_dated(commits, {}) == {}
+
+
+def test_body_marker_alone_is_not_treated_as_a_revert():
+    # "Reland X" carries the marker but is the opposite of a revert.
+    commits = [
+        Commit(sha="3" * 40, date="2026-05-01T00:00:00+00:00",
+               subject="Reland: Add caching", body="This reverts commit " + "4" * 40 + "."),
+        Commit(sha="4" * 40, date="2026-01-01T00:00:00+00:00", subject="Revert caching (#9)"),
+    ]
+    assert parse_revert_targets_dated(commits, {}) == {}
+
+
+def test_pr_numbers_by_sha_maps_only_squash_subjects():
+    commits = [
+        Commit(sha="a" * 40, subject="Add thing (#12)"),
+        Commit(sha="b" * 40, subject="Direct commit, no PR"),
+    ]
+    assert pr_numbers_by_sha(commits) == {"a" * 40: 12}
