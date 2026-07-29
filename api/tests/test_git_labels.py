@@ -1,4 +1,8 @@
-from doug.backtest.git_labels import parse_revert_targets, pr_titles_from_subjects
+from doug.backtest.git_labels import (
+    parse_revert_targets,
+    parse_revert_targets_dated,
+    pr_titles_from_subjects,
+)
 
 
 def test_squash_title_map_ignores_reverts_and_merges():
@@ -67,3 +71,31 @@ def test_non_revert_subjects_ignored():
         "Ship feature (#3)",
     ]
     assert parse_revert_targets(subjects, pr_titles_from_subjects(subjects)) == set()
+
+
+def test_dated_targets_report_when_the_label_became_knowable():
+    # git log is newest-first.
+    entries = [
+        ("2026-05-01T00:00:00+00:00", 'Revert "Add rate limiter" (#44)'),
+        ("2026-01-02T00:00:00+00:00", "Add rate limiter (#40)"),
+    ]
+    titles = pr_titles_from_subjects([s for _, s in entries])
+    assert parse_revert_targets_dated(entries, titles) == {
+        40: "2026-05-01T00:00:00+00:00"
+    }
+
+
+def test_dated_targets_keep_the_earliest_revert():
+    # A re-revert (re-land, then revert again) must not push the label's
+    # knowable-from date later — the first revert is when we could have known.
+    entries = [
+        ("2026-06-01T00:00:00+00:00", 'Revert "Add caching (#100)" (#103)'),
+        ("2026-03-01T00:00:00+00:00", 'Revert "Add caching (#100)" (#101)'),
+    ]
+    dated = parse_revert_targets_dated(entries, {})
+    assert dated == {100: "2026-03-01T00:00:00+00:00"}
+
+
+def test_undated_wrapper_still_returns_bare_numbers():
+    subjects = ["Add rate limiter (#40)", 'Revert "Add rate limiter" (#44)']
+    assert parse_revert_targets(subjects, pr_titles_from_subjects(subjects)) == {40}

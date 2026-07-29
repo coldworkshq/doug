@@ -1,13 +1,20 @@
-"""Train-half learned path hotspots — no label leakage into the test half.
+"""Learned path hotspots — no label leakage into the scored set.
 
 Builds a small set of path segments / bigrams that co-occur with revert
 labels more often than chance on a training window. Used only as an
 *extra* signal on top of the static HOTSPOT_SEGMENTS in features.py.
+
+`rolling_window` picks that training window as of a moment in time, so the
+learned set can be refreshed as the repo's risk moves instead of being
+learned once and frozen. Hotspots drift fast — learning on the older half of
+an 86-day sentry window yields `integrations/*`, `agents/hooks`, `mcp`, while
+the newer half's real hotspots were `seer/*`.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
 
 from .harvest import HarvestedPR
 
@@ -35,6 +42,49 @@ _STOP = {
     "js",
     "ts",
 }
+
+
+def rolling_window(
+    prs: list[HarvestedPR],
+    labels: dict[int, str],
+    as_of: str,
+    *,
+    min_defects: int = 12,
+    max_days: int = 90,
+) -> tuple[list[HarvestedPR], set[int]]:
+    """The PRs and labels a learner could legitimately use at `as_of`.
+
+    Walks backwards from `as_of` and stops at whichever comes first: enough
+    known defects to learn from, or `max_days` of history. Both bounds earn
+    their place — repos differ hugely in label density (sentry produces ~22
+    revert-labeled defects a month, grafana ~2.7), so a fixed calendar window
+    starves the sparse one and a fixed PR count reaches back past a drift
+    boundary on the dense one.
+
+    `labels` maps PR number → the date its revert landed. A defect counts
+    only once its revert is in the past: at `as_of` nobody knows the PR was
+    bad, so training on it would be measuring clairvoyance.
+    """
+    cutoff = datetime.fromisoformat(as_of)
+    floor = cutoff - timedelta(days=max_days)
+
+    window: list[HarvestedPR] = []
+    defects: set[int] = set()
+    # Newest first, so the walk can stop as soon as it has enough.
+    for pr in sorted(prs, key=lambda p: p.merged_at, reverse=True):
+        merged = datetime.fromisoformat(pr.merged_at)
+        if merged >= cutoff:
+            continue
+        if merged < floor:
+            break
+        window.append(pr)
+        reverted_at = labels.get(pr.number)
+        if reverted_at is not None and datetime.fromisoformat(reverted_at) < cutoff:
+            defects.add(pr.number)
+            if len(defects) >= min_defects:
+                break
+
+    return window, defects
 
 
 def _segments(files: list[str]) -> set[str]:

@@ -78,15 +78,24 @@ def clone_treeless(owner: str, repo: str, dest: Path, token: str | None = None) 
     return dest
 
 
-def _log_subjects(clone: Path) -> list[str]:
+# A subject can contain anything; a unit separator cannot.
+_LOG_SEP = "\x1f"
+
+
+def _log_entries(clone: Path) -> list[tuple[str, str]]:
+    """(committer date, subject) per commit, newest first."""
     out = subprocess.run(
-        ["git", "-C", str(clone), "log", "--all", "--format=%s"],
+        ["git", "-C", str(clone), "log", "--all", f"--format=%cI{_LOG_SEP}%s"],
         check=True,
         capture_output=True,
         text=True,
         timeout=120,
     )
-    return out.stdout.splitlines()
+    entries = []
+    for line in out.stdout.splitlines():
+        date, _, subject = line.partition(_LOG_SEP)
+        entries.append((date, subject))
+    return entries
 
 
 def _normalize_title(title: str) -> str:
@@ -116,33 +125,79 @@ def pr_titles_from_subjects(subjects: list[str]) -> dict[str, int]:
     return titles
 
 
-def parse_revert_targets(
-    subjects: list[str], titles: dict[str, int] | None = None
-) -> set[int]:
-    """PR numbers that a later commit claims to revert.
+def parse_revert_targets_dated(
+    entries: list[tuple[str, str]], titles: dict[str, int] | None = None
+) -> dict[int, str]:
+    """PR number → the date its defect label first became knowable.
 
     On squash-merge repos, `Revert "Add x" (#99)` uses (#99) for the
     *revert* PR. The original is recovered from the quoted title (or from
     a `#N` nested inside the quotes). Bare `Revert #12` keeps 12 as the
     target. Feature PRs titled "Revert to legacy…" are ignored.
-    """
-    titles = titles if titles is not None else pr_titles_from_subjects(subjects)
-    defects: set[int] = set()
 
-    for subject in subjects:
+    The date is the reverting commit's, not the reverted PR's: nobody —
+    including a live Doug — could have known the PR was bad until the
+    revert landed. On a re-revert the *earliest* date wins.
+    """
+    if titles is None:
+        titles = pr_titles_from_subjects([s for _, s in entries])
+    dated: dict[int, str] = {}
+
+    def mark(number: int, date: str) -> None:
+        if number not in dated or date < dated[number]:
+            dated[number] = date
+
+    for date, subject in entries:
         if _QUOTED_REVERT.search(subject):
             for q in _QUOTED.findall(subject):
-                defects.update(int(m.group(1)) for m in _PR_PAREN.finditer(q))
-                defects.update(int(m.group(1)) for m in _PR_HASH.finditer(q))
+                for m in _PR_PAREN.finditer(q):
+                    mark(int(m.group(1)), date)
+                for m in _PR_HASH.finditer(q):
+                    mark(int(m.group(1)), date)
                 key = _normalize_title(q)
                 if key in titles:
-                    defects.add(titles[key])
+                    mark(titles[key], date)
             continue
 
         if m := _BARE_TARGET.match(subject):
-            defects.add(int(m.group(1)))
+            mark(int(m.group(1)), date)
 
-    return defects
+    return dated
+
+
+def parse_revert_targets(
+    subjects: list[str], titles: dict[str, int] | None = None
+) -> set[int]:
+    """Undated view of `parse_revert_targets_dated`."""
+    return set(parse_revert_targets_dated([("", s) for s in subjects], titles))
+
+
+def find_reverted_prs_dated(
+    owner: str,
+    repo: str,
+    cache_dir: Path,
+    token: str | None = None,
+) -> dict[int, str]:
+    """Clone (or reuse) and map reverted PR number → revert-commit date.
+
+    The dates are what let a rolling learner train on only the labels that
+    existed at a given moment; without them a backtest silently assumes the
+    product knew about reverts that had not happened yet.
+    """
+    cache = cache_dir / f"{owner}-{repo}-git-defects-dated.json"
+    if cache.exists():
+        return {int(k): v for k, v in json.loads(cache.read_text()).items()}
+
+    clone_dir = cache_dir / "clones" / f"{owner}-{repo}.git"
+    print(f"  treeless clone of {owner}/{repo}…", flush=True)
+    clone_treeless(owner, repo, clone_dir, token=token)
+    entries = _log_entries(clone_dir)
+    titles = pr_titles_from_subjects([s for _, s in entries])
+    dated = parse_revert_targets_dated(entries, titles)
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({str(k): dated[k] for k in sorted(dated)}, indent=1))
+    return dated
 
 
 def find_reverted_prs(
@@ -156,13 +211,6 @@ def find_reverted_prs(
     if cache.exists():
         return set(json.loads(cache.read_text()))
 
-    clone_dir = cache_dir / "clones" / f"{owner}-{repo}.git"
-    print(f"  treeless clone of {owner}/{repo}…", flush=True)
-    clone_treeless(owner, repo, clone_dir, token=token)
-    subjects = _log_subjects(clone_dir)
-    titles = pr_titles_from_subjects(subjects)
-    defects = parse_revert_targets(subjects, titles)
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    defects = set(find_reverted_prs_dated(owner, repo, cache_dir, token=token))
     cache.write_text(json.dumps(sorted(defects), indent=1))
     return defects
