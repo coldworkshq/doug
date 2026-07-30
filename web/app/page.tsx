@@ -22,19 +22,23 @@ const RULES = [
   },
 ];
 
-const READS = [
-  "paths touched",
-  "diff shape",
-  "lockfiles & manifests",
-  "migrations",
-  "approval latency",
-  "authorship — human or agent",
-  "module recency",
+// Exactly what doug/reader.py puts in front of the model, and exactly what
+// it withholds. Both lists are load-bearing claims — keep them in sync with
+// the frozen prompt, not with the pitch.
+const READS = ["the diff itself", "the PR title", "the files it touches"];
+
+const NEVER_SEES = [
+  "who wrote it",
+  "human or agent",
+  "when it was opened",
+  "who approved it",
+  "what happened next",
 ];
 
 export default async function Home() {
-  const { queue } = await getQueue();
+  const { queue, source } = await getQueue();
   const { summary } = queue;
+  const live = source === "live";
 
   return (
     <main className="mx-auto w-full max-w-5xl px-6">
@@ -64,8 +68,8 @@ export default async function Home() {
             className="animate-rise glass inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
             style={{ animationDelay: "0ms" }}
           >
-            <span className="size-1.5 rounded-full bg-sheen" /> pre-build · the
-            backtest comes first
+            <span className="size-1.5 rounded-full bg-sheen" /> the reader is
+            live · scoring its own pull requests
           </p>
           <h1
             className="animate-rise font-heading mt-6 max-w-xl text-5xl leading-[1.02] font-semibold tracking-tight md:text-7xl"
@@ -78,9 +82,10 @@ export default async function Home() {
             className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted-foreground"
             style={{ animationDelay: "160ms" }}
           >
-            Doug reads the metadata, scores the risk, and routes the handful
-            that need human eyes. Everything else clears. When it&rsquo;s
-            wrong, it says so — in public.
+            Doug reads the diff, scores it against what actually reverted in
+            repos like yours, and routes the handful that need human eyes.
+            Everything else clears. When it&rsquo;s wrong, it says so — in
+            public.
           </p>
           <div
             className="animate-rise mt-10 flex flex-wrap gap-3"
@@ -177,25 +182,55 @@ export default async function Home() {
               </li>
             ))}
           </ul>
+          <p className="mt-8 font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            What it never sees
+          </p>
+          <ul className="mt-5 flex flex-wrap gap-2">
+            {NEVER_SEES.map((r) => (
+              <li
+                key={r}
+                className="rounded-full border border-white/10 px-3.5 py-1.5 font-mono text-xs text-muted-foreground/70 line-through decoration-white/20"
+              >
+                {r}
+              </li>
+            ))}
+          </ul>
           <p className="mt-6 max-w-sm text-sm leading-relaxed text-muted-foreground">
-            Metadata only. No model reads a diff unless the score says it
-            should — that&rsquo;s the routing economics that make review free
-            for the 90% that don&rsquo;t need it.
+            Doug scores the change, not the reputation. Metadata scoring is
+            still there as a fallback when the read fails — and it says so in
+            the verdict, because a silent downgrade would quietly poison every
+            number on this page.
           </p>
         </div>
 
         <div className="glass relative overflow-hidden rounded-2xl p-8">
           <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Published miss rate
+            What&rsquo;s actually measured
           </p>
-          <p className="text-iridescent font-heading mt-4 text-7xl font-semibold">
-            —
+          <p className="text-iridescent font-heading mt-4 text-6xl font-semibold">
+            0.69
+            <span className="ml-2 text-2xl text-muted-foreground">/ 0.67</span>
           </p>
-          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-            No production data yet. The number goes here, good or bad, with a
-            date next to it. That&rsquo;s the product.
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Ranking AUC on sentry and grafana, pre-registered before a single
+            model call. The best deterministic baseline scored 0.59 and 0.52 —
+            on grafana every metadata method we tried lands at or below random.
+            Reading the diff is the first thing that survived a second repo.
           </p>
+          <div className="mt-6 border-t border-white/5 pt-5">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Published miss rate
+            </p>
+            <p className="font-heading mt-2 text-3xl font-semibold text-muted-foreground">
+              —
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Not yet. That needs verdicts joined to outcomes in production,
+              and Doug has been live for days, not months. The number lands
+              here with a date next to it, good or bad.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -212,8 +247,9 @@ export default async function Home() {
           Watch the queue <span className="text-iridescent">thin out</span>.
         </h2>
         <p className="mx-auto mt-4 max-w-md text-muted-foreground">
-          The demo queue is live now — twelve PRs, two worth your time, and
-          the receipts for every score.
+          {live
+            ? `${summary.open} scored ${summary.open === 1 ? "PR" : "PRs"}, ${summary.flagged} worth your time, and the receipts behind every score.`
+            : "A sample queue with the receipts behind every score — the live ledger is a fetch away."}
         </p>
         <div className="mt-8 flex justify-center gap-3">
           <Link
