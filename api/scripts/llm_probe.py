@@ -423,6 +423,97 @@ def analyze() -> int:
     return 0
 
 
+def _weighted_capture(d_scores, c_scores, pi: float, budget: float) -> float:
+    """Capture@budget on the population mixture, tie blocks interpolated.
+
+    Defect rows carry total mass pi, clean rows 1-pi. Linear interpolation
+    inside a tied score block matches capture_curve's honest treatment.
+    """
+    wd, wc = pi / len(d_scores), (1 - pi) / len(c_scores)
+    mass, dmass = Counter(), Counter()
+    for s in d_scores:
+        mass[s] += wd
+        dmass[s] += wd
+    for s in c_scores:
+        mass[s] += wc
+    flagged = caught = 0.0
+    for s in sorted(mass, reverse=True):
+        prev_f, prev_c = flagged, caught
+        flagged += mass[s]
+        caught += dmass[s]
+        if flagged >= budget:
+            t = (budget - prev_f) / (flagged - prev_f)
+            return (prev_c + t * (caught - prev_c)) / pi
+    return 1.0
+
+
+def population() -> int:
+    """Population capture / cleared-band for the LLM scorer — no new reads.
+
+    The probe's enriched sample is a stratified draw from the newer half:
+    ALL defects plus a uniform random clean subsample. Reweighting the two
+    strata to the frame's base rate estimates the population score
+    distribution, so capture@budget and density_lift are estimable with
+    bootstrap CIs. NOT pre-registered — estimation from existing data,
+    method stated here; deterministic comparators are exact (full frame).
+    """
+    meta = json.loads((DIR / "sample.json").read_text())
+    findings = json.loads((DIR / "findings-main.json").read_text())
+    prs, defects, older, newer = _split()
+    newer_nums = {p.number for p in newer}
+    d_scores = [
+        float(findings[str(n)]["risk_score"])
+        for n in meta["defects"]
+        if n in newer_nums and str(n) in findings
+    ]
+    c_scores = [float(findings[str(n)]["risk_score"]) for n in meta["clean"] if str(n) in findings]
+    n_def = sum(1 for p in newer if p.number in defects)
+    pi = n_def / len(newer)
+    print(
+        f"population frame: {REPO} newer half, n={len(newer)}, {n_def} defects "
+        f"(base {pi:.2%}) · strata: {len(d_scores)} defect + {len(c_scores)} clean scores"
+    )
+
+    budgets = [0.10, 0.20, 0.30]
+    rng = np.random.default_rng(SEED)
+    header = "".join(f"{f'@{int(b * 100)}%':>22}" for b in budgets)
+    print(f"  {'scorer':<14}{header}  (capture [95% CI] · density_lift)")
+    caps = [_weighted_capture(d_scores, c_scores, pi, b) for b in budgets]
+    boots = {b: [] for b in budgets}
+    for _ in range(1000):
+        d = [d_scores[i] for i in rng.integers(0, len(d_scores), len(d_scores))]
+        c = [c_scores[i] for i in rng.integers(0, len(c_scores), len(c_scores))]
+        for b in budgets:
+            boots[b].append(_weighted_capture(d, c, pi, b))
+    cells = []
+    for b, cap in zip(budgets, caps, strict=True):
+        lo, hi = np.percentile(boots[b], [2.5, 97.5])
+        cells.append(f"{cap:.0%} [{lo:.0%},{hi:.0%}] · {(1 - cap) / (1 - b):.2f}x")
+    print(f"  {'LLM (est.)':<14}" + "".join(f"{c:>22}" for c in cells))
+
+    # Deterministic comparators are exact on the full newer half.
+    hist = history_index(prs)
+    train = older
+    train_defs = {p.number for p in train} & defects
+    y = [p.number in defects for p in newer]
+    rf = fit_rf(matrix(train, hist), np.array([p.number in train_defs for p in train]))
+    learned = learn_hotspot_segments(train, train_defs)
+    v3_by = {pr.number: s for pr, s, _ in replay(newer, extra_hotspots=learned)}
+    for name, scores in [
+        ("size", [float(p.additions + p.deletions) for p in newer]),
+        ("v3", [v3_by[p.number] for p in newer]),
+        ("RF", rf.predict_proba(matrix(newer, hist))[:, 1].tolist()),
+    ]:
+        curve = capture_curve(list(zip(scores, y, strict=True)))
+        cells = [
+            f"{curve.capture_at(b):.0%} · {(1 - curve.capture_at(b)) / (1 - b):.2f}x"
+            for b in budgets
+        ]
+        print(f"  {name + ' (exact)':<14}" + "".join(f"{c:>22}" for c in cells))
+    print("  density_lift = cleared-band defect density vs base; <1 = clearing carries information")
+    return 0
+
+
 def main() -> int:
     global REPO, DIR
     args = [a for a in sys.argv[1:] if a != "--grafana"]
@@ -440,6 +531,8 @@ def main() -> int:
         return counterfactual()
     if cmd == "analyze":
         return analyze()
+    if cmd == "population":
+        return population()
     print(__doc__)
     return 1
 
