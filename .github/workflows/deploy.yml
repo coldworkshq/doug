@@ -90,6 +90,20 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest
+      - name: Check federation is configured
+        env:
+          PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          # Fail visibly with the fix, rather than an opaque OIDC error.
+          # Skipping silently would be worse: a deploy that quietly does
+          # nothing looks exactly like a deploy that worked.
+          if [ -z "$PROVIDER" ] || [ -z "$DEPLOY_SA" ]; then
+            echo "::error::Workload Identity is not configured. Run:"
+            echo "::error::  PROJECT=doug-prod0 REPO=${{ github.repository }} bash api/deploy/setup-cicd.sh"
+            echo "::error::then set the GCP_WIF_PROVIDER and GCP_DEPLOY_SA repo variables it prints."
+            exit 1
+          fi
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -127,6 +141,20 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - name: Check federation is configured
+        env:
+          PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          # Fail visibly with the fix, rather than an opaque OIDC error.
+          # Skipping silently would be worse: a deploy that quietly does
+          # nothing looks exactly like a deploy that worked.
+          if [ -z "$PROVIDER" ] || [ -z "$DEPLOY_SA" ]; then
+            echo "::error::Workload Identity is not configured. Run:"
+            echo "::error::  PROJECT=doug-prod0 REPO=${{ github.repository }} bash api/deploy/setup-cicd.sh"
+            echo "::error::then set the GCP_WIF_PROVIDER and GCP_DEPLOY_SA repo variables it prints."
+            exit 1
+          fi
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
