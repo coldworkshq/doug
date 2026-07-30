@@ -16,6 +16,7 @@ import os
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     Column,
     DateTime,
     Float,
@@ -47,6 +48,9 @@ verdicts = Table(
     Column("model", String(60)),  # reader tier only
     Column("risk_score", Integer),
     Column("rationale", Text),
+    # Full reader output, verbatim — reprocessable when the distillation
+    # pipeline wants more than the typed columns carried at write time.
+    Column("raw", JSON),
 )
 
 findings = Table(
@@ -118,6 +122,7 @@ def save_review(
                 "model": model,
                 "risk_score": reader_verdict.risk_score if reader_verdict else None,
                 "rationale": reader_verdict.rationale if reader_verdict else None,
+                "raw": reader_verdict.model_dump() if reader_verdict else None,
             },
         ).scalar_one()
         rows = [

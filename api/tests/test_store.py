@@ -50,6 +50,7 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         v = conn.execute(select(store.verdicts)).mappings().one()
         assert v["repo"] == "o/r" and v["pr_number"] == 7
         assert v["risk_score"] == 62 and v["model"] == reader.MODEL
+        assert v["raw"]["findings"][0]["category_slug"] == "race-condition"
         f = conn.execute(select(store.findings)).mappings().one()
         assert f["verdict_id"] == vid
         assert f["severity"] == "high" and f["file"] == "cache.py"

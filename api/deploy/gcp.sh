@@ -22,7 +22,7 @@ setup() {
   if ! gcloud sql instances describe "$INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
     # Smallest sensible tier (~$10/mo). The ledger outlives any one service.
     gcloud sql instances create "$INSTANCE" \
-      --database-version=POSTGRES_16 --tier=db-f1-micro --edition=enterprise \
+      --database-version=POSTGRES_18 --tier=db-f1-micro --edition=enterprise \
       --region="$REGION" --project "$PROJECT" --async
   fi
 
