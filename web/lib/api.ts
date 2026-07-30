@@ -41,12 +41,17 @@ export interface QueueResponse {
 
 export const API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 
+/** Scope the dashboard's queue to one repo (e.g. "lemahq/lema"). Unset =
+ *  the ledger's all-repos view, which mixes backfilled corpora in. */
+const QUEUE_REPO = process.env.DOUG_QUEUE_REPO;
+
 export async function getQueue(): Promise<{
   queue: QueueResponse;
   source: "live" | "fixture";
 }> {
   try {
-    const res = await fetch(`${API_URL}/v1/queue`, {
+    const repoParam = QUEUE_REPO ? `?repo=${encodeURIComponent(QUEUE_REPO)}` : "";
+    const res = await fetch(`${API_URL}/v1/queue${repoParam}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(2000),
     });

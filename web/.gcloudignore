@@ -1,0 +1,4 @@
+# gcloud --source uploads honor this file, not .dockerignore.
+.git
+node_modules/
+.next/

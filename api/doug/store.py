@@ -153,8 +153,12 @@ def save_review(
     return int(row)
 
 
-def latest_reviews(limit: int = 200) -> list[dict]:
-    """Most recent verdict per (repo, pr) with findings — the live queue."""
+def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
+    """Most recent verdict per (repo, pr) with findings — the live queue.
+
+    `repo` scopes the queue; without it the ledger's every repo mixes
+    together, which is an all-repos admin view, not a dashboard.
+    """
     engine = _get_engine()
     if engine is None:
         return []
@@ -165,11 +169,12 @@ def latest_reviews(limit: int = 200) -> list[dict]:
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )
+    query = select(verdicts).where(verdicts.c.id.in_(latest))
+    if repo:
+        query = query.where(verdicts.c.repo == repo)
     out = []
     with engine.connect() as conn:
-        for v in conn.execute(
-            select(verdicts).where(verdicts.c.id.in_(latest)).order_by(desc(verdicts.c.score))
-        ).mappings():
+        for v in conn.execute(query.order_by(desc(verdicts.c.score))).mappings():
             fs = conn.execute(
                 select(findings).where(findings.c.verdict_id == v["id"])
             ).mappings().all()

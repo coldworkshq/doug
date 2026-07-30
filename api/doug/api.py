@@ -115,7 +115,7 @@ def _load_fixture() -> list[PRMetadata]:
 
 
 @app.get("/v1/queue")
-def queue(threshold: float | None = None) -> QueueResponse:
+def queue(threshold: float | None = None, repo: str | None = None) -> QueueResponse:
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [
@@ -131,7 +131,7 @@ def queue(threshold: float | None = None) -> QueueResponse:
                     ],
                 ),
             )
-            for row in store.latest_reviews()
+            for row in store.latest_reviews(repo=repo)
             if row["pr_meta"]
         ]
     else:

@@ -1,12 +1,11 @@
 FROM ghcr.io/astral-sh/uv:python3.14-trixie-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project --no-dev
+# No BuildKit cache mounts — Cloud Build's default docker builder lacks them.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-install-project --no-dev
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev
+RUN uv sync --locked --no-dev
 
 FROM python:3.14-slim-trixie
 WORKDIR /app

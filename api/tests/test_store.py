@@ -106,3 +106,12 @@ def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
     assert body["summary"]["open"] == 1
     assert body["items"][0]["pr"]["number"] == 7
     assert body["items"][0]["verdict"]["band"] == "flagged"
+
+
+def test_queue_repo_scoping(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review("a/x", 1, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
+    store.save_review("b/y", 2, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
+    c = TestClient(app)
+    assert c.get("/v1/queue").json()["summary"]["open"] == 2
+    assert c.get("/v1/queue", params={"repo": "a/x"}).json()["summary"]["open"] == 1

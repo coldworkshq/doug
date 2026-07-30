@@ -1,0 +1,9 @@
+# gcloud --source uploads honor this file, not .dockerignore.
+.git
+.venv/
+.backtest-cache/
+.pytest_cache/
+__pycache__/
+tests/
+scripts/
+*.pyc
