@@ -82,6 +82,13 @@ class QueueItem(BaseModel):
     verdict: Verdict
 
 
+class ReadScoreRequest(BaseModel):
+    """Diff-carrying score request — the reader tier's input."""
+
+    pr: PRMetadata
+    diff: str
+
+
 class QueueSummary(BaseModel):
     open: int
     flagged: int

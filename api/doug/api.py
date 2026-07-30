@@ -9,8 +9,17 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
 
-from . import __version__
-from .models import Band, PRMetadata, QueueItem, QueueResponse, QueueSummary, Verdict
+from . import __version__, reader
+from .models import (
+    Band,
+    PRMetadata,
+    QueueItem,
+    QueueResponse,
+    QueueSummary,
+    ReadScoreRequest,
+    Reason,
+    Verdict,
+)
 from .scoring import default_threshold, score
 
 app = FastAPI(title="Doug", version=__version__)
@@ -31,6 +40,26 @@ def healthz() -> dict[str, str | bool]:
 @app.post("/v1/score")
 def score_pr(pr: PRMetadata) -> Verdict:
     return score(pr)
+
+
+@app.post("/v1/score/read")
+def score_pr_read(req: ReadScoreRequest) -> Verdict:
+    """Reader-tier scoring: LLM diff-read when enabled, deterministic otherwise.
+
+    A failed read never 500s — it falls back to the deterministic verdict
+    and says so in the reasons, because a silent downgrade would corrupt
+    any calibration built on this endpoint's output.
+    """
+    if not reader.enabled():
+        return score(req.pr)
+    try:
+        return reader.verdict_from_reader(reader.read_diff(req.pr, req.diff))
+    except reader.ReaderError as e:
+        fallback = score(req.pr)
+        fallback.reasons.append(
+            Reason(rule="reader-unavailable", label=str(e), weight=0.0)
+        )
+        return fallback
 
 
 def _load_fixture() -> list[PRMetadata]:
