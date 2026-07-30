@@ -54,18 +54,23 @@ jobs:
           else:
               print()
               print('No findings.')
+          # No double quotes in this Python: the -c argument is itself a
+          # double-quoted shell string, so one aborts the summary (and the
+          # risk verdict above) before anything writes.
           devs = v.get('deviations') or []
           if devs or v.get('intent_alignment') is not None:
               print()
               print('### Against recorded decisions')
               refs = ', '.join(v.get('intent_refs') or []) or 'none'
-              print(f"Read against: {refs} - alignment {v.get('intent_alignment')}/100")
+              align = v.get('intent_alignment')
+              print(f'Read against: {refs} - alignment {align}/100')
               if devs:
                   print()
-                  print('| type | severity | detail |')
-                  print('|---|---|---|')
+                  print('| type | severity | decision | detail |')
+                  print('|---|---|---|---|')
                   for d in devs:
-                      print(f"| {d['type']} | {d['severity']} | {d['description']} |")
+                      dtype, sev, desc = d['type'], d['severity'], d['description']
+                      print(f'| {dtype} | {sev} | {refs} | {desc} |')
               else:
                   print()
                   print('No deviations.')

@@ -127,6 +127,11 @@ def report(out: dict) -> int:
     if not out or not out["matched"]:
         print("no reads completed")
         return 1
+    if not out.get("deranged"):
+        # Matched-only quiet looks like PASS when ratio is inf against an
+        # empty deranged arm — that is a false integrity pass.
+        print("no deranged reads completed — cannot evaluate the bar")
+        return 1
     stats = {}
     for arm, rows in out.items():
         n = len(rows)
@@ -153,7 +158,7 @@ def report(out: dict) -> int:
         if ok
         else "BAR: FAIL — arms are too close; the records are not being read"
     )
-    return 0
+    return 0 if ok else 1
 
 
 def main() -> int:

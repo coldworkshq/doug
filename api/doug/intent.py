@@ -122,9 +122,12 @@ def select(docs: list[IntentDoc], title: str, files: list[str]) -> list[IntentDo
     out: list[IntentDoc] = []
     used = 0
     for _score, doc in ranked[:MAX_DOCS]:
-        cost = len(doc.title) + len(doc.body)
+        # Charge what the model will actually see: truncate() runs after
+        # select, so budgeting the raw body lets one oversized record
+        # veto every later fit (and itself — BODY_BUDGET always fits).
+        cost = len(doc.title) + min(len(doc.body), BODY_BUDGET)
         if used + cost > DOC_BUDGET:
-            break
+            continue
         out.append(doc)
         used += cost
     return out

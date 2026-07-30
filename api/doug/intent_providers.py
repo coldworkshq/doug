@@ -14,6 +14,9 @@ one question this module exists to answer correctly.
 
 import os
 import re
+import sys
+
+from githubkit.exception import RequestFailed
 
 from .intent import IntentDoc
 
@@ -27,6 +30,11 @@ CANDIDATE_PATHS = ("docs/decisions", "docs/adr", "doc/adr", "docs/architecture/d
 def adr_paths() -> tuple[str, ...]:
     override = os.environ.get("DOUG_ADR_PATH")
     return (override,) if override else CANDIDATE_PATHS
+
+
+def _is_missing(exc: BaseException) -> bool:
+    """A directory that isn't there is the common case, not a failure."""
+    return isinstance(exc, RequestFailed) and exc.response.status_code == 404
 
 
 def parse_record(path: str, text: str) -> IntentDoc | None:
@@ -75,9 +83,9 @@ def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
     """Every parseable decision record in the repo. [] when there are none.
 
     A repo without an ADR directory is the common case, not an error: the
-    intent read simply does not happen. Fetch failures are swallowed for
-    the same reason — this path is advisory, and it must never be the
-    reason a review fails.
+    intent read simply does not happen. Auth, rate-limit, and transport
+    failures are re-raised so the caller can log-and-skip — collapsing
+    them to [] would make a broken credential look like "no ADRs".
     """
     for directory in adr_paths():
         try:
@@ -85,8 +93,10 @@ def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
                 owner=owner, repo=repo, path=directory,
                 **({"ref": ref} if ref else {}),
             ).parsed_data
-        except Exception:  # noqa: BLE001 — missing directory is the normal case
-            continue
+        except Exception as e:  # noqa: BLE001 — classify below
+            if _is_missing(e):
+                continue
+            raise
         if not isinstance(listing, list):
             continue
 
@@ -98,7 +108,11 @@ def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
             path = getattr(entry, "path", f"{directory}/{name}")
             try:
                 text = _read_file(gh, owner, repo, path, ref)
-            except Exception:  # noqa: BLE001 — one unreadable file is not fatal
+            except Exception as e:  # noqa: BLE001 — one unreadable file is not fatal
+                print(
+                    f"doug: decision record unread ({path}: {type(e).__name__}: {e})",
+                    file=sys.stderr,
+                )
                 continue
             doc = parse_record(path, text)
             if doc is not None:

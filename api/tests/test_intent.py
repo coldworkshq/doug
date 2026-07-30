@@ -76,7 +76,17 @@ def test_selection_respects_the_document_budget():
     docs = [_doc(f"ADR-{i:04d}", "reader prompt", "x" * 5000) for i in range(10)]
     chosen = intent.select(docs, "reader prompt", ["doug/reader.py"])
     assert len(chosen) <= intent.MAX_DOCS
-    assert sum(len(d.title) + len(d.body) for d in chosen) <= intent.DOC_BUDGET
+    # Budget is what the model sees after truncate(), not the raw file size.
+    charged = sum(len(d.title) + min(len(d.body), intent.BODY_BUDGET) for d in chosen)
+    assert charged <= intent.DOC_BUDGET
+
+
+def test_selection_charges_truncated_size_not_raw_body():
+    """One oversized record must not veto the read — truncate runs later."""
+    huge = _doc("ADR-0001", "Freeze the reader prompt", "x" * 50_000)
+    small = _doc("ADR-0002", "Freeze the reader schema", "y" * 200)
+    chosen = intent.select([huge, small], "reader prompt", ["doug/reader.py"])
+    assert [d.id for d in chosen] == ["ADR-0001", "ADR-0002"]
 
 
 def test_truncate_marks_what_it_cut():
@@ -124,6 +134,27 @@ def test_parse_record_skips_non_records(text):
 def test_parse_record_keeps_unconventional_filenames():
     doc = intent_providers.parse_record("docs/decisions/use-postgres.md", ADR)
     assert doc.id == "use-postgres"
+
+
+def test_fetch_skips_missing_directories_and_reraises_real_failures(monkeypatch):
+    """404 = no ADRs here; auth/rate-limit must not look like an empty repo."""
+    calls: list[str] = []
+
+    class Gh:
+        class rest:
+            class repos:
+                @staticmethod
+                def get_content(*, path, **_k):
+                    calls.append(path)
+                    raise RuntimeError("boom")
+
+    monkeypatch.setattr(intent_providers, "_is_missing", lambda exc: True)
+    assert intent_providers.fetch(Gh(), "o", "r") == []
+    assert calls == list(intent_providers.adr_paths())
+
+    monkeypatch.setattr(intent_providers, "_is_missing", lambda exc: False)
+    with pytest.raises(RuntimeError, match="boom"):
+        intent_providers.fetch(Gh(), "o", "r")
 
 
 def test_derangement_never_leaves_a_pr_with_its_own_records():
@@ -182,3 +213,42 @@ def test_selection_on_dougs_own_records():
         ("Add a deviations table to the ledger", ["doug/store.py"]),
     ]:
         assert len(sent(title, files)) <= 3
+
+
+def _probe():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import decision_intent_probe as probe
+
+    return probe
+
+
+def test_probe_report_fails_closed_without_deranged_arm(capsys):
+    """Empty deranged + quiet matched used to print PASS (inf ratio)."""
+    probe = _probe()
+    code = probe.report({
+        "matched": [{"pr": 1, "alignment": 90, "high": 0, "deviations": [], "refs": []}],
+        "deranged": [],
+    })
+    assert code == 1
+    assert "cannot evaluate" in capsys.readouterr().out
+
+
+def test_probe_report_exits_nonzero_when_bar_fails(capsys):
+    probe = _probe()
+    row = {"pr": 1, "alignment": 50, "high": 0, "deviations": [], "refs": []}
+    code = probe.report({"matched": [row], "deranged": [row]})
+    assert code == 1
+    assert "BAR: FAIL" in capsys.readouterr().out
+
+
+def test_probe_report_exits_zero_when_bar_passes(capsys):
+    probe = _probe()
+    code = probe.report({
+        "matched": [{"pr": 1, "alignment": 80, "high": 0, "deviations": [], "refs": []}],
+        "deranged": [{"pr": 2, "alignment": 10, "high": 1, "deviations": [], "refs": []}],
+    })
+    assert code == 0
+    assert "BAR: PASS" in capsys.readouterr().out
