@@ -92,3 +92,17 @@ def test_review_endpoint_scores_and_persists(tmp_path, monkeypatch):
     with engine.connect() as conn:
         v = conn.execute(select(store.verdicts)).mappings().one()
         assert v["tier"] == "deterministic" and v["pr_number"] == 7
+
+
+def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+    )
+    r = TestClient(app).get("/v1/queue")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"]["open"] == 1
+    assert body["items"][0]["pr"]["number"] == 7
+    assert body["items"][0]["verdict"]["band"] == "flagged"

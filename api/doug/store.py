@@ -51,6 +51,8 @@ verdicts = Table(
     # Full reader output, verbatim — reprocessable when the distillation
     # pipeline wants more than the typed columns carried at write time.
     Column("raw", JSON),
+    # PR metadata as scored — the queue dashboard reads verdicts alone.
+    Column("pr_meta", JSON),
 )
 
 findings = Table(
@@ -60,6 +62,7 @@ findings = Table(
     Column("verdict_id", Integer, ForeignKey("verdicts.id"), nullable=False, index=True),
     Column("rule", String(120), nullable=False),
     Column("label", Text, nullable=False),
+    Column("weight", Float, nullable=False, default=0.0),
     Column("file", Text),
     Column("severity", String(10)),
 )
@@ -102,6 +105,7 @@ def save_review(
     verdict: Verdict,
     reader_verdict: ReaderVerdict | None = None,
     model: str | None = None,
+    pr_meta: dict | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
     storage is disabled — callers never branch on persistence."""
@@ -123,10 +127,18 @@ def save_review(
                 "risk_score": reader_verdict.risk_score if reader_verdict else None,
                 "rationale": reader_verdict.rationale if reader_verdict else None,
                 "raw": reader_verdict.model_dump() if reader_verdict else None,
+                "pr_meta": pr_meta,
             },
         ).scalar_one()
         rows = [
-            {"verdict_id": row, "rule": r.rule, "label": r.label, "file": None, "severity": None}
+            {
+                "verdict_id": row,
+                "rule": r.rule,
+                "label": r.label,
+                "weight": r.weight,
+                "file": None,
+                "severity": None,
+            }
             for r in verdict.reasons
         ]
         if reader_verdict:
@@ -139,3 +151,29 @@ def save_review(
         if rows:
             conn.execute(findings.insert(), rows)
     return int(row)
+
+
+def latest_reviews(limit: int = 200) -> list[dict]:
+    """Most recent verdict per (repo, pr) with findings — the live queue."""
+    engine = _get_engine()
+    if engine is None:
+        return []
+    from sqlalchemy import desc, func, select
+
+    latest = (
+        select(func.max(verdicts.c.id).label("id"))
+        .group_by(verdicts.c.repo, verdicts.c.pr_number)
+        .scalar_subquery()
+    )
+    out = []
+    with engine.connect() as conn:
+        for v in conn.execute(
+            select(verdicts).where(verdicts.c.id.in_(latest)).order_by(desc(verdicts.c.score))
+        ).mappings():
+            fs = conn.execute(
+                select(findings).where(findings.c.verdict_id == v["id"])
+            ).mappings().all()
+            out.append({**v, "findings": [dict(f) for f in fs]})
+            if len(out) >= limit:
+                break
+    return out

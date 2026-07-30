@@ -80,6 +80,7 @@ def review_pr(
         store.save_review(
             req.repo, req.pr_number, tier, verdict, rv,
             model=reader.MODEL if tier == "reader" else None,
+            pr_meta=meta.model_dump(mode="json"),
         )
     except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
         verdict.reasons.append(
@@ -116,7 +117,26 @@ def _load_fixture() -> list[PRMetadata]:
 @app.get("/v1/queue")
 def queue(threshold: float | None = None) -> QueueResponse:
     thr = default_threshold() if threshold is None else threshold
-    items = [QueueItem(pr=pr, verdict=score(pr, thr)) for pr in _load_fixture()]
+    if store.enabled():
+        items = [
+            QueueItem(
+                pr=PRMetadata.model_validate(row["pr_meta"]),
+                verdict=Verdict(
+                    score=row["score"],
+                    band=Band(row["band"]),
+                    threshold=row["threshold"],
+                    reasons=[
+                        Reason(rule=f["rule"], label=f["label"], weight=f["weight"])
+                        for f in row["findings"]
+                    ],
+                ),
+            )
+            for row in store.latest_reviews()
+            if row["pr_meta"]
+        ]
+    else:
+        # No ledger configured — the fixture keeps the demo path alive.
+        items = [QueueItem(pr=pr, verdict=score(pr, thr)) for pr in _load_fixture()]
     items.sort(key=lambda i: i.verdict.score, reverse=True)
     flagged = sum(1 for i in items if i.verdict.band is Band.FLAGGED)
     return QueueResponse(
