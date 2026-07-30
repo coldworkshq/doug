@@ -15,4 +15,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Cloud Run injects PORT; default matches its convention.
 ENV PORT=8080
 EXPOSE 8080
-CMD ["sh", "-c", "uvicorn magpie.api:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn doug.api:app --host 0.0.0.0 --port ${PORT}"]

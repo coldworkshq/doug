@@ -69,19 +69,57 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
     return out
 
 
+def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
+    p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
+    files = gh.rest.pulls.list_files(
+        owner=owner, repo=repo, pull_number=number, per_page=100
+    ).parsed_data
+    meta = PRMetadata(
+        number=p.number,
+        title=p.title,
+        author=p.user.login if p.user else "unknown",
+        author_type=(
+            AuthorType.AGENT
+            if p.user and (p.user.type == "Bot" or p.user.login.endswith("[bot]"))
+            else AuthorType.HUMAN
+        ),
+        additions=sum(f.additions for f in files),
+        deletions=sum(f.deletions for f in files),
+        files=[f.filename for f in files],
+        approvals=0,
+        approval_latency_s=None,
+        days_since_last_human_commit=None,
+        files_added=sum(1 for f in files if f.status == "added"),
+        files_modified=sum(1 for f in files if f.status == "modified"),
+    )
+    diff = "\n\n".join(
+        f"### {f.filename} ({f.status}, +{f.additions}/-{f.deletions})\n{f.patch}"
+        for f in files
+        if f.patch
+    )
+    return meta, diff
+
+
+def score_one(meta: PRMetadata, diff: str):
+    """Tier dispatch: (tier, verdict, reader_verdict|None). Reader failures
+    fall back loudly — the deterministic verdict says reader-unavailable."""
+    if reader.enabled():
+        try:
+            rv = reader.read_diff(meta, diff)
+            return "reader", reader.verdict_from_reader(rv), rv
+        except reader.ReaderError as e:
+            verdict = score(meta)
+            verdict.reasons.append(
+                Reason(rule="reader-unavailable", label=str(e), weight=0.0)
+            )
+            return "deterministic", verdict, None
+    return "deterministic", score(meta), None
+
+
 def review_repo(gh, owner: str, repo: str, limit: int) -> list[ReviewItem]:
     items = []
     for meta, diff in fetch_open_prs(gh, owner, repo, limit):
-        if reader.enabled():
-            try:
-                verdict = reader.verdict_from_reader(reader.read_diff(meta, diff))
-            except reader.ReaderError as e:
-                verdict = score(meta)
-                verdict.reasons.append(
-                    Reason(rule="reader-unavailable", label=str(e), weight=0.0)
-                )
-        else:
-            verdict = score(meta)
+        _, verdict, _ = score_one(meta, diff)
         items.append(ReviewItem(pr=meta, verdict=verdict))
     items.sort(key=lambda i: i.verdict.score, reverse=True)
     return items

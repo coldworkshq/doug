@@ -1,0 +1,46 @@
+# Doug review — drop into <your-repo>/.github/workflows/doug-review.yml
+#
+# On every PR, asks the hosted Doug service for a verdict and writes it to
+# the job summary. Read-only by design: no comments, no failing checks —
+# Doug never blocks a merge. Requires two repo secrets:
+#   DOUG_API_URL   e.g. https://doug-api-xxxx.run.app
+#   DOUG_API_TOKEN the value of the doug-api-token secret in GCP
+name: doug-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Score with Doug
+        env:
+          DOUG_API_URL: ${{ secrets.DOUG_API_URL }}
+          DOUG_API_TOKEN: ${{ secrets.DOUG_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          verdict=$(curl -sS --fail-with-body -X POST "$DOUG_API_URL/v1/review" \
+            -H "content-type: application/json" \
+            -H "x-doug-token: $DOUG_API_TOKEN" \
+            -H "x-github-token: $GH_TOKEN" \
+            -d "{\"repo\": \"$REPO\", \"pr_number\": $PR}")
+          echo "$verdict" | python3 -c '
+          import json, sys
+          v = json.load(sys.stdin)
+          icon = "🔺" if v["band"] == "flagged" else "✅"
+          print(f"## {icon} Doug: {v[\"band\"]} · score {v[\"score\"]:.2f} (threshold {v[\"threshold\"]:.2f})")
+          if v["reasons"]:
+              print("\n| signal | detail |\n|---|---|")
+              for r in v["reasons"]:
+                  print(f"| `{r[\"rule\"]}` | {r[\"label\"]} |")
+          else:
+              print("\nNo findings.")
+          print("\n_Doug routes attention; it never blocks a merge._")
+          ' >> "$GITHUB_STEP_SUMMARY"

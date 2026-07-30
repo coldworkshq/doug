@@ -5,8 +5,11 @@ description = "Doug — risk-routed code review. Deterministic routing API."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "anthropic>=0.120.2",
     "fastapi>=0.140.7",
     "githubkit>=0.16.0",
+    "psycopg[binary]>=3.3.4",
+    "sqlalchemy>=2.0.51",
     "uvicorn[standard]>=0.51.0",
 ]
 
