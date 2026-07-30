@@ -123,3 +123,48 @@ def test_endpoint_falls_back_loudly_on_reader_failure(monkeypatch):
     )
     assert r.status_code == 200
     assert "reader-unavailable" in {x["rule"] for x in r.json()["reasons"]}
+
+
+class _RaisingMessages:
+    def __init__(self, exc):
+        self._exc = exc
+
+    def create(self, **kwargs):
+        raise self._exc
+
+
+class RaisingClient:
+    def __init__(self, exc):
+        self.messages = _RaisingMessages(exc)
+
+
+def test_transport_failures_become_reader_errors():
+    """reader.py promises callers that a failed read falls back loudly. Only
+    refusals and parse errors honoured that; everything the SDK raises —
+    billing, rate limits, timeouts, 5xx — escaped and 500'd the caller.
+
+    This is not hypothetical: an exhausted Anthropic balance took the CI
+    path down for every repo, and continue-on-error reported it as success.
+    """
+    billing = RuntimeError(
+        "Error code: 400 - Your credit balance is too low to access the Anthropic API."
+    )
+    with pytest.raises(reader.ReaderError) as e:
+        reader.read_diff(_pr(), "+ x", client=RaisingClient(billing))
+    assert "credit balance" in str(e.value)
+
+
+def test_score_one_degrades_to_deterministic_when_the_api_is_down(monkeypatch):
+    """The end the caller actually sees: a verdict, not an exception, and it
+    says why it is a lesser verdict."""
+    from doug import review
+
+    monkeypatch.setenv("DOUG_READER", "1")
+    real = reader.read_diff  # bind before patching, or the lambda calls itself
+    monkeypatch.setattr(
+        reader, "read_diff",
+        lambda pr, diff: real(pr, diff, client=RaisingClient(RuntimeError("boom"))),
+    )
+    tier, verdict, rv = review.score_one(_pr(), "+ x")
+    assert tier == "deterministic" and rv is None
+    assert any(r.rule == "reader-unavailable" for r in verdict.reasons)
