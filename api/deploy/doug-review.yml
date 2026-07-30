@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Score with Doug
+        # Advisory by definition: a Doug outage must never redden a PR.
+        continue-on-error: true
         env:
           DOUG_API_URL: ${{ secrets.DOUG_API_URL }}
           DOUG_API_TOKEN: ${{ secrets.DOUG_API_TOKEN }}
@@ -26,6 +28,11 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
+          # Fork PRs run without repository secrets — skip rather than fail.
+          if [ -z "$DOUG_API_URL" ] || [ -z "$DOUG_API_TOKEN" ]; then
+            echo "Doug: no credentials in this context (fork PR?) — skipped. Doug never blocks a merge." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           verdict=$(curl -sS --fail-with-body -X POST "$DOUG_API_URL/v1/review" \
             -H "content-type: application/json" \
             -H "x-doug-token: $DOUG_API_TOKEN" \
