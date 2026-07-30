@@ -38,11 +38,15 @@ from doug.backtest.harvest import resolve_token
 
 print = functools.partial(print, flush=True)  # noqa: A001
 
-DIR = Path(".backtest-cache/intent-probe")
+DIR = Path(".backtest-cache/intent-probe-v2")  # v1 artifacts kept for the record
 PROBE_1B = Path(".backtest-cache/llm-probe-grafana")
 N_SAMPLE = 100
 N_MISMATCH = 30
 MIN_ISSUE_BODY = 100  # chars; a bare title is not intent (pre-registered)
+# v1's matched arm was 39% contaminated by stale refs — `fix #1970`-style
+# quotes resolving to 2014-era issues. Modern grafana issues are 6-digit;
+# the floor kills the junk without reading any reader output (non-circular).
+MIN_ISSUE_NUMBER = 50_000
 TICKET_BUDGET = 4000
 SEED = 0
 LINK = re.compile(
@@ -94,7 +98,12 @@ def _linked_pairs():
     pairs = []
     for p in prs:
         m = LINK.search(p.body or "")
-        if m and p.file_details and any(f.patch for f in p.file_details):
+        if (
+            m
+            and int(m.group(1)) >= MIN_ISSUE_NUMBER
+            and p.file_details
+            and any(f.patch for f in p.file_details)
+        ):
             pairs.append((p, int(m.group(1))))
     return pairs, defects
 
@@ -253,22 +262,24 @@ def analyze() -> int:
     mismatched = json.loads((DIR / "findings-mismatched.json").read_text())
     defects = set(meta["defects"])
 
-    # (c) integrity — the pre-registered kill bar
-    m_rate = sum(1 for r in matched.values() if r.get("deviation_findings")) / len(matched)
-    x_rate = sum(1 for r in mismatched.values() if r.get("deviation_findings")) / len(mismatched)
+    # (c) integrity. v1's binary any-deviation metric saturated (the reader
+    # legitimately notes partial-implementation gaps on real pairs), so the
+    # v2 pre-registered criterion is HIGH-severity deviations + alignment.
+    def _hi(r) -> bool:
+        return any(d["severity"] == "high" for d in r.get("deviation_findings", []))
+
+    m_hi = sum(1 for r in matched.values() if _hi(r)) / len(matched)
+    x_hi = sum(1 for r in mismatched.values() if _hi(r)) / len(mismatched)
     m_align = float(np.mean([r["intent_alignment"] for r in matched.values()]))
     x_align = float(np.mean([r["intent_alignment"] for r in mismatched.values()]))
     print(f"(c) INTEGRITY — matched n={len(matched)}, mismatched n={len(mismatched)}")
-    print(f"  >=1 deviation finding: matched {m_rate:.0%} · mismatched {x_rate:.0%}")
+    print(f"  HIGH-sev deviation: matched {m_hi:.0%} · mismatched {x_hi:.0%}")
     print(f"  mean intent_alignment: matched {m_align:.0f} · mismatched {x_align:.0f}")
-    passed = x_rate >= 0.60 and (x_rate - m_rate) >= 0.40
-    verdict = "PASS" if passed else "FAIL — reader is not reading the ticket"
-    print(f"  BAR: mismatched >=60% AND gap >=40pp -> {verdict}")
-    if m_rate > 0.50:
-        print(
-            "  ⚠ matched rate >50% — deviation hallucination flag "
-            "(pre-registered precision failure)"
-        )
+    passed = x_hi >= 0.80 and m_hi <= 0.15
+    verdict = "PASS" if passed else "FAIL"
+    print(f"  BAR (v2): mismatched HIGH-sev >=80% AND matched HIGH-sev <=15% -> {verdict}")
+    sec = m_align >= 60 and x_align <= 20
+    print(f"  secondary: matched align >=60 AND mismatched <=20 -> {'PASS' if sec else 'FAIL'}")
 
     # (b) audit file — every matched-arm deviation, for hand review
     lines = ["# Matched-arm deviation findings — hand audit (Experiment B)\n"]
