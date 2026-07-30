@@ -218,6 +218,70 @@ def save_deviations(
     return len(rows)
 
 
+def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
+    """The findings x outcomes join — step 2 of the distillation loop.
+
+    Returns two aligned row sets, read in one transaction so the base rate
+    and the per-pattern hits describe the same snapshot:
+
+      prs  — every scored PR whose outcome is known, with that outcome.
+              This is the denominator; PRs that produced zero findings
+              belong in it, which is why it is not derived from `hits`.
+      hits — every (PR, finding rule) pair on those PRs, deduplicated.
+              One PR emitting the same rule twice is one hit, because the
+              unit of prediction is the PR, not the finding.
+
+    Only the newest verdict per PR counts: a rescored PR would otherwise
+    contribute its superseded findings to precision as well.
+
+    Aggregation is left to the caller — slug normalisation happens after
+    this join (synonymous rules collapse to one pattern, and two merged
+    rules on one PR must not count twice), and the statistics that matter
+    depend on the sampling design of the rows in the ledger.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return {"prs": [], "hits": []}
+    from sqlalchemy import func, select
+
+    latest = (
+        select(func.max(verdicts.c.id).label("id"))
+        .group_by(verdicts.c.repo, verdicts.c.pr_number)
+        .scalar_subquery()
+    )
+    scored = select(verdicts.c.id, verdicts.c.repo, verdicts.c.pr_number).where(
+        verdicts.c.id.in_(latest)
+    )
+    if repo:
+        scored = scored.where(verdicts.c.repo == repo)
+    scored = scored.subquery()
+
+    on_outcome = (outcomes.c.repo == scored.c.repo) & (
+        outcomes.c.pr_number == scored.c.pr_number
+    )
+    # A PR with several outcome rows yields several rows here; the caller
+    # decides how to reduce them (any non-clean outcome makes it a defect).
+    pr_q = (
+        select(scored.c.repo, scored.c.pr_number, outcomes.c.kind)
+        .select_from(scored.join(outcomes, on_outcome))
+        .distinct()
+    )
+    hit_q = (
+        select(scored.c.repo, scored.c.pr_number, findings.c.rule)
+        .select_from(
+            scored.join(findings, findings.c.verdict_id == scored.c.id).join(
+                outcomes, on_outcome
+            )
+        )
+        .distinct()
+    )
+    with engine.connect() as conn:
+        return {
+            "prs": [dict(r) for r in conn.execute(pr_q).mappings()],
+            "hits": [dict(r) for r in conn.execute(hit_q).mappings()],
+        }
+
+
 def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
     """Most recent verdict per (repo, pr) with findings — the live queue.
 
