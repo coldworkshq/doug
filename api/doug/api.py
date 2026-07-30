@@ -140,6 +140,22 @@ def _load_fixture() -> list[PRMetadata]:
     return [PRMetadata.model_validate(item) for item in json.loads(raw)]
 
 
+def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
+    """The line these rows were actually banded at.
+
+    Rows can disagree — a reader row is banded at 0.30, a deterministic
+    fallback row at 0.62 — in which case no single line is honest and the
+    most common one is the least wrong. The per-item thresholds stay
+    authoritative either way; this only decides where the dashboard draws.
+    """
+    if not items:
+        return fallback
+    seen: dict[float, int] = {}
+    for i in items:
+        seen[i.verdict.threshold] = seen.get(i.verdict.threshold, 0) + 1
+    return max(seen, key=lambda t: (seen[t], -t))
+
+
 @app.get("/v1/queue")
 def queue(threshold: float | None = None, repo: str | None = None) -> QueueResponse:
     thr = default_threshold() if threshold is None else threshold
@@ -163,6 +179,29 @@ def queue(threshold: float | None = None, repo: str | None = None) -> QueueRespo
     else:
         # No ledger configured — the fixture keeps the demo path alive.
         items = [QueueItem(pr=pr, verdict=score(pr, thr)) for pr in _load_fixture()]
+
+    if threshold is None:
+        # Report the line the rows were actually banded at, not the
+        # deterministic default. Ledger rows carry the reader's threshold
+        # (0.30); reporting 0.62 made the dashboard draw its cut line above
+        # PRs it was simultaneously showing as flagged.
+        thr = _banding_threshold(items, thr)
+    else:
+        # An explicit threshold has to re-band, or the parameter changes the
+        # number in the summary while the rows keep contradicting it.
+        items = [
+            QueueItem(
+                pr=i.pr,
+                verdict=i.verdict.model_copy(
+                    update={
+                        "threshold": thr,
+                        "band": Band.FLAGGED if i.verdict.score >= thr else Band.CLEARED,
+                    }
+                ),
+            )
+            for i in items
+        ]
+
     items.sort(key=lambda i: i.verdict.score, reverse=True)
     flagged = sum(1 for i in items if i.verdict.band is Band.FLAGGED)
     return QueueResponse(

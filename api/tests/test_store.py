@@ -235,3 +235,44 @@ def test_patterns_endpoint_serves_the_join_with_its_caveat(tmp_path, monkeypatch
     assert row["pattern"] == "race-condition" and row["prs"] == 4
     assert row["precision"] == 0.75 and row["lift"] == 1.0
     assert "enriched sample" in body["caveat"]
+
+
+def test_queue_reports_the_threshold_rows_were_banded_at(tmp_path, monkeypatch):
+    """The summary threshold drives the dashboard's cut line. Reporting the
+    deterministic default while every row was banded by the reader drew the
+    line above PRs the same response showed as flagged."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_THRESHOLD", raising=False)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+    )
+    body = TestClient(app).get("/v1/queue").json()
+    assert body["summary"]["threshold"] == VERDICT.threshold == 0.30
+    assert body["items"][0]["verdict"]["band"] == "flagged"
+
+
+def test_queue_falls_back_to_the_default_when_there_are_no_rows(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    from doug.scoring import default_threshold
+
+    body = TestClient(app).get("/v1/queue", params={"repo": "nobody/here"}).json()
+    assert body["summary"]["open"] == 0
+    assert body["summary"]["threshold"] == default_threshold()
+
+
+def test_explicit_threshold_rebands_the_rows(tmp_path, monkeypatch):
+    """Passing a threshold used to change only the reported number while the
+    rows kept their stored bands — the parameter contradicted its own
+    response."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+    )
+    body = TestClient(app).get("/v1/queue", params={"threshold": 0.9}).json()
+    assert body["summary"]["threshold"] == 0.9
+    assert body["summary"]["flagged"] == 0
+    item = body["items"][0]
+    assert item["verdict"]["band"] == "cleared"       # 0.62 < 0.9
+    assert item["verdict"]["threshold"] == 0.9        # and it says so
