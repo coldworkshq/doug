@@ -31,16 +31,22 @@ jobs:
             -H "x-doug-token: $DOUG_API_TOKEN" \
             -H "x-github-token: $GH_TOKEN" \
             -d "{\"repo\": \"$REPO\", \"pr_number\": $PR}")
-          echo "$verdict" | python3 -c '
+          echo "$verdict" | python3 -c "
           import json, sys
           v = json.load(sys.stdin)
-          icon = "🔺" if v["band"] == "flagged" else "✅"
-          print(f"## {icon} Doug: {v[\"band\"]} · score {v[\"score\"]:.2f} (threshold {v[\"threshold\"]:.2f})")
-          if v["reasons"]:
-              print("\n| signal | detail |\n|---|---|")
-              for r in v["reasons"]:
-                  print(f"| `{r[\"rule\"]}` | {r[\"label\"]} |")
+          band, score, thr = v['band'], v['score'], v['threshold']
+          icon = 'FLAGGED' if band == 'flagged' else 'cleared'
+          print(f'## Doug: {icon} - score {score:.2f} (threshold {thr:.2f})')
+          if v['reasons']:
+              print()
+              print('| signal | detail |')
+              print('|---|---|')
+              for r in v['reasons']:
+                  rule, label = r['rule'], r['label']
+                  print(f'| \`{rule}\` | {label} |')
           else:
-              print("\nNo findings.")
-          print("\n_Doug routes attention; it never blocks a merge._")
-          ' >> "$GITHUB_STEP_SUMMARY"
+              print()
+              print('No findings.')
+          print()
+          print('_Doug routes attention; it never blocks a merge._')
+          " >> "$GITHUB_STEP_SUMMARY"
