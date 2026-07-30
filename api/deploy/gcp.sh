@@ -4,15 +4,25 @@
 # One-time-ish and idempotent where possible. Requires: gcloud authed on a
 # project with billing. Secrets go to Secret Manager, never into env specs.
 #
-#   PROJECT=vestige-00 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets
-#   PROJECT=vestige-00 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets, IAM
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh web     # build + deploy the site
+#
+# `deploy` and `web` are what CI runs on every merge to main
+# (.github/workflows/deploy.yml), so they are pure deploys — no IAM, no
+# resource creation, nothing that needs admin rights. That is what lets the
+# CI principal stay narrow. Anything privileged belongs in `setup`.
 set -euo pipefail
 
 PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
 INSTANCE=doug-ledger
 SERVICE=doug-api
+WEB_SERVICE=doug-web
 CONN="$PROJECT:$REGION:$INSTANCE"
+# The dashboard shows one repo's queue; unset would mix the backfilled
+# probe corpora into it.
+QUEUE_REPO=${QUEUE_REPO:-lemahq/lema}
 
 setup() {
   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
@@ -50,19 +60,23 @@ setup() {
     || printf 'postgresql+psycopg://doug:%s@/doug?host=/cloudsql/%s' "$DB_PASS" "$CONN" \
       | gcloud secrets versions add doug-database-url --data-file=- --project "$PROJECT"
 
+  # Secret access for the runtime service account. This lives in setup, not
+  # deploy: re-binding IAM on every merge would force the CI principal to
+  # carry admin rights it has no other reason to hold.
+  SA=$(gcloud iam service-accounts list --project "$PROJECT" \
+    --filter="displayName:'Default compute service account'" --format="value(email)")
+  for s in doug-database-url doug-api-token doug-anthropic-key; do
+    gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
+      --member="serviceAccount:$SA" \
+      --role=roles/secretmanager.secretAccessor >/dev/null 2>&1 || true
+  done
+
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
   echo "setup done (check SQL instance state before first deploy)"
 }
 
 deploy() {
-  SA=$(gcloud iam service-accounts list --project "$PROJECT" \
-    --filter="displayName:'Default compute service account'" --format="value(email)")
-  for s in doug-database-url doug-api-token doug-anthropic-key; do
-    gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
-      --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor >/dev/null
-  done
-
   # Both tiers are set here on purpose: --set-env-vars replaces the whole
   # env block, so anything set out-of-band is wiped by the next deploy.
   gcloud run deploy "$SERVICE" \
@@ -77,4 +91,22 @@ deploy() {
     --format="value(status.url)"
 }
 
-"${1:?setup|deploy}"
+web() {
+  # Built from ../web, so this runs from api/ like every other command here.
+  # DOUG_API_URL is read at request time by the dashboard's server component.
+  gcloud run deploy "$WEB_SERVICE" \
+    --source ../web \
+    --project "$PROJECT" --region "$REGION" \
+    --allow-unauthenticated \
+    --set-env-vars "DOUG_API_URL=$(api_url),DOUG_QUEUE_REPO=$QUEUE_REPO" \
+    --memory 512Mi --cpu 1 --max-instances 2 --timeout 60
+  gcloud run services describe "$WEB_SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format="value(status.url)"
+}
+
+api_url() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format="value(status.url)"
+}
+
+"${1:?setup|deploy|web}"
