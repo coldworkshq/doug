@@ -80,6 +80,26 @@ outcomes = Table(
     Column("source", String(40), nullable=False),  # git-labels | manual | ...
 )
 
+# Intent-tier output, kept in its own table on purpose (ADR-0007). A
+# deviation is a judgment about a change against a recorded decision; it
+# has no outcome-precision evaluation, and folding it into verdicts.score
+# would silently change what every score in this ledger means.
+deviations = Table(
+    "deviations",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("verdict_id", Integer, ForeignKey("verdicts.id"), nullable=False, index=True),
+    # missing-from-pr | beyond-ticket | contradicts-ticket, or "none" for a
+    # read that completed and found nothing.
+    Column("kind", String(24), nullable=False),
+    Column("description", Text, nullable=False),
+    Column("severity", String(10), nullable=False),
+    # Which records the read was given, so a finding can be checked against
+    # the record rather than taken on faith.
+    Column("intent_refs", JSON),
+    Column("intent_alignment", Integer),
+)
+
 _engine = None
 
 
@@ -151,6 +171,51 @@ def save_review(
         if rows:
             conn.execute(findings.insert(), rows)
     return int(row)
+
+
+def save_deviations(
+    verdict_id: int | None,
+    findings: list,
+    intent_refs: list[str],
+    intent_alignment: int,
+) -> int:
+    """Persist the intent read's output against an existing verdict.
+
+    Deliberately writes nothing to `verdicts` — not the score, not the
+    band, not the raw column. The separation is the point (ADR-0007), and
+    it is enforced here rather than trusted to callers.
+
+    A read that found no deviations still records one row carrying the
+    alignment score, so "read happened, nothing found" stays
+    distinguishable from "no read happened" when precision is eventually
+    measured over this table.
+    """
+    engine = _get_engine()
+    if engine is None or verdict_id is None:
+        return 0
+    rows = [
+        {
+            "verdict_id": verdict_id,
+            "kind": f.type,
+            "description": f.description,
+            "severity": f.severity,
+            "intent_refs": intent_refs,
+            "intent_alignment": intent_alignment,
+        }
+        for f in findings
+    ] or [
+        {
+            "verdict_id": verdict_id,
+            "kind": "none",
+            "description": "",
+            "severity": "low",
+            "intent_refs": intent_refs,
+            "intent_alignment": intent_alignment,
+        }
+    ]
+    with engine.begin() as conn:
+        conn.execute(deviations.insert(), rows)
+    return len(rows)
 
 
 def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:

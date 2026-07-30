@@ -48,12 +48,26 @@ class ReviewRequest(BaseModel):
     pr_number: int
 
 
+class ReviewResponse(Verdict):
+    """The risk verdict, plus the intent tier when it ran.
+
+    Subclasses Verdict so the wire shape stays a superset: existing CI
+    workflows parse band/score/threshold/reasons at the top level and keep
+    working untouched. `deviations` is absent-or-empty for every repo that
+    keeps no decision records, which is most of them.
+    """
+
+    deviations: list[reader.DeviationFinding] = []
+    intent_alignment: int | None = None
+    intent_refs: list[str] = []
+
+
 @app.post("/v1/review")
 def review_pr(
     req: ReviewRequest,
     x_doug_token: str = Header(""),
     x_github_token: str = Header(""),
-) -> Verdict:
+) -> ReviewResponse:
     """CI-facing review: fetch the PR, score through the reader tier, persist.
 
     Auth is a shared token (DOUG_API_TOKEN); the GitHub token arrives
@@ -76,17 +90,29 @@ def review_pr(
     gh = GitHub(x_github_token or None)
     meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
     tier, verdict, rv = review.score_one(meta, diff)
+    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    verdict_id = None
     try:
-        store.save_review(
+        verdict_id = store.save_review(
             req.repo, req.pr_number, tier, verdict, rv,
             model=reader.MODEL if tier == "reader" else None,
             pr_meta=meta.model_dump(mode="json"),
         )
+        if intent_read is not None:
+            store.save_deviations(
+                verdict_id, intent_read.findings,
+                intent_read.refs, intent_read.alignment,
+            )
     except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
         verdict.reasons.append(
             Reason(rule="ledger-unavailable", label=str(e)[:200], weight=0.0)
         )
-    return verdict
+    return ReviewResponse(
+        **verdict.model_dump(),
+        deviations=intent_read.findings if intent_read else [],
+        intent_alignment=intent_read.alignment if intent_read else None,
+        intent_refs=intent_read.refs if intent_read else [],
+    )
 
 
 @app.post("/v1/score/read")
