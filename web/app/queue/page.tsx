@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
 import { applyThreshold, getQueue } from "@/lib/api";
 
@@ -30,9 +31,9 @@ export default async function QueuePage({
       <nav className="flex items-center justify-between py-6">
         <Link
           href="/"
-          className="font-heading text-lg font-semibold tracking-tight"
+          className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight"
         >
-          <span className="text-iridescent">✦</span> doug
+          <DougLogo /> doug
         </Link>
         <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
           <span

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
 import { getQueue } from "@/lib/api";
 
@@ -38,8 +39,8 @@ export default async function Home() {
   return (
     <main className="mx-auto w-full max-w-5xl px-6">
       <nav className="flex items-center justify-between py-6">
-        <span className="font-heading text-lg font-semibold tracking-tight">
-          <span className="text-iridescent">✦</span> doug
+        <span className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight">
+          <DougLogo /> doug
         </span>
         <span className="glass flex items-center gap-1 rounded-full px-1.5 py-1.5 font-mono text-xs">
           <Link
@@ -231,9 +232,8 @@ export default async function Home() {
       </section>
 
       <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
-        <span>
-          <span className="text-iridescent">✦</span> doug · routes, never
-          blocks
+        <span className="flex items-center gap-1.5">
+          <DougLogo size={16} /> doug · routes, never blocks
         </span>
         <span>
           FSL-1.1-ALv2 ·{" "}
