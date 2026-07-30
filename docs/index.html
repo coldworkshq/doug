@@ -546,6 +546,14 @@ deletion_leaning          214     4  <span class="hot">0.82x</span>  <span class
         <h2>Changelog</h2>
         <div class="params">
           <div class="param"><div><span class="pn">2026-07</span></div>
+            <div class="pd">Phase-1 entry experiments, pre-registered end to end. RandomForest on Kamei's 14
+            confirms the metadata ceiling (a plain size sort still wins). An LLM diff-read probe
+            out-ranks every deterministic baseline on <em>both</em> repos — AUC 0.69 sentry /
+            0.67 grafana, the first method here that held up on repo #2 — and survives a
+            polarity-inversion counterfactual (findings track change semantics, not diff surface).
+            Finding-pattern distillation: marginal pass on sentry, coverage fail on grafana.
+            Scripts: <code>api/scripts/rf_kamei.py</code>, <code>api/scripts/llm_probe.py</code>.</div></div>
+          <div class="param"><div><span class="pn">2026-07</span></div>
             <div class="pd">Backtest hardening: checkpoint/resume harvests, cache seeding, listing dedupe,
             <code>--backfill-details</code> (per-file stats + patch text). Cleared-band metric shipped.
             Rolling-window hotspot learning built; verdict pending deeper history. This docs site.</div></div>

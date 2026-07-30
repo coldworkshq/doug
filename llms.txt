@@ -78,7 +78,30 @@ Sketch: GET /v1/queue (routed queue with scores + receipts), GET
 /v1/prs/:number/receipt (evidence trail behind a verdict), GET /v1/scoreboard
 (published miss rates per author type — public by design).
 
+## Research results — LLM diff-read probe (2026-07, PREVIEW — not in the shipped scorer)
+Pre-registered before any run (bars, samples, kill conditions frozen first).
+Setup: structured LLM reads of PR diffs (title + files + patch only — no author,
+dates, or outcome), findings stored per PR, evaluated against revert/hotfix labels.
+- Ranking: the LLM risk score out-ranked every deterministic baseline we have
+  (size sort, shipped rules, RandomForest on Kamei's 14 metadata features) on BOTH
+  repos tested — AUC 0.69 on sentry, 0.67 on grafana. On grafana every
+  deterministic method sits at or below random; the LLM read is the first method
+  in this project that held up on repo #2.
+- Robustness: re-reading diffs with polarity inverted (added<->deleted) kept only
+  15-17% of findings — the reader tracks what the change does, not surface diff
+  patterns (the ReDef failure mode did not reproduce).
+- Distillation of findings into deterministic checks: recurring-pattern coverage
+  passed marginally on sentry, failed on grafana. The pattern vocabulary is shared
+  across repos; the density is not, on one thin-labelled repo.
+- Caveats, always attached: evaluation used defect-enriched samples (AUC is
+  unbiased there; capture percentages are not population numbers and are not
+  quoted); grafana had 22 evaluation defects (directional, not definitive); one
+  model, one prompt. Scripts: api/scripts/llm_probe.py, api/scripts/rf_kamei.py.
+
 ## Honesty notes
 All published numbers are scoped to the repo they were measured on (sentry unless
-stated). They are single-repo results: cross-repo replication is in progress and
-not yet demonstrated. Misses are published, not buried. Doug never blocks a merge.
+stated). The shipped deterministic scorer is a single-repo result — its cross-repo
+replication FAILED (grafana at random), which we publish rather than bury. The LLM
+diff-read result above is the piece that replicated across both repos, and it is
+research, not the shipped scorer. Misses are published, not buried. Doug never
+blocks a merge.
