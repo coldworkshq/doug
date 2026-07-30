@@ -1,0 +1,168 @@
+# Merge to main ships it. Solo repo, so the PR is the review gate and there
+# is no staging environment to promote through.
+#
+# Tests run again here even though CI already ran them on the PR: a direct
+# push to main skips the PR entirely, and "deployed a red build" is the one
+# failure this pipeline exists to prevent.
+#
+# Auth is Workload Identity Federation — no long-lived service-account key
+# in a public repo's secrets. Setup: api/deploy/setup-cicd.sh
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  # Escape hatch: redeploy without a commit (rollback, or a deploy that
+  # failed on something other than the code).
+  workflow_dispatch:
+    inputs:
+      target:
+        description: which service to deploy
+        type: choice
+        options: [both, api, web]
+        default: both
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation
+
+# Serialise deploys; never cancel one mid-flight, since a half-applied
+# Cloud Run revision is worse than a queued one.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT: doug-prod0
+  REGION: us-central1
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          DISPATCH: ${{ github.event.inputs.target }}
+        run: |
+          api=false; web=false
+          if [ -n "$DISPATCH" ]; then
+            case "$DISPATCH" in
+              both) api=true; web=true ;;
+              api)  api=true ;;
+              web)  web=true ;;
+            esac
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            # First push, force-push, or a pruned ref: no usable range, so
+            # deploy both. Redeploying is idempotent; skipping is not.
+            echo "no usable diff range — deploying both"
+            api=true; web=true
+          else
+            files=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+            echo "$files"
+            # grep returning 1 must not kill the step under `set -e`.
+            if echo "$files" | grep -q '^api/'; then api=true; fi
+            if echo "$files" | grep -q '^web/'; then web=true; fi
+          fi
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "api=$api web=$web" >> "$GITHUB_STEP_SUMMARY"
+
+  api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Check federation is configured
+        env:
+          PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          # Fail visibly with the fix, rather than an opaque OIDC error.
+          # Skipping silently would be worse: a deploy that quietly does
+          # nothing looks exactly like a deploy that worked.
+          if [ -z "$PROVIDER" ] || [ -z "$DEPLOY_SA" ]; then
+            echo "::error::Workload Identity is not configured. Run:"
+            echo "::error::  PROJECT=doug-prod0 REPO=${{ github.repository }} bash api/deploy/setup-cicd.sh"
+            echo "::error::then set the GCP_WIF_PROVIDER and GCP_DEPLOY_SA repo variables it prints."
+            exit 1
+          fi
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: bash deploy/gcp.sh deploy
+        env:
+          PROJECT: ${{ env.PROJECT }}
+          REGION: ${{ env.REGION }}
+      - name: Smoke-test the deployed revision
+        run: |
+          # /healthz is intercepted by the Google frontend and never reaches
+          # the app, so it is useless as a probe. openapi.json is a real route.
+          url=$(gcloud run services describe doug-api \
+            --project "$PROJECT" --region "$REGION" --format='value(status.url)')
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url/openapi.json")
+          echo "$url/openapi.json -> $code"
+          [ "$code" = "200" ] || exit 1
+          echo "api deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Check federation is configured
+        env:
+          PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          # Fail visibly with the fix, rather than an opaque OIDC error.
+          # Skipping silently would be worse: a deploy that quietly does
+          # nothing looks exactly like a deploy that worked.
+          if [ -z "$PROVIDER" ] || [ -z "$DEPLOY_SA" ]; then
+            echo "::error::Workload Identity is not configured. Run:"
+            echo "::error::  PROJECT=doug-prod0 REPO=${{ github.repository }} bash api/deploy/setup-cicd.sh"
+            echo "::error::then set the GCP_WIF_PROVIDER and GCP_DEPLOY_SA repo variables it prints."
+            exit 1
+          fi
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy
+        working-directory: api # gcp.sh builds ../web, and runs from here
+        run: bash deploy/gcp.sh web
+        env:
+          PROJECT: ${{ env.PROJECT }}
+          REGION: ${{ env.REGION }}
