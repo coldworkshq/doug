@@ -33,11 +33,25 @@ jobs:
             echo "Doug: no credentials in this context (fork PR?) — skipped. Doug never blocks a merge." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          verdict=$(curl -sS --fail-with-body -X POST "$DOUG_API_URL/v1/review" \
+          # A failure here must be visible, not silent. continue-on-error
+          # keeps it from reddening the PR, but a step that quietly writes
+          # nothing is indistinguishable from a clean review.
+          if ! verdict=$(curl -sS --fail-with-body -X POST "$DOUG_API_URL/v1/review" \
             -H "content-type: application/json" \
             -H "x-doug-token: $DOUG_API_TOKEN" \
             -H "x-github-token: $GH_TOKEN" \
-            -d "{\"repo\": \"$REPO\", \"pr_number\": $PR}")
+            -d "{\"repo\": \"$REPO\", \"pr_number\": $PR}" 2>&1); then
+            {
+              echo "## Doug: unavailable"
+              echo
+              echo "Doug could not score this PR. This never blocks a merge."
+              echo
+              echo '```'
+              echo "$verdict" | head -5
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "$verdict" | python3 -c "
           import json, sys
           v = json.load(sys.stdin)

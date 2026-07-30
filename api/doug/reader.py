@@ -181,13 +181,21 @@ def read_diff(pr, diff: str, client=None) -> ReaderVerdict:
         import anthropic
 
         client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
-        system=SYSTEM,
-        messages=[{"role": "user", "content": _user_text(pr, diff)}],
-    )
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
+            system=SYSTEM,
+            messages=[{"role": "user", "content": _user_text(pr, diff)}],
+        )
+    except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
+        # Anything the SDK raises — billing, rate limit, timeout, 5xx — is a
+        # failed read, and this module's contract is that a failed read falls
+        # back loudly rather than propagating. Letting these escape meant one
+        # exhausted balance 500'd every customer's CI, reported as success
+        # because the workflow step is continue-on-error.
+        raise ReaderError(f"{type(e).__name__}: {e}") from e
     if response.stop_reason != "end_turn":
         raise ReaderError(f"read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")
