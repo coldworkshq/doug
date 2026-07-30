@@ -63,13 +63,15 @@ deploy() {
       --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor >/dev/null
   done
 
+  # Both tiers are set here on purpose: --set-env-vars replaces the whole
+  # env block, so anything set out-of-band is wiped by the next deploy.
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest" \
-    --set-env-vars "DOUG_READER=1" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT=1" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format="value(status.url)"

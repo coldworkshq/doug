@@ -75,6 +75,72 @@ SCHEMA = {
 }
 
 
+# --- Intent tier -----------------------------------------------------------
+#
+# A second, separate read: the diff judged against the decisions the team
+# already recorded. INTENT_SCHEMA is verbatim from scripts/intent_probe.py,
+# the Experiment B v2 shape that passed (HIGH-severity deviations on 4% of
+# matched PRs vs 100% of mismatched, alignment 80 vs 2).
+#
+# The system prompt is NOT verbatim, and the difference matters. B v2's
+# prompt says "the issue/ticket this PR claims to resolve" and defines
+# missing-from-pr as "things the ticket asks for that the PR does not do".
+# A recorded decision asks nothing of a PR. Reusing that wording would be
+# false on its face, so this is a sibling prompt — frozen from creation on
+# the same terms as SYSTEM (ADR-0002), and unvalidated until the
+# derangement check runs. B v2 is prior evidence the capability is real,
+# not evidence that this prompt works.
+
+DECISION_INTENT_SYSTEM = (
+    "You are reviewing a single pull request diff from a large production "
+    "codebase, together with the architecture decisions this team has "
+    "already recorded and still considers binding. Judge whether the change "
+    "departs from those decisions. Report a deviation when the diff makes a "
+    "material change a recorded decision does not sanction (beyond-ticket), "
+    "when it contradicts a recorded decision outright (contradicts-ticket), "
+    "or when it claims to implement a decision but leaves a required part "
+    "undone (missing-from-pr). Routine implementation detail the decisions "
+    "leave open is NOT a deviation, and neither is work that is simply "
+    "unrelated to every decision you were given — most changes touch none "
+    "of them. Judge only against the decisions provided; do not invent "
+    "policy. Also report defect risks in the change itself, as usual."
+)
+
+INTENT_SCHEMA = {
+    **{k: v for k, v in SCHEMA.items() if k != "properties"},
+    "properties": {
+        **SCHEMA["properties"],
+        "intent_alignment": {
+            "type": "integer",
+            "description": (
+                "0-100: how fully and faithfully the diff implements the ticket's intent."
+            ),
+        },
+        "deviation_findings": {
+            "type": "array",
+            "description": (
+                "Gaps between ticket intent and diff behavior; empty if the PR "
+                "does what the ticket asks."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["missing-from-pr", "beyond-ticket", "contradicts-ticket"],
+                    },
+                    "description": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+                "required": ["type", "description", "severity"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": [*SCHEMA["required"], "intent_alignment", "deviation_findings"],
+}
+
+
 class ReaderError(RuntimeError):
     """A read failed (refusal, truncation, transport) — fall back and say so."""
 
@@ -129,6 +195,61 @@ def read_diff(pr, diff: str, client=None) -> ReaderVerdict:
         return ReaderVerdict.model_validate_json(text)
     except ValueError as e:
         raise ReaderError(f"unparseable reader output: {e}") from e
+
+
+class DeviationFinding(BaseModel):
+    type: str
+    description: str
+    severity: str
+
+
+class IntentReaderVerdict(ReaderVerdict):
+    intent_alignment: int
+    deviation_findings: list[DeviationFinding]
+
+
+def intent_enabled() -> bool:
+    return os.environ.get("DOUG_INTENT") == "1"
+
+
+def _intent_text(pr, diff: str, docs) -> str:
+    """Decisions first, then the diff — same ordering the probe validated."""
+    block = "\n\n".join(
+        f"[{d.id}] {d.title}\n{d.body}" for d in docs
+    )
+    return (
+        "Recorded architecture decisions this team considers binding:\n"
+        f"{block}\n\n---\n" + _user_text(pr, diff)
+    )
+
+
+def read_with_decisions(pr, diff: str, docs, client=None) -> IntentReaderVerdict:
+    """The intent read. Never called with an empty `docs` — a read with no
+    decisions in it is the diff-only read, and asking the model to compare
+    against nothing invites invented findings."""
+    if not docs:
+        raise ReaderError("no decision records to read against")
+    if client is None:
+        import anthropic
+
+        client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        output_config={
+            "effort": EFFORT,
+            "format": {"type": "json_schema", "schema": INTENT_SCHEMA},
+        },
+        system=DECISION_INTENT_SYSTEM,
+        messages=[{"role": "user", "content": _intent_text(pr, diff, docs)}],
+    )
+    if response.stop_reason != "end_turn":
+        raise ReaderError(f"intent read stopped with {response.stop_reason}")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    try:
+        return IntentReaderVerdict.model_validate_json(text)
+    except ValueError as e:
+        raise ReaderError(f"unparseable intent output: {e}") from e
 
 
 def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Verdict:

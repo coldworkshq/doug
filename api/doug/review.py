@@ -15,10 +15,11 @@ rules simply don't fire here; the reader doesn't use them at all.
 
 import argparse
 import functools
+import sys
 
 from pydantic import BaseModel
 
-from . import reader
+from . import intent, intent_providers, reader
 from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict
 from .scoring import score
@@ -114,6 +115,43 @@ def score_one(meta: PRMetadata, diff: str):
             )
             return "deterministic", verdict, None
     return "deterministic", score(meta), None
+
+
+class IntentRead(BaseModel):
+    """The intent tier's output. Separate from Verdict by design (ADR-0007)."""
+
+    alignment: int
+    refs: list[str]
+    findings: list[reader.DeviationFinding]
+
+
+def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> IntentRead | None:
+    """Judge the change against the repo's binding decisions, or None.
+
+    None means no read happened — the feature is off, the repo keeps no
+    decision records, none of them bear on this change, or the read
+    failed. Every one of those is ordinary, and none of them may disturb
+    the risk verdict this runs alongside.
+    """
+    if not (intent.enabled() and reader.enabled()):
+        return None
+    try:
+        docs = intent_providers.fetch(gh, owner, repo)
+        chosen = [intent.truncate(d) for d in intent.select(docs, meta.title, meta.files)]
+        if not chosen:
+            return None
+        rv = reader.read_with_decisions(meta, diff, chosen)
+    except Exception as e:  # noqa: BLE001 — advisory path, never fails a review
+        # Swallowed, but not silently: a read that fails every time would
+        # otherwise be indistinguishable from a repo that keeps no records,
+        # and the feature would look "quiet" rather than broken.
+        print(f"doug: intent read skipped ({type(e).__name__}: {e})", file=sys.stderr)
+        return None
+    return IntentRead(
+        alignment=rv.intent_alignment,
+        refs=[d.id for d in chosen],
+        findings=rv.deviation_findings,
+    )
 
 
 def review_repo(gh, owner: str, repo: str, limit: int) -> list[ReviewItem]:

@@ -80,6 +80,26 @@ outcomes = Table(
     Column("source", String(40), nullable=False),  # git-labels | manual | ...
 )
 
+# Intent-tier output, kept in its own table on purpose (ADR-0007). A
+# deviation is a judgment about a change against a recorded decision; it
+# has no outcome-precision evaluation, and folding it into verdicts.score
+# would silently change what every score in this ledger means.
+deviations = Table(
+    "deviations",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("verdict_id", Integer, ForeignKey("verdicts.id"), nullable=False, index=True),
+    # missing-from-pr | beyond-ticket | contradicts-ticket, or "none" for a
+    # read that completed and found nothing.
+    Column("kind", String(24), nullable=False),
+    Column("description", Text, nullable=False),
+    Column("severity", String(10), nullable=False),
+    # Which records the read was given, so a finding can be checked against
+    # the record rather than taken on faith.
+    Column("intent_refs", JSON),
+    Column("intent_alignment", Integer),
+)
+
 _engine = None
 
 
@@ -151,6 +171,115 @@ def save_review(
         if rows:
             conn.execute(findings.insert(), rows)
     return int(row)
+
+
+def save_deviations(
+    verdict_id: int | None,
+    findings: list,
+    intent_refs: list[str],
+    intent_alignment: int,
+) -> int:
+    """Persist the intent read's output against an existing verdict.
+
+    Deliberately writes nothing to `verdicts` — not the score, not the
+    band, not the raw column. The separation is the point (ADR-0007), and
+    it is enforced here rather than trusted to callers.
+
+    A read that found no deviations still records one row carrying the
+    alignment score, so "read happened, nothing found" stays
+    distinguishable from "no read happened" when precision is eventually
+    measured over this table.
+    """
+    engine = _get_engine()
+    if engine is None or verdict_id is None:
+        return 0
+    rows = [
+        {
+            "verdict_id": verdict_id,
+            "kind": f.type,
+            "description": f.description,
+            "severity": f.severity,
+            "intent_refs": intent_refs,
+            "intent_alignment": intent_alignment,
+        }
+        for f in findings
+    ] or [
+        {
+            "verdict_id": verdict_id,
+            "kind": "none",
+            "description": "",
+            "severity": "low",
+            "intent_refs": intent_refs,
+            "intent_alignment": intent_alignment,
+        }
+    ]
+    with engine.begin() as conn:
+        conn.execute(deviations.insert(), rows)
+    return len(rows)
+
+
+def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
+    """The findings x outcomes join — step 2 of the distillation loop.
+
+    Returns two aligned row sets, read in one transaction so the base rate
+    and the per-pattern hits describe the same snapshot:
+
+      prs  — every scored PR whose outcome is known, with that outcome.
+              This is the denominator; PRs that produced zero findings
+              belong in it, which is why it is not derived from `hits`.
+      hits — every (PR, finding rule) pair on those PRs, deduplicated.
+              One PR emitting the same rule twice is one hit, because the
+              unit of prediction is the PR, not the finding.
+
+    Only the newest verdict per PR counts: a rescored PR would otherwise
+    contribute its superseded findings to precision as well.
+
+    Aggregation is left to the caller — slug normalisation happens after
+    this join (synonymous rules collapse to one pattern, and two merged
+    rules on one PR must not count twice), and the statistics that matter
+    depend on the sampling design of the rows in the ledger.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return {"prs": [], "hits": []}
+    from sqlalchemy import func, select
+
+    latest = (
+        select(func.max(verdicts.c.id).label("id"))
+        .group_by(verdicts.c.repo, verdicts.c.pr_number)
+        .scalar_subquery()
+    )
+    scored = select(verdicts.c.id, verdicts.c.repo, verdicts.c.pr_number).where(
+        verdicts.c.id.in_(latest)
+    )
+    if repo:
+        scored = scored.where(verdicts.c.repo == repo)
+    scored = scored.subquery()
+
+    on_outcome = (outcomes.c.repo == scored.c.repo) & (
+        outcomes.c.pr_number == scored.c.pr_number
+    )
+    # A PR with several outcome rows yields several rows here; the caller
+    # decides how to reduce them (any non-clean outcome makes it a defect).
+    pr_q = (
+        select(scored.c.repo, scored.c.pr_number, outcomes.c.kind)
+        .select_from(scored.join(outcomes, on_outcome))
+        .distinct()
+    )
+    hit_q = (
+        select(scored.c.repo, scored.c.pr_number, findings.c.rule)
+        .select_from(
+            scored.join(findings, findings.c.verdict_id == scored.c.id).join(
+                outcomes, on_outcome
+            )
+        )
+        .distinct()
+    )
+    with engine.connect() as conn:
+        return {
+            "prs": [dict(r) for r in conn.execute(pr_q).mappings()],
+            "hits": [dict(r) for r in conn.execute(hit_q).mappings()],
+        }
 
 
 def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
