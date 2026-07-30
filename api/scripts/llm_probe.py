@@ -43,6 +43,7 @@ from screen_features import history_index
 from doug.backtest.curve import capture_curve
 from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
+from doug.patterns import SLUG_MERGES
 
 print = functools.partial(print, flush=True)  # noqa: A001
 
@@ -57,21 +58,9 @@ N_COUNTERFACTUAL = 30
 SEED = 0
 
 # Pre-registration (ii) allows "manual merge of obvious synonyms, logged".
-# This map IS the log. Conservative: lexical variants and strict synonyms
-# only — no thematic stretches (e.g. race-condition and import-cycle stay
-# separate from anything they merely resemble).
-SLUG_MERGES = {
-    "missing-error-handling": "error-handling-gap",
-    "unhandled-exception": "error-handling-gap",
-    "unhandled-io-error": "error-handling-gap",
-    "behavior-regression": "behavior-change",
-    "circular-import": "import-cycle",
-    "import-cycle-risk": "import-cycle",
-    "metric-cardinality": "metrics-cardinality",
-    "unchecked-type-conversion": "type-coercion",
-    "unsafe-type-coercion": "type-coercion",
-    "dead-reference-after-module-removal": "dead-reference",
-}
+# The map IS that log; it now lives in doug/patterns.py so the probe and the
+# ledger's precision join group findings identically. Values are unchanged
+# from this run and pinned by tests/test_patterns.py.
 
 SYSTEM = (
     "You are reviewing a single pull request diff from a large production "

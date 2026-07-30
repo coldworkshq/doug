@@ -115,3 +115,123 @@ def test_queue_repo_scoping(tmp_path, monkeypatch):
     c = TestClient(app)
     assert c.get("/v1/queue").json()["summary"]["open"] == 2
     assert c.get("/v1/queue", params={"repo": "a/x"}).json()["summary"]["open"] == 1
+
+
+def _outcome(url, repo, pr_number, kind, source="git-labels"):
+    from datetime import UTC, datetime
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert(), {
+            "repo": repo, "pr_number": pr_number, "kind": kind,
+            "observed_at": datetime.now(UTC), "source": source,
+        })
+
+
+def _v(slugs, score=0.62):
+    """A verdict carrying one finding per slug."""
+    rv = reader.ReaderVerdict.model_validate({
+        "risk_score": int(score * 100),
+        "rationale": "x",
+        "findings": [
+            {"category_slug": s, "description": f"d-{i}", "file": "a.py", "severity": "high"}
+            for i, s in enumerate(slugs)
+        ],
+    })
+    return reader.verdict_from_reader(rv, threshold=30), rv
+
+
+def test_pattern_join_pairs_findings_with_outcomes(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    verdict, rv = _v(["race-condition", "unsafe-migration"])
+    store.save_review("o/r", 1, "reader", verdict, rv)
+    _outcome(url, "o/r", 1, "revert")
+
+    join = store.pattern_join()
+    assert join["prs"] == [{"repo": "o/r", "pr_number": 1, "kind": "revert"}]
+    assert sorted(h["rule"] for h in join["hits"]) == [
+        "reader:race-condition", "reader:unsafe-migration",
+    ]
+
+
+def test_pattern_join_excludes_prs_without_outcomes(tmp_path, monkeypatch):
+    """A scored PR whose fate is unknown is not evidence either way — it
+    must not land in the precision denominator as an implicit clean."""
+    _db(tmp_path, monkeypatch)
+    verdict, rv = _v(["race-condition"])
+    store.save_review("o/r", 1, "reader", verdict, rv)
+    join = store.pattern_join()
+    assert join["prs"] == [] and join["hits"] == []
+
+
+def test_pattern_join_keeps_finding_free_prs_in_the_denominator(tmp_path, monkeypatch):
+    """The base rate is over every PR the reader looked at, not just the
+    ones it flagged. Dropping quiet PRs would inflate every lift."""
+    url = _db(tmp_path, monkeypatch)
+    verdict, rv = _v([])
+    store.save_review("o/r", 2, "reader", verdict, rv)
+    _outcome(url, "o/r", 2, "clean")
+    join = store.pattern_join()
+    assert join["prs"] == [{"repo": "o/r", "pr_number": 2, "kind": "clean"}]
+    assert join["hits"] == []
+
+
+def test_pattern_join_counts_only_the_latest_verdict(tmp_path, monkeypatch):
+    """A rescored PR would otherwise contribute its superseded findings to
+    precision alongside the current ones."""
+    url = _db(tmp_path, monkeypatch)
+    old_v, old_rv = _v(["race-condition"])
+    store.save_review("o/r", 3, "reader", old_v, old_rv)
+    new_v, new_rv = _v(["unsafe-migration"])
+    store.save_review("o/r", 3, "reader", new_v, new_rv)
+    _outcome(url, "o/r", 3, "revert")
+
+    join = store.pattern_join()
+    assert [h["rule"] for h in join["hits"]] == ["reader:unsafe-migration"]
+    assert len(join["prs"]) == 1
+
+
+def test_pattern_join_scopes_by_repo(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    for repo in ("a/x", "b/y"):
+        verdict, rv = _v(["race-condition"])
+        store.save_review(repo, 1, "reader", verdict, rv)
+        _outcome(url, repo, 1, "clean")
+    assert len(store.pattern_join()["prs"]) == 2
+    assert store.pattern_join(repo="a/x")["prs"] == [
+        {"repo": "a/x", "pr_number": 1, "kind": "clean"}
+    ]
+
+
+def test_pattern_join_is_empty_without_storage(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.pattern_join() == {"prs": [], "hits": []}
+
+
+def test_patterns_endpoint_requires_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    assert TestClient(app).get("/v1/patterns").status_code == 401
+
+
+def test_patterns_endpoint_serves_the_join_with_its_caveat(tmp_path, monkeypatch):
+    """The caveat ships inside the payload on purpose: a precision number
+    lifted out of this endpoint without it is the enriched-sample error."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    for i in range(4):
+        verdict, rv = _v(["race-condition"])
+        store.save_review("o/r", i, "reader", verdict, rv)
+        _outcome(url, "o/r", i, "revert" if i < 3 else "clean")
+
+    r = TestClient(app).get(
+        "/v1/patterns", params={"min_prs": 2}, headers={"x-doug-token": "secret"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["prs"] == 4 and body["defects"] == 3
+    assert body["base_rate"] == 0.75
+    row = body["rows"][0]
+    assert row["pattern"] == "race-condition" and row["prs"] == 4
+    assert row["precision"] == 0.75 and row["lift"] == 1.0
+    assert "enriched sample" in body["caveat"]
