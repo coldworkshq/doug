@@ -22,7 +22,7 @@ WEB_SERVICE=doug-web
 CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
-QUEUE_REPO=${QUEUE_REPO:-lemahq/lema}
+QUEUE_REPO=${QUEUE_REPO:-drewjst/doug}
 
 setup() {
   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
@@ -65,7 +65,11 @@ setup() {
   # carry admin rights it has no other reason to hold.
   SA=$(gcloud iam service-accounts list --project "$PROJECT" \
     --filter="displayName:'Default compute service account'" --format="value(email)")
-  for s in doug-database-url doug-api-token doug-anthropic-key; do
+  # NOTE for the GitHub App work: this binds secrets to the *default*
+  # compute service account, so every workload in the project can read
+  # them. Tolerable for these four; not tolerable for an App private key,
+  # which needs a dedicated service account.
+  for s in doug-database-url doug-api-token doug-anthropic-key doug-webhook-secret; do
     gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
       --member="serviceAccount:$SA" \
       --role=roles/secretmanager.secretAccessor >/dev/null 2>&1 || true
@@ -84,7 +88,7 @@ deploy() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest" \
     --set-env-vars "DOUG_READER=1,DOUG_INTENT=1" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
@@ -99,6 +103,7 @@ web() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --set-env-vars "DOUG_API_URL=$(api_url),DOUG_QUEUE_REPO=$QUEUE_REPO" \
+    --set-secrets "DOUG_API_TOKEN=doug-api-token:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60
   gcloud run services describe "$WEB_SERVICE" --project "$PROJECT" --region "$REGION" \
     --format="value(status.url)"
