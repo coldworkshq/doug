@@ -173,7 +173,23 @@ def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
 
 
 @app.get("/v1/queue")
-def queue(threshold: float | None = None, repo: str | None = None) -> QueueResponse:
+def queue(
+    threshold: float | None = None,
+    repo: str | None = None,
+    x_doug_token: str = Header(""),
+) -> QueueResponse:
+    """The review queue. Token-gated on the same shared secret as
+    /v1/review: these are real PR titles, authors and reader rationales,
+    and the service is deployed --allow-unauthenticated.
+
+    `repo` stays a caller-supplied parameter until sessions exist; the
+    shared token stops anonymous reads, it does not separate tenants.
+    """
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if not hmac.compare_digest(x_doug_token, expected):
+        raise HTTPException(status_code=401, detail="bad token")
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [

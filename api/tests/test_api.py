@@ -30,8 +30,21 @@ def test_score_endpoint():
     assert body["reasons"]
 
 
-def test_queue_summary_is_consistent():
+def test_queue_refuses_without_a_token(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
     r = client.get("/v1/queue")
+    assert r.status_code == 401
+
+
+def test_queue_refuses_when_token_unconfigured(monkeypatch):
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "anything"})
+    assert r.status_code == 503
+
+
+def test_queue_summary_is_consistent(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "t0ken"})
     assert r.status_code == 200
     body = r.json()
     s = body["summary"]

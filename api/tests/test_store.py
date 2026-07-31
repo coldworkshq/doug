@@ -28,9 +28,16 @@ VERDICT = Verdict(
 )
 
 
+# /v1/queue is token-gated on the shared DOUG_API_TOKEN, so every queue
+# test needs both a ledger and a token. _db sets the token because every
+# one of those tests already calls it.
+AUTH = {"X-Doug-Token": "t0ken"}
+
+
 def _db(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path}/doug.db"
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
     return url
 
 
@@ -100,7 +107,7 @@ def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
         "o/r", 7, "reader", VERDICT, RV,
         model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
     )
-    r = TestClient(app).get("/v1/queue")
+    r = TestClient(app).get("/v1/queue", headers=AUTH)
     assert r.status_code == 200
     body = r.json()
     assert body["summary"]["open"] == 1
@@ -113,8 +120,8 @@ def test_queue_repo_scoping(tmp_path, monkeypatch):
     store.save_review("a/x", 1, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
     store.save_review("b/y", 2, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
     c = TestClient(app)
-    assert c.get("/v1/queue").json()["summary"]["open"] == 2
-    assert c.get("/v1/queue", params={"repo": "a/x"}).json()["summary"]["open"] == 1
+    assert c.get("/v1/queue", headers=AUTH).json()["summary"]["open"] == 2
+    assert c.get("/v1/queue", params={"repo": "a/x"}, headers=AUTH).json()["summary"]["open"] == 1
 
 
 def _outcome(url, repo, pr_number, kind, source="git-labels"):
@@ -247,7 +254,7 @@ def test_queue_reports_the_threshold_rows_were_banded_at(tmp_path, monkeypatch):
         "o/r", 7, "reader", VERDICT, RV,
         model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
     )
-    body = TestClient(app).get("/v1/queue").json()
+    body = TestClient(app).get("/v1/queue", headers=AUTH).json()
     assert body["summary"]["threshold"] == VERDICT.threshold == 0.30
     assert body["items"][0]["verdict"]["band"] == "flagged"
 
@@ -256,7 +263,7 @@ def test_queue_falls_back_to_the_default_when_there_are_no_rows(tmp_path, monkey
     _db(tmp_path, monkeypatch)
     from doug.scoring import default_threshold
 
-    body = TestClient(app).get("/v1/queue", params={"repo": "nobody/here"}).json()
+    body = TestClient(app).get("/v1/queue", params={"repo": "nobody/here"}, headers=AUTH).json()
     assert body["summary"]["open"] == 0
     assert body["summary"]["threshold"] == default_threshold()
 
@@ -270,7 +277,7 @@ def test_explicit_threshold_rebands_the_rows(tmp_path, monkeypatch):
         "o/r", 7, "reader", VERDICT, RV,
         model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
     )
-    body = TestClient(app).get("/v1/queue", params={"threshold": 0.9}).json()
+    body = TestClient(app).get("/v1/queue", params={"threshold": 0.9}, headers=AUTH).json()
     assert body["summary"]["threshold"] == 0.9
     assert body["summary"]["flagged"] == 0
     item = body["items"][0]
@@ -288,7 +295,7 @@ def test_queue_links_rows_written_before_url_was_captured(tmp_path, monkeypatch)
         "o/r", 7, "reader", VERDICT, RV,
         model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
     )
-    item = TestClient(app).get("/v1/queue").json()["items"][0]
+    item = TestClient(app).get("/v1/queue", headers=AUTH).json()["items"][0]
     assert item["pr"]["url"] == "https://github.com/o/r/pull/7"
 
 
@@ -301,6 +308,7 @@ def test_queue_carries_finding_severity(tmp_path, monkeypatch):
         "o/r", 7, "reader", VERDICT, RV,
         model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
     )
-    reasons = TestClient(app).get("/v1/queue").json()["items"][0]["verdict"]["reasons"]
+    body = TestClient(app).get("/v1/queue", headers=AUTH).json()
+    reasons = body["items"][0]["verdict"]["reasons"]
     assert reasons[0]["severity"] == "high"
     assert reasons[0]["weight"] == 0.0
