@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+
 from fastapi.testclient import TestClient
 
 from doug.api import app
@@ -42,17 +45,48 @@ def test_queue_summary_is_consistent():
     assert body["items"][0]["verdict"]["band"] == "flagged"
 
 
-def test_webhook_rejects_signature_without_secret(monkeypatch):
+def _sig(secret: bytes, body: bytes, algo: str) -> str:
+    digest = hashlib.sha256 if algo == "sha256" else hashlib.sha1
+    return f"{algo}=" + hmac.new(secret, body, digest).hexdigest()
+
+
+def test_webhook_refuses_when_secret_unconfigured(monkeypatch):
+    # An unconfigured deployment must not accept unverified payloads: under
+    # the App a webhook triggers a paid model read.
+    monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+    r = client.post("/webhooks/github", content=b"{}")
+    assert r.status_code == 503
+
+
+def test_webhook_refuses_signed_body_when_secret_unconfigured(monkeypatch):
     monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
     r = client.post(
         "/webhooks/github",
         content=b"{}",
         headers={"X-Hub-Signature-256": "sha256=deadbeef"},
     )
+    assert r.status_code == 503
+
+
+def test_webhook_rejects_sha1_digest_on_the_256_header(monkeypatch):
+    # githubkit picks the digest from the prefix, not the header name, so an
+    # attacker-chosen "sha1=" would silently weaken verification.
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    body = b'{"zen":"x"}'
+    r = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={"X-Hub-Signature-256": _sig(b"s3cret", body, "sha1")},
+    )
     assert r.status_code == 401
 
 
-def test_webhook_accepts_when_unconfigured_and_unsigned(monkeypatch):
-    monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
-    r = client.post("/webhooks/github", content=b"{}")
+def test_webhook_accepts_a_valid_sha256_signature(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    body = b'{"zen":"x"}'
+    r = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={"X-Hub-Signature-256": _sig(b"s3cret", body, "sha256")},
+    )
     assert r.status_code == 202

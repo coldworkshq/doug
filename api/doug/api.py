@@ -303,14 +303,21 @@ async def github_webhook(
     x_hub_signature_256: str = Header(default=""),
 ) -> Response:
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+    if not secret:
+        # Fail closed, matching /v1/review and /v1/patterns. Accepting
+        # unverified payloads was survivable while this endpoint discarded
+        # everything; under the App a delivery triggers a paid model read.
+        raise HTTPException(
+            status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured"
+        )
     body = await request.body()
-    if secret:
-        if not x_hub_signature_256 or not verify_webhook(secret, body, x_hub_signature_256):
-            raise HTTPException(status_code=401, detail="bad signature")
-    elif not hmac.compare_digest(x_hub_signature_256, ""):
-        # A signature arrived but no secret is configured: refuse rather than
-        # silently accept unverified payloads.
-        raise HTTPException(status_code=401, detail="webhook secret not configured")
+    # githubkit's verify() reads the digest from the signature prefix, not
+    # from the header name, so an attacker-supplied "sha1=" would downgrade
+    # the comparison. Pin it.
+    if not x_hub_signature_256.startswith("sha256="):
+        raise HTTPException(status_code=401, detail="bad signature")
+    if not verify_webhook(secret, body, x_hub_signature_256):
+        raise HTTPException(status_code=401, detail="bad signature")
 
     # Phase 2 (the Live Gate) will parse pull_request events here, extract
     # features, score, and post a check run. Accepting and discarding is
