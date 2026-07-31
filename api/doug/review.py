@@ -32,6 +32,18 @@ class ReviewItem(BaseModel):
     verdict: Verdict
 
 
+def _html_url(p) -> str | None:
+    """PR permalink, tolerant of what the field actually is.
+
+    githubkit models absent fields as the UNSET sentinel rather than None,
+    and cached payloads from earlier harvests predate the field entirely.
+    Anything that is not a string is no link — api.py reconstructs one from
+    the repo and number in that case.
+    """
+    url = getattr(p, "html_url", None)
+    return url if isinstance(url, str) else None
+
+
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",
@@ -60,6 +72,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             days_since_last_human_commit=None,
             files_added=sum(1 for f in files if f.status == "added"),
             files_modified=sum(1 for f in files if f.status == "modified"),
+            url=_html_url(p),
         )
         diff = "\n\n".join(
             f"### {f.filename} ({f.status}, +{f.additions}/-{f.deletions})\n{f.patch}"
@@ -92,6 +105,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         days_since_last_human_commit=None,
         files_added=sum(1 for f in files if f.status == "added"),
         files_modified=sum(1 for f in files if f.status == "modified"),
+        url=_html_url(p),
     )
     diff = "\n\n".join(
         f"### {f.filename} ({f.status}, +{f.additions}/-{f.deletions})\n{f.patch}"

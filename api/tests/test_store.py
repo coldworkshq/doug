@@ -276,3 +276,31 @@ def test_explicit_threshold_rebands_the_rows(tmp_path, monkeypatch):
     item = body["items"][0]
     assert item["verdict"]["band"] == "cleared"       # 0.62 < 0.9
     assert item["verdict"]["threshold"] == 0.9        # and it says so
+
+
+def test_queue_links_rows_written_before_url_was_captured(tmp_path, monkeypatch):
+    """Every backfilled probe row and everything scored before today has no
+    url. The ledger knows the repo and the number, which is all a GitHub PR
+    link needs, so they are repaired on read rather than by rewriting 654
+    rows."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+    )
+    item = TestClient(app).get("/v1/queue").json()["items"][0]
+    assert item["pr"]["url"] == "https://github.com/o/r/pull/7"
+
+
+def test_queue_carries_finding_severity(tmp_path, monkeypatch):
+    """Reader findings have weight 0 by construction, so the queue showed
+    '+0.00' beside every one of them. Severity is the field that actually
+    varies."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+    )
+    reasons = TestClient(app).get("/v1/queue").json()["items"][0]["verdict"]["reasons"]
+    assert reasons[0]["severity"] == "high"
+    assert reasons[0]["weight"] == 0.0

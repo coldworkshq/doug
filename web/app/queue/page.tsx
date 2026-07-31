@@ -2,9 +2,29 @@ import Link from "next/link";
 
 import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
-import { applyThreshold, getQueue } from "@/lib/api";
+import { applyThreshold, getQueue, type Reason } from "@/lib/api";
 
 const PRESETS = [0.5, 0.62, 0.8];
+
+/** Preset cut lines, always including the one in force — otherwise clicking
+ *  a preset is a one-way trip away from the queue's real threshold. */
+function presets(active: number): number[] {
+  return [...new Set([...PRESETS, active])].sort((a, b) => a - b);
+}
+
+/** Reader findings always carry weight 0 and a severity; deterministic rules
+ *  carry a weight and no severity. Showing "+0.00" beside every reader
+ *  finding printed a number that was constant by construction. */
+function marker(r: Reason): string {
+  if (r.severity) return r.severity;
+  return r.weight ? `+${r.weight.toFixed(2)}` : "·";
+}
+
+function severityTone(r: Reason): string {
+  if (r.severity === "high") return "text-flag";
+  if (r.severity === "medium") return "text-sheen";
+  return "text-muted-foreground";
+}
 
 function latency(s: number | null): string {
   if (s === null) return "unapproved";
@@ -63,7 +83,7 @@ export default async function QueuePage({
             <span className="px-2 uppercase tracking-widest text-muted-foreground">
               threshold
             </span>
-            {PRESETS.map((t) => (
+            {presets(queue.summary.threshold).map((t) => (
               <Link
                 key={t}
                 href={`/queue?threshold=${t}`}
@@ -109,10 +129,17 @@ export default async function QueuePage({
             </p>
             <div>
               <h2 className="font-heading text-lg font-medium">
-                <span className="mr-2 font-mono text-sm text-muted-foreground">
-                  #{pr.number}
-                </span>
-                {pr.title}
+                <a
+                  href={pr.url ?? "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="transition-colors hover:text-sheen"
+                >
+                  <span className="mr-2 font-mono text-sm text-muted-foreground">
+                    #{pr.number}
+                  </span>
+                  {pr.title}
+                </a>
               </h2>
               <p className="mt-1 font-mono text-xs text-muted-foreground">
                 {pr.author_type === "agent" ? "◆ agent" : "○ human"} {pr.author}{" "}
@@ -122,12 +149,12 @@ export default async function QueuePage({
               </p>
               {verdict.reasons.length > 0 && (
                 <ul className="mt-3 space-y-1">
-                  {verdict.reasons.map((r) => (
+                  {verdict.reasons.map((r, i) => (
                     <li
-                      key={r.rule}
+                      key={`${r.rule}-${i}`}
                       className="font-mono text-xs text-muted-foreground"
                     >
-                      <span className="text-sheen">+{r.weight.toFixed(2)}</span>{" "}
+                      <span className={severityTone(r)}>{marker(r)}</span>{" "}
                       {r.label}
                     </li>
                   ))}
@@ -149,8 +176,9 @@ export default async function QueuePage({
       </section>
 
       <footer className="border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
-        Scores are deterministic and legible — every point of weight is a named
-        rule. No model read any of this code.
+        Every finding names the pattern it matched, so a score can be argued
+        with. Reader findings come from a model reading the diff; the
+        deterministic fallback names a weighted rule instead.
       </footer>
     </main>
   );
