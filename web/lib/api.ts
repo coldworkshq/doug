@@ -20,6 +20,8 @@ export interface Reason {
   rule: string;
   label: string;
   weight: number;
+  /** Reader findings only; deterministic rules carry a weight instead. */
+  severity?: string | null;
 }
 
 export interface Verdict {

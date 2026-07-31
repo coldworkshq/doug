@@ -140,6 +140,22 @@ def _load_fixture() -> list[PRMetadata]:
     return [PRMetadata.model_validate(item) for item in json.loads(raw)]
 
 
+def _with_url(row: dict) -> PRMetadata:
+    """PR metadata with a link back to the pull request.
+
+    Rows written before `url` was captured — every backfilled probe row and
+    everything scored up to now — have none. The ledger knows the repo and
+    the number, which is all a GitHub PR URL needs, so they are repaired on
+    read rather than by rewriting 654 rows.
+    """
+    meta = PRMetadata.model_validate(row["pr_meta"])
+    if meta.url:
+        return meta
+    return meta.model_copy(
+        update={"url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}"}
+    )
+
+
 def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
     """The line these rows were actually banded at.
 
@@ -162,13 +178,18 @@ def queue(threshold: float | None = None, repo: str | None = None) -> QueueRespo
     if store.enabled():
         items = [
             QueueItem(
-                pr=PRMetadata.model_validate(row["pr_meta"]),
+                pr=_with_url(row),
                 verdict=Verdict(
                     score=row["score"],
                     band=Band(row["band"]),
                     threshold=row["threshold"],
                     reasons=[
-                        Reason(rule=f["rule"], label=f["label"], weight=f["weight"])
+                        Reason(
+                            rule=f["rule"],
+                            label=f["label"],
+                            weight=f["weight"],
+                            severity=f["severity"],
+                        )
                         for f in row["findings"]
                     ],
                 ),

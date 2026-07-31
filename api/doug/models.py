@@ -63,6 +63,10 @@ class Reason(BaseModel):
     rule: str
     label: str
     weight: float
+    # Reader findings carry a severity and no weight; deterministic rules
+    # carry a weight and no severity. Both travel here so a surface can
+    # show whichever one is meaningful instead of a constant 0.00.
+    severity: str | None = None
 
 
 class Band(StrEnum):
