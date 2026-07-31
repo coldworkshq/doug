@@ -19,6 +19,17 @@ WORKFLOWS = (
 )
 
 
+# The one anchor both tests below use to find the -c block's real extent.
+# The closing quote of the -c argument is immediately followed by
+# ` >> "$GITHUB_STEP_SUMMARY"` on the *same* line, not by a newline — a
+# narrower pattern ending at `"` + newline matches past it, into that
+# redirect's own closing quote, and silently captures
+# ` >> "$GITHUB_STEP_SUMMARY` as if it were part of the python body.
+_SUMMARY_BLOCK = re.compile(
+    r'( *)echo "\$verdict" \| python3 -c "(.*?)" >> "\$GITHUB_STEP_SUMMARY"\n', re.S
+)
+
+
 def _python_c_block(path: Path) -> str:
     """The script as the *runner* sees it, not as the file stores it.
 
@@ -34,9 +45,9 @@ def _python_c_block(path: Path) -> str:
     was older.
     """
     text = path.read_text()
-    match = re.search(r'python3 -c "(.*?)" >> "\$GITHUB_STEP_SUMMARY"', text, re.S)
+    match = _SUMMARY_BLOCK.search(text)
     assert match, f"could not find python3 -c block in {path}"
-    return textwrap.dedent(match.group(1))
+    return textwrap.dedent(match.group(2))
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: str(p.relative_to(p.parents[2])))
@@ -46,7 +57,7 @@ def test_summary_script_is_flush_with_the_line_that_opens_it(path: Path):
     indented — an IndentationError on every CPython before 3.14. Nothing
     else in this file can catch that, because dedent() would hide it."""
     text = path.read_text()
-    match = re.search(r'( *)echo "\$verdict" \| python3 -c "(.*?)"\n', text, re.S)
+    match = _SUMMARY_BLOCK.search(text)
     assert match, f"could not find the summary pipeline in {path}"
     opener, body = len(match.group(1)), match.group(2)
     deepest_shared = min(
