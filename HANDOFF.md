@@ -1,9 +1,8 @@
 # HANDOFF — doug
 
 State:    review
-Next:     Fix #13's own review finding (test regex swallows trailing shell
-          syntax — reuse _python_c_block's anchor), push, then merge #12
-          and #13; then queue-page rendering for `read-truncated`.
+Next:     Both PRs pushed with review fixes applied. Merge #12 and #13;
+          then queue-page rendering for `read-truncated`.
 Blockers: Anthropic balance empty — no diff has been read since it ran out.
           Any reader re-run (prompt v2, budget experiment) waits on it.
 
@@ -53,20 +52,24 @@ Decisions this session:
   ~11-21% of backfilled PRs that were truncated with no way to recover the
   true original length — file_details being fully populated made this
   unnecessary; every backfilled row now has an exact reads row or none.
-- One of #13's own findings needs fixing next: its new indentation-fidelity
-  test's regex stops at the wrong closing quote (matches the `"` opening
+- Fixed #13's own review finding: its new indentation-fidelity test's regex
+  stopped at the wrong closing quote (matched the `"` opening
   `"$GITHUB_STEP_SUMMARY"` instead of the -c block's real terminator) —
-  passes today only because the swallowed text happens to share the
-  opener's indent. Reuse _python_c_block's existing correct anchor instead
-  of a new narrower one.
+  passed only because the swallowed text happened to share the opener's
+  indent. Both tests now share one `_SUMMARY_BLOCK` regex anchored past the
+  correct ` >> "$GITHUB_STEP_SUMMARY"` terminator, so the two can't drift
+  apart again. Mutation-verified: the fix still catches a 2-space
+  re-indent; spot-checked the captured body no longer contains
+  `GITHUB_STEP_SUMMARY`.
 
 Pointers:
 - `read-coverage` → PR #12: api/doug/{reader,store,review,api}.py,
   api/scripts/backfill_ledger.py, both doug-review.yml copies (render
-  intent_notice) + api/tests/test_coverage.py (13 tests).
-- `workflow-summary-test-fidelity` → PR #13 — one finding still open (see
-  above), not yet fixed or pushed.
-- Open PRs: #12, #13. (#9, #10, #11 merged.)
+  intent_notice) + api/tests/test_coverage.py (13 tests). Pushed.
+- `workflow-summary-test-fidelity` → PR #13: api/tests/test_workflow_summary.py
+  (_SUMMARY_BLOCK shared anchor). Pushed.
+- Open PRs: #12, #13, both with their own xhigh-review findings fixed.
+  (#9, #10, #11 merged.)
 - doug-review on drewjst/doug succeeds; the summary step renders.
 - Stashed: `git stash list` → repoint dashboard queue lemahq/lema →
   drewjst/doug (was uncommitted on queue-polish; includes
