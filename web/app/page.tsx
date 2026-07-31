@@ -22,12 +22,19 @@ const RULES = [
   },
 ];
 
-// Exactly what doug/reader.py puts in front of the model, and exactly what
-// it withholds. Both lists are load-bearing claims — keep them in sync with
-// the frozen prompt, not with the pitch.
+// Exactly what doug/reader.py's frozen prompt puts in front of the model,
+// and exactly what it withholds. Both lists are load-bearing claims — keep
+// them in sync with the prompt, not with the pitch.
+//
+// Scoped to the *read* on purpose. Doug as a whole does see authorship:
+// scoring.py has an agent-authored rule (weight 0.12) in the deterministic
+// tier, pr_meta carries the author into the ledger, and the queue page
+// prints it. Claiming Doug "never sees who wrote it" was false — and most
+// false exactly when the reader is unavailable and the deterministic tier
+// is doing the scoring.
 const READS = ["the diff itself", "the PR title", "the files it touches"];
 
-const NEVER_SEES = [
+const NOT_TOLD = [
   "who wrote it",
   "human or agent",
   "when it was opened",
@@ -170,7 +177,7 @@ export default async function Home() {
       <section className="grid gap-10 pb-16 md:grid-cols-2">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            What it reads
+            What the reader is given
           </p>
           <ul className="mt-5 flex flex-wrap gap-2">
             {READS.map((r) => (
@@ -183,10 +190,10 @@ export default async function Home() {
             ))}
           </ul>
           <p className="mt-8 font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            What it never sees
+            What the reader is not told
           </p>
           <ul className="mt-5 flex flex-wrap gap-2">
-            {NEVER_SEES.map((r) => (
+            {NOT_TOLD.map((r) => (
               <li
                 key={r}
                 className="rounded-full border border-white/10 px-3.5 py-1.5 font-mono text-xs text-muted-foreground/70 line-through decoration-white/20"
@@ -196,10 +203,16 @@ export default async function Home() {
             ))}
           </ul>
           <p className="mt-6 max-w-sm text-sm leading-relaxed text-muted-foreground">
-            Doug scores the change, not the reputation. Metadata scoring is
-            still there as a fallback when the read fails — and it says so in
-            the verdict, because a silent downgrade would quietly poison every
-            number on this page.
+            The judgment about the code is made without knowing who wrote it.
+            That claim is narrow on purpose: it covers the read, not the whole
+            of Doug.
+          </p>
+          <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Doug does see authorship elsewhere. The deterministic fallback —
+            used when a read fails — scores a PR higher when a bot opened it,
+            and the queue tells you who wrote each one, because you need that
+            to route. What it never does is let the reader grade the code
+            against the author&rsquo;s reputation.
           </p>
         </div>
 
