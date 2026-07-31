@@ -152,9 +152,16 @@ def save_review(
     reader_verdict: ReaderVerdict | None = None,
     model: str | None = None,
     pr_meta: dict | None = None,
+    coverage: Coverage | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
-    storage is disabled — callers never branch on persistence."""
+    storage is disabled — callers never branch on persistence.
+
+    `coverage`, when given, commits in the same transaction as the verdict
+    and its findings — the reader-tier hot path used to pay a second
+    sequential commit for it via a standalone save_read() call; nothing
+    about writing it needed to be a separate round trip.
+    """
     engine = _get_engine()
     if engine is None:
         return None
@@ -196,6 +203,18 @@ def save_review(
                     r["severity"] = f.severity
         if rows:
             conn.execute(findings.insert(), rows)
+        if coverage is not None:
+            conn.execute(
+                reads.insert(),
+                {
+                    "verdict_id": row,
+                    "diff_chars": coverage.diff_chars,
+                    "sent_chars": coverage.sent_chars,
+                    "files_sent": coverage.files_sent,
+                    "files_unseen": coverage.files_unseen,
+                    "file_cut": coverage.file_cut,
+                },
+            )
     return int(row)
 
 

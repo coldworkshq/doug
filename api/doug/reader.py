@@ -167,13 +167,23 @@ def reader_threshold() -> float:
     return float(os.environ.get("DOUG_READER_THRESHOLD", DEFAULT_READER_THRESHOLD))
 
 
+def _sent_slice(diff: str) -> str:
+    """The exact bytes DIFF_BUDGET admits — the one place this slice happens.
+
+    coverage() re-derives what a read saw from this same function, so it can
+    never drift from what _user_text actually sent to the model.
+    """
+    return diff[:DIFF_BUDGET]
+
+
 def _user_text(pr, diff: str) -> str:
-    truncated = len(diff) > DIFF_BUDGET
+    sent = _sent_slice(diff)
+    truncated = len(diff) > len(sent)
     return (
         f"Title: {pr.title}\n"
         f"Files changed: {', '.join(pr.files)}\n"
         + ("[diff truncated at budget]\n" if truncated else "")
-        + f"\n{diff[:DIFF_BUDGET]}"
+        + f"\n{sent}"
     )
 
 
@@ -190,6 +200,22 @@ def _user_text(pr, diff: str) -> str:
 # These functions do not change what the model is given — DIFF_BUDGET and
 # _user_text are frozen probe parameters (ADR-0002). They only make the cut
 # observable, so a partial read stops looking like a complete one.
+
+
+def diff_chunk(filename: str, status: str, additions: int, deletions: int, patch: str) -> str:
+    """One file's block, in the one shape review.py is allowed to build it.
+
+    review.py used to write this f-string twice (fetch_pr, fetch_open_prs)
+    and _FILE_HEADER re-derived the same shape a third time, independently.
+    A format change in any one of the three would have silently broken
+    coverage() — files_sent dropping to 0, a complete read reporting itself
+    as fully unseen — without an error anywhere. One function, used
+    everywhere the shape is needed, is what makes that impossible now.
+    """
+    return f"### {filename} ({status}, +{additions}/-{deletions})\n{patch}"
+
+
+CHUNK_SEPARATOR = "\n\n"
 
 _FILE_HEADER = re.compile(r"^### (.+) \([a-z]+, \+\d+/-\d+\)$", re.M)
 
@@ -217,23 +243,34 @@ class Coverage(BaseModel):
         return 1.0 if not self.diff_chars else self.sent_chars / self.diff_chars
 
 
-def coverage(pr, diff: str) -> Coverage:
+def coverage(diff: str) -> Coverage:
     """Observe the truncation _user_text performs. Pure; sends nothing.
 
     Files are counted from the diff's own `### path (status, +a/-d)` headers
-    rather than from pr.files, because fetch_pr drops files GitHub returns
-    without a patch (binary, or too large to inline). Those never had a
-    chance to be read, which is a different hole from this one.
+    rather than from a PR's file list, because fetch_pr drops files GitHub
+    returns without a patch (binary, or too large to inline). Those never
+    had a chance to be read, which is a different hole from this one.
     """
-    sent = diff[:DIFF_BUDGET]
-    all_files = [m.group(1) for m in _FILE_HEADER.finditer(diff)]
-    seen = [m for m in _FILE_HEADER.finditer(sent)]
+    sent = _sent_slice(diff)
+    matches = list(_FILE_HEADER.finditer(diff))
+    all_files = [m.group(1) for m in matches]
+    # A header counts as sent only if it arrived in full — a header cut
+    # mid-line never matches _FILE_HEADER's `$` at all, so it is correctly
+    # absent from `seen` and its file lands in files_unseen below.
+    seen = [m for m in matches if m.end() <= len(sent)]
     names = [m.group(1) for m in seen]
     cut = None
     if len(sent) < len(diff) and seen:
-        # The budget ran out somewhere inside the last file whose header
-        # made it through.
-        cut = names[-1]
+        last = len(seen) - 1
+        # review.py joins chunks with exactly CHUNK_SEPARATOR, so the last
+        # seen file's real content ends CHUNK_SEPARATOR chars before the
+        # next header starts (or at len(diff), if it's the final file).
+        # Only call this file "cut" when the missing span is bigger than
+        # that separator — otherwise the budget landed cleanly between two
+        # whole files, and nothing about this one was actually partial.
+        next_start = matches[last + 1].start() if last + 1 < len(matches) else len(diff)
+        if next_start - len(sent) > len(CHUNK_SEPARATOR):
+            cut = names[-1]
     return Coverage(
         diff_chars=len(diff),
         sent_chars=len(sent),

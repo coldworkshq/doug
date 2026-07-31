@@ -74,8 +74,8 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             files_modified=sum(1 for f in files if f.status == "modified"),
             url=_html_url(p),
         )
-        diff = "\n\n".join(
-            f"### {f.filename} ({f.status}, +{f.additions}/-{f.deletions})\n{f.patch}"
+        diff = reader.CHUNK_SEPARATOR.join(
+            reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
             for f in files
             if f.patch
         )
@@ -107,8 +107,8 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         files_modified=sum(1 for f in files if f.status == "modified"),
         url=_html_url(p),
     )
-    diff = "\n\n".join(
-        f"### {f.filename} ({f.status}, +{f.additions}/-{f.deletions})\n{f.patch}"
+    diff = reader.CHUNK_SEPARATOR.join(
+        reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
         for f in files
         if f.patch
     )
@@ -129,7 +129,7 @@ def score_one(meta: PRMetadata, diff: str):
         try:
             rv = reader.read_diff(meta, diff)
             verdict = reader.verdict_from_reader(rv)
-            cov = reader.coverage(meta, diff)
+            cov = reader.coverage(diff)
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             return "reader", verdict, rv, cov
@@ -143,11 +143,19 @@ def score_one(meta: PRMetadata, diff: str):
 
 
 class IntentRead(BaseModel):
-    """The intent tier's output. Separate from Verdict by design (ADR-0007)."""
+    """The intent tier's output. Separate from Verdict by design (ADR-0007).
+
+    Carries its own `coverage` rather than trusting a caller to notice it
+    matches the risk read's: read_with_decisions() truncates the identical
+    diff at the identical DIFF_BUDGET, so a deviation finding built from a
+    partial read is exactly as unverifiable past the cut as a risk finding
+    is — it just wasn't saying so.
+    """
 
     alignment: int
     refs: list[str]
     findings: list[reader.DeviationFinding]
+    coverage: reader.Coverage
 
 
 def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> IntentRead | None:
@@ -176,6 +184,7 @@ def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> Inten
         alignment=rv.intent_alignment,
         refs=[d.id for d in chosen],
         findings=rv.deviation_findings,
+        coverage=reader.coverage(diff),
     )
 
 

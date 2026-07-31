@@ -27,12 +27,14 @@ PR643 = [
 
 
 def _diff(files=PR643) -> str:
-    """A diff in exactly the shape review.fetch_pr builds."""
+    """A diff in exactly the shape review.fetch_pr builds — through
+    reader.diff_chunk()/CHUNK_SEPARATOR, the same builder production code
+    uses, so this fixture can never drift from what coverage() parses."""
     chunks = []
     for path, size in files:
-        header = f"### {path} (added, +1/-0)\n"
-        chunks.append(header + "+x" * ((size - len(header)) // 2))
-    return "\n\n".join(chunks)
+        base = reader.diff_chunk(path, "added", 1, 0, "")
+        chunks.append(reader.diff_chunk(path, "added", 1, 0, "x" * (size - len(base))))
+    return reader.CHUNK_SEPARATOR.join(chunks)
 
 
 def _pr(files=PR643):
@@ -48,7 +50,7 @@ def test_coverage_names_the_files_the_read_never_saw():
     """The failure in one assertion: the mutation-verified test file that
     would have deduped two findings was not sent, and the file holding the
     real bug was cut in half."""
-    cov = reader.coverage(_pr(), _diff())
+    cov = reader.coverage(_diff())
 
     assert not cov.complete
     assert 0.43 < cov.fraction < 0.45
@@ -64,7 +66,7 @@ def test_coverage_names_the_files_the_read_never_saw():
 
 def test_a_whole_diff_reports_itself_whole():
     small = [("a.py", 400), ("b.py", 600)]
-    cov = reader.coverage(_pr(small), _diff(small))
+    cov = reader.coverage(_diff(small))
 
     assert cov.complete and cov.fraction == 1.0
     assert cov.files_unseen == [] and cov.file_cut is None
@@ -73,12 +75,46 @@ def test_a_whole_diff_reports_itself_whole():
 
 def test_a_diff_exactly_at_the_budget_is_not_partial():
     """Off-by-one at the cut would file complete reads as truncated forever."""
-    cov = reader.coverage(_pr(), _diff([("a.py", reader.DIFF_BUDGET)]))
+    cov = reader.coverage(_diff([("a.py", reader.DIFF_BUDGET)]))
     assert cov.complete and reader.truncation_reason(cov) is None
 
 
+def test_file_cut_is_none_when_the_budget_lands_between_files(monkeypatch):
+    """Regression: coverage() used to name the *last file whose header
+    arrived* as `file_cut` unconditionally, even when the budget ran out in
+    the separator between two files rather than inside either one's
+    content — so a file that was sent whole got blamed for the cut."""
+    a_chunk = reader.diff_chunk("a.py", "added", 1, 0, "x" * 500)
+    b_chunk = reader.diff_chunk("b.py", "added", 1, 0, "y" * 500)
+    diff = a_chunk + reader.CHUNK_SEPARATOR + b_chunk
+    monkeypatch.setattr(reader, "DIFF_BUDGET", len(a_chunk))
+
+    cov = reader.coverage(diff)
+
+    assert cov.sent_chars == len(a_chunk) == len(diff[: reader.DIFF_BUDGET])
+    assert not cov.complete  # b.py genuinely never arrived
+    assert cov.files_unseen == ["b.py"]
+    # The bug: file_cut used to report "a.py" here, even though a.py's
+    # entire chunk fit in `sent` and only the separator was withheld.
+    assert cov.file_cut is None
+
+
+def test_file_cut_names_the_file_actually_cut_mid_content(monkeypatch):
+    a_chunk = reader.diff_chunk("a.py", "added", 1, 0, "x" * 500)
+    b_chunk = reader.diff_chunk("b.py", "added", 1, 0, "y" * 500)
+    diff = a_chunk + reader.CHUNK_SEPARATOR + b_chunk
+    # Budget lands well inside b.py's content, not at any seam.
+    monkeypatch.setattr(reader, "DIFF_BUDGET", len(a_chunk) + len(reader.CHUNK_SEPARATOR) + 50)
+
+    cov = reader.coverage(diff)
+
+    assert not cov.complete
+    assert cov.file_cut == "b.py"
+    assert cov.files_unseen == []  # b.py's header arrived; only its tail didn't
+
+
 def test_the_notice_states_the_share_read_and_the_files_dropped():
-    notice = reader.truncation_reason(reader.coverage(_pr(), _diff()))
+    notice = reader.truncation_reason(reader.coverage(_diff()))
 
     assert notice is not None
     assert notice.rule == "read-truncated"
@@ -97,6 +133,17 @@ def test_the_notice_is_never_counted_as_a_defect_pattern():
     these counts."""
     assert patterns.from_rule("read-truncated") is None
     assert patterns.from_rule("reader:race-condition") == "race-condition"
+
+
+def test_diff_chunk_and_file_header_agree_on_the_shape():
+    """The regex coverage() parses with and the function review.py builds
+    diffs with used to be three independently hand-written copies of the
+    same format. Now there's one builder; this pins that its output is
+    exactly what the parser expects, so a future edit to either breaks a
+    test instead of silently zeroing out coverage."""
+    chunk = reader.diff_chunk("a/b.py", "modified", 3, 1, "@@ -1 +1 @@\n-x\n+y\n")
+    m = reader._FILE_HEADER.search(chunk)
+    assert m is not None and m.group(1) == "a/b.py"
 
 
 def test_a_partial_read_says_so_on_the_verdict(monkeypatch):
@@ -129,9 +176,8 @@ def test_coverage_is_recorded_for_complete_reads_too(tmp_path, monkeypatch):
     """Absence of a row must not be the signal for "read it all" — that is
     indistinguishable from a verdict written before this table existed."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    whole = reader.coverage(_pr(), _diff([("a.py", 400)]))
-    vid = store.save_review("lemahq/lema", 643, "reader", _verdict())
-    assert store.save_read(vid, whole) == 1
+    whole = reader.coverage(_diff([("a.py", 400)]))
+    vid = store.save_review("lemahq/lema", 643, "reader", _verdict(), coverage=whole)
 
     with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
         row = conn.execute(select(store.reads)).mappings().one()
@@ -140,9 +186,19 @@ def test_coverage_is_recorded_for_complete_reads_too(tmp_path, monkeypatch):
         assert row["files_unseen"] == [] and row["file_cut"] is None
 
 
+def test_save_review_without_coverage_writes_no_reads_row(tmp_path, monkeypatch):
+    """The deterministic tier passes coverage=None; that must not produce a
+    reads row that looks like a zero-length or empty read."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.save_review("o/r", 1, "deterministic", _verdict())
+
+    with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
+        assert conn.execute(select(store.reads)).mappings().all() == []
+
+
 def test_save_read_is_a_no_op_without_a_verdict(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    assert store.save_read(None, reader.coverage(_pr(), _diff())) == 0
+    assert store.save_read(None, reader.coverage(_diff())) == 0
 
 
 def _verdict():

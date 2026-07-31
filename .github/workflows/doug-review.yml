@@ -64,6 +64,10 @@ jobs:
               refs = ', '.join(v.get('intent_refs') or []) or 'none'
               align = v.get('intent_alignment')
               print(f'Read against: {refs} - alignment {align}/100')
+              notice = v.get('intent_notice')
+              if notice:
+                  print()
+                  print(f'_{notice}_')
               if devs:
                   print()
                   print('| type | severity | decision | detail |')
