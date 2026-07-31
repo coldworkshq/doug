@@ -60,6 +60,10 @@ class ReviewResponse(Verdict):
     deviations: list[reader.DeviationFinding] = []
     intent_alignment: int | None = None
     intent_refs: list[str] = []
+    # read_with_decisions truncates the same diff at the same DIFF_BUDGET as
+    # the risk read; set whenever that read ran partial, so a client
+    # rendering `deviations` alone still knows to hedge them.
+    intent_notice: str | None = None
 
 
 @app.post("/v1/review")
@@ -89,29 +93,51 @@ def review_pr(
 
     gh = GitHub(x_github_token or None)
     meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
-    tier, verdict, rv = review.score_one(meta, diff)
+    tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
+
+    # save_review commits the verdict, its findings, and (when given) its
+    # coverage row together — coverage is passed in rather than written by a
+    # follow-up save_read() call, so it can never be the thing that
+    # succeeds-then-silently-vanishes if this request dies mid-write.
+    #
+    # save_deviations is a genuinely separate write (ADR-0007), so it keeps
+    # its own try: if save_review lands but save_deviations doesn't, the
+    # verdict this response describes really is durable, and calling that
+    # "ledger-unavailable" would be false.
     verdict_id = None
     try:
         verdict_id = store.save_review(
             req.repo, req.pr_number, tier, verdict, rv,
             model=reader.MODEL if tier == "reader" else None,
             pr_meta=meta.model_dump(mode="json"),
+            coverage=cov,
         )
-        if intent_read is not None:
-            store.save_deviations(
-                verdict_id, intent_read.findings,
-                intent_read.refs, intent_read.alignment,
-            )
     except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
         verdict.reasons.append(
             Reason(rule="ledger-unavailable", label=str(e)[:200], weight=0.0)
         )
+    else:
+        if intent_read is not None:
+            try:
+                store.save_deviations(
+                    verdict_id, intent_read.findings,
+                    intent_read.refs, intent_read.alignment,
+                )
+            except Exception as e:  # noqa: BLE001 — the verdict is already saved
+                verdict.reasons.append(
+                    Reason(rule="deviations-unrecorded", label=str(e)[:200], weight=0.0)
+                )
+
+    intent_notice = (
+        reader.truncation_reason(intent_read.coverage) if intent_read else None
+    )
     return ReviewResponse(
         **verdict.model_dump(),
         deviations=intent_read.findings if intent_read else [],
         intent_alignment=intent_read.alignment if intent_read else None,
         intent_refs=intent_read.refs if intent_read else [],
+        intent_notice=intent_notice.label if intent_notice else None,
     )
 
 
@@ -121,12 +147,18 @@ def score_pr_read(req: ReadScoreRequest) -> Verdict:
 
     A failed read never 500s — it falls back to the deterministic verdict
     and says so in the reasons, because a silent downgrade would corrupt
-    any calibration built on this endpoint's output.
+    any calibration built on this endpoint's output. A partial read is not
+    a failure — it returns a verdict, same as /v1/review's score_one path —
+    but it gets the same read-truncated reason so a caller of this endpoint
+    isn't the one path left unable to tell a whole read from part of one.
     """
     if not reader.enabled():
         return score(req.pr)
     try:
-        return reader.verdict_from_reader(reader.read_diff(req.pr, req.diff))
+        verdict = reader.verdict_from_reader(reader.read_diff(req.pr, req.diff))
+        if notice := reader.truncation_reason(reader.coverage(req.diff)):
+            verdict.reasons.append(notice)
+        return verdict
     except reader.ReaderError as e:
         fallback = score(req.pr)
         fallback.reasons.append(

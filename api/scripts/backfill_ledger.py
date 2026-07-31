@@ -25,7 +25,7 @@ from pathlib import Path
 
 from rf_kamei import REPOS, load
 
-from doug import store
+from doug import reader, store
 from doug.backtest.git_labels import find_reverted_prs_dated
 from doug.backtest.replay import to_metadata
 from doug.reader import MODEL, ReaderVerdict, verdict_from_reader
@@ -37,6 +37,29 @@ PROBES = [
     ("getsentry/sentry", "llm-probe", "sentry"),
     ("grafana/grafana", "llm-probe-grafana", "grafana"),
 ]
+
+
+def _rebuild_diff(pr) -> str | None:
+    """The exact diff review.fetch_pr would have built for this PR, live.
+
+    The probe's own cache (findings-main.json) never kept the diff text it
+    read, only the verdict — but the harvest cache the probe was labeled
+    against did: HarvestedPR.file_details carries every file's patch
+    (verified populated for all 10,000 cached sentry PRs and spot-checked
+    for grafana). Rebuilding from it means coverage for the seed corpus is
+    exact, not inferred.
+
+    None only for a PR harvested before file_details existed — that row
+    gets no reads row, same as before this function existed, rather than a
+    guessed one.
+    """
+    if pr.file_details is None:
+        return None
+    return reader.CHUNK_SEPARATOR.join(
+        reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
+        for f in pr.file_details
+        if f.patch
+    )
 
 
 def _database_url_from_gcp(project: str) -> str:
@@ -57,7 +80,7 @@ def backfill(force: bool) -> int:
         print("DATABASE_URL not set")
         return 1
 
-    total_v = total_o = 0
+    total_v = total_o = total_r = 0
     for repo, probe_dir, tag in PROBES:
         with engine.connect() as conn:
             existing = conn.execute(
@@ -85,11 +108,16 @@ def backfill(force: bool) -> int:
             rv = ReaderVerdict.model_validate(
                 {k: r[k] for k in ("risk_score", "rationale", "findings")}
             )
+            cov = None
+            if (diff := _rebuild_diff(pr)) is not None:
+                cov = reader.coverage(diff)
             store.save_review(
                 repo, n, "reader", verdict_from_reader(rv), rv,
                 model=MODEL, pr_meta=to_metadata(pr).model_dump(mode="json"),
+                coverage=cov,
             )
             total_v += 1
+            total_r += cov is not None
             observed = dated.get(n)
             with engine.begin() as conn:
                 conn.execute(store.outcomes.insert(), {
@@ -103,7 +131,7 @@ def backfill(force: bool) -> int:
                 })
             total_o += 1
         print(f"{repo}: loaded")
-    print(f"backfilled {total_v} verdicts, {total_o} outcomes")
+    print(f"backfilled {total_v} verdicts, {total_o} outcomes, {total_r} reads")
     return 0
 
 
@@ -130,10 +158,12 @@ def emit_sql(out: Path) -> int:
         "BEGIN;",
         "DELETE FROM findings WHERE verdict_id IN (SELECT id FROM verdicts"
         f" WHERE repo IN {repos_in} AND model = {_q(MODEL)});",
+        "DELETE FROM reads WHERE verdict_id IN (SELECT id FROM verdicts"
+        f" WHERE repo IN {repos_in} AND model = {_q(MODEL)});",
         f"DELETE FROM verdicts WHERE repo IN {repos_in} AND model = {_q(MODEL)};",
         f"DELETE FROM outcomes WHERE repo IN {repos_in} AND source = 'git-labels';",
     ]
-    n_v = n_o = 0
+    n_v = n_o = n_r = 0
     for repo, probe_dir, tag in PROBES:
         findings = json.loads((CACHE / probe_dir / "findings-main.json").read_text())
         owner, name, limit, before = REPOS[tag]
@@ -179,6 +209,24 @@ def emit_sql(out: Path) -> int:
             else:
                 lines.append(insert + ";")
             n_v += 1
+            diff = _rebuild_diff(pr)
+            if diff is not None:
+                cov = reader.coverage(diff)
+                # No RETURNING id to chain off of here — this verdict's
+                # insert already ran as its own statement above. (repo,
+                # pr_number, model) is unique within this file's own DELETE
+                # + INSERT (never both repos share a PR number, and the
+                # DELETE above clears any prior run), so the most recent
+                # matching id is unambiguously this row.
+                lines.append(
+                    "INSERT INTO reads (verdict_id, diff_chars, sent_chars,"
+                    " files_sent, files_unseen, file_cut) SELECT id, "
+                    f"{cov.diff_chars}, {cov.sent_chars}, {cov.files_sent}, "
+                    f"{_q(cov.files_unseen)}, {_q(cov.file_cut)} FROM verdicts "
+                    f"WHERE repo = {_q(repo)} AND pr_number = {n} AND model = {_q(MODEL)}"
+                    " ORDER BY id DESC LIMIT 1;"
+                )
+                n_r += 1
             observed = dated.get(n)
             lines.append(
                 "INSERT INTO outcomes (repo, pr_number, kind, observed_at, source) VALUES "
@@ -189,7 +237,7 @@ def emit_sql(out: Path) -> int:
             n_o += 1
     lines.append("COMMIT;")
     out.write_text("\n".join(lines))
-    print(f"wrote {out}: {n_v} verdicts, {n_o} outcomes")
+    print(f"wrote {out}: {n_v} verdicts, {n_o} outcomes, {n_r} reads")
     return 0
 
 
