@@ -43,7 +43,7 @@ export interface QueueResponse {
 
 export const API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 
-/** Scope the dashboard's queue to one repo (e.g. "lemahq/lema"). Unset =
+/** Scope the dashboard's queue to one repo (e.g. "drewjst/doug"). Unset =
  *  the ledger's all-repos view, which mixes backfilled corpora in. */
 const QUEUE_REPO = process.env.DOUG_QUEUE_REPO;
 
@@ -56,6 +56,11 @@ export async function getQueue(): Promise<{
     const res = await fetch(`${API_URL}/v1/queue${repoParam}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(2000),
+      // Server-only: this runs in a server component, so the token must
+      // never carry a NEXT_PUBLIC_ prefix. A 401/503 falls through to the
+      // fixture below, which the page labels "bundled fixture" — that
+      // badge is the tell for a misconfigured deploy.
+      headers: { "X-Doug-Token": process.env.DOUG_API_TOKEN ?? "" },
     });
     if (res.ok) return { queue: (await res.json()) as QueueResponse, source: "live" };
   } catch {

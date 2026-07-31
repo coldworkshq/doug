@@ -10,7 +10,7 @@ Open PRs have no approval history yet, so approval-shaped deterministic
 rules simply don't fire here; the reader doesn't use them at all.
 
     uv run doug-review grafana/grafana --limit 10
-    DOUG_READER=1 uv run doug-review drewjst/lema
+    DOUG_READER=1 uv run doug-review drewjst/doug
 """
 
 import argparse
