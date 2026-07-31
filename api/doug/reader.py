@@ -15,6 +15,7 @@ scores on both probe repos — roughly the top quarter gets flagged.
 """
 
 import os
+import re
 
 from pydantic import BaseModel
 
@@ -166,14 +167,141 @@ def reader_threshold() -> float:
     return float(os.environ.get("DOUG_READER_THRESHOLD", DEFAULT_READER_THRESHOLD))
 
 
+def _sent_slice(diff: str) -> str:
+    """The exact bytes DIFF_BUDGET admits — the one place this slice happens.
+
+    coverage() re-derives what a read saw from this same function, so it can
+    never drift from what _user_text actually sent to the model.
+    """
+    return diff[:DIFF_BUDGET]
+
+
 def _user_text(pr, diff: str) -> str:
-    truncated = len(diff) > DIFF_BUDGET
+    sent = _sent_slice(diff)
+    truncated = len(diff) > len(sent)
     return (
         f"Title: {pr.title}\n"
         f"Files changed: {', '.join(pr.files)}\n"
         + ("[diff truncated at budget]\n" if truncated else "")
-        + f"\n{diff[:DIFF_BUDGET]}"
+        + f"\n{sent}"
     )
+
+
+# --- what the read actually saw ------------------------------------------
+#
+# _user_text cuts the diff at DIFF_BUDGET and moves on. That cut is silent
+# everywhere downstream: a verdict from a fully-read PR and a verdict from a
+# 44%-read PR are the same shape, store the same columns, and render the
+# same way. lemahq/lema#643 cleared at 0.26 having been shown 30,000 of
+# 68,430 chars; the tenancy leak a human later found was 2,266 chars past
+# the cut, and the mutation-verified test file that would have deduped two
+# of its other findings was never sent at all.
+#
+# These functions do not change what the model is given — DIFF_BUDGET and
+# _user_text are frozen probe parameters (ADR-0002). They only make the cut
+# observable, so a partial read stops looking like a complete one.
+
+
+def diff_chunk(filename: str, status: str, additions: int, deletions: int, patch: str) -> str:
+    """One file's block, in the one shape review.py is allowed to build it.
+
+    review.py used to write this f-string twice (fetch_pr, fetch_open_prs)
+    and _FILE_HEADER re-derived the same shape a third time, independently.
+    A format change in any one of the three would have silently broken
+    coverage() — files_sent dropping to 0, a complete read reporting itself
+    as fully unseen — without an error anywhere. One function, used
+    everywhere the shape is needed, is what makes that impossible now.
+    """
+    return f"### {filename} ({status}, +{additions}/-{deletions})\n{patch}"
+
+
+CHUNK_SEPARATOR = "\n\n"
+
+_FILE_HEADER = re.compile(r"^### (.+) \([a-z]+, \+\d+/-\d+\)$", re.M)
+
+
+class Coverage(BaseModel):
+    """How much of a PR's diff reached the model.
+
+    `file_cut` is the file the budget landed inside — seen in part, and the
+    most dangerous case, because the model has enough of it to reason about
+    and not enough to be right.
+    """
+
+    diff_chars: int
+    sent_chars: int
+    files_sent: int
+    files_unseen: list[str]
+    file_cut: str | None = None
+
+    @property
+    def complete(self) -> bool:
+        return self.sent_chars >= self.diff_chars
+
+    @property
+    def fraction(self) -> float:
+        return 1.0 if not self.diff_chars else self.sent_chars / self.diff_chars
+
+
+def coverage(diff: str) -> Coverage:
+    """Observe the truncation _user_text performs. Pure; sends nothing.
+
+    Files are counted from the diff's own `### path (status, +a/-d)` headers
+    rather than from a PR's file list, because fetch_pr drops files GitHub
+    returns without a patch (binary, or too large to inline). Those never
+    had a chance to be read, which is a different hole from this one.
+    """
+    sent = _sent_slice(diff)
+    matches = list(_FILE_HEADER.finditer(diff))
+    all_files = [m.group(1) for m in matches]
+    # A header counts as sent only if it arrived in full — a header cut
+    # mid-line never matches _FILE_HEADER's `$` at all, so it is correctly
+    # absent from `seen` and its file lands in files_unseen below.
+    seen = [m for m in matches if m.end() <= len(sent)]
+    names = [m.group(1) for m in seen]
+    cut = None
+    if len(sent) < len(diff) and seen:
+        last = len(seen) - 1
+        # review.py joins chunks with exactly CHUNK_SEPARATOR, so the last
+        # seen file's real content ends CHUNK_SEPARATOR chars before the
+        # next header starts (or at len(diff), if it's the final file).
+        # Only call this file "cut" when the missing span is bigger than
+        # that separator — otherwise the budget landed cleanly between two
+        # whole files, and nothing about this one was actually partial.
+        next_start = matches[last + 1].start() if last + 1 < len(matches) else len(diff)
+        if next_start - len(sent) > len(CHUNK_SEPARATOR):
+            cut = names[-1]
+    return Coverage(
+        diff_chars=len(diff),
+        sent_chars=len(sent),
+        files_sent=len(names),
+        files_unseen=[f for f in all_files if f not in names],
+        file_cut=cut,
+    )
+
+
+def truncation_reason(cov: Coverage) -> Reason | None:
+    """A loud line on the verdict when the read was partial, or None.
+
+    Deliberately outside the `reader:` namespace: patterns.from_rule only
+    canonicalises `reader:` rules, so this shares the findings table with
+    real defect patterns without ever being counted as one. A meta-fact
+    about the read is not a defect pattern, and pooling the two would
+    corrupt the precision table it feeds.
+    """
+    if cov.complete:
+        return None
+    unseen = cov.files_unseen[:3]
+    tail = f" (+{len(cov.files_unseen) - 3} more)" if len(cov.files_unseen) > 3 else ""
+    label = (
+        f"Partial read: {cov.fraction:.0%} of the diff "
+        f"({cov.sent_chars:,} of {cov.diff_chars:,} chars)."
+        + (f" Cut inside {cov.file_cut}." if cov.file_cut else "")
+        + (f" Never sent: {', '.join(unseen)}{tail}." if unseen else "")
+        + " Findings below cover only what was sent; a clear is not evidence"
+        " about the rest."
+    )
+    return Reason(rule="read-truncated", label=label, weight=0.0)
 
 
 def read_diff(pr, diff: str, client=None) -> ReaderVerdict:

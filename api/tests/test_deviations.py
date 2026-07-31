@@ -78,10 +78,10 @@ def test_intent_read_does_not_move_the_score(monkeypatch):
     ))
 
     monkeypatch.delenv("DOUG_INTENT", raising=False)
-    _, without, _ = review.score_one(_pr(), "+ x")
+    _, without, _, _cov = review.score_one(_pr(), "+ x")
 
     _enable(monkeypatch)
-    _, with_intent, _ = review.score_one(_pr(), "+ x")
+    _, with_intent, _, _cov = review.score_one(_pr(), "+ x")
 
     assert with_intent.model_dump() == without.model_dump()
 
