@@ -8,8 +8,13 @@ this table existing from day one.
 
 Storage is opt-in via DATABASE_URL (Postgres in production, sqlite in
 tests). When unset, every call is a cheap no-op so local dogfooding and
-the open-source path need no database. Schema is created on first use —
-three tables do not need a migration framework yet.
+the open-source path need no database. Schema is created on first use.
+
+There is still no migration framework, which is a real constraint and not
+just a deferral: create_all() adds missing *tables* and never adds a column
+to a table that already exists. New facts therefore arrive as new tables
+(see `reads`) until that changes. A column added to `verdicts` today would
+appear in every test and in no production row.
 """
 
 import os
@@ -30,7 +35,7 @@ from sqlalchemy import (
 )
 
 from .models import Verdict
-from .reader import ReaderVerdict
+from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
 
@@ -78,6 +83,27 @@ outcomes = Table(
     Column("kind", String(20), nullable=False),  # revert | hotfix | clean
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("source", String(40), nullable=False),  # git-labels | manual | ...
+)
+
+# How much of each PR the reader was actually shown. Its own table, not
+# columns on verdicts, for a boring operational reason: create_all() creates
+# missing *tables* and never adds columns to an existing one, so new columns
+# here would exist in tests and silently not in production Postgres — the
+# same shape of green-checkmark no-op that has already cost this project a
+# day. A new table is the migration-free option.
+#
+# Only reader-tier verdicts get a row; the deterministic tier never opens
+# the diff, so it has no coverage to report.
+reads = Table(
+    "reads",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("verdict_id", Integer, ForeignKey("verdicts.id"), nullable=False, index=True),
+    Column("diff_chars", Integer, nullable=False),
+    Column("sent_chars", Integer, nullable=False),
+    Column("files_sent", Integer, nullable=False),
+    Column("files_unseen", JSON, nullable=False),
+    Column("file_cut", Text),
 )
 
 # Intent-tier output, kept in its own table on purpose (ADR-0007). A
@@ -171,6 +197,34 @@ def save_review(
         if rows:
             conn.execute(findings.insert(), rows)
     return int(row)
+
+
+def save_read(verdict_id: int | None, cov: Coverage) -> int:
+    """Record how much of the diff this verdict was based on.
+
+    Written for complete reads too, not only truncated ones. Precision
+    measured over this ledger has to be able to condition on coverage, and
+    "no row" would be ambiguous between a full read and an unrecorded one —
+    the same trap save_deviations avoids with its kind="none" row.
+    """
+    engine = _get_engine()
+    if engine is None or verdict_id is None:
+        return 0
+    with engine.begin() as conn:
+        conn.execute(
+            reads.insert(),
+            [
+                {
+                    "verdict_id": verdict_id,
+                    "diff_chars": cov.diff_chars,
+                    "sent_chars": cov.sent_chars,
+                    "files_sent": cov.files_sent,
+                    "files_unseen": cov.files_unseen,
+                    "file_cut": cov.file_cut,
+                }
+            ],
+        )
+    return 1
 
 
 def save_deviations(

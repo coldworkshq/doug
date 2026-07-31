@@ -116,19 +116,30 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
 
 
 def score_one(meta: PRMetadata, diff: str):
-    """Tier dispatch: (tier, verdict, reader_verdict|None). Reader failures
-    fall back loudly — the deterministic verdict says reader-unavailable."""
+    """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
+
+    Reader failures fall back loudly — the deterministic verdict says
+    reader-unavailable. Reader *successes* can also be partial, and say so
+    the same way: coverage rides out with the verdict rather than being
+    recomputed by whoever remembers to, because forgetting is how a 44% read
+    came to look exactly like a whole one. None on the deterministic tier,
+    which never opens the diff.
+    """
     if reader.enabled():
         try:
             rv = reader.read_diff(meta, diff)
-            return "reader", reader.verdict_from_reader(rv), rv
+            verdict = reader.verdict_from_reader(rv)
+            cov = reader.coverage(meta, diff)
+            if notice := reader.truncation_reason(cov):
+                verdict.reasons.append(notice)
+            return "reader", verdict, rv, cov
         except reader.ReaderError as e:
             verdict = score(meta)
             verdict.reasons.append(
                 Reason(rule="reader-unavailable", label=str(e), weight=0.0)
             )
-            return "deterministic", verdict, None
-    return "deterministic", score(meta), None
+            return "deterministic", verdict, None, None
+    return "deterministic", score(meta), None, None
 
 
 class IntentRead(BaseModel):
@@ -171,7 +182,7 @@ def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> Inten
 def review_repo(gh, owner: str, repo: str, limit: int) -> list[ReviewItem]:
     items = []
     for meta, diff in fetch_open_prs(gh, owner, repo, limit):
-        _, verdict, _ = score_one(meta, diff)
+        _, verdict, _, _ = score_one(meta, diff)
         items.append(ReviewItem(pr=meta, verdict=verdict))
     items.sort(key=lambda i: i.verdict.score, reverse=True)
     return items

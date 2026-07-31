@@ -89,7 +89,7 @@ def review_pr(
 
     gh = GitHub(x_github_token or None)
     meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
-    tier, verdict, rv = review.score_one(meta, diff)
+    tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
     verdict_id = None
     try:
@@ -98,6 +98,8 @@ def review_pr(
             model=reader.MODEL if tier == "reader" else None,
             pr_meta=meta.model_dump(mode="json"),
         )
+        if cov is not None:
+            store.save_read(verdict_id, cov)
         if intent_read is not None:
             store.save_deviations(
                 verdict_id, intent_read.findings,

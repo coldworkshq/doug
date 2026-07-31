@@ -165,6 +165,6 @@ def test_score_one_degrades_to_deterministic_when_the_api_is_down(monkeypatch):
         reader, "read_diff",
         lambda pr, diff: real(pr, diff, client=RaisingClient(RuntimeError("boom"))),
     )
-    tier, verdict, rv = review.score_one(_pr(), "+ x")
+    tier, verdict, rv, _cov = review.score_one(_pr(), "+ x")
     assert tier == "deterministic" and rv is None
     assert any(r.rule == "reader-unavailable" for r in verdict.reasons)
