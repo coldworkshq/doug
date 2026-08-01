@@ -17,7 +17,7 @@ else propagates.
 from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Integer, MetaData, Table, select
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 # Its own MetaData: this table has to exist before store.metadata is created
 # and must never be dropped alongside it.
@@ -99,10 +99,20 @@ def apply(engine) -> list[int]:
             continue
         for statement in statements:
             _run(engine, statement)
-        with engine.begin() as conn:
-            conn.execute(
-                schema_migrations.insert(),
-                {"version": version, "applied_at": datetime.now(UTC)},
-            )
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    schema_migrations.insert(),
+                    {"version": version, "applied_at": datetime.now(UTC)},
+                )
+        except IntegrityError:
+            # Two instances cold-starting together can both read `done` as
+            # not containing this version, both run the ALTERs above (each
+            # individually idempotent), and then race to record it here.
+            # The migration itself already landed under either instance —
+            # the loser's insert hitting the version primary key is the same
+            # "already done, not failed" case _run's _SATISFIED handles for
+            # DDL, just for the ledger row instead of a column.
+            continue
         applied.append(version)
     return applied

@@ -85,6 +85,15 @@ def test_migration_001_source_ddl_matches_the_widened_column():
     assert store.verdicts.c.source.type.length == 64
 
 
+def _statements_by_table(statements: tuple[str, ...]) -> dict[str, set[str]]:
+    by_table: dict[str, set[str]] = {}
+    for stmt in statements:
+        table = stmt.split("ALTER TABLE ")[1].split()[0]
+        column = stmt.split("ADD COLUMN ")[1].split()[0]
+        by_table.setdefault(table, set()).add(column)
+    return by_table
+
+
 def test_migration_002_declares_the_same_columns_as_their_tables(tmp_path):
     """Migration 002 touches two existing tables (outcomes, verdicts) instead
     of one. Same drift risk as migration 001, doubled: each column has to
@@ -92,15 +101,130 @@ def test_migration_002_declares_the_same_columns_as_their_tables(tmp_path):
     fresh database and production can diverge on either table."""
     engine = create_engine(f"sqlite:///{tmp_path}/decl2.db")
     store.metadata.create_all(engine)
-    by_table: dict[str, set[str]] = {}
-    for stmt in dict(migrations.MIGRATIONS)[2]:
-        table = stmt.split("ALTER TABLE ")[1].split()[0]
-        column = stmt.split("ADD COLUMN ")[1].split()[0]
-        by_table.setdefault(table, set()).add(column)
+    by_table = _statements_by_table(dict(migrations.MIGRATIONS)[2])
     assert by_table["outcomes"] == OUTCOME_COLUMNS
     assert by_table["verdicts"] == {"prompt_hash"}
     for table, cols in by_table.items():
         assert cols <= _columns(engine, table)
+
+
+# The pre-Task-2 shape of the two migrated tables, exactly as they were at
+# commit 240caf5 (the base this branch built on) — not a copy of anything in
+# store.py today. This is the independent ground truth the reverse-drift
+# test below needs: "today's definition" is derived from store.metadata,
+# and comparing metadata against itself could never fail, so the baseline
+# has to come from somewhere else.
+_BASELINE_DDL = {
+    "verdicts": """
+        CREATE TABLE verdicts (
+            id INTEGER PRIMARY KEY,
+            repo VARCHAR(200) NOT NULL,
+            pr_number INTEGER NOT NULL,
+            scored_at DATETIME NOT NULL,
+            tier VARCHAR(20) NOT NULL,
+            score FLOAT NOT NULL,
+            band VARCHAR(10) NOT NULL,
+            threshold FLOAT NOT NULL,
+            model VARCHAR(60),
+            risk_score INTEGER,
+            rationale TEXT,
+            raw TEXT,
+            pr_meta TEXT
+        )
+    """,
+    "outcomes": """
+        CREATE TABLE outcomes (
+            id INTEGER PRIMARY KEY,
+            repo VARCHAR(200) NOT NULL,
+            pr_number INTEGER NOT NULL,
+            kind VARCHAR(20) NOT NULL,
+            observed_at DATETIME NOT NULL,
+            source VARCHAR(40) NOT NULL
+        )
+    """,
+}
+
+
+def test_no_migrated_table_has_a_column_unaccounted_for_by_baseline_or_migration(tmp_path):
+    """The forward drift tests above (migration 001, migration 002) only
+    catch a migration column missing from the table definition. This is the
+    other direction: a bare `Column(...)` added to `verdicts` or `outcomes`
+    with no matching migration would leave every test green here — and the
+    column silently absent from production Postgres — which is exactly the
+    failure the migration framework exists to prevent.
+
+    baseline (pre-Task-2 columns) + every migration's added columns must
+    equal store.metadata's column set for that table, exactly. Anything in
+    the definition but not in that union is a column with no migration;
+    anything in that union but not the definition is already caught by the
+    forward tests.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/reverse.db")
+    with engine.begin() as conn:
+        for ddl in _BASELINE_DDL.values():
+            conn.exec_driver_sql(ddl)
+
+    added: dict[str, set[str]] = {}
+    for _version, statements in migrations.MIGRATIONS:
+        for table, cols in _statements_by_table(statements).items():
+            added.setdefault(table, set()).update(cols)
+
+    for table in _BASELINE_DDL:
+        baseline = _columns(engine, table)
+        expected = baseline | added.get(table, set())
+        actual = {c.name for c in store.metadata.tables[table].columns}
+        assert actual == expected, (
+            f"{table}: definition has {actual - expected or '{}'} with no migration, "
+            f"or a migration adds {expected - actual or '{}'} missing from the definition"
+        )
+
+
+def test_apply_does_not_raise_when_two_racers_insert_the_same_version(tmp_path, monkeypatch):
+    """Two Cloud Run instances cold-starting together can both read
+    `done = {}` before either has recorded anything, both run a version's
+    (idempotent) ALTERs, and then both try to INSERT the version row. The
+    ALTERs landed either way — only one of the two inserts can win the
+    primary key, and the loser's insert failure must not escape apply() and
+    turn into a 500 on that instance's first ledger-touching request.
+    """
+    import threading
+    import time
+
+    engine = create_engine(f"sqlite:///{tmp_path}/race.db")
+    store.metadata.create_all(engine)
+    # Created up front so the two racers' first move is the `done` read this
+    # test means to race, not an unrelated checkfirst-create race on the
+    # ledger table itself.
+    migrations.schema_migrations.create(engine, checkfirst=True)
+
+    real_run = migrations._run
+
+    def slow_run(engine, statement):
+        time.sleep(0.02)  # hold the window open past both racers' done-read
+        return real_run(engine, statement)
+
+    monkeypatch.setattr(migrations, "_run", slow_run)
+
+    errors = []
+
+    def racer():
+        try:
+            migrations.apply(engine)
+        except Exception as e:  # noqa: BLE001 — the assertion is that nothing escapes
+            errors.append(e)
+
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], errors
+    with engine.connect() as conn:
+        versions = sorted(
+            r[0] for r in conn.execute(select(migrations.schema_migrations.c.version))
+        )
+    assert versions == [v for v, _ in migrations.MIGRATIONS]
 
 
 def test_get_engine_applies_migrations(tmp_path, monkeypatch):
