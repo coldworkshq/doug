@@ -109,14 +109,19 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+      # gcp.sh stages the revision with no traffic, smoke-tests its tagged
+      # URL, and promotes only on a 200 — a failed candidate never serves,
+      # and the previous revision keeps 100%.
       - run: bash deploy/gcp.sh deploy
         env:
           PROJECT: ${{ env.PROJECT }}
           REGION: ${{ env.REGION }}
-      - name: Smoke-test the deployed revision
+      - name: Confirm the live URL after promotion
         run: |
-          # /healthz is intercepted by the Google frontend and never reaches
-          # the app, so it is useless as a probe. openapi.json is a real route.
+          # The candidate gate lives in gcp.sh; this re-checks the real
+          # serving URL post-promotion. /healthz is intercepted by the
+          # Google frontend and never reaches the app; openapi.json is a
+          # real route.
           url=$(gcloud run services describe doug-api \
             --project "$PROJECT" --region "$REGION" --format='value(status.url)')
           code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url/openapi.json")
@@ -160,9 +165,21 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+      # Same staged flow as the api: candidate revision, smoke test on the
+      # homepage (the readiness probe only proves the server binds its
+      # port), promote on 200. A web build that 500s every route now goes
+      # red without ever serving.
       - name: Deploy
         working-directory: api # gcp.sh builds ../web, and runs from here
         run: bash deploy/gcp.sh web
         env:
           PROJECT: ${{ env.PROJECT }}
           REGION: ${{ env.REGION }}
+      - name: Confirm the live URL after promotion
+        run: |
+          url=$(gcloud run services describe doug-web \
+            --project "$PROJECT" --region "$REGION" --format='value(status.url)')
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url/")
+          echo "$url/ -> $code"
+          [ "$code" = "200" ] || exit 1
+          echo "web deployed: $url" >> "$GITHUB_STEP_SUMMARY"

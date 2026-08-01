@@ -35,3 +35,21 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  # The images that actually serve prod are otherwise built for the first
+  # time *during* the prod deploy (gcloud run deploy --source) — a broken
+  # Dockerfile or base-image regression surfaced there, mid-merge, and
+  # nowhere earlier. Building them here catches that at PR time. Bases are
+  # digest-pinned in the Dockerfiles, so this exercises the same layers the
+  # deploy will.
+  api-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build api
+
+  web-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build web
