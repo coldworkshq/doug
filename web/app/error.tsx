@@ -4,12 +4,16 @@
 // render-time throw fell through to Next's unstyled default error screen —
 // no branding, no explanation, no retry. Doug's whole pitch is saying so
 // when something is wrong; the error page is not exempt.
+// unstable_retry, not reset: in this Next version reset() only clears the
+// boundary's error state without re-fetching, so it would replay the same
+// failed render. unstable_retry() re-fetches and re-renders the segment —
+// the only retry that can actually recover from a failed queue fetch.
 export default function ErrorPage({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col items-center justify-center px-6 text-center">
@@ -25,7 +29,7 @@ export default function ErrorPage({
         {error.digest ? ` Reference: ${error.digest}.` : ""}
       </p>
       <button
-        onClick={reset}
+        onClick={() => unstable_retry()}
         className="mt-8 rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-transform hover:-translate-y-0.5"
       >
         Try again
