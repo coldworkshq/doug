@@ -637,6 +637,104 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
     }
 
 
+def find_verdict_by_identity(
+    installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
+) -> dict | None:
+    """The verdict already recorded for this exact App-identified commit, or
+    None. worker.process_job's idempotency read.
+
+    A worker can crash (or ingest.complete can itself raise) anywhere after
+    save_review lands and before the job is marked 'done' — mid check-run
+    post, or before it ever starts. reclaim_stalled()/ingest.fail() then
+    re-pend the row for another full attempt. Without this read, that retry
+    re-scores from scratch: a second paid score_one/read_intent, and a
+    second verdicts row for the same commit, because verdicts carries no
+    unique constraint of its own to stop it.
+
+    Keyed on (installation_id, github_repo_id, pr_number, head_sha) rather
+    than find_review's repo-string + pr_meta JSON match: the Global
+    Constraint makes those four columns the uniqueness key everywhere, and
+    the worker populates all of them on every App-path row. find_review
+    predates the App path and stays keyed the old way; its only caller
+    (/v1/review) retires in Task 9.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    q = (
+        select(verdicts)
+        .where(
+            verdicts.c.installation_id == installation_id,
+            verdicts.c.github_repo_id == github_repo_id,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.head_sha == head_sha,
+        )
+        .order_by(verdicts.c.id.desc())
+        .limit(1)
+    )
+    with engine.connect() as conn:
+        v = conn.execute(q).mappings().first()
+        if v is None:
+            return None
+        reason_rows = (
+            conn.execute(
+                select(findings).where(findings.c.verdict_id == v["id"]).order_by(findings.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        dev_rows = (
+            conn.execute(
+                select(deviations)
+                .where(deviations.c.verdict_id == v["id"])
+                .order_by(deviations.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        read_row = (
+            conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
+            .mappings()
+            .first()
+        )
+    return {
+        "id": v["id"],
+        "tier": v["tier"],
+        "score": v["score"],
+        "band": v["band"],
+        "threshold": v["threshold"],
+        "reasons": [
+            {
+                "rule": r["rule"],
+                "label": r["label"],
+                "weight": r["weight"],
+                "severity": r["severity"],
+            }
+            for r in reason_rows
+        ],
+        # kind="none" is the "read happened, found nothing" storage marker
+        # (see save_deviations) — it was never a response finding.
+        "deviations": [
+            {"type": d["kind"], "description": d["description"], "severity": d["severity"]}
+            for d in dev_rows
+            if d["kind"] != "none"
+        ],
+        "intent_alignment": dev_rows[0]["intent_alignment"] if dev_rows else None,
+        "intent_refs": (dev_rows[0]["intent_refs"] or []) if dev_rows else [],
+        "coverage": (
+            {
+                "diff_chars": read_row["diff_chars"],
+                "sent_chars": read_row["sent_chars"],
+                "files_sent": read_row["files_sent"],
+                "files_unseen": read_row["files_unseen"],
+                "file_cut": read_row["file_cut"],
+            }
+            if read_row
+            else None
+        ),
+    }
+
+
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
     """The findings x outcomes join — step 2 of the distillation loop.
 

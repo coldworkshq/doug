@@ -205,3 +205,25 @@ def _verdict():
     from doug.models import Band, Verdict
 
     return Verdict(score=0.26, band=Band.CLEARED, threshold=0.30, reasons=[])
+
+
+def test_the_intent_read_sees_exactly_what_the_risk_read_saw():
+    """`coverage()` is a pure function of the diff, which is what lets the
+    two reads share one stored Coverage row.
+
+    review.IntentRead's docstring asserts this ("read_with_decisions()
+    truncates the identical diff at the identical DIFF_BUDGET"), and
+    worker.process_job's replay path now *depends* on it: only the risk
+    read's coverage is persisted, so a replayed deviation section is
+    hedged with that row. If the two reads could ever see different
+    amounts, a replayed check run would misreport what the intent read
+    was shown — the one thing this module exists to prevent — so the
+    assumption gets a test rather than a comment.
+    """
+    from doug import reader
+
+    diff = "### a.py (modified, +5/-1)\n" + ("x" * (reader.DIFF_BUDGET + 5_000))
+
+    assert reader.coverage(diff) == reader.coverage(diff)
+    # And the property that makes that true: nothing outside the diff feeds it.
+    assert reader.coverage(diff) != reader.coverage(diff + "\n### b.py (added, +1/-0)\n")
