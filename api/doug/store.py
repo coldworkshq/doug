@@ -10,11 +10,12 @@ Storage is opt-in via DATABASE_URL (Postgres in production, sqlite in
 tests). When unset, every call is a cheap no-op so local dogfooding and
 the open-source path need no database. Schema is created on first use.
 
-There is still no migration framework, which is a real constraint and not
-just a deferral: create_all() adds missing *tables* and never adds a column
-to a table that already exists. New facts therefore arrive as new tables
-(see `reads`) until that changes. A column added to `verdicts` today would
-appear in every test and in no production row.
+create_all() adds missing *tables* and never adds a column to a table that
+already exists, so several facts here live in tables of their own (see
+`reads`) rather than as columns on `verdicts`. Columns that must go on an
+existing table now go through migrations.apply(), which runs on the same
+engine right after create_all(); a column added to the Table definition
+alone would appear in every test and in no production row.
 """
 
 import os
@@ -23,6 +24,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Column,
     DateTime,
     Float,
@@ -32,9 +34,13 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     create_engine,
+    select,
+    update,
 )
 
+from . import migrations
 from .models import Verdict
 from .reader import Coverage, ReaderVerdict
 
@@ -59,6 +65,14 @@ verdicts = Table(
     Column("raw", JSON),
     # PR metadata as scored — the queue dashboard reads verdicts alone.
     Column("pr_meta", JSON),
+    # App identity. Added to an existing table, so these four are also
+    # migration 001 — the two definitions must stay identical or a fresh
+    # database and production diverge. Unindexed on purpose: create_all()
+    # would build an index here that no migration builds there.
+    Column("github_repo_id", BigInteger),
+    Column("installation_id", BigInteger),
+    Column("head_sha", String(64)),
+    Column("source", String(20)),  # app | ci | cli
 )
 
 findings = Table(
@@ -127,6 +141,58 @@ deviations = Table(
     Column("intent_alignment", Integer),
 )
 
+# Who installed Doug where. The webhook is the only writer; a row is never
+# deleted, because "this installation was removed on the 3rd" is a fact the
+# ledger's verdicts still refer to.
+installations = Table(
+    "installations",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False, unique=True),
+    Column("account_login", String(200)),
+    Column("account_type", String(20)),  # User | Organization
+    Column("state", String(20), nullable=False),  # active | suspended | deleted
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+installation_repos = Table(
+    "installation_repos",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False, index=True),
+    Column("github_repo_id", BigInteger, nullable=False),
+    Column("full_name", String(200), nullable=False),  # display only
+    Column("state", String(20), nullable=False),  # active | removed
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
+)
+
+# The durable gap between a delivery and a review. The unique constraint is
+# the deduplication mechanism, not an integrity afterthought: two deliveries
+# of one push race often enough that a check-then-insert would pay for the
+# same model read twice.
+review_jobs = Table(
+    "review_jobs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False),
+    Column("github_repo_id", BigInteger, nullable=False),
+    Column("repo_full_name", String(200), nullable=False),  # display only
+    Column("pr_number", Integer, nullable=False),
+    Column("head_sha", String(64), nullable=False),
+    # pending | running | done | failed | superseded
+    Column("status", String(12), nullable=False, index=True),
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("enqueued_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("error", Text),
+    Column("verdict_id", Integer, ForeignKey("verdicts.id")),
+    UniqueConstraint(
+        "installation_id", "github_repo_id", "pr_number", "head_sha", name="uq_review_job"
+    ),
+)
+
 _engine = None
 # The raw env string the engine was built from. Compared instead of
 # str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
@@ -147,6 +213,11 @@ def _get_engine():
         if _engine is None or _engine_url != url:
             engine = create_engine(url, pool_pre_ping=True)
             metadata.create_all(engine)
+            # create_all() cannot add a column to a table that already
+            # exists. Production's `verdicts` predates the App columns, so
+            # the two paths only agree if this runs on every engine, not
+            # just the new ones.
+            migrations.apply(engine)
             if _engine is not None:
                 _engine.dispose()
             _engine = engine
@@ -167,6 +238,10 @@ def save_review(
     model: str | None = None,
     pr_meta: dict | None = None,
     coverage: Coverage | None = None,
+    github_repo_id: int | None = None,
+    installation_id: int | None = None,
+    head_sha: str | None = None,
+    source: str | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
     storage is disabled — callers never branch on persistence.
@@ -175,6 +250,10 @@ def save_review(
     and its findings — the reader-tier hot path used to pay a second
     sequential commit for it via a standalone save_read() call; nothing
     about writing it needed to be a separate round trip.
+
+    The identity kwargs are None for every pre-App row and for the CLI, which
+    has no installation. `github_repo_id` is the only stable repo identity —
+    `repo` is a display string that changes when a repo is renamed.
     """
     engine = _get_engine()
     if engine is None:
@@ -195,6 +274,10 @@ def save_review(
                 "rationale": reader_verdict.rationale if reader_verdict else None,
                 "raw": reader_verdict.model_dump() if reader_verdict else None,
                 "pr_meta": pr_meta,
+                "github_repo_id": github_repo_id,
+                "installation_id": installation_id,
+                "head_sha": head_sha,
+                "source": source,
             },
         ).scalar_one()
         rows = [
@@ -230,6 +313,87 @@ def save_review(
                 },
             )
     return int(row)
+
+
+def upsert_installation(
+    installation_id: int, account_login: str, account_type: str, state: str
+) -> None:
+    """Record an installation's current state. Never deletes: a suspended or
+    deleted installation is a state the verdicts it produced still point at."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    values = {
+        "account_login": account_login,
+        "account_type": account_type,
+        "state": state,
+        "updated_at": datetime.now(UTC),
+    }
+    with engine.begin() as conn:
+        row = conn.execute(
+            select(installations.c.id).where(installations.c.installation_id == installation_id)
+        ).scalar_one_or_none()
+        if row is None:
+            conn.execute(installations.insert(), {"installation_id": installation_id, **values})
+        else:
+            conn.execute(update(installations).where(installations.c.id == row).values(**values))
+
+
+def set_installation_repos(
+    installation_id: int,
+    repos: list[tuple[int, str]],
+    *,
+    replace: bool,
+    state: str = "active",
+) -> None:
+    """Record which repos an installation covers.
+
+    `replace=True` treats `repos` as authoritative — anything else on this
+    installation flips to 'removed'. That is the installation-created event,
+    which carries the full list. `replace=False` merges a delta, and the
+    caller says which delta it is: the `installation_repositories` webhook
+    sends added and removed in one payload, so removals arrive as their own
+    call with state='removed'.
+
+    Rows are never DELETEd. A removed repo's verdicts stay in the ledger and
+    the join that explains them has to keep resolving.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return
+    now = datetime.now(UTC)
+    ids = [r[0] for r in repos]
+    with engine.begin() as conn:
+        if replace:
+            stale = (
+                update(installation_repos)
+                .where(installation_repos.c.installation_id == installation_id)
+                .values(state="removed", updated_at=now)
+            )
+            if ids:
+                stale = stale.where(installation_repos.c.github_repo_id.notin_(ids))
+            conn.execute(stale)
+        known = {
+            r.github_repo_id: r.id
+            for r in conn.execute(
+                select(installation_repos.c.id, installation_repos.c.github_repo_id).where(
+                    installation_repos.c.installation_id == installation_id
+                )
+            )
+        }
+        for repo_id, full_name in repos:
+            values = {"full_name": full_name, "state": state, "updated_at": now}
+            if repo_id in known:
+                conn.execute(
+                    update(installation_repos)
+                    .where(installation_repos.c.id == known[repo_id])
+                    .values(**values)
+                )
+            else:
+                conn.execute(
+                    installation_repos.insert(),
+                    {"installation_id": installation_id, "github_repo_id": repo_id, **values},
+                )
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:

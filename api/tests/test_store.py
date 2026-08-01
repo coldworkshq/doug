@@ -554,3 +554,100 @@ def test_replay_keeps_the_partial_read_hedge_on_deviations(tmp_path, monkeypatch
     assert prior["coverage"]["sent_chars"] == 30_000
     notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
     assert notice is not None and "Partial read" in notice.label
+
+
+# --- App identity on verdicts -------------------------------------------------
+
+INSTALL = 150424894
+REPO_ID = 900001
+
+
+def test_save_review_records_app_identity(tmp_path, monkeypatch):
+    """`repo` is a display string that changes the moment a repo is renamed,
+    and every tenancy question this ledger will be asked — which installation,
+    which repo, which commit — has to survive that rename. The identity
+    columns are the only answer that does."""
+    url = _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        model=reader.MODEL,
+        github_repo_id=REPO_ID,
+        installation_id=INSTALL,
+        head_sha="a" * 40,
+        source="app",
+    )
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["id"] == vid
+    assert v["github_repo_id"] == REPO_ID and v["installation_id"] == INSTALL
+    assert v["head_sha"] == "a" * 40 and v["source"] == "app"
+
+
+def test_save_review_leaves_identity_null_for_the_ci_path(tmp_path, monkeypatch):
+    """Every row written before the App existed has no installation, and the
+    CLI still writes rows that never had one. Null has to mean that rather
+    than being backfilled with a guess."""
+    url = _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 7, "deterministic", VERDICT)
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["installation_id"] is None and v["source"] is None
+
+
+# --- Installation helpers -----------------------------------------------------
+
+
+def test_upsert_installation_updates_state_in_place(tmp_path, monkeypatch):
+    """Suspend and unsuspend arrive as repeated events for one installation.
+    Inserting a second row would leave two answers to "is this tenant active"
+    and no rule for picking one."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    store.upsert_installation(INSTALL, "drewjst", "User", "suspended")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["state"] == "suspended" and rows[0]["account_login"] == "drewjst"
+
+
+def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
+    """The installation payload carries the authoritative list. A reinstall
+    that dropped a repo must not leave it active — Doug would keep reviewing a
+    repo the customer removed it from."""
+    url = _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALL, [(1, "o/a"), (2, "o/b")], replace=True)
+    store.set_installation_repos(INSTALL, [(2, "o/b")], replace=True)
+    with create_engine(url).connect() as conn:
+        rows = {
+            r["github_repo_id"]: r["state"]
+            for r in conn.execute(select(store.installation_repos)).mappings()
+        }
+    assert rows == {1: "removed", 2: "active"}
+
+
+def test_repo_deltas_merge_without_touching_the_rest(tmp_path, monkeypatch):
+    """installation_repositories events are deltas, not snapshots. Treating
+    one as authoritative would remove every repo it did not mention."""
+    url = _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALL, [(1, "o/a"), (2, "o/b")], replace=True)
+    store.set_installation_repos(INSTALL, [(3, "o/c")], replace=False)
+    store.set_installation_repos(INSTALL, [(1, "o/a")], replace=False, state="removed")
+    with create_engine(url).connect() as conn:
+        rows = {
+            r["github_repo_id"]: r["state"]
+            for r in conn.execute(select(store.installation_repos)).mappings()
+        }
+    assert rows == {1: "removed", 2: "active", 3: "active"}
+
+
+def test_a_removed_repo_keeps_its_row(tmp_path, monkeypatch):
+    """Verdicts outlive access. Deleting the row would break the join that
+    explains where a stored verdict came from, and uninstall-then-reinstall is
+    a support case that needs the history."""
+    url = _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALL, [(1, "o/a")], replace=True)
+    store.set_installation_repos(INSTALL, [], replace=True)
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installation_repos)).mappings().all()
+    assert len(rows) == 1 and rows[0]["state"] == "removed"
