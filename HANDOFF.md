@@ -1,82 +1,68 @@
 # HANDOFF — doug
 
-State:    review
-Next:     Both PRs pushed with review fixes applied. Merge #12 and #13;
-          then queue-page rendering for `read-truncated`.
-Blockers: Anthropic balance empty — no diff has been read since it ran out.
-          Any reader re-run (prompt v2, budget experiment) waits on it.
+State:    building — step-2 (GitHub App + webhook ingest) plan is on main,
+          reviewed; next session EXECUTES it.
+Next:     Execute docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md
+          task by task (superpowers:subagent-driven-development or
+          executing-plans). Read the plan's header first: Tasks 6/7
+          interleave deliberately; branch fix/reliability-review collides
+          with Tasks 9/10. Execute via PRs (ADR-0008) — the plan document
+          itself was pushed to main on Andrew's explicit say-so; that
+          authorization does not extend to the implementation.
+Blockers: none. Credits topped up 2026-07-31; reader tier live in prod.
 
-Decisions this session:
-- The lema#643 review feedback is a truncation bug, not a prompt bug — the
-  reader was shown 30,000 of 68,430 chars (44%). The clamp that falsifies
-  finding #1 sat 1,248 chars past the cut; the tenancy leak it missed sat
-  2,266 past; the mutation-verified test file was never sent.
-  — rejected: applying the pasted prompt patch as written, which would have
-  told the model to "open the callee" and "read the tests" for code it never
-  received — claimed compliance, not real compliance.
-- Coverage is observed and recorded; nothing sent to the model changed.
-  — why: DIFF_BUDGET and _user_text are frozen probe parameters (ADR-0002),
-  and 11% of the sentry corpus / 21% of grafana were truncated at 30k, so
-  raising the budget moves the input for ~1 read in 6 — a new experiment.
-  — rejected: quietly raising DIFF_BUDGET.
-- Coverage lands in a new `reads` table, not columns on `verdicts`.
-  — why: create_all() adds tables, never columns; new columns would exist in
-  tests and silently not in production. — rejected: ALTER-on-startup.
-- The notice is `read-truncated`, outside the `reader:` namespace.
-  — why: patterns.from_rule only canonicalises `reader:*`, so a meta-fact
-  about the read can never be counted as a defect pattern by /v1/patterns.
-- The workflow-summary test passed for the wrong reason — it fed python3 the
-  YAML indentation the runner strips, which only 3.14 tolerates.
-  — why fix rather than ignore: red locally (system python3 is 3.9.6), green
-  in CI, which teaches you to ignore it. — rejected: dedent alone, which
-  hides the deeper-indent case; raw indentation is now asserted separately
-  and mutation-verified.
-- Ran an xhigh code review against #12 and #13; 10/12 candidates confirmed.
-  Fixed all 10 on read-coverage: /v1/score/read and the intent tier both
-  bypassed coverage entirely (silent partial reads in exactly the two paths
-  PR #12 exists to close); file_cut misattributed a fully-sent file when the
-  budget landed on a file boundary (fixed by comparing against
-  CHUNK_SEPARATOR, not just presence); a save_read failure after a
-  successful save_review was reported as "ledger-unavailable" (fixed by
-  folding coverage into save_review's existing transaction — now atomic,
-  not two round trips); backfill_ledger.py left ~650 seed-corpus rows with
-  no reads row — fixed exactly, not approximately, since HarvestedPR's
-  cached file_details still carries every patch (verified: 0/10000 sentry
-  rows missing it), so coverage for the whole corpus is reconstructed from
-  the same harvest cache rf_kamei.load() already reads, not guessed.
-  diff_chunk() is now the one place the "### path (status, +a/-d)" shape is
-  built; review.py and reader.py both use it instead of two hand-written
-  copies plus a third regex. 4 new regression tests, incl. the exact
-  boundary-misattribution repro from the review.
-  — rejected: a schema change to make Coverage.diff_chars nullable for the
-  ~11-21% of backfilled PRs that were truncated with no way to recover the
-  true original length — file_details being fully populated made this
-  unnecessary; every backfilled row now has an exact reads row or none.
-- Fixed #13's own review finding: its new indentation-fidelity test's regex
-  stopped at the wrong closing quote (matched the `"` opening
-  `"$GITHUB_STEP_SUMMARY"` instead of the -c block's real terminator) —
-  passed only because the swallowed text happened to share the opener's
-  indent. Both tests now share one `_SUMMARY_BLOCK` regex anchored past the
-  correct ` >> "$GITHUB_STEP_SUMMARY"` terminator, so the two can't drift
-  apart again. Mutation-verified: the fix still catches a 2-space
-  re-indent; spot-checked the captured body no longer contains
-  `GITHUB_STEP_SUMMARY`.
+Key facts for the executor:
+- App: dougs-review, App ID 4450932, installation 150424894 on drewjst
+  (User, selected: doug only). Perms checks:write/contents:read/
+  pull_requests:read/metadata:read; events: pull_request. Private key in
+  Secret Manager doug-github-app-key (no IAM grant yet — deliberate, Task
+  10 decides the dedicated-SA custody). Webhook secret doug-webhook-secret
+  v2 (v1 has a trailing newline; prod pinned to :2, disable v1 at cutover).
+  Webhook verified end-to-end in prod: ping + installation events 202 with
+  valid signatures; deliveries currently verify-and-discard (api.py:331).
+- Install visibility is "Only on this account" — flip to "Any account"
+  before installing on lemahq/lema (Task 10 cutover).
+- The plan was built by 3 drafting agents on locked interfaces, reviewed by
+  2 adversarial verifiers (both verify by execution), 3 blockers + 5 majors
+  fixed. Deepest invariants (do not "tidy" these away): enqueue REVIVES
+  failed/superseded rows in place with a STABLE id; drain's seen-set bounds
+  both retry burn and the force-push supersede/revive ping-pong; the
+  no-ledger 503 is scoped to the three handled webhook events only.
+- Derangement check (2026-07-31): BAR FAILED and the instrument is invalid
+  for constraint-style records — validates nothing either way. Deviation
+  findings stay UNBELIEVED; check-run copy must keep the "unvalidated"
+  label. Positive-control experiment needed before further intent-stream
+  investment. Full analysis: workspace/research/phase1-entry-preregistration.md
+  (workspace/ is untracked — lives only on Andrew's machine).
+
+Decisions this session (2026-07-31/08-01):
+- Step-2 plan pushed straight to main (Andrew's instruction, sole session);
+  execution returns to PRs. — rejected: PRing the plan doc (explicitly
+  overridden by Andrew).
+- ADR-0003 will be superseded by ADR-0010 (neutral check run) in the same
+  commit as the check-run code; ADR-0007 and ADR-0008 get prose corrections
+  only (their decisions stand, their surface references die with CI).
+- Anthropic key rotation staged create-then-revoke-after-verify (Task 10)
+  so the live reader never breaks between rotation and deploy.
 
 Pointers:
-- `read-coverage` → PR #12: api/doug/{reader,store,review,api}.py,
-  api/scripts/backfill_ledger.py, both doug-review.yml copies (render
-  intent_notice) + api/tests/test_coverage.py (13 tests). Pushed.
-- `workflow-summary-test-fidelity` → PR #13: api/tests/test_workflow_summary.py
-  (_SUMMARY_BLOCK shared anchor). Pushed.
-- Open PRs: #12, #13, both with their own xhigh-review findings fixed.
-  (#9, #10, #11 merged.)
-- doug-review on drewjst/doug succeeds; the summary step renders.
-- Stashed: `git stash list` → repoint dashboard queue lemahq/lema →
-  drewjst/doug (was uncommitted on queue-polish; includes
-  docs/superpowers/plans/2026-07-30-close-live-auth-holes.md).
-- Feedback items 3 and 4 (invariant-vs-mechanism; severity = impact ×
-  confidence) are real and unbuilt — they need a frozen v2 prompt and a
-  validation run, so they wait on credits.
-- #643 had FOUR reader findings, not three: `reader:brittle-test-assertion`
-  (low) is unscored in the feedback, and it is about a test file — evidence
-  the reader does read tests it is given.
+- Plan: docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md
+  (commits d51eec8..94f87e9+). Spec: docs/superpowers/specs/
+  2026-07-30-github-app-tenancy-dashboard-design.md (lema mentions
+  clarified 2026-08-01).
+- Full session state: ../HANDOFF.md on Andrew's machine (project root,
+  above this repo) is the richer, hook-maintained handoff.
+- In-flight elsewhere: branch fix/reliability-review (worktree
+  .claude/worktrees/reliability-fixes) — reliability fixes incl. /v1/review
+  idempotency (endpoint dies in Task 9) and gcp.sh traffic gating (merge
+  INTO Task 10's version).
+- Stale branch workflow-summary-test-fidelity holds ~49 unmerged test lines
+  (post-#13 work); decide merge-or-drop deliberately.
+- stash@{0} (queue-polish era): dashboard repoint + the lost step-1 plan
+  file. Both obsolete (repoint shipped via deploy config; plan content
+  landed in #14) — drop deliberately when convenient.
+- Carried forward: reader-feedback items 3 & 4 (invariant-vs-mechanism;
+  severity = impact × confidence) need a frozen v2 prompt + validation run —
+  credits now exist, still unscheduled. lema#643 had FOUR reader findings
+  (reader:brittle-test-assertion, low, unscored) — evidence the reader
+  reads tests it is given.
