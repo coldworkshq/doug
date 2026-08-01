@@ -39,6 +39,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.exc import IntegrityError
 
 from . import migrations
 from .models import Verdict
@@ -385,14 +386,32 @@ def upsert_installation(
         "state": state,
         "updated_at": datetime.now(UTC),
     }
-    with engine.begin() as conn:
+    with engine.connect() as conn:
         row = conn.execute(
             select(installations.c.id).where(installations.c.installation_id == installation_id)
         ).scalar_one_or_none()
-        if row is None:
-            conn.execute(installations.insert(), {"installation_id": installation_id, **values})
-        else:
-            conn.execute(update(installations).where(installations.c.id == row).values(**values))
+    if row is None:
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    installations.insert(), {"installation_id": installation_id, **values}
+                )
+            return
+        except IntegrityError:
+            # Two concurrent deliveries for a new installation (redelivery,
+            # or two webhook workers) can both see `row is None` and race to
+            # insert. The loser's own transaction is the only one that
+            # aborts (a separate engine.begin() from the read above), so it
+            # falls through to the update below instead of raising — same
+            # "already done, not failed" case migrations.apply() handles for
+            # the schema-version race.
+            pass
+    with engine.begin() as conn:
+        conn.execute(
+            update(installations)
+            .where(installations.c.installation_id == installation_id)
+            .values(**values)
+        )
 
 
 def set_installation_repos(
@@ -446,10 +465,14 @@ def set_installation_repos(
                     .values(**values)
                 )
             else:
-                conn.execute(
+                result = conn.execute(
                     installation_repos.insert(),
                     {"installation_id": installation_id, "github_repo_id": repo_id, **values},
                 )
+                # A duplicate github_repo_id later in this same `repos` list must
+                # update, not insert again — `known` only reflects rows that
+                # existed before this call started.
+                known[repo_id] = result.inserted_primary_key[0]
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:

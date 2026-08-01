@@ -615,6 +615,51 @@ def test_upsert_installation_updates_state_in_place(tmp_path, monkeypatch):
     assert rows[0]["state"] == "suspended" and rows[0]["account_login"] == "drewjst"
 
 
+def test_upsert_installation_falls_back_to_update_when_insert_races(tmp_path, monkeypatch):
+    """The SELECT can return `row is None` and then, before this call's own
+    INSERT executes, a concurrent delivery for the same installation_id
+    (redelivery, or two webhook workers) already lands its row. The loser's
+    INSERT must fall through to an update instead of raising IntegrityError
+    out of upsert_installation — the same "already done, not failed" case
+    migrations.apply() handles for the schema-version race. Forces the exact
+    interleaving deterministically (a real thread race would be flaky)."""
+    url = _db(tmp_path, monkeypatch)
+    engine = create_engine(url)
+    store.metadata.create_all(engine)
+    monkeypatch.setattr(store, "_get_engine", lambda: engine)
+
+    real_begin = engine.begin
+    raced = {"done": False}
+
+    def racing_begin():
+        if not raced["done"]:
+            raced["done"] = True
+            with real_begin() as conn:
+                conn.execute(
+                    store.installations.insert(),
+                    {
+                        "installation_id": INSTALL,
+                        "account_login": "someone-else",
+                        "account_type": "User",
+                        "state": "active",
+                        "updated_at": datetime.now(UTC),
+                    },
+                )
+        return real_begin()
+
+    monkeypatch.setattr(engine, "begin", racing_begin)
+
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["installation_id"] == INSTALL
+    # Our update landed on the racer's row rather than raising — "drewjst"
+    # is this call's value, not the racer's "someone-else".
+    assert rows[0]["account_login"] == "drewjst" and rows[0]["state"] == "active"
+
+
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
     """The installation payload carries the authoritative list. A reinstall
     that dropped a repo must not leave it active — Doug would keep reviewing a
@@ -655,6 +700,21 @@ def test_a_removed_repo_keeps_its_row(tmp_path, monkeypatch):
     with create_engine(url).connect() as conn:
         rows = conn.execute(select(store.installation_repos)).mappings().all()
     assert len(rows) == 1 and rows[0]["state"] == "removed"
+
+
+def test_a_duplicate_repo_id_in_one_call_updates_not_double_inserts(tmp_path, monkeypatch):
+    """`known` is read once before the loop; a naive implementation never
+    updates it as rows are inserted, so a second occurrence of the same
+    github_repo_id in one `repos` list would see it as still-unseen and
+    insert again, violating uq_installation_repo. Not a hypothetical
+    payload shape — the caller controls `repos`, and this must degrade to
+    an update, not an unhandled IntegrityError."""
+    url = _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALL, [(1, "o/a"), (1, "o/a")], replace=True)
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installation_repos)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["github_repo_id"] == 1 and rows[0]["state"] == "active"
 
 
 # --- Outcome-loop schema (M1 amendment) ---------------------------------------
