@@ -1,15 +1,22 @@
 # HANDOFF — doug
 
-State:    building — step-2 (GitHub App + webhook ingest) plan is on main,
-          reviewed; next session EXECUTES it.
-Next:     Execute docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md
+State:    building — M0 (clear the decks, see
+          docs/design/outcome-loop/ROADMAP.md) mostly done this session;
+          M1 (execute the step-2 plan) is next once M0's PR merges.
+Next:     Merge PR #16 (docs/outcome-loop-design-lock — design docs +
+          landing-page section + .env.example fix; Doug's own review
+          check runs on it, ADR-0008). Then M1: execute
+          docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md
           task by task (superpowers:subagent-driven-development or
-          executing-plans). Read the plan's header first: Tasks 6/7
-          interleave deliberately; branch fix/reliability-review collides
-          with Tasks 9/10. Execute via PRs (ADR-0008) — the plan document
-          itself was pushed to main on Andrew's explicit say-so; that
-          authorization does not extend to the implementation.
+          executing-plans), with the migration-002 / clock-start /
+          pull_request_review-ingest amendments folded in per ROADMAP.md,
+          not as a second pass. Read the plan's header first: Tasks 6/7
+          interleave deliberately. Execute via PRs (ADR-0008).
 Blockers: none. Credits topped up 2026-07-31; reader tier live in prod.
+          One open M0 item, deliberately deferred by Andrew: rotate +
+          delete the live local key at
+          api/.backtest-cache/llm-probe/api-key (needs Anthropic console
+          access neither this session nor the executor has).
 
 Key facts for the executor:
 - App: dougs-review, App ID 4450932, installation 150424894 on drewjst
@@ -35,7 +42,22 @@ Key facts for the executor:
   investment. Full analysis: workspace/research/phase1-entry-preregistration.md
   (workspace/ is untracked — lives only on Andrew's machine).
 
-Decisions this session (2026-07-31/08-01):
+Decisions this session (2026-07-31/08-01, M0 pass):
+- workflow-summary-test-fidelity: DROPPED, branch deleted (local + remote).
+  Its only real content vs main was a test regex fix, already byte-identical
+  on main; the branch's sole diff was a stale HANDOFF.md snapshot —
+  rejected: merging it (nothing to merge).
+- PR #15 was already merged upstream before this session acted on it
+  (by a concurrent session); local main fast-forwarded, no rebase needed.
+- Intent-stream posture (per-installation flag, default OFF for tenants,
+  ON for dogfood, experimental label) needed no new decision — confirmed
+  already written into design-lock.md:62 — rejected: re-deciding it.
+- Key rotation at api/.backtest-cache/llm-probe/api-key deferred by Andrew
+  this session (needs Anthropic console access) — rejected: deleting the
+  file without rotating first (would just lose the credential, not retire
+  it).
+
+Prior decisions this session (2026-07-31/08-01, step-2 plan):
 - Step-2 plan pushed straight to main (Andrew's instruction, sole session);
   execution returns to PRs. — rejected: PRing the plan doc (explicitly
   overridden by Andrew).
@@ -50,14 +72,12 @@ Pointers:
   (commits d51eec8..94f87e9+). Spec: docs/superpowers/specs/
   2026-07-30-github-app-tenancy-dashboard-design.md (lema mentions
   clarified 2026-08-01).
+- Roadmap: docs/design/outcome-loop/ROADMAP.md — the tracking document,
+  M0 through M6.
 - Full session state: ../HANDOFF.md on Andrew's machine (project root,
   above this repo) is the richer, hook-maintained handoff.
-- In-flight elsewhere: branch fix/reliability-review (worktree
-  .claude/worktrees/reliability-fixes) — reliability fixes incl. /v1/review
-  idempotency (endpoint dies in Task 9) and gcp.sh traffic gating (merge
-  INTO Task 10's version).
-- Stale branch workflow-summary-test-fidelity holds ~49 unmerged test lines
-  (post-#13 work); decide merge-or-drop deliberately.
+- PR #16 open: docs/outcome-loop-design-lock (design docs + landing-page
+  section + .env.example MAGPIE_*→DOUG_* fix).
 - stash@{0} (queue-polish era): dashboard repoint + the lost step-1 plan
   file. Both obsolete (repoint shipped via deploy config; plan content
   landed in #14) — drop deliberately when convenient.
