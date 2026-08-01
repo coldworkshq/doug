@@ -1010,6 +1010,7 @@ git push
 - **Supersede runs after the insert, inside the same transaction.** Nothing is superseded on the collision path. It is a spend optimisation for the ordinary in-order burst, not the mechanism that decides which SHA gets reviewed — Task 5's `process_job` re-checks the PR's real head before paying for a read, and re-enqueues (reviving, per above) when it differs.
 - **`fail` bumps `enqueued_at` when it re-pends**, and `claim` orders by `(enqueued_at, id)`, so a re-pended job sorts behind existing work instead of ahead of it. That alone does not stop a drain from re-claiming the only pending row inside one pass; Task 5's `drain` keeps a seen-set for that. Both halves are needed and Task 5 verified the composition: with the seen-set but without this bump, its two-job test yields `drain() == 1` — the poison job is re-claimed at once, the seen-set breaks the loop, and the healthy second job never runs. Do not drop the bump as a redundant write.
 - **`release` deliberately leaves `enqueued_at` alone**, unlike `fail`. Nothing was attempted, so the job keeps its place in the queue.
+- **A revived job keeps its id** — `_revive` updates in place and never re-inserts. Task 5's `drain` bounds a supersede/revive ping-pong (its stale-head guard supersedes a job, `enqueue` revives it, neither makes progress) with a seen-set of job ids, and Task 5 mutation-checked it: with the seen-set the drain returns 2 and stops, without it 20, the `max_jobs` ceiling. The bound holds only because the id is stable, so a revival that allocated a fresh row would restore an unbounded loop inside a held instance without failing one test in this task.
 - **One point the locked contract left open:** `enqueue` raises `RuntimeError` when `DATABASE_URL` is unset. `None` already means "already queued", so a no-op return would make an unconfigured deployment answer 202 to every delivery while reviewing nothing. In practice Task 6 guards this at the edge — `if not store.enabled(): raise HTTPException(503, "no ledger configured")`, placed after the ping early-return — so the raise here is a backstop, not the path a delivery normally takes. `claim()` keeps the no-op (returns `None`), which makes `drain` a safe no-op on a ledger-less deployment; Task 5 wraps it in no try/except for that reason.
 
 - [ ] **Step 1: Write the failing test**
@@ -1181,7 +1182,10 @@ def test_a_failed_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
     assert row["error"] is None and row["finished_at"] is None
-    # One row, not two: revival reuses the row the index collided with.
+    # One row, not two, and the same id. worker.drain bounds a
+    # supersede/revive ping-pong with a seen-set of job ids, so a revival
+    # that allocated a fresh id would quietly turn that bound back into an
+    # unbounded loop.
     assert len(_jobs(url)) == 1
 
 
@@ -1385,6 +1389,12 @@ def _revive(
     The status test lives in the UPDATE's WHERE rather than in a SELECT before
     it: a concurrent drain can claim or finish the row between the two, and a
     zero-row result is the only reliable way to find out that it did.
+
+    The row is updated in place and keeps its id — never deleted and
+    re-inserted. worker.drain bounds a supersede/revive ping-pong (its
+    stale-head guard supersedes a job, which this then revives) with a
+    seen-set of job ids, and a fresh id per revival would defeat it silently,
+    turning the spin back into an unbounded loop inside a held instance.
     """
     with engine.begin() as conn:
         job_id = conn.execute(
