@@ -19,12 +19,13 @@ The tempting next step is to let a deviation raise the risk score.
 
 Deviation findings and `intent_alignment` are written to their own
 `deviations` table and never contribute to `risk_score` or `band`. They
-render as a separate block in the CI job summary, each line carrying the
-decision reference so the claim can be checked against the record.
+render as a separate advisory section of the check run (ADR-0010), each
+line carrying the decision reference so the claim can be checked against
+the record.
 
 The feature ships on from the first merge. There is no staged rollout,
 because Doug never blocks and every verdict it emits is already
-advisory — a deviation in a job summary cannot hurt anyone.
+advisory — a deviation on a neutral check run cannot hurt anyone.
 
 ## Rejected
 
@@ -40,7 +41,7 @@ knowing whether or not it is live.
 
 ## Consequences
 
-- Two streams to reason about, and a reader of the job summary has to
+- Two streams to reason about, and a reader of the check run has to
   understand that one of them does not affect routing.
 - Whether deviation ever earns its way into routing is a later decision
   needing outcome-joined evidence that does not exist yet.

@@ -1,6 +1,7 @@
 ---
 title: Doug's CI surface is the job summary, never comments or checks
-status: accepted
+status: superseded
+superseded_by: ADR-0010
 date: 2026-07-29
 ---
 

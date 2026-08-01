@@ -199,7 +199,14 @@ def test_selection_on_dougs_own_records():
         return [d.id for d in intent.select(docs, title, files)]
 
     assert sent("Tighten the reader prompt wording", ["doug/reader.py"])[0] == "ADR-0002"
-    assert sent("Post Doug verdicts as PR comments", [".github/workflows/x.yml"])[0] == "ADR-0003"
+    # ADR-0003 used to answer this and is now superseded by ADR-0010. A
+    # superseded record must stop steering the reader: left binding, it
+    # would have Doug flag its own check-run code as deviating from a rule
+    # the team already dropped — the failure intent.BINDING exists to
+    # prevent, and the reason the status flip ships with the code.
+    comments = sent("Post Doug verdicts as PR comments", [".github/workflows/x.yml"])
+    assert comments[0] == "ADR-0010"
+    assert "ADR-0003" not in comments
     lema = sent("Read decisions from lema's hosted API", ["doug/intent_providers.py"])
     assert lema == ["ADR-0006"]
 
