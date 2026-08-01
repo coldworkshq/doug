@@ -108,9 +108,38 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
     return out
 
 
+def _review_state(gh, owner: str, repo: str, number: int, opened_at) -> tuple[int, float | None]:
+    """Current approval count and seconds to the first approval, from the
+    PR's own review history.
+
+    A reviewer's LATEST decision is what counts — approve, then a later
+    changes-requested from the same person, leaves them not-approved,
+    exactly like GitHub's own PR page. COMMENTED/DISMISSED reviews carry
+    no decision and are excluded from that tally. Latency is measured to
+    the first approval event ever recorded, regardless of any later
+    change of heart: the rubber-stamp rule it feeds is about whether a
+    fast approval happened, not about the PR's current state.
+    """
+    reviews = gh.rest.pulls.list_reviews(
+        owner=owner, repo=repo, pull_number=number, per_page=100
+    ).parsed_data
+    latest_decision: dict[str, str] = {}
+    for r in reviews:
+        if r.user is None or r.state not in ("APPROVED", "CHANGES_REQUESTED"):
+            continue
+        latest_decision[r.user.login] = r.state
+    approvals = sum(1 for state in latest_decision.values() if state == "APPROVED")
+    approval_times = sorted(
+        r.submitted_at for r in reviews if r.state == "APPROVED" and r.submitted_at is not None
+    )
+    latency = (approval_times[0] - opened_at).total_seconds() if approval_times else None
+    return approvals, latency
+
+
 def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
     files = _list_all_files(gh, owner, repo, number)
+    approvals, approval_latency_s = _review_state(gh, owner, repo, number, p.created_at)
     meta = PRMetadata(
         number=p.number,
         title=p.title,
@@ -123,8 +152,12 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         additions=sum(f.additions for f in files),
         deletions=sum(f.deletions for f in files),
         files=[f.filename for f in files],
-        approvals=0,
-        approval_latency_s=None,
+        approvals=approvals,
+        approval_latency_s=approval_latency_s,
+        # No deterministic rule reads this today (scoring.py: "usually
+        # unknown ... bot authorship alone is the reachable signal") — a
+        # commits-list call to populate it would be speculative work
+        # against a signal nothing consumes yet.
         days_since_last_human_commit=None,
         files_added=sum(1 for f in files if f.status == "added"),
         files_modified=sum(1 for f in files if f.status == "modified"),

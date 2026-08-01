@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from doug import reader, review
@@ -95,6 +96,7 @@ def test_fetch_pr_records_the_head_commit():
         head=SimpleNamespace(sha="c0ffee" + "0" * 34),
         html_url="https://github.com/o/r/pull/7",
         changed_files=1,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     f = SimpleNamespace(
         filename="cache.py", status="modified", additions=3, deletions=1, patch="+ x"
@@ -104,6 +106,7 @@ def test_fetch_pr_records_the_head_commit():
             pulls=SimpleNamespace(
                 get=lambda **kw: SimpleNamespace(parsed_data=p),
                 list_files=lambda **kw: SimpleNamespace(parsed_data=[f]),
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=[]),
             )
         )
     )
@@ -147,6 +150,7 @@ class PagedFakeGH:
                 get=lambda **kw: SimpleNamespace(parsed_data=self._pull),
                 list=lambda **kw: SimpleNamespace(parsed_data=[self._pull]),
                 list_files=self._list_files,
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=[]),
             )
         )
 
@@ -158,6 +162,7 @@ def _pull_full(number=7, changed_files=1):
         head=SimpleNamespace(sha="c0ffee" + "0" * 34),
         html_url="https://github.com/o/r/pull/7",
         changed_files=changed_files,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -198,3 +203,88 @@ def test_fetch_open_prs_derives_changed_files_from_the_paginated_count():
     items = review.fetch_open_prs(gh, "o", "r", limit=5)
     meta, _diff = items[0]
     assert meta.changed_files == 150
+
+
+# --- Live review state (approvals no longer hardcoded 0) -----------------
+
+def _review(login, state, submitted_at):
+    return SimpleNamespace(
+        user=SimpleNamespace(login=login, type="User"), state=state, submitted_at=submitted_at
+    )
+
+
+def _pull_with_reviews(reviews, created_at):
+    p = _pull_full(changed_files=1)
+    p.created_at = created_at
+    return p, reviews
+
+
+class ReviewedFakeGH:
+    def __init__(self, pull, files, reviews):
+        self._pull, self._files, self._reviews = pull, files, reviews
+
+    @property
+    def rest(self):
+        return SimpleNamespace(
+            pulls=SimpleNamespace(
+                get=lambda **kw: SimpleNamespace(parsed_data=self._pull),
+                list_files=lambda **kw: SimpleNamespace(
+                    parsed_data=(self._files if kw.get("page", 1) == 1 else [])
+                ),
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=self._reviews),
+            )
+        )
+
+
+def test_fetch_pr_counts_current_approvals_by_distinct_reviewer():
+    """A reviewer who re-approves after a push must not double-count — the
+    rubber-stamp rule reads approvals == 1 as 'exactly one reviewer signed
+    off', not 'one approval event'."""
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [
+            _review("alice", "APPROVED", opened + timedelta(minutes=3)),
+            _review("alice", "APPROVED", opened + timedelta(minutes=10)),  # re-approval
+        ],
+        opened,
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 1
+
+
+def test_fetch_pr_uses_a_reviewers_latest_state_not_their_first():
+    """approve, then a maintainer re-requests changes on the same PR: the
+    reviewer's CURRENT stance is changes-requested, not approved."""
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [
+            _review("alice", "APPROVED", opened + timedelta(minutes=3)),
+            _review("alice", "CHANGES_REQUESTED", opened + timedelta(minutes=20)),
+        ],
+        opened,
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+
+
+def test_fetch_pr_computes_latency_to_the_first_approval():
+    opened = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [_review("alice", "APPROVED", opened + timedelta(minutes=4))], opened
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approval_latency_s == 240.0
+
+
+def test_fetch_pr_reports_no_latency_without_an_approval():
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [_review("alice", "COMMENTED", opened + timedelta(minutes=4))], opened
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+    assert meta.approval_latency_s is None
