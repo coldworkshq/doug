@@ -16,7 +16,7 @@ Effort marks are engineer-days of focused work, not calendar days.
 The items that make every later step messier the longer they wait.
 
 - [x] **Merge PR #15** (`fix/reliability-review`) — lands the gated-traffic deploy + web timeout fix; merging FIRST avoids the known collision with step-2 Tasks 9/10 (else: deliberate rebase, its `/v1/review` idempotency work dies with the endpoint). Merged `0d95884`.
-- [ ] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — PR #16 open, pending merge.
+- [x] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — PR #16 merged `240caf5`, deployed.
 - [x] **Decide** `workflow-summary-test-fidelity` branch: merge or drop (~49 test lines) — dropped; its only real content was already on main byte-identical, branch deleted.
 - [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — deferred by Andrew (2026-08-01), needs Anthropic console access.
 - [x] **Confirm intent-stream posture** (design already assumes it): per-installation flag, default OFF for tenants, ON for dogfood, labeled experimental — confirmed in `design-lock.md:62`.
@@ -31,9 +31,11 @@ The items that make every later step messier the longer they wait.
 The reviewed 10-task TDD plan (`docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md`)
 executed as written — amendments folded in at their task, never as a second pass.
 
-- [ ] Tasks 1–2: fixtures + migration runner — **with migration 002 in the same sitting**:
-  `outcome_jobs` (+ UNIQUE(inst, repo, pr, merge_sha, window)), `verdicts.source` + `verdicts.prompt_hash`,
-  `outcomes` identity columns (github_repo_id, installation_id, window_days, detail JSON)
+- [x] Tasks 1–2: app_auth + migration runner — **with migration 002 in the same sitting**:
+  `outcome_jobs` (+ UNIQUE(inst, repo, pr, merge_sha, window)), `verdicts.source` (String(64)) + `verdicts.prompt_hash`,
+  `outcomes` identity columns (github_repo_id, installation_id, window_days, detail JSON),
+  `installations.token_hash`. Note: the Task 6 `installation.created` token mint is superseded —
+  hash-only storage makes an install-time mint unrecoverable; M2's dispense endpoint mints.
 - [ ] Tasks 3–5: durable job queue, worker drain, app auth (githubkit auth dep added)
 - [ ] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
   never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `installation.created`
