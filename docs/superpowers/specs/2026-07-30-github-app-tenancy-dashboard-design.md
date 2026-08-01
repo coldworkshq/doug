@@ -33,7 +33,7 @@ authenticated dashboard with org → repo navigation, a triage view, a per-repo
 control surface, and the neutral check run that replaces the job summary.
 
 Out of scope: the evidence view (blocked — see below), per-PR forensics
-(deferred), a lema-backed intent provider, PR comments, and any change to the
+(deferred), a lema-backed intent provider (lema is an unrelated product — ADR-0006), PR comments, and any change to the
 frozen reader prompt or schema.
 
 ## What the review found, verified against the code
@@ -126,8 +126,10 @@ contributor could otherwise drive `risk_score` at the tenant's expense.
 
 ### The shared token path is removed outright
 
-One ingest path, no migration mode. Only `lemahq/lema` ingests today, so the
-flag-day cost is one repo, and it is the install target for testing.
+One ingest path, no migration mode. Only `lemahq/lema` — an unrelated product
+that happens to have Doug wired into its CI, not a sibling or showcase tenant —
+ingests today, so the flag-day cost is one repo, and it is the install target
+for testing.
 
 **Rejected:** running both paths during a migration — hedging against a
 migration that does not exist. **Noted for later:** Qodo keeps a CI path

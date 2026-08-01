@@ -24,7 +24,7 @@
 - **No migration framework exists before Task 2** (`store.py:13-17` — that paragraph is rewritten by Task 2 in the same commit that makes it false): `create_all()` adds missing tables only. New *tables* go in `store.metadata`; new *columns* on `verdicts` exist in BOTH the table definition (fresh databases) and migration 001 (existing databases), with a drift test pinning the two together. Never add a bare column — or a bare *index* — to an existing table outside a migration; it will exist in tests and silently not in production.
 - **Unsigned-body handling is already fail-closed** (commit `0d58554`, `api.py:353-360`): nothing to delete. Task 6 keeps that 503 branch as defence in depth and adds the genuinely missing coverage (delivery with no signature header at all).
 - **Fork PRs are skipped at enqueue** (`head.repo.id != base.repo.id`) — the raw diff enters the prompt (`_user_text`, `reader.py:179-187`), so outside contributors must not be able to drive spend.
-- **`GITHUB_WEBHOOK_SECRET` is required at startup** (lifespan, Task 6). The `gcp.sh` change (Task 10) MUST land in the same push as the startup requirement: prod's secret was set out-of-band via `services update` (2026-07-31) and the current `deploy()`'s `--set-secrets` **wipes it on the next CI deploy**. Between Task 1 and Task 10 landing, every CI deploy also wipes the out-of-band App credentials — harmless by design (`app_auth.enabled()` → False, no paid reads, webhook 503s on the ledger guard only if DATABASE_URL is also lost) and healed by Task 7's startup reconcile once Task 10 restores them permanently.
+- **`GITHUB_WEBHOOK_SECRET` is required at startup** (lifespan, Task 6). `gcp.sh:91` already ships it via `--set-secrets` (added by #14), so CI deploys preserve it — the prod pin to `:2` (set out-of-band 2026-07-31) reverts to `:latest` on the next deploy, which resolves to the same v2 value. What CI deploys DO wipe until Task 10 lands is the **App credentials** (`DOUG_GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` are absent from the current script): harmless by design — `app_auth.enabled()` → False, no paid reads — and healed by Task 7's startup reconcile once Task 10 makes them permanent.
 - **Env names:** `DOUG_GITHUB_APP_ID` (plain env), `GITHUB_APP_PRIVATE_KEY` (PEM content via Secret Manager `doug-github-app-key`), `GITHUB_WEBHOOK_SECRET` (existing, `doug-webhook-secret:latest` = the stripped v2; v1 carries a trailing newline and gets disabled at cutover).
 - **Python ≥3.14, ruff line-length 100, pytest from `api/`:** `cd api && uv run pytest -q` and `uv run ruff check .` must pass at every commit.
 - **Commit style:** imperative subject, body explains why, `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` trailer.
@@ -34,7 +34,7 @@
 ```
 api/doug/app_auth.py        NEW — App JWT + installation tokens (githubkit auth strategies)
 api/doug/migrations.py      NEW — minimal ordered-DDL runner + migration 001 (verdicts columns)
-api/doug/ingest.py          NEW — review_jobs queue ops: enqueue/supersede/claim/complete/fail
+api/doug/ingest.py          NEW — review_jobs queue ops: enqueue/claim/release/complete/supersede/fail
 api/doug/worker.py          NEW — drain loop, per-job pipeline, reconcile (startup + install)
 api/doug/check_run.py       NEW — render + post the neutral check run
 api/doug/store.py           MOD — new tables (installations, installation_repos, review_jobs),
@@ -52,7 +52,7 @@ api/tests/: test_app_auth.py, test_migrations.py, test_ingest.py, test_worker.py
 
 ## Locked Interfaces
 
-Task implementers: these signatures are the contract between tasks. Do not rename. (Two amendments vs. the original skeleton, both discovered in drafting and already consistent across all task bodies: `set_installation_repos` gained the keyword-only `state` its own removal semantics required, and `enqueue` raises rather than no-ops on a missing ledger.)
+Task implementers: these signatures are the contract between tasks. Do not rename. (Three amendments vs. the original skeleton, all discovered in drafting or review and consistent across all task bodies: `set_installation_repos` gained the keyword-only `state` its own removal semantics required; `enqueue` raises rather than no-ops on a missing ledger; `release`/`supersede` were added so drain and the stale-head guard never spend an attempt or strand a SHA. One invariant is deliberately un-obvious: `supersede()` leaves the row in a status `enqueue` revives, so a force-push BACK to an old SHA re-queues it — pinned by a test; do not "tidy" it into its own status.)
 
 ```python
 # app_auth.py
@@ -83,28 +83,49 @@ def set_installation_repos(installation_id: int, repos: list[tuple[int, str]], *
     # replace=True on installation created (authoritative full list);
     # replace=False merges deltas — 'removed' passes state="removed", rows are marked, never DELETEd
 def save_review(..., github_repo_id=None, installation_id=None, head_sha=None, source=None)
-# read helpers land in Task 7 (additive, agreed across drafts):
-def active_installations() -> list[dict]
-def active_repos(installation_id: int) -> list[dict]
+# read helpers land in Task 7 (additive, agreed across drafts; narrow on purpose —
+# reconcile needs ids and names, nothing else):
+def active_installations() -> list[int]
+def active_repos(installation_id: int) -> list[tuple[int, str]]   # (github_repo_id, full_name)
 
 # ingest.py
 def enqueue(installation_id: int, github_repo_id: int, repo_full_name: str,
             pr_number: int, head_sha: str) -> int | None
-    # None = duplicate suppressed by the unique index (a DONE row collides the same as a
-    #        pending one — that IS reconcile's dedupe); flips still-pending jobs of the same
-    #        (installation, repo, pr) with a different head_sha to 'superseded';
+    # Collision on the unique index: if the existing row is 'failed' or 'superseded' it is
+    #   REVIVED (status='pending', attempts=0, error=NULL, enqueued_at=now) and its id
+    #   returned — this is how reconcile heals errored/stale work; bounded, a poison PR
+    #   costs max_attempts per reconcile, never unbounded. pending/running/done collide
+    #   to None (that IS the dedupe).
+    # Supersede runs AFTER a successful insert, same transaction: flips still-pending jobs
+    #   of the same (installation, repo, pr) with a different head_sha to 'superseded'. A
+    #   replayed delivery collides first and supersedes nothing (out-of-order safety; the
+    #   worker-side head guard in process_job is the other half).
     # RAISES RuntimeError when DATABASE_URL is unset — None already means "already queued",
-    #        and a silent no-op would 202 every delivery while reviewing nothing.
-def claim() -> dict | None                     # plain dict, PK under "id"; SKIP LOCKED on
-                                               # postgres; None when empty OR storage disabled
+    #   and a silent no-op would 202 every delivery while reviewing nothing.
+def claim() -> dict | None                     # plain dict, PK under "id"; oldest first by
+                                               # (enqueued_at, id); SKIP LOCKED on postgres;
+                                               # None when empty OR storage disabled
                                                # (drain stays a safe startup no-op)
 def complete(job_id: int, verdict_id: int | None) -> None
+def release(job_id: int) -> None               # back to 'pending', started_at=NULL, NO attempt
+                                               # spent — drain's seen-set uses it when it
+                                               # re-claims a job re-pended this same run
+def supersede(job_id: int) -> None             # status='superseded' + finished_at — the
+                                               # worker's stale-head guard uses it
 def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None
-    # attempts+1; back to 'pending' below the cap, 'failed' at it; error truncated to 500 chars
+    # attempts+1; back to 'pending' below the cap with enqueued_at bumped to now (sends the
+    # retry to the back of the queue), 'failed' at the cap; error truncated to 500 chars
 
 # worker.py
-def process_job(job: dict) -> int | None       # full pipeline; returns verdict_id
-def drain(max_jobs: int = 20) -> int           # claim loop; a failing job never stops the loop
+def process_job(job: dict) -> int | None       # full pipeline; returns verdict_id. Guards
+                                               # stale heads: if the PR's CURRENT head sha
+                                               # differs from job["head_sha"], the job is
+                                               # superseded and the current head enqueued —
+                                               # converges on the true head regardless of
+                                               # delivery order.
+def drain(max_jobs: int = 20) -> int           # claim loop; a failing job never stops the
+                                               # loop; a seen-set stops re-claiming a job
+                                               # re-pended within this same run
 def reconcile_installation(installation_id: int) -> int   # enqueue open PRs; returns count
 def reconcile_all() -> int                     # every active installation
 
@@ -124,7 +145,7 @@ def post(gh: GitHub, owner: str, repo: str, head_sha: str,
 | `installation_repositories` | added / removed | merge repo deltas (added → state="active", removed → state="removed") |
 | `pull_request` | opened / synchronize / reopened / ready_for_review | gate: skip drafts, skip forks (`head.repo.id != base.repo.id`), then enqueue + kick drain |
 
-Everything else: 202, ignored. The handler stays `async def` for `await request.body()` (signature needs raw bytes) but does **no** sync work inline: verify → parse → `run_in_threadpool` for DB writes → 202, with `BackgroundTasks` kicking `worker.drain` after the response. The 202 is sent only after the enqueue is durable. `if not store.enabled()`: 503 — scoped to the webhook, not the lifespan, because ledger-less mode is a deliberate feature of the rest of the API (`store.py:9-11`).
+Everything else: 202, ignored, without touching the store. The handler stays `async def` for `await request.body()` (signature needs raw bytes) but does **no** sync work inline: verify → parse → `run_in_threadpool` for DB writes → 202, with `BackgroundTasks` kicking `worker.drain` after the response (installation-created chains reconcile **then drain** in one background task). The 202 is sent only after the enqueue is durable. `if not store.enabled()`: 503 — scoped to the **three handled event types only**, not the lifespan and not unknown events, because ledger-less mode is a deliberate feature of the rest of the API (`store.py:9-11`) and pre-existing deliveries without an event header must keep answering 202.
 
 ---
 
@@ -552,7 +573,7 @@ def apply(engine) -> list[int]:
 - [ ] **Step 4: Run tests to verify they fail on the right thing now**
 
 Run: `cd api && uv run pytest tests/test_migrations.py -q`
-Expected: `test_apply_adds_the_columns_to_a_database_built_by_an_older_schema` and `test_apply_reports_only_newly_applied_versions` PASS; the three tests that go through `store.metadata` FAIL — `AssertionError` on `APP_COLUMNS <= _columns(...)` and `assert altered == APP_COLUMNS`, because `store.verdicts` does not declare the columns yet and `_get_engine` does not call `apply`. Cycle B closes them.
+Expected: 2 passed, 3 failed. `test_apply_adds_the_columns_to_a_database_built_by_an_older_schema` and `test_apply_reports_only_newly_applied_versions` PASS — neither consults `store.verdicts`. The other three fail, in two different ways: the two that assert against `store.metadata` fail on `AssertionError: assert {'github_repo_id', 'installation_id', 'head_sha', 'source'} <= {...}` because `store.verdicts` does not declare the columns yet, and `test_get_engine_applies_migrations` fails on `sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: schema_migrations` because `_get_engine` does not call `apply` yet. Cycle B closes all three.
 
 #### Cycle B — the schema and the hook
 
@@ -623,7 +644,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 ```
 
-In the import block, add `BigInteger` after `JSON,` (line 24), and replace lines 33-38:
+In the import block, add `BigInteger` after `JSON,` (line 24), and replace lines 32-37:
 ```python
     Table,
     Text,
@@ -788,7 +809,7 @@ with:
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_migrations.py tests/test_store.py -q`
-Expected: all pass — 6 migration tests, 20 store tests.
+Expected: all pass — 5 migration tests, 22 store tests (20 pre-existing + the 2 just appended).
 
 #### Cycle C — the installation helpers
 
@@ -948,7 +969,7 @@ def set_installation_repos(
 - [ ] **Step 12: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest -q && uv run ruff check .`
-Expected: full suite green (24 tests in `test_store.py`, 6 in `test_migrations.py`); ruff clean.
+Expected: full suite green (26 tests in `test_store.py`, 5 in `test_migrations.py`); ruff clean.
 
 - [ ] **Step 13: Commit**
 
@@ -979,10 +1000,16 @@ git push
   def enqueue(installation_id: int, github_repo_id: int, repo_full_name: str,
               pr_number: int, head_sha: str) -> int | None
   def claim() -> dict | None
+  def release(job_id: int) -> None
   def complete(job_id: int, verdict_id: int | None) -> None
+  def supersede(job_id: int) -> None
   def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None
   ```
-  Task 5 (`worker.drain`, `worker.process_job`) and Task 6 (webhook handler) call all four. `claim()` returns a plain dict, not a Row, so the worker can hold it after the connection closes; it carries every `review_jobs` column, so `job["id"]` is the primary key Task 5 passes back to `complete`/`fail`.
+  Task 6's webhook handler calls `enqueue`. Task 5 calls the rest: `drain` uses `claim`/`release` (it claims before it can tell whether its seen-set already holds the job, so the claim has to be undoable without charging an attempt), and `process_job` uses `complete`/`supersede`/`fail` — `supersede` being the stale-head guard's terminal state, which is neither done nor failed. `claim()` returns a plain dict, not a Row, so the worker can hold it after the connection closes; it carries every `review_jobs` column, so `job["id"]` is the primary key Task 5 passes back to `complete`/`fail`.
+- **`enqueue` returns `None` only when the SHA needs no new work.** The unique index carries no status column, so a row that ended `'failed'` or `'superseded'` collides exactly like a reviewed one. Colliding with either of those revives it — `status='pending'`, `attempts=0`, `error=NULL`, `enqueued_at=now` — and returns its existing id; `'pending'`, `'running'` and `'done'` still return `None`. Task 7's reconcile depends on this: without it a PR whose review failed could never be healed, on any restart. The bound on the bad case is `max_attempts` retries per reconcile, not unbounded retrying.
+- **Supersede runs after the insert, inside the same transaction.** Nothing is superseded on the collision path. It is a spend optimisation for the ordinary in-order burst, not the mechanism that decides which SHA gets reviewed — Task 5's `process_job` re-checks the PR's real head before paying for a read, and re-enqueues (reviving, per above) when it differs.
+- **`fail` bumps `enqueued_at` when it re-pends**, and `claim` orders by `(enqueued_at, id)`, so a re-pended job sorts behind existing work instead of ahead of it. That alone does not stop a drain from re-claiming the only pending row inside one pass; Task 5's `drain` keeps a seen-set for that. Both halves are needed and Task 5 verified the composition: with the seen-set but without this bump, its two-job test yields `drain() == 1` — the poison job is re-claimed at once, the seen-set breaks the loop, and the healthy second job never runs. Do not drop the bump as a redundant write.
+- **`release` deliberately leaves `enqueued_at` alone**, unlike `fail`. Nothing was attempted, so the job keeps its place in the queue.
 - **One point the locked contract left open:** `enqueue` raises `RuntimeError` when `DATABASE_URL` is unset. `None` already means "already queued", so a no-op return would make an unconfigured deployment answer 202 to every delivery while reviewing nothing. In practice Task 6 guards this at the edge — `if not store.enabled(): raise HTTPException(503, "no ledger configured")`, placed after the ping early-return — so the raise here is a backstop, not the path a delivery normally takes. `claim()` keeps the no-op (returns `None`), which makes `drain` a safe no-op on a ledger-less deployment; Task 5 wraps it in no try/except for that reason.
 
 - [ ] **Step 1: Write the failing test**
@@ -1087,11 +1114,16 @@ def test_fail_re_pends_below_the_cap_and_gives_up_at_it(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
 
+    queued_at = {j["id"]: j for j in _jobs(url)}[job_id]["enqueued_at"]
     ingest.fail(job_id, "read timed out")
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 1
     assert row["error"] == "read timed out"
     assert row["started_at"] is None  # re-pended, not still running
+    # Behind the rest of the queue, not back at its head: claim() orders by
+    # enqueued_at, so an untouched timestamp hands the job straight back and
+    # burns all three attempts in one drain, in milliseconds.
+    assert row["enqueued_at"] > queued_at
 
     ingest.fail(job_id, "read timed out")
     ingest.fail(job_id, "read timed out")
@@ -1131,6 +1163,104 @@ def test_enqueue_without_a_ledger_refuses_loudly(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
         ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+
+
+def test_a_failed_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
+    """The unique index carries no status column, so a row that gave up blocks
+    re-insertion exactly like a reviewed one. Reconcile exists to heal PRs
+    whose review never landed — a deploy that wiped the App credentials, a
+    provider outage — and if a collision with a 'failed' row returned None it
+    would heal nothing, permanently, on that PR and every restart after."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "credentials missing")
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "failed"
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "pending" and row["attempts"] == 0
+    assert row["error"] is None and row["finished_at"] is None
+    # One row, not two: revival reuses the row the index collided with.
+    assert len(_jobs(url)) == 1
+
+
+def test_a_superseded_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
+    """GitHub does not order deliveries, so the SHA that lost the supersede
+    race can be the PR's real head. The worker re-enqueues whatever head it
+    finds, and that call has to be able to bring the row back."""
+    url = _db(tmp_path, monkeypatch)
+    first = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+    assert {j["id"]: j for j in _jobs(url)}[first]["status"] == "superseded"
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == first
+    assert {j["id"]: j for j in _jobs(url)}[first]["status"] == "pending"
+
+
+def test_running_and_finished_jobs_are_never_revived(tmp_path, monkeypatch):
+    """Only the two states that mean "queued and never reviewed" come back.
+    Reviving in-flight or completed work is exactly the duplicate spend the
+    unique index exists to prevent."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    ingest.claim()
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "running"
+
+    ingest.complete(job_id, None)
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "done"
+
+
+def test_a_replayed_older_delivery_leaves_the_newer_job_pending(tmp_path, monkeypatch):
+    """Supersede runs after the insert lands, not before it. Running it first
+    meant a redelivered older push superseded the newer pending job and then
+    collided on its own row, leaving the PR with nothing pending and no
+    further delivery coming to fix it."""
+    url = _db(tmp_path, monkeypatch)
+    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    newer = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+
+    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)  # the replay
+    assert {j["id"]: j["status"] for j in _jobs(url)}[newer] == "pending"
+
+
+def test_release_returns_a_claimed_job_without_charging_an_attempt(tmp_path, monkeypatch):
+    """drain has to claim a job before it can tell whether it already ran it
+    this pass. Undoing that claim cannot cost an attempt — the job was never
+    attempted, and charging it would retire a healthy PR after three drains
+    that never touched it."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    queued_at = {j["id"]: j for j in _jobs(url)}[job_id]["enqueued_at"]
+    ingest.claim()
+
+    ingest.release(job_id)
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "pending" and row["attempts"] == 0
+    assert row["started_at"] is None
+    # Keeps its place, unlike a failure: nothing was attempted.
+    assert row["enqueued_at"] == queued_at
+    assert ingest.claim()["id"] == job_id
+
+
+def test_supersede_retires_a_job_whose_sha_is_no_longer_the_head(tmp_path, monkeypatch):
+    """The worker's stale-head guard needs a terminal state that is honest:
+    not 'done', because no verdict exists, and not 'failed', because nothing
+    went wrong. Revivable, so a force-push back to this SHA re-queues the row
+    instead of colliding with it forever."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    ingest.claim()
+
+    ingest.supersede(job_id)
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "superseded" and row["finished_at"] is not None
+    assert row["verdict_id"] is None
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1163,12 +1293,25 @@ from sqlalchemy.exc import IntegrityError
 
 from . import store
 
+# The two states a collision may revive. Both mean "this SHA was queued and
+# never reviewed"; every other state means the work is queued, in flight, or
+# already paid for.
+REVIVABLE = ("failed", "superseded")
+
 
 def _engine():
     engine = store._get_engine()
     if engine is None:
         raise RuntimeError("review_jobs requires DATABASE_URL")
     return engine
+
+
+def _job_filter(installation_id: int, github_repo_id: int, pr_number: int):
+    return (
+        store.review_jobs.c.installation_id == installation_id,
+        store.review_jobs.c.github_repo_id == github_repo_id,
+        store.review_jobs.c.pr_number == pr_number,
+    )
 
 
 def enqueue(
@@ -1178,30 +1321,29 @@ def enqueue(
     pr_number: int,
     head_sha: str,
 ) -> int | None:
-    """Queue one head SHA for review. None means the row already existed.
+    """Queue one head SHA for review. None means this SHA needs no new work.
 
-    Older *pending* jobs for the same PR are superseded first: a five-commit
-    push burst enqueues five SHAs and only the last one is worth a model
-    call. Running and finished jobs are left alone — the first has already
-    been paid for and the second is a ledger fact.
+    A collision on the unique index is not automatically a duplicate. The
+    index carries no status column, so a row that ended 'failed' or
+    'superseded' blocks re-insertion exactly like a reviewed one — and those
+    are the two states reconcile exists to repair. Colliding with one revives
+    it rather than dropping the work; the cost of a permanently broken PR is
+    therefore max_attempts per reconcile, which is bounded, instead of never
+    being retried again on any restart.
+
+    Superseding older pending SHAs happens after the insert lands and in the
+    same transaction. Running it first meant a redelivered older push
+    superseded the newer pending job and then collided on its own row,
+    leaving the PR with nothing pending at all. It is a spend optimisation
+    for the ordinary in-order burst, not the thing that decides which SHA
+    gets reviewed: GitHub does not order deliveries, so worker.process_job
+    re-checks the PR's real head before paying for a read.
     """
     engine = _engine()
     now = datetime.now(UTC)
-    with engine.begin() as conn:
-        conn.execute(
-            update(store.review_jobs)
-            .where(
-                store.review_jobs.c.installation_id == installation_id,
-                store.review_jobs.c.github_repo_id == github_repo_id,
-                store.review_jobs.c.pr_number == pr_number,
-                store.review_jobs.c.head_sha != head_sha,
-                store.review_jobs.c.status == "pending",
-            )
-            .values(status="superseded", finished_at=now)
-        )
     try:
         with engine.begin() as conn:
-            return int(
+            job_id = int(
                 conn.execute(
                     store.review_jobs.insert().returning(store.review_jobs.c.id),
                     {
@@ -1216,12 +1358,61 @@ def enqueue(
                     },
                 ).scalar_one()
             )
+            conn.execute(
+                update(store.review_jobs)
+                .where(
+                    *_job_filter(installation_id, github_repo_id, pr_number),
+                    store.review_jobs.c.head_sha != head_sha,
+                    store.review_jobs.c.status == "pending",
+                )
+                .values(status="superseded", finished_at=now)
+            )
+            return job_id
     except IntegrityError:
-        return None
+        return _revive(engine, installation_id, github_repo_id, pr_number, head_sha, now)
+
+
+def _revive(
+    engine,
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    head_sha: str,
+    now: datetime,
+) -> int | None:
+    """Return a queued-but-unreviewed row to pending, or None if there is none.
+
+    The status test lives in the UPDATE's WHERE rather than in a SELECT before
+    it: a concurrent drain can claim or finish the row between the two, and a
+    zero-row result is the only reliable way to find out that it did.
+    """
+    with engine.begin() as conn:
+        job_id = conn.execute(
+            update(store.review_jobs)
+            .where(
+                *_job_filter(installation_id, github_repo_id, pr_number),
+                store.review_jobs.c.head_sha == head_sha,
+                store.review_jobs.c.status.in_(REVIVABLE),
+            )
+            .values(
+                status="pending",
+                attempts=0,
+                error=None,
+                enqueued_at=now,
+                started_at=None,
+                finished_at=None,
+            )
+            .returning(store.review_jobs.c.id)
+        ).scalar_one_or_none()
+    return int(job_id) if job_id is not None else None
 
 
 def claim() -> dict | None:
     """Take the oldest pending job, or None. Marks it running before returning.
+
+    Ordering is (enqueued_at, id), which is what makes fail()'s bump of
+    enqueued_at put a re-pended job behind the rest of the queue rather than
+    back at its head.
 
     On Postgres the select takes a row lock with SKIP LOCKED, so concurrent
     drains take different jobs instead of blocking on the same one. sqlite
@@ -1252,6 +1443,23 @@ def claim() -> dict | None:
         return {**row, "status": "running", "started_at": now}
 
 
+def release(job_id: int) -> None:
+    """Put a claimed job back without spending an attempt.
+
+    drain claims a job before it can tell whether it has already run it this
+    pass. Leaving the repeat 'running' strands it, and fail() would charge an
+    attempt against work nobody attempted. enqueued_at is deliberately
+    untouched — unlike a failure, nothing here justifies losing its place.
+    """
+    engine = _engine()
+    with engine.begin() as conn:
+        conn.execute(
+            update(store.review_jobs)
+            .where(store.review_jobs.c.id == job_id)
+            .values(status="pending", started_at=None)
+        )
+
+
 def complete(job_id: int, verdict_id: int | None) -> None:
     """Mark a job done. verdict_id is None when the review produced no ledger
     row — a skipped PR is finished, not failed."""
@@ -1261,6 +1469,22 @@ def complete(job_id: int, verdict_id: int | None) -> None:
             update(store.review_jobs)
             .where(store.review_jobs.c.id == job_id)
             .values(status="done", verdict_id=verdict_id, finished_at=datetime.now(UTC))
+        )
+
+
+def supersede(job_id: int) -> None:
+    """Retire a job whose head SHA is no longer the PR's.
+
+    Neither 'done' — there is no verdict — nor 'failed', since nothing went
+    wrong. It lands in a revivable state on purpose: a force-push back to
+    this SHA re-queues this row rather than being suppressed by it.
+    """
+    engine = _engine()
+    with engine.begin() as conn:
+        conn.execute(
+            update(store.review_jobs)
+            .where(store.review_jobs.c.id == job_id)
+            .values(status="superseded", finished_at=datetime.now(UTC))
         )
 
 
@@ -1279,24 +1503,26 @@ def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None:
             ).scalar_one()
             + 1
         )
-        exhausted = attempts >= max_attempts
+        values = {"attempts": attempts, "error": error[:500], "started_at": None}
+        if attempts >= max_attempts:
+            values |= {"status": "failed", "finished_at": now}
+        else:
+            # Back of the queue, not the front. claim() orders by
+            # (enqueued_at, id), so leaving enqueued_at alone hands the job
+            # straight back to the next claim and burns every attempt in one
+            # pass, before whatever was transient has any chance to clear.
+            # This orders it behind existing work; worker.drain's seen-set is
+            # what stops a re-claim when it is the only pending row.
+            values |= {"status": "pending", "enqueued_at": now}
         conn.execute(
-            update(store.review_jobs)
-            .where(store.review_jobs.c.id == job_id)
-            .values(
-                attempts=attempts,
-                status="failed" if exhausted else "pending",
-                error=error[:500],
-                started_at=None,
-                finished_at=now if exhausted else None,
-            )
+            update(store.review_jobs).where(store.review_jobs.c.id == job_id).values(**values)
         )
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_ingest.py -q && uv run pytest -q && uv run ruff check .`
-Expected: 9 passed in `test_ingest.py`; full suite green; ruff clean.
+Expected: 15 passed in `test_ingest.py`; full suite green; ruff clean.
 
 - [ ] **Step 5: Commit**
 
@@ -1304,9 +1530,11 @@ Expected: 9 passed in `test_ingest.py`; full suite green; ruff clean.
 git add api/doug/ingest.py api/tests/test_ingest.py
 git commit -m "Add durable review_jobs queue operations" -m "A webhook has to be answered in milliseconds and a review takes a model call, so the two cannot be the same request. These four operations are the whole seam: the handler enqueues and returns 202, a worker claims, runs, and reports back.
 
-Deduplication is the unique index rather than a check-then-insert, because two deliveries of one push do race and losing that race means paying for the same read twice. A new head SHA supersedes the pending job it replaces so a push burst costs one review, not one per commit — but only pending jobs, since a finished one is already a ledger fact.
+Deduplication is the unique index rather than a check-then-insert, because two deliveries of one push do race and losing that race means paying for the same read twice. But the index carries no status, so a collision alone does not mean the work is done: a row that ended failed or superseded is exactly the work reconcile exists to recover, and colliding with one revives it instead of dropping it. Only pending, running and done suppress.
 
-Claim is a write: on Postgres it takes the row with SKIP LOCKED so two drains never take the same job. Failures retry twice and then stop, because a job that retried forever would spend real money doing it.
+Supersede runs after the insert and in the same transaction. Running it first meant a redelivered older push superseded the newer pending job and then collided on its own row, leaving the PR with nothing pending and no further delivery coming. It is a spend optimisation for the ordinary burst; which SHA actually gets reviewed is decided by the worker re-checking the PR head, because GitHub does not order deliveries.
+
+Claim is a write: on Postgres it takes the row with SKIP LOCKED so two drains never take the same job. A re-pended failure goes to the back of the queue rather than the front, so three retries cannot burn in one pass before whatever was transient has a chance to clear. Release is its inverse, for the drain that claims a job before it can tell it has already run it — undoing that claim must not spend an attempt on work nobody attempted. Supersede is the honest terminal state for a job whose SHA is no longer the PR head: no verdict exists, so it is not done, and nothing went wrong, so it is not failed.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 git push
@@ -1559,7 +1787,10 @@ def render(
     if tier != "reader":
         lines += ["", FALLBACK_NOTE]
     if partial is not None:
-        lines += ["", f"> **Partial read.** {partial.label}"]
+        # The label already opens "Partial read:" — reader.truncation_reason
+        # writes the whole sentence. Adding a heading of our own printed the
+        # words twice and broke the caveat's own once-and-only-once rule.
+        lines += ["", f"> {partial.label}"]
 
     # Folded into the block above, so it is stated once — but only when that
     # block rendered, so it can never be lost instead.
@@ -1777,8 +2008,10 @@ git push
 - Consumes from Task 3 (`ingest.py`), confirmed against its draft:
   - `claim() -> dict | None` — a **plain dict** (not a `Row`; the worker holds it after the connection closes) carrying every `review_jobs` column, primary key under `"id"`. Returns `None` when the ledger is unconfigured, so `drain` is a safe no-op on a ledger-less deployment — do **not** wrap it in try/except for that case.
   - `complete(job_id, verdict_id)` — `review_jobs.verdict_id` is a `ForeignKey("verdicts.id")`, unenforced on sqlite and enforced on Postgres. Pass a real `save_review` return value or `None`, never a placeholder int; `complete(job_id, None)` is the intended path for a job that finished without a ledger row.
-  - `fail(job_id, error, *, max_attempts=3)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total.
+  - `fail(job_id, error, *, max_attempts=3)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
   - `enqueue(...) -> int | None` — `None` on the unique-index duplicate; **raises `RuntimeError` when `DATABASE_URL` is unset** (see Task 6, which guards that at the edge).
+  - `release(job_id)` and `supersede(job_id)` — **two additions Task 3 must carry for this task**; both are five-line siblings of `complete`. `release` returns a claimed job to `'pending'` with `started_at=None` and no attempt spent; `supersede` sets `'superseded'` with `finished_at`.
+- **The drain's retry behaviour is a two-part fix and neither half works alone.** `fail` re-pends a job, and `claim` takes the oldest pending, so a poison job is immediately re-claimed by the same pass: three attempts burn in under a second against a fault that has had no time to clear. Task 3's `enqueued_at=now` sends the re-pended job to the back so the drain reaches everything else first; Step 3's seen-set below stops the pass when it laps round to a job it already ran. Verified by running both: with the seen-set alone, `drain()` returns 1 instead of 2 on the two-job test and the second job never runs — the seen-set breaks the loop where the ordering change is what lets it get past.
 - Produces: `process_job(job: dict) -> int | None`; `drain(max_jobs: int = 20) -> int`. Task 6 calls `drain` from a `BackgroundTasks` kick; Task 7 adds `reconcile_installation` / `reconcile_all` to this module.
 
 **Fixture note:** DB tests use file-backed sqlite under `tmp_path` (`sqlite:///{tmp_path}/doug.db`), the pattern at `test_store.py:37-41`. Plain in-memory `sqlite://` gives each connection its own database, which breaks the moment `drain` runs from a background thread — verified: SQLAlchemy uses `QueuePool` for file sqlite and cross-thread writes work.
@@ -1796,6 +2029,7 @@ scoring, intent read, check run) and assert on what survives in the
 ledger, because the ledger row is the product — the check run is a copy.
 """
 
+import os
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine, select
@@ -1850,11 +2084,37 @@ def _pr() -> PRMetadata:
     )
 
 
-def _wire(monkeypatch, *, tier="reader", intent=None, fetch=None) -> list[dict]:
+def _gh(heads: dict[int, str] | None = None):
+    """A client whose pulls.get reports the PR's current head SHA.
+
+    By default that is the head of the newest job queued for the PR — the
+    branch has not moved since enqueue, which is the ordinary case and
+    keeps every other test free of SHA bookkeeping. `heads` moves it, which
+    is how a test simulates a push landing between enqueue and claim.
+    """
+    heads = heads or {}
+
+    def _get(*, owner, repo, pull_number):
+        sha = heads.get(pull_number)
+        if sha is None:
+            with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
+                sha = conn.execute(
+                    select(store.review_jobs.c.head_sha)
+                    .where(store.review_jobs.c.pr_number == pull_number)
+                    .order_by(store.review_jobs.c.id.desc())
+                    .limit(1)
+                ).scalar_one()
+        return SimpleNamespace(parsed_data=SimpleNamespace(head=SimpleNamespace(sha=sha)))
+
+    return SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get)))
+
+
+def _wire(monkeypatch, *, tier="reader", intent=None, fetch=None, heads=None) -> list[dict]:
     """Cut every seam that would touch the network. Returns the posted
     check runs, which is what a caller of this pipeline can observe."""
     posted: list[dict] = []
-    monkeypatch.setattr(app_auth, "installation_client", lambda i: SimpleNamespace(inst=i))
+    gh = _gh(heads)
+    monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
     monkeypatch.setattr(
         review,
@@ -1977,6 +2237,28 @@ def process_job(job: dict) -> int | None:
     """Run one job end to end and mark it done. Returns the verdict id."""
     gh = app_auth.installation_client(job["installation_id"])
     owner, name = job["repo_full_name"].split("/", 1)
+
+    # Read the PR's current head before spending anything on it. A job can
+    # sit in the queue behind a backlog, or be re-pended by a retry, long
+    # enough for the branch to move — and fetch_pr would then read the NEW
+    # diff while every identity column, the unique index and the check run
+    # still said the old SHA. That mislabels a read rather than losing one,
+    # which is worse: the verdict looks like evidence about a commit it
+    # never saw. The SHA that overtook this one gets its own job.
+    current = gh.rest.pulls.get(
+        owner=owner, repo=name, pull_number=job["pr_number"]
+    ).parsed_data.head.sha
+    if current != job["head_sha"]:
+        ingest.supersede(job["id"])
+        ingest.enqueue(
+            job["installation_id"],
+            job["github_repo_id"],
+            job["repo_full_name"],
+            job["pr_number"],
+            current,
+        )
+        return None
+
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
     tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
@@ -2029,10 +2311,20 @@ def drain(max_jobs: int = 20) -> int:
     opened after it.
     """
     attempted = 0
+    seen: set[int] = set()
     while attempted < max_jobs:
         job = ingest.claim()
         if job is None:
             break
+        if job["id"] in seen:
+            # Lapped the queue: ingest.fail re-pends a job below the attempt
+            # cap, so the only thing left to claim is something this pass
+            # already failed. Retrying it here is not a retry — nothing has
+            # had time to change — and it would burn the whole attempt
+            # budget against one transient fault in under a second.
+            ingest.release(job["id"])
+            break
+        seen.add(job["id"])
         attempted += 1
         try:
             process_job(job)
@@ -2201,12 +2493,58 @@ def test_drain_stops_at_max_jobs(tmp_path, monkeypatch):
     assert worker.drain(max_jobs=2) == 2
     statuses = sorted(r["status"] for r in _rows(url, store.review_jobs))
     assert statuses == ["done", "done", "pending"]
+
+
+def test_a_failed_job_is_not_retried_inside_the_same_pass(tmp_path, monkeypatch):
+    """ingest.fail re-pends a job below the attempt cap, and the drain
+    claims whatever is pending — so without a guard one poison job is
+    claimed, failed, re-pended and re-claimed until its three attempts are
+    gone, inside a single pass lasting under a second. That is not a retry
+    policy; nothing has had time to change. Spreading the attempts across
+    passes is what makes "transient" a hypothesis worth holding."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+
+    def _fetch(gh, owner, repo, number):
+        raise RuntimeError("502 from GitHub")
+
+    monkeypatch.setattr(review, "fetch_pr", _fetch)
+    ingest.enqueue(**JOB)
+
+    assert worker.drain() == 1
+    (j,) = _rows(url, store.review_jobs)
+    assert j["attempts"] == 1
+    # Released, not left running: the next pass has to be able to claim it.
+    assert j["status"] == "pending" and j["started_at"] is None
+
+
+def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monkeypatch):
+    """A job can wait behind a backlog, or be re-pended by a retry, long
+    enough for the branch to move. fetch_pr would then read the NEW diff
+    while the identity columns, the unique index and the check run all
+    still said the old SHA — a verdict labelled as evidence about a commit
+    it never saw. Losing the read would be better than mislabelling it;
+    doing neither is better still."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch, heads={7: "c" * 40})
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    jobs = {j["head_sha"]: j for j in _rows(url, store.review_jobs)}
+    assert jobs["a" * 40]["status"] == "superseded"
+    assert jobs["c" * 40]["status"] == "pending"
+    # Nothing was paid for and nothing was published against the stale SHA.
+    assert _rows(url, store.verdicts) == []
+    assert posted == []
 ```
 
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_worker.py -q`
-Expected: 12 passed. Then `cd api && uv run ruff check .` — clean.
+Expected: 14 passed (this task's whole contribution to the file). Then `cd api && uv run ruff check .` — clean. Task 7 adds its five reconcile tests to this same file later, taking it to 19 — so a count of 19 here means Task 7 has already landed, not that something is wrong.
+
+`test_a_failing_job_does_not_strand_the_queue` is the one that fails if Task 3's `enqueued_at=now` bump in `fail` is missing: `drain()` returns 1 instead of 2 and the second job never runs. That is the intended signal, not a flaky test — do not weaken the assertion, land the Task 3 half.
 
 - [ ] **Step 9: Run the full suite**
 
@@ -2229,10 +2567,16 @@ job and ingest.fail decides retry. save_deviations keeps the swallow: it
 is a separate write (ADR-0007) and retrying it would re-run a paid read to
 recover a row the risk verdict does not depend on.
 
-The check run is posted against the job's head SHA, not the PR's current
-one — by the time a job runs, pulls.get may already return a newer commit,
-and that commit has its own job. drain is bounded and catches per job, so
-one poison job cannot stop an installation from being reviewed." \
+A job whose head SHA is no longer the PR's is superseded and the current
+one requeued, rather than read. Reading the new diff under the old SHA
+would mislabel a verdict as evidence about a commit it never saw, which is
+worse than not producing one; the check run is posted against the job's
+SHA for the same reason.
+
+drain is bounded, catches per job, and refuses to re-claim a job it
+already failed this pass — with ingest.fail re-pending below the attempt
+cap, one poison job would otherwise burn all three attempts in under a
+second and call that a retry policy." \
   -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 git push
 ```
@@ -2378,7 +2722,7 @@ Replace `api.py:26`:
 app = FastAPI(title="Doug", version=__version__)
 ```
 
-with:
+with the following — note it needs **two** blank lines after `from .scoring import default_threshold, score`, not the one the replaced statement had. A decorated top-level function on one blank line is an `I001` from ruff, which is how this was caught:
 
 ```python
 @asynccontextmanager
@@ -2424,6 +2768,12 @@ def _hook_env(tmp_path, monkeypatch) -> list:
     asserted on and run it against a monkeypatch-free pipeline."""
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    # Materialise the schema here rather than leaving it to whichever
+    # request happens to write first. The tests that assert a delivery
+    # wrote NOTHING (401s, ignored events, drafts, forks) never reach a
+    # write, so without this _table() opens an empty sqlite file and the
+    # assertion dies on "no such table" instead of passing.
+    assert store.enabled()
     kicks: list = []
     monkeypatch.setattr(worker, "drain", lambda *a, **k: kicks.append("drain"))
     monkeypatch.setattr(worker, "reconcile_installation", lambda i: kicks.append(i))
@@ -2475,8 +2825,9 @@ def test_installation_created_records_the_account_and_its_repos(tmp_path, monkey
     assert repos[987]["full_name"] == "drewjst/doug"
     assert all(r["state"] == "active" for r in repos.values())
     # Reconcile is queued, not run inline: it lists open PRs over the
-    # network and the 202 must not wait on it.
-    assert kicks == [150424894]
+    # network and the 202 must not wait on it. The drain is chained behind
+    # it inside the same task — see the dedicated test below.
+    assert kicks == [150424894, "drain"]
 
 
 def test_installation_deleted_flips_state_without_dropping_history(tmp_path, monkeypatch):
@@ -2537,6 +2888,31 @@ def test_installation_repositories_merges_both_deltas(tmp_path, monkeypatch):
     repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
     assert repos[987]["state"] == "removed"
     assert repos[988]["state"] == "active"
+
+
+def test_a_new_installation_reviews_its_backlog_without_waiting(tmp_path, monkeypatch):
+    """reconcile_installation only enqueues. Chaining the drain behind it is
+    what makes the cutover's "a check run appears within seconds of
+    installing" true — otherwise a fresh install's whole backlog sits
+    pending until somebody happens to open the next PR, which on a quiet
+    repo can be days. Order matters: draining first would drain an empty
+    queue."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert kicks == [150424894, "drain"]
+
+
+def test_only_a_new_installation_kicks_reconcile(tmp_path, monkeypatch):
+    """Suspend/unsuspend/delete change state and nothing else. Reconciling on
+    them would list every open PR of an installation that just told us to
+    stop looking at it."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    for action in ("suspend", "unsuspend", "deleted"):
+        _webhook("installation", {"action": action, "installation": INSTALLATION})
+    assert kicks == []
 ```
 
 - [ ] **Step 6: Run test to verify it fails**
@@ -2588,6 +2964,20 @@ def _merge_installation_repos(payload: dict) -> None:
             # A removal marks state and never deletes: verdicts already
             # written must still resolve to the repo they describe.
             store.set_installation_repos(inst_id, repos, replace=False, state=state)
+
+
+def _reconcile_then_drain(installation_id: int) -> None:
+    """Heal the backlog, then actually review it.
+
+    reconcile_installation only enqueues. Without the drain chained behind
+    it, everything a new installation just discovered sits pending until
+    some unrelated delivery happens to kick one — which on a quiet repo is
+    the difference between "reviews appear within seconds of installing"
+    and "reviews appear whenever someone next opens a PR". The cutover
+    checklist in Task 10 asserts the first.
+    """
+    worker.reconcile_installation(installation_id)
+    worker.drain()
 
 
 def _enqueue_pull_request(payload: dict) -> int | None:
@@ -2660,9 +3050,20 @@ async def github_webhook(
         return Response(status_code=202)
 
     action = payload.get("action", "")
-    if x_github_event == "ping":
-        # The App's connectivity test. It needs neither a tenant nor a
-        # ledger, so it is answered before both checks below.
+    # The gating table, evaluated once and before any guard that touches the
+    # store. An event we do not handle — ping, push, an action outside the
+    # table — must not depend on a ledger it never reaches. Scoping this
+    # narrowly is load-bearing: the pre-existing
+    # test_webhook_accepts_a_valid_sha256_signature posts a valid signature
+    # with no event header and no database, and must still get its 202.
+    handled = (
+        (x_github_event == "installation" and action in INSTALLATION_STATES)
+        or (x_github_event == "installation_repositories" and action in ("added", "removed"))
+        or (x_github_event == "pull_request" and action in PR_ACTIONS)
+    )
+    if not handled:
+        # Accepted and ignored, on purpose: a 4xx would put GitHub into a
+        # redelivery loop over events we chose not to handle.
         return Response(status_code=202)
     if not store.enabled():
         # ingest.enqueue raises without a database rather than no-opping,
@@ -2681,21 +3082,19 @@ async def github_webhook(
         # GitHub would redeliver into the same 500.
         return Response(status_code=202)
 
-    if x_github_event == "installation" and action in INSTALLATION_STATES:
+    if x_github_event == "installation":
         await run_in_threadpool(_record_installation, payload, action)
         if action == "created":
             # Heal what the App missed before it was installed. Queued, not
             # inline: it lists every open PR over the network.
-            background.add_task(worker.reconcile_installation, inst["id"])
-    elif x_github_event == "installation_repositories" and action in ("added", "removed"):
+            background.add_task(_reconcile_then_drain, inst["id"])
+    elif x_github_event == "installation_repositories":
         await run_in_threadpool(_merge_installation_repos, payload)
-    elif x_github_event == "pull_request" and action in PR_ACTIONS:
+    elif x_github_event == "pull_request":
         job_id = await run_in_threadpool(_enqueue_pull_request, payload)
         if job_id is not None:
             background.add_task(worker.drain)
 
-    # Everything else is accepted and ignored, on purpose: a 4xx would put
-    # GitHub into a redelivery loop over events we chose not to handle.
     return Response(status_code=202)
 ```
 
@@ -2814,7 +3213,8 @@ def test_unhandled_pull_request_actions_are_accepted_and_ignored(tmp_path, monke
 def test_unhandled_events_are_accepted_and_ignored(tmp_path, monkeypatch):
     _hook_env(tmp_path, monkeypatch)
     for event in ("push", "check_suite", "issues", "installation_target"):
-        assert _webhook(event, {"action": "created", "installation": INSTALLATION}).status_code == 202
+        r = _webhook(event, {"action": "created", "installation": INSTALLATION})
+        assert r.status_code == 202
     assert _table(tmp_path, store.review_jobs) == []
     assert _table(tmp_path, store.installations) == []
 
@@ -2894,12 +3294,15 @@ def test_ping_answers_even_without_a_ledger(monkeypatch):
 - [ ] **Step 12: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_api.py -q`
-Expected: all pass. If `test_installation_created_records_the_account_and_its_repos` errors with `AttributeError: <module 'doug.worker'> has no attribute 'reconcile_installation'`, Task 7 has not landed — implement it first rather than adding `raising=False`.
+Expected: all pass — 24 tests added by this task, on top of the file's pre-existing ones. If `test_installation_created_records_the_account_and_its_repos` errors with `AttributeError: <module 'doug.worker'> has no attribute 'reconcile_installation'`, Task 7 has not landed — implement it first rather than adding `raising=False`.
 
 - [ ] **Step 13: Run the full suite and the linter**
 
 Run: `cd api && uv run pytest -q && uv run ruff check .`
-Expected: all green, no skips, no lint findings. Confirm the two pre-existing 503 tests (`test_webhook_refuses_when_secret_unconfigured`, `test_webhook_refuses_signed_body_when_secret_unconfigured` at `test_api.py:66-81`) still pass — they cover the retained defence-in-depth guard and are not deleted. Note that `store.enabled()` caches its engine in a module global keyed on the URL (`store.py:129-140`), so run the file in one process rather than reasoning about test order: each `_hook_env` gets its own `tmp_path` URL and therefore its own engine.
+Expected: all green, no skips, no lint findings. Three pre-existing tests must still pass **unchanged**, and each one pins something this task could have broken:
+
+- `test_webhook_refuses_when_secret_unconfigured` and `test_webhook_refuses_signed_body_when_secret_unconfigured` (`test_api.py:66-81`) — the retained defence-in-depth 503. Not deleted.
+- `test_webhook_accepts_a_valid_sha256_signature` (`test_api.py:97-105`) — a valid signature, **no** `X-GitHub-Event` header and **no** `DATABASE_URL`, expecting 202. This is why the no-ledger 503 is scoped to handled events only; an unscoped guard turns this green test red, which is exactly how the scoping bug was found. Note that `store.enabled()` caches its engine in a module global keyed on the URL (`store.py:129-140`), so run the file in one process rather than reasoning about test order: each `_hook_env` gets its own `tmp_path` URL and therefore its own engine.
 
 - [ ] **Step 14: Commit**
 
@@ -2924,10 +3327,17 @@ visible failure, a service accepting forged deliveries is not. The
 request-time 503 stays as defence in depth, since verify() with an empty
 key is forgeable and a lifespan can be bypassed.
 
-The endpoint also 503s without a ledger, where a 202 would claim work was
-queued into nothing. That check is scoped here rather than added to the
-lifespan: DATABASE_URL is optional for the rest of the service by design,
-and /v1/score and the fixture-backed queue must keep working without it." \
+A handled event with no ledger 503s, where a 202 would claim work was
+queued into nothing. That check is scoped two ways: to this endpoint
+rather than the lifespan, because DATABASE_URL is optional for the rest of
+the service by design; and to the three handled event types, because an
+event we ignore never touches the store and must not start depending on
+one.
+
+installation.created chains the drain behind reconcile in the same
+background task. Reconcile only enqueues, so without it a new install's
+backlog waits for an unrelated delivery to kick it — days, on a quiet
+repo." \
   -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 git push
 ```
@@ -2941,7 +3351,16 @@ git push
 
 **Interfaces:**
 - Consumes: `app_auth.installation_client(installation_id) -> GitHub`; `ingest.enqueue(installation_id, github_repo_id, repo_full_name, pr_number, head_sha) -> int | None`; `worker.drain(max_jobs=20) -> int`; the `installations` / `installation_repos` tables from Task 2.
-- Produces: `reconcile_installation(installation_id) -> int`, `reconcile_all() -> int` (locked); plus two new store readers, `store.active_installations() -> list[int]` and `store.active_repos(installation_id) -> list[tuple[int, str]]`. **These two are additions, not renames** — the locked block gives writers (`upsert_installation`, `set_installation_repos`) but no reader, and reconcile cannot work without one. Task 6 calls `reconcile_installation` on `installation.created`.
+- Produces: `reconcile_installation(installation_id) -> int`, `reconcile_all() -> int` (locked); plus two new store readers:
+
+```python
+def active_installations() -> list[int]                        # NOT list[dict]
+def active_repos(installation_id: int) -> list[tuple[int, str]]  # NOT list[dict]
+```
+
+  **These two are additions, not renames** — the locked block gives writers (`upsert_installation`, `set_installation_repos`) but no reader, and reconcile cannot work without one. Task 6 calls `reconcile_installation` on `installation.created`.
+
+  **The types above are load-bearing; do not "correct" them to `list[dict]`.** `reconcile_installation` destructures the result directly — `for repo_id, full_name in store.active_repos(installation_id)` — which a list of dicts would not unpack, and `reconcile_all` iterates ids as bare ints. If the Locked Interfaces header block disagrees, the header is the stale copy: these signatures are the ones Task 7's tests exercise.
 
 **On the `enqueue` dedupe claim (verified against the locked semantics, not assumed):** the unique index is `(installation_id, github_repo_id, pr_number, head_sha)` and carries **no status column**. So a job that already ran to `done` collides on insert exactly like a `pending` one, and `enqueue` returns `None`. That collision *is* the dedupe reconcile needs — a head SHA reviewed once is never reviewed again, and a restart against a repo with 40 quiet open PRs enqueues nothing and spends nothing. The `supersede` half of `enqueue` only touches still-`pending` jobs with a *different* head SHA, so it cannot resurrect finished work either.
 
@@ -2983,9 +3402,9 @@ def test_reconcile_enqueues_open_prs_and_skips_drafts(tmp_path, monkeypatch):
 
 
 def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
-    """A fork's raw diff enters the prompt (reader.py:169-176). An outside
-    contributor must not be able to drive spend by opening a PR during the
-    window when Doug is restarting and reconciling."""
+    """A fork's raw diff enters the prompt (_user_text, reader.py:179-187).
+    An outside contributor must not be able to drive spend by opening a PR
+    during the window when Doug is restarting and reconciling."""
     _installed(tmp_path, monkeypatch)
     monkeypatch.setattr(
         worker.app_auth, "installation_client",
@@ -3112,9 +3531,10 @@ def _skip_reason(p) -> str | None:
         return "draft"
     head_id = getattr(getattr(getattr(p, "head", None), "repo", None), "id", None)
     base_id = getattr(getattr(getattr(p, "base", None), "repo", None), "id", None)
-    # A fork's raw diff enters the prompt (reader.py:169-176), so an outside
-    # contributor must not be able to drive spend. UNSET or missing ids are
-    # treated as a fork: the safe direction to be wrong in is "skip".
+    # A fork's raw diff enters the prompt (_user_text, reader.py:179-187),
+    # so an outside contributor must not be able to drive spend. UNSET or
+    # missing ids are treated as a fork: the safe direction to be wrong in
+    # is "skip".
     if not isinstance(head_id, int) or not isinstance(base_id, int):
         return "fork"
     return "fork" if head_id != base_id else None
@@ -3247,12 +3667,16 @@ git push
 **Files:**
 - Create: `docs/decisions/ADR-0010-surface-is-a-neutral-check-run.md`
 - Modify: `docs/decisions/ADR-0003-ci-surface-is-job-summary-only.md:1-5` (frontmatter only)
+- Modify: `docs/decisions/ADR-0007-deviation-is-a-separate-stream.md:20-23`, `:25-27`, `:43-44` (surface references only; the decision is unchanged and it stays `accepted`)
+- Test: `api/tests/test_intent.py:202` — the ADR-0003 flip changes what Doug's own selector returns, and this is the one test that reads the real records
 
 **Interfaces:**
 - Consumes: the frontmatter contract in `docs/decisions/README.md:17-38`, as actually parsed by `intent_providers.parse_record` (`api/doug/intent_providers.py:40-79`) — `status` and `title` are both required or the record returns `None` and is skipped silently; the `ADR-\d+` id comes from the filename stem (`intent_providers.py:68-71`), so the filename is part of the contract.
 - Produces: an `accepted` record that Doug's own intent tier will read, and an ADR-0003 that it will not. `intent.select` filters on `d.status.lower() == BINDING` where `BINDING = "accepted"` (`api/doug/intent.py:48,111`) — this flip is the mechanism, not documentation of one.
 
 **Why this ships in the same push as the check-run code:** while ADR-0003 stays `accepted`, it is fed to the reader as binding policy, and it says in as many words that Doug "never posts a check run". A PR adding `check_run.py` would then be flagged by Doug as deviating from Doug's own decisions — a confident false finding, which is the exact failure `docs/decisions/README.md:8-11` warns about.
+
+The same argument applies to ADR-0007, which is why Step 3 is here rather than in a follow-up. ADR-0007 does not need superseding — deviations still never move the score — but it describes the job summary as the live rendering surface three times, and it is the record most likely to be retrieved on any PR touching `check_run.py` or `deviations`. Two records, two different fixes: ADR-0003's *decision* expired, so its status flips; ADR-0007's decision holds and only its prose is stale, so its status does not.
 
 - [ ] **Step 1: Write ADR-0010.** Create `docs/decisions/ADR-0010-surface-is-a-neutral-check-run.md` with exactly this content:
 
@@ -3373,7 +3797,87 @@ date: 2026-07-29
 
 Nothing below the frontmatter changes. The record stays on disk in full — its precision argument is the reason ADR-0010's conclusion is `neutral`, and deleting it would erase why.
 
-- [ ] **Step 3: Verify both records parse and the binding set is right.** Run:
+- [ ] **Step 3: Correct ADR-0007's surface references.** Same staleness class as the ADR-0008 correction in Task 9, and a worse instance of it: ADR-0007 stays `accepted` (correctly — deviations still never move the score), so it keeps reaching the reader, and it is the record most likely to score relevant on any PR touching `check_run.py` or `deviations`. It currently describes a job summary that Task 9 deletes. Three edits; the Decision, Rejected, and score-isolation content are untouched.
+
+`docs/decisions/ADR-0007-deviation-is-a-separate-stream.md:20-23`, currently:
+
+```markdown
+Deviation findings and `intent_alignment` are written to their own
+`deviations` table and never contribute to `risk_score` or `band`. They
+render as a separate block in the CI job summary, each line carrying the
+decision reference so the claim can be checked against the record.
+```
+
+becomes:
+
+```markdown
+Deviation findings and `intent_alignment` are written to their own
+`deviations` table and never contribute to `risk_score` or `band`. They
+render as a separate advisory section of the check run (ADR-0010), each
+line carrying the decision reference so the claim can be checked against
+the record.
+```
+
+`:25-27`, currently:
+
+```markdown
+The feature ships on from the first merge. There is no staged rollout,
+because Doug never blocks and every verdict it emits is already
+advisory — a deviation in a job summary cannot hurt anyone.
+```
+
+becomes:
+
+```markdown
+The feature ships on from the first merge. There is no staged rollout,
+because Doug never blocks and every verdict it emits is already
+advisory — a deviation on a neutral check run cannot hurt anyone.
+```
+
+`:43-44`, the first Consequences bullet, currently:
+
+```markdown
+- Two streams to reason about, and a reader of the job summary has to
+  understand that one of them does not affect routing.
+```
+
+becomes:
+
+```markdown
+- Two streams to reason about, and a reader of the check run has to
+  understand that one of them does not affect routing.
+```
+
+ADR-0007 keeps `status: accepted` and gets no `superseded_by`. Nothing about the decision expired — only the surface it was written against.
+
+- [ ] **Step 4: Update the selection test the flip breaks.** `api/tests/test_intent.py:187-216` (`test_selection_on_dougs_own_records`) is the only test that reads the real `docs/decisions/` tree — `_real_records()` at `:175-184` is called from `:195` and nowhere else. Its line 202 asserts that a PR about posting verdicts as comments selects ADR-0003, which stops being true the moment ADR-0003 leaves the binding set. **This is the test doing its job, not collateral damage:** it exists to pin that the right record surfaces for a change, and the right record just changed.
+
+Replace `api/tests/test_intent.py:202`, currently:
+
+```python
+    assert sent("Post Doug verdicts as PR comments", [".github/workflows/x.yml"])[0] == "ADR-0003"
+```
+
+with:
+
+```python
+    # ADR-0003 used to answer this and is now superseded by ADR-0010. A
+    # superseded record must stop steering the reader: left binding, it
+    # would have Doug flag its own check-run code as deviating from a rule
+    # the team already dropped — the failure intent.BINDING exists to
+    # prevent, and the reason the status flip ships with the code.
+    comments = sent("Post Doug verdicts as PR comments", [".github/workflows/x.yml"])
+    assert comments[0] == "ADR-0010"
+    assert "ADR-0003" not in comments
+```
+
+The second assertion is the load-bearing one. Asserting only the new id would still pass if the status filter broke and both records came back, so it pins the exclusion directly.
+
+**Verified empirically, not predicted** — running `intent.select` against the post-edit records gives `['ADR-0010', 'ADR-0008']`, with binding relevance ADR-0010 `0.667`, ADR-0008 `0.333`, everything else at or below `0.167`. ADR-0010 wins outright; ADR-0008 rides in under the `RELATIVE_FLOOR = 0.5` cutoff, which is why the assertion is `comments[0] ==` rather than `comments ==`. The same run confirms the test's other four assertions are untouched: the reader-prompt query still leads with ADR-0002, the lema query is still exactly `["ADR-0006"]`, both no-op queries still return `[]`, and both `len(...) <= 3` cases still hold (2 and 3). `len(docs) >= 8` becomes 10.
+
+**This assertion is also stable across Task 9.** Task 9 rewords ADR-0008, which is in this result set — but the rewording leaves its score at `0.333` and the selection identical, so this test does not need touching again. Confirmed by materialising both the post-Task-8 and post-Task-9 record sets and running selection against each.
+
+- [ ] **Step 5: Verify all three records parse and the binding set is right.** Run:
 
 ```bash
 cd api && uv run python -c "
@@ -3386,31 +3890,52 @@ def rec(name):
 
 new = rec('ADR-0010-surface-is-a-neutral-check-run.md')
 old = rec('ADR-0003-ci-surface-is-job-summary-only.md')
+dev = rec('ADR-0007-deviation-is-a-separate-stream.md')
 assert new is not None, 'ADR-0010 frontmatter does not parse — it would be skipped silently'
 assert old is not None, 'ADR-0003 frontmatter no longer parses'
+assert dev is not None, 'ADR-0007 frontmatter no longer parses'
 assert new.id == 'ADR-0010', new.id
 assert new.status == 'accepted', new.status
 assert old.status == 'superseded', old.status
+# ADR-0007 stays binding: its decision did not expire, only its surface.
+assert dev.status == 'accepted', dev.status
+# The stale-prose check the parser cannot make: ADR-0007 must no longer
+# present the job summary as the live mechanism. All three references go.
+# ADR-0010 is deliberately NOT checked — it names the job summary
+# throughout its Context and Rejected sections, which is correct and
+# required: the record has to say what it replaced and why.
+assert 'job summary' not in dev.body.lower(), 'ADR-0007 still describes the job summary'
 # The predicate intent.select actually applies (intent.py:111).
-binding = [r.id for r in (new, old) if r.status.lower() == intent.BINDING]
-assert binding == ['ADR-0010'], binding
-print('ok', new.id, new.status, '|', old.id, old.status, '| binding:', binding)
+binding = sorted(r.id for r in (new, old, dev) if r.status.lower() == intent.BINDING)
+assert binding == ['ADR-0007', 'ADR-0010'], binding
+print('ok', new.id, new.status, '|', old.id, old.status, '|', dev.id, dev.status)
+print('binding:', binding)
 "
 ```
 
 Expected output, exactly:
 
 ```
-ok ADR-0010 accepted | ADR-0003 superseded | binding: ['ADR-0010']
+ok ADR-0010 accepted | ADR-0003 superseded | ADR-0007 accepted
+binding: ['ADR-0007', 'ADR-0010']
 ```
 
-- [ ] **Step 4: Verify nothing else regressed.** `cd api && uv run pytest -q && uv run ruff check .` — expect all pass.
+The `job summary` assertion is the one that would have caught this class of staleness on its own; ADR-0003 is exempt from it only because it is no longer binding and its whole subject *was* the job summary.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Verify nothing else regressed.** `cd api && uv run pytest -q && uv run ruff check .` — expect all pass, no lint findings. This task adds no tests and removes none, so the total must match whatever Task 7 left it at; do not expect an absolute number here, because Tasks 1–7 add several new test modules on top of the 190 cases at HEAD today. Run the affected module explicitly first, since it is the one this task can break — its count *is* stable, as nothing in Tasks 1–7 touches it:
+
+```bash
+cd api && uv run pytest tests/test_intent.py -q
+```
+→ `25 passed` (19 test functions, 25 cases after parametrisation — measured at HEAD, not estimated).
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/decisions/ADR-0010-surface-is-a-neutral-check-run.md \
-        docs/decisions/ADR-0003-ci-surface-is-job-summary-only.md
+        docs/decisions/ADR-0003-ci-surface-is-job-summary-only.md \
+        docs/decisions/ADR-0007-deviation-is-a-separate-stream.md \
+        api/tests/test_intent.py
 git commit -m "$(cat <<'EOF'
 Record the neutral check run as the surface, superseding ADR-0003
 
@@ -3424,6 +3949,18 @@ The status flip is mechanism, not bookkeeping: intent.select feeds only
 `accepted` records to the reader, so leaving ADR-0003 accepted would
 have Doug flag its own check-run code as a deviation from its own
 decisions.
+
+ADR-0007's surface sentences move to the check run in the same commit,
+for the same reason and without a status change: its decision —
+deviations never move the score — is untouched and still binding, but it
+described a job summary that no longer exists, and it is the record most
+likely to be retrieved on any PR touching check_run.py or deviations.
+
+test_intent.py's selection test moves with them. It asserted that a PR
+about posting verdicts as comments selects ADR-0003; the flip makes
+ADR-0010 the answer, which is the test working rather than breaking. It
+now also asserts ADR-0003 is absent from the result, so a regression in
+the status filter fails loudly instead of passing on the new id alone.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 EOF
@@ -3451,7 +3988,7 @@ After this deploys, `lemahq/lema`'s copy of the workflow gets a 404. It never re
 - Delete: `.github/workflows/doug-review.yml`
 - Delete: `api/tests/test_workflow_summary.py`
 - Modify: `api/tests/test_store.py:72-101` (delete three tests), `:4` (import)
-- Modify: `docs/decisions/ADR-0008-doug-reviews-doug.md:18-23`, `:44-47`
+- Modify: `docs/decisions/ADR-0008-doug-reviews-doug.md:19-24`, `:40-43`
 
 **Line numbers above are as of the pre-Task-6 file.** Tasks 6 and 7 both edit `api.py` before this runs, so match on the quoted text, not on the numbers.
 
@@ -3459,19 +3996,23 @@ After this deploys, `lemahq/lema`'s copy of the workflow gets a 404. It never re
 - Consumes: nothing new.
 - Produces: one ingest path (webhook → queue → worker) and one surface (check run). The service holds no per-request GitHub token from a caller's CI any more; every GitHub call goes through an installation token.
 
-- [ ] **Step 1: Delete the route and its models.** In `api/doug/api.py`, delete lines 46–143 inclusive — from `class ReviewRequest(BaseModel):` through the blank lines after `review_pr`'s closing `)`. That leaves the two blank lines at 44–45 followed directly by `@app.post("/v1/score/read")`. Then fix the import at line 13, currently:
+- [ ] **Step 1: Delete the route and its models.** In `api/doug/api.py`, delete lines 46–143 inclusive — from `class ReviewRequest(BaseModel):` through the blank lines after `review_pr`'s closing `)`. That leaves the two blank lines at 44–45 followed directly by `@app.post("/v1/score/read")`.
+
+Then, on the package-import line: **remove the single name `review` from the list and leave every other name exactly as you find it.** Do not replace the whole line from a quoted "currently" text — by the time this task runs, Tasks 6 and 7 have both rewritten it, and the pre-Task-6 version (`from . import __version__, precision, reader, review, store`) no longer exists to match against. The symbol is the anchor, not the line.
+
+For reference, after Tasks 6 and 7 the line reads:
 
 ```python
-from . import __version__, precision, reader, review, store
+from . import __version__, app_auth, ingest, precision, reader, review, store, worker
 ```
 
-to:
+so the result of this edit is:
 
 ```python
-from . import __version__, precision, reader, store
+from . import __version__, app_auth, ingest, precision, reader, store, worker
 ```
 
-`review` was used only inside `review_pr` (`api.py:95-97`); leaving it is an `F401`. If Tasks 6 or 7 introduced a use of `review` in this module, keep it — Step 5's `ruff check` is the arbiter, not this instruction.
+`review` was used only inside `review_pr` (`api.py:95-97`), so it becomes an `F401` once the route is gone; `app_auth`, `ingest`, and `worker` are all live — the new handler and the lifespan reference them, and dropping any of them is a `NameError` at the first delivery or at startup. If the line you actually find differs from the reference above, still remove only `review`. Step 6's `ruff check` is the arbiter of whether the result is clean.
 
 - [ ] **Step 2: Fix the comments that now point at a deleted route.** A dangling reference to `/v1/review` is worse than none: it describes an auth model no reader can go look at. Three exact replacements.
 
@@ -3546,7 +4087,7 @@ from doug import reader, store
 
 None of these three tests has a replacement to write. They tested an auth model that no longer exists; the equivalents under the App are Task 6's signature tests and Task 3's queue tests.
 
-- [ ] **Step 5: Correct ADR-0008, which now describes a workflow that is gone.** It is `status: accepted`, so it is fed to the reader as binding policy — a stale mechanism in it produces confident false findings (`docs/decisions/README.md:8-11`). Its actual decision (development goes through pull requests) is untouched; only the mechanism sentences are wrong. Replace `docs/decisions/ADR-0008-doug-reviews-doug.md:18-23`, currently:
+- [ ] **Step 5: Correct ADR-0008, which now describes a workflow that is gone.** It is `status: accepted`, so it is fed to the reader as binding policy — a stale mechanism in it produces confident false findings (`docs/decisions/README.md:8-11`). Its actual decision (development goes through pull requests) is untouched; only the mechanism sentences are wrong. Replace `docs/decisions/ADR-0008-doug-reviews-doug.md:19-24` (the `## Decision` heading is line 19; line 18 is blank), currently:
 
 ```markdown
 ## Decision
@@ -3567,7 +4108,7 @@ App is installed on this repo, and the service runs with `DOUG_INTENT=1`
 so Doug reads this decisions directory when reviewing its own changes.
 ```
 
-and `:44-47`, currently:
+and `:40-43` — the *second* Consequences bullet, the one about `reader.py`; lines 44-46 are a different bullet (about revert history) that must not be touched — currently:
 
 ```markdown
 - A pull request that changes `reader.py` is scored by the *deployed*
@@ -3599,16 +4140,19 @@ ls api/deploy/doug-review.yml .github/workflows/doug-review.yml
 → `No such file or directory` for both, exit status non-zero.
 
 ```bash
-grep -rn "doug-review" --include="*.py" --include="*.yml" --include="*.toml" . | grep -v node_modules
+git grep -n "doug-review" -- "*.py" "*.yml" "*.toml"
 ```
 → exactly four lines, all expected survivors of the CLI, and nothing else:
 ```
-./api/doug/review.py:3:`doug-review owner/repo` pulls the open PRs, scores each through the
-./api/doug/review.py:12:    uv run doug-review grafana/grafana --limit 10
-./api/doug/review.py:13:    DOUG_READER=1 uv run doug-review drewjst/doug
-./api/pyproject.toml:27:doug-review = "doug.review:main"
+api/doug/review.py:3:`doug-review owner/repo` pulls the open PRs, scores each through the
+api/doug/review.py:12:    uv run doug-review grafana/grafana --limit 10
+api/doug/review.py:13:    DOUG_READER=1 uv run doug-review drewjst/doug
+api/pyproject.toml:27:doug-review = "doug.review:main"
 ```
-(`HANDOFF.md`, `docs/superpowers/specs/*`, and the plan itself also mention it; they are narrative history and are excluded by the `--include` filters above by design.)
+
+**Use `git grep`, not `grep -r .`, for this one.** An unscoped recursive grep from the repo root returns 20 lines today, 10 of them from `.claude/worktrees/reliability-fixes/` — a full second checkout of this repo for the in-flight `fix/reliability-review` branch, which is *not* gitignored (`.gitignore` has no `.claude` entry). Those 10 survive Task 9's deletions and make an exact expected count unattainable. `git grep` searches tracked files in this worktree only, so it sees neither the sibling worktree nor `.venv`. `grep -rn "doug-review" api/ .github/ web/ --include=…` is an equivalent alternative and returns the same four lines.
+
+(`HANDOFF.md`, `docs/superpowers/specs/*`, and the plan itself also mention `doug-review`; they are narrative history and are excluded by the path filters above by design.)
 
 ```bash
 cd api && uv run pytest -q && uv run ruff check .
@@ -3650,10 +4194,11 @@ git push
 
 **Files:**
 - Modify: `api/deploy/gcp.sh:66-76` (setup: dedicated SA + secret bindings), `:86-93` (deploy: service account, secrets, env, CPU)
+- Delete (operator, Step 4 — untracked and gitignored, so it is not part of any commit): `api/.backtest-cache/llm-probe/api-key`
 
 **Interfaces:**
-- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6).
-- Produces: a Cloud Run revision that can mint installation tokens and finish background work; an operator-run IAM prerequisite and an operator-run cutover.
+- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6); `/v1/score/read`, kept by Task 9, as the post-deploy credential probe.
+- Produces: a Cloud Run revision that can mint installation tokens and finish background work; a rotated `doug-anthropic-key`; an operator-run IAM prerequisite and an operator-run cutover.
 
 **Read before starting — the gap this task closes is already open.** `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` were set on prod out-of-band via `gcloud run services update` on 2026-07-31, and `deploy()` uses `--set-env-vars` / `--set-secrets`, which **replace** their whole blocks. Every push from Tasks 1–9 therefore deploys a revision with the App credentials wiped. That is survivable and is not a reason to reorder the plan: `app_auth.enabled()` returns `False` without them, so the App simply stays dormant — webhooks verify and enqueue, no tokens are minted, no paid reads happen from a half-built pipeline. Task 7's startup reconcile then picks up every PR missed during the gap on the first revision that has the credentials, which is the one this task ships. What is *not* survivable is landing this task and assuming prod was fine in between: check the logs at Step 6 rather than assuming.
 
@@ -3751,7 +4296,15 @@ grep -c "doug-github-app-key" api/deploy/gcp.sh
 ```
 → `2` (the `setup()` binding loop and the `deploy()` `--set-secrets`).
 
-- [ ] **Step 4: Pre-deploy IAM — a human runs this once, BEFORE merging this task.** CI cannot: `deploy()` has no IAM rights by ADR-0009, and it will fail with an `iam.serviceaccounts.actAs` denial until the last binding below exists.
+- [ ] **Step 4: Pre-deploy IAM and key rotation — a human runs this once, BEFORE merging this task.** CI cannot: `deploy()` has no IAM rights by ADR-0009, and it will fail with an `iam.serviceaccounts.actAs` denial until the `actAs` binding below exists.
+
+This block also carries the other half of the spec's key-custody item — the **App private key custody** bullet under "Open questions" in `specs/2026-07-30-github-app-tenancy-dashboard-design.md`, at `:254-259` as of this writing (the spec has uncommitted edits in flight above that point, so find it by heading rather than by line) — which the `gcp.sh` edits above do not address:
+
+> `gcp.sh:66-72` grants `secretAccessor` to the default compute service account, so every workload in `doug-prod0` could read the key — a dedicated service account is required. The un-rotated key at `repo/api/.backtest-cache/llm-probe/api-key` should be rotated first.
+
+Steps 1–2 did the dedicated service account. The rotation is the part that makes it worth doing: `api/.backtest-cache/llm-probe/api-key` exists in the working tree (108 bytes, dated 2026-07-29). It is untracked and covered by `.gitignore:25` (`.backtest-cache/`), so this is a working-tree exposure rather than a committed one — but scoping `doug-anthropic-key` down to a new service account protects nothing if the value it holds is one that has been sitting in a plaintext file. Rotate first, then narrow access to the credential that is actually current.
+
+**Order the rotation so there is no outage.** Anthropic lets a new key exist before the old one is revoked, so: create the new key → add it as a `doug-anthropic-key` version → deploy (Step 5) → verify the reader answers (Step 6) → *only then* revoke the old key (cutover Step 8). Reversing that — revoking first — breaks the live reader for the whole interval between rotation and deploy, because the running revision holds the old secret version until it is replaced.
 
 ````
 ⚠️ NEVER run `gcp.sh setup` against doug-prod0. It regenerates DB_PASS with
@@ -3767,18 +4320,45 @@ grep -c "doug-github-app-key" api/deploy/gcp.sh
 PROJECT=doug-prod0
 SA="doug-api-sa@$PROJECT.iam.gserviceaccount.com"
 
-# 0. Prerequisite: the App private key must already be in Secret Manager.
+# 0. Rotate the Anthropic key (spec, "App private key custody"). Create a NEW key in the
+#    Anthropic console — console.anthropic.com -> API keys -> Create key —
+#    and do NOT revoke the old one yet; that happens at cutover step 8,
+#    after the deploy is verified.
+#
+#    Write it to a file rather than passing it inline: --data-file=- from a
+#    heredoc or an echo puts the key in shell history, which is the exact
+#    exposure being cleaned up here. gcp.sh:78-79 already prescribes the
+#    file form for this secret.
+#
+#    printf '%s', never echo: doug-webhook-secret v1 carries a trailing
+#    newline from exactly this mistake and has to be disabled at cutover.
+umask 077
+printf '%s' 'sk-ant-...' > /tmp/anthropic.key   # paste the new key here
+gcloud secrets versions add doug-anthropic-key \
+  --data-file=/tmp/anthropic.key --project "$PROJECT"
+rm -P /tmp/anthropic.key
+
+#    Now delete the plaintext copy that started this. It is untracked and
+#    gitignored, so removing it needs no commit.
+rm -P /Users/andrew/Projects/doughq/repo/api/.backtest-cache/llm-probe/api-key
+
+#    Confirm the new version is live and the file is gone.
+gcloud secrets versions list doug-anthropic-key --project "$PROJECT" --limit 3
+test ! -e /Users/andrew/Projects/doughq/repo/api/.backtest-cache/llm-probe/api-key \
+  && echo "plaintext key removed"
+
+# 1. Prerequisite: the App private key must already be in Secret Manager.
 #    Create it from the .pem downloaded from the App settings page — as a
-#    file, so the key never enters shell history:
+#    file, for the same reason as above:
 #      gcloud secrets create doug-github-app-key \
 #        --data-file=/path/to/dougs-review.private-key.pem --project doug-prod0
 gcloud secrets describe doug-github-app-key --project "$PROJECT" >/dev/null
 
-# 1. The runtime identity.
+# 2. The runtime identity.
 gcloud iam service-accounts create doug-api-sa \
   --display-name "doug-api runtime" --project "$PROJECT"
 
-# 2. Secret access — all five, including the two the App needs.
+# 3. Secret access — all five, including the two the App needs.
 for s in doug-database-url doug-api-token doug-anthropic-key \
          doug-webhook-secret doug-github-app-key; do
   gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
@@ -3786,12 +4366,12 @@ for s in doug-database-url doug-api-token doug-anthropic-key \
     --role=roles/secretmanager.secretAccessor
 done
 
-# 3. Cloud SQL, which the default compute SA had by inheritance and this
+# 4. Cloud SQL, which the default compute SA had by inheritance and this
 #    one does not. Without it every ledger write fails on the first request.
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:$SA" --role=roles/cloudsql.client
 
-# 4. Let the CI deployer run the service as this SA. Without this the next
+# 5. Let the CI deployer run the service as this SA. Without this the next
 #    merge to main fails with an iam.serviceaccounts.actAs denial.
 DEPLOY_SA=$(gh variable get GCP_DEPLOY_SA --repo drewjst/doug)
 echo "deployer: $DEPLOY_SA"
@@ -3799,7 +4379,7 @@ gcloud iam service-accounts add-iam-policy-binding "$SA" --project "$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" \
   --role=roles/iam.serviceAccountUser
 
-# 5. Verify before merging. Both must print a line containing doug-api-sa.
+# 6. Verify before merging. Both must print a line containing doug-api-sa.
 gcloud secrets get-iam-policy doug-github-app-key --project "$PROJECT" \
   --flatten="bindings[].members" --format="value(bindings.members)" | grep doug-api-sa
 gcloud iam service-accounts get-iam-policy "$SA" --project "$PROJECT" \
@@ -3847,6 +4427,21 @@ gcloud run services logs read doug-api --project doug-prod0 --region us-central1
 ```
 Expect a `doug: reconcile enqueued N job(s)` line from the startup thread. `N` counts every open PR missed while the App credentials were absent. If the log reader is unavailable in your gcloud, use:
 `gcloud logging read 'resource.labels.service_name="doug-api"' --limit 50 --freshness=1h --project doug-prod0`.
+
+Then confirm the **rotated Anthropic key** actually works on this revision, before the old one is revoked. `/v1/score/read` survives Task 9 and needs no token, and it falls back loudly rather than erroring, which makes it the cheapest possible credential probe:
+
+```bash
+URL=$(gcloud run services describe doug-api --project doug-prod0 \
+  --region us-central1 --format='value(status.url)')
+curl -sS -X POST "$URL/v1/score/read" -H 'content-type: application/json' \
+  -d '{"pr":{"number":1,"title":"probe","author":"drewjst","files":["a.py"]},
+       "diff":"--- a/a.py\n+++ b/a.py\n@@\n+x = 1\n"}' \
+  | python3 -c 'import json,sys; v=json.load(sys.stdin); \
+rules=[r["rule"] for r in v["reasons"]]; print(rules); \
+sys.exit(1 if "reader-unavailable" in rules else 0)'
+```
+
+Exit 0 with at least one `reader:*` rule means the new key is live. A `reader-unavailable` rule (exit 1) means `ANTHROPIC_API_KEY` is wrong on this revision — stop, fix the secret version, and do **not** revoke the old key. This costs one small model call.
 
 - [ ] **Step 7: Cutover — operator steps, run in this order.**
 
@@ -3905,10 +4500,29 @@ tell anyone.
    a job completing after it. A 202 with no job completion means the
    drain is not running — check --no-cpu-throttling actually landed on
    the serving revision (Step 6).
+
+8. Close the key rotation. Only now, with the reader verified working on
+   the new key at Step 6 and a real review completed at step 7, revoke
+   the OLD Anthropic key in the console (console.anthropic.com -> API
+   keys -> the pre-rotation key -> Delete). Doing this earlier would
+   have broken the live reader for the interval between rotation and
+   deploy; doing it never leaves a key that spent time in a plaintext
+   file valid indefinitely.
+   Then disable the superseded secret version so it cannot be rolled
+   back to by accident — check the list first and disable the one BELOW
+   the newest:
+     gcloud secrets versions list doug-anthropic-key --project doug-prod0
+     gcloud secrets versions disable <previous-version> \
+       --secret=doug-anthropic-key --project doug-prod0
 ```
 ````
 
-- [ ] **Step 8: Commit** — nothing to commit if Steps 4–7 changed no files in this repo, which is the expected case; the gcp.sh change was committed at Step 5. If the cutover turned up a correction to the script, commit it now:
+- [ ] **Step 8: Commit** — expect nothing to commit. The `gcp.sh` change went in at Step 5, and the only file Steps 4–7 touch in this repo is `api/.backtest-cache/llm-probe/api-key`, which is untracked and gitignored, so `git status --porcelain` stays empty. Confirm that rather than assuming it:
+
+```bash
+git status --porcelain
+```
+→ no output. If the cutover turned up a correction to the script, commit it now:
 
 ```bash
 git add api/deploy/gcp.sh
