@@ -72,7 +72,11 @@ verdicts = Table(
     Column("github_repo_id", BigInteger),
     Column("installation_id", BigInteger),
     Column("head_sha", String(64)),
-    Column("source", String(20)),  # app | ci | cli
+    # app | ci | cli | review:<login> (third-party review ingest, Task 6).
+    # 64 wide for the review: case — GitHub logins run to 39 chars.
+    Column("source", String(64)),
+    # Migration 002, alongside outcomes' new columns below.
+    Column("prompt_hash", String(64)),
 )
 
 findings = Table(
@@ -98,6 +102,16 @@ outcomes = Table(
     Column("kind", String(20), nullable=False),  # revert | hotfix | clean
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("source", String(40), nullable=False),  # git-labels | manual | ...
+    # Outcome-loop identity, migration 002. NULL on every row scored before
+    # this migration — `repo` stays their display-only join key, and nothing
+    # rewrites it; only new rows carry ids.
+    Column("github_repo_id", BigInteger),
+    Column("installation_id", BigInteger),
+    Column("window_days", Integer),
+    # The adjudicator's supporting detail, JSON-encoded. TEXT rather than
+    # the JSON type used elsewhere in this file, for sqlite/postgres parity
+    # per house style on this column specifically.
+    Column("detail", Text),
 )
 
 # How much of each PR the reader was actually shown. Its own table, not
@@ -153,6 +167,10 @@ installations = Table(
     Column("account_type", String(20)),  # User | Organization
     Column("state", String(20), nullable=False),  # active | suspended | deleted
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # M2's token-dispense endpoint mints an installation token and writes its
+    # hash here — never the token itself. NULL until then; this table is new
+    # on this branch, so the column ships with it rather than a migration.
+    Column("token_hash", Text),
 )
 
 installation_repos = Table(
@@ -190,6 +208,44 @@ review_jobs = Table(
     Column("verdict_id", Integer, ForeignKey("verdicts.id")),
     UniqueConstraint(
         "installation_id", "github_repo_id", "pr_number", "head_sha", name="uq_review_job"
+    ),
+)
+
+# Merged PRs waiting out their outcome-observation window before the M3
+# adjudicator scores them. Written when a pull_request 'closed' event is a
+# merge (Task 6's amendment); drained by the adjudicator once due_at
+# passes. The unique constraint is the dedup against GitHub webhook
+# redelivery, same role as review_jobs' — a replayed 'closed' event for a PR
+# already queued must not create a second job with its own due date.
+outcome_jobs = Table(
+    "outcome_jobs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False),
+    Column("github_repo_id", BigInteger, nullable=False),
+    Column("pr_number", Integer, nullable=False),
+    Column("merge_commit_sha", String(64), nullable=False),
+    Column("merged_at", DateTime(timezone=True), nullable=False),
+    # Branch the PR merged into. The adjudicator censors anything merged to
+    # a non-default branch rather than trusting this table to only hold them.
+    Column("base_ref", String(200), nullable=False),
+    Column("window_days", Integer, nullable=False, server_default="14"),
+    # merged_at + window_days, computed and stored at enqueue time rather
+    # than derived at query time — Postgres is the only clock this ledger
+    # trusts, and a derived value would drift if window_days ever changed
+    # after the row was written.
+    Column("due_at", DateTime(timezone=True), nullable=False),
+    # pending | running | done | failed
+    Column("status", String(12), nullable=False, server_default="pending"),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "installation_id",
+        "github_repo_id",
+        "pr_number",
+        "merge_commit_sha",
+        "window_days",
+        name="uq_outcome_job",
     ),
 )
 

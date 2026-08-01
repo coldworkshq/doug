@@ -1,17 +1,17 @@
 """Ordered DDL for changes create_all() cannot make.
 
 store.py's create_all() adds missing *tables* and never adds a column to a
-table that already exists. Every new column on `verdicts` therefore has two
-homes that must agree: the Table definition (which is what a fresh database
-gets) and a migration here (which is what production's existing database
-gets). apply() runs after create_all() on every engine, so both paths end at
-the same schema instead of diverging into a green test suite and a broken
-production write.
+table that already exists. Every new column on an existing table therefore
+has two homes that must agree: the Table definition (which is what a fresh
+database gets) and a migration here (which is what production's existing
+database gets). apply() runs after create_all() on every engine, so both
+paths end at the same schema instead of diverging into a green test suite
+and a broken production write.
 
 A statement that finds its work already done is satisfied, not failed: on a
 fresh database create_all() has already produced the post-migration shape,
-so migration 001's ALTERs are no-ops there and must not raise. Anything else
-propagates.
+so an already-applied ALTER is a no-op there and must not raise. Anything
+else propagates.
 """
 
 from datetime import UTC, datetime
@@ -41,10 +41,37 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE verdicts ADD COLUMN github_repo_id BIGINT",
             "ALTER TABLE verdicts ADD COLUMN installation_id BIGINT",
             "ALTER TABLE verdicts ADD COLUMN head_sha VARCHAR(64)",
-            "ALTER TABLE verdicts ADD COLUMN source VARCHAR(20)",
+            # 64 wide: Task 6 ingests third-party review verdicts as
+            # source='review:<login>', and a GitHub login runs to 39 chars
+            # ('review:' + 39 = 46).
+            "ALTER TABLE verdicts ADD COLUMN source VARCHAR(64)",
+        ),
+    ),
+    (
+        2,
+        (
+            # outcomes predates the outcome-loop (ADR-0001) and gets the
+            # same identity columns verdicts got in migration 001, plus the
+            # window this PR was observed under and the adjudicator's
+            # supporting detail. Existing rows keep NULLs here — outcomes.repo
+            # stays the display-only join key for anything scored before
+            # this migration; nothing rewrites it.
+            "ALTER TABLE outcomes ADD COLUMN github_repo_id BIGINT",
+            "ALTER TABLE outcomes ADD COLUMN installation_id BIGINT",
+            "ALTER TABLE outcomes ADD COLUMN window_days INTEGER",
+            "ALTER TABLE outcomes ADD COLUMN detail TEXT",
+            "ALTER TABLE verdicts ADD COLUMN prompt_hash VARCHAR(64)",
         ),
     ),
 ]
+
+# Research-corpus quarantine convention (no data change — no research rows
+# exist in the app database today): public-corpus / research rows are
+# written under a reserved sentinel installation id and carry
+# source='research' at insert time, in the same insert that would otherwise
+# carry a real installation_id. Every tenant-facing counter therefore stays
+# correct by filtering on real installation ids rather than by excluding a
+# label after the fact.
 
 _SATISFIED = ("duplicate column name", "already exists")
 

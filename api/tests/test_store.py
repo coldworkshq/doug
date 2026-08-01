@@ -1,5 +1,9 @@
+from datetime import UTC, datetime
+
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.exc import IntegrityError
 
 from doug import reader, review, store
 from doug.api import app
@@ -651,3 +655,79 @@ def test_a_removed_repo_keeps_its_row(tmp_path, monkeypatch):
     with create_engine(url).connect() as conn:
         rows = conn.execute(select(store.installation_repos)).mappings().all()
     assert len(rows) == 1 and rows[0]["state"] == "removed"
+
+
+# --- Outcome-loop schema (M1 amendment) ---------------------------------------
+
+
+def test_installations_has_a_nullable_token_hash_column(tmp_path):
+    """M2's token-dispense endpoint writes this column; `installations` is
+    new on this branch so it ships with the table instead of a migration.
+    Nullable because every installation exists before its token is minted."""
+    engine = create_engine(f"sqlite:///{tmp_path}/inst.db")
+    store.metadata.create_all(engine)
+    cols = {c["name"]: c for c in inspect(engine).get_columns("installations")}
+    assert "token_hash" in cols
+    assert cols["token_hash"]["nullable"] is True
+
+
+def _outcome_job(**overrides) -> dict:
+    now = datetime.now(UTC)
+    base = {
+        "installation_id": INSTALL,
+        "github_repo_id": REPO_ID,
+        "pr_number": 42,
+        "merge_commit_sha": "a" * 40,
+        "merged_at": now,
+        "base_ref": "main",
+        "due_at": now,
+        "created_at": now,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_outcome_jobs_unique_constraint_rejects_a_duplicate(tmp_path, monkeypatch):
+    """The unique key is the dedup against GitHub webhook redelivery — a
+    replayed 'closed' event for a PR that is already queued must not create a
+    second job with its own independent due date."""
+    url = _db(tmp_path, monkeypatch)
+    store.enabled()  # triggers create_all() before the raw insert below
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(store.outcome_jobs.insert(), _outcome_job())
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(store.outcome_jobs.insert(), _outcome_job())
+
+
+def test_outcome_jobs_server_defaults_are_the_real_unquoted_values(tmp_path, monkeypatch):
+    """A server_default passed as an already-quoted string literal
+    ("'pending'") renders as DEFAULT ''pending'' — SQLAlchemy quotes the
+    Python string itself, so double-quoting stores the literal characters
+    'pending' (with quote marks) as the value instead of the word. Only a
+    real round-trip through the DB's own default clause catches that."""
+    url = _db(tmp_path, monkeypatch)
+    store.enabled()
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(store.outcome_jobs.insert(), _outcome_job())
+    with engine.connect() as conn:
+        row = conn.execute(select(store.outcome_jobs)).mappings().one()
+    assert row["window_days"] == 14
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+
+
+def test_outcome_jobs_permits_the_same_pr_with_a_different_window(tmp_path, monkeypatch):
+    """`window_days` is part of the unique key on purpose — a future change
+    to the default observation window must not collide with jobs already
+    queued under the old one."""
+    url = _db(tmp_path, monkeypatch)
+    store.enabled()  # triggers create_all() before the raw insert below
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(store.outcome_jobs.insert(), _outcome_job(window_days=14))
+        conn.execute(store.outcome_jobs.insert(), _outcome_job(window_days=30))
+    with engine.connect() as conn:
+        rows = conn.execute(select(store.outcome_jobs)).mappings().all()
+    assert len(rows) == 2
