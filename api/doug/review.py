@@ -106,6 +106,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         files_added=sum(1 for f in files if f.status == "added"),
         files_modified=sum(1 for f in files if f.status == "modified"),
         url=_html_url(p),
+        head_sha=p.head.sha,
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)

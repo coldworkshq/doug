@@ -46,6 +46,9 @@ def score_pr(pr: PRMetadata) -> Verdict:
 class ReviewRequest(BaseModel):
     repo: str  # owner/name
     pr_number: int
+    # A deliberate rescore of an already-recorded commit. Without it, a
+    # repeat request for the same head sha replays the recorded verdict.
+    force: bool = False
 
 
 class ReviewResponse(Verdict):
@@ -93,6 +96,43 @@ def review_pr(
 
     gh = GitHub(x_github_token or None)
     meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
+
+    # Idempotency: a webhook redelivery or retried CI job for a commit this
+    # ledger has already scored replays the recorded verdict — no second
+    # paid read, no duplicate row for precision to double-count. Any lookup
+    # failure falls through to a fresh score: the worst case of a broken
+    # dedup read is one duplicate, never a failed CI.
+    if meta.head_sha and not req.force:
+        try:
+            prior = store.find_review(req.repo, req.pr_number, meta.head_sha)
+        except Exception:  # noqa: BLE001
+            prior = None
+        if prior is not None:
+            reasons = [Reason(**r) for r in prior["reasons"]]
+            reasons.append(
+                Reason(
+                    rule="idempotent-replay",
+                    label=(
+                        f"Verdict for {meta.head_sha[:12]} was already recorded; "
+                        "replayed without a new read. POST force=true to rescore."
+                    ),
+                    weight=0.0,
+                )
+            )
+            return ReviewResponse(
+                score=prior["score"],
+                band=Band(prior["band"]),
+                threshold=prior["threshold"],
+                reasons=reasons,
+                deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
+                intent_alignment=prior["intent_alignment"],
+                intent_refs=prior["intent_refs"],
+                # The stored risk-read reasons already carry any read-truncated
+                # hedge; the intent read's own coverage was not persisted, so a
+                # replay does not invent one.
+                intent_notice=None,
+            )
+
     tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
 

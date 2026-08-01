@@ -368,3 +368,109 @@ def test_concurrent_first_requests_build_exactly_one_engine(tmp_path, monkeypatc
     for t in threads:
         t.join()
     assert len(built) == 1
+
+
+# --- /v1/review idempotency --------------------------------------------------
+# A webhook redelivery or a retried CI job used to re-run the whole paid
+# read and insert a second verdicts row for the same commit — doubling LLM
+# spend and giving precision two "independent" scoring events that were one.
+
+
+def _pr_with_sha(sha="a" * 40) -> PRMetadata:
+    return PRMetadata.model_validate(
+        dict(number=7, title="Add cache", author="dev", files=["cache.py"], head_sha=sha)
+    )
+
+
+def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
+    scored = []
+    real_score_one = review.score_one
+    monkeypatch.setattr(
+        review, "score_one", lambda meta, diff: scored.append(1) or real_score_one(meta, diff)
+    )
+
+    c = TestClient(app)
+    first = c.post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret"},
+    ).json()
+    second = c.post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret"},
+    ).json()
+
+    assert len(scored) == 1, "the repeat must not score (or pay for a read) again"
+    assert second["band"] == first["band"] and second["score"] == first["score"]
+    assert any(r["rule"] == "idempotent-replay" for r in second["reasons"])
+    assert not any(r["rule"] == "idempotent-replay" for r in first["reasons"])
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 1
+
+
+def test_review_force_rescore_and_new_commit_both_score_again(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    sha = ["a" * 40]
+    monkeypatch.setattr(
+        review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(sha[0]), "+ x")
+    )
+    c = TestClient(app)
+    post = lambda body: c.post(  # noqa: E731
+        "/v1/review", json={"repo": "o/r", "pr_number": 7, **body},
+        headers={"x-doug-token": "secret"},
+    )
+
+    post({})
+    post({"force": True})  # deliberate rescore of the same commit
+    sha[0] = "b" * 40
+    post({})  # a new commit is never a repeat
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 3
+
+
+def test_replay_carries_the_recorded_deviations(tmp_path, monkeypatch):
+    """The replayed response must be the recorded review, intent tier
+    included — a replay that silently dropped deviations would make a
+    redelivered webhook look like the decisions read never ran."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"),
+    )
+    store.save_deviations(
+        vid,
+        [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
+        ["ADR-3"], 72,
+    )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior is not None and prior["band"] == "flagged"
+    assert prior["deviations"] == [
+        {"type": "beyond-ticket", "description": "adds a flag", "severity": "low"}
+    ]
+    assert prior["intent_refs"] == ["ADR-3"] and prior["intent_alignment"] == 72
+
+
+def test_deviation_none_marker_is_storage_only_never_replayed(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"),
+    )
+    store.save_deviations(vid, [], ["ADR-3"], 95)
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior["deviations"] == []  # kind="none" is bookkeeping, not a finding
+    assert prior["intent_alignment"] == 95  # but the read's alignment survives
+
+
+def test_pre_sha_rows_never_match_and_get_rescored_once(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 7, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
+    assert store.find_review("o/r", 7, "a" * 40) is None
