@@ -801,3 +801,72 @@ def test_outcome_jobs_permits_the_same_pr_with_a_different_window(tmp_path, monk
     with engine.connect() as conn:
         rows = conn.execute(select(store.outcome_jobs)).mappings().all()
     assert len(rows) == 2
+
+
+# --- Deep-read spend cap -------------------------------------------------
+
+def test_record_deep_read_allows_reads_under_the_cap(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.record_deep_read("installation:1", cap=3) is True
+    assert store.record_deep_read("installation:1", cap=3) is True
+    assert store.record_deep_read("installation:1", cap=3) is True
+
+
+def test_record_deep_read_refuses_once_the_cap_is_reached(tmp_path, monkeypatch):
+    """The read that would put a scope over its monthly cap must be refused
+    — and refused *before* any model call, since the whole point is COGS
+    control, not a receipt that says "over budget" after paying for one
+    more read anyway."""
+    _db(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2) is True
+    assert store.record_deep_read("installation:1", cap=2) is False
+    # And it stays refused — this isn't a one-shot trip.
+    assert store.record_deep_read("installation:1", cap=2) is False
+
+
+def test_record_deep_read_scopes_are_independent(tmp_path, monkeypatch):
+    """One installation's spend must never count against another's cap —
+    the whole reason this is keyed by scope and not a single global
+    counter."""
+    _db(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2) is True
+    assert store.record_deep_read("installation:1", cap=2) is False
+    assert store.record_deep_read("installation:2", cap=2) is True
+
+
+def test_record_deep_read_resets_on_a_new_period(tmp_path, monkeypatch):
+    """A cap that never resets is not a monthly cap, it's a lifetime ban."""
+    _db(tmp_path, monkeypatch)
+    jan = datetime(2026, 1, 15, tzinfo=UTC)
+    feb = datetime(2026, 2, 1, tzinfo=UTC)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2, now=jan) is True
+    assert store.record_deep_read("installation:1", cap=2, now=jan) is False
+    assert store.record_deep_read("installation:1", cap=2, now=feb) is True
+
+
+def test_record_deep_read_is_a_noop_without_a_ledger(tmp_path, monkeypatch):
+    """Every other store.py helper degrades to a harmless no-op when
+    DATABASE_URL is unset, so local dogfooding needs no database. A cap
+    that could never be satisfied without a ledger would silently break
+    every uncapped local run — the no-op here has to mean "allowed",
+    matching every other disabled-ledger helper's default."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.record_deep_read("installation:1", cap=0) is True
+
+
+def test_record_deep_read_does_not_overshoot_the_cap_under_repeated_calls(tmp_path, monkeypatch):
+    """The atomicity that matters: a single `UPDATE ... WHERE count < cap`
+    statement, not a read-then-write pair — the same class of
+    check-then-act bug this ledger has hit before (the review dedup lookup,
+    fixed in the reliability sweep). Calling well past the cap must never
+    let the stored count exceed it."""
+    _db(tmp_path, monkeypatch)
+    results = [store.record_deep_read("installation:1", cap=5) for _ in range(20)]
+    assert results == [True] * 5 + [False] * 15
+    engine = create_engine(_db(tmp_path, monkeypatch))
+    with engine.connect() as conn:
+        row = conn.execute(select(store.deep_read_counters)).mappings().one()
+    assert row["count"] == 5
