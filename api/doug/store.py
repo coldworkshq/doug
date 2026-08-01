@@ -18,6 +18,7 @@ appear in every test and in no production row.
 """
 
 import os
+import threading
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -127,17 +128,30 @@ deviations = Table(
 )
 
 _engine = None
+# The raw env string the engine was built from. Compared instead of
+# str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
+# ("user:***@host"), so that comparison never matches a credentialed
+# DATABASE_URL — and rebuilt the engine, pool and all, on every call.
+_engine_url = None
+_engine_lock = threading.Lock()
 
 
 def _get_engine():
-    global _engine
+    global _engine, _engine_url
     url = os.environ.get("DATABASE_URL")
     if not url:
         return None
-    if _engine is None or str(_engine.url) != url:
-        _engine = create_engine(url, pool_pre_ping=True)
-        metadata.create_all(_engine)
-    return _engine
+    with _engine_lock:
+        # Locked check-then-act: two first-requests racing here used to both
+        # build an engine and orphan one of the connection pools.
+        if _engine is None or _engine_url != url:
+            engine = create_engine(url, pool_pre_ping=True)
+            metadata.create_all(engine)
+            if _engine is not None:
+                _engine.dispose()
+            _engine = engine
+            _engine_url = url
+        return _engine
 
 
 def enabled() -> bool:

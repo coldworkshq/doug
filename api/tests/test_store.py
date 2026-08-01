@@ -312,3 +312,59 @@ def test_queue_carries_finding_severity(tmp_path, monkeypatch):
     reasons = body["items"][0]["verdict"]["reasons"]
     assert reasons[0]["severity"] == "high"
     assert reasons[0]["weight"] == 0.0
+
+
+def test_engine_is_not_rebuilt_when_the_url_carries_a_password(monkeypatch):
+    """str(engine.url) masks passwords ("user:***@host"), so comparing it
+    against a credentialed DATABASE_URL never matches — which meant every
+    single ledger call built a fresh engine and connection pool against
+    prod Postgres and orphaned the old one. The cache must key on the raw
+    env string, not the engine's self-description.
+    """
+    from unittest.mock import MagicMock
+
+    built = []
+    monkeypatch.setattr(store, "create_engine", lambda url, **kw: built.append(url) or MagicMock())
+    monkeypatch.setattr(store.metadata, "create_all", lambda engine: None)
+    monkeypatch.setattr(store, "_engine", None)
+    monkeypatch.setattr(store, "_engine_url", None)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://doug:s3cret@db.internal/doug")
+
+    first = store._get_engine()
+    second = store._get_engine()
+    assert built == ["postgresql://doug:s3cret@db.internal/doug"]
+    assert first is second
+
+
+def test_concurrent_first_requests_build_exactly_one_engine(tmp_path, monkeypatch):
+    """Unsynchronized check-then-act let two racing first-requests each
+    build an engine; the loser's connection pool leaked until Postgres ran
+    out of connections. The lock makes first-touch build exactly once.
+    """
+    import threading
+
+    url = f"sqlite:///{tmp_path}/race.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setattr(store, "_engine", None)
+    monkeypatch.setattr(store, "_engine_url", None)
+
+    real_create = store.create_engine
+    built = []
+    barrier = threading.Barrier(8)
+
+    def slow_create(u, **kw):
+        built.append(u)
+        return real_create(u, **kw)
+
+    monkeypatch.setattr(store, "create_engine", slow_create)
+
+    def hit():
+        barrier.wait()
+        store._get_engine()
+
+    threads = [threading.Thread(target=hit) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1
