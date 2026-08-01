@@ -15,12 +15,12 @@ Effort marks are engineer-days of focused work, not calendar days.
 
 The items that make every later step messier the longer they wait.
 
-- [ ] **Merge PR #15** (`fix/reliability-review`) — lands the gated-traffic deploy + web timeout fix; merging FIRST avoids the known collision with step-2 Tasks 9/10 (else: deliberate rebase, its `/v1/review` idempotency work dies with the endpoint)
-- [ ] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008)
-- [ ] **Decide** `workflow-summary-test-fidelity` branch: merge or drop (~49 test lines)
-- [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing)
-- [ ] **Confirm intent-stream posture** (design already assumes it): per-installation flag, default OFF for tenants, ON for dogfood, labeled experimental
-- [ ] Fix stale `.env.example` (`MAGPIE_*` → current names) — trivial, stops onboarding confusion
+- [x] **Merge PR #15** (`fix/reliability-review`) — lands the gated-traffic deploy + web timeout fix; merging FIRST avoids the known collision with step-2 Tasks 9/10 (else: deliberate rebase, its `/v1/review` idempotency work dies with the endpoint). Merged `0d95884`.
+- [ ] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — PR #16 open, pending merge.
+- [x] **Decide** `workflow-summary-test-fidelity` branch: merge or drop (~49 test lines) — dropped; its only real content was already on main byte-identical, branch deleted.
+- [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — deferred by Andrew (2026-08-01), needs Anthropic console access.
+- [x] **Confirm intent-stream posture** (design already assumes it): per-installation flag, default OFF for tenants, ON for dogfood, labeled experimental — confirmed in `design-lock.md:62`.
+- [x] Fix stale `.env.example` (`MAGPIE_*` → current names) — trivial, stops onboarding confusion. Shipped in PR #16.
 
 **Exit gate:** main contains #15 + the design docs; no undecided branches; no live credentials on disk.
 
