@@ -1,0 +1,85 @@
+# Design Lock: The Outcome Loop
+
+**Date:** 2026-07-31 · **Method:** design-debate (5 grounding agents, 3 independent positions, 3 cross-examiners, converged round 1, 3-skeptic red-team) · **Status:** LOCKED
+
+## Converged design
+
+Doug's primitive is the **verdict→outcome join**: every verdict recorded in the ledger is adjudicated against what the repository actually did — revert or survival inside a named window — and the counts are published to the customer as a dated, falsifiable instrument. One sentence of positioning survives the honesty pass intact: *others learn what reviewers say; Doug learns what production did, remembers it, and tells your agents before they type* — with the caveat that "tells your agents" is v1.5, gated on adjudicated data existing.
+
+The v1 sale is **an audit of what your process shipped**. Doug scores every PR (the LLM diff-reader is the scoring path, ADR-0004), records every verdict — its own *and* third-party reviewers' (native `pull_request_review` events land as adjudicable verdict rows with a `source` discriminator) — starts a clock on every merge, and adjudicates each one against observed reverts at 14 and 60 days. The scoreboard starts at zero and says so; the promise is the date, not the number.
+
+On the real seams, the whole design is four additions to what exists:
+
+1. **Clock start** — an amendment inside the step-2 ingest plan: a `closed && merged` branch in the webhook handler (dispatched separately; never routes through review-enqueue, so a merge never buys a model read) writes one `outcome_jobs` row per (merge, window).
+2. **`outcome_jobs`** — migration 002 in Task 2's runner: `installation_id, github_repo_id, pr_number, merge_commit_sha, merged_at, base_ref, window_days DEFAULT 14, due_at, status, attempts`, with `UNIQUE(installation_id, github_repo_id, pr_number, merge_commit_sha, window_days)`. **The published denominator is `count(outcome_jobs WHERE status='done')`** — never `count(outcomes)`, which multi-counts. The same migration gives `outcomes` its identity columns (`github_repo_id, installation_id, window_days, detail JSON`) and `verdicts` a `source` and a `prompt_hash`; all verdict↔outcome joins re-key on ids, the repo string becomes display-only.
+3. **The adjudicator** — a Cloud Scheduler–triggered Cloud Run Job (2Gi) claiming `due_at <= now()` with `FOR UPDATE SKIP LOCKED`, running the **same revert detector as the backtest** (`backtest/git_labels.py`, reused verbatim) over a treeless clone, then a pure function (job rows, revert map) → append-only `outcomes` rows carrying evidence (`detail`: anchor sha, revert sha), never judgments. `base_ref` not on the cloned default branch adjudicates **censored, never clean**.
+4. **Surfaces** — the check-run summary is the product surface: per-PR verdict, receipt content, monotone dated adjudication counters ("N adjudicated · M pending, as of <date>"), and the deep-read meter line. A per-installation opaque token (minted on `installation.created`, hash stored in `installations`, dispensed via a GitHub-token-verified endpoint) scopes API access (`/v1/queue`, receipts) for design partners. The **public Doug-on-Doug scoreboard** ships as the dogfood proof. Tenant web dashboards wait for the tenancy spec's steps 3–4.
+
+Everything runs on what's deployed: Cloud Run + Cloud SQL Postgres 18, merge-to-main deploys, Claude on the existing key (Vertex AI as a later procurement option, not a design change). **No AlloyDB, BigQuery, Pub/Sub, or Cloud Tasks until a Postgres table is measurably the bottleneck.**
+
+## Resolved tensions
+
+- **Tension:** outcome table shape — PE's lean `merges` vs Architect's `outcome_jobs`.
+  **Call:** `outcome_jobs` shape (uniqueness, attempts, window_days) in PE's placement (migration 002, Task 2's runner). **Killed:** the bare `merges` table; `count(outcomes)` as denominator. **Why:** GitHub redelivers `closed`; without the unique key one PR gets two timers and two outcome rows — dedup is structural or the denominator is wrong (plan:720-743 makes uniqueness the mechanism).
+
+- **Tension:** clock start now vs after step 2.
+  **Call:** amend step 2 in place, honestly scoped (~2 days: fourth `handled` clause, separate dispatch branch, `_pr_payload(merged=...)`, closed-unmerged test). **Killed:** bolting on after (second migration, second handler pass); re-planning step 2 (4,591 reviewed lines). **Why:** the plan deliberately no-ops `closed` — the only clock-start event is currently discarded.
+
+- **Tension:** one revert detector vs a live webhook-driven second one.
+  **Call:** `git_labels.py` is the only detector, run in the adjudicator Job. **Killed:** a second matcher; `/internal/sweep` on the API service (512Mi/300s can't clone a monorepo, and it competes with the 10s webhook deadline); Cloud Tasks (second clock authority); a rate limiter (5k req/hr vs ~5 calls/PR — doesn't bind). **Why:** live labels and backtest labels must be the same event or published rates aren't comparable to the validated evidence.
+
+- **Tension:** MCP garden in v1 vs gated.
+  **Call:** **cut from v1.** The garden is v1.5, write-time only, a separate Cloud Run service (same image), shipping only when it can answer (first adjudicated rows + a minimum-n floor), serving *adjudicated history with citations* — n and provenance inside the same sentence as the claim. The word "pattern" gates on the three unrun probes (IDEAS.md). **Killed:** an MCP tool live on day 1 (it would refuse every call for a quarter — agents cache tool lists and never come back); same-container MCP; WorkOS-minted tokens (no dashboard exists); DIY OAuth. **Why:** shipping a refusing tool spends the honesty budget on theater.
+
+- **Tension:** customer surface vs v1 austerity.
+  **Call:** check-run summary as primary surface + token-scoped API + public dogfood scoreboard; no tenant browser page (bearer-token-in-URL leaks), no live cross-PR "5 need you" count frozen into check runs (stale-state claim inside a falsifiability instrument). **Killed:** curl-only v1; public per-PR permalinks before tenancy (enumerable URLs render other tenants' rationales, which quote source); WorkOS in v1. **Why:** the empty scoreboard is only the product if the customer can watch it fill — GitHub already authenticates the check run on every PR.
+
+- **Tension:** pricing the reader vs pricing the ledger.
+  **Call:** price attaches to the **ledger**: $99/installation/mo covering 5 active repos and 200 pooled deep reads ($15/additional repo, $0.40/read overage), buying retained + published adjudication history, multi-source verdict grading, and export. Deep-read metering is an abuse control and COGS recovery, not the value story. No self-serve free tier; design partners get hand-comped allowance rows. Hard per-installation read caps, fork-PR and bot-author exclusion from deep reads, and Anthropic timeout/retry/spend caps land **before any outside install**. **Killed:** $19 flat; per-seat; per-repo-only pricing (starves multi-repo adoption, and adjudication is the cross-repo asset); the copy "watch the bill move with the routing dial" (false — under ADR-0004 every ranked PR is deep-read; the dial routes attention, not spend); an uncapped free tier (~$39/repo/mo attacker-steerable). **Why:** the read is the commodity being absorbed into platform pricing; the ledger is the thing nobody else has.
+
+- **Tension:** day-1 claim ambition vs the two honestly citable results.
+  **Call:** the claim is a *ranking result plus a dated IOU*: "On two public repos, reading the diff ranked defect-carrying PRs above every metadata baseline (AUC 0.687/0.668, pre-registered, replicated). We don't know your number. Your scoreboard starts 0 adjudicated / M pending; at your merge volume N≥30 lands around <date>." Cleared-band copy permanently carries: cleared = not deeply inspected by a human; on one of two research repos the cleared band was not safer than blind. **Killed:** capture-rate percentages in sales copy; per-author-type/agentic-trust claims (~150k PRs to measure); the "learns from outcomes" verb before the customer's own loop closes; auto-merge of the cleared band. **Why:** the standing kill criterion — 2 of 3 prospects say "that's not right" — fires on the first overclaimed report.
+
+- **Tension:** ADR-0009's staging trigger vs paying tenants.
+  **Call:** accepted knowingly: gated-traffic deploys (candidate → smoke → promote) are the v1 mitigation; a staging environment lands at tenant #2 or the first deploy-caused incident. Recorded as an open risk, not resolved.
+
+- **Tension:** 14-day legibility vs slow defects.
+  **Call:** both windows (14 + 60), right-censoring rate published. The 60-day rows are deferred ~45 days as a runbook backfill (one `INSERT...SELECT` over stored merge facts) that **must run before the first 14-day publication**. **Killed:** 14-only (over-samples fast loud failures — flaky-bug median detection is 34 days).
+
+## Supersessions
+
+- **Flagged-vs-cleared comparison → cleared-band miss rate.** Round 1 ordered a renderer emitting both bands' revert rates side by side; the overclaim red-team showed that visual *is* the causal claim the design forswears, and the flagged band is contaminated by the intervention itself (flagging causes scrutiny). Superseded: publish the **cleared-band miss rate alone**, against the repo's own historical base rate from a `git_labels` backfill.
+- **PE's MCP-in-v1 → cut**, by his own empty-table argument, weaponized by two challengers.
+- **"Audit of the review you already run" → "audit of what your process shipped."** Live scoring hardcodes `approvals=0` (review.py:70,103) — Doug cannot yet see review state, so "review audit" was the wrong noun on day 1. The `source` column + `pull_request_review` ingest makes reviewer-grading real, at which point the stronger copy can return.
+- ADR-0003 (job-summary surface) dies into ADR-0010 (one neutral check run named `Doug`) exactly as the step-2 plan already carries; noted here because this design leans on the check run as *the* surface.
+
+## Warranted mitigations applied (red-team)
+
+- **Coverage integrity (overclaim #1):** `Coverage` gains `changed_files` + `files_dropped` from the PR object; `complete` requires `files_sent == changed_files`; `list_files` paginates or the read refuses. Without this, a 250-file PR bills as a clean complete deep read on 100 files (review.py:54-56, 77-81, 88-90; reader.py:238, 250-252).
+- **Third-party verdicts (altitude O1):** `verdicts.source` (`doug-reader | fallback | review:<login>` …) in migration 002; ingest subscribes to `pull_request_review` and records native reviews as adjudicable rows — no model cost, no meter impact. Comment-format parsing for specific bots (Bugbot, CodeRabbit) is deferred. Doug becomes the neutral grader, which is the uncontested lane.
+- **Live review state (overclaim #2):** `fetch_pr` fetches reviews (one API call), aligning the live deterministic tier with the backtested one (rubber-stamp becomes reachable).
+- **Pre-registration as artifact (altitude O3):** metric definitions, denominator, both windows, right-censoring, cadence, and next publication date published as a dated public document **before install #1**; its hash stored in every receipt beside `prompt_hash`. The moat is that incumbents *can't* publish miss rates against their marketing; make our commitment checkable, not copy.
+- **Intent/deviations off for tenants (overclaim #4 = scope #1):** per-installation flag, default OFF, ON for the dogfood install; labeled experimental; stays off until the pre-registered positive control passes. Fixes ride along: the second intent read is currently **uncapped and unmetered** (reader.py:372 has no try/except; the spend-cap seam covers only reader.py:313-319) — closed as part of the spend-cap work.
+- **IOU discloses its term (overclaim #5):** install-time projection "at your merge volume, N≥30 lands around <date>."
+- **Scope cuts (scope #2–5):** 60-day rows via runbook backfill; tenant browser page cut (token mint survives — its consumers are the API and later MCP); free tier cut (allowance rows, hand-comped); no live cross-PR count in check runs.
+- **Garden fragment channel (altitude O4, modified):** v1.5 also *serves* an AGENTS.md/DOUG.md fragment of adjudicated history for the **customer** to commit (CLI/API); the skeptic's Doug-opened-PR form was **rejected** — it violates the closed rule "never write code, never open a PR." The customer's merge of the fragment still yields the traced end-to-end example.
+- **Judged noise (unmitigated):** A2A/standards drift (MCP on Cloud Run is first-class and stable); prompt-hash/cross-pin and `base_ref` censoring challenges (kept — they're an hour each and guard published numbers); hand invoicing (already minimal).
+
+## Non-goals / do-not-reopen
+
+- **No public / cross-tenant garden in this design.** Nothing derived from the research corpus is servable across tenants (rationales quote getsentry/grafana source verbatim). A public garden requires its own store built from permissively-licensed sources, with citations — a separate design pass. (Legal posture per IDEAS.md: attribution as the product.)
+- **No auto-merge of the cleared band** (measured riskier-than-blind on one of two repos). Revisit only with customer-local adjudicated evidence.
+- **No per-author-type (agent vs human) claims** until the data exists (~150k PRs).
+- **Nothing outcome-derived enters `score()`** unless `backtest/replay.py:56` can replay it; any garden→review entry additionally gates on the 2.34× disjoint-population bar (IDEAS.md). ADR-0002's separate-frozen-prompt rule stands.
+- **Doug never writes code, never opens a PR, never blocks.** Unchanged, load-bearing, brand-level.
+- **Closed ADRs stay closed:** 0001, 0002 (now actually test-pinned), 0004, 0005 (extended: caveats travel inside MCP payload strings), 0006, 0007, 0008, 0009 (with the accepted-risk note above).
+- **Deterministic-tier ranking is not the product** (near-random on repo #2); it is the loud, labeled fallback.
+
+## Open risks (explicit, unresolved)
+
+1. ADR-0009 staging trigger accepted, not resolved (mitigation: gated deploys; trigger for real staging: tenant #2 or first incident).
+2. Single-model, single-prompt dependency (one frozen instrument; model retirement or price change forces a new validation run).
+3. Revert-label noise (reverts fire for flags, dep conflicts, release trains) — published numbers carry a stated label-noise estimate; no fix, only honesty.
+4. Low-base-rate repos may sit below the N floor for ~a year (grafana math: 0.37% × 150 PRs/mo ≈ 1–2 defects/quarter) — the install-time projection discloses it; if design partners churn on it, the wedge needs re-aiming at higher-volume orgs.
+5. Monorepo clone cost in the adjudicator Job (revisit sizing at first large tenant).
+6. Cursor could ship "graded against reverts" in a quarter; the defense is the pre-registration artifact + accumulated per-customer history, not secrecy.
