@@ -16,9 +16,9 @@ Effort marks are engineer-days of focused work, not calendar days.
 The items that make every later step messier the longer they wait.
 
 - [x] **Merge PR #15** (`fix/reliability-review`) — lands the gated-traffic deploy + web timeout fix; merging FIRST avoids the known collision with step-2 Tasks 9/10 (else: deliberate rebase, its `/v1/review` idempotency work dies with the endpoint). Merged `0d95884`.
-- [x] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — PR #16 merged `240caf5`, deployed.
+- [x] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — merged `240caf5` (#16).
 - [x] **Decide** `workflow-summary-test-fidelity` branch: merge or drop (~49 test lines) — dropped; its only real content was already on main byte-identical, branch deleted.
-- [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — deferred by Andrew (2026-08-01), needs Anthropic console access.
+- [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — confirmed NOT in the public repo (full-history pickaxe search across all branches, file never tracked, covered by `.gitignore`), so no public exposure; Andrew rotates the live prod key via gcloud on his own schedule, then deletes this local file.
 - [x] **Confirm intent-stream posture** (design already assumes it): per-installation flag, default OFF for tenants, ON for dogfood, labeled experimental — confirmed in `design-lock.md:62`.
 - [x] Fix stale `.env.example` (`MAGPIE_*` → current names) — trivial, stops onboarding confusion. Shipped in PR #16.
 
@@ -38,8 +38,10 @@ executed as written — amendments folded in at their task, never as a second pa
   hash-only storage makes an install-time mint unrecoverable; M2's dispense endpoint mints.
 - [ ] Tasks 3–5: durable job queue, worker drain, app auth (githubkit auth dep added)
 - [ ] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
-  never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `installation.created`
-  token mint (hash into `installations`), **plus** `pull_request_review` ingest → third-party verdict rows
+  never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `pull_request_review`
+  ingest → third-party verdict rows (`source='review:<login>'`, no score, no model call). The
+  `installation.created` token mint that used to sit here is superseded (see Tasks 1–2); note the
+  GitHub App needs its "Pull request review" event subscription enabled at the Task 10 cutover.
 - [ ] Task 7: check run (ADR-0010 supersedes ADR-0003 in the same commit)
 - [ ] Task 8: reconcile-on-startup by head sha
 - [ ] Tasks 9–10: delete CI token path, cutover deploy (rebase vs. merged #15 done deliberately)
