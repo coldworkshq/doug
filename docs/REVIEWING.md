@@ -59,3 +59,21 @@ The step-2 plan carries literal code. Several times its sample violated a constr
 same plan states in prose. The standing ruling is that plan **intent** governs over plan
 **sample**, the fix goes in, and the ruling gets recorded in the PR body rather than
 applied silently — the plan was reviewed by people who deserve to see where it was wrong.
+
+## Doug's own findings: expect roughly half to be disproved by code it wasn't shown
+
+Two rounds of Doug reviewing this branch produced nine findings. Four were real, two were
+disproved by files outside the diff (`Coverage` declaring the field it was said to reject;
+`save_deviations` always writing a row, so "no rows" means no read rather than a dropped
+one), and three were "wrong as stated, right about something adjacent."
+
+That last category is the valuable one and the easiest to throw away. Doug claimed the
+replay path could reuse the wrong coverage for the intent read; it cannot, because
+`coverage()` is a pure function of the diff. But the property was asserted in two docstrings
+and enforced by nothing, and the replay path had just started depending on it — so the
+finding was right that something was missing, and wrong about what. It bought a test.
+
+The rule: before dismissing a finding, find the code that disproves it and say which file
+that was. Before accepting one, check whether the fix it suggests is the fix the codebase
+actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
+was not to add a lock but to upgrade an already-planned index to a unique one.
