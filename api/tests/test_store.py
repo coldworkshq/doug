@@ -474,3 +474,56 @@ def test_pre_sha_rows_never_match_and_get_rescored_once(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review("o/r", 7, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
     assert store.find_review("o/r", 7, "a" * 40) is None
+
+
+def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
+    """find_review-then-score is a check-then-act spanning a whole paid
+    read, so two overlapping webhook deliveries both missed the lookup and
+    both paid — the exact double-spend the dedup exists to prevent. The
+    per-(repo, pr, sha) in-flight lock makes the second delivery wait,
+    then replay. (In-process only: a cross-instance duplicate is still
+    possible and tolerated.)
+    """
+    import threading
+    import time
+
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
+    scored = []
+    real_score_one = review.score_one
+
+    def slow_score(meta, diff):
+        scored.append(1)
+        time.sleep(0.2)  # hold the race window open
+        return real_score_one(meta, diff)
+
+    monkeypatch.setattr(review, "score_one", slow_score)
+
+    c = TestClient(app)
+    results = []
+
+    def hit():
+        results.append(
+            c.post(
+                "/v1/review", json={"repo": "o/r", "pr_number": 7},
+                headers={"x-doug-token": "secret"},
+            ).json()
+        )
+
+    threads = [threading.Thread(target=hit) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(scored) == 1, "the overlapping delivery must wait and replay, not pay"
+    replays = [
+        r for r in results
+        if any(x["rule"] == "idempotent-replay" for x in r["reasons"])
+    ]
+    assert len(replays) == 1
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 1

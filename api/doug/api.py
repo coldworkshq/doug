@@ -3,6 +3,8 @@
 import hmac
 import json
 import os
+import threading
+from contextlib import contextmanager
 from importlib import resources
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -99,40 +101,81 @@ def review_pr(
 
     # Idempotency: a webhook redelivery or retried CI job for a commit this
     # ledger has already scored replays the recorded verdict — no second
-    # paid read, no duplicate row for precision to double-count. Any lookup
-    # failure falls through to a fresh score: the worst case of a broken
-    # dedup read is one duplicate, never a failed CI.
+    # paid read, no duplicate row for precision to double-count.
     if meta.head_sha and not req.force:
-        try:
-            prior = store.find_review(req.repo, req.pr_number, meta.head_sha)
-        except Exception:  # noqa: BLE001
-            prior = None
-        if prior is not None:
-            reasons = [Reason(**r) for r in prior["reasons"]]
-            reasons.append(
-                Reason(
-                    rule="idempotent-replay",
-                    label=(
-                        f"Verdict for {meta.head_sha[:12]} was already recorded; "
-                        "replayed without a new read. POST force=true to rescore."
-                    ),
-                    weight=0.0,
-                )
-            )
-            return ReviewResponse(
-                score=prior["score"],
-                band=Band(prior["band"]),
-                threshold=prior["threshold"],
-                reasons=reasons,
-                deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
-                intent_alignment=prior["intent_alignment"],
-                intent_refs=prior["intent_refs"],
-                # The stored risk-read reasons already carry any read-truncated
-                # hedge; the intent read's own coverage was not persisted, so a
-                # replay does not invent one.
-                intent_notice=None,
-            )
+        # A read takes tens of seconds, so "already scored?" then "score"
+        # is a wide-open check-then-act: two overlapping deliveries would
+        # both miss the lookup and both pay. Serialise per (repo, pr, sha)
+        # so the duplicate waits, then replays. In-process only — a
+        # cross-instance duplicate stays possible and tolerated (consumers
+        # key off max(verdict id)); a DB unique index isn't available
+        # because create_all never alters live tables.
+        with _inflight_review(req.repo, req.pr_number, meta.head_sha):
+            if (replay := _replay_or_none(req, meta)) is not None:
+                return replay
+            return _score_and_persist(req, gh, owner, name, meta, diff)
+    return _score_and_persist(req, gh, owner, name, meta, diff)
 
+
+_inflight_guard = threading.Lock()
+_inflight_locks: dict[tuple[str, int, str], threading.Lock] = {}
+
+
+@contextmanager
+def _inflight_review(repo: str, pr_number: int, head_sha: str):
+    key = (repo, pr_number, head_sha)
+    with _inflight_guard:
+        lock = _inflight_locks.setdefault(key, threading.Lock())
+    with lock:
+        yield
+    # Dropped after release, not refcounted: a waiter already holding this
+    # lock object proceeds fine, and by the time a third request misses the
+    # dict the verdict is durable, so its find_review hits.
+    with _inflight_guard:
+        _inflight_locks.pop(key, None)
+
+
+def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | None:
+    """The recorded verdict for this exact commit, or None to score fresh.
+
+    Any lookup failure falls through to a fresh score: the worst case of a
+    broken dedup read is one duplicate, never a failed CI.
+    """
+    try:
+        prior = store.find_review(req.repo, req.pr_number, meta.head_sha)
+    except Exception:  # noqa: BLE001
+        prior = None
+    if prior is None:
+        return None
+    reasons = [Reason(**r) for r in prior["reasons"]]
+    reasons.append(
+        Reason(
+            rule="idempotent-replay",
+            label=(
+                f"Verdict for {meta.head_sha[:12]} was already recorded; "
+                "replayed without a new read. POST force=true to rescore."
+            ),
+            weight=0.0,
+        )
+    )
+    return ReviewResponse(
+        score=prior["score"],
+        band=Band(prior["band"]),
+        threshold=prior["threshold"],
+        reasons=reasons,
+        deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
+        intent_alignment=prior["intent_alignment"],
+        intent_refs=prior["intent_refs"],
+        # The stored risk-read reasons already carry any read-truncated
+        # hedge; the intent read's own coverage was not persisted, so a
+        # replay does not invent one.
+        intent_notice=None,
+    )
+
+
+def _score_and_persist(
+    req: ReviewRequest, gh, owner: str, name: str, meta: PRMetadata, diff: str
+) -> ReviewResponse:
     tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
 
