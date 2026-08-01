@@ -289,3 +289,27 @@ def test_cleared_band_reports_zero_lift_for_an_empty_population():
     band = cleared_band(capture_curve([]), n=0, total_defects=0, flag_rate=0.20)
     assert band.density == 0.0
     assert band.density_lift == 0.0
+
+
+def test_concurrent_checkpoints_land_whole(tmp_path):
+    """Checkpoint appends now run in worker threads so a big harvest's
+    10,000+ writes stop pausing every in-flight request. Off-loop writes
+    can interleave without the lock, and a torn line silently loses the
+    resume state the checkpoint exists to protect — every line must
+    survive concurrency intact.
+    """
+    path = tmp_path / "partial.jsonl"
+
+    async def hammer():
+        lock = asyncio.Lock()
+        payloads = [{"number": i, "pad": "x" * 2000} for i in range(50)]
+        await asyncio.gather(
+            *(
+                harvest_mod._checkpoint(lock, path, json.dumps(p) + "\n")
+                for p in payloads
+            )
+        )
+
+    asyncio.run(hammer())
+    lines = [json.loads(s) for s in path.read_text().splitlines() if s.strip()]
+    assert sorted(p["number"] for p in lines) == list(range(50))

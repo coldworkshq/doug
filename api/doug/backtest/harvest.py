@@ -132,6 +132,23 @@ def _load_partial(path: Path) -> dict[int, HarvestedPR]:
     return {pr.number: pr for pr in prs}
 
 
+def _append_line(path: Path, line: str) -> None:
+    with path.open("a") as f:
+        f.write(line)
+
+
+async def _checkpoint(lock: asyncio.Lock, path: Path, line: str) -> None:
+    """Append one checkpoint line without stalling the loop.
+
+    File I/O here is synchronous and used to run inline in the coroutine,
+    pausing every in-flight request for each of the 10,000+ appends a big
+    harvest makes — painful on slow or network-mounted cache dirs. The
+    lock keeps concurrent appends whole now that they run off-loop.
+    """
+    async with lock:
+        await asyncio.to_thread(_append_line, path, line)
+
+
 async def _enrich_all(
     gh, owner: str, repo: str, merged: list, partial: Path | None
 ) -> list[HarvestedPR]:
@@ -142,6 +159,7 @@ async def _enrich_all(
     if done:
         print(f"  resuming: {len(done)} PRs already enriched in checkpoint", flush=True)
     sem = asyncio.Semaphore(CONCURRENCY)
+    write_lock = asyncio.Lock()
     count = 0
 
     async def one(pull) -> HarvestedPR:
@@ -151,8 +169,7 @@ async def _enrich_all(
         else:
             result = await _enrich(gh, owner, repo, pull, sem)
             if partial is not None:
-                with partial.open("a") as f:
-                    f.write(json.dumps(result.model_dump()) + "\n")
+                await _checkpoint(write_lock, partial, json.dumps(result.model_dump()) + "\n")
         count += 1
         if count % 50 == 0:
             print(f"  enriched {count}/{len(merged)}…", flush=True)
@@ -277,18 +294,19 @@ async def _backfill(
 ) -> None:
     async with GitHub(token, auto_retry=_RETRY) as gh:
         sem = asyncio.Semaphore(CONCURRENCY)
+        write_lock = asyncio.Lock()
         count = 0
 
         async def one(number: int) -> None:
             nonlocal count
             details = await _fetch_file_details(gh, owner, repo, number, sem)
-            with sidecar.open("a") as f:
-                f.write(
-                    json.dumps(
-                        {"number": number, "file_details": [d.model_dump() for d in details]}
-                    )
-                    + "\n"
+            line = (
+                json.dumps(
+                    {"number": number, "file_details": [d.model_dump() for d in details]}
                 )
+                + "\n"
+            )
+            await _checkpoint(write_lock, sidecar, line)
             count += 1
             if count % 100 == 0:
                 print(f"  details {count}/{len(targets)}…", flush=True)
