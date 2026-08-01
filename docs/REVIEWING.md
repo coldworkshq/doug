@@ -32,6 +32,23 @@ Neither was a bad finding; both were unresolvable from what it was shown. Check 
 surrounding code before fixing or dismissing, and record which one it was. The same rule
 binds agent reviewers, who should mark these ⚠️ rather than assert them.
 
+## Verify platform semantics before fixing a platform finding
+
+PR #22 produced a plausible warning that a `neutral` check run might not satisfy a
+required check in some GitHub configurations. That would undermine ADR-0010, but GitHub's
+current documentation says the opposite: `success`, `skipped`, and `neutral` are
+successful required-check states.
+
+Claims about GitHub behavior need current primary-source evidence before they change code
+or a decision record. If the documentation is clear, cite it in the disposition. If it is
+not, reproduce the exact branch-protection or ruleset configuration. Do not turn “the
+check is missing” or “the check came from the wrong expected App” into “`neutral`
+blocks” — those are different failure modes. A required check can wait forever when no
+result is posted; a posted `neutral` result satisfies the required status check.
+
+Source checked 2026-08-01: [Troubleshooting required status
+checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#required-check-needs-to-succeed-against-the-latest-commit-sha).
+
 ## Read Doug's coverage line before trusting its verdict
 
 Every verdict carries what was actually read: `Partial read: 83% of the diff (30,000 of

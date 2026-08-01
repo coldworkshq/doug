@@ -57,8 +57,9 @@ the App exists to remove.
 
 **A `success` or `failure` conclusion, however generously thresholded.**
 This is what ADR-0003 actually rejected and it stays rejected. A red
-check is a merge gate in any repo with required checks turned on, and
-Doug's precision does not support gating anything.
+Doug check becomes a merge gate when an admin requires it, and even when
+it is not required it falsely signals failure. Doug's precision does not
+support either outcome.
 
 **PR comments.** Unchanged from ADR-0003: a wrong comment notifies every
 subscriber and it persists.
@@ -75,17 +76,21 @@ outcome, only a less useful one.
 - ADR-0003 is superseded and stops being fed to the reader. Left
   `accepted`, it would make Doug's own check-run code read as a deviation
   from Doug's own decisions.
-- Never-blocks becomes structural rather than procedural. It used to rest
-  on `continue-on-error: true` in a YAML file the adopting repo owned and
-  could edit; it now rests on a conclusion value GitHub does not treat as
-  a gate.
+- For every check run Doug posts, never-blocks becomes structural rather
+  than procedural. It used to rest on `continue-on-error: true` in a YAML
+  file the adopting repo owned and could edit; it now rests on a
+  conclusion value GitHub accepts as a successful required-check state.
 - An admin can still add the `Doug` check to a branch's required checks.
-  Nothing prevents that, and a neutral conclusion satisfies it — the
-  check being *present* is all such a rule can demand of us.
+  A correctly sourced `neutral` result on the latest head satisfies it,
+  but requiring Doug also makes its presence, freshness, and configured
+  App source merge dependencies. A missing result or one from the wrong
+  expected App does not satisfy the rule.
 - Visibility rises: the check appears in the PR's check list without
   anyone opening a summary. Wrong findings get seen more often too. That
   is the cost of the upgrade, and it is why the tier in the title and the
   `unvalidated` label on deviations are load-bearing rather than
   decoration.
-- A Doug outage stays invisible to the repo, which is still correct: no
-  check run posted is no signal, not a red one.
+- With Doug left advisory, an outage stays invisible to the repo: no check
+  run posted is no signal, not a red one. If an admin makes Doug required,
+  the same outage can leave the pull request waiting; that configuration
+  turns Doug's availability into a gate despite the advisory conclusion.
