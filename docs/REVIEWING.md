@@ -94,3 +94,43 @@ The rule: before dismissing a finding, find the code that disproves it and say w
 that was. Before accepting one, check whether the fix it suggests is the fix the codebase
 actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
 was not to add a lock but to upgrade an already-planned index to a unique one.
+
+## New tables never need a migration — only new columns on an existing one do
+
+PR #25 got a medium finding: `deep_read_counters` and `verdicts.prompt_hash` looked
+unmigrated, so a deployed database would raise on first use. `store.py`'s own module
+docstring disproves half of it (`prompt_hash` already has both a `Table` column and a
+migration 001 entry, landed in #18, outside this diff) and the migration mechanism itself
+disproves the other half: `migrations.py`'s `MIGRATIONS` list has never once contained a
+`CREATE TABLE` — `review_jobs`, `installations`, `installation_repos`, and `outcome_jobs`
+all shipped without one, because `create_all()` (called on every `_get_engine()`) adds any
+table missing from the target database and only ever fails to add a *column* to a table
+that already exists. A migration is for the second case, never the first.
+
+Not a bad finding — a fresh reader has no way to know that convention from the diff alone,
+and it bought a real regression test (`test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it`)
+that builds a database with every table except the new one and proves `create_all()` still
+adds it. Same rule as PR #19's datetime finding: check the surrounding code, then say which
+file settled it, in the disposition — here, `store.py`'s docstring plus the absence of any
+`CREATE TABLE` anywhere in `migrations.py`.
+
+## A completeness check must be about content that could have been reviewed, not about hitting an API's raw file list
+
+PR #25 also introduced `Coverage.complete` requiring `files_sent == changed_files`, and got
+a real medium finding: a PR touching one binary file (a screenshot, a lockfile checksum)
+would be marked incomplete forever, because a file with no patch never produces a diff
+header and `files_sent` can never count it. The naive fix — drop the check — would have
+reopened the exact bug it exists to catch (a 250-file PR silently rendering as fully read).
+
+The right fix distinguishes what GitHub's `DiffEntry` actually tells you: a genuine binary
+comes back with `additions == deletions == 0` alongside `patch=None`, because git cannot
+count lines in it. A large text file GitHub declines to inline for size still carries the
+real line counts it computed. Only the second case is content that should have been
+reviewable and was not — `files_dropped` now excludes the first, and `complete` compares
+against `files_dropped` rather than the raw `changed_files` count, which was always going to
+disagree with `files_sent` on any PR touching a non-text file. `changed_files` stays as a
+display fact for the receipt ("N of M"), decoupled from the boolean.
+
+Same shape as the idempotency-pre-read case above: the finding named a real gap and
+suggested the wrong repair. The useful move was asking what GitHub's own data can actually
+distinguish before picking which files count as "dropped."

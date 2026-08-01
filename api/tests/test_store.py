@@ -105,6 +105,42 @@ def test_review_endpoint_scores_and_persists(tmp_path, monkeypatch):
         assert v["tier"] == "deterministic" and v["pr_number"] == 7
 
 
+def test_review_endpoint_stamps_the_prompt_hash_on_reader_tier_verdicts(tmp_path, monkeypatch):
+    """The anchor a receipt points at to say 'this verdict used this exact
+    prompt' has to actually be written by the live path, not just
+    plumbed through save_review and left uncalled."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    monkeypatch.setattr(reader, "read_diff", lambda pr, diff: RV)
+    TestClient(app).post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret", "x-github-token": "gh"},
+    )
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["tier"] == "reader"
+    assert v["prompt_hash"] == reader.PROMPT_HASH
+
+
+def test_review_endpoint_leaves_prompt_hash_null_on_the_deterministic_tier(tmp_path, monkeypatch):
+    """The deterministic tier never opens the diff, so stamping a prompt
+    hash on it would claim an instrument that was never actually run."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    TestClient(app).post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret", "x-github-token": "gh"},
+    )
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["tier"] == "deterministic"
+    assert v["prompt_hash"] is None
+
+
 def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review(
@@ -801,3 +837,113 @@ def test_outcome_jobs_permits_the_same_pr_with_a_different_window(tmp_path, monk
     with engine.connect() as conn:
         rows = conn.execute(select(store.outcome_jobs)).mappings().all()
     assert len(rows) == 2
+
+
+# --- Deep-read spend cap -------------------------------------------------
+
+def test_record_deep_read_allows_reads_under_the_cap(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.record_deep_read("installation:1", cap=3) is True
+    assert store.record_deep_read("installation:1", cap=3) is True
+    assert store.record_deep_read("installation:1", cap=3) is True
+
+
+def test_record_deep_read_refuses_once_the_cap_is_reached(tmp_path, monkeypatch):
+    """The read that would put a scope over its monthly cap must be refused
+    — and refused *before* any model call, since the whole point is COGS
+    control, not a receipt that says "over budget" after paying for one
+    more read anyway."""
+    _db(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2) is True
+    assert store.record_deep_read("installation:1", cap=2) is False
+    # And it stays refused — this isn't a one-shot trip.
+    assert store.record_deep_read("installation:1", cap=2) is False
+
+
+def test_record_deep_read_scopes_are_independent(tmp_path, monkeypatch):
+    """One installation's spend must never count against another's cap —
+    the whole reason this is keyed by scope and not a single global
+    counter."""
+    _db(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2) is True
+    assert store.record_deep_read("installation:1", cap=2) is False
+    assert store.record_deep_read("installation:2", cap=2) is True
+
+
+def test_record_deep_read_resets_on_a_new_period(tmp_path, monkeypatch):
+    """A cap that never resets is not a monthly cap, it's a lifetime ban."""
+    _db(tmp_path, monkeypatch)
+    jan = datetime(2026, 1, 15, tzinfo=UTC)
+    feb = datetime(2026, 2, 1, tzinfo=UTC)
+    for _ in range(2):
+        assert store.record_deep_read("installation:1", cap=2, now=jan) is True
+    assert store.record_deep_read("installation:1", cap=2, now=jan) is False
+    assert store.record_deep_read("installation:1", cap=2, now=feb) is True
+
+
+def test_record_deep_read_is_a_noop_without_a_ledger(tmp_path, monkeypatch):
+    """Every other store.py helper degrades to a harmless no-op when
+    DATABASE_URL is unset, so local dogfooding needs no database. A cap
+    that could never be satisfied without a ledger would silently break
+    every uncapped local run — the no-op here has to mean "allowed",
+    matching every other disabled-ledger helper's default."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.record_deep_read("installation:1", cap=0) is True
+
+
+def test_record_deep_read_does_not_overshoot_the_cap_under_repeated_calls(tmp_path, monkeypatch):
+    """The atomicity that matters: a single `UPDATE ... WHERE count < cap`
+    statement, not a read-then-write pair — the same class of
+    check-then-act bug this ledger has hit before (the review dedup lookup,
+    fixed in the reliability sweep). Calling well past the cap must never
+    let the stored count exceed it."""
+    _db(tmp_path, monkeypatch)
+    results = [store.record_deep_read("installation:1", cap=5) for _ in range(20)]
+    assert results == [True] * 5 + [False] * 15
+    engine = create_engine(_db(tmp_path, monkeypatch))
+    with engine.connect() as conn:
+        row = conn.execute(select(store.deep_read_counters)).mappings().one()
+    assert row["count"] == 5
+
+
+def test_save_review_records_the_prompt_hash(tmp_path, monkeypatch):
+    """The anchor a receipt or the pre-registration document points at to
+    say 'this verdict came from this exact instrument'. Missing it is the
+    same class of gap as missing github_repo_id — a fact about the row
+    that nothing else on it can reconstruct."""
+    url = _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV, model=reader.MODEL, prompt_hash=reader.PROMPT_HASH,
+    )
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["id"] == vid
+    assert v["prompt_hash"] == reader.PROMPT_HASH
+
+
+def test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it(tmp_path):
+    """New tables never need a migration entry in this codebase — only new
+    columns on an existing table do, because create_all() adds missing
+    tables and only migrations.apply() can add a column to one that
+    already exists. This proves the mechanism directly: a database built
+    before deep_read_counters existed still gets it, the same way
+    review_jobs/installations/outcome_jobs did when each was added."""
+    from sqlalchemy import create_engine, inspect
+
+    from doug import migrations
+
+    url = f"sqlite:///{tmp_path}/pre-existing.db"
+    engine = create_engine(url)
+    # Simulate "yesterday's" schema: every table but the one this test is
+    # about, built the same way store._get_engine() builds a fresh one.
+    old_tables = [t for t in store.metadata.sorted_tables if t.name != "deep_read_counters"]
+    for table in old_tables:
+        table.create(engine, checkfirst=True)
+    migrations.schema_migrations.create(engine, checkfirst=True)
+    assert "deep_read_counters" not in inspect(engine).get_table_names()
+
+    store.metadata.create_all(engine)  # what _get_engine() does on every call
+    assert "deep_read_counters" in inspect(engine).get_table_names()

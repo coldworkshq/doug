@@ -250,6 +250,22 @@ outcome_jobs = Table(
     ),
 )
 
+# Deep-read spend cap, metered per scope per UTC calendar month. `scope` is
+# caller-defined (e.g. "installation:150424894") rather than a foreign key —
+# the reader's two model-call sites take no installation parameter yet
+# (score_one/read_intent's signatures are locked by the in-flight step-2
+# worker task), so this is the tested primitive a future caller wires in
+# once that context reaches reader.py, not an already-enforced cap.
+deep_read_counters = Table(
+    "deep_read_counters",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("scope", String(80), nullable=False),
+    Column("period", String(7), nullable=False),  # "YYYY-MM", UTC
+    Column("count", Integer, nullable=False, server_default="0"),
+    UniqueConstraint("scope", "period", name="uq_deep_read_period"),
+)
+
 _engine = None
 # The raw env string the engine was built from. Compared instead of
 # str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
@@ -299,6 +315,7 @@ def save_review(
     installation_id: int | None = None,
     head_sha: str | None = None,
     source: str | None = None,
+    prompt_hash: str | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
     storage is disabled — callers never branch on persistence.
@@ -335,6 +352,7 @@ def save_review(
                 "installation_id": installation_id,
                 "head_sha": head_sha,
                 "source": source,
+                "prompt_hash": prompt_hash,
             },
         ).scalar_one()
         rows = [
@@ -473,6 +491,48 @@ def set_installation_repos(
                 # update, not insert again — `known` only reflects rows that
                 # existed before this call started.
                 known[repo_id] = result.inserted_primary_key[0]
+
+
+def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bool:
+    """Attempt to spend one deep read against `scope`'s monthly cap.
+
+    Returns True and increments the counter if under cap; returns False
+    and leaves the counter unchanged if `scope` already has `cap` reads
+    recorded for the current UTC calendar month (or the month `now`
+    falls in, for tests). The caller must check this BEFORE making the
+    model call it would meter — a cap enforced after paying for the call
+    is not spend control, just a receipt.
+
+    The increment is a single `UPDATE ... WHERE count < cap` statement,
+    not a read-then-write pair: two concurrent callers racing the last
+    unit of cap must not both win. This ledger has hit that exact
+    check-then-act bug before (the review dedup lookup, fixed in the
+    reliability sweep) — the fix here is structural, not a lock.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return True
+    period = (now or datetime.now(UTC)).strftime("%Y-%m")
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                deep_read_counters.insert(), {"scope": scope, "period": period, "count": 0}
+            )
+    except IntegrityError:
+        # Another caller already created this scope/period row — expected
+        # under concurrency, same shape as upsert_installation's race.
+        pass
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(deep_read_counters)
+            .where(
+                deep_read_counters.c.scope == scope,
+                deep_read_counters.c.period == period,
+                deep_read_counters.c.count < cap,
+            )
+            .values(count=deep_read_counters.c.count + 1)
+        )
+        return result.rowcount > 0
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:

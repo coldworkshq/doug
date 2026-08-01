@@ -199,3 +199,43 @@ def test_default_client_never_carries_the_sdk_default_timeout(monkeypatch):
         _pr(), "+ x", docs=[SimpleNamespace(id="ADR-1", title="t", body="b")],
     )
     assert captured["timeout"] == 45.0
+
+
+# --- ADR-0002: the reader's frozen prompt is the probe's, verbatim -------
+
+def test_reader_and_probe_share_the_validated_prompt_bytes():
+    """ADR-0002 claims reader.py is byte-identical to scripts/llm_probe.py,
+    the module the Phase-1 probes actually validated (AUC 0.687/0.668,
+    pre-registered, replicated). Until now nothing checked that — the only
+    existing assertion near this compared reader.py to itself (read_diff
+    passes reader.SYSTEM to the API call; of course it equals reader.SYSTEM).
+    llm_probe.py keeps its own independent copies of these constants
+    (unlike SLUG_MERGES, which the probe imports from doug.patterns), so
+    only a real cross-module comparison can catch the two drifting —
+    at which point the live service would be running an unvalidated
+    instrument under a validated instrument's claimed AUC."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import llm_probe
+
+    assert reader.SYSTEM == llm_probe.SYSTEM
+    assert reader.SCHEMA == llm_probe.SCHEMA
+    assert reader.DIFF_BUDGET == llm_probe.DIFF_BUDGET
+    assert reader.MODEL == llm_probe.MODEL
+
+
+def test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes(monkeypatch):
+    """A verdict's prompt_hash is the "these numbers are about the same
+    instrument" anchor for receipts and the pre-registration document —
+    it has to actually move when SYSTEM/SCHEMA move, or a silent prompt
+    edit would keep stamping old verdicts' hash on new-instrument reads."""
+    import hashlib
+
+    assert reader.PROMPT_HASH == hashlib.sha256(
+        (reader.SYSTEM + repr(reader.SCHEMA)).encode()
+    ).hexdigest()
+
+    monkeypatch.setattr(reader, "SYSTEM", reader.SYSTEM + " ")
+    assert reader._compute_prompt_hash() != reader.PROMPT_HASH

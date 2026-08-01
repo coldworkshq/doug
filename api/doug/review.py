@@ -44,6 +44,50 @@ def _html_url(p) -> str | None:
     return url if isinstance(url, str) else None
 
 
+GITHUB_MAX_PR_FILES = 3000  # GitHub's own documented list_files cap
+_MAX_PAGES = GITHUB_MAX_PR_FILES // 100
+
+
+def _list_all_files(gh, owner: str, repo: str, number: int) -> list:
+    """Every changed file, not just the first page.
+
+    A single per_page=100 call silently drops everything past file 100 —
+    a 250-file PR reads (and scores, and reports coverage) as if it had
+    100. GitHub signals the last page by returning fewer than per_page
+    rows, not by a cursor; looping on that is standard REST pagination.
+
+    Bounded at GitHub's own file cap: past that, GitHub itself would stop
+    returning more, so a full page at the bound means the PR has hit
+    GitHub's limit, not that this loop gave up early. Without the bound, a
+    client bug or a misbehaving mock that never returns a short page spins
+    forever.
+    """
+    files = []
+    for page in range(1, _MAX_PAGES + 1):
+        batch = gh.rest.pulls.list_files(
+            owner=owner, repo=repo, pull_number=number, per_page=100, page=page
+        ).parsed_data
+        files.extend(batch)
+        if len(batch) < 100:
+            break
+    return files
+
+
+def _dropped_files(files: list) -> list[str]:
+    """Files GitHub reported changed but sent no patch for — excluding
+    genuine binaries, which never had reviewable content to miss.
+
+    GitHub cannot count lines in a binary file, so a real binary comes
+    back with additions == deletions == 0 alongside patch=None. A large
+    text file GitHub declines to inline for size still carries the real
+    line counts it computed — that file WAS reviewable and is not here,
+    which is the gap this list exists to catch. Flagging binaries the
+    same way would mark most ordinary PRs incomplete (a screenshot, a
+    lockfile) and bury the signal that matters.
+    """
+    return [f.filename for f in files if not f.patch and (f.additions or f.deletions)]
+
+
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",
@@ -51,9 +95,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
     ).parsed_data[:limit]
     out = []
     for p in pulls:
-        files = gh.rest.pulls.list_files(
-            owner=owner, repo=repo, pull_number=p.number, per_page=100
-        ).parsed_data
+        files = _list_all_files(gh, owner, repo, p.number)
         meta = PRMetadata(
             number=p.number,
             title=p.title,
@@ -73,6 +115,13 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             files_added=sum(1 for f in files if f.status == "added"),
             files_modified=sum(1 for f in files if f.status == "modified"),
             url=_html_url(p),
+            # PullRequestSimple (what pulls.list returns) has no
+            # changed_files field — additions/deletions are absent for the
+            # same reason. The paginated count is the only source here,
+            # and it is trustworthy precisely because pagination is now
+            # complete.
+            changed_files=len(files),
+            files_dropped=_dropped_files(files),
         )
         diff = reader.CHUNK_SEPARATOR.join(
             reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
@@ -83,11 +132,46 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
     return out
 
 
-def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
-    p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
-    files = gh.rest.pulls.list_files(
+def _review_state(gh, owner: str, repo: str, number: int, opened_at) -> tuple[int, float | None]:
+    """Current approval count and seconds to the first approval, from the
+    PR's own review history.
+
+    A reviewer's LATEST decision is what counts — approve, then a later
+    changes-requested from the same person, leaves them not-approved,
+    exactly like GitHub's own PR page. COMMENTED/DISMISSED reviews carry
+    no decision and are excluded from that tally. Latency is measured to
+    the first approval event ever recorded, regardless of any later
+    change of heart: the rubber-stamp rule it feeds is about whether a
+    fast approval happened, not about the PR's current state.
+    """
+    reviews = gh.rest.pulls.list_reviews(
         owner=owner, repo=repo, pull_number=number, per_page=100
     ).parsed_data
+    latest_decision: dict[str, str] = {}
+    for r in reviews:
+        if r.user is None or r.state not in ("APPROVED", "CHANGES_REQUESTED"):
+            continue
+        latest_decision[r.user.login] = r.state
+    approvals = sum(1 for state in latest_decision.values() if state == "APPROVED")
+    approval_times = sorted(
+        r.submitted_at for r in reviews if r.state == "APPROVED" and r.submitted_at is not None
+    )
+    latency = (approval_times[0] - opened_at).total_seconds() if approval_times else None
+    return approvals, latency
+
+
+def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
+    p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
+    files = _list_all_files(gh, owner, repo, number)
+    try:
+        approvals, approval_latency_s = _review_state(gh, owner, repo, number, p.created_at)
+    except Exception as e:  # noqa: BLE001 — advisory signal, never fails the fetch
+        # Files and diff are the load-bearing return value; approvals feed
+        # one deterministic rule (rubber-stamp). A malformed review payload
+        # — a naive timestamp mixed with an aware one, a transport error —
+        # must cost that signal, not the PR fetch it rides along with.
+        print(f"doug: review-state fetch skipped ({type(e).__name__}: {e})", file=sys.stderr)
+        approvals, approval_latency_s = 0, None
     meta = PRMetadata(
         number=p.number,
         title=p.title,
@@ -100,13 +184,21 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         additions=sum(f.additions for f in files),
         deletions=sum(f.deletions for f in files),
         files=[f.filename for f in files],
-        approvals=0,
-        approval_latency_s=None,
+        approvals=approvals,
+        approval_latency_s=approval_latency_s,
+        # No deterministic rule reads this today (scoring.py: "usually
+        # unknown ... bot authorship alone is the reachable signal") — a
+        # commits-list call to populate it would be speculative work
+        # against a signal nothing consumes yet.
         days_since_last_human_commit=None,
         files_added=sum(1 for f in files if f.status == "added"),
         files_modified=sum(1 for f in files if f.status == "modified"),
         url=_html_url(p),
         head_sha=p.head.sha,
+        # The PR object's own count — authoritative regardless of
+        # pagination, unlike fetch_open_prs which has to derive it.
+        changed_files=p.changed_files,
+        files_dropped=_dropped_files(files),
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
@@ -130,7 +222,9 @@ def score_one(meta: PRMetadata, diff: str):
         try:
             rv = reader.read_diff(meta, diff)
             verdict = reader.verdict_from_reader(rv)
-            cov = reader.coverage(diff)
+            cov = reader.coverage(
+                diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
+            )
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             return "reader", verdict, rv, cov
@@ -185,7 +279,9 @@ def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> Inten
         alignment=rv.intent_alignment,
         refs=[d.id for d in chosen],
         findings=rv.deviation_findings,
-        coverage=reader.coverage(diff),
+        coverage=reader.coverage(
+            diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
+        ),
     )
 
 

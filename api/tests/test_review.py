@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from doug import reader, review
@@ -94,6 +95,8 @@ def test_fetch_pr_records_the_head_commit():
         user=SimpleNamespace(login="dev", type="User"),
         head=SimpleNamespace(sha="c0ffee" + "0" * 34),
         html_url="https://github.com/o/r/pull/7",
+        changed_files=1,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     f = SimpleNamespace(
         filename="cache.py", status="modified", additions=3, deletions=1, patch="+ x"
@@ -103,8 +106,271 @@ def test_fetch_pr_records_the_head_commit():
             pulls=SimpleNamespace(
                 get=lambda **kw: SimpleNamespace(parsed_data=p),
                 list_files=lambda **kw: SimpleNamespace(parsed_data=[f]),
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=[]),
             )
         )
     )
     meta, _diff = review.fetch_pr(gh, "o", "r", 7)
     assert meta.head_sha == "c0ffee" + "0" * 34
+
+
+# --- Coverage integrity: pagination + changed_files/files_dropped --------
+
+class PagedFakeGH:
+    """list_files across N pages of 100, the shape GitHub's API actually
+    paginates — a single per_page=100 call silently drops everything past
+    the first page."""
+
+    def __init__(self, pull, total_files: int, binary_names: list[str] | None = None):
+        self._pull = pull
+        self._total = total_files
+        self._binary = binary_names or []
+
+    def _list_files(self, **kw):
+        page = kw.get("page", 1)
+        per_page = kw.get("per_page", 100)
+        start = (page - 1) * per_page
+        end = min(start + per_page, self._total)
+        files = [
+            SimpleNamespace(
+                filename=f"f{i}.py",
+                status="modified",
+                additions=1,
+                deletions=0,
+                patch=(None if f"f{i}.py" in self._binary else f"+ f{i}.py"),
+            )
+            for i in range(start, end)
+        ]
+        return SimpleNamespace(parsed_data=files)
+
+    @property
+    def rest(self):
+        return SimpleNamespace(
+            pulls=SimpleNamespace(
+                get=lambda **kw: SimpleNamespace(parsed_data=self._pull),
+                list=lambda **kw: SimpleNamespace(parsed_data=[self._pull]),
+                list_files=self._list_files,
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=[]),
+            )
+        )
+
+
+def _pull_full(number=7, changed_files=1):
+    return SimpleNamespace(
+        number=number, title="Big PR",
+        user=SimpleNamespace(login="dev", type="User"),
+        head=SimpleNamespace(sha="c0ffee" + "0" * 34),
+        html_url="https://github.com/o/r/pull/7",
+        changed_files=changed_files,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def test_fetch_pr_paginates_past_the_first_hundred_files():
+    """Today's single unpaginated call silently drops everything past file
+    100 — a 250-file PR reads as a 100-file PR with no error anywhere."""
+    gh = PagedFakeGH(_pull_full(changed_files=250), total_files=250)
+    meta, diff = review.fetch_pr(gh, "o", "r", 7)
+    assert len(meta.files) == 250
+    assert diff.count("### f") == 250
+
+
+def test_fetch_pr_records_changed_files_from_the_pr_object():
+    gh = PagedFakeGH(_pull_full(changed_files=3), total_files=3)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.changed_files == 3
+
+
+def test_fetch_pr_records_files_with_no_patch_as_dropped():
+    gh = PagedFakeGH(_pull_full(changed_files=3), total_files=3, binary_names=["f1.py"])
+    meta, diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.files_dropped == ["f1.py"]
+    assert "f1.py" not in diff  # never had a patch, never entered the diff
+
+
+def test_fetch_open_prs_paginates_list_files_too():
+    gh = PagedFakeGH(_pull_full(number=9), total_files=150)
+    items = review.fetch_open_prs(gh, "o", "r", limit=5)
+    meta, diff = items[0]
+    assert len(meta.files) == 150
+    assert diff.count("### f") == 150
+
+
+def test_fetch_open_prs_derives_changed_files_from_the_paginated_count():
+    """pulls.list returns PullRequestSimple, which has no changed_files
+    field at all — the paginated file count is the only source here."""
+    gh = PagedFakeGH(_pull_full(number=9), total_files=150)
+    items = review.fetch_open_prs(gh, "o", "r", limit=5)
+    meta, _diff = items[0]
+    assert meta.changed_files == 150
+
+
+# --- Live review state (approvals no longer hardcoded 0) -----------------
+
+def _review(login, state, submitted_at):
+    return SimpleNamespace(
+        user=SimpleNamespace(login=login, type="User"), state=state, submitted_at=submitted_at
+    )
+
+
+def _pull_with_reviews(reviews, created_at):
+    p = _pull_full(changed_files=1)
+    p.created_at = created_at
+    return p, reviews
+
+
+class ReviewedFakeGH:
+    def __init__(self, pull, files, reviews):
+        self._pull, self._files, self._reviews = pull, files, reviews
+
+    @property
+    def rest(self):
+        return SimpleNamespace(
+            pulls=SimpleNamespace(
+                get=lambda **kw: SimpleNamespace(parsed_data=self._pull),
+                list_files=lambda **kw: SimpleNamespace(
+                    parsed_data=(self._files if kw.get("page", 1) == 1 else [])
+                ),
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=self._reviews),
+            )
+        )
+
+
+def test_fetch_pr_counts_current_approvals_by_distinct_reviewer():
+    """A reviewer who re-approves after a push must not double-count — the
+    rubber-stamp rule reads approvals == 1 as 'exactly one reviewer signed
+    off', not 'one approval event'."""
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [
+            _review("alice", "APPROVED", opened + timedelta(minutes=3)),
+            _review("alice", "APPROVED", opened + timedelta(minutes=10)),  # re-approval
+        ],
+        opened,
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 1
+
+
+def test_fetch_pr_uses_a_reviewers_latest_state_not_their_first():
+    """approve, then a maintainer re-requests changes on the same PR: the
+    reviewer's CURRENT stance is changes-requested, not approved."""
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [
+            _review("alice", "APPROVED", opened + timedelta(minutes=3)),
+            _review("alice", "CHANGES_REQUESTED", opened + timedelta(minutes=20)),
+        ],
+        opened,
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+
+
+def test_fetch_pr_computes_latency_to_the_first_approval():
+    opened = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [_review("alice", "APPROVED", opened + timedelta(minutes=4))], opened
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approval_latency_s == 240.0
+
+
+def test_fetch_pr_reports_no_latency_without_an_approval():
+    opened = datetime(2026, 1, 1, tzinfo=UTC)
+    p, reviews = _pull_with_reviews(
+        [_review("alice", "COMMENTED", opened + timedelta(minutes=4))], opened
+    )
+    gh = ReviewedFakeGH(p, [_file()], reviews)
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+    assert meta.approval_latency_s is None
+
+
+def test_list_all_files_stops_at_githubs_own_file_cap():
+    """GitHub caps list_files at 3000 files per PR — a client that keeps
+    asking past that gets more full pages back from nothing real (a
+    misbehaving mock, or a client bug), so the loop needs its own bound
+    rather than trusting a short page to eventually arrive."""
+
+    class InfiniteFakeGH:
+        @property
+        def rest(self):
+            return SimpleNamespace(
+                pulls=SimpleNamespace(
+                    list_files=lambda **kw: SimpleNamespace(
+                        parsed_data=[_file(name=f"f{i}.py") for i in range(100)]
+                    )
+                )
+            )
+
+    files = review._list_all_files(InfiniteFakeGH(), "o", "r", 7)
+    assert len(files) == 3000
+
+
+# --- Coverage integrity: binary files are not "dropped" -------------------
+
+def _binary_file(name="logo.png"):
+    """GitHub reports a genuinely binary file with no patch AND no
+    line-level stats — it cannot count lines in a binary, unlike a large
+    text file it merely declines to inline."""
+    return SimpleNamespace(filename=name, status="added", additions=0, deletions=0, patch=None)
+
+
+def _oversized_text_file(name="generated.go"):
+    """A large text file GitHub computed real stats for but omitted the
+    patch text — this one IS reviewable content that never arrived."""
+    return SimpleNamespace(
+        filename=name, status="modified", additions=4000, deletions=200, patch=None
+    )
+
+
+def test_fetch_pr_does_not_count_a_genuine_binary_as_dropped():
+    """A screenshot or a compiled asset never had reviewable content to
+    miss — flagging every PR that touches one as an incomplete read would
+    make the signal common enough to ignore, exactly the overclaim this
+    field exists to prevent in the other direction."""
+    p = _pull_full(changed_files=2)
+    p.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gh = ReviewedFakeGH(p, [_file(), _binary_file()], [])
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.files_dropped == []
+
+
+def test_fetch_pr_still_counts_an_oversized_text_file_as_dropped():
+    """GitHub reporting real additions/deletions with no patch means it
+    computed a diff and withheld the text — content that should have
+    been reviewable and was not. Coverage.complete must still catch this."""
+    p = _pull_full(changed_files=2)
+    p.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gh = ReviewedFakeGH(p, [_file(), _oversized_text_file()], [])
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.files_dropped == ["generated.go"]
+
+
+def test_fetch_pr_degrades_gracefully_when_review_state_is_unreadable():
+    """A malformed review payload (mixed tz-aware/naive timestamps, or any
+    other surprise in list_reviews) must cost the approvals signal, not
+    the entire PR fetch — files and diff are the load-bearing return
+    value, and review state is one input among several deterministic
+    rules use."""
+    p = _pull_full(changed_files=1)
+    p.created_at = datetime(2026, 1, 1)  # naive — TypeError vs an aware submitted_at
+
+    class BrokenReviewsGH(ReviewedFakeGH):
+        @property
+        def rest(self):
+            r = super().rest
+            r.pulls.list_reviews = lambda **kw: SimpleNamespace(
+                parsed_data=[_review("alice", "APPROVED", datetime(2026, 1, 1, tzinfo=UTC))]
+            )
+            return r
+
+    gh = BrokenReviewsGH(p, [_file()], [])
+    meta, diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+    assert meta.approval_latency_s is None
+    assert diff  # the actually load-bearing part still worked
