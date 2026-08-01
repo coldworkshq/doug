@@ -870,14 +870,19 @@ def test_reconcile_installation_caps_and_logs_a_pathological_repo(tmp_path, monk
 
 
 def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monkeypatch):
-    """The dedupe comment in reconcile_installation used to claim a 'done'
-    row and a 'failed' row collide with enqueue identically. They don't:
-    ingest._revive resets a 'failed' (or 'superseded') row back to
-    'pending' with attempts=0, so a PR that already burned every retry
-    before a restart is not dead forever — it is silently re-armed for up
-    to max_attempts more paid reads on every restart that reconciles it.
-    This proves reconcile_all (not just ingest.enqueue directly, which
-    test_ingest.py already covers) actually walks that path and counts it."""
+    """A PR that burned every retry is not dead forever — ingest._revive
+    resets a 'failed' row to 'pending' with attempts=0, which is how a
+    review lost to a real outage heals on a later restart.
+
+    The cost of that, which Doug's own review of this PR flagged: reconcile
+    runs at every startup, so without a brake a permanently-broken PR
+    re-arms max_attempts paid reads on each one, and the bill scales with
+    how often the service cold-starts rather than with anything the
+    customer did. FAILED_REVIVE_COOLOFF_SECONDS is the brake. This pins
+    both halves through reconcile_all — not just ingest.enqueue, which
+    test_ingest.py covers directly — because the startup path is where the
+    repetition actually comes from.
+    """
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
@@ -890,8 +895,23 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
         worker.app_auth, "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
     )
-    assert worker.reconcile_all() == 1  # counted: a revive, not a fresh insert
+    # A restart inside the cooloff re-arms nothing, however many times it happens.
+    assert worker.reconcile_all() == 0
+    assert worker.reconcile_all() == 0
+    (still_failed,) = _rows(url, store.review_jobs)
+    assert still_failed["status"] == "failed" and still_failed["attempts"] == 3
 
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(
+                finished_at=datetime.now(UTC)
+                - timedelta(seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
+            )
+        )
+
+    assert worker.reconcile_all() == 1  # counted: a revive, not a fresh insert
     (revived,) = _rows(url, store.review_jobs)
     assert revived["id"] == job_id  # same row, in place
     assert revived["status"] == "pending" and revived["attempts"] == 0

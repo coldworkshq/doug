@@ -21,7 +21,7 @@ paying for the same read twice.
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import store
@@ -30,6 +30,16 @@ from . import store
 # never reviewed"; every other state means the work is queued, in flight, or
 # already paid for.
 REVIVABLE = ("failed", "superseded")
+
+# How long a job that burned every attempt is left alone before reconcile will
+# revive it. Without this, revival is per-restart: startup reconcile re-arms a
+# permanently-broken PR, the drain burns max_attempts paid reads against it,
+# and a Cloud Run service that cold-starts often pays that bill every time.
+# Healing a genuinely transient failure (an outage, a wiped credential) is worth
+# a retry an hour later; nothing is worth retrying every ninety seconds forever.
+# Superseded rows are exempt — a force-push back to an older SHA is a live
+# instruction to review that SHA now, not a failure waiting out a penalty.
+FAILED_REVIVE_COOLOFF_SECONDS = 3600
 
 # How long a claim may sit 'running' before reclaim_stalled treats it as
 # abandoned rather than in flight. reader.read_timeout() bounds a single
@@ -138,6 +148,12 @@ def _revive(
 ) -> int | None:
     """Return a queued-but-unreviewed row to pending, or None if there is none.
 
+    Two revivable states, deliberately on different terms. A 'superseded' row
+    revives immediately: a force-push back to an older SHA is an instruction to
+    review that SHA now. A 'failed' row waits out FAILED_REVIVE_COOLOFF_SECONDS
+    first, because reconcile runs on every startup and a permanently-broken PR
+    would otherwise re-arm max_attempts paid reads on each one.
+
     The status test lives in the UPDATE's WHERE rather than in a SELECT before
     it: a concurrent drain can claim or finish the row between the two, and a
     zero-row result is the only reliable way to find out that it did.
@@ -154,7 +170,20 @@ def _revive(
             .where(
                 *_job_filter(installation_id, github_repo_id, pr_number),
                 store.review_jobs.c.head_sha == head_sha,
-                store.review_jobs.c.status.in_(REVIVABLE),
+                or_(
+                    store.review_jobs.c.status == "superseded",
+                    (store.review_jobs.c.status == "failed")
+                    & (
+                        # NULL finished_at should not happen — fail() sets it at
+                        # the cap — but if it ever does, heal rather than strand
+                        # the PR forever behind a comparison it can never pass.
+                        store.review_jobs.c.finished_at.is_(None)
+                        | (
+                            store.review_jobs.c.finished_at
+                            < now - timedelta(seconds=FAILED_REVIVE_COOLOFF_SECONDS)
+                        )
+                    ),
+                ),
             )
             .values(
                 status="pending",
