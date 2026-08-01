@@ -315,6 +315,7 @@ def save_review(
     installation_id: int | None = None,
     head_sha: str | None = None,
     source: str | None = None,
+    prompt_hash: str | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
     storage is disabled — callers never branch on persistence.
@@ -351,6 +352,7 @@ def save_review(
                 "installation_id": installation_id,
                 "head_sha": head_sha,
                 "source": source,
+                "prompt_hash": prompt_hash,
             },
         ).scalar_one()
         rows = [

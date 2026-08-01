@@ -105,6 +105,42 @@ def test_review_endpoint_scores_and_persists(tmp_path, monkeypatch):
         assert v["tier"] == "deterministic" and v["pr_number"] == 7
 
 
+def test_review_endpoint_stamps_the_prompt_hash_on_reader_tier_verdicts(tmp_path, monkeypatch):
+    """The anchor a receipt points at to say 'this verdict used this exact
+    prompt' has to actually be written by the live path, not just
+    plumbed through save_review and left uncalled."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    monkeypatch.setattr(reader, "read_diff", lambda pr, diff: RV)
+    TestClient(app).post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret", "x-github-token": "gh"},
+    )
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["tier"] == "reader"
+    assert v["prompt_hash"] == reader.PROMPT_HASH
+
+
+def test_review_endpoint_leaves_prompt_hash_null_on_the_deterministic_tier(tmp_path, monkeypatch):
+    """The deterministic tier never opens the diff, so stamping a prompt
+    hash on it would claim an instrument that was never actually run."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    TestClient(app).post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret", "x-github-token": "gh"},
+    )
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["tier"] == "deterministic"
+    assert v["prompt_hash"] is None
+
+
 def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review(
@@ -870,3 +906,19 @@ def test_record_deep_read_does_not_overshoot_the_cap_under_repeated_calls(tmp_pa
     with engine.connect() as conn:
         row = conn.execute(select(store.deep_read_counters)).mappings().one()
     assert row["count"] == 5
+
+
+def test_save_review_records_the_prompt_hash(tmp_path, monkeypatch):
+    """The anchor a receipt or the pre-registration document points at to
+    say 'this verdict came from this exact instrument'. Missing it is the
+    same class of gap as missing github_repo_id — a fact about the row
+    that nothing else on it can reconstruct."""
+    url = _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV, model=reader.MODEL, prompt_hash=reader.PROMPT_HASH,
+    )
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+    assert v["id"] == vid
+    assert v["prompt_hash"] == reader.PROMPT_HASH

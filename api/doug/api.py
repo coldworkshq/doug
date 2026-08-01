@@ -201,6 +201,7 @@ def _score_and_persist(
             model=reader.MODEL if tier == "reader" else None,
             pr_meta=meta.model_dump(mode="json"),
             coverage=cov,
+            prompt_hash=reader.PROMPT_HASH if tier == "reader" else None,
         )
     except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
         verdict.reasons.append(

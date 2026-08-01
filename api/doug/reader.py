@@ -14,6 +14,7 @@ threshold (default 30) sits at the ~75-80th percentile of clean-PR risk
 scores on both probe repos — roughly the top quarter gets flagged.
 """
 
+import hashlib
 import os
 import re
 
@@ -75,6 +76,21 @@ SCHEMA = {
     "required": ["risk_score", "rationale", "findings"],
     "additionalProperties": False,
 }
+
+
+def _compute_prompt_hash() -> str:
+    """A stable fingerprint of the frozen bytes (SYSTEM + SCHEMA).
+
+    The "these numbers are about the same instrument" anchor: a receipt or
+    a pre-registration document can point at this hash, and it can only
+    match a verdict actually produced by this exact prompt. repr(SCHEMA)
+    is stable across runs because SCHEMA's key order never changes (it is
+    a literal, not something built at import time from a variable set).
+    """
+    return hashlib.sha256((SYSTEM + repr(SCHEMA)).encode()).hexdigest()
+
+
+PROMPT_HASH = _compute_prompt_hash()
 
 
 # --- Intent tier -----------------------------------------------------------
