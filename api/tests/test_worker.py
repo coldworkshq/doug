@@ -570,3 +570,425 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     (j,) = _rows(url, store.review_jobs)
     assert j["status"] == "done"
     assert len(posted) == 2  # both attempts post; the second is the harmless duplicate
+
+
+# --- reconcile: the healing path for missed deliveries --------------------
+
+
+def _pull(number=1, head_sha="a" * 40, draft=False, head_repo_id=42, base_repo_id=42):
+    return SimpleNamespace(
+        number=number,
+        draft=draft,
+        head=SimpleNamespace(sha=head_sha, repo=SimpleNamespace(id=head_repo_id)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=base_repo_id, full_name="o/r")),
+    )
+
+
+class FakeListGH:
+    """Only pulls.list — reconcile must never touch pulls.list_files."""
+
+    def __init__(self, pulls):
+        self.rest = SimpleNamespace(
+            pulls=SimpleNamespace(list=lambda **kw: SimpleNamespace(parsed_data=pulls))
+        )
+
+
+def _installed(tmp_path, monkeypatch, *, repos=((42, "o/r"),)):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.upsert_installation(1, "o", "Organization", "active")
+    store.set_installation_repos(1, list(repos), replace=True)
+
+
+def test_reconcile_enqueues_open_prs_and_skips_drafts(tmp_path, monkeypatch):
+    _installed(tmp_path, monkeypatch)
+    gh = FakeListGH([_pull(number=1), _pull(number=2, draft=True)])
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+    assert worker.reconcile_installation(1) == 1
+    job = ingest.claim()
+    assert job["pr_number"] == 1 and job["github_repo_id"] == 42
+    assert ingest.claim() is None
+
+
+def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
+    """A fork's raw diff enters the prompt (_user_text, reader.py:179-187).
+    An outside contributor must not be able to drive spend by opening a PR
+    during the window when Doug is restarting and reconciling."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(head_repo_id=99)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+    assert ingest.claim() is None
+
+
+def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
+    """The property that makes startup reconcile free rather than a full
+    re-review: the unique index carries no status, so a head SHA already
+    taken to 'done' collides on insert exactly like a pending one."""
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    ingest.claim()
+    ingest.complete(job_id, None)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+
+
+def test_reconcile_all_covers_only_active_installations(tmp_path, monkeypatch):
+    """A suspended or deleted installation still has rows in the table —
+    reconciling it would mint tokens for an App the account revoked."""
+    _installed(tmp_path, monkeypatch)
+    store.upsert_installation(2, "gone", "User", "suspended")
+    store.set_installation_repos(2, [(43, "gone/r")], replace=True)
+    seen = []
+
+    def client(installation_id):
+        seen.append(installation_id)
+        return FakeListGH([_pull(number=installation_id)])
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", client)
+    assert worker.reconcile_all() == 1
+    assert seen == [1]
+
+
+def test_reconcile_all_survives_one_failing_installation(tmp_path, monkeypatch):
+    """Reconcile runs at startup for every tenant at once, so one revoked or
+    rate-limited installation raising would leave every other tenant's
+    missed PRs unqueued until the next restart."""
+    _installed(tmp_path, monkeypatch)
+    store.upsert_installation(2, "ok", "User", "active")
+    store.set_installation_repos(2, [(43, "ok/r")], replace=True)
+
+    def client(installation_id):
+        if installation_id == 1:
+            raise RuntimeError("401 bad installation")
+        # Installation 2's repo is (43, "ok/r") — the base repo id must
+        # agree, or the new base-repo-id guard (added in review) would skip
+        # this PR for the wrong reason and mask what this test checks.
+        return FakeListGH([_pull(number=5, head_repo_id=43, base_repo_id=43)])
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", client)
+    assert worker.reconcile_all() == 1
+
+
+# --- amendment: reconcile_all heals crash-stranded claims ------------------
+#
+# reconcile_installation heals a *missed* PR via ingest.enqueue, but a
+# crash-stranded claim is left 'running' — REVIVABLE deliberately excludes
+# that status, so enqueue collides and returns None forever. reconcile_all
+# must call ingest.reclaim_stalled() once, before the enqueue sweep, or the
+# case Task 7 is named for ("a deploy killed the instance mid-review") is
+# never actually healed by a restart.
+
+
+def test_reconcile_all_heals_a_crash_stranded_claim_end_to_end(tmp_path, monkeypatch):
+    """The amendment's 'test for intent': a 'running' job stranded past its
+    lease is, after reconcile_all, back in a state where its PR actually
+    gets reviewed — not merely a row whose status flipped. This scenario
+    alone (no head SHA change while the claim was stranded) converges to
+    the same final row state whichever side of the sweep reclaim runs on —
+    enqueue's collision with a still-'running' zombie and its collision
+    with an already-reclaimed 'pending' row both resolve to None, since
+    REVIVABLE excludes both. So it does not, by itself, prove reclaim runs
+    first; see test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on
+    (where the head SHA does change and ordering has a real behavioral
+    effect) and test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep
+    (which pins call order directly, for this test's own scenario) for
+    that."""
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    stuck = ingest.claim()
+    assert stuck["id"] == job_id
+    _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+
+    assert worker.reconcile_all() == 0  # reclaimed, not (re)enqueued — no new job minted
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "pending"
+    # The reclaimed row is claimable again — a worker will actually review it.
+    claimed = ingest.claim()
+    assert claimed["id"] == job_id and claimed["head_sha"] == "a" * 40
+
+
+def test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on(tmp_path, monkeypatch):
+    """The case where reclaim-before-sweep has a real, observable effect on
+    end state, not just on call order: enqueue's supersede-after-insert
+    step (ingest.py) only retires rows that are already 'pending' at this
+    (installation, repo, pr) with a different head_sha — it has no effect
+    on a row that is still 'running'. A claim stranded at sha A whose PR
+    force-pushed to sha B while it was stuck needs reclaim to run first, so
+    the sweep's insert of B can supersede A in the same pass. Reclaiming
+    after would leave both A and B 'pending' — A as live work a worker
+    would claim and then have to supersede itself, instead of the sweep
+    having already retired it."""
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    stuck = ingest.claim()
+    assert stuck["id"] == job_id
+    _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
+
+    # The PR moved on while the claim was stranded: it now reports "b" * 40.
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="b" * 40)]),
+    )
+
+    assert worker.reconcile_all() == 1  # b*40 is genuinely new work
+    jobs = {j["head_sha"]: j["status"] for j in _rows(url, store.review_jobs)}
+    assert jobs["a" * 40] == "superseded"
+    assert jobs["b" * 40] == "pending"
+
+
+def test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep(tmp_path, monkeypatch):
+    """Pins the amendment's ordering requirement directly against call
+    order. test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on
+    already catches a swap behaviorally for the force-push case; this one
+    catches it even when no head SHA changes — the scenario
+    test_reconcile_all_heals_a_crash_stranded_claim_end_to_end documents as
+    converging to the same final state under either ordering. Tracking
+    which of ingest.reclaim_stalled / ingest.enqueue fires first is what
+    does that."""
+    order: list[str] = []
+    real_reclaim = ingest.reclaim_stalled
+    real_enqueue = ingest.enqueue
+    monkeypatch.setattr(
+        ingest,
+        "reclaim_stalled",
+        lambda *a, **k: order.append("reclaim") or real_reclaim(*a, **k),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "enqueue",
+        lambda *a, **k: order.append("enqueue") or real_enqueue(*a, **k),
+    )
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1)]),
+    )
+
+    worker.reconcile_all()
+
+    assert "enqueue" in order  # sanity: the sweep did run
+    assert order[0] == "reclaim"
+
+
+def test_reconcile_all_calls_reclaim_stalled_not_reconcile_installation(tmp_path, monkeypatch):
+    """Scope note from the amendment: reclaim_stalled sweeps the whole queue
+    by lease age, not by tenant, so it belongs in the startup path
+    (reconcile_all), not per-installation — a per-installation call would
+    sweep other tenants' rows as a side effect of one installation's event.
+    Pinned directly against the function object rather than behaviourally,
+    since reconcile_installation alone has no stalled row in scope to prove
+    it either way."""
+    calls = []
+    real = ingest.reclaim_stalled
+    monkeypatch.setattr(ingest, "reclaim_stalled", lambda *a, **k: calls.append(1) or real())
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: FakeListGH([]))
+
+    worker.reconcile_installation(1)
+    assert calls == []
+
+    worker.reconcile_all()
+    assert calls == [1]
+
+
+# --- fix: pagination, tenancy identity, and the dedupe/revive comment -----
+#
+# A code review ran probes rather than reading, and found three Important
+# gaps and three cheap Minors in the reconcile implementation above:
+#   1. the ordering-equivalence claim in reconcile_all's docstring (and the
+#      test docstring that repeated it) was false for the force-push case —
+#      fixed above, by adding the supersede test and correcting both
+#      docstrings, rather than down here.
+#   2. gh.rest.pulls.list(..., per_page=50) fetched one page, silently
+#      capping "every open PR" at 50 on a busy repo.
+#   3. the dedupe comment claimed a 'done' row and a 'failed' row collide
+#      identically; a 'failed' row is instead revived and spent again.
+# Plus three minors: _skip_reason's return value was computed and
+# discarded; the draft gate didn't apply its own "unknown means skip"
+# principle; and full_name-based reconcile trusted a possibly-stale name
+# instead of checking the base repo id GitHub actually reports.
+
+
+def test_reconcile_installation_paginates_past_the_first_page(tmp_path, monkeypatch):
+    """gh.rest.pulls.list caps a single response at 100 results. Before this
+    fix, one unpaginated call meant a repo with more than 50 open PRs (or,
+    after bumping per_page, 100) was healed only in part — permanently and
+    silently, under a docstring that promised 'every reviewable open PR'.
+    This fakes a two-page repo (100 + 1) and asserts both pages' PRs are
+    enqueued, not just the first."""
+    _installed(tmp_path, monkeypatch)
+    page1 = [_pull(number=n, head_sha=f"{n:040d}") for n in range(1, 101)]
+    page2 = [_pull(number=101, head_sha=f"{101:040d}")]
+
+    def _list(*, page=1, **kw):
+        data = {1: page1, 2: page2}.get(page, [])
+        return SimpleNamespace(parsed_data=data)
+
+    gh = SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(list=_list)))
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    url = f"sqlite:///{tmp_path}/doug.db"
+    assert worker.reconcile_installation(1) == 101
+    seen = {j["pr_number"] for j in _rows(url, store.review_jobs)}
+    assert seen == set(range(1, 102))
+
+
+def test_reconcile_installation_caps_and_logs_a_pathological_repo(tmp_path, monkeypatch, capsys):
+    """The pagination loop still needs a ceiling: an unbounded loop against
+    a repo with thousands of open PRs would hang reconcile_all() for every
+    other tenant queued behind it. Hitting the cap must be loud, not a
+    silent truncation of the same kind Finding 2 exists to fix."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(worker, "_MAX_OPEN_PRS_PER_REPO", 150)
+
+    def _list(*, page=1, **kw):
+        # Every page comes back full — an unbounded repo, capped by us, not
+        # by GitHub running out of pages.
+        start = (page - 1) * 100 + 1
+        return SimpleNamespace(
+            parsed_data=[_pull(number=n, head_sha=f"{n:040d}") for n in range(start, start + 100)]
+        )
+
+    gh = SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(list=_list)))
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    count = worker.reconcile_installation(1)
+    assert count == 150  # capped, not 200 (two full pages) and not unbounded
+    assert "capped at 150" in capsys.readouterr().err
+
+
+def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monkeypatch):
+    """A PR that burned every retry is not dead forever — ingest._revive
+    resets a 'failed' row to 'pending' with attempts=0, which is how a
+    review lost to a real outage heals on a later restart.
+
+    The cost of that, which Doug's own review of this PR flagged: reconcile
+    runs at every startup, so without a brake a permanently-broken PR
+    re-arms max_attempts paid reads on each one, and the bill scales with
+    how often the service cold-starts rather than with anything the
+    customer did. FAILED_REVIVE_COOLOFF_SECONDS is the brake. This pins
+    both halves through reconcile_all — not just ingest.enqueue, which
+    test_ingest.py covers directly — because the startup path is where the
+    repetition actually comes from.
+    """
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "credentials missing")
+    (failed,) = _rows(url, store.review_jobs)
+    assert failed["id"] == job_id and failed["status"] == "failed" and failed["attempts"] == 3
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+    # A restart inside the cooloff re-arms nothing, however many times it happens.
+    assert worker.reconcile_all() == 0
+    assert worker.reconcile_all() == 0
+    (still_failed,) = _rows(url, store.review_jobs)
+    assert still_failed["status"] == "failed" and still_failed["attempts"] == 3
+
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(
+                finished_at=datetime.now(UTC)
+                - timedelta(seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
+            )
+        )
+
+    assert worker.reconcile_all() == 1  # counted: a revive, not a fresh insert
+    (revived,) = _rows(url, store.review_jobs)
+    assert revived["id"] == job_id  # same row, in place
+    assert revived["status"] == "pending" and revived["attempts"] == 0
+
+
+def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
+    """_skip_reason's return value used to be computed and discarded at its
+    only call site — an unreadable repo got a log line, but the spend gate
+    itself (draft/fork) left no audit trail. The one thing worth being able
+    to check after the fact is exactly why a given PR was not reviewed."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=9, draft=True)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+    err = capsys.readouterr().err
+    assert "#9" in err and "draft" in err
+
+
+def test_skip_reason_treats_missing_or_unset_draft_as_skip():
+    """The docstring's whole UNSET rationale was previously unexercised: the
+    old check (`getattr(p, "draft", False) is True`) let anything that
+    wasn't the literal `True` — including UNSET and a genuinely missing
+    field — fall through to "review it". Only an explicit draft=False
+    should do that; True, UNSET, and missing must all skip, the same
+    direction the fork check already treats its own UNSET/missing case."""
+    from githubkit.utils import UNSET
+
+    ready = SimpleNamespace(
+        draft=False,
+        head=SimpleNamespace(sha="a" * 40, repo=SimpleNamespace(id=42)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=42, full_name="o/r")),
+    )
+    assert worker._skip_reason(ready) is None
+
+    unset = SimpleNamespace(
+        draft=UNSET,
+        head=ready.head,
+        base=ready.base,
+    )
+    assert worker._skip_reason(unset) == "draft"
+
+    missing = SimpleNamespace(head=ready.head, base=ready.base)  # no draft attribute at all
+    assert worker._skip_reason(missing) == "draft"
+
+
+def test_skip_reason_treats_missing_or_unset_repo_ids_as_fork():
+    """Same UNSET rationale, the branch that was already correct — pinned
+    with a real UNSET value and a genuinely missing attribute, not just the
+    isinstance reasoning in the comment above it."""
+    from githubkit.utils import UNSET
+
+    unset_head_id = SimpleNamespace(
+        draft=False,
+        head=SimpleNamespace(sha="a" * 40, repo=SimpleNamespace(id=UNSET)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=42, full_name="o/r")),
+    )
+    assert worker._skip_reason(unset_head_id) == "fork"
+
+    missing_head = SimpleNamespace(draft=False, head=SimpleNamespace(sha="a" * 40))
+    assert worker._skip_reason(missing_head) == "fork"
+
+
+def test_reconcile_skips_a_pr_whose_base_repo_id_disagrees_with_the_store(tmp_path, monkeypatch):
+    """installation_repos' full_name can go stale: a repo can be deleted and
+    its name picked up by an unrelated one. github_repo_id is the fact the
+    store's tenancy actually keys on and the only one GitHub still
+    guarantees, so a PR whose base repo id disagrees with it belongs to a
+    different repo than the one this installation was granted, and must
+    not be reconciled — or paid for — under this installation's identity.
+    head_repo_id is set equal to base_repo_id here so this isn't just the
+    fork check firing for the wrong reason."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(head_repo_id=999, base_repo_id=999)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+    assert ingest.claim() is None

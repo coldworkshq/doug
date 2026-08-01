@@ -35,6 +35,18 @@ def _jobs(url: str) -> list[dict]:
         ]
 
 
+def _age_finished_at(url: str, job_id: int, seconds: int) -> None:
+    """Push a failed job's finished_at into the past, standing in for the
+    cooloff elapsing. Same reason as _age_started_at: the alternative is a
+    real multi-minute sleep in the suite."""
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(finished_at=datetime.now(UTC) - timedelta(seconds=seconds))
+        )
+
+
 def _age_started_at(url: str, job_id: int, seconds: int) -> None:
     """Push a claimed job's started_at into the past, standing in for real
     wall-clock time passing while an instance holds (or crashes with) a
@@ -168,12 +180,17 @@ def test_a_failed_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
     re-insertion exactly like a reviewed one. Reconcile exists to heal PRs
     whose review never landed — a deploy that wiped the App credentials, a
     provider outage — and if a collision with a 'failed' row returned None it
-    would heal nothing, permanently, on that PR and every restart after."""
+    would heal nothing, permanently, on that PR and every restart after.
+
+    The healing is delayed by FAILED_REVIVE_COOLOFF_SECONDS, not withheld, so
+    this ages the row past it — the cooloff bounds how often a poison PR can
+    re-arm, and is tested in its own right below."""
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         ingest.fail(job_id, "credentials missing")
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "failed"
+    _age_finished_at(url, job_id, seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
 
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
@@ -313,6 +330,7 @@ def test_a_reclaimed_job_rejoins_the_ordinary_lifecycle(tmp_path, monkeypatch):
 
     for _ in range(3):
         ingest.fail(job_id, "still broken")
+    _age_finished_at(url, job_id, seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
 
 
@@ -412,3 +430,57 @@ def test_the_dedupe_marker_still_matches_the_real_constraint_name():
         "ingest._DEDUPE_COLLISION matches on"
     )
     assert any("uq_review_job" in marker for marker in ingest._DEDUPE_COLLISION)
+
+
+def test_a_job_that_just_burned_its_attempts_is_not_revived_immediately(tmp_path, monkeypatch):
+    """Reconcile runs on every startup, and a Cloud Run service cold-starts
+    often. Without a cooloff, a permanently-broken PR is re-armed on each one
+    and the drain burns max_attempts paid model reads against it every time —
+    a bill that scales with restart frequency rather than with anything the
+    customer did. Healing a transient failure an hour later is worth having;
+    retrying a poison PR every ninety seconds forever is not.
+    """
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "failed"
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "failed" and row["attempts"] == 3
+
+
+def test_a_failed_job_is_revived_once_its_cooloff_has_passed(tmp_path, monkeypatch):
+    """The cooloff bounds the retry rate; it must not strand the PR. A genuine
+    outage — wiped credentials, a provider down — has to heal on a later
+    restart, which is the whole reason revive exists."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+
+    stale = datetime.now(UTC) - timedelta(seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(finished_at=stale)
+        )
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "pending" and row["attempts"] == 0
+
+
+def test_a_superseded_job_revives_immediately_despite_the_cooloff(tmp_path, monkeypatch):
+    """The cooloff is a penalty for failing, not for being overtaken. A branch
+    force-pushed back to an earlier SHA is a live instruction to review that
+    SHA now — making it wait an hour would be a bug, not a saving."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    ingest.supersede(job_id)
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "superseded"
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"

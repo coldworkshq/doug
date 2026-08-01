@@ -828,3 +828,49 @@ def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
             if len(out) >= limit:
                 break
     return out
+
+
+def active_installations() -> list[int]:
+    """Installation ids in state 'active'. [] when storage is disabled."""
+    engine = _get_engine()
+    if engine is None:
+        return []
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        return [
+            int(r.installation_id)
+            for r in conn.execute(
+                select(installations.c.installation_id).where(
+                    installations.c.state == "active"
+                )
+            )
+        ]
+
+
+def active_repos(installation_id: int) -> list[tuple[int, str]]:
+    """(github_repo_id, full_name) for this installation's active repos.
+
+    A repo removed from an installation keeps state='removed' rather than
+    being deleted, so this filters rather than trusting the table's
+    contents — the history of what Doug was once installed on is worth
+    keeping, and reviewing a removed repo is not.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        return [
+            (int(r.github_repo_id), r.full_name)
+            for r in conn.execute(
+                select(
+                    installation_repos.c.github_repo_id,
+                    installation_repos.c.full_name,
+                ).where(
+                    (installation_repos.c.installation_id == installation_id)
+                    & (installation_repos.c.state == "active")
+                )
+            )
+        ]

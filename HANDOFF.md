@@ -1,22 +1,48 @@
 # HANDOFF — doug
 
-State:    building — M0 CLOSED (PR #16 merged 240caf5, deployed; only the
-          Andrew-deferred key rotation remains). M1 underway via
-          superpowers:subagent-driven-development: plan Tasks 1–2 done and
-          review-clean on this branch; Tasks 3–10 pending, PAUSED by
-          Andrew after Task 2 (2026-08-01) to land a mid-branch PR.
-Next:     Merge the Tasks-1–2 PR, then resume M1 at Task 3 (Queue ops,
-          ingest.py). SDD ledger + extracted briefs + the Task 6 amendment
-          live in this worktree at .superpowers/sdd/2026-07-31-step-2-
-          github-app-webhook-ingest/ (git-ignored — keep the worktree
-          until M1 completes). Execution order per plan header: 3, 4, 5,
-          7(Steps 1–3), 6, 7(Step 4+), 8, 9, 10. Execute via PRs
-          (ADR-0008).
-Blockers: none. Credits topped up 2026-07-31; reader tier live in prod.
-          One open M0 item, deliberately deferred by Andrew: rotate +
-          delete the live local key at
-          api/.backtest-cache/llm-probe/api-key (needs Anthropic console
-          access neither this session nor the executor has).
+State:    building — M0 CLOSED. M1 six-tenths done, ONE PR PER TASK
+          (Andrew's call, 2026-08-01: more Doug verdicts + smaller diffs
+          Doug can actually read whole). Merged to main: Tasks 1-2 (#18),
+          3 (#19), 4 (#20), 5 (#23), 8 (#22, ADR-0010). Task 7a
+          (reconcile functions) in flight.
+Next:     M1 Task 6 — the webhook rewrite (api/doug/api.py), carrying BOTH
+          amendments in docs/superpowers/plans/2026-08-01-step-2-amendments.md
+          (clock-start outcome_jobs rows; pull_request_review ingest; NO
+          token mint). Then Task 7b (Step 4 only — wire reconcile_all into
+          the lifespan Task 6 creates), Task 9 (retire the CI token path),
+          Task 10 (deploy cutover). Task 7 Steps 1-3 already shipped, so
+          only its Step 4 remains.
+Blockers: none for code. Two things only Andrew can do:
+          - subscribe the App to the "Pull request review" event before
+            Task 6's third-party ingest receives anything (handler is
+            inert but fully fixture-testable until then) — Task 10 checklist
+          - rotate + delete api/.backtest-cache/llm-probe/api-key
+            (confirmed never public; needs Anthropic console access)
+
+Execution model (do not rediscover this):
+- One PR per task. Doug reviews each (ADR-0008); read its findings, but
+  VERIFY before fixing or dismissing — roughly half are disproved by files
+  outside the diff. See docs/REVIEWING.md, which is the accumulated
+  lessons from ~20 findings across two review layers.
+- Per task: fresh implementer subagent from an extracted brief, then an
+  INDEPENDENT reviewer, then a fix round, then a scoped re-review. Do not
+  let the implementer grade its own work, and do not fix findings in the
+  controller session.
+- Extract a brief with sed from the plan; never make a subagent read all
+  4591 lines. Task line ranges: T6 2638-3395, T7 3396-3716 (Step 4 starts
+  at 3267 of that slice), T9 4025-4244, T10 4245-4591.
+
+Standing rules this branch learned the hard way:
+- A docstring asserting a durability/ordering/concurrency property must be
+  TRUE. Eight separate findings here were comments promising guarantees
+  the code did not make. If nothing enforces the claim, the comment is the
+  bug.
+- Plan INTENT governs over the plan's literal code sample. Several samples
+  violated constraints the same plan states in prose. Fix it, and record
+  the ruling in the PR body rather than applying it silently.
+- A test that cannot fail when its named behavior regresses is an
+  Important finding. Two shipped tests here were vacuous; both were caught
+  by mutation, not by reading.
 
 Key facts for the executor:
 - App: dougs-review, App ID 4450932, installation 150424894 on drewjst
