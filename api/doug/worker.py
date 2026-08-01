@@ -212,7 +212,12 @@ def _skip_reason(p) -> str | None:
     is not the same test as `p.draft is True`. If the webhook's gate
     changes, this changes with it.
     """
-    if getattr(p, "draft", False) is True:
+    # Only an explicit draft=False proceeds. True, the UNSET sentinel, and a
+    # genuinely missing field all fall through to "skip" — the same
+    # safe-direction-is-skip choice the fork check below makes for its own
+    # UNSET/missing case, applied here too rather than defaulting an unknown
+    # draft state to "safe to review".
+    if getattr(p, "draft", True) is not False:
         return "draft"
     head_id = getattr(getattr(getattr(p, "head", None), "repo", None), "id", None)
     base_id = getattr(getattr(getattr(p, "base", None), "repo", None), "id", None)
@@ -223,6 +228,16 @@ def _skip_reason(p) -> str | None:
     if not isinstance(head_id, int) or not isinstance(base_id, int):
         return "fork"
     return "fork" if head_id != base_id else None
+
+
+# Hard ceiling on how many open PRs reconcile will look at per repo. No
+# repo Doug expects to sit behind has anywhere near this many open at once;
+# hitting it is itself a signal something is wrong (a runaway bot, a
+# misconfigured install), logged rather than looping unboundedly or
+# truncating without a trace. Bounds the per-repo cost so one install with
+# a pathological number of open PRs cannot hang reconcile_all() for every
+# other tenant behind it.
+_MAX_OPEN_PRS_PER_REPO = 1000
 
 
 def reconcile_installation(installation_id: int) -> int:
@@ -240,6 +255,13 @@ def reconcile_installation(installation_id: int) -> int:
     request per open PR for data reconcile never reads. The worker fetches
     the diff when the job actually runs.
 
+    Paginates rather than trusting a single page: GitHub caps one page at
+    100, and "every open PR" (the promise above) would quietly become "the
+    newest 100" on a busy repo otherwise, silently and permanently — the
+    kind of gap between a docstring's claim and what the code does that
+    this codebase's reviewers now check for. _MAX_OPEN_PRS_PER_REPO is the
+    one place that promise still has an edge, and it's logged when hit.
+
     Does not call ingest.reclaim_stalled(): that sweep is installation-
     agnostic (whole queue, by lease age, not by tenant), so calling it here
     would reclaim other tenants' stranded rows as a side effect of
@@ -252,30 +274,74 @@ def reconcile_installation(installation_id: int) -> int:
     count = 0
     for repo_id, full_name in store.active_repos(installation_id):
         owner, _, name = full_name.partition("/")
+        pulls: list = []
+        page = 1
         try:
-            pulls = gh.rest.pulls.list(
-                owner=owner, repo=name, state="open", per_page=50
-            ).parsed_data
+            while True:
+                batch = gh.rest.pulls.list(
+                    owner=owner, repo=name, state="open", per_page=100, page=page
+                ).parsed_data
+                pulls.extend(batch)
+                if len(batch) < 100 or len(pulls) >= _MAX_OPEN_PRS_PER_REPO:
+                    break
+                page += 1
         except Exception as e:  # noqa: BLE001 — one unreadable repo is not fatal
             print(
                 f"doug: reconcile skipped {full_name} ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
             continue
+        if len(pulls) >= _MAX_OPEN_PRS_PER_REPO:
+            # A full page can overshoot the cap by up to per_page - 1 (the
+            # break above only checks after a whole page lands), so trim
+            # back to the cap exactly — the log line below must describe
+            # what actually got reconciled, not what almost did.
+            pulls = pulls[:_MAX_OPEN_PRS_PER_REPO]
+            print(
+                f"doug: reconcile capped at {_MAX_OPEN_PRS_PER_REPO} open PRs for "
+                f"{full_name}; the rest were not reconciled this pass",
+                file=sys.stderr,
+            )
         for p in pulls:
-            if _skip_reason(p) is not None:
+            reason = _skip_reason(p)
+            if reason is not None:
+                print(
+                    f"doug: reconcile skipped {full_name}#{p.number} ({reason})",
+                    file=sys.stderr,
+                )
                 continue
             head_sha = getattr(getattr(p, "head", None), "sha", None)
             if not isinstance(head_sha, str):
                 continue
-            # Identity comes from the installation_repos row, not from
-            # p.base.repo: it is the same repo either way, and the store row
-            # is what the rest of the tenancy model keys on.
-            #
-            # enqueue returns None when this (installation, repo, pr,
-            # head_sha) already exists. The unique index carries no status,
-            # so a job already taken to 'done' collides exactly like a
-            # pending one — which is precisely the dedupe reconcile wants.
+            # installation_repos' full_name can go stale: a repo can be
+            # deleted and its name picked up by an unrelated one. repo_id
+            # (github_repo_id) is the fact the store's tenancy actually keys
+            # on and the only one GitHub still guarantees, so a PR whose
+            # base repo id disagrees with it belongs to a different repo
+            # than the one this installation was granted — reviewing it
+            # under this installation's identity would be wrong, not just
+            # imprecise.
+            base_id = getattr(getattr(getattr(p, "base", None), "repo", None), "id", None)
+            if base_id != repo_id:
+                print(
+                    f"doug: reconcile skipped {full_name}#{p.number} "
+                    f"(base repo id {base_id} != installation_repos' {repo_id})",
+                    file=sys.stderr,
+                )
+                continue
+            # enqueue has two outcomes on a collision here, not one. A row
+            # already 'pending', 'running', or 'done' at this head SHA
+            # collides and returns None — the ordinary dedupe reconcile
+            # exists for, since the unique index carries no status column.
+            # A row that is 'failed' or 'superseded' at this SHA is instead
+            # REVIVED by ingest._revive: reset to status='pending',
+            # attempts=0, and its (non-None) id comes back, so it counts
+            # here too. That's deliberate — a PR that burned every attempt
+            # before a restart is healed rather than staying dead forever —
+            # but it isn't free: each restart that revives it pays for up
+            # to max_attempts model reads again. Bounded per restart (the
+            # locked interfaces' own note); not bounded across a restart
+            # loop that keeps reconciling the same broken PR.
             if (
                 ingest.enqueue(installation_id, repo_id, full_name, p.number, head_sha)
                 is not None
@@ -307,17 +373,22 @@ def reconcile_all() -> int:
     that follows it.
 
     Reclaiming runs before the sweep below, not after and not
-    per-installation (enforced by
-    test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep, since
-    swapping the two does not change reconcile_all()'s return value or the
-    row's final status in this implementation — enqueue's collision with a
-    still-'running' row and its collision with an already-reclaimed
-    'pending' row both resolve to None, REVIVABLE excludes both — so only
-    tracking call order actually catches a swap). Reclaim first means a
-    stranded row is 'pending' again by the time the sweep reaches that PR,
-    so ingest.enqueue sees an ordinary pending-job collision instead of one
-    against a row that, at that instant, is indistinguishable from a claim
-    a live worker still holds.
+    per-installation, and the order is observable, not just a defensive
+    nicety: enqueue's supersede-after-insert step (ingest.py) only retires
+    rows that are already 'pending' at this (installation, repo, pr) with a
+    different head_sha — it cannot touch a row that is still 'running'. So
+    when a stranded claim's PR is force-pushed while the claim is stuck,
+    reclaiming first is what lets the sweep's insert of the new head SHA
+    supersede the stale one in the same pass; reclaiming after would leave
+    both the stale SHA and the new one 'pending' — the stale one live work
+    a worker will claim and then have to supersede itself, instead of the
+    sweep having already retired it.
+    test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on pins
+    that case behaviorally. test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep
+    pins the call order directly on top of it, for the (also real, just not
+    behaviorally distinguishable on its own) case where the PR's head SHA
+    never changed and the two orderings converge to the same final row
+    state either way.
 
     reclaim_stalled() sweeps by lease age across the whole queue, not by
     tenant, which is exactly why it belongs here and not inside
