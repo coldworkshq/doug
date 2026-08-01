@@ -353,6 +353,11 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
             .mappings()
             .all()
         )
+        read_row = (
+            conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
+            .mappings()
+            .first()
+        )
     return {
         "tier": v["tier"],
         "score": v["score"],
@@ -371,6 +376,21 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
         ],
         "intent_alignment": dev_rows[0]["intent_alignment"] if dev_rows else None,
         "intent_refs": (dev_rows[0]["intent_refs"] or []) if dev_rows else [],
+        # The recorded risk-read coverage. Both reads truncate the same diff
+        # at the same DIFF_BUDGET, so this is also what the intent read saw —
+        # a replay rebuilds intent_notice from it instead of dropping the
+        # partial-read hedge the first response carried.
+        "coverage": (
+            {
+                "diff_chars": read_row["diff_chars"],
+                "sent_chars": read_row["sent_chars"],
+                "files_sent": read_row["files_sent"],
+                "files_unseen": read_row["files_unseen"],
+                "file_cut": read_row["file_cut"],
+            }
+            if read_row
+            else None
+        ),
     }
 
 

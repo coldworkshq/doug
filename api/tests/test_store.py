@@ -527,3 +527,30 @@ def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
     engine = create_engine(url)
     with engine.connect() as conn:
         assert len(conn.execute(select(store.verdicts)).all()) == 1
+
+
+def test_replay_keeps_the_partial_read_hedge_on_deviations(tmp_path, monkeypatch):
+    """PR #12 added intent_notice so a client rendering deviations alone
+    knows to hedge a partial read. Both reads truncate the same diff at
+    the same budget, so the recorded risk-read coverage is the intent
+    read's too — a replay must rebuild the hedge, not silently present
+    truncated findings as complete on the second delivery.
+    """
+    _db(tmp_path, monkeypatch)
+    cov = reader.Coverage(
+        diff_chars=100_000, sent_chars=30_000, files_sent=3,
+        files_unseen=["big_migration.sql"], file_cut="server.py",
+    )
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"), coverage=cov,
+    )
+    store.save_deviations(
+        vid,
+        [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
+        ["ADR-3"], 72,
+    )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior["coverage"]["sent_chars"] == 30_000
+    notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
+    assert notice is not None and "Partial read" in notice.label

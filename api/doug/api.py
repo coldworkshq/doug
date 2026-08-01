@@ -158,6 +158,15 @@ def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | No
             weight=0.0,
         )
     )
+    # intent_notice exists so a client rendering deviations alone knows the
+    # read behind them was partial. Both reads truncate the same diff at the
+    # same DIFF_BUDGET, so the stored risk-read coverage is also the intent
+    # read's — replaying without this hedge would make truncated deviation
+    # findings look complete on the second delivery of the same commit.
+    intent_notice = None
+    if prior["intent_alignment"] is not None and prior["coverage"] is not None:
+        notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
+        intent_notice = notice.label if notice else None
     return ReviewResponse(
         score=prior["score"],
         band=Band(prior["band"]),
@@ -166,10 +175,7 @@ def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | No
         deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
         intent_alignment=prior["intent_alignment"],
         intent_refs=prior["intent_refs"],
-        # The stored risk-read reasons already carry any read-truncated
-        # hedge; the intent read's own coverage was not persisted, so a
-        # replay does not invent one.
-        intent_notice=None,
+        intent_notice=intent_notice,
     )
 
 
