@@ -615,49 +615,59 @@ def test_upsert_installation_updates_state_in_place(tmp_path, monkeypatch):
     assert rows[0]["state"] == "suspended" and rows[0]["account_login"] == "drewjst"
 
 
-def test_upsert_installation_falls_back_to_update_when_insert_races(tmp_path, monkeypatch):
-    """The SELECT can return `row is None` and then, before this call's own
-    INSERT executes, a concurrent delivery for the same installation_id
-    (redelivery, or two webhook workers) already lands its row. The loser's
-    INSERT must fall through to an update instead of raising IntegrityError
-    out of upsert_installation — the same "already done, not failed" case
-    migrations.apply() handles for the schema-version race. Forces the exact
-    interleaving deterministically (a real thread race would be flaky)."""
+def test_upsert_installation_does_not_raise_when_two_racers_insert_the_same_id(
+    tmp_path, monkeypatch
+):
+    """Two concurrent deliveries for one new installation (redelivery, or two
+    webhook workers) can both read `row is None` before either has inserted,
+    then race to INSERT. The loser's insert hits installations' unique
+    constraint on installation_id — that must fall through to an update, the
+    same "already done, not failed" case migrations.apply() handles for the
+    schema-version race, not escape as an uncaught IntegrityError. Uses real
+    thread concurrency (mirroring test_migrations.py's version-race test)
+    rather than a mocked transaction boundary, so the test exercises
+    upsert_installation's actual behavior and would fail against any
+    implementation shape that reintroduces the race — not just this one."""
+    import threading
+    import time
+
+    from sqlalchemy.engine import Connection
+
     url = _db(tmp_path, monkeypatch)
     engine = create_engine(url)
     store.metadata.create_all(engine)
     monkeypatch.setattr(store, "_get_engine", lambda: engine)
 
-    real_begin = engine.begin
-    raced = {"done": False}
+    real_execute = Connection.execute
 
-    def racing_begin():
-        if not raced["done"]:
-            raced["done"] = True
-            with real_begin() as conn:
-                conn.execute(
-                    store.installations.insert(),
-                    {
-                        "installation_id": INSTALL,
-                        "account_login": "someone-else",
-                        "account_type": "User",
-                        "state": "active",
-                        "updated_at": datetime.now(UTC),
-                    },
-                )
-        return real_begin()
+    def slow_execute(self, statement, *args, **kwargs):
+        result = real_execute(self, statement, *args, **kwargs)
+        text = str(statement)
+        if "installations" in text and text.strip().upper().startswith("SELECT"):
+            time.sleep(0.02)  # hold the window open past both racers' select-read
+        return result
 
-    monkeypatch.setattr(engine, "begin", racing_begin)
+    monkeypatch.setattr(Connection, "execute", slow_execute)
 
-    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    errors = []
 
+    def racer():
+        try:
+            store.upsert_installation(INSTALL, "drewjst", "User", "active")
+        except Exception as e:  # noqa: BLE001 — the assertion is that nothing escapes
+            errors.append(e)
+
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], errors
     with engine.connect() as conn:
         rows = conn.execute(select(store.installations)).mappings().all()
     assert len(rows) == 1
-    assert rows[0]["installation_id"] == INSTALL
-    # Our update landed on the racer's row rather than raising — "drewjst"
-    # is this call's value, not the racer's "someone-else".
-    assert rows[0]["account_login"] == "drewjst" and rows[0]["state"] == "active"
+    assert rows[0]["installation_id"] == INSTALL and rows[0]["state"] == "active"
 
 
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
