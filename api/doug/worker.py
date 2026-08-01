@@ -21,13 +21,62 @@ succeeded.
 import sys
 
 from . import app_auth, check_run, ingest, reader, review, store
-from .models import Reason
+from .models import Band, Reason, Verdict
 
 
 def process_job(job: dict) -> int | None:
-    """Run one job end to end and mark it done. Returns the verdict id."""
+    """Run one job. Returns the verdict id — the recorded one on a replay,
+    a freshly scored one otherwise — or None when the job's head SHA no
+    longer matches the PR's: that job lands 'superseded', not 'done', and
+    the current head is enqueued in its place.
+    """
     gh = app_auth.installation_client(job["installation_id"])
     owner, name = job["repo_full_name"].split("/", 1)
+
+    # Idempotency read, before anything else — including the head-freshness
+    # check below, not only the paid calls past it. reclaim_stalled() (or
+    # ingest.fail(), if ingest.complete itself raises) can re-pend a
+    # 'running' job whose save_review already landed but whose check-run
+    # post or ingest.complete never ran: the worker died somewhere in
+    # between. A naive retry would re-score from scratch — a second paid
+    # score_one/read_intent, and a second verdicts row for the same commit,
+    # since verdicts carries no unique constraint to stop it. Ordering this
+    # ahead of the head-freshness check matters, not just for cost: a job
+    # with an already-durable verdict must replay it regardless of whether
+    # the PR has since moved on, or the head check below would supersede
+    # this row — leaving a verdict in the ledger whose job never reached
+    # 'done' and whose check run never posted, for a commit that really was
+    # read.
+    existing = store.find_verdict_by_identity(
+        job["installation_id"], job["github_repo_id"], job["pr_number"], job["head_sha"]
+    )
+    if existing is not None:
+        verdict = Verdict(
+            score=existing["score"],
+            band=Band(existing["band"]),
+            threshold=existing["threshold"],
+            reasons=[Reason(**r) for r in existing["reasons"]],
+        )
+        cov = reader.Coverage(**existing["coverage"]) if existing["coverage"] else None
+        # Both reads truncate the same diff at the same DIFF_BUDGET (see
+        # store.find_verdict_by_identity), so the risk read's stored
+        # coverage is also what the intent read saw — reused rather than
+        # invented. Without it there is nothing to hedge a replayed
+        # deviation with, so the section is left out entirely rather than
+        # rendered as if the read had been complete (ADR-0007's "a partial
+        # read must never render as a whole one" cuts both ways here).
+        intent_read = None
+        if existing["intent_alignment"] is not None and cov is not None:
+            intent_read = review.IntentRead(
+                alignment=existing["intent_alignment"],
+                refs=existing["intent_refs"],
+                findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
+                coverage=cov,
+            )
+        title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
+        check_run.post(gh, owner, name, job["head_sha"], title, summary)
+        ingest.complete(job["id"], existing["id"])
+        return existing["id"]
 
     # Read the PR's current head before spending anything on it. A job can
     # sit in the queue behind a backlog, or be re-pended by a retry, long
@@ -108,6 +157,14 @@ def drain(max_jobs: int = 20) -> int:
     and the SHA is silently never reviewed again. reclaim_stalled() is a
     no-op on a ledger-less deployment, exactly like claim(), so this needs
     no try/except around it either.
+
+    The seen-set can end a pass early with pending work still queued, not
+    only at max_jobs: a stale-head requeue enqueued mid-pass, or a revive,
+    or a reclaim, can sort behind a job this pass already ran (claim()
+    orders by enqueued_at), so the lap gets detected — and the pass stops —
+    before every pending row has been looked at. That is fine: the row is
+    exactly as durable as it was before drain ran, and the next delivery's
+    kick reaches it.
     """
     reclaimed = ingest.reclaim_stalled()
     if reclaimed:
@@ -120,14 +177,16 @@ def drain(max_jobs: int = 20) -> int:
         if job is None:
             break
         if job["id"] in seen:
-            # Lapped the queue: ingest.fail re-pends a job below the attempt
-            # cap, so the only thing left to claim is something this pass
-            # already failed. Retrying it here is not a retry — nothing has
-            # had time to change — and it would burn the whole attempt
-            # budget against one transient fault in under a second. A
-            # reclaimed job lands here the same way: it re-enters the
-            # pending pool with the same id it always had, so the seen-set
-            # treats it like any other re-pended job with no special case.
+            # Lapped the queue: this exact job id already ran once this
+            # pass. Three ways to land here, none of them implying a
+            # failure: ingest.fail re-pends a job below the attempt cap, so
+            # retrying it here would not be a retry — nothing has had time
+            # to change — and would burn the whole attempt budget against
+            # one transient fault in under a second; a force-push ping-pong
+            # revives a superseded row in place; a reclaim re-pends a
+            # stalled 'running' row in place. All three keep the row's
+            # original id, so the seen-set catches every one of them with
+            # no special case.
             ingest.release(job["id"])
             break
         seen.add(job["id"])

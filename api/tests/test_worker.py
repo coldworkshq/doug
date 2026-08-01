@@ -469,3 +469,104 @@ def test_a_stalled_claim_within_its_lease_is_left_strictly_alone(tmp_path, monke
     assert j["started_at"] is not None
     assert _rows(url, store.verdicts) == []
     assert posted == []
+
+
+# --- fix: idempotent replay for a job whose verdict already landed -------
+#
+# The amendment above made reclaim_stalled() reachable from drain, which
+# reopened a path save_review never defended: if the worker dies (or
+# ingest.complete itself raises) anywhere between save_review committing
+# and the job reaching 'done', the row re-pends and a naive retry re-scores
+# from scratch — a second paid score_one/read_intent, and a second verdicts
+# row for the same commit, since verdicts carries no unique constraint.
+# process_job now checks store.find_verdict_by_identity before spending
+# anything, and replays the durable verdict instead.
+
+
+def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_read(
+    tmp_path, monkeypatch
+):
+    """Stands in for a crash between save_review landing and ingest.complete
+    ever running — the earliest possible point in that window, so a replay
+    here has to render and post the check run for the first time, not just
+    skip re-scoring. Model-call counters, not just row counts, because a
+    duplicate verdicts row and a repeated paid call are two different
+    failures and this guards both."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        review, "fetch_pr", lambda gh, o, r, n: calls.append("fetch_pr") or (_pr(), "+ x")
+    )
+    monkeypatch.setattr(
+        review,
+        "score_one",
+        lambda meta, diff: calls.append("score_one")
+        or ("reader", VERDICT.model_copy(deep=True), RV, COV),
+    )
+    monkeypatch.setattr(
+        review, "read_intent", lambda gh, o, r, m, d: calls.append("read_intent") or None
+    )
+
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    # The worker reached save_review and then died — before render, before
+    # the check-run post, before ingest.complete. The job row is left
+    # 'running' with no verdict_id, exactly as a real crash would leave it.
+    verdict_id = store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV,
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+    _age_started_at(url, claimed["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
+
+    assert worker.drain() == 1
+
+    assert calls == []  # no model call was repeated
+    assert len(_rows(url, store.verdicts)) == 1  # no duplicate row
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "done" and j["verdict_id"] == verdict_id
+    assert posted[0]["head_sha"] == JOB["head_sha"]
+    assert posted[0]["title"].lower().startswith("flagged")
+
+
+def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_retry(
+    tmp_path, monkeypatch
+):
+    """The idempotency read guards more than the reclaim path: ingest.fail
+    re-pends a job whenever process_job raises for any reason, including
+    ingest.complete itself blowing up after save_review already landed — no
+    wall-clock wait needed to reach the same "verdict durable, job not
+    done" state a crash produces. The second drain() pass must not re-score
+    and does post a second, harmless, check run — the crash-after-post case
+    the fix report calls out as acceptable."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    real_complete = ingest.complete
+    armed = {"boom": True}
+
+    def _flaky_complete(job_id, verdict_id):
+        if armed["boom"]:
+            armed["boom"] = False
+            raise RuntimeError("db hiccup")
+        real_complete(job_id, verdict_id)
+
+    monkeypatch.setattr(ingest, "complete", _flaky_complete)
+    ingest.enqueue(**JOB)
+
+    assert worker.drain() == 1  # save_review lands, complete blows up, fail() re-pends
+    assert worker.drain() == 1  # replay: idempotent, no second read
+
+    assert len(_rows(url, store.verdicts)) == 1
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "done"
+    assert len(posted) == 2  # both attempts post; the second is the harmless duplicate
