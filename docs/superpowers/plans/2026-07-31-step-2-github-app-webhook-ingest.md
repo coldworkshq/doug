@@ -2558,6 +2558,12 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
     back and forth with no new rows and no progress — an unbounded spin
     inside a request's background task. Claiming a job this pass already
     ran is the signal that the queue has lapped, whatever the reason.
+
+    The bound rests on _revive updating in place: the row keeps its id, so
+    the seen-set recognises it. A revive written as a fresh insert — an
+    equally natural way to write it, and one every Task 3 test still
+    passes — would hand back a new id each time and quietly restore the
+    unbounded loop. Two tasks, one mechanism.
     """
     url = _db(tmp_path, monkeypatch)
     posted = _wire(monkeypatch)
