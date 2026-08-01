@@ -82,3 +82,29 @@ def test_render_is_json_safe(monkeypatch):
     out = review.render(results)
     assert "Fix retry" in out
     json.dumps([r.verdict.model_dump(mode="json") for r in results])
+
+
+def test_fetch_pr_records_the_head_commit():
+    """head_sha is the identity /v1/review dedups repeats on; a fetch that
+    dropped it would silently disable idempotency for every review."""
+    from types import SimpleNamespace
+
+    p = SimpleNamespace(
+        number=7, title="Add cache",
+        user=SimpleNamespace(login="dev", type="User"),
+        head=SimpleNamespace(sha="c0ffee" + "0" * 34),
+        html_url="https://github.com/o/r/pull/7",
+    )
+    f = SimpleNamespace(
+        filename="cache.py", status="modified", additions=3, deletions=1, patch="+ x"
+    )
+    gh = SimpleNamespace(
+        rest=SimpleNamespace(
+            pulls=SimpleNamespace(
+                get=lambda **kw: SimpleNamespace(parsed_data=p),
+                list_files=lambda **kw: SimpleNamespace(parsed_data=[f]),
+            )
+        )
+    )
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.head_sha == "c0ffee" + "0" * 34

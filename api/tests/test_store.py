@@ -312,3 +312,245 @@ def test_queue_carries_finding_severity(tmp_path, monkeypatch):
     reasons = body["items"][0]["verdict"]["reasons"]
     assert reasons[0]["severity"] == "high"
     assert reasons[0]["weight"] == 0.0
+
+
+def test_engine_is_not_rebuilt_when_the_url_carries_a_password(monkeypatch):
+    """str(engine.url) masks passwords ("user:***@host"), so comparing it
+    against a credentialed DATABASE_URL never matches — which meant every
+    single ledger call built a fresh engine and connection pool against
+    prod Postgres and orphaned the old one. The cache must key on the raw
+    env string, not the engine's self-description.
+    """
+    from unittest.mock import MagicMock
+
+    built = []
+    monkeypatch.setattr(store, "create_engine", lambda url, **kw: built.append(url) or MagicMock())
+    monkeypatch.setattr(store.metadata, "create_all", lambda engine: None)
+    monkeypatch.setattr(store, "_engine", None)
+    monkeypatch.setattr(store, "_engine_url", None)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://doug:s3cret@db.internal/doug")
+
+    first = store._get_engine()
+    second = store._get_engine()
+    assert built == ["postgresql://doug:s3cret@db.internal/doug"]
+    assert first is second
+
+
+def test_concurrent_first_requests_build_exactly_one_engine(tmp_path, monkeypatch):
+    """Unsynchronized check-then-act let two racing first-requests each
+    build an engine; the loser's connection pool leaked until Postgres ran
+    out of connections. The lock makes first-touch build exactly once.
+    """
+    import threading
+
+    url = f"sqlite:///{tmp_path}/race.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setattr(store, "_engine", None)
+    monkeypatch.setattr(store, "_engine_url", None)
+
+    real_create = store.create_engine
+    built = []
+    barrier = threading.Barrier(8)
+
+    def slow_create(u, **kw):
+        built.append(u)
+        return real_create(u, **kw)
+
+    monkeypatch.setattr(store, "create_engine", slow_create)
+
+    def hit():
+        barrier.wait()
+        store._get_engine()
+
+    threads = [threading.Thread(target=hit) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1
+
+
+# --- /v1/review idempotency --------------------------------------------------
+# A webhook redelivery or a retried CI job used to re-run the whole paid
+# read and insert a second verdicts row for the same commit — doubling LLM
+# spend and giving precision two "independent" scoring events that were one.
+
+
+def _pr_with_sha(sha="a" * 40) -> PRMetadata:
+    return PRMetadata.model_validate(
+        dict(number=7, title="Add cache", author="dev", files=["cache.py"], head_sha=sha)
+    )
+
+
+def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
+    scored = []
+    real_score_one = review.score_one
+    monkeypatch.setattr(
+        review, "score_one", lambda meta, diff: scored.append(1) or real_score_one(meta, diff)
+    )
+
+    c = TestClient(app)
+    first = c.post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret"},
+    ).json()
+    second = c.post(
+        "/v1/review", json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret"},
+    ).json()
+
+    assert len(scored) == 1, "the repeat must not score (or pay for a read) again"
+    assert second["band"] == first["band"] and second["score"] == first["score"]
+    assert any(r["rule"] == "idempotent-replay" for r in second["reasons"])
+    assert not any(r["rule"] == "idempotent-replay" for r in first["reasons"])
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 1
+
+
+def test_review_force_rescore_and_new_commit_both_score_again(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    sha = ["a" * 40]
+    monkeypatch.setattr(
+        review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(sha[0]), "+ x")
+    )
+    c = TestClient(app)
+    post = lambda body: c.post(  # noqa: E731
+        "/v1/review", json={"repo": "o/r", "pr_number": 7, **body},
+        headers={"x-doug-token": "secret"},
+    )
+
+    post({})
+    post({"force": True})  # deliberate rescore of the same commit
+    sha[0] = "b" * 40
+    post({})  # a new commit is never a repeat
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 3
+
+
+def test_replay_carries_the_recorded_deviations(tmp_path, monkeypatch):
+    """The replayed response must be the recorded review, intent tier
+    included — a replay that silently dropped deviations would make a
+    redelivered webhook look like the decisions read never ran."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"),
+    )
+    store.save_deviations(
+        vid,
+        [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
+        ["ADR-3"], 72,
+    )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior is not None and prior["band"] == "flagged"
+    assert prior["deviations"] == [
+        {"type": "beyond-ticket", "description": "adds a flag", "severity": "low"}
+    ]
+    assert prior["intent_refs"] == ["ADR-3"] and prior["intent_alignment"] == 72
+
+
+def test_deviation_none_marker_is_storage_only_never_replayed(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"),
+    )
+    store.save_deviations(vid, [], ["ADR-3"], 95)
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior["deviations"] == []  # kind="none" is bookkeeping, not a finding
+    assert prior["intent_alignment"] == 95  # but the read's alignment survives
+
+
+def test_pre_sha_rows_never_match_and_get_rescored_once(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 7, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
+    assert store.find_review("o/r", 7, "a" * 40) is None
+
+
+def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
+    """find_review-then-score is a check-then-act spanning a whole paid
+    read, so two overlapping webhook deliveries both missed the lookup and
+    both paid — the exact double-spend the dedup exists to prevent. The
+    per-(repo, pr, sha) in-flight lock makes the second delivery wait,
+    then replay. (In-process only: a cross-instance duplicate is still
+    possible and tolerated.)
+    """
+    import threading
+    import time
+
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
+    scored = []
+    real_score_one = review.score_one
+
+    def slow_score(meta, diff):
+        scored.append(1)
+        time.sleep(0.2)  # hold the race window open
+        return real_score_one(meta, diff)
+
+    monkeypatch.setattr(review, "score_one", slow_score)
+
+    c = TestClient(app)
+    results = []
+
+    def hit():
+        results.append(
+            c.post(
+                "/v1/review", json={"repo": "o/r", "pr_number": 7},
+                headers={"x-doug-token": "secret"},
+            ).json()
+        )
+
+    threads = [threading.Thread(target=hit) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(scored) == 1, "the overlapping delivery must wait and replay, not pay"
+    replays = [
+        r for r in results
+        if any(x["rule"] == "idempotent-replay" for x in r["reasons"])
+    ]
+    assert len(replays) == 1
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).all()) == 1
+
+
+def test_replay_keeps_the_partial_read_hedge_on_deviations(tmp_path, monkeypatch):
+    """PR #12 added intent_notice so a client rendering deviations alone
+    knows to hedge a partial read. Both reads truncate the same diff at
+    the same budget, so the recorded risk-read coverage is the intent
+    read's too — a replay must rebuild the hedge, not silently present
+    truncated findings as complete on the second delivery.
+    """
+    _db(tmp_path, monkeypatch)
+    cov = reader.Coverage(
+        diff_chars=100_000, sent_chars=30_000, files_sent=3,
+        files_unseen=["big_migration.sql"], file_cut="server.py",
+    )
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"), coverage=cov,
+    )
+    store.save_deviations(
+        vid,
+        [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
+        ["ADR-3"], 72,
+    )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior["coverage"]["sent_chars"] == 30_000
+    notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
+    assert notice is not None and "Partial read" in notice.label

@@ -26,6 +26,7 @@ MAX_TOKENS = 6000
 EFFORT = "medium"
 DIFF_BUDGET = 30_000  # chars
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
+DEFAULT_READ_TIMEOUT_S = 120  # seconds, whole read incl. retries' backoff
 
 SYSTEM = (
     "You are reviewing a single pull request diff from a large production "
@@ -167,6 +168,25 @@ def reader_threshold() -> float:
     return float(os.environ.get("DOUG_READER_THRESHOLD", DEFAULT_READER_THRESHOLD))
 
 
+def read_timeout() -> float:
+    return float(os.environ.get("DOUG_READ_TIMEOUT_S", DEFAULT_READ_TIMEOUT_S))
+
+
+def _client():
+    """A client with a bounded timeout, never the SDK default.
+
+    The SDK defaults to a 600s timeout, and both read entry points run
+    synchronously on Starlette's shared request thread pool (~40 workers,
+    /healthz included). At the default, one stalled upstream connection
+    parks a worker for ten minutes; forty of them and the whole service
+    reads as down. 120s is well above any legitimate read and turns the
+    same stall into a contained ReaderError fallback instead.
+    """
+    import anthropic
+
+    return anthropic.Anthropic(timeout=read_timeout())
+
+
 def _sent_slice(diff: str) -> str:
     """The exact bytes DIFF_BUDGET admits — the one place this slice happens.
 
@@ -306,9 +326,7 @@ def truncation_reason(cov: Coverage) -> Reason | None:
 
 def read_diff(pr, diff: str, client=None) -> ReaderVerdict:
     if client is None:
-        import anthropic
-
-        client = anthropic.Anthropic()
+        client = _client()
     try:
         response = client.messages.create(
             model=MODEL,
@@ -366,9 +384,7 @@ def read_with_decisions(pr, diff: str, docs, client=None) -> IntentReaderVerdict
     if not docs:
         raise ReaderError("no decision records to read against")
     if client is None:
-        import anthropic
-
-        client = anthropic.Anthropic()
+        client = _client()
     response = client.messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,

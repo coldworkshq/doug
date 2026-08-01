@@ -3,6 +3,8 @@
 import hmac
 import json
 import os
+import threading
+from contextlib import contextmanager
 from importlib import resources
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -46,6 +48,9 @@ def score_pr(pr: PRMetadata) -> Verdict:
 class ReviewRequest(BaseModel):
     repo: str  # owner/name
     pr_number: int
+    # A deliberate rescore of an already-recorded commit. Without it, a
+    # repeat request for the same head sha replays the recorded verdict.
+    force: bool = False
 
 
 class ReviewResponse(Verdict):
@@ -93,6 +98,90 @@ def review_pr(
 
     gh = GitHub(x_github_token or None)
     meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
+
+    # Idempotency: a webhook redelivery or retried CI job for a commit this
+    # ledger has already scored replays the recorded verdict — no second
+    # paid read, no duplicate row for precision to double-count.
+    if meta.head_sha and not req.force:
+        # A read takes tens of seconds, so "already scored?" then "score"
+        # is a wide-open check-then-act: two overlapping deliveries would
+        # both miss the lookup and both pay. Serialise per (repo, pr, sha)
+        # so the duplicate waits, then replays. In-process only — a
+        # cross-instance duplicate stays possible and tolerated (consumers
+        # key off max(verdict id)); a DB unique index isn't available
+        # because create_all never alters live tables.
+        with _inflight_review(req.repo, req.pr_number, meta.head_sha):
+            if (replay := _replay_or_none(req, meta)) is not None:
+                return replay
+            return _score_and_persist(req, gh, owner, name, meta, diff)
+    return _score_and_persist(req, gh, owner, name, meta, diff)
+
+
+_inflight_guard = threading.Lock()
+_inflight_locks: dict[tuple[str, int, str], threading.Lock] = {}
+
+
+@contextmanager
+def _inflight_review(repo: str, pr_number: int, head_sha: str):
+    key = (repo, pr_number, head_sha)
+    with _inflight_guard:
+        lock = _inflight_locks.setdefault(key, threading.Lock())
+    with lock:
+        yield
+    # Dropped after release, not refcounted: a waiter already holding this
+    # lock object proceeds fine, and by the time a third request misses the
+    # dict the verdict is durable, so its find_review hits.
+    with _inflight_guard:
+        _inflight_locks.pop(key, None)
+
+
+def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | None:
+    """The recorded verdict for this exact commit, or None to score fresh.
+
+    Any lookup failure falls through to a fresh score: the worst case of a
+    broken dedup read is one duplicate, never a failed CI.
+    """
+    try:
+        prior = store.find_review(req.repo, req.pr_number, meta.head_sha)
+    except Exception:  # noqa: BLE001
+        prior = None
+    if prior is None:
+        return None
+    reasons = [Reason(**r) for r in prior["reasons"]]
+    reasons.append(
+        Reason(
+            rule="idempotent-replay",
+            label=(
+                f"Verdict for {meta.head_sha[:12]} was already recorded; "
+                "replayed without a new read. POST force=true to rescore."
+            ),
+            weight=0.0,
+        )
+    )
+    # intent_notice exists so a client rendering deviations alone knows the
+    # read behind them was partial. Both reads truncate the same diff at the
+    # same DIFF_BUDGET, so the stored risk-read coverage is also the intent
+    # read's — replaying without this hedge would make truncated deviation
+    # findings look complete on the second delivery of the same commit.
+    intent_notice = None
+    if prior["intent_alignment"] is not None and prior["coverage"] is not None:
+        notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
+        intent_notice = notice.label if notice else None
+    return ReviewResponse(
+        score=prior["score"],
+        band=Band(prior["band"]),
+        threshold=prior["threshold"],
+        reasons=reasons,
+        deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
+        intent_alignment=prior["intent_alignment"],
+        intent_refs=prior["intent_refs"],
+        intent_notice=intent_notice,
+    )
+
+
+def _score_and_persist(
+    req: ReviewRequest, gh, owner: str, name: str, meta: PRMetadata, diff: str
+) -> ReviewResponse:
     tier, verdict, rv, cov = review.score_one(meta, diff)
     intent_read = review.read_intent(gh, owner, name, meta, diff)
 

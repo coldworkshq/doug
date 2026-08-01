@@ -18,6 +18,7 @@ appear in every test and in no production row.
 """
 
 import os
+import threading
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -127,17 +128,30 @@ deviations = Table(
 )
 
 _engine = None
+# The raw env string the engine was built from. Compared instead of
+# str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
+# ("user:***@host"), so that comparison never matches a credentialed
+# DATABASE_URL — and rebuilt the engine, pool and all, on every call.
+_engine_url = None
+_engine_lock = threading.Lock()
 
 
 def _get_engine():
-    global _engine
+    global _engine, _engine_url
     url = os.environ.get("DATABASE_URL")
     if not url:
         return None
-    if _engine is None or str(_engine.url) != url:
-        _engine = create_engine(url, pool_pre_ping=True)
-        metadata.create_all(_engine)
-    return _engine
+    with _engine_lock:
+        # Locked check-then-act: two first-requests racing here used to both
+        # build an engine and orphan one of the connection pools.
+        if _engine is None or _engine_url != url:
+            engine = create_engine(url, pool_pre_ping=True)
+            metadata.create_all(engine)
+            if _engine is not None:
+                _engine.dispose()
+            _engine = engine
+            _engine_url = url
+        return _engine
 
 
 def enabled() -> bool:
@@ -289,6 +303,95 @@ def save_deviations(
     with engine.begin() as conn:
         conn.execute(deviations.insert(), rows)
     return len(rows)
+
+
+def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
+    """The newest verdict already recorded for this exact commit, or None.
+
+    The idempotency read: /v1/review consults it before paying for an LLM
+    read, so a webhook redelivery or a retried CI job replays the recorded
+    verdict instead of double-spending and inserting a duplicate ledger
+    row. Matches on the head_sha key inside pr_meta — a JSON key rather
+    than a column for the same reason `reads` is its own table: create_all
+    never adds columns to a live table. Rows scored before head_sha
+    existed simply never match, and get rescored once.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import select
+
+    q = (
+        select(verdicts)
+        .where(
+            verdicts.c.repo == repo,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
+        )
+        .order_by(verdicts.c.id.desc())
+        .limit(1)
+    )
+    with engine.connect() as conn:
+        v = conn.execute(q).mappings().first()
+        if v is None:
+            return None
+        reason_rows = (
+            conn.execute(
+                select(findings)
+                .where(findings.c.verdict_id == v["id"])
+                .order_by(findings.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        dev_rows = (
+            conn.execute(
+                select(deviations)
+                .where(deviations.c.verdict_id == v["id"])
+                .order_by(deviations.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        read_row = (
+            conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
+            .mappings()
+            .first()
+        )
+    return {
+        "tier": v["tier"],
+        "score": v["score"],
+        "band": v["band"],
+        "threshold": v["threshold"],
+        "reasons": [
+            {"rule": r["rule"], "label": r["label"], "weight": r["weight"]}
+            for r in reason_rows
+        ],
+        # kind="none" is the "read happened, found nothing" storage marker
+        # (see save_deviations) — it was never a response finding.
+        "deviations": [
+            {"type": d["kind"], "description": d["description"], "severity": d["severity"]}
+            for d in dev_rows
+            if d["kind"] != "none"
+        ],
+        "intent_alignment": dev_rows[0]["intent_alignment"] if dev_rows else None,
+        "intent_refs": (dev_rows[0]["intent_refs"] or []) if dev_rows else [],
+        # The recorded risk-read coverage. Both reads truncate the same diff
+        # at the same DIFF_BUDGET, so this is also what the intent read saw —
+        # a replay rebuilds intent_notice from it instead of dropping the
+        # partial-read hedge the first response carried.
+        "coverage": (
+            {
+                "diff_chars": read_row["diff_chars"],
+                "sent_chars": read_row["sent_chars"],
+                "files_sent": read_row["files_sent"],
+                "files_unseen": read_row["files_unseen"],
+                "file_cut": read_row["file_cut"],
+            }
+            if read_row
+            else None
+        ),
+    }
 
 
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
