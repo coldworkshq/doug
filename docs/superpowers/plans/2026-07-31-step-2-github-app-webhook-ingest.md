@@ -2537,12 +2537,47 @@ def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monke
     # Nothing was paid for and nothing was published against the stale SHA.
     assert _rows(url, store.verdicts) == []
     assert posted == []
+
+
+def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
+    """The seen-set does double duty, and this is the second job.
+
+    ingest.enqueue REVIVES a superseded row rather than inserting beside it
+    (Task 3), so a branch flipping between two SHAs makes each job stale on
+    arrival, supersede itself, and revive the other. The two hand the queue
+    back and forth with no new rows and no progress — an unbounded spin
+    inside a request's background task. Claiming a job this pass already
+    ran is the signal that the queue has lapped, whatever the reason.
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    flip = iter(["c" * 40, "a" * 40] * 40)
+
+    def _get(**kw):
+        return SimpleNamespace(parsed_data=SimpleNamespace(head=SimpleNamespace(sha=next(flip))))
+
+    monkeypatch.setattr(
+        app_auth,
+        "installation_client",
+        lambda i: SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get))),
+    )
+    ingest.enqueue(**JOB)
+
+    # Two jobs touched, then the lap is detected — not max_jobs (20) spins.
+    assert worker.drain() == 2
+    statuses = {j["head_sha"]: j["status"] for j in _rows(url, store.review_jobs)}
+    assert statuses == {"a" * 40: "pending", "c" * 40: "superseded"}
+    # Nothing was read and nothing was published while the branch thrashed.
+    assert _rows(url, store.verdicts) == []
+    assert posted == []
 ```
+
+Both new drain tests were mutation-checked by deleting the seen-set: `test_a_failed_job_is_not_retried_inside_the_same_pass` fails `assert 3 == 1` (all three attempts burned in one pass) and `test_a_force_push_ping_pong_cannot_spin_the_drain` fails `assert 20 == 2` (the spin, bounded only by `max_jobs`). Neither can pass against a drain without the guard.
 
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_worker.py -q`
-Expected: 14 passed (this task's whole contribution to the file). Then `cd api && uv run ruff check .` — clean. Task 7 adds its five reconcile tests to this same file later, taking it to 19 — so a count of 19 here means Task 7 has already landed, not that something is wrong.
+Expected: 15 passed (this task's whole contribution to the file). Then `cd api && uv run ruff check .` — clean. Task 7 adds its five reconcile tests to this same file later, taking it to 20 — so a count of 20 here means Task 7 has already landed, not that something is wrong.
 
 `test_a_failing_job_does_not_strand_the_queue` is the one that fails if Task 3's `enqueued_at=now` bump in `fail` is missing: `drain()` returns 1 instead of 2 and the second job never runs. That is the intended signal, not a flaky test — do not weaken the assertion, land the Task 3 half.
 
