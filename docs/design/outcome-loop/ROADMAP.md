@@ -71,6 +71,10 @@ executed as written — amendments folded in at their task, never as a second pa
 - [ ] `fetch_pr` fetches review state (approvals no longer hardcoded 0 — live scorer matches the backtested one)
 - [ ] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written per verdict
 - [ ] Fork-PR + bot-author exclusion from deep reads
+- [ ] Migration 003: index `verdicts` on (installation_id, github_repo_id, pr_number, head_sha) —
+  `worker.process_job`'s idempotency pre-read runs on every job and those columns are unindexed,
+  so it seq-scans a table that only grows. Harmless at dogfood volume, a cliff at tenant volume.
+  Must be a migration, never a bare index (the constraint that governs columns governs indexes)
 - [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
 
 **Exit gate:** the attacker math closes — no unauthenticated paid endpoint, no uncapped spend
