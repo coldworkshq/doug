@@ -2227,7 +2227,8 @@ installation token, fetching the PR, scoring it, persisting it, posting
 the check run. The handler's whole job is to make the work durable and
 return 202; a delivery must never wait on a paid model read.
 
-Failure policy differs from /v1/review's on purpose. There, a down ledger
+Failure policy differs from the CI-token review path's on purpose.
+There, a down ledger
 must not fail somebody's CI, so save_review's exception becomes a reason
 on the response and the review still "succeeds". Here the durable row IS
 the deliverable — a job marked done having written nothing is a green
@@ -2643,7 +2644,7 @@ git push
 **Files:**
 - Create: none
 - Modify: `api/doug/api.py:1-33` (imports + `FastAPI(...)` construction at `:26`), `api/doug/api.py:347-373` (the whole `github_webhook` handler)
-- Test: `api/tests/test_api.py:1-8` (imports), append new tests after `:105`
+- Test: `api/tests/test_api.py:1-6` (imports), append new tests after `:105`
 
 **Interfaces:**
 - Consumes: `ingest.enqueue(installation_id, github_repo_id, repo_full_name, pr_number, head_sha) -> int | None` — `None` on the duplicate suppressed by `UNIQUE (installation_id, github_repo_id, pr_number, head_sha)`, and **`RuntimeError` when `DATABASE_URL` is unset** (Task 3); `store.upsert_installation(installation_id, account_login, account_type, state)` and `store.set_installation_repos(installation_id, repos: list[tuple[int, str]], *, replace: bool, state: str = "active")` — the `state` kwarg extends the locked signature, which had nowhere to pass the `state='removed'` its own note requires (confirmed with Task 2); `store.enabled()` (`store.py:143`); `worker.drain()`, `worker.reconcile_installation(installation_id)`; `githubkit.webhooks.verify` (already imported at `api.py:10`); `starlette.concurrency.run_in_threadpool`.
@@ -2652,7 +2653,7 @@ git push
 
 - [ ] **Step 1: Write the failing test — startup requires the secret, unsigned is rejected**
 
-Edit `api/tests/test_api.py:1-8`. Replace:
+Edit `api/tests/test_api.py:1-6`. Replace:
 
 ```python
 import hashlib
@@ -3152,7 +3153,7 @@ async def github_webhook(
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `cd api && uv run pytest tests/test_api.py -q -k installation`
-Expected: 4 passed. Then `cd api && uv run ruff check .` — clean (the Step 4 F401s are now used).
+Expected: 6 passed. Then `cd api && uv run ruff check .` — clean (the Step 4 F401s are now used).
 
 - [ ] **Step 9: Write the failing test — pull_request gating**
 
