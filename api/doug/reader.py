@@ -270,20 +270,23 @@ class Coverage(BaseModel):
     files_unseen: list[str]
     file_cut: str | None = None
     # From the PR object, not derived here — coverage() only ever sees the
-    # diff text, never the original file list, so a file GitHub reports
-    # changed but that never got a patch (binary, or too large to inline)
-    # is invisible to everything else in this class. None = not tracked
-    # (old callers); never inferred from files_sent + files_unseen.
+    # diff text, never the original file list. A display fact only (the
+    # receipt's "N of M files"): `complete` does not compare against it,
+    # because changed_files counts files that structurally never produce
+    # a diff header (genuine binaries), which files_sent could never
+    # match. None = not tracked (old callers).
     changed_files: int | None = None
     files_dropped: list[str] = Field(default_factory=list)
 
     @property
     def complete(self) -> bool:
-        if not self.sent_chars >= self.diff_chars:
-            return False
-        if self.changed_files is None:
-            return True
-        return self.files_sent == self.changed_files
+        # files_dropped, not changed_files == files_sent: a genuinely
+        # binary file (caller excludes it from files_dropped) never
+        # produces a diff header at all, so files_sent could never equal
+        # changed_files on an ordinary PR that touches one. changed_files
+        # is a display fact (the receipt's "N of M"), not part of this
+        # check.
+        return self.sent_chars >= self.diff_chars and not self.files_dropped
 
     @property
     def fraction(self) -> float:

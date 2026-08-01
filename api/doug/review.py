@@ -44,6 +44,10 @@ def _html_url(p) -> str | None:
     return url if isinstance(url, str) else None
 
 
+GITHUB_MAX_PR_FILES = 3000  # GitHub's own documented list_files cap
+_MAX_PAGES = GITHUB_MAX_PR_FILES // 100
+
+
 def _list_all_files(gh, owner: str, repo: str, number: int) -> list:
     """Every changed file, not just the first page.
 
@@ -51,17 +55,37 @@ def _list_all_files(gh, owner: str, repo: str, number: int) -> list:
     a 250-file PR reads (and scores, and reports coverage) as if it had
     100. GitHub signals the last page by returning fewer than per_page
     rows, not by a cursor; looping on that is standard REST pagination.
+
+    Bounded at GitHub's own file cap: past that, GitHub itself would stop
+    returning more, so a full page at the bound means the PR has hit
+    GitHub's limit, not that this loop gave up early. Without the bound, a
+    client bug or a misbehaving mock that never returns a short page spins
+    forever.
     """
     files = []
-    page = 1
-    while True:
+    for page in range(1, _MAX_PAGES + 1):
         batch = gh.rest.pulls.list_files(
             owner=owner, repo=repo, pull_number=number, per_page=100, page=page
         ).parsed_data
         files.extend(batch)
         if len(batch) < 100:
-            return files
-        page += 1
+            break
+    return files
+
+
+def _dropped_files(files: list) -> list[str]:
+    """Files GitHub reported changed but sent no patch for — excluding
+    genuine binaries, which never had reviewable content to miss.
+
+    GitHub cannot count lines in a binary file, so a real binary comes
+    back with additions == deletions == 0 alongside patch=None. A large
+    text file GitHub declines to inline for size still carries the real
+    line counts it computed — that file WAS reviewable and is not here,
+    which is the gap this list exists to catch. Flagging binaries the
+    same way would mark most ordinary PRs incomplete (a screenshot, a
+    lockfile) and bury the signal that matters.
+    """
+    return [f.filename for f in files if not f.patch and (f.additions or f.deletions)]
 
 
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
@@ -97,7 +121,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             # and it is trustworthy precisely because pagination is now
             # complete.
             changed_files=len(files),
-            files_dropped=[f.filename for f in files if not f.patch],
+            files_dropped=_dropped_files(files),
         )
         diff = reader.CHUNK_SEPARATOR.join(
             reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
@@ -139,7 +163,15 @@ def _review_state(gh, owner: str, repo: str, number: int, opened_at) -> tuple[in
 def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
     files = _list_all_files(gh, owner, repo, number)
-    approvals, approval_latency_s = _review_state(gh, owner, repo, number, p.created_at)
+    try:
+        approvals, approval_latency_s = _review_state(gh, owner, repo, number, p.created_at)
+    except Exception as e:  # noqa: BLE001 — advisory signal, never fails the fetch
+        # Files and diff are the load-bearing return value; approvals feed
+        # one deterministic rule (rubber-stamp). A malformed review payload
+        # — a naive timestamp mixed with an aware one, a transport error —
+        # must cost that signal, not the PR fetch it rides along with.
+        print(f"doug: review-state fetch skipped ({type(e).__name__}: {e})", file=sys.stderr)
+        approvals, approval_latency_s = 0, None
     meta = PRMetadata(
         number=p.number,
         title=p.title,
@@ -166,7 +198,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         # The PR object's own count — authoritative regardless of
         # pagination, unlike fetch_open_prs which has to derive it.
         changed_files=p.changed_files,
-        files_dropped=[f.filename for f in files if not f.patch],
+        files_dropped=_dropped_files(files),
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)

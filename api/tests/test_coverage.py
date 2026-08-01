@@ -299,3 +299,13 @@ def test_score_one_carries_the_prs_changed_files_and_dropped_list_into_coverage(
     _tier, _verdict, _rv, cov = review.score_one(pr, _diff([("a.py", 400)]))
     assert not cov.complete
     assert cov.files_dropped == ["b.bin"]
+
+
+def test_a_mismatched_changed_files_count_alone_does_not_mark_a_read_incomplete():
+    """changed_files is a display field (the receipt's "N of M"), not part
+    of the completeness check — files_dropped is. A PR with a genuinely
+    binary file (caught below) would otherwise be permanently incomplete:
+    files_sent can never equal changed_files when one changed file never
+    produces a diff header at all."""
+    cov = reader.coverage(_diff([("a.py", 400)]), changed_files=5, files_dropped=[])
+    assert cov.complete

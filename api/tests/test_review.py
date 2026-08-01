@@ -288,3 +288,89 @@ def test_fetch_pr_reports_no_latency_without_an_approval():
     meta, _diff = review.fetch_pr(gh, "o", "r", 7)
     assert meta.approvals == 0
     assert meta.approval_latency_s is None
+
+
+def test_list_all_files_stops_at_githubs_own_file_cap():
+    """GitHub caps list_files at 3000 files per PR — a client that keeps
+    asking past that gets more full pages back from nothing real (a
+    misbehaving mock, or a client bug), so the loop needs its own bound
+    rather than trusting a short page to eventually arrive."""
+
+    class InfiniteFakeGH:
+        @property
+        def rest(self):
+            return SimpleNamespace(
+                pulls=SimpleNamespace(
+                    list_files=lambda **kw: SimpleNamespace(
+                        parsed_data=[_file(name=f"f{i}.py") for i in range(100)]
+                    )
+                )
+            )
+
+    files = review._list_all_files(InfiniteFakeGH(), "o", "r", 7)
+    assert len(files) == 3000
+
+
+# --- Coverage integrity: binary files are not "dropped" -------------------
+
+def _binary_file(name="logo.png"):
+    """GitHub reports a genuinely binary file with no patch AND no
+    line-level stats — it cannot count lines in a binary, unlike a large
+    text file it merely declines to inline."""
+    return SimpleNamespace(filename=name, status="added", additions=0, deletions=0, patch=None)
+
+
+def _oversized_text_file(name="generated.go"):
+    """A large text file GitHub computed real stats for but omitted the
+    patch text — this one IS reviewable content that never arrived."""
+    return SimpleNamespace(
+        filename=name, status="modified", additions=4000, deletions=200, patch=None
+    )
+
+
+def test_fetch_pr_does_not_count_a_genuine_binary_as_dropped():
+    """A screenshot or a compiled asset never had reviewable content to
+    miss — flagging every PR that touches one as an incomplete read would
+    make the signal common enough to ignore, exactly the overclaim this
+    field exists to prevent in the other direction."""
+    p = _pull_full(changed_files=2)
+    p.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gh = ReviewedFakeGH(p, [_file(), _binary_file()], [])
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.files_dropped == []
+
+
+def test_fetch_pr_still_counts_an_oversized_text_file_as_dropped():
+    """GitHub reporting real additions/deletions with no patch means it
+    computed a diff and withheld the text — content that should have
+    been reviewable and was not. Coverage.complete must still catch this."""
+    p = _pull_full(changed_files=2)
+    p.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gh = ReviewedFakeGH(p, [_file(), _oversized_text_file()], [])
+    meta, _diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.files_dropped == ["generated.go"]
+
+
+def test_fetch_pr_degrades_gracefully_when_review_state_is_unreadable():
+    """A malformed review payload (mixed tz-aware/naive timestamps, or any
+    other surprise in list_reviews) must cost the approvals signal, not
+    the entire PR fetch — files and diff are the load-bearing return
+    value, and review state is one input among several deterministic
+    rules use."""
+    p = _pull_full(changed_files=1)
+    p.created_at = datetime(2026, 1, 1)  # naive — TypeError vs an aware submitted_at
+
+    class BrokenReviewsGH(ReviewedFakeGH):
+        @property
+        def rest(self):
+            r = super().rest
+            r.pulls.list_reviews = lambda **kw: SimpleNamespace(
+                parsed_data=[_review("alice", "APPROVED", datetime(2026, 1, 1, tzinfo=UTC))]
+            )
+            return r
+
+    gh = BrokenReviewsGH(p, [_file()], [])
+    meta, diff = review.fetch_pr(gh, "o", "r", 7)
+    assert meta.approvals == 0
+    assert meta.approval_latency_s is None
+    assert diff  # the actually load-bearing part still worked

@@ -922,3 +922,28 @@ def test_save_review_records_the_prompt_hash(tmp_path, monkeypatch):
         v = conn.execute(select(store.verdicts)).mappings().one()
     assert v["id"] == vid
     assert v["prompt_hash"] == reader.PROMPT_HASH
+
+
+def test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it(tmp_path):
+    """New tables never need a migration entry in this codebase — only new
+    columns on an existing table do, because create_all() adds missing
+    tables and only migrations.apply() can add a column to one that
+    already exists. This proves the mechanism directly: a database built
+    before deep_read_counters existed still gets it, the same way
+    review_jobs/installations/outcome_jobs did when each was added."""
+    from sqlalchemy import create_engine, inspect
+
+    from doug import migrations
+
+    url = f"sqlite:///{tmp_path}/pre-existing.db"
+    engine = create_engine(url)
+    # Simulate "yesterday's" schema: every table but the one this test is
+    # about, built the same way store._get_engine() builds a fresh one.
+    old_tables = [t for t in store.metadata.sorted_tables if t.name != "deep_read_counters"]
+    for table in old_tables:
+        table.create(engine, checkfirst=True)
+    migrations.schema_migrations.create(engine, checkfirst=True)
+    assert "deep_read_counters" not in inspect(engine).get_table_names()
+
+    store.metadata.create_all(engine)  # what _get_engine() does on every call
+    assert "deep_read_counters" in inspect(engine).get_table_names()
