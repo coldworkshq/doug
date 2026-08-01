@@ -43,7 +43,10 @@ const NOT_TOLD = [
 ];
 
 export default async function Home() {
-  const { queue, source } = await getQueue();
+  // The landing page never needs per-request freshness: 30s of staleness is
+  // invisible here, and it means a link-spike hits the queue API a couple of
+  // times a minute instead of once per visitor.
+  const { queue, source } = await getQueue({ maxAgeMs: 30_000 });
   const { summary } = queue;
   const live = source === "live";
 
@@ -71,12 +74,25 @@ export default async function Home() {
 
       <section className="grid gap-10 py-20 md:grid-cols-[1fr_auto] md:py-24">
         <div>
+          {/* Same source-honesty rule as the queue page: this pill claimed
+              "live" unconditionally, so an API outage showed a pulsing live
+              dot over fixture numbers — a confident, false claim on the one
+              page most likely to be shared. */}
           <p
             className="animate-rise glass inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
             style={{ animationDelay: "0ms" }}
           >
-            <span className="size-1.5 rounded-full bg-sheen" /> the reader is
-            live · scoring its own pull requests
+            {live ? (
+              <>
+                <span className="size-1.5 rounded-full bg-sheen" /> the reader
+                is live · scoring its own pull requests
+              </>
+            ) : (
+              <>
+                <span className="size-1.5 rounded-full bg-muted-foreground" />{" "}
+                sample data · the live queue is a fetch away
+              </>
+            )}
           </p>
           <h1
             className="animate-rise font-heading mt-6 max-w-xl text-5xl leading-[1.02] font-semibold tracking-tight md:text-7xl"
@@ -119,7 +135,7 @@ export default async function Home() {
         >
           <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Today&rsquo;s queue
+            {live ? "Today’s queue" : "Sample queue"}
           </p>
           <dl className="mt-4 space-y-3 font-mono">
             <div className="flex items-baseline justify-between">
@@ -144,7 +160,7 @@ export default async function Home() {
 
       <section className="glass rounded-2xl p-8">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          The open queue, pinned by risk
+          {live ? "The open queue, pinned by risk" : "A sample queue, pinned by risk"}
         </p>
         <div className="mt-6">
           <ScoreStrip
