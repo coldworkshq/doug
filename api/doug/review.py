@@ -44,6 +44,26 @@ def _html_url(p) -> str | None:
     return url if isinstance(url, str) else None
 
 
+def _list_all_files(gh, owner: str, repo: str, number: int) -> list:
+    """Every changed file, not just the first page.
+
+    A single per_page=100 call silently drops everything past file 100 —
+    a 250-file PR reads (and scores, and reports coverage) as if it had
+    100. GitHub signals the last page by returning fewer than per_page
+    rows, not by a cursor; looping on that is standard REST pagination.
+    """
+    files = []
+    page = 1
+    while True:
+        batch = gh.rest.pulls.list_files(
+            owner=owner, repo=repo, pull_number=number, per_page=100, page=page
+        ).parsed_data
+        files.extend(batch)
+        if len(batch) < 100:
+            return files
+        page += 1
+
+
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",
@@ -51,9 +71,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
     ).parsed_data[:limit]
     out = []
     for p in pulls:
-        files = gh.rest.pulls.list_files(
-            owner=owner, repo=repo, pull_number=p.number, per_page=100
-        ).parsed_data
+        files = _list_all_files(gh, owner, repo, p.number)
         meta = PRMetadata(
             number=p.number,
             title=p.title,
@@ -73,6 +91,13 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             files_added=sum(1 for f in files if f.status == "added"),
             files_modified=sum(1 for f in files if f.status == "modified"),
             url=_html_url(p),
+            # PullRequestSimple (what pulls.list returns) has no
+            # changed_files field — additions/deletions are absent for the
+            # same reason. The paginated count is the only source here,
+            # and it is trustworthy precisely because pagination is now
+            # complete.
+            changed_files=len(files),
+            files_dropped=[f.filename for f in files if not f.patch],
         )
         diff = reader.CHUNK_SEPARATOR.join(
             reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
@@ -85,9 +110,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
 
 def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     p = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=number).parsed_data
-    files = gh.rest.pulls.list_files(
-        owner=owner, repo=repo, pull_number=number, per_page=100
-    ).parsed_data
+    files = _list_all_files(gh, owner, repo, number)
     meta = PRMetadata(
         number=p.number,
         title=p.title,
@@ -107,6 +130,10 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         files_modified=sum(1 for f in files if f.status == "modified"),
         url=_html_url(p),
         head_sha=p.head.sha,
+        # The PR object's own count — authoritative regardless of
+        # pagination, unlike fetch_open_prs which has to derive it.
+        changed_files=p.changed_files,
+        files_dropped=[f.filename for f in files if not f.patch],
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
@@ -130,7 +157,9 @@ def score_one(meta: PRMetadata, diff: str):
         try:
             rv = reader.read_diff(meta, diff)
             verdict = reader.verdict_from_reader(rv)
-            cov = reader.coverage(diff)
+            cov = reader.coverage(
+                diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
+            )
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             return "reader", verdict, rv, cov
@@ -185,7 +214,9 @@ def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> Inten
         alignment=rv.intent_alignment,
         refs=[d.id for d in chosen],
         findings=rv.deviation_findings,
-        coverage=reader.coverage(diff),
+        coverage=reader.coverage(
+            diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
+        ),
     )
 
 

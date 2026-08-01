@@ -38,6 +38,14 @@ class PRMetadata(BaseModel):
     # None = not fetched (old caches, direct /v1/score callers); a review
     # without it is simply never treated as a repeat.
     head_sha: str | None = None
+    # GitHub's own changed-file count (fetch_pr) or the paginated file
+    # count (fetch_open_prs, whose list endpoint omits this field) — feeds
+    # Coverage.complete. None = not fetched; never inferred from len(files).
+    changed_files: int | None = None
+    # Filenames GitHub reported but that carried no patch (binary, or too
+    # large to inline) — never had a chance to be read at all, which
+    # Coverage.complete treats as incomplete regardless of budget.
+    files_dropped: list[str] = Field(default_factory=list)
 
 
 class Features(BaseModel):

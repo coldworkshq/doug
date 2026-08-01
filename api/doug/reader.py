@@ -17,7 +17,7 @@ scores on both probe repos — roughly the top quarter gets flagged.
 import os
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .models import Band, Reason, Verdict
 
@@ -253,23 +253,40 @@ class Coverage(BaseModel):
     files_sent: int
     files_unseen: list[str]
     file_cut: str | None = None
+    # From the PR object, not derived here — coverage() only ever sees the
+    # diff text, never the original file list, so a file GitHub reports
+    # changed but that never got a patch (binary, or too large to inline)
+    # is invisible to everything else in this class. None = not tracked
+    # (old callers); never inferred from files_sent + files_unseen.
+    changed_files: int | None = None
+    files_dropped: list[str] = Field(default_factory=list)
 
     @property
     def complete(self) -> bool:
-        return self.sent_chars >= self.diff_chars
+        if not self.sent_chars >= self.diff_chars:
+            return False
+        if self.changed_files is None:
+            return True
+        return self.files_sent == self.changed_files
 
     @property
     def fraction(self) -> float:
         return 1.0 if not self.diff_chars else self.sent_chars / self.diff_chars
 
 
-def coverage(diff: str) -> Coverage:
-    """Observe the truncation _user_text performs. Pure; sends nothing.
+def coverage(
+    diff: str, *, changed_files: int | None = None, files_dropped: list[str] | None = None
+) -> Coverage:
+    """Observe the truncation _user_text performs. Pure over `diff`; sends
+    nothing. `changed_files`/`files_dropped` are supplied by the caller,
+    not derived here — they describe files that never reached this
+    function's input at all (fetch_pr drops files GitHub returns without a
+    patch: binary, or too large to inline), which is a different hole from
+    the budget truncation this function observes directly.
 
     Files are counted from the diff's own `### path (status, +a/-d)` headers
-    rather than from a PR's file list, because fetch_pr drops files GitHub
-    returns without a patch (binary, or too large to inline). Those never
-    had a chance to be read, which is a different hole from this one.
+    rather than from a PR's file list, for the same reason: a file with no
+    patch never produces a header, so it cannot appear in files_unseen.
     """
     sent = _sent_slice(diff)
     matches = list(_FILE_HEADER.finditer(diff))
@@ -297,6 +314,8 @@ def coverage(diff: str) -> Coverage:
         files_sent=len(names),
         files_unseen=[f for f in all_files if f not in names],
         file_cut=cut,
+        changed_files=changed_files,
+        files_dropped=files_dropped or [],
     )
 
 
@@ -318,6 +337,7 @@ def truncation_reason(cov: Coverage) -> Reason | None:
         f"({cov.sent_chars:,} of {cov.diff_chars:,} chars)."
         + (f" Cut inside {cov.file_cut}." if cov.file_cut else "")
         + (f" Never sent: {', '.join(unseen)}{tail}." if unseen else "")
+        + (f" Never fetched: {', '.join(cov.files_dropped)}." if cov.files_dropped else "")
         + " Findings below cover only what was sent; a clear is not evidence"
         " about the rest."
     )

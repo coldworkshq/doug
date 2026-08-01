@@ -227,3 +227,75 @@ def test_the_intent_read_sees_exactly_what_the_risk_read_saw():
     assert reader.coverage(diff) == reader.coverage(diff)
     # And the property that makes that true: nothing outside the diff feeds it.
     assert reader.coverage(diff) != reader.coverage(diff + "\n### b.py (added, +1/-0)\n")
+
+
+# --- Coverage integrity: changed_files / files_dropped -------------------
+
+def test_a_read_missing_no_files_is_complete_when_the_count_matches():
+    """The baseline this whole feature protects: when every changed file
+    made it into the diff and nothing was budget-cut, complete stays True
+    exactly like before changed_files existed."""
+    small = [("a.py", 400), ("b.py", 600)]
+    cov = reader.coverage(_diff(small), changed_files=2)
+    assert cov.complete
+    assert cov.files_dropped == []
+
+
+def test_a_read_is_incomplete_when_files_were_dropped_before_the_diff_was_built():
+    """The bug this closes: a PR with files GitHub reported but that never
+    got a patch (binary, or beyond an unpaginated list_files call) used to
+    be invisible to coverage() entirely — files_sent/files_unseen only ever
+    see files that had a header in the diff string. A 250-file PR reading
+    100 files rendered as a complete read. changed_files + files_dropped
+    are supplied by the caller (from the PR object), not derived here,
+    because coverage() only ever sees the diff text, never the file list."""
+    small = [("a.py", 400), ("b.py", 600)]  # both fully sent, budget not a factor
+    cov = reader.coverage(_diff(small), changed_files=3, files_dropped=["c.bin"])
+    assert not cov.complete
+    assert cov.files_dropped == ["c.bin"]
+    assert cov.changed_files == 3
+
+
+def test_changed_files_unset_preserves_the_old_complete_rule():
+    """Every existing caller (and every test above this one in this file)
+    never passes changed_files. That must keep meaning "not tracked", not
+    "zero known changed files" — which would make every untouched call site
+    incomplete by accident."""
+    cov = reader.coverage(_diff([("a.py", 400)]))
+    assert cov.changed_files is None
+    assert cov.complete
+
+
+def test_the_notice_mentions_files_dropped_before_the_diff_even_when_nothing_was_cut():
+    """A read that saw its whole diff string in full but never received
+    every file must still say so — 'complete' would otherwise be a claim
+    about characters sent, not about the PR."""
+    cov = reader.coverage(
+        _diff([("a.py", 400)]), changed_files=2, files_dropped=["b.bin"]
+    )
+    notice = reader.truncation_reason(cov)
+    assert notice is not None
+    assert "b.bin" in notice.label
+
+
+def test_score_one_carries_the_prs_changed_files_and_dropped_list_into_coverage(monkeypatch):
+    """meta already knows changed_files/files_dropped from fetch_pr —
+    score_one must actually pass them to coverage() rather than leaving
+    them at the defaults, or a dropped-binary-file PR still renders
+    complete."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setattr(
+        reader, "read_diff",
+        lambda pr, diff: reader.ReaderVerdict.model_validate(
+            {"risk_score": 10, "rationale": "fine", "findings": []}
+        ),
+    )
+    from doug.models import PRMetadata
+
+    pr = PRMetadata.model_validate({
+        "number": 1, "title": "t", "author": "a",
+        "files": ["a.py"], "changed_files": 2, "files_dropped": ["b.bin"],
+    })
+    _tier, _verdict, _rv, cov = review.score_one(pr, _diff([("a.py", 400)]))
+    assert not cov.complete
+    assert cov.files_dropped == ["b.bin"]
