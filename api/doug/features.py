@@ -143,9 +143,11 @@ def _is_sensitive(path: str) -> bool:
     return bool(_SENSITIVE_NAME_RE.search(p.name))
 
 
-def _is_hotspot(path: str, extra: set[str] | None = None) -> bool:
+def _is_hotspot(path: str, hot: set[str]) -> bool:
+    # `hot` is the already-merged HOTSPOT_SEGMENTS | extra — merged once per
+    # PR by the caller, not per file: this is the hottest per-PR function in
+    # the pipeline, and a replay calls it for every file of every PR.
     parts = [p.lower() for p in PurePosixPath(path).parts]
-    hot = HOTSPOT_SEGMENTS | (extra or set())
     if any(p in hot for p in parts):
         return True
     # Learned bigrams like "preprod/api".
@@ -170,6 +172,7 @@ def extract_features(
     pr: PRMetadata, extra_hotspots: set[str] | None = None
 ) -> Features:
     names = [PurePosixPath(f).name for f in pr.files]
+    hot = HOTSPOT_SEGMENTS | (extra_hotspots or set())
     test_files = sum(1 for f in pr.files if _is_test(f))
     lockfile = any(n in LOCKFILES for n in names)
     manifest = any(n in MANIFESTS for n in names)
@@ -187,7 +190,7 @@ def extract_features(
         dev_tool_dep=bool(_DEV_DEP_TITLE_RE.search(pr.title)),
         dep_only=dep_only,
         sensitive_path=any(_is_sensitive(f) for f in pr.files),
-        hotspot_path=any(_is_hotspot(f, extra_hotspots) for f in pr.files),
+        hotspot_path=any(_is_hotspot(f, hot) for f in pr.files),
         config_flag=any(_CONFIG_FLAG_RE.search(f) for f in pr.files),
         test_files=test_files,
         code_files=len(pr.files) - test_files,
