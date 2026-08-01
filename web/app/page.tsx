@@ -42,6 +42,29 @@ const NOT_TOLD = [
   "what happened next",
 ];
 
+// The positioning sentence, decomposed into its three claims. They are not
+// equally true yet, so each carries its own status: the reader is live, the
+// outcome loop is designed and landing (docs/design/outcome-loop/), and the
+// garden is gated on adjudicated data existing. Keep the statuses in sync
+// with reality, not ambition — this section overclaims the day they drift.
+const LAYERS = [
+  {
+    tag: "landing",
+    title: "Learns what production did",
+    body: "Every merge starts a clock. At 14 and 60 days the verdict is graded against what actually happened — reverted, or survived the window. The scoreboard starts at zero and says so.",
+  },
+  {
+    tag: "accruing",
+    title: "Remembers it",
+    body: "Every verdict is a ledger row — dated, immutable, waiting to be graded. A repo running Doug for a year holds a calibrated risk record of itself that no point-in-time reviewer can replicate.",
+  },
+  {
+    tag: "preview · no dates promised",
+    title: "Tells your agents",
+    body: "The graded history, served to coding agents before they type: “this migration shape reverted here 7 of 9 times — the two that survived used dual-write.” Ships when there is adjudicated data to serve, not before.",
+  },
+];
+
 export default async function Home() {
   // The landing page never needs per-request freshness: 30s of staleness is
   // invisible here, and it means a link-spike hits the queue API a couple of
@@ -260,6 +283,34 @@ export default async function Home() {
               here with a date next to it, good or bad.
             </p>
           </div>
+        </div>
+      </section>
+
+      <section className="pb-16">
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+          Others learn what reviewers say
+        </p>
+        <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-4xl">
+          Doug learns what production did, remembers it, and tells your agents{" "}
+          <span className="text-iridescent">before they type</span>.
+        </h2>
+        <div className="mt-10 grid gap-4 md:grid-cols-3">
+          {LAYERS.map((l) => (
+            <div
+              key={l.title}
+              className="glass group rounded-2xl p-8 transition-transform hover:-translate-y-1"
+            >
+              <span className="glass rounded-full px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+                {l.tag}
+              </span>
+              <h3 className="font-heading mt-4 text-xl font-semibold">
+                {l.title}
+              </h3>
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                {l.body}
+              </p>
+            </div>
+          ))}
         </div>
       </section>
 
