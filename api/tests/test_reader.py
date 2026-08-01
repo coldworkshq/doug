@@ -168,3 +168,34 @@ def test_score_one_degrades_to_deterministic_when_the_api_is_down(monkeypatch):
     tier, verdict, rv, _cov = review.score_one(_pr(), "+ x")
     assert tier == "deterministic" and rv is None
     assert any(r.rule == "reader-unavailable" for r in verdict.reasons)
+
+
+def test_default_client_never_carries_the_sdk_default_timeout(monkeypatch):
+    """The SDK defaults to 600s. Both read paths run on Starlette's shared
+    sync thread pool, so at that bound one stalled Anthropic connection
+    parks a request worker for ten minutes — enough of them and every
+    route, /healthz included, queues behind dead reads. The default client
+    must always carry our bounded timeout instead.
+    """
+    import anthropic
+
+    captured = {}
+    payload = {**PAYLOAD, "intent_alignment": 90, "deviation_findings": []}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.messages = _FakeMessages(payload, "end_turn")
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+
+    monkeypatch.delenv("DOUG_READ_TIMEOUT_S", raising=False)
+    reader.read_diff(_pr(), "+ x")
+    assert captured["timeout"] == reader.DEFAULT_READ_TIMEOUT_S
+
+    captured.clear()
+    monkeypatch.setenv("DOUG_READ_TIMEOUT_S", "45")
+    reader.read_with_decisions(
+        _pr(), "+ x", docs=[SimpleNamespace(id="ADR-1", title="t", body="b")],
+    )
+    assert captured["timeout"] == 45.0
