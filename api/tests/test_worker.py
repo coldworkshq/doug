@@ -570,3 +570,195 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     (j,) = _rows(url, store.review_jobs)
     assert j["status"] == "done"
     assert len(posted) == 2  # both attempts post; the second is the harmless duplicate
+
+
+# --- reconcile: the healing path for missed deliveries --------------------
+
+
+def _pull(number=1, head_sha="a" * 40, draft=False, head_repo_id=42, base_repo_id=42):
+    return SimpleNamespace(
+        number=number,
+        draft=draft,
+        head=SimpleNamespace(sha=head_sha, repo=SimpleNamespace(id=head_repo_id)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=base_repo_id, full_name="o/r")),
+    )
+
+
+class FakeListGH:
+    """Only pulls.list — reconcile must never touch pulls.list_files."""
+
+    def __init__(self, pulls):
+        self.rest = SimpleNamespace(
+            pulls=SimpleNamespace(list=lambda **kw: SimpleNamespace(parsed_data=pulls))
+        )
+
+
+def _installed(tmp_path, monkeypatch, *, repos=((42, "o/r"),)):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.upsert_installation(1, "o", "Organization", "active")
+    store.set_installation_repos(1, list(repos), replace=True)
+
+
+def test_reconcile_enqueues_open_prs_and_skips_drafts(tmp_path, monkeypatch):
+    _installed(tmp_path, monkeypatch)
+    gh = FakeListGH([_pull(number=1), _pull(number=2, draft=True)])
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+    assert worker.reconcile_installation(1) == 1
+    job = ingest.claim()
+    assert job["pr_number"] == 1 and job["github_repo_id"] == 42
+    assert ingest.claim() is None
+
+
+def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
+    """A fork's raw diff enters the prompt (_user_text, reader.py:179-187).
+    An outside contributor must not be able to drive spend by opening a PR
+    during the window when Doug is restarting and reconciling."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(head_repo_id=99)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+    assert ingest.claim() is None
+
+
+def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
+    """The property that makes startup reconcile free rather than a full
+    re-review: the unique index carries no status, so a head SHA already
+    taken to 'done' collides on insert exactly like a pending one."""
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    ingest.claim()
+    ingest.complete(job_id, None)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+
+
+def test_reconcile_all_covers_only_active_installations(tmp_path, monkeypatch):
+    """A suspended or deleted installation still has rows in the table —
+    reconciling it would mint tokens for an App the account revoked."""
+    _installed(tmp_path, monkeypatch)
+    store.upsert_installation(2, "gone", "User", "suspended")
+    store.set_installation_repos(2, [(43, "gone/r")], replace=True)
+    seen = []
+
+    def client(installation_id):
+        seen.append(installation_id)
+        return FakeListGH([_pull(number=installation_id)])
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", client)
+    assert worker.reconcile_all() == 1
+    assert seen == [1]
+
+
+def test_reconcile_all_survives_one_failing_installation(tmp_path, monkeypatch):
+    """Reconcile runs at startup for every tenant at once, so one revoked or
+    rate-limited installation raising would leave every other tenant's
+    missed PRs unqueued until the next restart."""
+    _installed(tmp_path, monkeypatch)
+    store.upsert_installation(2, "ok", "User", "active")
+    store.set_installation_repos(2, [(43, "ok/r")], replace=True)
+
+    def client(installation_id):
+        if installation_id == 1:
+            raise RuntimeError("401 bad installation")
+        return FakeListGH([_pull(number=5)])
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", client)
+    assert worker.reconcile_all() == 1
+
+
+# --- amendment: reconcile_all heals crash-stranded claims ------------------
+#
+# reconcile_installation heals a *missed* PR via ingest.enqueue, but a
+# crash-stranded claim is left 'running' — REVIVABLE deliberately excludes
+# that status, so enqueue collides and returns None forever. reconcile_all
+# must call ingest.reclaim_stalled() once, before the enqueue sweep, or the
+# case Task 7 is named for ("a deploy killed the instance mid-review") is
+# never actually healed by a restart.
+
+
+def test_reconcile_all_heals_a_crash_stranded_claim_end_to_end(tmp_path, monkeypatch):
+    """The amendment's 'test for intent': a 'running' job stranded past its
+    lease is, after reconcile_all, back in a state where its PR actually
+    gets reviewed — not merely a row whose status flipped. (Ordering is
+    pinned separately, below: in this implementation a stranded row ends up
+    'pending' by the end of reconcile_all() regardless of which side of the
+    sweep reclaim runs on, because enqueue's collision with a still-'running'
+    zombie and its collision with an already-'pending' row both resolve to
+    None — REVIVABLE excludes both. So this test alone would not catch the
+    two calls being swapped.)"""
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    stuck = ingest.claim()
+    assert stuck["id"] == job_id
+    _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+
+    assert worker.reconcile_all() == 0  # reclaimed, not (re)enqueued — no new job minted
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "pending"
+    # The reclaimed row is claimable again — a worker will actually review it.
+    claimed = ingest.claim()
+    assert claimed["id"] == job_id and claimed["head_sha"] == "a" * 40
+
+
+def test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep(tmp_path, monkeypatch):
+    """Pins the amendment's ordering requirement directly against call
+    order, since (per the previous test's note) the row's final status does
+    not distinguish the two orderings in this implementation — a swap would
+    not fail on end state alone. Tracking which of ingest.reclaim_stalled /
+    ingest.enqueue fires first is what actually catches the two calls being
+    swapped."""
+    order: list[str] = []
+    real_reclaim = ingest.reclaim_stalled
+    real_enqueue = ingest.enqueue
+    monkeypatch.setattr(
+        ingest,
+        "reclaim_stalled",
+        lambda *a, **k: order.append("reclaim") or real_reclaim(*a, **k),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "enqueue",
+        lambda *a, **k: order.append("enqueue") or real_enqueue(*a, **k),
+    )
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1)]),
+    )
+
+    worker.reconcile_all()
+
+    assert "enqueue" in order  # sanity: the sweep did run
+    assert order[0] == "reclaim"
+
+
+def test_reconcile_all_calls_reclaim_stalled_not_reconcile_installation(tmp_path, monkeypatch):
+    """Scope note from the amendment: reclaim_stalled sweeps the whole queue
+    by lease age, not by tenant, so it belongs in the startup path
+    (reconcile_all), not per-installation — a per-installation call would
+    sweep other tenants' rows as a side effect of one installation's event.
+    Pinned directly against the function object rather than behaviourally,
+    since reconcile_installation alone has no stalled row in scope to prove
+    it either way."""
+    calls = []
+    real = ingest.reclaim_stalled
+    monkeypatch.setattr(ingest, "reclaim_stalled", lambda *a, **k: calls.append(1) or real())
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: FakeListGH([]))
+
+    worker.reconcile_installation(1)
+    assert calls == []
+
+    worker.reconcile_all()
+    assert calls == [1]

@@ -200,3 +200,143 @@ def drain(max_jobs: int = 20) -> int:
             )
             ingest.fail(job["id"], str(e))
     return attempted
+
+
+def _skip_reason(p) -> str | None:
+    """Why this open PR must not be enqueued, or None.
+
+    The same gate the pull_request webhook applies in api.py. Duplicated
+    rather than shared on purpose: the two callers hold different objects —
+    a githubkit model here, a parsed webhook payload there — and githubkit
+    models an absent field as the UNSET sentinel, not None, so `if p.draft`
+    is not the same test as `p.draft is True`. If the webhook's gate
+    changes, this changes with it.
+    """
+    if getattr(p, "draft", False) is True:
+        return "draft"
+    head_id = getattr(getattr(getattr(p, "head", None), "repo", None), "id", None)
+    base_id = getattr(getattr(getattr(p, "base", None), "repo", None), "id", None)
+    # A fork's raw diff enters the prompt (_user_text, reader.py:179-187),
+    # so an outside contributor must not be able to drive spend. UNSET or
+    # missing ids are treated as a fork: the safe direction to be wrong in
+    # is "skip".
+    if not isinstance(head_id, int) or not isinstance(base_id, int):
+        return "fork"
+    return "fork" if head_id != base_id else None
+
+
+def reconcile_installation(installation_id: int) -> int:
+    """Enqueue every reviewable open PR this installation can see.
+
+    The healing path for missed deliveries. GitHub retries a *failed*
+    delivery, but a delivery this service 202s and then loses to a restart
+    is never retried, and the redelivery window is not a guarantee — so
+    recovery does not trust webhooks at all, it re-derives the world from
+    the API and lets the queue's unique index throw away what it already
+    has.
+
+    Deliberately pulls.list rather than review.fetch_open_prs: that helper
+    also fetches per-PR files to build PRMetadata, which is one extra
+    request per open PR for data reconcile never reads. The worker fetches
+    the diff when the job actually runs.
+
+    Does not call ingest.reclaim_stalled(): that sweep is installation-
+    agnostic (whole queue, by lease age, not by tenant), so calling it here
+    would reclaim other tenants' stranded rows as a side effect of
+    reconciling one of them — Task 6 calls this function alone, from the
+    installation.created handler, and that call must not have a blast
+    radius past the one installation it names. reconcile_all is where the
+    stalled-claim sweep belongs; see its docstring.
+    """
+    gh = app_auth.installation_client(installation_id)
+    count = 0
+    for repo_id, full_name in store.active_repos(installation_id):
+        owner, _, name = full_name.partition("/")
+        try:
+            pulls = gh.rest.pulls.list(
+                owner=owner, repo=name, state="open", per_page=50
+            ).parsed_data
+        except Exception as e:  # noqa: BLE001 — one unreadable repo is not fatal
+            print(
+                f"doug: reconcile skipped {full_name} ({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+            continue
+        for p in pulls:
+            if _skip_reason(p) is not None:
+                continue
+            head_sha = getattr(getattr(p, "head", None), "sha", None)
+            if not isinstance(head_sha, str):
+                continue
+            # Identity comes from the installation_repos row, not from
+            # p.base.repo: it is the same repo either way, and the store row
+            # is what the rest of the tenancy model keys on.
+            #
+            # enqueue returns None when this (installation, repo, pr,
+            # head_sha) already exists. The unique index carries no status,
+            # so a job already taken to 'done' collides exactly like a
+            # pending one — which is precisely the dedupe reconcile wants.
+            if (
+                ingest.enqueue(installation_id, repo_id, full_name, p.number, head_sha)
+                is not None
+            ):
+                count += 1
+    return count
+
+
+def reconcile_all() -> int:
+    """Reconcile every active installation. Returns total jobs enqueued.
+
+    This is the startup reconcile path (Task 7's amendment): the one thing
+    it does that reconcile_installation deliberately does not is call
+    ingest.reclaim_stalled() once, up front, before the per-installation
+    enqueue sweep below runs for anyone.
+
+    A missed *delivery* is healed by re-deriving the world from the API and
+    letting enqueue's unique index dedupe against it — that's
+    reconcile_installation. A *crash-stranded claim* is a different failure:
+    the row is still 'running', and REVIVABLE deliberately excludes that
+    status (reviving it out from under a worker that might still be alive
+    would pay for a second read of the same SHA), so enqueue collides with
+    it and returns None — forever, on every subsequent startup — unless
+    something first puts the row back to 'pending'. reclaim_stalled() is
+    that something, and reconcile without it is structurally unable to fix
+    the case it's named for: "a Cloud Run instance dying mid-review", which
+    is the same failure class as "a deploy that wiped the App credentials"
+    but the most likely instance of it, and startup is exactly the event
+    that follows it.
+
+    Reclaiming runs before the sweep below, not after and not
+    per-installation (enforced by
+    test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep, since
+    swapping the two does not change reconcile_all()'s return value or the
+    row's final status in this implementation — enqueue's collision with a
+    still-'running' row and its collision with an already-reclaimed
+    'pending' row both resolve to None, REVIVABLE excludes both — so only
+    tracking call order actually catches a swap). Reclaim first means a
+    stranded row is 'pending' again by the time the sweep reaches that PR,
+    so ingest.enqueue sees an ordinary pending-job collision instead of one
+    against a row that, at that instant, is indistinguishable from a claim
+    a live worker still holds.
+
+    reclaim_stalled() sweeps by lease age across the whole queue, not by
+    tenant, which is exactly why it belongs here and not inside
+    reconcile_installation: called there, it would reclaim every other
+    tenant's stranded rows as a side effect of reconciling just one
+    installation.
+    """
+    reclaimed = ingest.reclaim_stalled()
+    if reclaimed:
+        print(f"doug: reconcile reclaimed {reclaimed} stalled job(s)", file=sys.stderr)
+
+    total = 0
+    for installation_id in store.active_installations():
+        try:
+            total += reconcile_installation(installation_id)
+        except Exception as e:  # noqa: BLE001 — one bad tenant must not stop the rest
+            print(
+                f"doug: reconcile failed for installation {installation_id} "
+                f"({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+    return total
