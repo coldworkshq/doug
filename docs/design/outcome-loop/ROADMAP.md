@@ -31,13 +31,17 @@ The items that make every later step messier the longer they wait.
 The reviewed 10-task TDD plan (`docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md`)
 executed as written — amendments folded in at their task, never as a second pass.
 
-- [ ] Tasks 1–2: fixtures + migration runner — **with migration 002 in the same sitting**:
-  `outcome_jobs` (+ UNIQUE(inst, repo, pr, merge_sha, window)), `verdicts.source` + `verdicts.prompt_hash`,
-  `outcomes` identity columns (github_repo_id, installation_id, window_days, detail JSON)
+- [x] Tasks 1–2: app_auth + migration runner — **with migration 002 in the same sitting**:
+  `outcome_jobs` (+ UNIQUE(inst, repo, pr, merge_sha, window)), `verdicts.source` (String(64)) + `verdicts.prompt_hash`,
+  `outcomes` identity columns (github_repo_id, installation_id, window_days, detail JSON),
+  `installations.token_hash`. Note: the Task 6 `installation.created` token mint is superseded —
+  hash-only storage makes an install-time mint unrecoverable; M2's dispense endpoint mints.
 - [ ] Tasks 3–5: durable job queue, worker drain, app auth (githubkit auth dep added)
 - [ ] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
-  never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `installation.created`
-  token mint (hash into `installations`), **plus** `pull_request_review` ingest → third-party verdict rows
+  never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `pull_request_review`
+  ingest → third-party verdict rows (`source='review:<login>'`, no score, no model call). The
+  `installation.created` token mint that used to sit here is superseded (see Tasks 1–2); note the
+  GitHub App needs its "Pull request review" event subscription enabled at the Task 10 cutover.
 - [ ] Task 7: check run (ADR-0010 supersedes ADR-0003 in the same commit)
 - [ ] Task 8: reconcile-on-startup by head sha
 - [ ] Tasks 9–10: delete CI token path, cutover deploy (rebase vs. merged #15 done deliberately)

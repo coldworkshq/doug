@@ -1,17 +1,17 @@
 # HANDOFF — doug
 
-State:    building — M0 (clear the decks, see
-          docs/design/outcome-loop/ROADMAP.md) mostly done this session;
-          M1 (execute the step-2 plan) is next once M0's PR merges.
-Next:     Merge PR #16 (docs/outcome-loop-design-lock — design docs +
-          landing-page section + .env.example fix; Doug's own review
-          check runs on it, ADR-0008). Then M1: execute
-          docs/superpowers/plans/2026-07-31-step-2-github-app-webhook-ingest.md
-          task by task (superpowers:subagent-driven-development or
-          executing-plans), with the migration-002 / clock-start /
-          pull_request_review-ingest amendments folded in per ROADMAP.md,
-          not as a second pass. Read the plan's header first: Tasks 6/7
-          interleave deliberately. Execute via PRs (ADR-0008).
+State:    building — M0 CLOSED (PR #16 merged 240caf5, deployed; only the
+          Andrew-deferred key rotation remains). M1 underway via
+          superpowers:subagent-driven-development: plan Tasks 1–2 done and
+          review-clean on this branch; Tasks 3–10 pending, PAUSED by
+          Andrew after Task 2 (2026-08-01) to land a mid-branch PR.
+Next:     Merge the Tasks-1–2 PR, then resume M1 at Task 3 (Queue ops,
+          ingest.py). SDD ledger + extracted briefs + the Task 6 amendment
+          live in this worktree at .superpowers/sdd/2026-07-31-step-2-
+          github-app-webhook-ingest/ (git-ignored — keep the worktree
+          until M1 completes). Execution order per plan header: 3, 4, 5,
+          7(Steps 1–3), 6, 7(Step 4+), 8, 9, 10. Execute via PRs
+          (ADR-0008).
 Blockers: none. Credits topped up 2026-07-31; reader tier live in prod.
           One open M0 item, deliberately deferred by Andrew: rotate +
           delete the live local key at
@@ -41,6 +41,29 @@ Key facts for the executor:
   label. Positive-control experiment needed before further intent-stream
   investment. Full analysis: workspace/research/phase1-entry-preregistration.md
   (workspace/ is untracked — lives only on Andrew's machine).
+
+Decisions this session (2026-08-01, M1 Tasks 1–2):
+- outcome_jobs is a store.metadata table, NOT a migration (Global
+  Constraint: new tables via create_all; migrations are for columns on
+  existing prod tables) — rejected: ROADMAP's literal "migration 002"
+  framing for the table.
+- installation.created token mint SKIPPED: hash-only storage makes an
+  install-time mint unrecoverable dead weight; M2's dispense endpoint
+  mints and writes installations.token_hash (column landed in Task 2) —
+  rejected: minting a token nobody can ever read back.
+- verdicts.source widened to String(64) ('review:<login>' needs 46) —
+  rejected: plan's String(20).
+- Two plan-mandated defects fixed against the plan's literal code because
+  the plan's own stated invariants condemned them: apply()'s version
+  insert now swallows the duplicate-version race (docstring: "already
+  done is satisfied, not failed"); drift test now pins BOTH directions
+  (baseline + migrations == metadata) — rejected: shipping the plan's
+  verbatim body over its intent.
+- pull_request_review ingest design (for Task 6): tier='external',
+  band cleared/flagged from review state, dedup on (inst, repo, pr,
+  source, head_sha, scored_at); latest_reviews/find_review must exclude
+  tier='external'. GitHub App needs the "Pull request review" event
+  subscription — MANUAL step, Task 10 cutover checklist.
 
 Decisions this session (2026-07-31/08-01, M0 pass):
 - workflow-summary-test-fidelity: DROPPED, branch deleted (local + remote).
