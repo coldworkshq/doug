@@ -185,8 +185,8 @@ def _real_records():
 
 
 def test_selection_on_dougs_own_records():
-    """Synthetic docs cannot show the real failure: records written by one
-    team share vocabulary, so nearly every record scores slightly against
+    """Synthetic docs alone cannot show the real failure: records written by
+    one team share vocabulary, so nearly every record scores slightly against
     nearly every PR. Without a floor this sent six records for a ruff bump.
 
     Pins both halves — the right record surfaces, and unrelated changes
@@ -203,9 +203,26 @@ def test_selection_on_dougs_own_records():
     # superseded record must stop steering the reader: left binding, it
     # would have Doug flag its own check-run code as deviating from a rule
     # the team already dropped — the failure intent.BINDING exists to
-    # prevent, and the reason the status flip ships with the code.
-    comments = sent("Post Doug verdicts as PR comments", [".github/workflows/x.yml"])
-    assert comments[0] == "ADR-0010"
+    # prevent, and the reason the status flip ships with the code. A later,
+    # more specific accepted record may legitimately outrank ADR-0010, so
+    # pin inclusion and exclusion rather than today's exact ordering.
+    future_comments_record = intent.IntentDoc(
+        id="ADR-9999",
+        title="Post review comments",
+        body="Comments remain advisory.",
+        status="accepted",
+        ref="docs/decisions/ADR-9999-post-review-comments.md",
+    )
+    comments = [
+        d.id
+        for d in intent.select(
+            [*docs, future_comments_record],
+            "Post Doug verdicts as PR comments",
+            [".github/workflows/x.yml"],
+        )
+    ]
+    assert comments.index("ADR-9999") < comments.index("ADR-0010")
+    assert "ADR-0010" in comments
     assert "ADR-0003" not in comments
     lema = sent("Read decisions from lema's hosted API", ["doug/intent_providers.py"])
     assert lema == ["ADR-0006"]
