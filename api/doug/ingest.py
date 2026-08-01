@@ -179,12 +179,13 @@ def claim() -> dict | None:
 
     On Postgres the select takes a row lock with SKIP LOCKED, so concurrent
     drains take different jobs instead of blocking on the same one. sqlite
-    gets the same result for a different reason: it has no SKIP LOCKED, but
-    a second writer racing this transaction hits SQLITE_BUSY on the file
-    lock and has to wait behind it rather than reading the row this
-    transaction is still mid-update on — the serialization is sqlite's
-    write lock on the file, not a guarantee that sqlite only ever schedules
-    one writer.
+    has no equivalent and does not get the same guarantee: its transactions
+    are deferred, so two racing claimers both read the same pending row, and
+    the loser is stopped only when its UPDATE meets the file write lock and
+    raises SQLITE_BUSY ('database is locked'). The row is never claimed
+    twice, but the loser errors rather than waiting its turn. That is
+    tolerable because sqlite is the test path only; if it ever becomes a
+    real drain backend, this needs BEGIN IMMEDIATE, not a comment.
     """
     engine = store._get_engine()
     if engine is None:
@@ -246,7 +247,10 @@ def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
             )
             .values(status="pending", started_at=None, enqueued_at=now)
         )
-        return result.rowcount
+        # rowcount is -1 on drivers that decline to report it. Callers log
+        # this as "how many claims we found abandoned", and a negative count
+        # there would read as a bug in the sweep rather than in the driver.
+        return max(0, result.rowcount)
 
 
 def release(job_id: int) -> None:

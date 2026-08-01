@@ -395,3 +395,20 @@ def test_a_revived_job_clears_a_stray_verdict_id(tmp_path, monkeypatch):
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["verdict_id"] is None
+
+
+def test_the_dedupe_marker_still_matches_the_real_constraint_name():
+    """enqueue tells "this SHA is already queued" apart from a genuine
+    integrity failure by matching the driver's error text, because neither
+    sqlite nor psycopg exposes the violated constraint in a portable way.
+    That makes the constraint's NAME load-bearing from a second file: rename
+    it in store.py and every redelivery stops deduping and starts 5xx-ing the
+    webhook, with nothing here to catch it. Pin the two together so a rename
+    fails this test instead of production.
+    """
+    names = {c.name for c in store.review_jobs.constraints if c.name}
+    assert "uq_review_job" in names, (
+        f"review_jobs' unique constraint was renamed; {names} no longer contains the name "
+        "ingest._DEDUPE_COLLISION matches on"
+    )
+    assert any("uq_review_job" in marker for marker in ingest._DEDUPE_COLLISION)
