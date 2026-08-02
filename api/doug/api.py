@@ -15,7 +15,7 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, ingest, precision, reader, review, store, worker
+from . import __version__, app_auth, ingest, precision, reader, review, store, worker
 from .models import (
     Band,
     PRMetadata,
@@ -28,10 +28,45 @@ from .models import (
 )
 from .scoring import default_threshold, score
 
+# Named so it is identifiable in a thread dump or a py-spy trace of a
+# revision that is busy at boot, and so tests can assert on the one thread
+# startup is allowed to spawn.
+STARTUP_THREAD_NAME = "doug-startup-reconcile"
+
+
+def _startup_reconcile() -> None:
+    """Heal the queue this instance came up to, then work it.
+
+    Both halves belong to the same catch-up and in this order: reconcile_all
+    only enqueues, so a drain running ahead of it would drain whatever the
+    last delivery left and stop, leaving everything this sweep discovers
+    waiting for a delivery that already went missing once.
+
+    This runs on every cold start, which on a scale-to-zero deployment means
+    often, and nothing here rate-limits it or elects a leader. What bounds
+    the repeat cost lives in the schema and the worker instead. Re-enqueueing
+    a head SHA the queue already reviewed collides on uq_review_job and
+    ingest._revive returns None for a 'done' row, so a sweep that finds
+    nothing new leaves nothing for the drain to claim. A job that is claimed
+    is checked against store.find_verdict_by_identity before any paid read.
+    Repeated sweeps therefore cost GitHub list calls, not model spend.
+
+    The gap that leaves: that pre-read is advisory, because verdicts carries
+    no unique index on the identity it reads (roadmap M2, migration 003), so
+    two workers racing the same reclaimed job can both pass it. The claim
+    lease bounds that window rather than closing it.
+    """
+    try:
+        n = worker.reconcile_all()
+        print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
+        worker.drain()
+    except Exception as e:  # noqa: BLE001 — catch-up is best-effort, never fatal
+        print(f"doug: startup reconcile failed ({type(e).__name__}: {e})", file=sys.stderr)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Refuse to boot without the webhook secret.
+    """Refuse to boot without the webhook secret, then start the catch-up sweep.
 
     The reason is not that a deploy would wipe it: deploy() has carried
     GITHUB_WEBHOOK_SECRET in --set-secrets since #14, and --set-env-vars
@@ -43,11 +78,32 @@ async def lifespan(app: FastAPI):
     is a paid model read triggered by anyone who can POST. A crash-looping
     revision is a visible failure; a running service accepting forged
     deliveries is not.
+
+    DATABASE_URL is deliberately not checked alongside it, and the three
+    postures here are one rule, not an inconsistency: a security control
+    that fails open is worthless, so the secret fails closed at boot; a
+    ledger is an optional feature rather than a guarantee — store.py's
+    ledger-less mode is what local dogfooding and the open-source path run
+    on — so the one endpoint that cannot work without it refuses per
+    request with a 503 and the rest of the service keeps serving; and the
+    sweep below needs the App *and* the ledger to do anything at all, so a
+    deployment holding neither promise skips it silently and loses nothing
+    it could have had.
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
         raise RuntimeError(
             "GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github"
         )
+    if app_auth.enabled() and store.enabled():
+        # A thread, not an await and not inline: Cloud Run holds the revision
+        # out of rotation until the lifespan yields, and this walks every open
+        # PR of every installation and then runs paid model reads on the ones
+        # it queued. Blocking startup on that fails the health check and the
+        # revision never serves at all. daemon=True so a shutdown is never
+        # held open waiting for it.
+        threading.Thread(
+            target=_startup_reconcile, name=STARTUP_THREAD_NAME, daemon=True
+        ).start()
     yield
 
 
@@ -715,10 +771,25 @@ def _record_merge(payload: dict) -> None:
 
 
 # A submitted review that takes a position, mapped onto Doug's own bands.
-# Everything else a reviewer can submit — `commented`, and the dismissal and
-# edit actions — states no position on whether the change should land, so
-# there is nothing to grade against an outcome and no row to write.
+# Keyed lowercase because that is the spelling the lookup is done in — see
+# _record_external_review — not because it is the spelling GitHub sends.
 REVIEW_BANDS = {"approved": Band.CLEARED, "changes_requested": Band.FLAGGED}
+
+# The review states GitHub can carry that take no position on whether the
+# change should land: a note, a retraction, a review not yet submitted.
+# There is nothing to grade against an outcome, so there is no row.
+#
+# Written out rather than left as an absence from REVIEW_BANDS, and that is
+# the whole point of it: skipping these is a decision, skipping a state
+# nobody has ever seen is not, and only the second one logs. `commented` is
+# by far the most common review state on GitHub and `dismissed` is routine,
+# so logging them would fire on the normal case — and a line that fires on
+# the normal case is one an operator learns to scroll past, which costs the
+# signal the unrecognized-state line exists to carry.
+#
+# Whether `dismissed` should instead be banded is a live design question and
+# is deliberately not settled here; this records today's answer.
+REVIEW_STATES_WITHOUT_A_STANCE = frozenset({"commented", "dismissed", "pending"})
 
 
 def _record_external_review(payload: dict) -> None:
@@ -729,13 +800,40 @@ def _record_external_review(payload: dict) -> None:
     because a fork's raw diff would enter the prompt, and nothing here reads
     a diff. Bot reviewers are ingested like anyone else, because grading bot
     reviewers is the point of the lane.
+
+    The state is matched lowercased. GitHub spells one state two ways —
+    this webhook delivers `approved`, the REST reviews endpoint returns
+    `APPROVED` for that same review, which is the spelling
+    review._review_state matches — and nothing in a payload says which
+    vocabulary produced it. Matching the delivered casing raw put a whole
+    grading lane on that assumption, and got it wrong in the quietest
+    possible way: an unmatched state writes no row and still 202s, so the
+    lane would ingest nothing indefinitely with no error to notice it by.
+    Lowercasing cannot band a state wrongly — no two GitHub review states
+    differ only in case — so it strictly removes that failure without
+    admitting anything new.
     """
     review_ = _obj(payload.get("review"))
-    state = review_.get("state")
-    band = REVIEW_BANDS.get(state) if isinstance(state, str) else None
-    if band is None:
-        return
     pr = _obj(payload.get("pull_request"))
+    state = review_.get("state")
+    normalized = state.lower() if isinstance(state, str) else None
+    band = REVIEW_BANDS.get(normalized)
+    if band is None:
+        if normalized not in REVIEW_STATES_WITHOUT_A_STANCE:
+            # Neither banded nor deliberately skipped: GitHub added a review
+            # state, or this payload is not the shape it claims (a `review`
+            # that is not an object lands here too, as a None state). No row
+            # either way — a stance that cannot be read is not a gradable
+            # claim — but this is the only drop on this path that nobody
+            # chose, so it is the only one that gets to be loud. !r because
+            # the state is a remote string and a bare newline in it would
+            # otherwise forge a second log line.
+            print(
+                f"doug: review on PR #{pr.get('number')} carried unrecognized "
+                f"state {state!r}; not ingested",
+                file=sys.stderr,
+            )
+        return
     base_repo = _obj(_obj(pr.get("base")).get("repo"))
     scored_at = _payload_timestamp(review_.get("submitted_at"))
     head_sha = _text(review_.get("commit_id"), store.verdicts.c.head_sha)
@@ -803,9 +901,10 @@ async def github_webhook(
     can be throttled, and the instance can be scaled to zero out from under
     an in-flight drain. Losing a kick loses no work — the job row is
     already committed — it only delays it until something kicks a drain
-    again. The durable backstop for that is worker.reconcile_all, which
-    nothing calls yet; Task 7b wires it into the lifespan, and until it does
-    the next delivery's kick is the only thing that reaches a stranded row.
+    again. The durable backstop is the sweep lifespan() starts: on a
+    deployment holding both the App and a ledger it reconciles and then
+    drains on every cold start, so a row no later delivery kicks waits for
+    the next revision rather than forever.
 
     async only because the signature needs the raw body. verify_webhook and
     json.loads run on the event loop thread deliberately: both are CPU-bound

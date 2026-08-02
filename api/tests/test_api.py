@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, store, worker
+from doug import api, app_auth, store, worker
 from doug.api import app
 
 client = TestClient(app)
@@ -134,6 +134,177 @@ def test_startup_succeeds_once_the_secret_is_configured(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
     with TestClient(app) as c:
         assert c.get("/healthz").status_code == 200
+
+
+# The startup catch-up sweep. Both of its guards are off under the ordinary
+# test environment (no App credentials, no DATABASE_URL), so the tests below
+# patch the two predicates rather than the environment behind them: what is
+# under test is the lifespan's decision, not app_auth's and store's own
+# reading of the environment, which their own tests cover. Leaving it at "the
+# guards are off in tests" is what left the thread, the guards and the
+# exception handler with no coverage at all.
+
+
+def _startup_guards(monkeypatch, *, app_enabled: bool, ledger: bool) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    monkeypatch.setattr(app_auth, "enabled", lambda: app_enabled)
+    monkeypatch.setattr(store, "enabled", lambda: ledger)
+
+
+def _startup_threads() -> list[threading.Thread]:
+    """The live sweep threads, found by the name the lifespan gives them.
+
+    Thread.start() registers the thread before it returns, and the lifespan
+    starts it before it yields, so by the time TestClient.__enter__ hands
+    control back an expected thread is always here — which is what makes
+    "no thread was started" a real assertion rather than a race."""
+    return [t for t in threading.enumerate() if t.name == api.STARTUP_THREAD_NAME]
+
+
+def _join_startup_threads(timeout: float = 5.0) -> None:
+    for t in _startup_threads():
+        t.join(timeout)
+        assert not t.is_alive(), "the startup reconcile thread never finished"
+
+
+def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
+    """Order is the whole behavior: draining first drains an empty queue.
+
+    reconcile_all only enqueues. A drain that runs ahead of it claims
+    whatever the last delivery happened to leave behind and stops, so every
+    row this sweep is about to discover then waits for some unrelated
+    delivery to kick a drain — which on the quiet repo whose missed
+    deliveries stranded them is the case this exists for.
+    """
+    calls: list[str] = []
+    drained = threading.Event()
+
+    def fake_reconcile() -> int:
+        calls.append("reconcile")
+        return 3
+
+    def fake_drain() -> int:
+        calls.append("drain")
+        drained.set()
+        return 0
+
+    monkeypatch.setattr(worker, "reconcile_all", fake_reconcile)
+    monkeypatch.setattr(worker, "drain", fake_drain)
+    _startup_guards(monkeypatch, app_enabled=True, ledger=True)
+
+    with TestClient(app):
+        # An Event the fake sets, not a sleep: the thread is asynchronous to
+        # this test by construction, and a fixed pause would be either flaky
+        # or slow and would still prove nothing about the ordering.
+        assert drained.wait(timeout=5), "startup never reached the drain"
+    _join_startup_threads()
+    assert calls == ["reconcile", "drain"]
+
+
+def test_startup_serves_before_the_reconcile_it_started_finishes(monkeypatch):
+    """A thread, not an await and not an inline call.
+
+    Cloud Run holds a revision out of rotation until the lifespan yields,
+    and this sweep walks every open PR of every installation and then pays
+    for model reads on what it queued. Inline, the revision fails its
+    health check and never serves at all — so "the lifespan yields while the
+    sweep is still running" is the property, not an implementation detail.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_reconcile() -> int:
+        entered.set()
+        release.wait(timeout=5)
+        finished.set()
+        return 0
+
+    monkeypatch.setattr(worker, "reconcile_all", slow_reconcile)
+    monkeypatch.setattr(worker, "drain", lambda: 0)
+    _startup_guards(monkeypatch, app_enabled=True, ledger=True)
+
+    try:
+        with TestClient(app) as c:
+            assert entered.wait(timeout=5), "the sweep never ran"
+            assert not finished.is_set(), "startup blocked until the sweep finished"
+            assert c.get("/healthz").status_code == 200
+    finally:
+        release.set()
+        _join_startup_threads()
+
+
+@pytest.mark.parametrize(
+    ("app_enabled", "ledger"),
+    [(False, True), (True, False)],
+)
+def test_startup_starts_no_sweep_when_either_half_is_missing(monkeypatch, app_enabled, ledger):
+    """No App credentials, or no ledger, and nothing starts at all.
+
+    Both halves are needed for the sweep to do anything: without the App it
+    has no client to list PRs with, without the ledger it has no
+    installations to list and nowhere to enqueue. Getting this wrong is not
+    a no-op — it is every ledger-less local run and this test suite itself
+    spawning a thread that talks to GitHub on import.
+    """
+    calls: list[str] = []
+    release = threading.Event()
+
+    def fake_reconcile() -> int:
+        calls.append("reconcile")
+        # Blocks, so a thread that should never have existed is still alive
+        # — and so still enumerable — when the assertion below looks for it.
+        # Without this it could finish and deregister first, and the
+        # assertion would pass on the code it exists to catch.
+        release.wait(timeout=5)
+        return 0
+
+    monkeypatch.setattr(worker, "reconcile_all", fake_reconcile)
+    monkeypatch.setattr(worker, "drain", lambda: calls.append("drain"))
+    _startup_guards(monkeypatch, app_enabled=app_enabled, ledger=ledger)
+
+    try:
+        with TestClient(app) as c:
+            assert _startup_threads() == []
+            assert c.get("/healthz").status_code == 200
+        assert calls == []
+    finally:
+        release.set()
+        _join_startup_threads()
+
+
+def test_a_failing_startup_reconcile_neither_escapes_nor_reaches_the_drain(monkeypatch, capsys):
+    """Catch-up is best-effort: a sweep that raises must cost only itself.
+
+    GitHub being down, an installation token that will not mint, a ledger
+    that refuses the first connection — all of them land here, and none of
+    them is a reason for this revision to stop serving /v1/score. The drain
+    must not run either: reconcile_all raising means the queue was never
+    healed, so there is nothing this pass discovered to drain.
+    """
+    calls: list[str] = []
+    escaped: list = []
+    raised = threading.Event()
+
+    def boom() -> int:
+        raised.set()
+        raise RuntimeError("github said no")
+
+    # threading.excepthook is what a thread's uncaught exception reaches, so
+    # recording it is the direct test of "the except is there" — an assertion
+    # about the log line alone would still pass if the exception escaped.
+    monkeypatch.setattr(threading, "excepthook", lambda args: escaped.append(args))
+    monkeypatch.setattr(worker, "reconcile_all", boom)
+    monkeypatch.setattr(worker, "drain", lambda: calls.append("drain"))
+    _startup_guards(monkeypatch, app_enabled=True, ledger=True)
+
+    with TestClient(app) as c:
+        assert raised.wait(timeout=5), "the sweep never ran"
+        _join_startup_threads()
+        assert c.get("/healthz").status_code == 200
+    assert escaped == [], "the sweep's failure escaped its thread"
+    assert calls == [], "the drain ran behind a reconcile that failed"
+    assert "startup reconcile failed (RuntimeError: github said no)" in capsys.readouterr().err
 
 
 def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
@@ -745,6 +916,69 @@ def test_a_review_that_takes_no_stance_is_not_recorded(tmp_path, monkeypatch):
             _webhook("pull_request_review", _review_payload(state)).status_code == 202
         )
     assert _table(tmp_path, store.verdicts) == []
+
+
+def test_a_rest_cased_review_state_bands_the_same_as_a_webhook_cased_one(
+    tmp_path, monkeypatch
+):
+    """GitHub spells one state two ways: this webhook delivers `approved`,
+    and the REST reviews endpoint returns `APPROVED` for that same review —
+    which is the spelling review._review_state matches. Nothing in the
+    payload says which vocabulary it came from, so the band must not depend
+    on the casing.
+
+    Being wrong about that fails silently, in the direction that looks like a
+    quiet week: an unmatched state takes the no-band return, so every review
+    would drop, the tier-`external` lane would ingest nothing, and GitHub
+    would still get its 202. That lane is the denominator the outcome loop
+    publishes against, so the damage is a claim computed over nothing."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request_review", _review_payload("APPROVED")).status_code == 202
+    _webhook(
+        "pull_request_review",
+        _review_payload(
+            "CHANGES_REQUESTED", submitted_at="2026-07-20T11:00:00Z", review_id=56
+        ),
+    )
+    rows = _table(tmp_path, store.verdicts)
+    assert [v["band"] for v in rows] == ["cleared", "flagged"]
+    assert [v["tier"] for v in rows] == ["external", "external"]
+    assert [v["source"] for v in rows] == ["review:alice", "review:alice"]
+    # Normalising decides the band; it does not rewrite the ledger. raw is
+    # what GitHub actually sent, which is the only copy of that fact.
+    assert [v["raw"]["state"] for v in rows] == ["APPROVED", "CHANGES_REQUESTED"]
+
+
+def test_an_unrecognized_review_state_is_logged_rather_than_dropped_in_silence(
+    tmp_path, monkeypatch, capsys
+):
+    """A state in neither set is the hazard normalising does not close:
+    GitHub adds a review state, or one was never accounted for. No row is
+    written — a stance we cannot read is not a gradable claim — but this is
+    the one drop on this path that nobody chose, so it must not be silent.
+    Silent, an ingest-nothing lane is indistinguishable from a quiet week,
+    and there is no error and no 4xx anywhere else to notice it by."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request_review", _review_payload("endorsed")).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+    assert "carried unrecognized state 'endorsed'" in capsys.readouterr().err
+
+
+def test_a_review_state_we_deliberately_do_not_band_is_skipped_without_a_log_line(
+    tmp_path, monkeypatch, capsys
+):
+    """`commented` is by far the most common review state on GitHub and
+    `dismissed` is routine. Both are skipped on purpose, so neither may log:
+    a warning that fires on the normal case is one an operator learns to
+    scroll past, which costs exactly the signal the unrecognized-state line
+    exists to carry. That makes the silence load-bearing, not incidental.
+
+    Both spellings, for the reason the casing test above gives."""
+    _hook_env(tmp_path, monkeypatch)
+    for state in ("commented", "COMMENTED", "dismissed", "pending"):
+        assert _webhook("pull_request_review", _review_payload(state)).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+    assert capsys.readouterr().err == ""
 
 
 def test_only_a_submitted_review_is_recorded(tmp_path, monkeypatch):

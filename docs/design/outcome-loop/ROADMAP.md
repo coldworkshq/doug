@@ -10,8 +10,10 @@ M0 starts before M0 closes; M1–M3 are strictly ordered; M4/M5 overlap M3's cal
 Effort marks are engineer-days of focused work, not calendar days.
 
 `[x]` done and merged · `[ ]` not started · `[~]` **partially** landed, with the remaining half
-named in the item. `[~]` exists because two items are half-true in a way that reads as done if
-you only count boxes: a shipped primitive nothing calls is not a shipped capability.
+named in the item. `[~]` exists because items go half-true in a way that reads as done if you
+only count boxes: a shipped primitive nothing calls is not a shipped capability. One is left —
+M2's spend cap, whose primitive landed in #25 and is still wired to no call site. Task 7's
+reconcile was the other, and Task 7b calling it from the lifespan is what closed it.
 
 ---
 
@@ -53,17 +55,24 @@ executed as written — amendments folded in at their task, never as a second pa
   anti-double-spend guarantee). Merged #23. The amendment that added reclaim also opened a
   double-spend hole (a crash after `save_review` re-ran the whole job), closed with an
   idempotency pre-read, `store.find_verdict_by_identity`.
-- [ ] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
+- [x] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
   never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `pull_request_review`
   ingest → third-party verdict rows (`source='review:<login>'`, no score, no model call). The
   `installation.created` token mint that used to sit here is superseded (see Tasks 1–2); note the
   GitHub App needs its "Pull request review" event subscription enabled at the Task 10 cutover.
-- [~] Task 7: reconcile-on-startup by head sha — **calls `reclaim_stalled()` before the enqueue
+  Merged #27.
+- [x] Task 7: reconcile-on-startup by head sha — **calls `reclaim_stalled()` before the enqueue
   sweep** (startup path only, never per-installation: the sweep is queue-wide, not per-tenant).
-  Steps 1–3 merged #24. **Step 4 — wiring `reconcile_all` into the lifespan — still open**, and
-  it cannot land before Task 6, which creates the lifespan.
+  Steps 1–3 merged #24. Step 4 — `reconcile_all` then `drain` in a daemon thread from the lifespan
+  Task 6 created, behind `app_auth.enabled() and store.enabled()` — lands as Task 7b, which is what
+  turns the primitive into a capability (the `[~]` above was there for exactly this gap). Its tests
+  are new work, not the brief's: the brief shipped the wiring with none.
 - [x] Task 8: ADR-0010 (neutral check run) supersedes ADR-0003 in the same commit. Merged #22.
-- [ ] Tasks 9–10: delete CI token path, cutover deploy (rebase vs. merged #15 done deliberately)
+- [ ] Task 10 **then** Task 9 — **resequenced** (Andrew, 2026-08-01), the reverse of the plan's
+  order: cutover deploy first, delete the CI token path second. Task 9 deletes `doug-review.yml`,
+  which is the surface producing Doug's reviews on this repo today, so landing it before the App's
+  check run is verified working in production would leave every PR reviewed by nothing — including
+  the PRs fixing whatever the cutover found. (Rebase vs. merged #15 still done deliberately.)
 - [x] Research-corpus quarantine — **resolved as a write-time convention, not a data migration**:
   no research rows exist in the app database, so there is nothing to `UPDATE`. The sentinel
   installation plus `source='research'` at insert is documented in the migration docstring.
@@ -96,8 +105,11 @@ executed as written — amendments folded in at their task, never as a second pa
   backtested one), with graceful degradation when the reviews call fails. Merged #25.
 - [x] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written
   per verdict. Merged #25. The previous test compared `reader.py` to itself and could not fail.
-- [ ] Fork-PR + bot-author exclusion from deep reads — the **fork** half lands with Task 6's
-  webhook gate; bot-author is still open
+- [~] Fork-PR + bot-author exclusion from deep reads — the **fork** half is done, on both
+  entrances to the paid path: the webhook gate (`api.py:660`) never enqueues one, and
+  `worker._skip_reason` (`worker.py:236`) refuses one that reached the queue another way.
+  Both treat non-integer repo ids as a fork, because the safe direction to be wrong in is
+  skip. Merged #27. **Bot-author is still open**, and it is the half that still costs money.
 - [ ] Migration 003: **UNIQUE** index on `verdicts` (installation_id, github_repo_id, pr_number,
   head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are untouched. Two jobs
   in one: `worker.process_job`'s idempotency pre-read runs on every job over unindexed columns
