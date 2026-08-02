@@ -267,15 +267,24 @@ def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | No
 def _score_and_persist(
     req: ReviewRequest, gh, owner: str, name: str, meta: PRMetadata, diff: str
 ) -> ReviewResponse:
-    tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    # This path carries no tenancy at all — the caller authenticates with a
+    # shared CI token, not an installation — so its reads charge the shared
+    # sentinel scope. Its own ceiling, deliberately: the CI path is
+    # dual-running against the App path as the soak comparison right now,
+    # and must not spend the dogfood installation's budget doing it. Dies
+    # with this endpoint at Task 9.
+    tier, verdict, rv, cov = review.score_one(meta, diff, scope=reader.SENTINEL_SCOPE)
+    intent_result = review.read_intent(
+        gh, owner, name, meta, diff, scope=reader.SENTINEL_SCOPE
+    )
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):
         # Weight 0: advisory signal only. Band/score stay the risk tier's
-        # (ADR-0007). Distinct from None so a broken intent path is visible.
+        # (ADR-0007). Distinct from None so a broken intent path is visible,
+        # and `rule` distinguishes a broken read from an exhausted budget.
         verdict.reasons.append(
             Reason(
-                rule="intent-unavailable",
+                rule=intent_result.rule,
                 label=intent_result.detail,
                 weight=0.0,
             )
@@ -347,6 +356,11 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     a failure — it returns a verdict, same as /v1/review's score_one path —
     but it gets the same read-truncated reason so a caller of this endpoint
     isn't the one path left unable to tell a whole read from part of one.
+
+    The token bounds who calls; the sentinel scope's monthly cap bounds how
+    much they can spend. This probe is never tenanted — there is no
+    installation in the request to charge — so it shares that ceiling with
+    the CI review path rather than any customer's budget.
     """
     # Fourth inlined copy of this gate (review_pr, queue, patterns_precision,
     # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
@@ -360,10 +374,18 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     if not reader.enabled():
         return score(req.pr)
     try:
-        verdict = reader.verdict_from_reader(reader.read_diff(req.pr, req.diff))
+        verdict = reader.verdict_from_reader(
+            reader.read_diff(req.pr, req.diff, scope=reader.SENTINEL_SCOPE)
+        )
         if notice := reader.truncation_reason(reader.coverage(req.diff)):
             verdict.reasons.append(notice)
         return verdict
+    except reader.SpendCapExceeded as e:
+        # Ahead of the ReaderError clause below, which would otherwise
+        # catch this subclass and report a spent budget as a broken reader.
+        capped = score(req.pr)
+        capped.reasons.append(Reason(rule="reader-capped", label=str(e), weight=0.0))
+        return capped
     except reader.ReaderError as e:
         fallback = score(req.pr)
         fallback.reasons.append(

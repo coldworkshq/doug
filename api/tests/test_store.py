@@ -119,7 +119,7 @@ def test_review_endpoint_stamps_the_prompt_hash_on_reader_tier_verdicts(tmp_path
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
-    monkeypatch.setattr(reader, "read_diff", lambda pr, diff: RV)
+    monkeypatch.setattr(reader, "read_diff", lambda pr, diff, **_: RV)
     TestClient(app).post(
         "/v1/review", json={"repo": "o/r", "pr_number": 7},
         headers={"x-doug-token": "secret", "x-github-token": "gh"},
@@ -436,7 +436,9 @@ def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, mo
     scored = []
     real_score_one = review.score_one
     monkeypatch.setattr(
-        review, "score_one", lambda meta, diff: scored.append(1) or real_score_one(meta, diff)
+        review,
+        "score_one",
+        lambda meta, diff, **kw: scored.append(1) or real_score_one(meta, diff, **kw),
     )
 
     c = TestClient(app)
@@ -622,10 +624,10 @@ def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
     scored = []
     real_score_one = review.score_one
 
-    def slow_score(meta, diff):
+    def slow_score(meta, diff, **kw):
         scored.append(1)
         time.sleep(0.2)  # hold the race window open
-        return real_score_one(meta, diff)
+        return real_score_one(meta, diff, **kw)
 
     monkeypatch.setattr(review, "score_one", slow_score)
 

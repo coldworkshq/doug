@@ -12,11 +12,18 @@ Callers fall back to the deterministic score when either is missing or a
 read fails, and the fallback verdict says so in its reasons. The flag
 threshold (default 30) sits at the ~75-80th percentile of clean-PR risk
 scores on both probe repos — roughly the top quarter gets flagged.
+
+Every read is charged to a caller-named scope against a monthly cap before
+anything is sent (see _charge). On a deployment with a ledger that is a
+real ceiling on spend; without one — local dogfooding, the open-source
+path — store.record_deep_read returns True and reads are uncapped by
+design.
 """
 
 import hashlib
 import os
 import re
+import sys
 
 from pydantic import BaseModel, Field
 
@@ -161,6 +168,114 @@ INTENT_SCHEMA = {
 
 class ReaderError(RuntimeError):
     """A read failed (refusal, truncation, transport) — fall back and say so."""
+
+
+class SpendCapExceeded(ReaderError):
+    """This scope has spent its monthly deep-read budget; nothing was sent.
+
+    A ReaderError subclass so that any caller which only knows about
+    ReaderError still degrades to the deterministic verdict rather than
+    500ing — the safe direction to be wrong in. Callers that can tell the
+    two apart should: "the reader broke" and "we hit the ceiling" need
+    different responses from whoever is on the other end.
+    """
+
+
+# --- The monthly deep-read cap -------------------------------------------
+#
+# Checked here, in the module that spends the money, rather than in each
+# caller: a check in reader.py cannot be bypassed by adding a fourth entry
+# point that forgets it, and every one of these functions is one Anthropic
+# call away from a bill.
+#
+# Callers name the scope; this module only spends against it. Un-tenanted
+# entry points (the CI review path, the /v1/score/read credential probe)
+# charge SENTINEL_SCOPE, which has a ceiling of its own — the CI path is
+# deliberately dual-running against the App path as the soak comparison,
+# and it must not be able to consume the dogfood installation's budget on
+# its way.
+
+SENTINEL_SCOPE = "untenanted"
+
+# Runaway guards, NOT plan limits. Their job today is to bound a redelivery
+# loop, a misconfigured install or an abuser — per-installation pricing is
+# M4, and nothing here is a considered business figure. One PR costs two
+# units (a risk read and an intent read), so 4,000 is on the order of 2,000
+# PRs from one installation in one calendar month: far past anything a real
+# repo generates, which is the point. Tighten from the cost data the read
+# lines below now emit, not from a guess about what a tenant "should" use;
+# a ceiling low enough to touch honest traffic would quietly downgrade real
+# reviews to the deterministic tier.
+INSTALLATION_MONTHLY_READ_CAP = 4000
+SENTINEL_MONTHLY_READ_CAP = 1000
+
+
+def installation_scope(installation_id: int) -> str:
+    """The one place an installation's scope string is built."""
+    return f"installation:{installation_id}"
+
+
+def cap_for(scope: str) -> int:
+    return SENTINEL_MONTHLY_READ_CAP if scope == SENTINEL_SCOPE else INSTALLATION_MONTHLY_READ_CAP
+
+
+def _charge(scope: str) -> None:
+    """Spend one read against `scope`, or raise before anything is sent.
+
+    Called before the client is even constructed, let alone the request
+    made: store.record_deep_read's contract is that the caller checks it
+    BEFORE the model call it meters, since a cap enforced afterwards is not
+    spend control, just a receipt.
+
+    Charged on the attempt, not on success. A read that then fails still
+    consumed a unit — the failure mode this guards against is a loop that
+    retries something broken, and a cap only failed reads could not touch
+    would not bound it.
+
+    This is only a cap where there is a ledger to count in:
+    record_deep_read returns True when DATABASE_URL is unset, so local
+    dogfooding and the open-source path are deliberately uncapped. The
+    guarantee is a property of deployments that have a ledger, not of this
+    code.
+    """
+    from . import store  # local: store imports reader.Coverage at module level
+
+    cap = cap_for(scope)
+    if not store.record_deep_read(scope, cap):
+        raise SpendCapExceeded(
+            f"{scope} has spent its cap of {cap} deep reads for this month; "
+            "no model call was made"
+        )
+
+
+def _report_cost(response, *, kind: str, scope: str, pr) -> None:
+    """One stderr line per paid read: what it cost and what bought it.
+
+    Emitted here because this is the only place `response.usage` exists —
+    and before the stop_reason check below, because a read that stops at
+    max_tokens is billed for every one of those tokens and then thrown
+    away. Reporting cost on the success path alone would hide the most
+    expensive reads there are.
+
+    `model` rides on every line even though MODEL is a single constant
+    today: the moment anyone splits it per read, a line that silently
+    changed meaning is this repo's recurring defect.
+
+    Unknown token counts print `?`, never 0 — the point of these lines is
+    to set the cap from evidence, and a read of unknown cost summed in as a
+    free one is worse than an admitted gap.
+    """
+    usage = getattr(response, "usage", None)
+    tokens_in = getattr(usage, "input_tokens", None)
+    tokens_out = getattr(usage, "output_tokens", None)
+    sha = getattr(pr, "head_sha", None)
+    print(
+        f"doug: read #{getattr(pr, 'number', '?')}@{sha[:12] if sha else '?'} (paid read) "
+        f"kind={kind} scope={scope} model={MODEL} "
+        f"in={tokens_in if tokens_in is not None else '?'} "
+        f"out={tokens_out if tokens_out is not None else '?'}",
+        file=sys.stderr,
+    )
 
 
 class ReaderFinding(BaseModel):
@@ -366,7 +481,11 @@ def truncation_reason(cov: Coverage) -> Reason | None:
     return Reason(rule="read-truncated", label=label, weight=0.0)
 
 
-def read_diff(pr, diff: str, client=None) -> ReaderVerdict:
+def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
+    """The risk read. `scope` is who pays for it, and is required rather
+    than defaulted: a default is how the next caller silently becomes
+    un-metered, which is the bug this cap exists to close."""
+    _charge(scope)
     if client is None:
         client = _client()
     try:
@@ -384,6 +503,7 @@ def read_diff(pr, diff: str, client=None) -> ReaderVerdict:
         # exhausted balance 500'd every customer's CI, reported as success
         # because the workflow step is continue-on-error.
         raise ReaderError(f"{type(e).__name__}: {e}") from e
+    _report_cost(response, kind="risk", scope=scope, pr=pr)
     if response.stop_reason != "end_turn":
         raise ReaderError(f"read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")
@@ -419,12 +539,19 @@ def _intent_text(pr, diff: str, docs) -> str:
     )
 
 
-def read_with_decisions(pr, diff: str, docs, client=None) -> IntentReaderVerdict:
+def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> IntentReaderVerdict:
     """The intent read. Never called with an empty `docs` — a read with no
     decisions in it is the diff-only read, and asking the model to compare
-    against nothing invites invented findings."""
+    against nothing invites invented findings.
+
+    Charges the same `scope` the risk read does, so one PR costs two units:
+    one knob per tenant, and no ambiguity about which read exhausted it.
+    The empty-docs refusal above comes first — it sends nothing, so it must
+    cost nothing.
+    """
     if not docs:
         raise ReaderError("no decision records to read against")
+    _charge(scope)
     if client is None:
         client = _client()
     response = client.messages.create(
@@ -437,6 +564,7 @@ def read_with_decisions(pr, diff: str, docs, client=None) -> IntentReaderVerdict
         system=DECISION_INTENT_SYSTEM,
         messages=[{"role": "user", "content": _intent_text(pr, diff, docs)}],
     )
+    _report_cost(response, kind="intent", scope=scope, pr=pr)
     if response.stop_reason != "end_turn":
         raise ReaderError(f"intent read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")

@@ -255,11 +255,21 @@ outcome_jobs = Table(
 )
 
 # Deep-read spend cap, metered per scope per UTC calendar month. `scope` is
-# caller-defined (e.g. "installation:150424894") rather than a foreign key —
-# the reader's two model-call sites take no installation parameter yet
-# (score_one/read_intent's signatures are locked by the in-flight step-2
-# worker task), so this is the tested primitive a future caller wires in
-# once that context reaches reader.py, not an already-enforced cap.
+# caller-defined (e.g. "installation:150424894") rather than a foreign key
+# because not every paid read has a tenant to key on: reader.read_diff and
+# reader.read_with_decisions both take a required `scope` and charge it
+# through record_deep_read before the Anthropic call, and the un-tenanted
+# callers (the CI review path, the /v1/score/read probe, the CLI) charge a
+# shared sentinel scope with a ceiling of its own. The App path charges the
+# installation that owns the PR. Those two reader functions are the only
+# enforcement point, which is what stops a new entry point from spending
+# without naming a payer.
+#
+# It is a real ceiling only where there is a ledger to count in:
+# record_deep_read returns True when DATABASE_URL is unset, exactly like
+# every other helper in this module, so local dogfooding and the
+# open-source path run uncapped by design. The cap is a property of
+# deployments that have this table, not of the code.
 deep_read_counters = Table(
     "deep_read_counters",
     metadata,

@@ -36,13 +36,35 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
           also carries the reason and the concurrent UI work reading the
           same rows. That decision supersedes nothing about the 10-then-9
           resequencing; it adds a gate in front of the 9.
-          Land score-read-auth first (m1-cutover-done already landed, #34).
           Rebase vs. merged #15 still to be done deliberately. AFTER the
-          soak and Task 9, M1's exit gate is checkable end to end and M2
-          (spend caps) starts — its `[~]` primitive (store.record_deep_read,
-          #25) is still wired to no call site, so spend is uncapped in
-          production TODAY, which matters more now that the App path is
-          the live one.
+          soak and Task 9, M1's exit gate is checkable end to end.
+
+          M2 SAFETY WORK IS NOW MOSTLY DONE, out of order and deliberately,
+          because the cutover changed the risk: paid reads are now triggered
+          by webhook deliveries — PR activity Doug does not control — rather
+          than by our own CI. Merged: #35 (/v1/score/read was unauthenticated
+          AND paid on a public --allow-unauthenticated service; now gated).
+          OPEN AS PR #37: the spend cap wired to every paid call site, plus
+          per-read cost capture. Once #37 lands, spend is bounded and
+          measurable for the first time.
+
+          The remaining M2 items, in the order I would do them:
+          1. Migration 005 (NOT 003 — #30 took 003 and 004): the UNIQUE
+             index on verdicts. Now an integrity item, not a spend one —
+             see the roadmap entry, rewritten 2026-08-02.
+          2. doug-web's own service account. It still runs as the default
+             compute SA, which holds roles/editor on doug-prod0, and it is
+             the browser-facing surface. Task list has the verified IAM
+             facts.
+          3. Per-installation scoped reads + token dispense. This is the
+             one that actually gates real tenants, and it is untouched.
+          4. Bot-author exclusion — RE-SCOPE THIS BEFORE BUILDING IT. The
+             roadmap wants bot-authored PRs excluded from deep reads to
+             save money, but Doug's thesis is AI-review routing and the
+             agentic-trust surface, so those are the PRs it exists to
+             grade. api.py already says as much for the reviewer lane
+             ("grading bot reviewers is the point of the lane"). Probably
+             metering, not exclusion. Andrew has not ruled on it.
 
           What the cutover actually put in production, verified on the
           serving revision: doug-api runs as its OWN service account
@@ -56,16 +78,24 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
           doug-web STILL runs as the default compute SA — held back
           deliberately so a misconfigured web SA could not confuse the
           cutover — and gets its own SA in a follow-on PR.
-Blockers: none for code. One thing only Andrew can do, and one loose end:
-          - subscribe the App to the "Pull request review" event before
-            Task 6's third-party ingest receives anything (handler is
-            inert but fully fixture-testable until then). STATUS NOT
-            RECONFIRMED since the cutover — check the App settings rather
-            than assuming the cutover checklist reached it.
-          - key rotation is DONE and verified (see below); the loose end is
-            that doug-anthropic-key version 1 is still `enabled` in Secret
-            Manager, so the superseded material is still readable there.
-            Disabling it is separate from revoking the key at Anthropic.
+Blockers: NONE. Both Andrew-only items closed 2026-08-02 and verified:
+          - "Pull request review" event subscription ENABLED (Andrew
+            confirmed). The tier='external' grader lane can now receive.
+            Nothing has exercised it yet in production — the first
+            third-party review on a PR is what proves it, and no log line
+            fires when it works, only when the state is unrecognized.
+          - Anthropic key rotation CLOSED: v2 live, v1 DISABLED in Secret
+            Manager (verified `state: disabled`), local plaintext file
+            deleted. Every secret binding is `version=latest` — verified
+            on the serving revision — so disabling v1 was safe. NOTE that
+            `latest` means a future v3 is picked up silently; nothing pins
+            a version anywhere.
+
+          Standing hazard, not a blocker: GitHub's REST quota is 5,000/hr
+          and is SHARED across every concurrent session and agent. It was
+          exhausted twice on 2026-08-02. Prefer `gcloud run services logs
+          read doug-api` over `gh` for anything the logs can answer —
+          since #34 and #37 they answer most of it.
 
 Execution model (do not rediscover this):
 - One PR per task. Doug reviews each (ADR-0008); read its findings, but
