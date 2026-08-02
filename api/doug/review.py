@@ -41,9 +41,15 @@ class IntentFailure:
     requires a failed read to be recorded differently from "nothing found",
     or precision and operators cannot tell a broken path from a quiet repo.
     Never raises into the review — callers surface a weight-0 reason.
+
+    `rule` is the name that reason carries, and it is a field rather than a
+    constant for the same reason the risk tier has two names: a read that
+    broke and a read this tenant could not afford need different responses
+    from whoever is on call.
     """
 
     detail: str
+    rule: str = "intent-unavailable"
 
 
 def _html_url(p) -> str | None:
@@ -222,7 +228,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     return meta, diff
 
 
-def score_one(meta: PRMetadata, diff: str):
+def score_one(meta: PRMetadata, diff: str, *, scope: str):
     """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
 
     Reader failures fall back loudly — the deterministic verdict says
@@ -231,10 +237,18 @@ def score_one(meta: PRMetadata, diff: str):
     recomputed by whoever remembers to, because forgetting is how a 44% read
     came to look exactly like a whole one. None on the deterministic tier,
     which never opens the diff.
+
+    `scope` is who the read is charged to, and every caller must name one:
+    a default here is how the next entry point silently becomes un-metered.
+    A scope out of budget falls back like any other failed read rather than
+    raising — a PR left silently unreviewed is the failure mode this whole
+    codebase is built to avoid — but under its own rule name, because
+    "top up the budget" and "page someone, the reader is broken" are not
+    the same instruction.
     """
     if reader.enabled():
         try:
-            rv = reader.read_diff(meta, diff)
+            rv = reader.read_diff(meta, diff, scope=scope)
             verdict = reader.verdict_from_reader(rv)
             cov = reader.coverage(
                 diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
@@ -242,6 +256,13 @@ def score_one(meta: PRMetadata, diff: str):
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             return "reader", verdict, rv, cov
+        except reader.SpendCapExceeded as e:
+            # Before ReaderError: SpendCapExceeded is a subclass of it, so a
+            # broader clause first would relabel every capped read as a
+            # broken one.
+            verdict = score(meta)
+            verdict.reasons.append(Reason(rule="reader-capped", label=str(e), weight=0.0))
+            return "deterministic", verdict, None, None
         except reader.ReaderError as e:
             verdict = score(meta)
             verdict.reasons.append(
@@ -268,7 +289,7 @@ class IntentRead(BaseModel):
 
 
 def read_intent(
-    gh, owner: str, repo: str, meta: PRMetadata, diff: str
+    gh, owner: str, repo: str, meta: PRMetadata, diff: str, *, scope: str
 ) -> IntentRead | IntentFailure | None:
     """Judge the change against the repo's binding decisions.
 
@@ -278,6 +299,10 @@ def read_intent(
     IntentRead — success.
 
     None of these may move the risk score or band (ADR-0007).
+
+    `scope` is the same one the risk read charged: both reads come out of
+    one budget, so a PR costs two units and an operator has one number to
+    reason about rather than two.
     """
     if not (intent.enabled() and reader.enabled()):
         return None
@@ -286,7 +311,13 @@ def read_intent(
         chosen = [intent.truncate(d) for d in intent.select(docs, meta.title, meta.files)]
         if not chosen:
             return None
-        rv = reader.read_with_decisions(meta, diff, chosen)
+        rv = reader.read_with_decisions(meta, diff, chosen, scope=scope)
+    except reader.SpendCapExceeded as e:
+        # Its own rule, for the same reason score_one gives the risk read
+        # one: an exhausted budget is not a broken read. Caught ahead of
+        # the blanket clause below, which would otherwise swallow it.
+        print(f"doug: intent read skipped ({e})", file=sys.stderr)
+        return IntentFailure(detail=str(e)[:200], rule="intent-capped")
     except Exception as e:  # noqa: BLE001 — advisory path, never fails a review
         # Distinct from None: a read that fails every time must not look
         # like a repo that keeps no records (ADR-0007).
@@ -305,7 +336,11 @@ def read_intent(
 def review_repo(gh, owner: str, repo: str, limit: int) -> list[ReviewItem]:
     items = []
     for meta, diff in fetch_open_prs(gh, owner, repo, limit):
-        _, verdict, _, _ = score_one(meta, diff)
+        # The CLI holds no installation — it runs on a developer's own
+        # token — so its reads charge the sentinel scope, alongside the
+        # other two un-tenanted callers. Dogfooding locally usually has no
+        # ledger at all, in which case nothing counts anything.
+        _, verdict, _, _ = score_one(meta, diff, scope=reader.SENTINEL_SCOPE)
         items.append(ReviewItem(pr=meta, verdict=verdict))
     items.sort(key=lambda i: i.verdict.score, reverse=True)
     return items
