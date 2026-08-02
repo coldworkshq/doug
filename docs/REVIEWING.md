@@ -114,6 +114,29 @@ adds it. Same rule as PR #19's datetime finding: check the surrounding code, the
 file settled it, in the disposition — here, `store.py`'s docstring plus the absence of any
 `CREATE TABLE` anywhere in `migrations.py`.
 
+## "No migration for this column" often means "not in the diff's new versions"
+
+PR #30's high finding: `find_review` / `save_review` now use `verdicts.head_sha`, but "the
+visible migration list only adds `prompt_hash` (v2) and indexes (v3)." Disposition: **false**.
+Migration **001** has added `head_sha` since #18 (`6a1a213`); this PR only started writing
+and querying it. Doug was looking at the *diff's* `MIGRATIONS` delta (new or touched
+versions), not the full list, and said so in the coverage line — `Partial read: 50% … Never
+sent: … test_migrations.py`.
+
+Same shape as #25's `prompt_hash` half: a column that already has an older migration looks
+unmigrated when the reader only sees the versions this PR introduced. Before treating a
+missing-migration finding as Critical/High:
+
+1. Read Doug's coverage line (unread `migrations.py` / tests are a stop sign).
+2. Open the full `MIGRATIONS` list and search for `ADD COLUMN <name>` in *every* version,
+   not only the ones in the diff hunk.
+3. Confirm the `Table()` definition and the migration agree (the reverse-drift tests exist
+   for this).
+
+If the column is already migrated outside the diff, say so in the disposition and name the
+version + landing PR. Do not add a duplicate `ALTER` "to be safe" — that is noise, and on
+sqlite without `IF NOT EXISTS` it depends entirely on `_SATISFIED` text matching.
+
 ## A completeness check must be about content that could have been reviewed, not about hitting an API's raw file list
 
 PR #25 also introduced `Coverage.complete` requiring `files_sent == changed_files`, and got
