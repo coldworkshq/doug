@@ -47,6 +47,17 @@ from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
 
+COMPARISON_RUN_LIMIT = 500
+
+
+class ComparisonResultTooLarge(RuntimeError):
+    """The comparison cannot be returned without cutting ledger evidence."""
+
+    def __init__(self, limit: int):
+        super().__init__(
+            f"comparison contains more than {limit} runs; narrow the repo or PR limit"
+        )
+
 verdicts = Table(
     "verdicts",
     metadata,
@@ -806,15 +817,17 @@ def save_deviations(
 
 
 def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
-    """The newest verdict already recorded for this exact commit, or None.
+    """The newest CI verdict already recorded for this exact commit, or None.
 
     The idempotency read: /v1/review consults it before paying for an LLM
     read, so a webhook redelivery or a retried CI job replays the recorded
     verdict instead of double-spending and inserting a duplicate ledger
     row. Matches on the head_sha column (indexed-capable, written by the App
     and CI paths); falls back to pr_meta["head_sha"] for rows scored before
-    the column was populated. Rows with neither simply never match, and get
-    rescored once.
+    the column was populated. The null App-id pair keeps this replay scoped
+    to CI so an App verdict for the same commit cannot suppress the
+    independent CI instrument. Rows with neither SHA simply never match, and
+    get rescored once.
     """
     engine = _get_engine()
     if engine is None:
@@ -826,6 +839,8 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
         .where(
             verdicts.c.repo == repo,
             verdicts.c.pr_number == pr_number,
+            verdicts.c.installation_id.is_(None),
+            verdicts.c.github_repo_id.is_(None),
             or_(
                 verdicts.c.head_sha == head_sha,
                 verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
@@ -1164,3 +1179,110 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def comparison_reviews(
+    limit: int = 50,
+    repo: str | None = None,
+    *,
+    max_rows: int = COMPARISON_RUN_LIMIT,
+) -> list[dict]:
+    """All App and CI verdicts for the most recently scored PR groups.
+
+    The limit counts PRs, not verdict rows, so one side of a pair and duplicate
+    App writes cannot be cut away at the boundary. max_rows bounds the result
+    without making partial ledger evidence look complete: an oversized result
+    raises instead of cutting a comparison group.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1:
+        return []
+    if max_rows < 1:
+        raise ValueError("max_rows must be positive")
+    from sqlalchemy import and_, desc, func, or_, select
+
+    app_identity = and_(
+        verdicts.c.installation_id.is_not(None),
+        verdicts.c.github_repo_id.is_not(None),
+        verdicts.c.head_sha.is_not(None),
+    )
+    ci_identity = and_(
+        verdicts.c.installation_id.is_(None),
+        verdicts.c.github_repo_id.is_(None),
+    )
+    qualifies = and_(
+        verdicts.c.tier != EXTERNAL_TIER,
+        or_(app_identity, ci_identity),
+    )
+    recent = select(
+        verdicts.c.repo,
+        verdicts.c.pr_number,
+        func.max(verdicts.c.scored_at).label("latest_scored_at"),
+    ).where(qualifies)
+    if repo:
+        recent = recent.where(verdicts.c.repo == repo)
+    recent = (
+        recent.group_by(verdicts.c.repo, verdicts.c.pr_number)
+        .order_by(desc("latest_scored_at"))
+        .limit(limit)
+        .subquery()
+    )
+    latest_read_ids = (
+        select(
+            reads.c.verdict_id,
+            func.max(reads.c.id).label("read_id"),
+        )
+        .group_by(reads.c.verdict_id)
+        .subquery()
+    )
+    latest_read = reads.alias("latest_read")
+    query = (
+        select(
+            verdicts,
+            latest_read.c.id.label("_coverage_id"),
+            latest_read.c.diff_chars.label("_coverage_diff_chars"),
+            latest_read.c.sent_chars.label("_coverage_sent_chars"),
+            latest_read.c.files_sent.label("_coverage_files_sent"),
+            latest_read.c.files_unseen.label("_coverage_files_unseen"),
+            latest_read.c.file_cut.label("_coverage_file_cut"),
+        )
+        .join(
+            recent,
+            (recent.c.repo == verdicts.c.repo)
+            & (recent.c.pr_number == verdicts.c.pr_number),
+        )
+        .outerjoin(
+            latest_read_ids,
+            latest_read_ids.c.verdict_id == verdicts.c.id,
+        )
+        .outerjoin(latest_read, latest_read.c.id == latest_read_ids.c.read_id)
+        .where(qualifies)
+        .order_by(
+            desc(recent.c.latest_scored_at),
+            desc(verdicts.c.scored_at),
+            desc(verdicts.c.id),
+        )
+        .limit(max_rows + 1)
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query).mappings().all()
+    if len(rows) > max_rows:
+        raise ComparisonResultTooLarge(max_rows)
+    out = []
+    for row in rows:
+        verdict = {column.name: row[column.name] for column in verdicts.columns}
+        coverage = (
+            {
+                "id": row["_coverage_id"],
+                "verdict_id": verdict["id"],
+                "diff_chars": row["_coverage_diff_chars"],
+                "sent_chars": row["_coverage_sent_chars"],
+                "files_sent": row["_coverage_files_sent"],
+                "files_unseen": row["_coverage_files_unseen"],
+                "file_cut": row["_coverage_file_cut"],
+            }
+            if row["_coverage_id"] is not None
+            else None
+        )
+        out.append({**verdict, "coverage": coverage})
+    return out

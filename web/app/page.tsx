@@ -86,6 +86,12 @@ export default async function Home() {
           >
             Queue
           </Link>
+          <Link
+            href="/compare"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+          >
+            Compare
+          </Link>
           <a
             href="https://github.com/drewjst/doug"
             className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"

@@ -126,6 +126,62 @@ that was. Before accepting one, check whether the fix it suggests is the fix the
 actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
 was not to add a lock but to upgrade an already-planned index to a unique one.
 
+## A shared commit SHA does not make App and CI the same idempotency domain
+
+PR #38's medium finding said making `find_review` require NULL App ids intentionally
+doubled spend and could break an App webhook redelivery routed through `/v1/review`.
+The extra verdict was real; the claimed dedupe regression was not. The two verdicts are
+the two independent soak instruments that `/compare` exists to measure. `api.py` is the
+only production caller of `find_review`, for the CI-only `/v1/review` route. App webhook
+deliveries enqueue a job, and `worker.py` deduplicates those with
+`find_verdict_by_identity(installation_id, github_repo_id, pr_number, head_sha)` instead.
+The same-path CI replay still pays once, while an App result cannot erase the independent
+CI observation. `test_review_repeat_for_same_commit_replays_without_a_second_row` and
+`test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict` pin both directions.
+
+Before treating a dedupe helper as global, enumerate its production callers and identify
+the event identity each caller owns. A hypothetical route from one delivery mechanism
+through another route is not a current regression. If the product explicitly runs two
+instruments on one commit, cross-instrument dedupe destroys the evidence rather than
+saving a duplicate read.
+
+The same review said `_comparison_run` could raise when a legacy `reads` row omitted one
+of its projected coverage keys. That legacy shape has never existed: merged commit
+`3983030` introduced `reads` with `diff_chars`, `sent_chars`, `files_sent`, `files_unseen`,
+and `file_cut` together, and none were added later. The reviewed implementation obtained
+coverage from `select(reads)`, whose mapping contained every declared column even when
+nullable `file_cut` was NULL. The fixed implementation explicitly projects those same
+columns from a `latest_read` alias. A database physically missing a declared column fails
+the SQL SELECT before response projection; changing `coverage[key]` to
+`coverage.get(key)` would not degrade that schema mismatch. Check table history and the
+producer contract before adding fallbacks for a row shape only a partial diff makes
+plausible.
+
+Two adjacent findings were valid. The per-verdict coverage SELECT was an N+1 and became a
+single outer join. The PR-group limit also did not bound duplicate rows; silently slicing
+them would corrupt pairing and missing-path metrics, so successful comparison responses
+remain lossless while results above the run ceiling fail with an explicit 413.
+
+The replacement review called that 413 a hard failure with no graceful degradation, but
+it did not read the web client. `web/lib/api.ts` converts every non-OK comparison response
+to the explicit `unavailable` source, and `/compare` renders that state without summary
+zeroes or partial runs. Pagination could improve availability later; returning a bounded
+but incomplete group now would be a correctness regression. Trace an error through its
+consumer before claiming the user sees a crash or fabricated state.
+
+It also called a both-App-ids-NULL row with no head SHA a classification heuristic. That
+is the accepted legacy CI identity, not a guess introduced by `_comparison_path`; rows
+with one App id are excluded in SQL. The web model assigns a null-head run its own
+`head-unknown` group, counts no missing path, and computes no delta. Check the producer-era
+contract and downstream neutral state before relabeling an intentionally unpairable row as
+malformed.
+
+The replacement pass's remaining query-cost warning is plausible but unproven: one
+set-based query can still become slow as the ledger grows. Require a production-scale
+execution plan or measured latency before replacing it again; SQL shape alone does not
+establish a regression, and speculative query rewrites can reintroduce the N+1 or cut
+duplicate evidence.
+
 ## New tables never need a migration — only new columns on an existing one do
 
 PR #25 got a medium finding: `deep_read_counters` and `verdicts.prompt_hash` looked

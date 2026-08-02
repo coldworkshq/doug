@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from doug import reader, review, store
@@ -461,6 +461,71 @@ def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, mo
     engine = create_engine(url)
     with engine.connect() as conn:
         assert len(conn.execute(select(store.verdicts)).all()) == 1
+
+
+def test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict(
+    tmp_path, monkeypatch
+):
+    """App and CI are independent soak instruments for the same commit.
+
+    Replaying an App verdict into /v1/review suppresses the entire CI side, so
+    the comparison falsely reports a missing baseline even though CI ran.
+    """
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    sha = "c" * 40
+    app_id = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta=_pr_with_sha(sha).model_dump(mode="json"),
+        installation_id=10,
+        github_repo_id=20,
+        head_sha=sha,
+        source="app",
+    )
+    monkeypatch.setattr(
+        review,
+        "fetch_pr",
+        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
+    )
+    scored = []
+    real_score_one = review.score_one
+    monkeypatch.setattr(
+        review,
+        "score_one",
+        lambda meta, diff, **kw: scored.append(1) or real_score_one(meta, diff, **kw),
+    )
+    c = TestClient(app)
+
+    response = c.post(
+        "/v1/review",
+        json={"repo": "o/r", "pr_number": 7},
+        headers={"X-Doug-Token": "secret", "X-GitHub-Token": "gh"},
+    )
+    assert response.status_code == 200
+    assert scored == [1], "CI must score instead of replaying the App instrument"
+    assert not any(reason["rule"] == "idempotent-replay" for reason in response.json()["reasons"])
+
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.verdicts).order_by(store.verdicts.c.id)).mappings().all()
+    assert len(rows) == 2
+    assert rows[0]["id"] == app_id
+    assert (rows[1]["installation_id"], rows[1]["github_repo_id"], rows[1]["head_sha"]) == (
+        None,
+        None,
+        sha,
+    )
+
+    runs = c.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    ).json()["runs"]
+    assert {run["id"] for run in runs} == {row["id"] for row in rows}
+    assert {run["path"] for run in runs} == {"app", "ci"}
+    assert {run["head_sha"] for run in runs} == {sha}
 
 
 def test_review_force_rescore_and_new_commit_both_score_again(tmp_path, monkeypatch):
@@ -1260,7 +1325,7 @@ def test_find_review_ignores_external_rows(tmp_path, monkeypatch):
     incidentally, not by design. The exclusion is explicit so that immunity
     does not evaporate the day someone writes pr_meta on an external row."""
     _db(tmp_path, monkeypatch)
-    _doug_verdict()
+    _doug_verdict(installation_id=None, github_repo_id=None, source=None)
     _external(raw={"review_id": 3})
     prior = store.find_review("o/r", 7, "a" * 40)
     assert prior is not None and prior["tier"] == "reader"
@@ -1275,11 +1340,11 @@ def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
     every other test here, which is how a guard gets "cleaned up" later.
 
     So this one writes the row the incidental immunity does not cover: an
-    external verdict carrying pr_meta with a matching head_sha. Only the
-    explicit tier exclusion keeps Doug's verdict winning, and deleting it
-    fails exactly this test."""
+    external verdict carrying CI identity and pr_meta with a matching
+    head_sha. Only the explicit tier exclusion keeps the CI verdict winning,
+    and deleting it fails exactly this test."""
     url = _db(tmp_path, monkeypatch)
-    _doug_verdict()
+    _doug_verdict(installation_id=None, github_repo_id=None, source=None)
     with create_engine(url).begin() as conn:
         conn.execute(
             store.verdicts.insert(),
@@ -1291,8 +1356,8 @@ def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
                 "score": 0.0,
                 "band": "cleared",
                 "threshold": 0.0,
-                "installation_id": INSTALL,
-                "github_repo_id": REPO_ID,
+                "installation_id": None,
+                "github_repo_id": None,
                 "head_sha": "a" * 40,
                 "source": "review:someone",
                 "pr_meta": {"head_sha": "a" * 40},
@@ -1327,3 +1392,209 @@ def test_an_external_review_does_not_erase_a_prs_findings_from_precision(
     joined = store.pattern_join()
     assert [(p["repo"], p["pr_number"]) for p in joined["prs"]] == [("o/r", 7)]
     assert [h["rule"] for h in joined["hits"]] == ["reader:race-condition"]
+
+
+def _comparison_review(
+    repo: str,
+    pr_number: int,
+    sha: str,
+    *,
+    app: bool,
+    legacy_ci: bool = False,
+    coverage: reader.Coverage | None = None,
+) -> int:
+    identity = (
+        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
+        if app
+        else {} if legacy_ci else {"head_sha": sha}
+    )
+    verdict_id = store.save_review(
+        repo,
+        pr_number,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "number": pr_number, "head_sha": sha},
+        coverage=coverage,
+        **identity,
+    )
+    assert verdict_id is not None
+    return verdict_id
+
+
+def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
+    tmp_path, monkeypatch
+):
+    """The comparison read must preserve every qualifying App and CI run.
+
+    Dropping the CI-side predicate, deduplicating rows, or failing to load a
+    reader receipt makes the App-versus-CI dashboard claim a comparison it
+    cannot actually show.
+    """
+    _db(tmp_path, monkeypatch)
+    coverage = reader.Coverage(
+        diff_chars=20,
+        sent_chars=10,
+        files_sent=1,
+        files_unseen=["second.py"],
+        file_cut="first.py",
+    )
+    app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
+    app_two = _comparison_review("o/r", 7, "a" * 40, app=True)
+    current_ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    legacy_ci = _comparison_review("o/r", 7, "a" * 40, app=False, legacy_ci=True)
+    _external()
+    one_app_id = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        installation_id=10,
+    )
+    github_repo_id_only = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        github_repo_id=20,
+    )
+    app_without_head = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        installation_id=10,
+        github_repo_id=20,
+    )
+
+    rows = store.comparison_reviews(repo="o/r")
+    assert {row["id"] for row in rows} == {
+        app_one,
+        app_two,
+        current_ci,
+        legacy_ci,
+    }
+    assert one_app_id not in {row["id"] for row in rows}
+    assert github_repo_id_only not in {row["id"] for row in rows}
+    assert app_without_head not in {row["id"] for row in rows}
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[app_one]["coverage"]["sent_chars"] == 10
+    assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
+    assert by_id[app_two]["coverage"] is None
+    assert by_id[current_ci]["coverage"] is None
+    assert by_id[legacy_ci]["coverage"] is None
+
+
+def test_comparison_reviews_loads_all_coverage_in_one_select(tmp_path, monkeypatch):
+    """Adding another verdict must not add another database round trip.
+
+    The dashboard can request 200 PR groups and duplicates are deliberately
+    preserved. A SELECT inside the verdict loop turns that honest ledger read
+    into hundreds of sequential queries.
+    """
+    _db(tmp_path, monkeypatch)
+    coverage = reader.Coverage(
+        diff_chars=20,
+        sent_chars=10,
+        files_sent=1,
+        files_unseen=["second.py"],
+        file_cut="first.py",
+    )
+    covered = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
+    assert store.save_read(
+        covered,
+        reader.Coverage(
+            diff_chars=20,
+            sent_chars=18,
+            files_sent=2,
+            files_unseen=[],
+            file_cut=None,
+        ),
+    ) == 1
+    _comparison_review("o/r", 7, "a" * 40, app=False)
+    _comparison_review("o/r", 7, "a" * 40, app=True)
+    engine = store._get_engine()
+    assert engine is not None
+    selects: list[str] = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_select)
+    try:
+        rows = store.comparison_reviews(repo="o/r")
+    finally:
+        event.remove(engine, "before_cursor_execute", record_select)
+
+    assert len(selects) == 1
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[covered]["coverage"]["sent_chars"] == 18
+    assert by_id[covered]["coverage"]["file_cut"] is None
+
+
+def test_current_ci_review_is_visible_in_comparisons_with_its_exact_head(
+    tmp_path, monkeypatch
+):
+    """The CI endpoint writes head_sha for idempotency, without App ids.
+
+    Treating any row with a head column as App or malformed hides every new
+    CI result from the soak dashboard even though the review completed.
+    """
+    url = _db(tmp_path, monkeypatch)
+    sha = "c" * 40
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(
+        review,
+        "fetch_pr",
+        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
+    )
+    c = TestClient(app)
+
+    reviewed = c.post(
+        "/v1/review",
+        json={"repo": "o/r", "pr_number": 7},
+        headers={**AUTH, "X-GitHub-Token": "gh"},
+    )
+    assert reviewed.status_code == 200
+    with create_engine(url).connect() as conn:
+        verdict_id = conn.execute(select(store.verdicts.c.id)).scalar_one()
+
+    runs = c.get("/v1/comparisons", headers=AUTH).json()["runs"]
+    assert [run["id"] for run in runs] == [verdict_id]
+    assert runs[0]["path"] == "ci"
+    assert runs[0]["head_sha"] == sha
+
+
+def test_comparison_reviews_limits_pr_groups_without_cutting_their_runs(
+    tmp_path, monkeypatch
+):
+    """The limit counts scored PR groups, never one side of a comparison."""
+    _db(tmp_path, monkeypatch)
+    _comparison_review("o/r", 1, "a" * 40, app=True)
+    _comparison_review("o/r", 1, "a" * 40, app=False)
+    newest_app = _comparison_review("o/r", 2, "b" * 40, app=True)
+    newest_ci = _comparison_review("o/r", 2, "b" * 40, app=False)
+
+    rows = store.comparison_reviews(limit=1)
+    assert {row["id"] for row in rows} == {newest_app, newest_ci}
+    assert {row["pr_number"] for row in rows} == {2}
+
+
+def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
+    tmp_path, monkeypatch
+):
+    """A repo view cannot leak another repo, and disabled storage stays inert."""
+    _db(tmp_path, monkeypatch)
+    wanted = _comparison_review("a/x", 1, "a" * 40, app=True)
+    _comparison_review("b/y", 2, "b" * 40, app=True)
+    assert [row["id"] for row in store.comparison_reviews(repo="a/x")] == [wanted]
+
+    monkeypatch.delenv("DATABASE_URL")
+    assert store.comparison_reviews() == []
