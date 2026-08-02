@@ -24,7 +24,7 @@ The items that make every later step messier the longer they wait.
 - [x] **Merge PR #15** (`fix/reliability-review`) — lands the gated-traffic deploy + web timeout fix; merging FIRST avoids the known collision with step-2 Tasks 9/10 (else: deliberate rebase, its `/v1/review` idempotency work dies with the endpoint). Merged `0d95884`.
 - [x] **Commit the design docs + landing-page section** as a PR (Doug reviews it, ADR-0008) — merged `240caf5` (#16).
 - [x] **Decide** `workflow-summary-test-fidelity` branch: merge or drop (~49 test lines) — dropped; its only real content was already on main byte-identical, branch deleted.
-- [ ] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — confirmed NOT in the public repo (full-history pickaxe search across all branches, file never tracked, covered by `.gitignore`), so no public exposure; Andrew rotates the live prod key via gcloud on his own schedule, then deletes this local file.
+- [x] **Rotate + delete** the local key at `api/.backtest-cache/llm-probe/api-key` (long-standing) — confirmed NOT in the public repo (full-history pickaxe search across all branches, file never tracked, covered by `.gitignore`), so no public exposure. Done at the Task 10 cutover, and checked rather than taken on trust: the plaintext file is gone (the whole `api/.backtest-cache/llm-probe/` directory with it), and `gcloud secrets versions list doug-anthropic-key --project doug-prod0` shows a version 2 created 2026-08-02. One loose end for whoever closes the rotation out, deliberately not ticked away here: version 1 is still `enabled` in Secret Manager, so the superseded material is still readable from it — disabling that version is a separate step from revoking the key at Anthropic, and neither is what this item was about.
 - [x] **Confirm intent-stream posture** (design already assumes it): per-installation flag, default OFF for tenants, ON for dogfood, labeled experimental — confirmed in `design-lock.md:62`.
 - [x] Fix stale `.env.example` (`MAGPIE_*` → current names) — trivial, stops onboarding confusion. Shipped in PR #16.
 
@@ -68,11 +68,29 @@ executed as written — amendments folded in at their task, never as a second pa
   turns the primitive into a capability (the `[~]` above was there for exactly this gap). Its tests
   are new work, not the brief's: the brief shipped the wiring with none.
 - [x] Task 8: ADR-0010 (neutral check run) supersedes ADR-0003 in the same commit. Merged #22.
-- [ ] Task 10 **then** Task 9 — **resequenced** (Andrew, 2026-08-01), the reverse of the plan's
-  order: cutover deploy first, delete the CI token path second. Task 9 deletes `doug-review.yml`,
-  which is the surface producing Doug's reviews on this repo today, so landing it before the App's
-  check run is verified working in production would leave every PR reviewed by nothing — including
-  the PRs fixing whatever the cutover found. (Rebase vs. merged #15 still done deliberately.)
+- [x] Task 10: deploy + cutover — **resequenced ahead of Task 9** (Andrew, 2026-08-01), the reverse
+  of the plan's order; the reasoning lives on the Task 9 line below, since Task 9 is the item the
+  reversal constrains. Code merged `f3fcee8` (#32), operator cutover run 2026-08-01. The App path is
+  verified working in production on `drewjst/doug`: a neutral check run, "Cleared · risk 0.02 · diff
+  read", rendered on PR #33 — with the tier in the **title**, which is the part ADR-0010 and Task 4
+  both insist on, so a deterministic fallback could not have passed for a read. What the cutover
+  changed, each verified on the serving revision: `doug-api` runs as its own `doug-api-sa` service
+  account instead of the default compute SA; `DOUG_GITHUB_APP_ID` **and** `GITHUB_APP_PRIVATE_KEY`
+  are both deployed, so `app_auth.enabled()` is true in production for the first time — before this
+  it was false and nothing could mint an installation token; `--no-cpu-throttling` is set, without
+  which a background drain is suspended the moment its request returns; and Task 7b's startup sweep
+  actually runs at boot, which needs both of the preceding two to be true at once. `doug-web` still
+  runs as the default compute SA — held back deliberately, so a misconfigured web SA could not
+  confuse the cutover — and gets its own in a follow-on PR.
+- [ ] Task 9: retire the CI-token review path — deletes `.github/workflows/doug-review.yml` and the
+  `/v1/review` endpoint it calls. **Sequenced after Task 10** (Andrew, 2026-08-01), and this is the
+  whole reason for the reversal: `doug-review.yml` is the surface producing Doug's reviews on this
+  repo today, so landing Task 9 first would have left every PR reviewed by nothing — including the
+  PRs fixing whatever the cutover found. Now unblocked, because the line above is ticked. Note for
+  whoever takes it: deleting that workflow also deletes the job summary that has been standing in
+  as the "did a review run?" signal, which is why `worker.process_job` had to start logging its
+  successful outcomes first — after Task 9 the check run is the only other observable.
+  (Rebase vs. merged #15 still to be done deliberately.)
 - [x] Research-corpus quarantine — **resolved as a write-time convention, not a data migration**:
   no research rows exist in the app database, so there is nothing to `UPDATE`. The sentinel
   installation plus `source='research'` at insert is documented in the migration docstring.
