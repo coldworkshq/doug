@@ -143,10 +143,10 @@ function SummaryCard({
             : "")
       }
     >
-      <div className="flex items-start justify-between gap-2">
-        <dt className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">
+      <dt className="flex items-start justify-between gap-2">
+        <span className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">
           {label}
-        </dt>
+        </span>
         {priority !== "normal" && (
           <span
             className={
@@ -157,7 +157,7 @@ function SummaryCard({
             {priority === "high" ? "high priority" : "watch"}
           </span>
         )}
-      </div>
+      </dt>
       <dd
         className={
           "mt-3 font-mono text-2xl font-medium tabular-nums " +
@@ -166,9 +166,9 @@ function SummaryCard({
       >
         {value}
       </dd>
-      <p className="mt-1 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
+      <dd className="mt-1 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
         {detail}
-      </p>
+      </dd>
     </div>
   );
 }
