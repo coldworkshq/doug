@@ -397,7 +397,9 @@ def test_the_stale_head_catch_up_revives_a_failed_job_at_once(tmp_path, monkeypa
     _wire(monkeypatch, heads={7: "a" * 40})
     failed_id = ingest.enqueue(**JOB)
     for _ in range(3):
-        ingest.fail(failed_id, "reader exploded")
+        claimed = ingest.claim()
+        assert claimed["id"] == failed_id
+        assert ingest.fail(failed_id, "reader exploded", started_at=claimed["started_at"])
     ingest.enqueue(**{**JOB, "head_sha": "b" * 40})  # a push, then a force-push back
 
     assert worker.process_job(ingest.claim()) is None  # the "b" job, now stale
@@ -579,11 +581,11 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id):
+    def _flaky_complete(job_id, verdict_id, *, started_at):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
-        real_complete(job_id, verdict_id)
+        real_complete(job_id, verdict_id, started_at=started_at)
 
     monkeypatch.setattr(ingest, "complete", _flaky_complete)
     ingest.enqueue(**JOB)
@@ -653,8 +655,9 @@ def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
     taken to 'done' collides on insert exactly like a pending one."""
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
-    ingest.claim()
-    ingest.complete(job_id, None)
+    claimed = ingest.claim()
+    assert claimed["id"] == job_id
+    assert ingest.complete(job_id, None, started_at=claimed["started_at"])
     monkeypatch.setattr(
         worker.app_auth, "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
@@ -912,7 +915,9 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
     for _ in range(3):
-        ingest.fail(job_id, "credentials missing")
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(job_id, "credentials missing", started_at=claimed["started_at"])
     (failed,) = _rows(url, store.review_jobs)
     assert failed["id"] == job_id and failed["status"] == "failed" and failed["attempts"] == 3
 

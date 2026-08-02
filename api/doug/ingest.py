@@ -22,7 +22,7 @@ paying for the same read twice.
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import store
@@ -84,6 +84,38 @@ def _engine():
     return engine
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalise a DB timestamp to aware UTC.
+
+    sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
+    Claim holders compare the started_at they were handed against the row,
+    so both sides of that equality have to share a timezone convention.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _db_now(conn) -> datetime:
+    """The database's clock, not the caller's wall clock.
+
+    Claim started_at and reclaim cutoffs must share one clock across Cloud
+    Run instances; comparing one instance's datetime.now() to another's
+    written started_at is how a skewed host reclaims a live worker.
+
+    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision,
+    which would collapse distinct claim generations inside one second into
+    the same started_at and make the fence useless in the suite. Wall clock
+    keeps microsecond generation tokens there; Postgres uses now().
+    """
+    if conn.dialect.name == "sqlite":
+        return datetime.now(UTC)
+    value = conn.execute(select(func.now())).scalar_one()
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    return _as_utc(value)
+
+
 def _job_filter(installation_id: int, github_repo_id: int, pr_number: int):
     return (
         store.review_jobs.c.installation_id == installation_id,
@@ -124,9 +156,9 @@ def enqueue(
     re-checks the PR's real head before paying for a read.
     """
     engine = _engine()
-    now = datetime.now(UTC)
     try:
         with engine.begin() as conn:
+            now = _db_now(conn)
             job_id = int(
                 conn.execute(
                     store.review_jobs.insert().returning(store.review_jobs.c.id),
@@ -156,7 +188,7 @@ def enqueue(
         if not _is_dedupe_collision(e):
             raise
         return _revive(
-            engine, installation_id, github_repo_id, pr_number, head_sha, now, trigger
+            engine, installation_id, github_repo_id, pr_number, head_sha, trigger
         )
 
 
@@ -166,7 +198,6 @@ def _revive(
     github_repo_id: int,
     pr_number: int,
     head_sha: str,
-    now: datetime,
     trigger: Trigger,
 ) -> int | None:
     """Return a queued-but-unreviewed row to pending, or None if there is none.
@@ -192,24 +223,25 @@ def _revive(
     turning the spin back into an unbounded loop inside a held instance.
     """
     failed = store.review_jobs.c.status == "failed"
-    # Anything that is not the sweep gets the live terms. A mistyped trigger
-    # therefore costs at most what this branch cost before the cooloff existed
-    # (max_attempts, bounded), never a review that silently never happens —
-    # and the sweep's own value is pinned behaviorally by
-    # test_reconcile_all_revives_a_pr_that_burned_all_its_attempts.
-    if trigger == "reconcile":
-        failed = and_(
-            failed,
-            or_(
-                # NULL finished_at should not happen — fail() sets it at the
-                # cap — but if it ever does, heal rather than strand the PR
-                # forever behind a comparison it can never pass.
-                store.review_jobs.c.finished_at.is_(None),
-                store.review_jobs.c.finished_at
-                < now - timedelta(seconds=FAILED_REVIVE_COOLOFF_SECONDS),
-            ),
-        )
     with engine.begin() as conn:
+        now = _db_now(conn)
+        # Anything that is not the sweep gets the live terms. A mistyped trigger
+        # therefore costs at most what this branch cost before the cooloff existed
+        # (max_attempts, bounded), never a review that silently never happens —
+        # and the sweep's own value is pinned behaviorally by
+        # test_reconcile_all_revives_a_pr_that_burned_all_its_attempts.
+        if trigger == "reconcile":
+            failed = and_(
+                failed,
+                or_(
+                    # NULL finished_at should not happen — fail() sets it at the
+                    # cap — but if it ever does, heal rather than strand the PR
+                    # forever behind a comparison it can never pass.
+                    store.review_jobs.c.finished_at.is_(None),
+                    store.review_jobs.c.finished_at
+                    < now - timedelta(seconds=FAILED_REVIVE_COOLOFF_SECONDS),
+                ),
+            )
         job_id = conn.execute(
             update(store.review_jobs)
             .where(
@@ -259,16 +291,22 @@ def claim() -> dict | None:
     )
     if engine.dialect.name == "postgresql":
         pending = pending.with_for_update(skip_locked=True)
-    now = datetime.now(UTC)
     with engine.begin() as conn:
         row = conn.execute(pending).mappings().first()
         if row is None:
             return None
-        conn.execute(
+        now = _db_now(conn)
+        result = conn.execute(
             update(store.review_jobs)
-            .where(store.review_jobs.c.id == row["id"])
+            .where(
+                store.review_jobs.c.id == row["id"],
+                store.review_jobs.c.status == "pending",
+            )
             .values(status="running", started_at=now)
         )
+        if result.rowcount == 0:
+            # Lost a race after the SELECT (sqlite has no SKIP LOCKED).
+            return None
         return {**row, "status": "running", "started_at": now}
 
 
@@ -297,14 +335,20 @@ def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
     engine = store._get_engine()
     if engine is None:
         return 0
-    now = datetime.now(UTC)
-    cutoff = now - timedelta(seconds=older_than_seconds)
     with engine.begin() as conn:
+        now = _db_now(conn)
+        cutoff = now - timedelta(seconds=older_than_seconds)
         result = conn.execute(
             update(store.review_jobs)
             .where(
                 store.review_jobs.c.status == "running",
-                store.review_jobs.c.started_at < cutoff,
+                # NULL started_at cannot satisfy `< cutoff` (unknown), and
+                # would otherwise leave a running row immortal — the silent
+                # never-reviewed failure reclaim exists to close.
+                or_(
+                    store.review_jobs.c.started_at.is_(None),
+                    store.review_jobs.c.started_at < cutoff,
+                ),
             )
             .values(status="pending", started_at=None, enqueued_at=now)
         )
@@ -314,62 +358,89 @@ def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
         return max(0, result.rowcount)
 
 
-def release(job_id: int) -> None:
+def _terminal_where(job_id: int, started_at: datetime):
+    """Fence a claim-holder update to this exact claim generation.
+
+    status='running' alone is not enough once reclaim has re-pended the row
+    and a second worker has claimed it — both holders see 'running'. The
+    started_at written at claim() is the generation token.
+    """
+    return (
+        store.review_jobs.c.id == job_id,
+        store.review_jobs.c.status == "running",
+        store.review_jobs.c.started_at == _as_utc(started_at),
+    )
+
+
+def release(job_id: int, *, started_at: datetime) -> bool:
     """Put a claimed job back without spending an attempt.
 
     drain claims a job before it can tell whether it has already run it this
     pass. Leaving the repeat 'running' strands it, and fail() would charge an
     attempt against work nobody attempted. enqueued_at is deliberately
     untouched — unlike a failure, nothing here justifies losing its place.
+
+    Returns False when this caller no longer holds the claim (reclaimed or
+    finished by someone else) — a no-op, not an error.
     """
     engine = _engine()
     with engine.begin() as conn:
-        conn.execute(
+        applied = conn.execute(
             update(store.review_jobs)
-            .where(store.review_jobs.c.id == job_id)
+            .where(*_terminal_where(job_id, started_at))
             .values(status="pending", started_at=None)
-        )
+            .returning(store.review_jobs.c.id)
+        ).scalar_one_or_none()
+        return applied is not None
 
 
-def complete(job_id: int, verdict_id: int | None) -> None:
+def complete(job_id: int, verdict_id: int | None, *, started_at: datetime) -> bool:
     """Mark a job done. verdict_id is None when the review produced no ledger
     row — a skipped PR is finished, not failed.
 
     error is cleared: a job that failed twice before succeeding must not
     land 'done' still carrying the error text from the attempt that didn't
     work, or the row misreports what happened to it.
+
+    Returns False when this caller no longer holds the claim — see release().
     """
     engine = _engine()
     with engine.begin() as conn:
-        conn.execute(
+        applied = conn.execute(
             update(store.review_jobs)
-            .where(store.review_jobs.c.id == job_id)
+            .where(*_terminal_where(job_id, started_at))
             .values(
                 status="done",
                 verdict_id=verdict_id,
-                finished_at=datetime.now(UTC),
+                finished_at=_db_now(conn),
                 error=None,
             )
-        )
+            .returning(store.review_jobs.c.id)
+        ).scalar_one_or_none()
+        return applied is not None
 
 
-def supersede(job_id: int) -> None:
+def supersede(job_id: int, *, started_at: datetime) -> bool:
     """Retire a job whose head SHA is no longer the PR's.
 
     Neither 'done' — there is no verdict — nor 'failed', since nothing went
     wrong. It lands in a revivable state on purpose: a force-push back to
     this SHA re-queues this row rather than being suppressed by it.
+
+    Returns False when this caller no longer holds the claim — see release().
     """
     engine = _engine()
     with engine.begin() as conn:
-        conn.execute(
+        applied = conn.execute(
             update(store.review_jobs)
-            .where(store.review_jobs.c.id == job_id)
-            .values(status="superseded", finished_at=datetime.now(UTC))
-        )
+            .where(*_terminal_where(job_id, started_at))
+            .values(status="superseded", finished_at=_db_now(conn))
+            .returning(store.review_jobs.c.id)
+        ).scalar_one_or_none()
+        return applied is not None
 
 
-def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None:
+def fail(job_id: int, error: str, *, started_at: datetime, max_attempts: int = 3) -> bool:
     """Record a failed attempt: back to pending below the cap, failed at it.
 
     started_at is cleared on the retry so a re-pended row is not reported as
@@ -383,15 +454,17 @@ def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None:
     finished_at are decided from that same SQL-side expression via CASE, so
     the whole row transitions atomically off one incremented value instead
     of a value this function briefly held in a local variable.
+
+    Returns False when this caller no longer holds the claim — see release().
     """
     engine = _engine()
-    now = datetime.now(UTC)
     new_attempts = store.review_jobs.c.attempts + 1
     at_cap = new_attempts >= max_attempts
     with engine.begin() as conn:
-        conn.execute(
+        now = _db_now(conn)
+        applied = conn.execute(
             update(store.review_jobs)
-            .where(store.review_jobs.c.id == job_id)
+            .where(*_terminal_where(job_id, started_at))
             .values(
                 attempts=new_attempts,
                 error=error[:500],
@@ -408,4 +481,6 @@ def fail(job_id: int, error: str, *, max_attempts: int = 3) -> None:
                 # nowhere in the queue, so enqueued_at is left alone too.
                 enqueued_at=case((at_cap, store.review_jobs.c.enqueued_at), else_=now),
             )
-        )
+            .returning(store.review_jobs.c.id)
+        ).scalar_one_or_none()
+        return applied is not None

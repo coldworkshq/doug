@@ -75,7 +75,11 @@ def process_job(job: dict) -> int | None:
             )
         title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
         check_run.post(gh, owner, name, job["head_sha"], title, summary)
-        ingest.complete(job["id"], existing["id"])
+        if not ingest.complete(job["id"], existing["id"], started_at=job["started_at"]):
+            print(
+                f"doug: job {job['id']} complete rejected (claim lost after work)",
+                file=sys.stderr,
+            )
         return existing["id"]
 
     # Read the PR's current head before spending anything on it. A job can
@@ -89,7 +93,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"])
+        ingest.supersede(job["id"], started_at=job["started_at"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -101,7 +105,15 @@ def process_job(job: dict) -> int | None:
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
     tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    intent_read: review.IntentRead | None
+    if isinstance(intent_result, review.IntentFailure):
+        verdict.reasons.append(
+            Reason(rule="intent-unavailable", label=intent_result.detail, weight=0.0)
+        )
+        intent_read = None
+    else:
+        intent_read = intent_result
 
     verdict_id = store.save_review(
         job["repo_full_name"],
@@ -134,7 +146,11 @@ def process_job(job: dict) -> int | None:
     # The job's head SHA, never meta's: by now pulls.get may already be
     # returning a newer commit, and that commit has its own job.
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
-    ingest.complete(job["id"], verdict_id)
+    if not ingest.complete(job["id"], verdict_id, started_at=job["started_at"]):
+        print(
+            f"doug: job {job['id']} complete rejected (claim lost after work)",
+            file=sys.stderr,
+        )
     return verdict_id
 
 
@@ -187,7 +203,7 @@ def drain(max_jobs: int = 20) -> int:
             # stalled 'running' row in place. All three keep the row's
             # original id, so the seen-set catches every one of them with
             # no special case.
-            ingest.release(job["id"])
+            ingest.release(job["id"], started_at=job["started_at"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -198,7 +214,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e))
+            ingest.fail(job["id"], str(e), started_at=job["started_at"])
     return attempted
 
 

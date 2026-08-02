@@ -315,6 +315,7 @@ def coverage(
     # absent from `seen` and its file lands in files_unseen below.
     seen = [m for m in matches if m.end() <= len(sent)]
     names = [m.group(1) for m in seen]
+    seen_names = set(names)
     cut = None
     if len(sent) < len(diff) and seen:
         last = len(seen) - 1
@@ -331,7 +332,9 @@ def coverage(
         diff_chars=len(diff),
         sent_chars=len(sent),
         files_sent=len(names),
-        files_unseen=[f for f in all_files if f not in names],
+        # Membership via set; iteration order preserved from all_files so
+        # pinned files_unseen sequences in test_coverage stay bit-identical.
+        files_unseen=[f for f in all_files if f not in seen_names],
         file_cut=cut,
         changed_files=changed_files,
         files_dropped=files_dropped or [],

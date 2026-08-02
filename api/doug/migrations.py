@@ -30,10 +30,12 @@ schema_migrations = Table(
     Column("applied_at", DateTime(timezone=True), nullable=False),
 )
 
-# Plain DDL strings, valid on both sqlite and Postgres. No IF NOT EXISTS:
-# sqlite rejects it on ADD COLUMN, so idempotency comes from the version
-# table plus _SATISFIED below. No indexes here either — an index created by
-# create_all() but not by a migration is the same divergence in a new place.
+# Plain DDL strings, valid on both sqlite and Postgres. No IF NOT EXISTS on
+# ADD COLUMN: sqlite rejects it there, so idempotency comes from the version
+# table plus _SATISFIED below. Indexes are CREATE INDEX IF NOT EXISTS so a
+# fresh create_all()+apply and an older production DB both converge without
+# putting the same Index() on Table definitions (which would reintroduce
+# create_all-only drift for anything not also migrated).
 MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
     (
         1,
@@ -61,6 +63,20 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE outcomes ADD COLUMN window_days INTEGER",
             "ALTER TABLE outcomes ADD COLUMN detail TEXT",
             "ALTER TABLE verdicts ADD COLUMN prompt_hash VARCHAR(64)",
+        ),
+    ),
+    (
+        3,
+        (
+            # Hot-path partial indexes for claim/reclaim (Task 5) and the M3
+            # adjudicator drain. Not declared on the Table() objects — see
+            # module docstring — so production only gets them here.
+            "CREATE INDEX IF NOT EXISTS idx_review_jobs_pending_queue "
+            "ON review_jobs (enqueued_at, id) WHERE status = 'pending'",
+            "CREATE INDEX IF NOT EXISTS idx_review_jobs_running_stale "
+            "ON review_jobs (started_at) WHERE status = 'running'",
+            "CREATE INDEX IF NOT EXISTS idx_outcome_jobs_pending_due "
+            "ON outcome_jobs (due_at) WHERE status = 'pending'",
         ),
     ),
 ]

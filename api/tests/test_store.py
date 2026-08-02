@@ -444,6 +444,9 @@ def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, mo
         "/v1/review", json={"repo": "o/r", "pr_number": 7},
         headers={"x-doug-token": "secret"},
     ).json()
+    with create_engine(url).connect() as conn:
+        written = conn.execute(select(store.verdicts.c.head_sha)).scalar_one()
+    assert written == "a" * 40
     second = c.post(
         "/v1/review", json={"repo": "o/r", "pr_number": 7},
         headers={"x-doug-token": "secret"},
@@ -520,6 +523,20 @@ def test_pre_sha_rows_never_match_and_get_rescored_once(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review("o/r", 7, "reader", VERDICT, RV, pr_meta=_pr().model_dump(mode="json"))
     assert store.find_review("o/r", 7, "a" * 40) is None
+
+
+def test_find_review_matches_the_head_sha_column_without_pr_meta(tmp_path, monkeypatch):
+    """The column is what App/CI writes for identity; JSON fallback is for
+    legacy rows only. A lookup that required pr_meta would leave the
+    migrated column dead weight and block a future unique index."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT, RV,
+        head_sha="a" * 40,
+        pr_meta={"title": "no head here"},
+    )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior is not None and prior["band"] == "flagged"
 
 
 def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
