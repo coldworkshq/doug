@@ -448,6 +448,50 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
     assert posted == []
 
 
+def test_the_seen_set_catches_a_failed_row_the_catch_up_revived_mid_pass(tmp_path, monkeypatch):
+    """The fourth way into the seen-set, and the only one whose row reached
+    'failed'.
+
+    process_job's stale-head catch-up enqueues the PR's real head on live
+    terms, and live terms revive a row that burned every attempt. When that
+    head is the SHA the row gave up on, a job this pass already ran comes
+    straight back as pending work with attempts reset to 0 — so without the
+    seen-set the drain re-claims it at once and spends the whole restored
+    budget on the same fault inside one pass, this time paying for a read
+    each time round.
+
+    Two pending rows for one PR cannot be made with two enqueues (the second
+    supersedes the first), so the setup is the one the drain itself leaves
+    behind: the row was 'running' when the delivery for the other SHA landed,
+    and a lapped earlier pass released it with its queue position intact.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch, heads={7: "a" * 40})  # the PR's real head never left "a"
+
+    def _fetch(gh, owner, repo, number):
+        raise RuntimeError("reader exploded")
+
+    monkeypatch.setattr(review, "fetch_pr", _fetch)
+
+    a_id = ingest.enqueue(**JOB)
+    ingest.fail(a_id, "reader exploded")
+    ingest.fail(a_id, "reader exploded")  # attempts=2, one short of the cap
+    ingest.claim()  # 'running', so the delivery below cannot supersede it
+    ingest.enqueue(**{**JOB, "head_sha": "b" * 40})
+    ingest.release(a_id)  # an earlier pass lapped; the row keeps its place
+
+    # Claimed and failed to the cap, then revived by the "b" job's catch-up.
+    assert worker.drain() == 2
+
+    jobs = {j["head_sha"]: j for j in _rows(url, store.review_jobs)}
+    assert jobs["b" * 40]["status"] == "superseded"
+    revived = jobs["a" * 40]
+    assert revived["id"] == a_id  # in place, which is what the seen-set keys on
+    # Pending with a full budget, and untouched since: re-running it here
+    # would have burned that budget (attempts 1..3) inside this same pass.
+    assert revived["status"] == "pending" and revived["attempts"] == 0
+
+
 # --- amendment: reclaim_stalled wired into drain --------------------------
 #
 # A worker that claims a job and then dies (a deploy, a scale-down, an OOM)

@@ -178,15 +178,22 @@ def drain(max_jobs: int = 20) -> int:
             break
         if job["id"] in seen:
             # Lapped the queue: this exact job id already ran once this
-            # pass. Three ways to land here, none of them implying a
-            # failure: ingest.fail re-pends a job below the attempt cap, so
-            # retrying it here would not be a retry — nothing has had time
-            # to change — and would burn the whole attempt budget against
-            # one transient fault in under a second; a force-push ping-pong
-            # revives a superseded row in place; a reclaim re-pends a
-            # stalled 'running' row in place. All three keep the row's
-            # original id, so the seen-set catches every one of them with
-            # no special case.
+            # pass. Four ways to land here, and hitting the set is the
+            # ordinary end of a pass rather than a fault to report — though
+            # two of the four do follow a failed attempt. ingest.fail
+            # re-pends a job below the attempt cap, so retrying it here
+            # would not be a retry (nothing has had time to change) and
+            # would burn the whole attempt budget against one transient
+            # fault in under a second. A force-push ping-pong revives a
+            # superseded row in place. A reclaim re-pends a stalled
+            # 'running' row in place. And process_job's stale-head catch-up
+            # re-enqueues the PR's real head on LIVE terms, which revives a
+            # row that already burned every attempt when that head is the
+            # SHA it gave up on — the one way in which the id coming back
+            # belongs to a row that reached 'failed'. All four keep the
+            # row's original id, which is the only property the seen-set
+            # depends on, so it catches every one of them with no special
+            # case.
             ingest.release(job["id"])
             break
         seen.add(job["id"])
