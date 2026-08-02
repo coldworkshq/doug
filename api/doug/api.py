@@ -3,16 +3,19 @@
 import hmac
 import json
 import os
+import sys
 import threading
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
+from datetime import UTC, datetime
 from importlib import resources
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-from . import __version__, precision, reader, review, store
+from . import __version__, ingest, precision, reader, review, store, worker
 from .models import (
     Band,
     PRMetadata,
@@ -25,7 +28,30 @@ from .models import (
 )
 from .scoring import default_threshold, score
 
-app = FastAPI(title="Doug", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Refuse to boot without the webhook secret.
+
+    The reason is not that a deploy would wipe it: deploy() has carried
+    GITHUB_WEBHOOK_SECRET in --set-secrets since #14, and --set-env-vars
+    replaces the env block without disturbing a secret binding. It is that
+    every remaining way this can go missing is silent — a revision deployed
+    by hand or by some path that is not deploy(), a new project whose
+    Secret Manager entry does not exist yet, a local run. Without it the
+    handler cannot verify anything, and an unverified delivery under the App
+    is a paid model read triggered by anyone who can POST. A crash-looping
+    revision is a visible failure; a running service accepting forged
+    deliveries is not.
+    """
+    if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
+        raise RuntimeError(
+            "GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github"
+        )
+    yield
+
+
+app = FastAPI(title="Doug", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -434,20 +460,369 @@ def patterns_precision(
     )
 
 
+# Actions that mean "this PR's head changed, or is newly eligible". Anything
+# else — labeled, edited, review_requested — is not a new diff and must not
+# buy a read. 'closed' is handled too, but deliberately not from here: it
+# starts the outcome clock on its own branch and never enqueues a review.
+PR_ACTIONS = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
+INSTALLATION_STATES = {
+    "created": "active",
+    "deleted": "deleted",
+    "suspend": "suspended",
+    "unsuspend": "active",
+}
+
+
+def _obj(raw) -> dict:
+    """One of a payload's nested objects, or {} when it is absent, null, or
+    not an object at all.
+
+    Every handler below reaches through two or three of these. GitHub sends
+    them today, but a delivery that arrives truncated, reshaped by a payload
+    version bump, or replayed from an older one must not be one lookup away
+    from a 500 — a 500 is what GitHub redelivers, and the redelivery has the
+    same shape, so a single bad body becomes a loop that never ends and
+    never reviews anything. Missing facts belong to the guard each handler
+    already has, not to the lookup in front of it.
+    """
+    return raw if isinstance(raw, dict) else {}
+
+
+def _text(raw, column=None) -> str | None:
+    """A usable string from a payload, or None.
+
+    None when the field is absent, null, empty, or not a string — the
+    guards below all ask "is this fact usable", and None is the single
+    answer they need for every way it can fail to be.
+
+    With `column`, also None when the value is too long for that VARCHAR.
+    Postgres answers an over-long INSERT with StringDataRightTruncation,
+    which is a 500 and therefore the same redelivery loop the shape guards
+    prevent; sqlite stores the long value happily, so a green local suite is
+    not evidence about this. Too long is unusable rather than truncated: a
+    cut SHA names a different commit and a cut full_name names a different
+    repo.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    if column is not None and len(raw) > column.type.length:
+        return None
+    return raw
+
+
+def _repo_list(raw) -> list[tuple[int, str]]:
+    """The (id, full_name) pairs a repositories array actually carries.
+
+    Entries that are not objects, carry a non-int id, or carry an unusable
+    full_name are dropped — one bad entry costs itself, not the repos beside
+    it, because the installation genuinely covers those and active_repos is
+    what the healing path reads. github_repo_id is the column every job and
+    verdict joins on and full_name is what reconcile splits into owner/name
+    to call the API with, so a pair built from a default would be a
+    tenancy record about a repo nobody named.
+    """
+    out = []
+    for entry in raw if isinstance(raw, list) else []:
+        repo_id = _obj(entry).get("id")
+        full_name = _text(_obj(entry).get("full_name"), store.installation_repos.c.full_name)
+        if isinstance(repo_id, int) and full_name:
+            out.append((repo_id, full_name))
+    return out
+
+
+def _record_installation(payload: dict, action: str) -> None:
+    inst = payload["installation"]
+    account = _obj(inst.get("account"))
+    store.upsert_installation(
+        inst["id"],
+        _text(account.get("login"), store.installations.c.account_login) or "",
+        _text(account.get("type"), store.installations.c.account_type) or "",
+        INSTALLATION_STATES[action],
+    )
+    if action == "created":
+        # Marks what this installation covers and never un-marks. `created`
+        # is replayable — the Redeliver button in the App's Advanced tab,
+        # GitHub retrying a failed delivery, two deliveries arriving out of
+        # order — and it carries the repo list as it was when GitHub
+        # generated the event, not as it is now. Treating it as
+        # authoritative at processing time flips back to 'removed' every
+        # repo granted since; active_repos is what reconcile reads, so that
+        # repo's backlog is then never healed again and no later event
+        # restores it. Nothing surfaces that, because live pull_request
+        # deliveries for it keep enqueueing.
+        #
+        # The opposite mistake a replay can now make is re-marking a repo
+        # that was removed since. That costs one reconcile call that 403s on
+        # a repo the installation token does not cover, logged and skipped —
+        # noise rather than silence, and no spend. Uninstall-then-reinstall
+        # still converges on the smaller set, because `deleted` below
+        # cleared coverage first.
+        store.set_installation_repos(
+            inst["id"], _repo_list(payload.get("repositories")), replace=False
+        )
+    elif action == "deleted":
+        # The uninstall is what ends coverage, and now the only thing that
+        # does: an empty authoritative list marks every repo on this
+        # installation 'removed'. Rows are not deleted — a verdict written
+        # while the repo was installed still has to resolve to the repo it
+        # describes — so a reinstall's `created` marks the newly granted
+        # subset active again and the repos left out of it stay removed.
+        store.set_installation_repos(inst["id"], [], replace=True)
+
+
+def _merge_installation_repos(payload: dict) -> None:
+    inst_id = payload["installation"]["id"]
+    for key, state in (
+        ("repositories_added", "active"),
+        ("repositories_removed", "removed"),
+    ):
+        repos = _repo_list(payload.get(key))
+        if repos:
+            # A removal marks state and never deletes: verdicts already
+            # written must still resolve to the repo they describe.
+            store.set_installation_repos(inst_id, repos, replace=False, state=state)
+
+
+def _reconcile_then_drain(installation_id: int) -> None:
+    """Heal the backlog, then actually review it.
+
+    reconcile_installation only enqueues. Without the drain chained behind
+    it, everything a new installation just discovered sits pending until
+    some unrelated delivery happens to kick one — which on a quiet repo is
+    the difference between "reviews appear within seconds of installing"
+    and "reviews appear whenever someone next opens a PR". The cutover
+    checklist in Task 10 asserts the first.
+    """
+    worker.reconcile_installation(installation_id)
+    worker.drain()
+
+
+def _enqueue_pull_request(payload: dict) -> int | None:
+    """Gate then enqueue. None means deliberately skipped or a duplicate."""
+    pr = _obj(payload.get("pull_request"))
+    if pr.get("draft") is not False:
+        # Work in progress nobody has asked for review on. ready_for_review
+        # is the event that admits it. Only an explicit draft=False
+        # proceeds: an absent or non-boolean draft is an unknown state and
+        # the safe direction to be wrong in is "skip" — which is also the
+        # answer worker._skip_reason gives the same PR, and its docstring
+        # calls the two one gate. Reading a missing key as "not a draft"
+        # made them disagree.
+        return None
+    base = _obj(_obj(pr.get("base")).get("repo"))
+    head = _obj(pr.get("head"))
+    base_id = base.get("id")
+    # head.repo is null when the fork was deleted, which fails this the same
+    # way a fork does — correctly.
+    head_id = _obj(head.get("repo")).get("id")
+    if not isinstance(base_id, int) or not isinstance(head_id, int) or head_id != base_id:
+        # Fork PRs never enqueue: the raw diff enters the prompt
+        # (reader._user_text), so an outside contributor opening PRs against
+        # a public repo could otherwise drive this account's model spend at
+        # will. Ids that are not both integers are a fork here rather than
+        # something to compare — two absent ids compare equal, so an
+        # unguarded `!=` passes a payload that names no repo at all straight
+        # into the queue, where github_repo_id is NOT NULL and the insert
+        # 500s. Same choice worker._skip_reason makes, for the same reason:
+        # the safe direction to be wrong in is skip.
+        return None
+    number = pr.get("number")
+    full_name = _text(base.get("full_name"), store.review_jobs.c.repo_full_name)
+    head_sha = _text(head.get("sha"), store.review_jobs.c.head_sha)
+    if not isinstance(number, int) or not full_name or not head_sha:
+        # Signed, past both gates, and still missing something the job row
+        # IS: which PR, which repo by name, which commit. Logged and 202'd
+        # rather than raised, for the reason _record_merge gives below.
+        print(
+            f"doug: pull_request #{pr.get('number')} carried no usable "
+            "number/base.repo.full_name/head.sha; not enqueued",
+            file=sys.stderr,
+        )
+        return None
+    return ingest.enqueue(
+        payload["installation"]["id"],
+        base_id,
+        full_name,
+        number,
+        head_sha,
+    )
+
+
+def _payload_timestamp(raw) -> datetime | None:
+    """One of GitHub's ISO-8601 timestamps, or None if it is unusable.
+
+    fromisoformat has accepted the trailing "Z" since 3.11. A naive result
+    is read as UTC, which is what GitHub sends and what every DateTime
+    column in the ledger stores.
+    """
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _record_merge(payload: dict) -> None:
+    """Start the outcome-observation window on a merge, and nothing else.
+
+    A merge must never buy a model read: there is no new diff, and this is
+    the one webhook branch whose whole job is to note that the clock has
+    started. The adjudicator picks the row up once due_at passes.
+    """
+    pr = _obj(payload.get("pull_request"))
+    if not pr.get("merged"):
+        # Closed without merging. Nothing shipped, so there is no outcome to
+        # observe — and a row here would put a PR that never landed into the
+        # denominator of a claim about shipped code.
+        return
+    base = _obj(pr.get("base"))
+    merged_at = _payload_timestamp(pr.get("merged_at"))
+    merge_sha = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
+    base_ref = _text(base.get("ref"), store.outcome_jobs.c.base_ref)
+    number = pr.get("number")
+    repo_id = _obj(base.get("repo")).get("id")
+    if (
+        merged_at is None
+        or not merge_sha
+        or not base_ref
+        or not isinstance(number, int)
+        or not isinstance(repo_id, int)
+    ):
+        # Signed, and a merge, but missing one of the five facts the row is
+        # built from: when it shipped, what shipped, where, which PR, and
+        # whose repo. Logged and 202'd rather than raised — a 500 is a
+        # redelivery loop over a body that will never carry them, and a
+        # half-row is worse than a missing one here: base_ref is what the
+        # adjudicator censors on, and github_repo_id is the tenancy this
+        # merge is counted under in a published denominator.
+        print(
+            f"doug: merged PR #{pr.get('number')} carried no usable "
+            "merged_at/merge_commit_sha/base.ref/number/base.repo.id; "
+            "outcome clock not started",
+            file=sys.stderr,
+        )
+        return
+    store.enqueue_outcome_job(
+        payload["installation"]["id"],
+        repo_id,
+        number,
+        merge_sha,
+        merged_at,
+        base_ref,
+    )
+
+
+# A submitted review that takes a position, mapped onto Doug's own bands.
+# Everything else a reviewer can submit — `commented`, and the dismissal and
+# edit actions — states no position on whether the change should land, so
+# there is nothing to grade against an outcome and no row to write.
+REVIEW_BANDS = {"approved": Band.CLEARED, "changes_requested": Band.FLAGGED}
+
+
+def _record_external_review(payload: dict) -> None:
+    """Ingest a third-party review as a dated stance in Doug's ledger.
+
+    The neutral-grader lane. Nothing is spent here: no model call, no
+    metering, no check run, and deliberately no fork gate — that gate exists
+    because a fork's raw diff would enter the prompt, and nothing here reads
+    a diff. Bot reviewers are ingested like anyone else, because grading bot
+    reviewers is the point of the lane.
+    """
+    review_ = _obj(payload.get("review"))
+    state = review_.get("state")
+    band = REVIEW_BANDS.get(state) if isinstance(state, str) else None
+    if band is None:
+        return
+    pr = _obj(payload.get("pull_request"))
+    base_repo = _obj(_obj(pr.get("base")).get("repo"))
+    scored_at = _payload_timestamp(review_.get("submitted_at"))
+    head_sha = _text(review_.get("commit_id"), store.verdicts.c.head_sha)
+    login = _text(_obj(review_.get("user")).get("login"))
+    number = pr.get("number")
+    repo_id = base_repo.get("id")
+    repo = _text(base_repo.get("full_name"), store.verdicts.c.repo)
+    # verdicts.source is String(64) for exactly this; GitHub logins run to 39
+    # characters, which is a fact about GitHub and not a bound this code
+    # enforces — so the composed value is what gets checked, not the login.
+    source = _text(f"review:{login}", store.verdicts.c.source) if login else None
+    if (
+        scored_at is None
+        or not head_sha
+        or not source
+        or not repo
+        or not isinstance(number, int)
+        or not isinstance(repo_id, int)
+    ):
+        # These are the row's identity and its dedup key. A stance that
+        # cannot be attached to a commit, a time, a reviewer, a PR and a
+        # repo is not a gradable claim, and storing it against a guess would
+        # put an invented data point into a ledger whose whole product is
+        # calibrated claims. Logged and 202'd rather than raised, for the
+        # reason _record_merge gives: a 500 is a redelivery loop over a body
+        # that will never carry what it is missing.
+        print(
+            f"doug: review on PR #{pr.get('number')} carried no usable "
+            "commit_id/submitted_at/user.login/number/base repo; not ingested",
+            file=sys.stderr,
+        )
+        return
+    store.save_external_review(
+        payload["installation"]["id"],
+        repo_id,
+        repo,
+        number,
+        head_sha,
+        source,
+        band,
+        scored_at,
+        raw={
+            "review_id": review_.get("id"),
+            "state": state,
+            "submitted_at": review_.get("submitted_at"),
+        },
+    )
+
+
 @app.post("/webhooks/github", status_code=202)
 async def github_webhook(
     request: Request,
+    background: BackgroundTasks,
     x_github_event: str = Header(default=""),
     x_hub_signature_256: str = Header(default=""),
 ) -> Response:
+    """Verify, record, enqueue, 202. Never reviews inline.
+
+    The 202 is sent only after the job is durable — GitHub does not
+    redeliver on our schedule and a job held in memory dies with the
+    instance. Everything expensive happens in worker.drain, which is kicked
+    as a background task after the response and is best-effort by
+    construction: Starlette runs background tasks after the response body is
+    sent, so on Cloud Run's default request-based CPU allocation the kick
+    can be throttled, and the instance can be scaled to zero out from under
+    an in-flight drain. Losing a kick loses no work — the job row is
+    already committed — it only delays it until something kicks a drain
+    again. The durable backstop for that is worker.reconcile_all, which
+    nothing calls yet; Task 7b wires it into the lifespan, and until it does
+    the next delivery's kick is the only thing that reaches a stranded row.
+
+    async only because the signature needs the raw body. verify_webhook and
+    json.loads run on the event loop thread deliberately: both are CPU-bound
+    work on a body already in memory, and handing a few microseconds of
+    HMAC to a worker thread would cost more than it saves. Everything that
+    can touch the database — store.enabled() included, because on a cold
+    engine it builds one, runs create_all() and applies migrations, all
+    under a threading.Lock — goes through run_in_threadpool, so a delivery
+    burst cannot block the event loop on a round trip.
+    """
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     if not secret:
-        # Fail closed, matching /v1/review and /v1/patterns. Accepting
-        # unverified payloads was survivable while this endpoint discarded
-        # everything; under the App a delivery triggers a paid model read.
-        raise HTTPException(
-            status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured"
-        )
+        # Unreachable when the app booted through its lifespan, which
+        # refuses without this. Kept because verify() with an empty key is
+        # forgeable by anyone and a lifespan is bypassable (sub-app mount,
+        # a TestClient not used as a context manager).
+        raise HTTPException(status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured")
     body = await request.body()
     # githubkit's verify() reads the digest from the signature prefix, not
     # from the header name, so an attacker-supplied "sha1=" would downgrade
@@ -457,7 +832,89 @@ async def github_webhook(
     if not verify_webhook(secret, body, x_hub_signature_256):
         raise HTTPException(status_code=401, detail="bad signature")
 
-    # Phase 2 (the Live Gate) will parse pull_request events here, extract
-    # features, score, and post a check run. Accepting and discarding is
-    # deliberate until then.
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        # Signed, so it came from someone holding the secret — but not
+        # something we can act on. 202 rather than 4xx: a retry loop over a
+        # body that will never parse helps nobody. A body that is valid JSON
+        # but not an object — a list, a bare string, null — lands here too:
+        # json.loads succeeds on it, so it never reaches the ValueError, and
+        # every line below is a lookup on a dict it is not.
+        print("doug: webhook body was signed but not a JSON object", file=sys.stderr)
+        return Response(status_code=202)
+
+    # Not payload.get("action", ""): the gating table below is a set
+    # membership test, and an unhashable action (an object, an array) raises
+    # TypeError there — a 500 on the dispatch itself, before any handler is
+    # even chosen.
+    action = _text(payload.get("action")) or ""
+    # The gating table, evaluated once and before any guard that touches the
+    # store. An event we do not handle — ping, push, an action outside the
+    # table — must not depend on a ledger it never reaches. Scoping this
+    # narrowly is load-bearing: the pre-existing
+    # test_webhook_accepts_a_valid_sha256_signature posts a valid signature
+    # with no event header and no database, and must still get its 202.
+    handled = (
+        (x_github_event == "installation" and action in INSTALLATION_STATES)
+        or (x_github_event == "installation_repositories" and action in ("added", "removed"))
+        or (
+            x_github_event == "pull_request"
+            and (action in PR_ACTIONS or action == "closed")
+        )
+        or (x_github_event == "pull_request_review" and action == "submitted")
+    )
+    if not handled:
+        # Accepted and ignored, on purpose: a 4xx would put GitHub into a
+        # redelivery loop over events we chose not to handle.
+        return Response(status_code=202)
+    if not await run_in_threadpool(store.enabled):
+        # In the threadpool because this is not the cheap read it looks
+        # like: on a cold engine store._get_engine() creates one, runs
+        # create_all() and applies migrations — a full DDL round trip
+        # against Cloud SQL — and it takes a threading.Lock on every call,
+        # so the loop thread would also stall behind any worker already
+        # inside it.
+        #
+        # ingest.enqueue raises without a database rather than no-opping,
+        # and store's installation writes would no-op silently. Either way
+        # a 202 here would mean "queued" over an empty ledger. Refused at
+        # this endpoint only: DATABASE_URL stays optional for the rest of
+        # the service (store.py's module docstring), so it cannot go in the
+        # lifespan.
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    inst = payload.get("installation")
+    if not isinstance(inst, dict) or not isinstance(inst.get("id"), int):
+        # Defensive: App webhooks always carry this, and a ping never does.
+        # Without it there is no tenant to attribute the work to and no
+        # token to do it with. The id is checked here, not just the key,
+        # because every branch below indexes installation["id"] — this is
+        # what makes those indexes total instead of a KeyError 500 that
+        # GitHub would redeliver into the same 500.
+        return Response(status_code=202)
+
+    if x_github_event == "installation":
+        await run_in_threadpool(_record_installation, payload, action)
+        if action == "created":
+            # Heal what the App missed before it was installed. Queued, not
+            # inline: it lists every open PR over the network.
+            background.add_task(_reconcile_then_drain, inst["id"])
+    elif x_github_event == "installation_repositories":
+        await run_in_threadpool(_merge_installation_repos, payload)
+    elif x_github_event == "pull_request":
+        if action == "closed":
+            # Its own branch, never PR_ACTIONS: a merge starts the outcome
+            # clock and must not buy a read. No drain is kicked, because
+            # nothing reviewable was queued.
+            await run_in_threadpool(_record_merge, payload)
+        else:
+            job_id = await run_in_threadpool(_enqueue_pull_request, payload)
+            if job_id is not None:
+                background.add_task(worker.drain)
+    elif x_github_event == "pull_request_review":
+        # A stance, not a review Doug pays for. No drain: nothing queued.
+        await run_in_threadpool(_record_external_review, payload)
+
     return Response(status_code=202)

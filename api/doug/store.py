@@ -20,7 +20,7 @@ alone would appear in every test and in no production row.
 
 import os
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
     JSON,
@@ -42,7 +42,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from . import migrations
-from .models import Verdict
+from .models import Band, Verdict
 from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
@@ -266,6 +266,26 @@ deep_read_counters = Table(
     UniqueConstraint("scope", "period", name="uq_deep_read_period"),
 )
 
+# The neutral-grader lane's tier (see save_external_review): a third-party
+# reviewer's stance, with no read behind it, no findings, and score 0.0.
+#
+# Every helper that answers "what does this ledger already say about this
+# PR" must exclude these, and the reason is not stylistic. Each of those
+# helpers keys on columns an external row also carries — head_sha included,
+# because a review names the commit it was left on — so an unfiltered helper
+# hands back a score=0.0 row as if it were Doug's own verdict. The four call
+# sites below are the whole guard among them.
+#
+# One other reader of this table exists and is not filtered:
+# scripts/backfill_ledger.py counts verdicts filtered on `model == MODEL`,
+# and external rows never set `model`. That immunity is incidental, exactly
+# like the one find_review has (its pr_meta predicate is NULL for these
+# rows) — which this file refused to rely on there, filtering explicitly and
+# adding a test that can fail. The asymmetry is deliberate: the backfill is
+# a one-shot script over named probe repos, not a live read of a tenant's
+# ledger, so it is named here rather than filtered.
+EXTERNAL_TIER = "external"
+
 _engine = None
 # The raw env string the engine was built from. Compared instead of
 # str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
@@ -390,6 +410,99 @@ def save_review(
     return int(row)
 
 
+def save_external_review(
+    installation_id: int,
+    github_repo_id: int,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    source: str,
+    band: Band,
+    scored_at: datetime,
+    raw: dict | None = None,
+) -> int | None:
+    """Record a third-party review as a verdict nobody scored.
+
+    A sibling of save_review rather than a call into it: save_review owns
+    `scored_at` (it hardcodes now()) and takes a Verdict, so using it would
+    mean building a scoring type for something that was never scored and
+    then overriding the one timestamp it deliberately decides. Here
+    `scored_at` is the reviewer's own submitted_at — the row is a dated
+    claim about when a stance was taken, and a redelivery a day later must
+    not restate it as today's.
+
+    score and threshold are 0.0 and tier is 'external' because no model ran
+    and no diff was read. The band is Doug's own vocabulary on purpose: it
+    is what lets a human's approval and Doug's verdict be adjudicated
+    against the same outcome in the same ledger. Nothing here writes
+    findings, reads or pr_meta — there was no read to describe.
+
+    Returns None when this exact stance is already recorded. That check is a
+    SELECT rather than a unique index, and the difference is worth stating
+    plainly. create_all() never adds a constraint to a table that already
+    exists and `verdicts` is live in production, so an index would have to
+    come from migrations.py — which runs arbitrary DDL and mechanically
+    could, but deliberately carries none: "an index created by create_all()
+    but not by a migration is the same divergence in a new place". This is
+    that convention, not an impossibility, and what replaces the index is
+    weaker in one specific way: two genuinely concurrent deliveries of one
+    review can both read before either commits, and both insert.
+
+    The cost when that happens is one reviewer's stance counted twice in any
+    agreement measure taken over this ledger — the same harm the dedup
+    exists to prevent, on the concurrent pair instead of the ordinary one,
+    and nothing downstream repairs it. Small, real, and not free. What this
+    check does reliably suppress is the sequential case: a redelivery that
+    arrives after the first row committed reads it and stops.
+
+    The read is .first() rather than .scalar_one_or_none() for the same
+    reason. It is an existence check against a table with no uniqueness
+    guarantee, so it has to survive what the race can leave behind —
+    asserting uniqueness there turned a duplicate pair into
+    MultipleResultsFound on every later delivery of that review, a 500 out
+    of the webhook that GitHub redelivers into the same 500. That is
+    strictly worse than the duplicate row it was reacting to.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        existing = conn.execute(
+            select(verdicts.c.id)
+            .where(
+                verdicts.c.installation_id == installation_id,
+                verdicts.c.github_repo_id == github_repo_id,
+                verdicts.c.pr_number == pr_number,
+                verdicts.c.source == source,
+                verdicts.c.head_sha == head_sha,
+                verdicts.c.scored_at == scored_at,
+            )
+            .limit(1)
+        ).first()
+    if existing is not None:
+        return None
+    with engine.begin() as conn:
+        return int(
+            conn.execute(
+                verdicts.insert().returning(verdicts.c.id),
+                {
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "scored_at": scored_at,
+                    "tier": EXTERNAL_TIER,
+                    "score": 0.0,
+                    "band": band.value,
+                    "threshold": 0.0,
+                    "raw": raw,
+                    "github_repo_id": github_repo_id,
+                    "installation_id": installation_id,
+                    "head_sha": head_sha,
+                    "source": source,
+                },
+            ).scalar_one()
+        )
+
+
 def upsert_installation(
     installation_id: int, account_login: str, account_type: str, state: str
 ) -> None:
@@ -442,11 +555,19 @@ def set_installation_repos(
     """Record which repos an installation covers.
 
     `replace=True` treats `repos` as authoritative — anything else on this
-    installation flips to 'removed'. That is the installation-created event,
-    which carries the full list. `replace=False` merges a delta, and the
-    caller says which delta it is: the `installation_repositories` webhook
-    sends added and removed in one payload, so removals arrive as their own
-    call with state='removed'.
+    installation flips to 'removed'. Its one caller is the
+    installation-deleted event, with an empty list: the uninstall is the
+    only delivery that can end coverage without naming what it ended, and
+    it is the only one whose repo list cannot be stale, because there isn't
+    one.
+
+    `replace=False` merges a delta, and the caller says which delta it is:
+    the `installation_repositories` webhook sends added and removed in one
+    payload, so removals arrive as their own call with state='removed'.
+    installation-created merges too, even though it carries a full list —
+    that list is authoritative when GitHub generated the event, and a
+    redelivery of it would otherwise mark 'removed' every repo granted
+    since (see _record_installation).
 
     Rows are never DELETEd. A removed repo's verdicts stay in the ledger and
     the join that explains them has to keep resolving.
@@ -491,6 +612,68 @@ def set_installation_repos(
                 # update, not insert again — `known` only reflects rows that
                 # existed before this call started.
                 known[repo_id] = result.inserted_primary_key[0]
+
+
+# outcome_jobs' unique key, named the two ways the two backends report it:
+# Postgres names the constraint, sqlite lists the table and its columns. Same
+# shape as ingest._DEDUPE_COLLISION and for the same reason — anything else is
+# a real integrity problem this code did not cause, and reading it as "already
+# queued" would drop a merge out of the denominator silently.
+_OUTCOME_COLLISION = ("uq_outcome_job", "unique constraint failed: outcome_jobs.")
+
+
+def enqueue_outcome_job(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merge_commit_sha: str,
+    merged_at: datetime,
+    base_ref: str,
+    *,
+    window_days: int = 14,
+) -> int | None:
+    """Start the outcome-observation window for one merged PR.
+
+    Returns the new row's id, or None when this merge is already queued at
+    this window — which is the ordinary case for a webhook redelivery.
+
+    `due_at` is computed from `merged_at` and never from the wall clock. The
+    same merge can reach this function seconds after it lands, hours later
+    via a redelivery, or months later via a backfill, and the window has to
+    mean "fourteen days after this code shipped" in all three. It is stored
+    rather than derived at query time because window_days is part of the
+    unique key and may differ per row.
+
+    Dedup is the unique index, not a check-then-insert: GitHub redelivers,
+    and two deliveries racing a SELECT would both miss it and both insert,
+    giving one merge two independent due dates and two votes in a published
+    denominator.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.begin() as conn:
+            return int(
+                conn.execute(
+                    outcome_jobs.insert().returning(outcome_jobs.c.id),
+                    {
+                        "installation_id": installation_id,
+                        "github_repo_id": github_repo_id,
+                        "pr_number": pr_number,
+                        "merge_commit_sha": merge_commit_sha,
+                        "merged_at": merged_at,
+                        "base_ref": base_ref,
+                        "window_days": window_days,
+                        "due_at": merged_at + timedelta(days=window_days),
+                        "created_at": datetime.now(UTC),
+                    },
+                ).scalar_one()
+            )
+    except IntegrityError as e:
+        if not any(m in str(e.orig).lower() for m in _OUTCOME_COLLISION):
+            raise
+        return None
 
 
 def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bool:
@@ -630,6 +813,13 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
             verdicts.c.repo == repo,
             verdicts.c.pr_number == pr_number,
             verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
+            # Belt and braces. This helper is already immune by accident:
+            # external rows write no pr_meta, so the JSON predicate above is
+            # NULL for them and never matches. That immunity is incidental,
+            # not designed, and evaporates the moment anything writes pr_meta
+            # on an external row — so the exclusion is stated rather than
+            # relied upon.
+            verdicts.c.tier != EXTERNAL_TIER,
         )
         .order_by(verdicts.c.id.desc())
         .limit(1)
@@ -728,6 +918,15 @@ def find_verdict_by_identity(
             verdicts.c.github_repo_id == github_repo_id,
             verdicts.c.pr_number == pr_number,
             verdicts.c.head_sha == head_sha,
+            # An external row carries all four of the columns above — a
+            # review names the commit it was left on — so without this a
+            # human approving PR #7 at SHA X answers this read, and
+            # process_job completes against a verdict nobody scored: no read
+            # of that commit ever happens, and the check run renders a
+            # score=0.0 row as Doug's own. The ordering is id desc, so that
+            # is not a race but the steady state for any PR a person reviews
+            # after Doug does.
+            verdicts.c.tier != EXTERNAL_TIER,
         )
         .order_by(verdicts.c.id.desc())
         .limit(1)
@@ -821,8 +1020,15 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
         return {"prs": [], "hits": []}
     from sqlalchemy import func, select
 
+    # Excluded inside the subquery for the same reason latest_reviews does
+    # it there, but the damage here is quieter. An external row winning
+    # max(id) leaves its PR in `prs` (the denominator) while contributing no
+    # findings to `hits`, because external rows have none — so every pattern
+    # that PR really carried silently stops counting as a hit, and the
+    # per-pattern precision this feeds is published.
     latest = (
         select(func.max(verdicts.c.id).label("id"))
+        .where(verdicts.c.tier != EXTERNAL_TIER)
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )
@@ -870,8 +1076,15 @@ def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
         return []
     from sqlalchemy import desc, func, select
 
+    # The external exclusion belongs INSIDE the grouped subquery, not on the
+    # outer query. Filtering outside would still let an external row win
+    # max(id) for its PR and then drop that row — so a PR someone reviewed
+    # after Doug would vanish from the queue entirely instead of falling
+    # back to Doug's verdict, which is a worse failure than the one being
+    # fixed.
     latest = (
         select(func.max(verdicts.c.id).label("id"))
+        .where(verdicts.c.tier != EXTERNAL_TIER)
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )

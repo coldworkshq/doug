@@ -211,6 +211,14 @@ def _skip_reason(p) -> str | None:
     models an absent field as the UNSET sentinel, not None, so `if p.draft`
     is not the same test as `p.draft is True`. If the webhook's gate
     changes, this changes with it.
+
+    "The same gate" is two properties, and they are the ones to check when
+    either side moves: an unknown draft state — absent, null, not a
+    boolean — is "draft" on both sides, and repo ids that are not both
+    integers are "fork" on both sides rather than something to compare.
+    They diverged once already, when the webhook read a missing `draft` key
+    as "not a draft" and compared two absent ids as equal; the webhook was
+    the newer code, so this docstring was the thing that became false.
     """
     # Only an explicit draft=False proceeds. True, the UNSET sentinel, and a
     # genuinely missing field all fall through to "skip" — the same

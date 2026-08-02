@@ -9,6 +9,10 @@ M0 starts before M0 closes; M1–M3 are strictly ordered; M4/M5 overlap M3's cal
 
 Effort marks are engineer-days of focused work, not calendar days.
 
+`[x]` done and merged · `[ ]` not started · `[~]` **partially** landed, with the remaining half
+named in the item. `[~]` exists because two items are half-true in a way that reads as done if
+you only count boxes: a shipped primitive nothing calls is not a shipped capability.
+
 ---
 
 ## M0 — Clear the decks *(mostly decisions; ~1d)*
@@ -40,21 +44,36 @@ executed as written — amendments folded in at their task, never as a second pa
   for claims stranded `'running'` by an instance that died mid-review. Without it such a row is
   never revivable, so `enqueue` collides forever and that SHA is silently never reviewed; adding
   `'running'` to the revivable set instead would buy a second paid read on a job still in flight.
-- [ ] Task 4: check run (`check_run.py`) — deviations render `unvalidated` (ADR-0007 + the
-  2026-07-31 derangement FAIL); fallback tier visible in the **title**, never a footnote
-- [ ] Task 5: worker drain — **must call `reclaim_stalled()` once per pass before the first claim**
-  (the other half of Task 3's fix; a young claim must be left strictly alone — that test is the
-  anti-double-spend guarantee)
+- [x] Task 4: check run (`check_run.py`) — deviations render `unvalidated` (ADR-0007 + the
+  2026-07-31 derangement FAIL); fallback tier visible in the **title**, never a footnote.
+  Merged #20. Its review also fixed a live bug outside the brief: `verdict_from_reader` dropped
+  every finding's severity, so the check run — Doug's only PR surface — showed none of them.
+- [x] Task 5: worker drain — **calls `reclaim_stalled()` once per pass before the first claim**
+  (the other half of Task 3's fix; a young claim is left strictly alone — that test is the
+  anti-double-spend guarantee). Merged #23. The amendment that added reclaim also opened a
+  double-spend hole (a crash after `save_review` re-ran the whole job), closed with an
+  idempotency pre-read, `store.find_verdict_by_identity`.
 - [ ] Task 6: webhook dispatch — **plus** the clock-start branch (`closed && merged` → outcome_jobs,
   never through review-enqueue; closed-unmerged-writes-nothing test), **plus** `pull_request_review`
   ingest → third-party verdict rows (`source='review:<login>'`, no score, no model call). The
   `installation.created` token mint that used to sit here is superseded (see Tasks 1–2); note the
   GitHub App needs its "Pull request review" event subscription enabled at the Task 10 cutover.
-- [ ] Task 7: reconcile-on-startup by head sha — **must call `reclaim_stalled()` before the enqueue
-  sweep** (startup path only, never per-installation: the sweep is queue-wide, not per-tenant)
-- [ ] Task 8: ADR-0010 (neutral check run) supersedes ADR-0003 in the same commit
+- [~] Task 7: reconcile-on-startup by head sha — **calls `reclaim_stalled()` before the enqueue
+  sweep** (startup path only, never per-installation: the sweep is queue-wide, not per-tenant).
+  Steps 1–3 merged #24. **Step 4 — wiring `reconcile_all` into the lifespan — still open**, and
+  it cannot land before Task 6, which creates the lifespan.
+- [x] Task 8: ADR-0010 (neutral check run) supersedes ADR-0003 in the same commit. Merged #22.
 - [ ] Tasks 9–10: delete CI token path, cutover deploy (rebase vs. merged #15 done deliberately)
-- [ ] Research-corpus quarantine: sentinel installation UPDATE + `source='research'`
+- [x] Research-corpus quarantine — **resolved as a write-time convention, not a data migration**:
+  no research rows exist in the app database, so there is nothing to `UPDATE`. The sentinel
+  installation plus `source='research'` at insert is documented in the migration docstring.
+  Ruling recorded rather than applied silently, per the plan-intent rule.
+- [x] Doug's own review of #24 found a real spend leak the in-house review had only documented:
+  reconcile revives `failed` rows on every cold start, so a permanently broken PR re-armed
+  `max_attempts` paid reads per restart. The first fix over-corrected — it put the cooloff in the
+  shared `_revive`, which would have made a reopened PR silently unreviewable for an hour once
+  Task 6 added a webhook caller. Merged #26 charges the cooloff to the *caller* instead:
+  `enqueue(..., trigger=)`, live by default, and only the reconcile sweep opts in.
 
 **Exit gate:** webhook-driven review live on `drewjst/doug` — deliveries 202 with dedup proven
 (same delivery twice → one job), check run rendering, full suite green, CI token path gone.
@@ -63,14 +82,22 @@ executed as written — amendments folded in at their task, never as a second pa
 
 ## M2 — Safe to point at strangers *(~3–4d; blocks ANY outside install)*
 
-- [ ] Spend caps wrapping **both** model calls — timeout, retry cap, per-installation monthly cap;
-  the second intent read (`reader.py:372`) is currently uncapped and unmetered: close it
+- [~] Spend caps wrapping **both** model calls — timeout, retry cap, per-installation monthly cap;
+  the second intent read (`reader.py:372`) is currently uncapped and unmetered: close it.
+  **The primitive landed in #25 (`store.record_deep_read`) but is NOT wired to any call site** —
+  `reader.py` neither imports it nor takes an `installation_id`. So there is a tested cap that
+  nothing consults, which is worth less than it looks: spend is still uncapped in production.
+  Wiring it needs `installation_id` threaded through `score_one`/`read_intent`.
 - [ ] `/v1/score/read`: authed or deleted
-- [ ] Coverage integrity: paginate `list_files`, carry `changed_files` + `files_dropped`,
-  `complete` ⇔ every changed file seen (a partial read can no longer render as a clean one)
-- [ ] `fetch_pr` fetches review state (approvals no longer hardcoded 0 — live scorer matches the backtested one)
-- [ ] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written per verdict
-- [ ] Fork-PR + bot-author exclusion from deep reads
+- [x] Coverage integrity: paginate `list_files`, carry `changed_files` + `files_dropped`,
+  `complete` ⇔ every changed file seen (a partial read can no longer render as a clean one).
+  Merged #25.
+- [x] `fetch_pr` fetches review state (approvals no longer hardcoded 0 — live scorer matches the
+  backtested one), with graceful degradation when the reviews call fails. Merged #25.
+- [x] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written
+  per verdict. Merged #25. The previous test compared `reader.py` to itself and could not fail.
+- [ ] Fork-PR + bot-author exclusion from deep reads — the **fork** half lands with Task 6's
+  webhook gate; bot-author is still open
 - [ ] Migration 003: **UNIQUE** index on `verdicts` (installation_id, github_repo_id, pr_number,
   head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are untouched. Two jobs
   in one: `worker.process_job`'s idempotency pre-read runs on every job over unindexed columns
