@@ -15,7 +15,7 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, ingest, precision, reader, review, store, worker
+from . import __version__, app_auth, ingest, precision, reader, review, store, worker
 from .models import (
     Band,
     PRMetadata,
@@ -28,10 +28,31 @@ from .models import (
 )
 from .scoring import default_threshold, score
 
+# Named so it is identifiable in a thread dump or a py-spy trace of a
+# revision that is busy at boot, and so tests can assert on the one thread
+# startup is allowed to spawn.
+STARTUP_THREAD_NAME = "doug-startup-reconcile"
+
+
+def _startup_reconcile() -> None:
+    """Heal the queue this instance came up to, then work it.
+
+    Both halves belong to the same catch-up and in this order: reconcile_all
+    only enqueues, so a drain running ahead of it would drain whatever the
+    last delivery left and stop, leaving everything this sweep discovers
+    waiting for a delivery that already went missing once.
+    """
+    try:
+        n = worker.reconcile_all()
+        print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
+        worker.drain()
+    except Exception as e:  # noqa: BLE001 — catch-up is best-effort, never fatal
+        print(f"doug: startup reconcile failed ({type(e).__name__}: {e})", file=sys.stderr)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Refuse to boot without the webhook secret.
+    """Refuse to boot without the webhook secret, then start the catch-up sweep.
 
     The reason is not that a deploy would wipe it: deploy() has carried
     GITHUB_WEBHOOK_SECRET in --set-secrets since #14, and --set-env-vars
@@ -43,11 +64,32 @@ async def lifespan(app: FastAPI):
     is a paid model read triggered by anyone who can POST. A crash-looping
     revision is a visible failure; a running service accepting forged
     deliveries is not.
+
+    DATABASE_URL is deliberately not checked alongside it, and the three
+    postures here are one rule, not an inconsistency: a security control
+    that fails open is worthless, so the secret fails closed at boot; a
+    ledger is an optional feature rather than a guarantee — store.py's
+    ledger-less mode is what local dogfooding and the open-source path run
+    on — so the one endpoint that cannot work without it refuses per
+    request with a 503 and the rest of the service keeps serving; and the
+    sweep below needs the App *and* the ledger to do anything at all, so a
+    deployment holding neither promise skips it silently and loses nothing
+    it could have had.
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
         raise RuntimeError(
             "GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github"
         )
+    if app_auth.enabled() and store.enabled():
+        # A thread, not an await and not inline: Cloud Run holds the revision
+        # out of rotation until the lifespan yields, and this walks every open
+        # PR of every installation and then runs paid model reads on the ones
+        # it queued. Blocking startup on that fails the health check and the
+        # revision never serves at all. daemon=True so a shutdown is never
+        # held open waiting for it.
+        threading.Thread(
+            target=_startup_reconcile, name=STARTUP_THREAD_NAME, daemon=True
+        ).start()
     yield
 
 
@@ -803,9 +845,10 @@ async def github_webhook(
     can be throttled, and the instance can be scaled to zero out from under
     an in-flight drain. Losing a kick loses no work — the job row is
     already committed — it only delays it until something kicks a drain
-    again. The durable backstop for that is worker.reconcile_all, which
-    nothing calls yet; Task 7b wires it into the lifespan, and until it does
-    the next delivery's kick is the only thing that reaches a stranded row.
+    again. The durable backstop is the sweep lifespan() starts: on a
+    deployment holding both the App and a ledger it reconciles and then
+    drains on every cold start, so a row no later delivery kicks waits for
+    the next revision rather than forever.
 
     async only because the signature needs the raw body. verify_webhook and
     json.loads run on the event loop thread deliberately: both are CPU-bound
