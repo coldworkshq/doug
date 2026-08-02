@@ -74,12 +74,17 @@ def process_job(job: dict) -> int | None:
                 coverage=cov,
             )
         title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
-        check_run.post(gh, owner, name, job["head_sha"], title, summary)
-        if not ingest.complete(job["id"], existing["id"], started_at=job["started_at"]):
+        # complete before post: a lost claim must not emit a check run that a
+        # second holder will also post via the identity-replay path below.
+        if not ingest.complete(
+            job["id"], existing["id"], claim_generation=job["claim_generation"]
+        ):
             print(
-                f"doug: job {job['id']} complete rejected (claim lost after work)",
+                f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
                 file=sys.stderr,
             )
+            return existing["id"]
+        check_run.post(gh, owner, name, job["head_sha"], title, summary)
         return existing["id"]
 
     # Read the PR's current head before spending anything on it. A job can
@@ -93,7 +98,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"], started_at=job["started_at"])
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -143,14 +148,18 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
-    # The job's head SHA, never meta's: by now pulls.get may already be
-    # returning a newer commit, and that commit has its own job.
-    check_run.post(gh, owner, name, job["head_sha"], title, summary)
-    if not ingest.complete(job["id"], verdict_id, started_at=job["started_at"]):
+    # complete before post — see the identity-replay path above. The job's
+    # head SHA, never meta's: by now pulls.get may already be returning a
+    # newer commit, and that commit has its own job.
+    if not ingest.complete(
+        job["id"], verdict_id, claim_generation=job["claim_generation"]
+    ):
         print(
-            f"doug: job {job['id']} complete rejected (claim lost after work)",
+            f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
             file=sys.stderr,
         )
+        return verdict_id
+    check_run.post(gh, owner, name, job["head_sha"], title, summary)
     return verdict_id
 
 
@@ -203,7 +212,7 @@ def drain(max_jobs: int = 20) -> int:
             # stalled 'running' row in place. All three keep the row's
             # original id, so the seen-set catches every one of them with
             # no special case.
-            ingest.release(job["id"], started_at=job["started_at"])
+            ingest.release(job["id"], claim_generation=job["claim_generation"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -214,7 +223,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e), started_at=job["started_at"])
+            ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
     return attempted
 
 

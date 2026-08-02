@@ -71,12 +71,24 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # Hot-path partial indexes for claim/reclaim (Task 5) and the M3
             # adjudicator drain. Not declared on the Table() objects — see
             # module docstring — so production only gets them here.
+            # IF NOT EXISTS: apply() records the version only after every
+            # statement in the tuple succeeds, so a mid-tuple failure leaves
+            # the version unrecorded and the next apply retries; IF NOT
+            # EXISTS makes the already-applied statements no-ops on retry.
             "CREATE INDEX IF NOT EXISTS idx_review_jobs_pending_queue "
             "ON review_jobs (enqueued_at, id) WHERE status = 'pending'",
             "CREATE INDEX IF NOT EXISTS idx_review_jobs_running_stale "
             "ON review_jobs (started_at) WHERE status = 'running'",
             "CREATE INDEX IF NOT EXISTS idx_outcome_jobs_pending_due "
             "ON outcome_jobs (due_at) WHERE status = 'pending'",
+        ),
+    ),
+    (
+        4,
+        (
+            # Claim-holder fence token. Integer equality survives sqlite/Postgres
+            # timestamp round-trips that made started_at-based fencing fragile.
+            "ALTER TABLE review_jobs ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
         ),
     ),
 ]

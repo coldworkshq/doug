@@ -103,14 +103,16 @@ def _db_now(conn) -> datetime:
     Run instances; comparing one instance's datetime.now() to another's
     written started_at is how a skewed host reclaims a live worker.
 
-    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision,
-    which would collapse distinct claim generations inside one second into
-    the same started_at and make the fence useless in the suite. Wall clock
-    keeps microsecond generation tokens there; Postgres uses now().
+    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision —
+    wall clock keeps microsecond resolution there. Postgres uses
+    clock_timestamp() (statement time), not now()/transaction_timestamp(),
+    so two claims in quick succession cannot collapse onto one tx start time.
+    Claim-holder fencing itself uses claim_generation (integer), not this
+    timestamp; started_at is only the lease clock for reclaim_stalled.
     """
     if conn.dialect.name == "sqlite":
         return datetime.now(UTC)
-    value = conn.execute(select(func.now())).scalar_one()
+    value = conn.execute(select(func.clock_timestamp())).scalar_one()
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
     return _as_utc(value)
@@ -296,18 +298,28 @@ def claim() -> dict | None:
         if row is None:
             return None
         now = _db_now(conn)
-        result = conn.execute(
+        generation = conn.execute(
             update(store.review_jobs)
             .where(
                 store.review_jobs.c.id == row["id"],
                 store.review_jobs.c.status == "pending",
             )
-            .values(status="running", started_at=now)
-        )
-        if result.rowcount == 0:
+            .values(
+                status="running",
+                started_at=now,
+                claim_generation=store.review_jobs.c.claim_generation + 1,
+            )
+            .returning(store.review_jobs.c.claim_generation)
+        ).scalar_one_or_none()
+        if generation is None:
             # Lost a race after the SELECT (sqlite has no SKIP LOCKED).
             return None
-        return {**row, "status": "running", "started_at": now}
+        return {
+            **row,
+            "status": "running",
+            "started_at": now,
+            "claim_generation": int(generation),
+        }
 
 
 def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
@@ -358,21 +370,22 @@ def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
         return max(0, result.rowcount)
 
 
-def _terminal_where(job_id: int, started_at: datetime):
+def _terminal_where(job_id: int, claim_generation: int):
     """Fence a claim-holder update to this exact claim generation.
 
     status='running' alone is not enough once reclaim has re-pended the row
     and a second worker has claimed it — both holders see 'running'. The
-    started_at written at claim() is the generation token.
+    integer claim_generation bumped at claim() is the generation token;
+    started_at stays the lease clock for reclaim_stalled only.
     """
     return (
         store.review_jobs.c.id == job_id,
         store.review_jobs.c.status == "running",
-        store.review_jobs.c.started_at == _as_utc(started_at),
+        store.review_jobs.c.claim_generation == claim_generation,
     )
 
 
-def release(job_id: int, *, started_at: datetime) -> bool:
+def release(job_id: int, *, claim_generation: int) -> bool:
     """Put a claimed job back without spending an attempt.
 
     drain claims a job before it can tell whether it has already run it this
@@ -387,14 +400,14 @@ def release(job_id: int, *, started_at: datetime) -> bool:
     with engine.begin() as conn:
         applied = conn.execute(
             update(store.review_jobs)
-            .where(*_terminal_where(job_id, started_at))
+            .where(*_terminal_where(job_id, claim_generation))
             .values(status="pending", started_at=None)
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()
         return applied is not None
 
 
-def complete(job_id: int, verdict_id: int | None, *, started_at: datetime) -> bool:
+def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> bool:
     """Mark a job done. verdict_id is None when the review produced no ledger
     row — a skipped PR is finished, not failed.
 
@@ -408,7 +421,7 @@ def complete(job_id: int, verdict_id: int | None, *, started_at: datetime) -> bo
     with engine.begin() as conn:
         applied = conn.execute(
             update(store.review_jobs)
-            .where(*_terminal_where(job_id, started_at))
+            .where(*_terminal_where(job_id, claim_generation))
             .values(
                 status="done",
                 verdict_id=verdict_id,
@@ -420,7 +433,7 @@ def complete(job_id: int, verdict_id: int | None, *, started_at: datetime) -> bo
         return applied is not None
 
 
-def supersede(job_id: int, *, started_at: datetime) -> bool:
+def supersede(job_id: int, *, claim_generation: int) -> bool:
     """Retire a job whose head SHA is no longer the PR's.
 
     Neither 'done' — there is no verdict — nor 'failed', since nothing went
@@ -433,14 +446,14 @@ def supersede(job_id: int, *, started_at: datetime) -> bool:
     with engine.begin() as conn:
         applied = conn.execute(
             update(store.review_jobs)
-            .where(*_terminal_where(job_id, started_at))
+            .where(*_terminal_where(job_id, claim_generation))
             .values(status="superseded", finished_at=_db_now(conn))
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()
         return applied is not None
 
 
-def fail(job_id: int, error: str, *, started_at: datetime, max_attempts: int = 3) -> bool:
+def fail(job_id: int, error: str, *, claim_generation: int, max_attempts: int = 3) -> bool:
     """Record a failed attempt: back to pending below the cap, failed at it.
 
     started_at is cleared on the retry so a re-pended row is not reported as
@@ -464,7 +477,7 @@ def fail(job_id: int, error: str, *, started_at: datetime, max_attempts: int = 3
         now = _db_now(conn)
         applied = conn.execute(
             update(store.review_jobs)
-            .where(*_terminal_where(job_id, started_at))
+            .where(*_terminal_where(job_id, claim_generation))
             .values(
                 attempts=new_attempts,
                 error=error[:500],

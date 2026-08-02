@@ -202,6 +202,10 @@ review_jobs = Table(
     # pending | running | done | failed | superseded
     Column("status", String(12), nullable=False, index=True),
     Column("attempts", Integer, nullable=False, default=0),
+    # Incremented on every claim(); terminals fence on this integer rather
+    # than started_at equality (timezone/precision round-trips can make a
+    # live holder's complete() a silent no-op and leave the job stuck).
+    Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("enqueued_at", DateTime(timezone=True), nullable=False),
     Column("started_at", DateTime(timezone=True)),
     Column("finished_at", DateTime(timezone=True)),

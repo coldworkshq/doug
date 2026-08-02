@@ -41,10 +41,11 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
             "CREATE TABLE outcome_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), due_at DATETIME)"
         )
-    assert migrations.apply(engine) == [1, 2, 3]
+    assert migrations.apply(engine) == [1, 2, 3, 4]
     assert APP_COLUMNS <= _columns(engine, "verdicts")
     assert {"prompt_hash"} <= _columns(engine, "verdicts")
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
+    assert "claim_generation" in _columns(engine, "review_jobs")
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -58,10 +59,10 @@ def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
     store.metadata.create_all(engine)
     assert APP_COLUMNS <= _columns(engine, "verdicts")
 
-    assert migrations.apply(engine) == [1, 2, 3]
+    assert migrations.apply(engine) == [1, 2, 3, 4]
     with engine.connect() as conn:
         versions = [r[0] for r in conn.execute(select(migrations.schema_migrations.c.version))]
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_apply_reports_only_newly_applied_versions(tmp_path):
@@ -70,7 +71,7 @@ def test_apply_reports_only_newly_applied_versions(tmp_path):
     and take the process down at first ledger use."""
     engine = create_engine(f"sqlite:///{tmp_path}/twice.db")
     store.metadata.create_all(engine)
-    assert migrations.apply(engine) == [1, 2, 3]
+    assert migrations.apply(engine) == [1, 2, 3, 4]
     assert migrations.apply(engine) == []
 
 
@@ -256,9 +257,35 @@ def test_migration_003_installs_the_queue_hot_path_indexes(tmp_path):
     table holds history. Partial indexes are the cheap fix."""
     engine = create_engine(f"sqlite:///{tmp_path}/idx.db")
     store.metadata.create_all(engine)
-    assert 3 in migrations.apply(engine)
+    applied = migrations.apply(engine)
+    assert 3 in applied and 4 in applied
     names = {idx["name"] for idx in inspect(engine).get_indexes("review_jobs")}
     assert "idx_review_jobs_pending_queue" in names
     assert "idx_review_jobs_running_stale" in names
     outcome_names = {idx["name"] for idx in inspect(engine).get_indexes("outcome_jobs")}
     assert "idx_outcome_jobs_pending_due" in outcome_names
+
+
+def test_migration_004_adds_claim_generation(tmp_path):
+    """Integer claim fence token — must exist on production via migration,
+    not only on fresh create_all tables."""
+    engine = create_engine(f"sqlite:///{tmp_path}/gen.db")
+    with engine.begin() as conn:
+        # Minimal pre-004 shape: earlier migrations need these tables present.
+        conn.exec_driver_sql(
+            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE review_jobs ("
+            "id INTEGER PRIMARY KEY, status VARCHAR(12), "
+            "enqueued_at DATETIME, started_at DATETIME)"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE outcome_jobs ("
+            "id INTEGER PRIMARY KEY, status VARCHAR(12), due_at DATETIME)"
+        )
+    assert 4 in migrations.apply(engine)
+    assert "claim_generation" in _columns(engine, "review_jobs")

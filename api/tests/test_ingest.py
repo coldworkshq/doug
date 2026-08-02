@@ -63,7 +63,7 @@ def _age_started_at(url: str, job_id: int, seconds: int) -> None:
 def _claim_and_fail(job_id, error: str) -> None:
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.fail(job_id, error, started_at=claimed["started_at"])
+    assert ingest.fail(job_id, error, claim_generation=claimed["claim_generation"])
 
 
 def test_enqueue_suppresses_a_redelivered_push(tmp_path, monkeypatch):
@@ -98,7 +98,7 @@ def test_a_finished_job_is_never_superseded(tmp_path, monkeypatch):
     done = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == done
-    assert ingest.complete(done, None, started_at=claimed["started_at"])
+    assert ingest.complete(done, None, claim_generation=claimed["claim_generation"])
     ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
     assert {j["id"]: j["status"] for j in _jobs(url)}[done] == "done"
 
@@ -168,7 +168,7 @@ def test_complete_records_the_verdict_the_job_produced(tmp_path, monkeypatch):
 
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.complete(job_id, verdict_id, started_at=claimed["started_at"])
+    assert ingest.complete(job_id, verdict_id, claim_generation=claimed["claim_generation"])
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "done"
     assert row["verdict_id"] == verdict_id and row["finished_at"] is not None
@@ -238,7 +238,7 @@ def test_running_and_finished_jobs_are_never_revived(tmp_path, monkeypatch):
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "running"
 
-    assert ingest.complete(job_id, None, started_at=claimed["started_at"])
+    assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "done"
 
@@ -267,7 +267,7 @@ def test_release_returns_a_claimed_job_without_charging_an_attempt(tmp_path, mon
     claimed = ingest.claim()
     assert claimed["id"] == job_id
 
-    assert ingest.release(job_id, started_at=claimed["started_at"])
+    assert ingest.release(job_id, claim_generation=claimed["claim_generation"])
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
     assert row["started_at"] is None
@@ -286,7 +286,7 @@ def test_supersede_retires_a_job_whose_sha_is_no_longer_the_head(tmp_path, monke
     claimed = ingest.claim()
     assert claimed["id"] == job_id
 
-    assert ingest.supersede(job_id, started_at=claimed["started_at"])
+    assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "superseded" and row["finished_at"] is not None
     assert row["verdict_id"] is None
@@ -350,7 +350,7 @@ def test_a_reclaimed_job_rejoins_the_ordinary_lifecycle(tmp_path, monkeypatch):
         if i > 0:
             claimed = ingest.claim()
             assert claimed["id"] == job_id
-        assert ingest.fail(job_id, "still broken", started_at=claimed["started_at"])
+        assert ingest.fail(job_id, "still broken", claim_generation=claimed["claim_generation"])
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
 
 
@@ -407,11 +407,11 @@ def test_complete_clears_a_stale_error_from_earlier_failed_attempts(tmp_path, mo
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.fail(job_id, "transient timeout", started_at=claimed["started_at"])
+    assert ingest.fail(job_id, "transient timeout", claim_generation=claimed["claim_generation"])
 
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.complete(job_id, None, started_at=claimed["started_at"])
+    assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "done" and row["error"] is None
 
@@ -426,7 +426,7 @@ def test_a_late_complete_after_reclaim_cannot_finish_under_a_second_claim(
     to close for Task 5/7's cadence.
 
     Fencing on status='running' alone is not enough once B has claimed; the
-    holder's started_at is the claim generation."""
+    holder's claim_generation is the generation token."""
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     first = ingest.claim()
@@ -435,14 +435,14 @@ def test_a_late_complete_after_reclaim_cannot_finish_under_a_second_claim(
     assert ingest.reclaim_stalled() == 1
     second = ingest.claim()
     assert second["id"] == job_id and second["status"] == "running"
-    assert second["started_at"] != first["started_at"]
+    assert second["claim_generation"] != first["claim_generation"]
 
-    assert ingest.complete(job_id, None, started_at=first["started_at"]) is False
+    assert ingest.complete(job_id, None, claim_generation=first["claim_generation"]) is False
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "running"
     assert row["verdict_id"] is None
 
-    assert ingest.complete(job_id, None, started_at=second["started_at"])
+    assert ingest.complete(job_id, None, claim_generation=second["claim_generation"])
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "done"
 
 
@@ -456,13 +456,14 @@ def test_a_late_fail_after_reclaim_cannot_burn_a_second_claim(tmp_path, monkeypa
     _age_started_at(url, job_id, seconds=ingest.STALL_LEASE_SECONDS + 1)
     assert ingest.reclaim_stalled() == 1
     second = ingest.claim()
-    assert second["id"] == job_id and second["started_at"] != first["started_at"]
+    assert second["id"] == job_id
+    assert second["claim_generation"] != first["claim_generation"]
 
-    assert ingest.fail(job_id, "stale", started_at=first["started_at"]) is False
+    assert ingest.fail(job_id, "stale", claim_generation=first["claim_generation"]) is False
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "running" and row["attempts"] == 0
 
-    assert ingest.fail(job_id, "real", started_at=second["started_at"])
+    assert ingest.fail(job_id, "real", claim_generation=second["claim_generation"])
     assert {j["id"]: j for j in _jobs(url)}[job_id]["attempts"] == 1
 
 
@@ -472,11 +473,10 @@ def test_terminals_are_no_ops_unless_the_job_is_running(tmp_path, monkeypatch):
     was reclaimed or never claimed."""
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
-    stale = datetime.now(UTC)
-    assert ingest.complete(job_id, None, started_at=stale) is False
-    assert ingest.fail(job_id, "nope", started_at=stale) is False
-    assert ingest.release(job_id, started_at=stale) is False
-    assert ingest.supersede(job_id, started_at=stale) is False
+    assert ingest.complete(job_id, None, claim_generation=0) is False
+    assert ingest.fail(job_id, "nope", claim_generation=0) is False
+    assert ingest.release(job_id, claim_generation=0) is False
+    assert ingest.supersede(job_id, claim_generation=0) is False
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
     assert {j["id"]: j for j in _jobs(url)}[job_id]["attempts"] == 0
 
@@ -512,7 +512,7 @@ def test_a_revived_job_clears_a_stray_verdict_id(tmp_path, monkeypatch):
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.supersede(job_id, started_at=claimed["started_at"])
+    assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
     with create_engine(url).begin() as conn:
         conn.execute(
             store.review_jobs.update()
@@ -658,7 +658,7 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.supersede(job_id, started_at=claimed["started_at"])
+    assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "superseded"
 
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
@@ -666,6 +666,6 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
 
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.supersede(job_id, started_at=claimed["started_at"])
+    assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"

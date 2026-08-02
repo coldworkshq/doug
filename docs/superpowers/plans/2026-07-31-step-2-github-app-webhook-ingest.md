@@ -2017,7 +2017,7 @@ git push
 - Consumes: `app_auth.installation_client(installation_id: int) -> GitHub` (Task 1); `store.save_review(..., github_repo_id=, installation_id=, head_sha=, source=)` — all keyword, all defaulting to `None` (Task 2); `store.save_deviations(verdict_id, findings, refs, alignment)` (`store.py:249`); `review.fetch_pr(gh, owner, repo, number) -> (PRMetadata, str)` (`review.py:86`); `review.score_one(meta, diff) -> (tier, Verdict, ReaderVerdict|None, Coverage|None)` (`review.py:118`); `review.read_intent(gh, owner, repo, meta, diff) -> IntentRead | IntentFailure | None` (`review.py:161`); `check_run.render/post` (Task 4); `reader.MODEL` (`reader.py:24`).
 - Consumes from Task 3 (`ingest.py`), confirmed against its draft:
   - `claim() -> dict | None` — a **plain dict** (not a `Row`; the worker holds it after the connection closes) carrying every `review_jobs` column, primary key under `"id"`. Returns `None` when the ledger is unconfigured, so `drain` is a safe no-op on a ledger-less deployment — do **not** wrap it in try/except for that case.
-  - `complete(job_id, verdict_id, *, started_at)`, `fail(job_id, error, *, started_at, max_attempts=3)`, `release(job_id, *, started_at)`, `supersede(job_id, *, started_at)` — all return `bool`. Terminals fence on `(status='running' AND started_at=claim generation)` so a stale worker after reclaim cannot finish under someone else's claim. Pass `started_at=job["started_at"]` from every terminal call site.
+  - `complete(job_id, verdict_id, *, claim_generation)`, `fail(job_id, error, *, claim_generation, max_attempts=3)`, `release(job_id, *, claim_generation)`, `supersede(job_id, *, claim_generation)` — all return `bool`. Terminals fence on `(status='running' AND claim_generation=<token>)` so a stale worker after reclaim cannot finish under someone else's claim. Pass `claim_generation=job["claim_generation"]` from every terminal call site. `started_at` remains the lease clock for `reclaim_stalled` only.
   - `fail(...)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
   - `enqueue(...) -> int | None` — `None` on the unique-index duplicate; **raises `RuntimeError` when `DATABASE_URL` is unset** (see Task 6, which guards that at the edge).
   - `IntentFailure` from `read_intent` surfaces as a weight-0 `intent-unavailable` reason; score/band unchanged (ADR-0007).
@@ -2260,7 +2260,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"], started_at=job["started_at"])
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -2309,10 +2309,14 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
-    # The job's head SHA, never meta's: by now pulls.get may already be
-    # returning a newer commit, and that commit has its own job.
+    # complete before post: a lost claim must not emit a check run the
+    # second holder will also post via identity replay. The job's head SHA,
+    # never meta's: by now pulls.get may already be returning a newer commit.
+    if not ingest.complete(
+        job["id"], verdict_id, claim_generation=job["claim_generation"]
+    ):
+        return verdict_id  # claim lost — skip check run; second holder replays
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
-    ingest.complete(job["id"], verdict_id, started_at=job["started_at"])
     return verdict_id
 
 
@@ -2341,7 +2345,7 @@ def drain(max_jobs: int = 20) -> int:
             # already failed. Retrying it here is not a retry — nothing has
             # had time to change — and it would burn the whole attempt
             # budget against one transient fault in under a second.
-            ingest.release(job["id"], started_at=job["started_at"])
+            ingest.release(job["id"], claim_generation=job["claim_generation"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -2352,7 +2356,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e), started_at=job["started_at"])
+            ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
     return attempted
 ```
 
