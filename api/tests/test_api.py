@@ -538,6 +538,7 @@ def _review_payload(
     review_id=55,
     number=7,
     head_repo_id=987,
+    base_repo_id=987,
 ):
     return {
         "action": action,
@@ -552,7 +553,7 @@ def _review_payload(
         "pull_request": {
             "number": number,
             "head": {"repo": {"id": head_repo_id}},
-            "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+            "base": {"repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
         },
     }
 
@@ -681,6 +682,7 @@ def test_a_review_missing_the_facts_it_would_be_dated_by_is_ignored(
         _review_payload(submitted_at=None),
         _review_payload(submitted_at="not-a-timestamp"),
         _review_payload(login=None),
+        _review_payload(base_repo_id=None),
     ):
         assert _webhook("pull_request_review", payload).status_code == 202
     assert _table(tmp_path, store.verdicts) == []

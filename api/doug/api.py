@@ -612,31 +612,34 @@ def _record_external_review(payload: dict) -> None:
     a diff. Bot reviewers are ingested like anyone else, because grading bot
     reviewers is the point of the lane.
     """
-    review_ = payload["review"]
+    review_ = payload.get("review") or {}
     band = REVIEW_BANDS.get(review_.get("state", ""))
     if band is None:
         return
+    pr = payload.get("pull_request") or {}
+    base_repo = ((pr.get("base") or {}).get("repo")) or {}
     scored_at = _payload_timestamp(review_.get("submitted_at"))
     head_sha = review_.get("commit_id")
     login = (review_.get("user") or {}).get("login")
-    if scored_at is None or not head_sha or not login:
-        # These three are the row's identity and its dedup key. A stance that
-        # cannot be attached to a commit, a time and a reviewer is not a
-        # gradable claim, and storing it against a guess would put an
-        # invented data point into a ledger whose whole product is calibrated
-        # claims.
+    if scored_at is None or not head_sha or not login or not base_repo.get("id"):
+        # These are the row's identity and its dedup key. A stance that
+        # cannot be attached to a commit, a time, a reviewer and a repo is
+        # not a gradable claim, and storing it against a guess would put an
+        # invented data point into a ledger whose whole product is
+        # calibrated claims. Logged and 202'd rather than raised, for the
+        # reason _record_merge gives: a 500 is a redelivery loop over a body
+        # that will never carry what it is missing.
         print(
-            f"doug: review on PR #{payload['pull_request'].get('number')} carried no "
-            "usable commit_id/submitted_at/user.login; not ingested",
+            f"doug: review on PR #{pr.get('number')} carried no usable "
+            "commit_id/submitted_at/user.login/base repo id; not ingested",
             file=sys.stderr,
         )
         return
-    base_repo = payload["pull_request"]["base"]["repo"]
     store.save_external_review(
         payload["installation"]["id"],
         base_repo["id"],
-        base_repo["full_name"],
-        payload["pull_request"]["number"],
+        base_repo.get("full_name", ""),
+        pr["number"],
         head_sha,
         # verdicts.source is String(64) for exactly this; GitHub logins run
         # to 39 characters.
