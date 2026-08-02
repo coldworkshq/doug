@@ -67,13 +67,22 @@ def test_review_uses_deterministic_when_reader_off(monkeypatch):
 
 def test_review_uses_reader_when_enabled(monkeypatch):
     monkeypatch.setenv("DOUG_READER", "1")
-    fake = lambda pr, diff, client=None: reader.ReaderVerdict.model_validate(PAYLOAD)  # noqa: E731
+    scopes: list[str] = []
+
+    def fake(pr, diff, *, scope, client=None):
+        scopes.append(scope)
+        return reader.ReaderVerdict.model_validate(PAYLOAD)
+
     monkeypatch.setattr(reader, "read_diff", fake)
     gh = FakeGH([_pull()], [_file()])
     results = review.review_repo(gh, "o", "r", limit=5)
     v = results[0].verdict
     assert v.band is Band.FLAGGED
     assert v.reasons[0].rule == "reader:error-handling-gap"
+    # The CLI holds no installation, so its reads charge the sentinel —
+    # the same budget the other two un-tenanted callers spend from, and
+    # never a customer's.
+    assert scopes == [reader.SENTINEL_SCOPE]
 
 
 def test_render_is_json_safe(monkeypatch):

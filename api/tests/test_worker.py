@@ -87,24 +87,36 @@ def _gh(heads: dict[int, str] | None = None):
     return SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get)))
 
 
-def _wire(monkeypatch, *, tier="reader", intent=None, fetch=None, heads=None) -> list[dict]:
+def _wire(
+    monkeypatch, *, tier="reader", intent=None, fetch=None, heads=None, scopes=None
+) -> list[dict]:
     """Cut every seam that would touch the network. Returns the posted
-    check runs, which is what a caller of this pipeline can observe."""
+    check runs, which is what a caller of this pipeline can observe.
+
+    `scopes` collects what each paid read was charged to, for the tests
+    that care which budget a job spends from."""
     posted: list[dict] = []
     gh = _gh(heads)
     monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
-    monkeypatch.setattr(
-        review,
-        "score_one",
-        lambda meta, diff: (
+
+    def _score_one(meta, diff, *, scope):
+        if scopes is not None:
+            scopes.append(("risk", scope))
+        return (
             tier,
             VERDICT.model_copy(deep=True),
             RV if tier == "reader" else None,
             COV if tier == "reader" else None,
-        ),
-    )
-    monkeypatch.setattr(review, "read_intent", lambda gh, o, r, m, d: intent)
+        )
+
+    def _read_intent(gh, o, r, m, d, *, scope):
+        if scopes is not None:
+            scopes.append(("intent", scope))
+        return intent
+
+    monkeypatch.setattr(review, "score_one", _score_one)
+    monkeypatch.setattr(review, "read_intent", _read_intent)
     monkeypatch.setattr(
         check_run,
         "post",
@@ -253,6 +265,26 @@ def test_no_intent_read_writes_no_deviation_row(tmp_path, monkeypatch):
     ingest.enqueue(**JOB)
     worker.process_job(ingest.claim())
     assert _rows(url, store.deviations) == []
+
+
+def test_a_failed_intent_read_reaches_the_verdict_under_its_own_name(tmp_path, monkeypatch):
+    """The worker takes the rule name from the failure rather than writing
+    one of its own, so an intent read stopped by the cap does not arrive in
+    the ledger looking like an intent read that broke. Same weight-0,
+    band-untouched treatment either way (ADR-0007) — only the name
+    differs, and the name is the whole point."""
+    url = _db(tmp_path, monkeypatch)
+    capped = review.IntentFailure(detail="installation:1 has spent its cap", rule="intent-capped")
+    _wire(monkeypatch, intent=capped)
+
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    rules = {r["rule"] for r in _rows(url, store.findings)}
+    assert "intent-capped" in rules
+    assert "intent-unavailable" not in rules
+    (row,) = _rows(url, store.verdicts)
+    assert row["band"] == VERDICT.band.value  # advisory: the band never moved
 
 
 def test_drain_on_an_empty_queue_is_zero(tmp_path, monkeypatch):
@@ -579,11 +611,13 @@ def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff: calls.append("score_one")
+        lambda meta, diff, *, scope: calls.append("score_one")
         or ("reader", VERDICT.model_copy(deep=True), RV, COV),
     )
     monkeypatch.setattr(
-        review, "read_intent", lambda gh, o, r, m, d: calls.append("read_intent") or None
+        review,
+        "read_intent",
+        lambda gh, o, r, m, d, *, scope: calls.append("read_intent") or None,
     )
 
     ingest.enqueue(**JOB)
@@ -1241,6 +1275,78 @@ def test_a_fresh_review_logs_the_read_it_paid_for(tmp_path, monkeypatch, capsys)
     # Nothing sensitive: the finding's model-authored label stays on the
     # check run. A log line is not a place to launder prompt output into.
     assert "Cache write is not guarded" not in line
+
+
+def test_both_reads_of_a_job_charge_that_installations_own_budget(tmp_path, monkeypatch):
+    """The one paid entry point that has tenancy, so the one that charges a
+    real tenant. Both reads name the same scope — one PR costs two units
+    against one knob — and neither falls back to the sentinel the
+    un-tenanted callers share, or a busy customer would exhaust the CI
+    path's budget and vice versa."""
+    _db(tmp_path, monkeypatch)
+    scopes: list[tuple[str, str]] = []
+    _wire(monkeypatch, scopes=scopes)
+
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    owner = reader.installation_scope(JOB["installation_id"])
+    assert scopes == [("risk", owner), ("intent", owner)]
+    assert owner != reader.SENTINEL_SCOPE
+
+
+def test_a_capped_review_renders_as_the_deterministic_fallback_it_is(tmp_path, monkeypatch):
+    """ADR-0010's honesty rule, carried through the path this branch adds.
+
+    A capped verdict came from the deterministic scorer, which never opened
+    the diff, so the check run's title — the only part of Doug visible from
+    a PR's checks list — has to say so. A fallback rendered as a read is the
+    one thing that surface must never do, and a spend ceiling is a new way
+    to produce one.
+
+    Nothing is stubbed between the counter and the title: a real ledger with
+    this installation's ceiling at zero, the real read_diff, the real
+    score_one, the real renderer. _client is booby-trapped, so the test also
+    fails if the cap is ever consulted after the model call rather than
+    before it.
+    """
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.delenv("DOUG_INTENT", raising=False)
+    monkeypatch.setattr(reader, "INSTALLATION_MONTHLY_READ_CAP", 0)
+
+    def _no_client():
+        raise AssertionError("a client was built for a read the cap refused")
+
+    monkeypatch.setattr(reader, "_client", _no_client)
+
+    posted: list[dict] = []
+    gh = _gh()
+    monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    monkeypatch.setattr(
+        check_run,
+        "post",
+        lambda gh, o, r, sha, title, summary: posted.append(dict(title=title, summary=summary)),
+    )
+
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    (run,) = posted
+    assert run["title"].startswith("Deterministic fallback")
+    assert "diff read" not in run["title"]
+    assert check_run.FALLBACK_NOTE in run["summary"]
+    # Named as a ceiling, not as a broken reader: the two need different
+    # responses from whoever reads it.
+    assert "reader-capped" in run["summary"]
+    assert "reader-unavailable" not in run["summary"]
+
+    (row,) = _rows(url, store.verdicts)
+    assert row["tier"] == "deterministic"
+    # A model column filled in for a read that never happened would put a
+    # capped verdict in the reader tier's evidence base.
+    assert row["model"] is None
 
 
 def test_an_idempotent_replay_says_it_bought_nothing(tmp_path, monkeypatch, capsys):

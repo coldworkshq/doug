@@ -105,7 +105,15 @@ def run(rows: list[dict]) -> dict:
     for i, row in enumerate(rows):
         for arm, docs in (("matched", row["docs"]), ("deranged", rows[order[i]]["docs"])):
             try:
-                rv = reader.read_with_decisions(row["meta"], row["diff"], docs)
+                # An offline research run holds no installation, so it
+                # charges the sentinel scope like every other un-tenanted
+                # caller. It normally runs against no ledger at all, in
+                # which case nothing counts it — but a probe pointed at a
+                # deployment that HAS one must not spend a customer's
+                # budget on an experiment.
+                rv = reader.read_with_decisions(
+                    row["meta"], row["diff"], docs, scope=reader.SENTINEL_SCOPE
+                )
             except reader.ReaderError as e:
                 print(f"  #{row['meta'].number} {arm}: read failed ({e})")
                 continue

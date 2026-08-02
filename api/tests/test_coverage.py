@@ -11,6 +11,11 @@ from sqlalchemy import create_engine, select
 
 from doug import patterns, reader, review, store
 
+# Every paid read is charged to a scope (reader._charge). Nothing here is
+# about spend, so these reads charge a scope of their own and run against
+# no ledger, which leaves the cap a no-op.
+SCOPE = reader.installation_scope(1)
+
 # (path, chars including the "### path (status, +a/-d)\n" header) — measured
 # from the GitHub compare API at a076c15d, in the order fetch_pr emits them.
 PR643 = [
@@ -150,11 +155,11 @@ def test_a_partial_read_says_so_on_the_verdict(monkeypatch):
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(
         reader, "read_diff",
-        lambda pr, diff: reader.ReaderVerdict.model_validate(
+        lambda pr, diff, *, scope: reader.ReaderVerdict.model_validate(
             {"risk_score": 26, "rationale": "Looks fine.", "findings": []}
         ),
     )
-    tier, verdict, _, cov = review.score_one(_pr(), _diff())
+    tier, verdict, _, cov = review.score_one(_pr(), _diff(), scope=SCOPE)
 
     assert tier == "reader" and not cov.complete
     # 0.26 against a 0.30 threshold: #643's exact verdict. It still clears —
@@ -168,7 +173,7 @@ def test_the_deterministic_tier_reports_no_coverage(monkeypatch):
     """It never opens the diff, so "0% read" would be a false statement
     about a tier that makes no claim to have read anything."""
     monkeypatch.delenv("DOUG_READER", raising=False)
-    tier, _, _, cov = review.score_one(_pr(), _diff())
+    tier, _, _, cov = review.score_one(_pr(), _diff(), scope=SCOPE)
     assert tier == "deterministic" and cov is None
 
 
@@ -286,7 +291,7 @@ def test_score_one_carries_the_prs_changed_files_and_dropped_list_into_coverage(
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(
         reader, "read_diff",
-        lambda pr, diff: reader.ReaderVerdict.model_validate(
+        lambda pr, diff, *, scope: reader.ReaderVerdict.model_validate(
             {"risk_score": 10, "rationale": "fine", "findings": []}
         ),
     )
@@ -296,7 +301,7 @@ def test_score_one_carries_the_prs_changed_files_and_dropped_list_into_coverage(
         "number": 1, "title": "t", "author": "a",
         "files": ["a.py"], "changed_files": 2, "files_dropped": ["b.bin"],
     })
-    _tier, _verdict, _rv, cov = review.score_one(pr, _diff([("a.py", 400)]))
+    _tier, _verdict, _rv, cov = review.score_one(pr, _diff([("a.py", 400)]), scope=SCOPE)
     assert not cov.complete
     assert cov.files_dropped == ["b.bin"]
 

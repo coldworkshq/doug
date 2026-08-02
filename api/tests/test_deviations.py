@@ -12,6 +12,10 @@ from doug.intent import IntentDoc
 from doug.models import PRMetadata
 from tests.test_reader import FakeClient
 
+# Both reads charge one scope; nothing here is about spend, and these tests
+# run against no ledger, so the cap never fires.
+SCOPE = reader.installation_scope(1)
+
 INTENT_PAYLOAD = {
     "risk_score": 62,
     "rationale": "Concurrent writes to shared cache without a lock.",
@@ -61,7 +65,7 @@ def _enable(monkeypatch, docs=(DOC,)):
     client = FakeClient(INTENT_PAYLOAD)
     monkeypatch.setattr(
         reader, "read_with_decisions",
-        lambda pr, diff, chosen: reader.IntentReaderVerdict.model_validate(
+        lambda pr, diff, chosen, *, scope: reader.IntentReaderVerdict.model_validate(
             {**INTENT_PAYLOAD}
         ),
     )
@@ -73,15 +77,19 @@ def test_intent_read_does_not_move_the_score(monkeypatch):
     the intent tier on and off. If this fails, every score in the ledger
     means two different things depending on a flag."""
     monkeypatch.setenv("DOUG_READER", "1")
-    monkeypatch.setattr(reader, "read_diff", lambda pr, diff: reader.ReaderVerdict.model_validate(
-        {k: INTENT_PAYLOAD[k] for k in ("risk_score", "rationale", "findings")}
-    ))
+    monkeypatch.setattr(
+        reader,
+        "read_diff",
+        lambda pr, diff, *, scope: reader.ReaderVerdict.model_validate(
+            {k: INTENT_PAYLOAD[k] for k in ("risk_score", "rationale", "findings")}
+        ),
+    )
 
     monkeypatch.delenv("DOUG_INTENT", raising=False)
-    _, without, _, _cov = review.score_one(_pr(), "+ x")
+    _, without, _, _cov = review.score_one(_pr(), "+ x", scope=SCOPE)
 
     _enable(monkeypatch)
-    _, with_intent, _, _cov = review.score_one(_pr(), "+ x")
+    _, with_intent, _, _cov = review.score_one(_pr(), "+ x", scope=SCOPE)
 
     assert with_intent.model_dump() == without.model_dump()
 
@@ -89,19 +97,19 @@ def test_intent_read_does_not_move_the_score(monkeypatch):
 def test_read_intent_returns_none_when_disabled(monkeypatch):
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.delenv("DOUG_INTENT", raising=False)
-    assert review.read_intent(None, "o", "r", _pr(), "+ x") is None
+    assert review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE) is None
 
 
 def test_read_intent_returns_none_when_repo_keeps_no_records(monkeypatch):
     """The common case. It must be silent and inert, not an error."""
     _enable(monkeypatch, docs=())
-    assert review.read_intent(None, "o", "r", _pr(), "+ x") is None
+    assert review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE) is None
 
 
 def test_read_intent_returns_none_when_no_record_is_relevant(monkeypatch):
     unrelated = DOC.model_copy(update={"title": "Ship the marketing site", "body": ""})
     _enable(monkeypatch, docs=(unrelated,))
-    assert review.read_intent(None, "o", "r", _pr(), "+ x") is None
+    assert review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE) is None
 
 
 def test_read_intent_returns_failure_when_the_read_fails(monkeypatch):
@@ -110,13 +118,31 @@ def test_read_intent_returns_failure_when_the_read_fails(monkeypatch):
     it as a weight-0 reason without moving score or band."""
     _enable(monkeypatch)
 
-    def _boom(pr, diff, chosen):
+    def _boom(pr, diff, chosen, *, scope):
         raise reader.ReaderError("truncated")
 
     monkeypatch.setattr(reader, "read_with_decisions", _boom)
-    out = review.read_intent(None, "o", "r", _pr(), "+ x")
+    out = review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE)
     assert isinstance(out, review.IntentFailure)
     assert "truncated" in out.detail
+    assert out.rule == "intent-unavailable"
+
+
+def test_an_intent_read_at_the_cap_is_named_apart_from_a_broken_one(monkeypatch):
+    """A tenant out of budget and a broken intent path are both
+    IntentFailure — ADR-0007 keeps either one distinct from "this repo
+    keeps no records" — but they must not arrive on the verdict under the
+    same name. "Raise the ceiling" and "page someone, the reader is down"
+    are different instructions to whoever reads it."""
+    _enable(monkeypatch)
+
+    def _capped(pr, diff, chosen, *, scope):
+        raise reader.SpendCapExceeded("installation:1 has spent its cap")
+
+    monkeypatch.setattr(reader, "read_with_decisions", _capped)
+    out = review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE)
+    assert isinstance(out, review.IntentFailure)
+    assert out.rule == "intent-capped"
 
 
 def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
@@ -133,7 +159,7 @@ def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
     _enable(monkeypatch)
 
-    def _boom(pr, diff, chosen):
+    def _boom(pr, diff, chosen, *, scope):
         raise reader.ReaderError("timeout")
 
     monkeypatch.setattr(reader, "read_with_decisions", _boom)
@@ -151,7 +177,7 @@ def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff: ("deterministic", fixed, None, None),
+        lambda meta, diff, *, scope: ("deterministic", fixed, None, None),
     )
 
     body = TestClient(app).post(
@@ -166,7 +192,7 @@ def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
 
 def test_read_intent_carries_provenance(monkeypatch):
     _enable(monkeypatch)
-    out = review.read_intent(None, "o", "r", _pr(), "+ x")
+    out = review.read_intent(None, "o", "r", _pr(), "+ x", scope=SCOPE)
     assert out.refs == ["ADR-0002"]
     assert out.alignment == 41
     assert out.findings[0].type == "contradicts-ticket"
@@ -176,7 +202,7 @@ def test_reader_refuses_to_read_against_no_decisions():
     """Asking the model to compare a diff against nothing is how invented
     deviations happen."""
     try:
-        reader.read_with_decisions(_pr(), "+ x", [])
+        reader.read_with_decisions(_pr(), "+ x", [], scope=SCOPE)
     except reader.ReaderError as e:
         assert "no decision records" in str(e)
     else:

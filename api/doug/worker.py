@@ -139,12 +139,16 @@ def process_job(job: dict) -> int | None:
         return None
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
-    tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    # The one paid entry point that has tenancy, so it is the one that
+    # charges a real tenant: both reads below come out of this
+    # installation's monthly budget rather than the shared sentinel one.
+    scope = reader.installation_scope(job["installation_id"])
+    tier, verdict, rv, cov = review.score_one(meta, diff, scope=scope)
+    intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):
         verdict.reasons.append(
-            Reason(rule="intent-unavailable", label=intent_result.detail, weight=0.0)
+            Reason(rule=intent_result.rule, label=intent_result.detail, weight=0.0)
         )
         intent_read = None
     else:
