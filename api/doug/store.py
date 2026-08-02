@@ -1175,7 +1175,6 @@ def comparison_reviews(limit: int = 50, repo: str | None = None) -> list[dict]:
     ci_identity = and_(
         verdicts.c.installation_id.is_(None),
         verdicts.c.github_repo_id.is_(None),
-        verdicts.c.head_sha.is_(None),
     )
     qualifies = and_(
         verdicts.c.tier != EXTERNAL_TIER,

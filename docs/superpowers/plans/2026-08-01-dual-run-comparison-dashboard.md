@@ -13,7 +13,7 @@
 - Work only in `/Users/andrew/Projects/doughq/repo/.claude/worktrees/dashboard` on `dashboard-dual-run`.
 - Do not change `store.latest_reviews`, `/v1/queue`, the reader prompt, migration 003, authentication, spend controls, or safety-session-owned files.
 - Append new code to `api/doug/store.py`, `api/doug/api.py`, `api/tests/test_store.py`, and `api/tests/test_api.py`; do not reorder or reformat unrelated regions.
-- Preserve every qualifying verdict. App means all three identity columns set; CI means all three NULL; mixed identity and `tier='external'` are excluded.
+- Preserve every qualifying verdict. App means both App ids and `head_sha` are set; CI means both App ids are NULL while `head_sha` may be set on current rows or NULL on legacy rows. One-id rows, App-like rows with no head SHA, and `tier='external'` are excluded. This current-base contract correction is required by upstream PR #30 and does not expand product scope.
 - Never infer complete coverage from tier or a missing coverage row.
 - The comparison UI has no fixture fallback.
 - Run the full API suite and Ruff before every commit; run web tests, lint, and build before every web commit.
@@ -62,11 +62,13 @@ def _comparison_review(
     sha: str,
     *,
     app: bool,
+    legacy_ci: bool = False,
     coverage: reader.Coverage | None = None,
 ) -> int:
     identity = (
         {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app else {}
+        if app
+        else {} if legacy_ci else {"head_sha": sha}
     )
     verdict_id = store.save_review(
         repo,
@@ -98,7 +100,8 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     )
     app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
     app_two = _comparison_review("o/r", 7, "a" * 40, app=True)
-    ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    current_ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    legacy_ci = _comparison_review("o/r", 7, "a" * 40, app=False, legacy_ci=True)
     _external()
     mixed = store.save_review(
         "o/r",
@@ -111,13 +114,14 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     )
 
     rows = store.comparison_reviews(repo="o/r")
-    assert {row["id"] for row in rows} == {app_one, app_two, ci}
+    assert {row["id"] for row in rows} == {app_one, app_two, current_ci, legacy_ci}
     assert mixed not in {row["id"] for row in rows}
     by_id = {row["id"]: row for row in rows}
     assert by_id[app_one]["coverage"]["sent_chars"] == 10
     assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
     assert by_id[app_two]["coverage"] is None
-    assert by_id[ci]["coverage"] is None
+    assert by_id[current_ci]["coverage"] is None
+    assert by_id[legacy_ci]["coverage"] is None
 
 
 def test_comparison_reviews_limits_pr_groups_without_cutting_their_runs(
@@ -181,7 +185,6 @@ def comparison_reviews(limit: int = 50, repo: str | None = None) -> list[dict]:
     ci_identity = and_(
         verdicts.c.installation_id.is_(None),
         verdicts.c.github_repo_id.is_(None),
-        verdicts.c.head_sha.is_(None),
     )
     qualifies = and_(
         verdicts.c.tier != EXTERNAL_TIER,
@@ -242,7 +245,7 @@ Expected: focused tests PASS; 457 baseline tests plus new tests PASS; Ruff print
 
 - [ ] **Step 5: Mutation-check duplicate and identity behavior**
 
-Temporarily change `or_(app_identity, ci_identity)` to `app_identity`; the both-path test must fail. Restore it. Temporarily add one-verdict-per-PR reduction; the duplicate test must fail. Restore it and rerun the focused tests.
+Temporarily restore the legacy all-three-NULL CI predicate; the current-CI test must fail. Restore it. Temporarily add one-verdict-per-PR reduction; the duplicate test must fail. Restore it and rerun the focused tests.
 
 - [ ] **Step 6: Commit the store read**
 
@@ -277,7 +280,9 @@ def _comparison_db(tmp_path, monkeypatch) -> None:
     assert store.enabled()
 
 
-def _comparison_api_review(*, app: bool, coverage=None, pr_meta=None) -> int:
+def _comparison_api_review(
+    *, app: bool, legacy_ci: bool = False, coverage=None, pr_meta=None
+) -> int:
     sha = "a" * 40
     verdict = api.Verdict(
         score=0.2,
@@ -287,7 +292,8 @@ def _comparison_api_review(*, app: bool, coverage=None, pr_meta=None) -> int:
     )
     identity = (
         {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app else {}
+        if app
+        else {} if legacy_ci else {"head_sha": sha}
     )
     verdict_id = store.save_review(
         "o/r",
@@ -354,16 +360,21 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
     )
     app_one = _comparison_api_review(app=True, coverage=coverage)
     app_two = _comparison_api_review(app=True)
-    ci = _comparison_api_review(app=False)
+    current_ci = _comparison_api_review(
+        app=False,
+        pr_meta={"number": 33, "title": "Current CI", "author": "dev", "files": []},
+    )
+    legacy_ci = _comparison_api_review(app=False, legacy_ci=True)
 
     response = client.get(
         "/v1/comparisons", headers={"X-Doug-Token": "secret"}
     )
     assert response.status_code == 200
     runs = response.json()["runs"]
-    assert {run["id"] for run in runs} == {app_one, app_two, ci}
+    assert {run["id"] for run in runs} == {app_one, app_two, current_ci, legacy_ci}
     assert [run["path"] for run in runs].count("app") == 2
-    assert [run["path"] for run in runs].count("ci") == 1
+    assert [run["path"] for run in runs].count("ci") == 2
+    assert next(run for run in runs if run["id"] == current_ci)["head_sha"] == "a" * 40
     assert {run["head_sha"] for run in runs} == {"a" * 40}
     covered = next(run for run in runs if run["id"] == app_one)
     assert covered["coverage"]["sent_chars"] == 10
@@ -390,7 +401,7 @@ def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
     assert run["head_sha"] is None
 ```
 
-The serialization test must write two App rows and one CI row for one SHA, then assert all three ids are present; App uses the identity `head_sha`, CI uses `pr_meta.head_sha`, and coverage includes exact sent and diff character counts. The fallback test inserts a qualifying CI row with `pr_meta=None` and asserts `title == "PR #9"`, a repaired GitHub URL, and `head_sha is None`.
+The serialization test must write two App rows, one current CI row, and one legacy CI row for one SHA, then assert all four ids are present. App and current CI use the row `head_sha`; legacy CI falls back to `pr_meta.head_sha`; coverage includes exact sent and diff character counts. The fallback test inserts a qualifying legacy CI row with `pr_meta=None` and asserts `title == "PR #9"`, a repaired GitHub URL, and `head_sha is None`.
 
 - [ ] **Step 2: Run the focused tests and verify the route is missing**
 
@@ -409,8 +420,8 @@ Implement helpers with these exact contracts:
 
 ```python
 def _comparison_path(row: dict) -> str:
-    identity = (row["installation_id"], row["github_repo_id"], row["head_sha"])
-    return "app" if all(value is not None for value in identity) else "ci"
+    app_identity = (row["installation_id"], row["github_repo_id"])
+    return "app" if all(value is not None for value in app_identity) else "ci"
 
 
 def _comparison_run(row: dict) -> dict:
@@ -423,7 +434,9 @@ def _comparison_run(row: dict) -> dict:
         "pr_number": row["pr_number"],
         "title": meta.get("title") or f"PR #{row['pr_number']}",
         "url": meta.get("url") or f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
-        "head_sha": row["head_sha"] if path == "app" else meta.get("head_sha"),
+        "head_sha": (
+            row["head_sha"] if row["head_sha"] is not None else meta.get("head_sha")
+        ),
         "path": path,
         "scored_at": row["scored_at"],
         "score": row["score"],
@@ -475,7 +488,7 @@ Expected: all tests PASS and Ruff is clean.
 
 - [ ] **Step 6: Mutation-check wire preservation**
 
-Temporarily derive both paths' SHA only from `row["head_sha"]`; the CI SHA assertion must fail. Restore it. Temporarily emit only the first store row; the duplicate serialization assertion must fail. Restore it and rerun focused tests.
+Temporarily project CI SHA only from `pr_meta.head_sha`; the current-CI row-column SHA assertion must fail. Restore it. Temporarily emit only the first store row; the duplicate serialization assertion must fail. Restore it and rerun focused tests.
 
 - [ ] **Step 7: Commit the endpoint**
 

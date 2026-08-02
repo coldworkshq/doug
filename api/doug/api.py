@@ -1066,8 +1066,8 @@ async def github_webhook(
 
 
 def _comparison_path(row: dict) -> str:
-    identity = (row["installation_id"], row["github_repo_id"], row["head_sha"])
-    return "app" if all(value is not None for value in identity) else "ci"
+    app_identity = (row["installation_id"], row["github_repo_id"])
+    return "app" if all(value is not None for value in app_identity) else "ci"
 
 
 def _comparison_run(row: dict) -> dict:
@@ -1080,7 +1080,9 @@ def _comparison_run(row: dict) -> dict:
         "pr_number": row["pr_number"],
         "title": meta.get("title") or f"PR #{row['pr_number']}",
         "url": meta.get("url") or f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
-        "head_sha": row["head_sha"] if path == "app" else meta.get("head_sha"),
+        "head_sha": (
+            row["head_sha"] if row["head_sha"] is not None else meta.get("head_sha")
+        ),
         "path": path,
         "scored_at": row["scored_at"],
         "score": row["score"],

@@ -10,7 +10,7 @@ This is an operational comparison surface for deciding when the CI path can be r
 
 - Add one token-gated read endpoint and one new store read. Do not change `store.latest_reviews` or `/v1/queue`.
 - Add a separate `/compare` web route and link it from the existing dashboard navigation. Do not fold soak evidence into the operational queue.
-- App rows are rows whose `installation_id`, `github_repo_id`, and `head_sha` are all set. CI rows are rows where all three are `NULL`. Rows with a partial identity are neither path and must not appear.
+- App rows are rows whose `installation_id`, `github_repo_id`, and `head_sha` are all set. CI rows have both App ids `NULL`; `head_sha` is set on current rows and may be `NULL` on legacy rows. Rows with exactly one App id, or both App ids without a head SHA, are neither path and must not appear.
 - Exclude `tier='external'` rows. Third-party reviews are not one side of this experiment.
 - Preserve every qualifying verdict row. In particular, do not assume the future migration 003 uniqueness constraint already exists and do not collapse duplicate App verdicts.
 - Show `tier` and stored read coverage with every score. A deterministic verdict or a reader verdict without a coverage row must say coverage is unavailable; the UI must not infer a full read.
@@ -43,8 +43,10 @@ For every verdict, the function returns the verdict columns plus an optional `co
 The path predicate is explicit in SQL:
 
 - App: all three identity columns are non-NULL.
-- CI: all three identity columns are NULL.
-- Mixed identity and external-tier rows: excluded.
+- CI: `installation_id` and `github_repo_id` are both NULL; `head_sha` may be non-NULL for current rows or NULL for legacy rows.
+- One-App-id rows, App-like rows with both ids but no head SHA, and external-tier rows: excluded.
+
+This is a current-base contract correction required by upstream PR #30, not a product-scope expansion: both current review paths write the shared commit identity to `head_sha` for idempotency, while only the App path writes the App id pair.
 
 The store function remains a lossless ledger read. It does not group runs, select a winner, or calculate deltas.
 
@@ -82,7 +84,7 @@ The response is:
 }
 ```
 
-`path` is derived from the three identity columns, never from score, tier, or display metadata. `head_sha` uses the App identity column when present and the CI row's stored `pr_meta.head_sha` otherwise. A missing CI metadata SHA remains `null`; it is not guessed. `title` and `url` come from `pr_meta`, with the same repository-and-number URL repair used by the queue when an old row lacks a URL.
+After the store predicate qualifies a row, `path` is derived from the App id pair, never from score, tier, commit identity, or display metadata. `head_sha` uses the row's shared commit-identity column for either path when present and falls back to `pr_meta.head_sha` only for a legacy CI row. A legacy CI row missing both remains `null`; it is not guessed. `title` and `url` come from `pr_meta`, with the same repository-and-number URL repair used by the queue when an old row lacks a URL.
 
 The response intentionally stays flat. Flat events preserve duplicates and make the backend contract independently inspectable; grouping and presentation statistics belong to the dashboard.
 
@@ -148,7 +150,7 @@ API endpoint tests will prove:
 
 - Shared-token configuration, rejection, and success match `/v1/queue`.
 - An unconfigured ledger returns `503`.
-- Path classification, CI metadata SHA, App identity SHA, fallback metadata, coverage, and duplicate rows survive serialization.
+- Path classification from the App id pair, current row-column SHA, legacy CI metadata fallback, null legacy SHA, coverage, and duplicate rows survive serialization.
 
 Web tests will use Node's built-in test runner with TypeScript stripping, adding no package dependency. They will prove:
 

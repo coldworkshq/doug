@@ -1333,11 +1333,13 @@ def _comparison_review(
     sha: str,
     *,
     app: bool,
+    legacy_ci: bool = False,
     coverage: reader.Coverage | None = None,
 ) -> int:
     identity = (
         {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app else {}
+        if app
+        else {} if legacy_ci else {"head_sha": sha}
     )
     verdict_id = store.save_review(
         repo,
@@ -1372,9 +1374,10 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     )
     app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
     app_two = _comparison_review("o/r", 7, "a" * 40, app=True)
-    ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    current_ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    legacy_ci = _comparison_review("o/r", 7, "a" * 40, app=False, legacy_ci=True)
     _external()
-    mixed = store.save_review(
+    one_app_id = store.save_review(
         "o/r",
         7,
         "reader",
@@ -1383,15 +1386,65 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
         pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
         installation_id=10,
     )
+    app_without_head = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        installation_id=10,
+        github_repo_id=20,
+    )
 
     rows = store.comparison_reviews(repo="o/r")
-    assert {row["id"] for row in rows} == {app_one, app_two, ci}
-    assert mixed not in {row["id"] for row in rows}
+    assert {row["id"] for row in rows} == {
+        app_one,
+        app_two,
+        current_ci,
+        legacy_ci,
+    }
+    assert one_app_id not in {row["id"] for row in rows}
+    assert app_without_head not in {row["id"] for row in rows}
     by_id = {row["id"]: row for row in rows}
     assert by_id[app_one]["coverage"]["sent_chars"] == 10
     assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
     assert by_id[app_two]["coverage"] is None
-    assert by_id[ci]["coverage"] is None
+    assert by_id[current_ci]["coverage"] is None
+    assert by_id[legacy_ci]["coverage"] is None
+
+
+def test_current_ci_review_is_visible_in_comparisons_with_its_exact_head(
+    tmp_path, monkeypatch
+):
+    """The CI endpoint writes head_sha for idempotency, without App ids.
+
+    Treating any row with a head column as App or malformed hides every new
+    CI result from the soak dashboard even though the review completed.
+    """
+    url = _db(tmp_path, monkeypatch)
+    sha = "c" * 40
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(
+        review,
+        "fetch_pr",
+        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
+    )
+    c = TestClient(app)
+
+    reviewed = c.post(
+        "/v1/review",
+        json={"repo": "o/r", "pr_number": 7},
+        headers={**AUTH, "X-GitHub-Token": "gh"},
+    )
+    assert reviewed.status_code == 200
+    with create_engine(url).connect() as conn:
+        verdict_id = conn.execute(select(store.verdicts.c.id)).scalar_one()
+
+    runs = c.get("/v1/comparisons", headers=AUTH).json()["runs"]
+    assert [run["id"] for run in runs] == [verdict_id]
+    assert runs[0]["path"] == "ci"
+    assert runs[0]["head_sha"] == sha
 
 
 def test_comparison_reviews_limits_pr_groups_without_cutting_their_runs(

@@ -1577,7 +1577,9 @@ def _comparison_db(tmp_path, monkeypatch) -> None:
     assert store.enabled()
 
 
-def _comparison_api_review(*, app: bool, coverage=None, pr_meta=None) -> int:
+def _comparison_api_review(
+    *, app: bool, legacy_ci: bool = False, coverage=None, pr_meta=None
+) -> int:
     sha = "a" * 40
     verdict = api.Verdict(
         score=0.2,
@@ -1587,7 +1589,8 @@ def _comparison_api_review(*, app: bool, coverage=None, pr_meta=None) -> int:
     )
     identity = (
         {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app else {}
+        if app
+        else {} if legacy_ci else {"head_sha": sha}
     )
     verdict_id = store.save_review(
         "o/r",
@@ -1654,16 +1657,40 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
     )
     app_one = _comparison_api_review(app=True, coverage=coverage)
     app_two = _comparison_api_review(app=True)
-    ci = _comparison_api_review(app=False)
+    current_ci = _comparison_api_review(
+        app=False,
+        pr_meta={"number": 33, "title": "Current CI", "author": "dev", "files": []},
+    )
+    legacy_ci = _comparison_api_review(app=False, legacy_ci=True)
+    one_app_id = store.save_review(
+        "o/r",
+        33,
+        "reader",
+        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
+        installation_id=10,
+        pr_meta={"head_sha": "a" * 40},
+    )
+    app_without_head = store.save_review(
+        "o/r",
+        33,
+        "reader",
+        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
+        installation_id=10,
+        github_repo_id=20,
+        pr_meta={"head_sha": "a" * 40},
+    )
 
     response = client.get(
         "/v1/comparisons", headers={"X-Doug-Token": "secret"}
     )
     assert response.status_code == 200
     runs = response.json()["runs"]
-    assert {run["id"] for run in runs} == {app_one, app_two, ci}
+    assert {run["id"] for run in runs} == {app_one, app_two, current_ci, legacy_ci}
+    assert one_app_id not in {run["id"] for run in runs}
+    assert app_without_head not in {run["id"] for run in runs}
     assert [run["path"] for run in runs].count("app") == 2
-    assert [run["path"] for run in runs].count("ci") == 1
+    assert [run["path"] for run in runs].count("ci") == 2
+    assert next(run for run in runs if run["id"] == current_ci)["head_sha"] == "a" * 40
     assert {run["head_sha"] for run in runs} == {"a" * 40}
     covered = next(run for run in runs if run["id"] == app_one)
     assert covered["coverage"]["sent_chars"] == 10
