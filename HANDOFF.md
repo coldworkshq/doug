@@ -51,9 +51,16 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
              job(s)". The webhook path drains jobs promptly, so at any boot
              there is nothing pending for the sweep to find. The criterion
              asks the backstop to prove itself, and passive soaking cannot
-             create the condition it needs. Needs a deliberate setup (park a
-             delivery, then boot) or a rewrite of the criterion — ANDREW'S
-             CALL, flagged 2026-08-02, not decided.
+             create the condition it needs. ANDREW RULED 2026-08-02: FORCE
+             THE CONDITION, rather than rewrite the criterion or drop it —
+             it was written to test an untested claim, so weakening it to
+             pass would defeat its purpose. Procedure agreed, NOT YET RUN
+             and deliberately not run unattended, because step 1 is a
+             deliberate production degradation: (1) stop deliveries reaching
+             the queue, (2) push to an open PR so no job is enqueued, (3)
+             let the service cold-start, (4) expect "doug: reconcile
+             enqueued 1 job(s)" plus a check run for that SHA. Costs one
+             paid read. Run this WITH Andrew, not for him.
           3. MERGE writes an outcome_jobs row — UNVERIFIED. #35/#36/#37 all
              merged 2026-08-02 and no log line covers this path, so it needs
              a ledger read, not a grep. Cheapest honest check available.
@@ -91,8 +98,8 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
              "safe to point at strangers", so this belongs in M2 and is not
              on the roadmap's M2 list at all. NOT a live incident: install
              visibility is still "Only on this account".
-             BUILT on branch intent-per-installation-flag (499 passed, was
-             492; ruff clean; 4 mutations all caught). Andrew ruled ENV
+             BUILT — PR #39 OPEN (branch intent-per-installation-flag; 499
+             passed, was 492; ruff clean; 4 mutations caught). Andrew ruled ENV
              ALLOWLIST over an installations column — no migration, no
              collision with 005, right size for one install; it becomes a
              column when item 3's dispense work opens that table anyway.
