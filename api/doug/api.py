@@ -41,6 +41,20 @@ def _startup_reconcile() -> None:
     only enqueues, so a drain running ahead of it would drain whatever the
     last delivery left and stop, leaving everything this sweep discovers
     waiting for a delivery that already went missing once.
+
+    This runs on every cold start, which on a scale-to-zero deployment means
+    often, and nothing here rate-limits it or elects a leader. What bounds
+    the repeat cost lives in the schema and the worker instead. Re-enqueueing
+    a head SHA the queue already reviewed collides on uq_review_job and
+    ingest._revive returns None for a 'done' row, so a sweep that finds
+    nothing new leaves nothing for the drain to claim. A job that is claimed
+    is checked against store.find_verdict_by_identity before any paid read.
+    Repeated sweeps therefore cost GitHub list calls, not model spend.
+
+    The gap that leaves: that pre-read is advisory, because verdicts carries
+    no unique index on the identity it reads (roadmap M2, migration 003), so
+    two workers racing the same reclaimed job can both pass it. The claim
+    lease bounds that window rather than closing it.
     """
     try:
         n = worker.reconcile_all()
