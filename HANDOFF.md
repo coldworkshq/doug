@@ -1,17 +1,17 @@
 # HANDOFF — doug
 
-State:    building — M0 CLOSED. M1 six-tenths done, ONE PR PER TASK
+State:    building — M0 CLOSED. M1 eight-tenths done, ONE PR PER TASK
           (Andrew's call, 2026-08-01: more Doug verdicts + smaller diffs
           Doug can actually read whole). Merged to main: Tasks 1-2 (#18),
-          3 (#19), 4 (#20), 5 (#23), 8 (#22, ADR-0010). Task 7a
-          (reconcile functions) in flight.
-Next:     M1 Task 6 — the webhook rewrite (api/doug/api.py), carrying BOTH
-          amendments in docs/superpowers/plans/2026-08-01-step-2-amendments.md
-          (clock-start outcome_jobs rows; pull_request_review ingest; NO
-          token mint). Then Task 7b (Step 4 only — wire reconcile_all into
-          the lifespan Task 6 creates), Task 9 (retire the CI token path),
-          Task 10 (deploy cutover). Task 7 Steps 1-3 already shipped, so
-          only its Step 4 remains.
+          3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26 cooloff
+          fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite). Task 7b —
+          Task 7's Step 4, wiring reconcile_all into the lifespan Task 6
+          created — is THIS PR, and it closes Task 7 and the M1 code
+          except Tasks 9-10.
+Next:     M1 Task 10 — deploy + cutover. NEEDS ANDREW'S EXPLICIT GO-AHEAD
+          before anything deploys. THEN Task 9 (retire the CI token path);
+          that order is the reverse of the plan's and is deliberate — see
+          the Task 9/10 resequencing decision below.
 Blockers: none for code. Two things only Andrew can do:
           - subscribe the App to the "Pull request review" event before
             Task 6's third-party ingest receives anything (handler is
@@ -52,7 +52,9 @@ Key facts for the executor:
   10 decides the dedicated-SA custody). Webhook secret doug-webhook-secret
   v2 (v1 has a trailing newline; prod pinned to :2, disable v1 at cutover).
   Webhook verified end-to-end in prod: ping + installation events 202 with
-  valid signatures; deliveries currently verify-and-discard (api.py:331).
+  valid signatures. Deliveries no longer verify-and-discard — Task 6 (#27)
+  dispatches them — but nothing is deployed yet, so prod is still running
+  the discarding revision until Task 10.
 - Install visibility is "Only on this account" — flip to "Any account"
   before installing on lemahq/lema (Task 10 cutover).
 - The plan was built by 3 drafting agents on locked interfaces, reviewed by
@@ -67,6 +69,20 @@ Key facts for the executor:
   label. Positive-control experiment needed before further intent-stream
   investment. Full analysis: workspace/research/phase1-entry-preregistration.md
   (workspace/ is untracked — lives only on Andrew's machine).
+
+Decisions this session (2026-08-01, M1 Tasks 6–7b):
+- Task 9 RESEQUENCED AFTER Task 10 (Andrew, 2026-08-01): Task 9 deletes
+  .github/workflows/doug-review.yml, which is the surface producing Doug's
+  reviews on this repo today. Deleting it before the App's check run is
+  verified working in production would leave every PR — including the ones
+  fixing that — reviewed by nothing, with no fallback to roll back to —
+  rejected: the plan's 9-then-10 order.
+- Task 7b tested the lifespan wiring the brief shipped untested. The brief's
+  own note ("both guards are off in tests, so TestClient never spawns the
+  thread") describes the gap rather than justifying it; the tests patch
+  app_auth.enabled/store.enabled instead of the env behind them, and the
+  thread is named so "no thread was started" is assertable rather than a
+  race — rejected: shipping Step 4 with the coverage the brief specified.
 
 Decisions this session (2026-08-01, M1 Tasks 1–2):
 - outcome_jobs is a store.metadata table, NOT a migration (Global
