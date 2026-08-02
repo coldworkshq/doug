@@ -497,7 +497,7 @@ def test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict(
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff: scored.append(1) or real_score_one(meta, diff),
+        lambda meta, diff, **kw: scored.append(1) or real_score_one(meta, diff, **kw),
     )
     c = TestClient(app)
 
