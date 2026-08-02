@@ -105,8 +105,11 @@ executed as written — amendments folded in at their task, never as a second pa
   backtested one), with graceful degradation when the reviews call fails. Merged #25.
 - [x] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written
   per verdict. Merged #25. The previous test compared `reader.py` to itself and could not fail.
-- [ ] Fork-PR + bot-author exclusion from deep reads — the **fork** half lands with Task 6's
-  webhook gate; bot-author is still open
+- [~] Fork-PR + bot-author exclusion from deep reads — the **fork** half is done, on both
+  entrances to the paid path: the webhook gate (`api.py:660`) never enqueues one, and
+  `worker._skip_reason` (`worker.py:236`) refuses one that reached the queue another way.
+  Both treat non-integer repo ids as a fork, because the safe direction to be wrong in is
+  skip. Merged #27. **Bot-author is still open**, and it is the half that still costs money.
 - [ ] Migration 003: **UNIQUE** index on `verdicts` (installation_id, github_repo_id, pr_number,
   head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are untouched. Two jobs
   in one: `worker.process_job`'s idempotency pre-read runs on every job over unindexed columns
