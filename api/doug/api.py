@@ -4,7 +4,7 @@ import hmac
 import json
 import os
 import threading
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from importlib import resources
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -25,7 +25,26 @@ from .models import (
 )
 from .scoring import default_threshold, score
 
-app = FastAPI(title="Doug", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Refuse to boot without the webhook secret.
+
+    Production's secret was set out-of-band and the current deploy()
+    wipes it on the next CI run (see Task 10 — the two must ship
+    together). Without it the handler cannot verify anything, and an
+    unverified delivery under the App is a paid model read triggered by
+    anyone who can POST. A crash-looping revision is a visible failure;
+    a running service accepting forged deliveries is not.
+    """
+    if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
+        raise RuntimeError(
+            "GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github"
+        )
+    yield
+
+
+app = FastAPI(title="Doug", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 
+import pytest
 from fastapi.testclient import TestClient
 
 from doug.api import app
@@ -103,3 +104,35 @@ def test_webhook_accepts_a_valid_sha256_signature(monkeypatch):
         headers={"X-Hub-Signature-256": _sig(b"s3cret", body, "sha256")},
     )
     assert r.status_code == 202
+
+
+def test_startup_refuses_to_run_without_a_webhook_secret(monkeypatch):
+    """GITHUB_WEBHOOK_SECRET was set out-of-band in production and the
+    current deploy() wipes it. A service that boots without it looks
+    perfectly healthy while every delivery it accepts is unverifiable —
+    and under the App, an accepted delivery is a paid model read that
+    anyone who can POST gets to trigger. Refusing at startup is the only
+    version of this that shows up in a deploy instead of a bill.
+
+    Note: this only fires when the client is entered as a context manager,
+    which is why the module-level `client` above keeps working."""
+    monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="GITHUB_WEBHOOK_SECRET"):
+        with TestClient(app):
+            pass
+
+
+def test_startup_succeeds_once_the_secret_is_configured(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    with TestClient(app) as c:
+        assert c.get("/healthz").status_code == 200
+
+
+def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
+    """The wrong-digest case is covered above; this is the shape an
+    attacker sends first, and nothing covered it."""
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    r = client.post(
+        "/webhooks/github", content=b'{"zen":"x"}', headers={"X-GitHub-Event": "ping"}
+    )
+    assert r.status_code == 401
