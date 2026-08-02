@@ -82,7 +82,12 @@ executed as written — amendments folded in at their task, never as a second pa
   `max_attempts` paid reads per restart. The first fix over-corrected — it put the cooloff in the
   shared `_revive`, which would have made a reopened PR silently unreviewable for an hour once
   Task 6 added a webhook caller. Merged #26 charges the cooloff to the *caller* instead:
-  `enqueue(..., trigger=)`, live by default, and only the reconcile sweep opts in.
+  `enqueue(..., trigger=)`, live by default, and a caller opts in to the sweep's terms.
+  Two do, and both say so at the call site: `worker.reconcile_all` and the
+  `installation.created` handler, which is a sweep over every open PR of an installation and
+  is replayable by the Redeliver button. #29 briefly let that second one inherit the live
+  default — Doug caught it on its own review of #29, which is the same leak class it found on
+  #24, one call site further out.
 
 **Exit gate:** webhook-driven review live on `drewjst/doug` — deliveries 202 with dedup proven
 (same delivery twice → one job), check run rendering, full suite green, CI token path gone.

@@ -186,11 +186,13 @@ def _revive(
 
     A 'superseded' row revives on any caller's terms: a force-push back to an
     older SHA is an instruction to review that SHA now. A 'failed' row revives
-    at once for a live caller too, and only the reconcile sweep makes it wait
-    out FAILED_REVIVE_COOLOFF_SECONDS from finished_at — that sweep runs on
-    every startup regardless of whether anything changed, so a
-    permanently-broken PR would otherwise re-arm max_attempts paid reads on
-    each cold start.
+    at once for a live caller too, and only a caller passing 'reconcile' makes
+    it wait out FAILED_REVIVE_COOLOFF_SECONDS from finished_at — those are the
+    callers that re-derive every open PR whether or not anything changed
+    (worker.reconcile_all on each startup, api.py's installation.created
+    handler on each redelivery of an event GitHub is free to repeat), so a
+    permanently-broken PR would otherwise re-arm max_attempts paid reads once
+    per cold start and once per redelivery.
 
     Read off `trigger` rather than off the row, because the row cannot tell
     the two callers apart: 'failed' at this SHA looks identical whichever one

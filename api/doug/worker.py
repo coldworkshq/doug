@@ -259,14 +259,23 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
     """Enqueue every reviewable open PR this installation can see.
 
     `trigger` is the terms a collision with a 'failed' row comes back on, and
-    it is a parameter rather than a constant because this function has two
-    callers with opposite claims to it. reconcile_all passes 'reconcile': the
-    startup sweep re-derives every open PR whether or not anything changed, so
-    FAILED_REVIVE_COOLOFF_SECONDS is charged to its repetition. api.py's
-    installation.created handler passes nothing and gets the live default,
-    because installing an App is an event that happened once, not a machine
-    repeating itself. Repetition is a property of the caller; deciding it here
-    would hand every caller the brake that belongs to one of them.
+    it is a parameter rather than a constant because repetition is a property
+    of the caller: deciding it here would hand every caller the brake that
+    belongs to whichever of them repeats itself. Both of today's callers ask
+    for 'reconcile', and for the same reason — reconcile_all is the startup
+    sweep, and api.py's _reconcile_then_drain runs on installation.created,
+    which GitHub will redeliver on request or on retry. Each re-derives every
+    open PR whether or not anything about it changed, which is what
+    FAILED_REVIVE_COOLOFF_SECONDS is charged to.
+
+    The 'live' default is for the caller that does not yet exist: one reacting
+    to a single head change, which has one event's worth of spend behind it
+    and no repetition to brake. Being a default is also what makes it safe —
+    an unrecognized trigger and a forgotten argument both land on the terms
+    that review too eagerly rather than the terms that might not review at
+    all (ingest._revive says why that is the right direction to fail in). The
+    price is that a caller which does repeat itself has to say so, out loud,
+    at the call site.
 
     The healing path for missed deliveries. GitHub retries a *failed*
     delivery, but a delivery this service 202s and then loses to a restart
