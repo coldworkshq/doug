@@ -22,7 +22,13 @@ Reading order:
    rulings on the selective-agent proposal: evidence refinery, champion–challenger models,
    retrieval-first garden, 90-day replay onboarding (adopted); live specialist panel (gated
    behind a pre-registered experiment); agents-on-every-PR (rejected).
-7. **[ROADMAP.md](ROADMAP.md)** — the tracking document: milestones M0–M6 with checkboxes,
+7. **[distillation-shape.md](distillation-shape.md)** — check-time deterministic MATCH;
+   offline distillation as margin engine. Mirror: `workspace/research/distillation-shape.md`.
+8. **[health-connectors.md](health-connectors.md)** — repo health narrative + inbound
+   Datadog/Grafana/Sentry connector contract (not an observability product). Mirror:
+   `workspace/research/health-connectors.md`.
+9. **[survival-probe-1-preregistration.md](survival-probe-1-preregistration.md)** / **[survival-probe-1-results.md](survival-probe-1-results.md)** — garden survival pulse #1 on sentry (FAIL on locked bars; does not unlock PC2).
+10. **[ROADMAP.md](ROADMAP.md)** — the tracking document: milestones M0–M6 with checkboxes,
    exit gates, and triggers. Progress is checked off in the PRs that earn it.
 
 Ground rules this design inherits (brand-level, closed): route never block · never write
