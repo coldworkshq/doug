@@ -114,12 +114,29 @@ executed as written — amendments folded in at their task, never as a second pa
 
 ## M2 — Safe to point at strangers *(~3–4d; blocks ANY outside install)*
 
-- [~] Spend caps wrapping **both** model calls — timeout, retry cap, per-installation monthly cap;
-  the second intent read (`reader.py:372`) is currently uncapped and unmetered: close it.
-  **The primitive landed in #25 (`store.record_deep_read`) but is NOT wired to any call site** —
-  `reader.py` neither imports it nor takes an `installation_id`. So there is a tested cap that
-  nothing consults, which is worth less than it looks: spend is still uncapped in production.
-  Wiring it needs `installation_id` threaded through `score_one`/`read_intent`.
+- [x] Spend caps wrapping **both** model calls — the primitive landed in #25
+  (`store.record_deep_read`) and sat wired to nothing until this item closed it. `_charge(scope)`
+  now runs at the top of `read_diff` **and** `read_with_decisions`, before the client is even
+  constructed, so the previously uncapped-and-unmetered intent read is covered on the same terms.
+  `scope` is **required** on both and on `score_one`/`read_intent` — no default anywhere on the
+  path, so a new caller is a `TypeError` rather than an unmetered read. Un-tenanted callers (the
+  CI path, the credential probe, the CLI, the intent probe script) charge a sentinel scope, which
+  keeps the CI dual-run and the probe alive without letting either touch a tenant's ceiling.
+  At the cap: `SpendCapExceeded(ReaderError)` → deterministic fallback under its own rule name,
+  and the check run renders the **deterministic** tier honestly (pinned end-to-end, ADR-0010).
+  **Caps are runaway guards, not plan limits** (4,000/installation/month ≈ 2,000 PRs, 1,000
+  sentinel), and they are guesses until the cost lines below produce real numbers — M4 sets
+  plan-shaped figures.
+  **Honest limit, deliberately not papered over:** `record_deep_read` returns `True` when there
+  is no ledger, so the cap is a property of deployments that have one. Production does; local
+  dogfooding and the open-source path do not, and reads there are uncapped. A test asserts that
+  rather than a comment claiming otherwise.
+- [x] Per-read cost capture — `response.usage` was previously discarded at the one moment it was
+  knowable. Each read now logs `kind` (risk vs intent), `scope`, `model`, `in=`, `out=`, emitted
+  from `reader.py` so it covers **every** read including the CI path the worker never sees, and
+  **before** the `stop_reason` check so a `max_tokens` truncation — billed in full, then thrown
+  away — reports what it cost. No schema change: logs answer "what does a PR cost" without
+  touching an existing prod table. Promoting it to the ledger is a deliberate later step.
 - [x] `/v1/score/read`: **authed**, not deleted — nothing in the product calls it, but the step-2
   plan's Task 10 Step 6 uses it as the post-deploy probe that a rotated Anthropic key works on a
   live revision, which is a recurring operational need and the only check that needs no PR. It
@@ -138,13 +155,22 @@ executed as written — amendments folded in at their task, never as a second pa
   `worker._skip_reason` (`worker.py:236`) refuses one that reached the queue another way.
   Both treat non-integer repo ids as a fork, because the safe direction to be wrong in is
   skip. Merged #27. **Bot-author is still open**, and it is the half that still costs money.
-- [ ] Migration 003: **UNIQUE** index on `verdicts` (installation_id, github_repo_id, pr_number,
-  head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are untouched. Two jobs
-  in one: `worker.process_job`'s idempotency pre-read runs on every job over unindexed columns
-  (seq scan on a table that only grows — harmless at dogfood volume, a cliff at tenant volume),
-  and that pre-read is currently *advisory only*. Doug's own review of #23 made the point: an
-  unlocked SELECT plus a table with no unique constraint means two workers on the same reclaimed
-  job can both pass the check and both write. The lease bounds that window; the index closes it.
+- [ ] Migration **005** — **UNIQUE** index on `verdicts` (installation_id, github_repo_id,
+  pr_number, head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are
+  untouched. **Renumbered 2026-08-02: 003 and 004 are taken** (#30 shipped 003, the partial
+  queue indexes, and 004, `review_jobs.claim_generation`). Two jobs in one: the idempotency
+  pre-read runs on every job over unindexed columns (seq scan on a table that only grows —
+  harmless at dogfood volume, a cliff at tenant volume), and that pre-read is still *advisory
+  only*.
+  **Rationale rewritten 2026-08-02, because #30 changed what is left to close.** The old
+  wording — "the lease bounds that window; the index closes it" — is stale: #30's
+  `claim_generation` fence is stronger than a lease and now bounds it, so a late `complete`/
+  `fail` from a superseded holder can neither finish the job, burn attempts, nor post a second
+  check run. What the fence does **not** do is stop both holders writing: `store.save_review`
+  takes no generation, so worker A can still insert a duplicate verdict after worker B
+  completed, and both had already paid before either could be fenced. So this item is now
+  about **ledger integrity — an honest published denominator — rather than double-spend**,
+  which the fence and the spend cap between them already bound.
   Must be a migration, never a bare index (the constraint that governs columns governs indexes)
 - [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
 
