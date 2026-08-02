@@ -1049,6 +1049,50 @@ def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
     assert "#9" in err and "draft" in err
 
 
+def test_reconcile_logs_a_pr_the_cooloff_held_back_but_not_an_ordinary_dedupe(
+    tmp_path, monkeypatch, capsys
+):
+    """The last reconcile skip with no audit trail.
+
+    test_reconcile_logs_why_a_pr_was_skipped states the principle: what is
+    worth being able to check after the fact is exactly why a given PR was not
+    reviewed. Draft/fork and the base-repo-id mismatch both log; the cooloff
+    did not, because enqueue returns None both when it deduped a row already
+    reviewed and when it held back a 'failed' one — an operator watching a PR
+    that Doug is silently waiting an hour on saw the same empty trace as one
+    that had already been reviewed.
+
+    The second half is why this is a log line and not noise: the boring case
+    is nearly every open PR on every sweep, and logging those would bury the
+    interesting one.
+    """
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    held = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    for _ in range(3):
+        ingest.fail(held, "reader exploded")
+    reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40)
+    ingest.claim()
+    ingest.complete(reviewed, None)
+    assert {j["id"]: j["status"] for j in _rows(url, store.review_jobs)} == {
+        held: "failed", reviewed: "done",
+    }
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([
+            _pull(number=1, head_sha="a" * 40),
+            _pull(number=2, head_sha="b" * 40),
+        ]),
+    )
+    assert worker.reconcile_all() == 0  # neither is new work
+
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if "o/r#" in ln]
+    assert len(lines) == 1, f"expected exactly one PR-level line, got {lines}"
+    assert "o/r#1" in lines[0] and "cooloff" in lines[0]
+
+
 def test_skip_reason_treats_missing_or_unset_draft_as_skip():
     """The docstring's whole UNSET rationale was previously unexercised: the
     old check (`getattr(p, "draft", False) is True`) let anything that

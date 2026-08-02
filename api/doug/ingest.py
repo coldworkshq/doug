@@ -260,6 +260,57 @@ def _revive(
     return int(job_id) if job_id is not None else None
 
 
+def cooloff_hold_remaining(
+    installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
+) -> int | None:
+    """Seconds before the sweep would revive this SHA's 'failed' row, or None.
+
+    enqueue answers every collision with the same None: a row already pending,
+    running or reviewed, and a 'failed' row FAILED_REVIVE_COOLOFF_SECONDS is
+    still holding back, are one value and two very different facts. This is how
+    a caller tells them apart, and it exists because the second was the only
+    reconcile skip with no log line — draft/fork and the base-repo-id mismatch
+    both leave a trace, so an operator could see every reason a PR went
+    unreviewed except "Doug is deliberately waiting an hour on it".
+
+    None for a row that is merely deduped, and None once the wait is over: past
+    the cooloff the sweep revives the row instead of skipping it, so there is
+    nothing to explain. That distinction is the whole point — the deduped case
+    is nearly every open PR on every sweep, and reporting those would bury the
+    one line worth reading.
+
+    Read-only and advisory. It runs after the enqueue rather than inside it, so
+    a concurrent drain can move the row in between: the answer describes what
+    was true a moment ago and only ever explains a decision already taken,
+    never makes one. Storage-disabled returns None like claim() rather than
+    raising like enqueue — nothing whose only job is to produce a log line may
+    become the thing that fails.
+    """
+    engine = store._get_engine()
+    if engine is None:
+        return None
+    with engine.begin() as conn:
+        row = conn.execute(
+            select(store.review_jobs.c.status, store.review_jobs.c.finished_at).where(
+                *_job_filter(installation_id, github_repo_id, pr_number),
+                store.review_jobs.c.head_sha == head_sha,
+            )
+        ).first()
+    # A NULL finished_at is not a hold either: _revive heals that row rather
+    # than stranding it behind a comparison it can never pass, so the sweep
+    # revived it and never reached this call.
+    if row is None or row.status != "failed" or row.finished_at is None:
+        return None
+    finished = row.finished_at
+    if finished.tzinfo is None:
+        # Postgres hands back the offset the column declares; sqlite drops it
+        # and returns the same instant naive. Everything written here is UTC
+        # (datetime.now(UTC)), so reattaching it reads the row, not a guess.
+        finished = finished.replace(tzinfo=UTC)
+    remaining = FAILED_REVIVE_COOLOFF_SECONDS - (datetime.now(UTC) - finished).total_seconds()
+    return int(remaining) if remaining > 0 else None
+
+
 def claim() -> dict | None:
     """Take the oldest pending job, or None. Marks it running before returning.
 

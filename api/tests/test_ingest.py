@@ -562,6 +562,54 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 
 
+def test_the_cooloff_hold_is_reportable_and_only_for_a_row_actually_holding(
+    tmp_path, monkeypatch
+):
+    """enqueue answers "already queued" and "held back by the cooloff" with the
+    same None, and reconcile has no other way to tell them apart — which is why
+    the cooloff was the one reconcile skip with no log line, while draft/fork
+    and the base-repo-id mismatch both leave a trace.
+
+    This is the discriminator that closes that, so what it must NOT say is as
+    load-bearing as what it must: a dedupe of a row that is pending, running or
+    reviewed is the ordinary, uninteresting outcome for nearly every open PR on
+    every sweep, and reporting those as held back would bury the one line an
+    operator is looking for under one line per PR per restart. Only a 'failed'
+    row whose cooloff has not yet elapsed is a hold — once it has, the sweep
+    revives the row rather than skipping it, so there is nothing to report.
+    """
+    url = _db(tmp_path, monkeypatch)
+    # The queue's identity is the four columns the unique index carries;
+    # repo_full_name is display-only, which is why it is enqueue's argument
+    # and not this query's.
+    ident = (INSTALL, REPO_ID, 7, "a" * 40)
+
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    assert ingest.cooloff_hold_remaining(*ident) is None  # pending: a plain dedupe
+    ingest.claim()
+    assert ingest.cooloff_hold_remaining(*ident) is None  # running: still not a hold
+    ingest.complete(job_id, None)
+    assert ingest.cooloff_hold_remaining(*ident) is None  # reviewed and paid for
+
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+    held = ingest.cooloff_hold_remaining(*ident)
+    assert held is not None and 0 < held <= ingest.FAILED_REVIVE_COOLOFF_SECONDS
+
+    # Once the wait is over the sweep revives the row instead of skipping it,
+    # so there is no hold left to report — and never a negative one.
+    _age_finished_at(url, job_id, seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
+    assert ingest.cooloff_hold_remaining(*ident) is None
+
+
+def test_the_cooloff_hold_query_is_a_no_op_when_storage_is_disabled(monkeypatch):
+    """It exists to explain a skip in a log line, and a log line must never be
+    the thing that raises. Same no-op stance as claim() and reclaim_stalled,
+    not the RuntimeError enqueue answers a missing ledger with."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert ingest.cooloff_hold_remaining(INSTALL, REPO_ID, 7, "a" * 40) is None
+
+
 def test_an_unrecognized_trigger_falls_open_to_the_live_terms(tmp_path, monkeypatch):
     """The fail-open direction itself, pinned against an input from outside
     Trigger.

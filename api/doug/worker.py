@@ -370,18 +370,25 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
             # left alone and the same broken PR costs one budget per cooloff
             # window rather than one per restart. A live caller revives it at
             # once instead.
-            if (
-                ingest.enqueue(
-                    installation_id,
-                    repo_id,
-                    full_name,
-                    p.number,
-                    head_sha,
-                    trigger=trigger,
-                )
-                is not None
-            ):
+            job_id = ingest.enqueue(
+                installation_id, repo_id, full_name, p.number, head_sha, trigger=trigger
+            )
+            if job_id is not None:
                 count += 1
+                continue
+            # None covers both outcomes above, and only one of them is worth
+            # an operator's attention: a PR this sweep is deliberately waiting
+            # on looks exactly like one already reviewed. The skips above both
+            # log, so this was the only way a PR could go unreviewed with
+            # nothing said about it. Costs one indexed read per collision, and
+            # only on the branch that already paid for a failed insert.
+            held = ingest.cooloff_hold_remaining(installation_id, repo_id, p.number, head_sha)
+            if held is not None:
+                print(
+                    f"doug: reconcile held back {full_name}#{p.number} "
+                    f"(review failed; {held}s of the cooloff left)",
+                    file=sys.stderr,
+                )
     return count
 
 
