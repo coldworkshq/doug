@@ -365,11 +365,11 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
             # before a restart is healed rather than staying dead forever —
             # but it isn't free: a revived job pays for up to max_attempts
             # model reads again. `trigger` is what bounds the repetition, and
-            # it comes from the caller: reconcile_all runs on every cold
-            # start, so a 'failed' row its sweep meets inside
-            # FAILED_REVIVE_COOLOFF_SECONDS is left alone and the same broken
-            # PR costs one budget per cooloff window rather than one per
-            # restart. A live caller revives it at once instead.
+            # it comes from the caller: reconcile_all is the startup sweep, so
+            # a 'failed' row it meets inside FAILED_REVIVE_COOLOFF_SECONDS is
+            # left alone and the same broken PR costs one budget per cooloff
+            # window rather than one per restart. A live caller revives it at
+            # once instead.
             if (
                 ingest.enqueue(
                     installation_id,

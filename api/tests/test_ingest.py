@@ -435,13 +435,16 @@ def test_the_dedupe_marker_still_matches_the_real_constraint_name():
 def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(
     tmp_path, monkeypatch
 ):
-    """The cooloff belongs to the caller, not to the row. A reopen, or a
-    force-push back to the SHA whose review failed during an outage, is a
-    person asking for this PR now, and what enqueue promises a live caller is
-    "queue this SHA for review". Suppressing that for an hour is a PR silently
-    never reviewed — the opposite failure from the one the cooloff exists to
-    bound, which is a restart loop re-arming a poison PR. Only the reconcile
-    sweep pays that penalty; the default caller does not.
+    """The cooloff belongs to the caller, not to the row. A reopen, a
+    force-push back to the SHA whose review failed during an outage, or the
+    drain catching up to a head that moved — each is something that happened
+    to this one PR, and what enqueue promises a live caller is "queue this SHA
+    for review". Suppressing that leaves the PR unreviewed until some later
+    caller happens to ask again: the next live event, or the sweep on the
+    first process start past the cooloff, neither of which is a schedule. The
+    failure the cooloff exists to bound is the opposite one — a restart loop
+    re-arming a poison PR — and only the caller that repeats itself should pay
+    for it.
     """
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
@@ -510,12 +513,14 @@ def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(
     finished_at in the same UPDATE that sets 'failed' at the cap — and that is
     precisely why the reconcile branch has to answer for the state anyway. The
     cooloff asks whether finished_at is older than an hour, and SQL answers that
-    question NULL, not true, for a row that has none: the row would fail the
-    comparison on every sweep, forever, and reconcile is the only thing that
-    ever revisits it. The PR would then never be reviewed again — not delayed an
-    hour, gone. An older row written before fail() set finished_at at the cap, a
-    partial write, or a future change to fail() all reach that state, and none
-    of them are a reason to abandon a customer's PR, so the sweep heals it.
+    question NULL, not true, for a row that has none: without this branch the
+    row fails the comparison on every sweep, forever. A live event still revives
+    it, because the live path never asks the question at all — but the PR that
+    needs the sweep is exactly the one nobody pushes to or reopens, and for that
+    PR "forever" is the whole story rather than an hour's delay. An older row
+    written before fail() set finished_at at the cap, a partial write, or a
+    future change to fail() all reach that state, and none of them are a reason
+    to abandon a customer's PR, so the sweep heals it.
     """
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
