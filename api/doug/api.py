@@ -469,22 +469,77 @@ INSTALLATION_STATES = {
 }
 
 
+def _obj(raw) -> dict:
+    """One of a payload's nested objects, or {} when it is absent, null, or
+    not an object at all.
+
+    Every handler below reaches through two or three of these. GitHub sends
+    them today, but a delivery that arrives truncated, reshaped by a payload
+    version bump, or replayed from an older one must not be one lookup away
+    from a 500 — a 500 is what GitHub redelivers, and the redelivery has the
+    same shape, so a single bad body becomes a loop that never ends and
+    never reviews anything. Missing facts belong to the guard each handler
+    already has, not to the lookup in front of it.
+    """
+    return raw if isinstance(raw, dict) else {}
+
+
+def _text(raw, column=None) -> str | None:
+    """A usable string from a payload, or None.
+
+    None when the field is absent, null, empty, or not a string — the
+    guards below all ask "is this fact usable", and None is the single
+    answer they need for every way it can fail to be.
+
+    With `column`, also None when the value is too long for that VARCHAR.
+    Postgres answers an over-long INSERT with StringDataRightTruncation,
+    which is a 500 and therefore the same redelivery loop the shape guards
+    prevent; sqlite stores the long value happily, so a green local suite is
+    not evidence about this. Too long is unusable rather than truncated: a
+    cut SHA names a different commit and a cut full_name names a different
+    repo.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    if column is not None and len(raw) > column.type.length:
+        return None
+    return raw
+
+
+def _repo_list(raw) -> list[tuple[int, str]]:
+    """The (id, full_name) pairs a repositories array actually carries.
+
+    Entries that are not objects, carry a non-int id, or carry an unusable
+    full_name are dropped — one bad entry costs itself, not the repos beside
+    it, because the installation genuinely covers those and active_repos is
+    what the healing path reads. github_repo_id is the column every job and
+    verdict joins on and full_name is what reconcile splits into owner/name
+    to call the API with, so a pair built from a default would be a
+    tenancy record about a repo nobody named.
+    """
+    out = []
+    for entry in raw if isinstance(raw, list) else []:
+        repo_id = _obj(entry).get("id")
+        full_name = _text(_obj(entry).get("full_name"), store.installation_repos.c.full_name)
+        if isinstance(repo_id, int) and full_name:
+            out.append((repo_id, full_name))
+    return out
+
+
 def _record_installation(payload: dict, action: str) -> None:
     inst = payload["installation"]
-    account = inst.get("account") or {}
+    account = _obj(inst.get("account"))
     store.upsert_installation(
         inst["id"],
-        account.get("login", ""),
-        account.get("type", ""),
+        _text(account.get("login"), store.installations.c.account_login) or "",
+        _text(account.get("type"), store.installations.c.account_type) or "",
         INSTALLATION_STATES[action],
     )
     if action == "created":
         # The only authoritative repo list we are ever sent; everything
         # after this is a delta against it.
         store.set_installation_repos(
-            inst["id"],
-            [(r["id"], r["full_name"]) for r in payload.get("repositories", [])],
-            replace=True,
+            inst["id"], _repo_list(payload.get("repositories")), replace=True
         )
 
 
@@ -494,7 +549,7 @@ def _merge_installation_repos(payload: dict) -> None:
         ("repositories_added", "active"),
         ("repositories_removed", "removed"),
     ):
-        repos = [(r["id"], r["full_name"]) for r in payload.get(key, [])]
+        repos = _repo_list(payload.get(key))
         if repos:
             # A removal marks state and never deletes: verdicts already
             # written must still resolve to the repo they describe.
@@ -517,27 +572,52 @@ def _reconcile_then_drain(installation_id: int) -> None:
 
 def _enqueue_pull_request(payload: dict) -> int | None:
     """Gate then enqueue. None means deliberately skipped or a duplicate."""
-    pr = payload["pull_request"]
-    if pr.get("draft"):
+    pr = _obj(payload.get("pull_request"))
+    if pr.get("draft") is not False:
         # Work in progress nobody has asked for review on. ready_for_review
-        # is the event that admits it.
+        # is the event that admits it. Only an explicit draft=False
+        # proceeds: an absent or non-boolean draft is an unknown state and
+        # the safe direction to be wrong in is "skip" — which is also the
+        # answer worker._skip_reason gives the same PR, and its docstring
+        # calls the two one gate. Reading a missing key as "not a draft"
+        # made them disagree.
         return None
-    base = pr["base"]["repo"]
+    base = _obj(_obj(pr.get("base")).get("repo"))
+    head = _obj(pr.get("head"))
+    base_id = base.get("id")
     # head.repo is null when the fork was deleted, which fails this the same
     # way a fork does — correctly.
-    head = pr["head"].get("repo") or {}
-    if head.get("id") != base["id"]:
+    head_id = _obj(head.get("repo")).get("id")
+    if not isinstance(base_id, int) or not isinstance(head_id, int) or head_id != base_id:
         # Fork PRs never enqueue: the raw diff enters the prompt
         # (reader._user_text), so an outside contributor opening PRs against
         # a public repo could otherwise drive this account's model spend at
-        # will.
+        # will. Ids that are not both integers are a fork here rather than
+        # something to compare — two absent ids compare equal, so an
+        # unguarded `!=` passes a payload that names no repo at all straight
+        # into the queue, where github_repo_id is NOT NULL and the insert
+        # 500s. Same choice worker._skip_reason makes, for the same reason:
+        # the safe direction to be wrong in is skip.
+        return None
+    number = pr.get("number")
+    full_name = _text(base.get("full_name"), store.review_jobs.c.repo_full_name)
+    head_sha = _text(head.get("sha"), store.review_jobs.c.head_sha)
+    if not isinstance(number, int) or not full_name or not head_sha:
+        # Signed, past both gates, and still missing something the job row
+        # IS: which PR, which repo by name, which commit. Logged and 202'd
+        # rather than raised, for the reason _record_merge gives below.
+        print(
+            f"doug: pull_request #{pr.get('number')} carried no usable "
+            "number/base.repo.full_name/head.sha; not enqueued",
+            file=sys.stderr,
+        )
         return None
     return ingest.enqueue(
         payload["installation"]["id"],
-        base["id"],
-        base["full_name"],
-        pr["number"],
-        pr["head"]["sha"],
+        base_id,
+        full_name,
+        number,
+        head_sha,
     )
 
 
@@ -564,32 +644,43 @@ def _record_merge(payload: dict) -> None:
     the one webhook branch whose whole job is to note that the clock has
     started. The adjudicator picks the row up once due_at passes.
     """
-    pr = payload["pull_request"]
+    pr = _obj(payload.get("pull_request"))
     if not pr.get("merged"):
         # Closed without merging. Nothing shipped, so there is no outcome to
         # observe — and a row here would put a PR that never landed into the
         # denominator of a claim about shipped code.
         return
-    base = pr.get("base") or {}
+    base = _obj(pr.get("base"))
     merged_at = _payload_timestamp(pr.get("merged_at"))
-    merge_sha = pr.get("merge_commit_sha")
-    base_ref = base.get("ref")
-    if merged_at is None or not merge_sha or not base_ref:
-        # Signed, and a merge, but missing one of the three facts the row is
-        # built from: when it shipped, what shipped, and where. Logged and
-        # 202'd rather than raised — a 500 is a redelivery loop over a body
-        # that will never carry them, and a half-row is worse than a missing
-        # one here, because base_ref is what the adjudicator censors on.
+    merge_sha = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
+    base_ref = _text(base.get("ref"), store.outcome_jobs.c.base_ref)
+    number = pr.get("number")
+    repo_id = _obj(base.get("repo")).get("id")
+    if (
+        merged_at is None
+        or not merge_sha
+        or not base_ref
+        or not isinstance(number, int)
+        or not isinstance(repo_id, int)
+    ):
+        # Signed, and a merge, but missing one of the five facts the row is
+        # built from: when it shipped, what shipped, where, which PR, and
+        # whose repo. Logged and 202'd rather than raised — a 500 is a
+        # redelivery loop over a body that will never carry them, and a
+        # half-row is worse than a missing one here: base_ref is what the
+        # adjudicator censors on, and github_repo_id is the tenancy this
+        # merge is counted under in a published denominator.
         print(
             f"doug: merged PR #{pr.get('number')} carried no usable "
-            "merged_at/merge_commit_sha/base.ref; outcome clock not started",
+            "merged_at/merge_commit_sha/base.ref/number/base.repo.id; "
+            "outcome clock not started",
             file=sys.stderr,
         )
         return
     store.enqueue_outcome_job(
         payload["installation"]["id"],
-        base["repo"]["id"],
-        pr["number"],
+        repo_id,
+        number,
         merge_sha,
         merged_at,
         base_ref,
@@ -612,43 +703,56 @@ def _record_external_review(payload: dict) -> None:
     a diff. Bot reviewers are ingested like anyone else, because grading bot
     reviewers is the point of the lane.
     """
-    review_ = payload.get("review") or {}
-    band = REVIEW_BANDS.get(review_.get("state", ""))
+    review_ = _obj(payload.get("review"))
+    state = review_.get("state")
+    band = REVIEW_BANDS.get(state) if isinstance(state, str) else None
     if band is None:
         return
-    pr = payload.get("pull_request") or {}
-    base_repo = ((pr.get("base") or {}).get("repo")) or {}
+    pr = _obj(payload.get("pull_request"))
+    base_repo = _obj(_obj(pr.get("base")).get("repo"))
     scored_at = _payload_timestamp(review_.get("submitted_at"))
-    head_sha = review_.get("commit_id")
-    login = (review_.get("user") or {}).get("login")
-    if scored_at is None or not head_sha or not login or not base_repo.get("id"):
+    head_sha = _text(review_.get("commit_id"), store.verdicts.c.head_sha)
+    login = _text(_obj(review_.get("user")).get("login"))
+    number = pr.get("number")
+    repo_id = base_repo.get("id")
+    repo = _text(base_repo.get("full_name"), store.verdicts.c.repo)
+    # verdicts.source is String(64) for exactly this; GitHub logins run to 39
+    # characters, which is a fact about GitHub and not a bound this code
+    # enforces — so the composed value is what gets checked, not the login.
+    source = _text(f"review:{login}", store.verdicts.c.source) if login else None
+    if (
+        scored_at is None
+        or not head_sha
+        or not source
+        or not repo
+        or not isinstance(number, int)
+        or not isinstance(repo_id, int)
+    ):
         # These are the row's identity and its dedup key. A stance that
-        # cannot be attached to a commit, a time, a reviewer and a repo is
-        # not a gradable claim, and storing it against a guess would put an
-        # invented data point into a ledger whose whole product is
+        # cannot be attached to a commit, a time, a reviewer, a PR and a
+        # repo is not a gradable claim, and storing it against a guess would
+        # put an invented data point into a ledger whose whole product is
         # calibrated claims. Logged and 202'd rather than raised, for the
         # reason _record_merge gives: a 500 is a redelivery loop over a body
         # that will never carry what it is missing.
         print(
             f"doug: review on PR #{pr.get('number')} carried no usable "
-            "commit_id/submitted_at/user.login/base repo id; not ingested",
+            "commit_id/submitted_at/user.login/number/base repo; not ingested",
             file=sys.stderr,
         )
         return
     store.save_external_review(
         payload["installation"]["id"],
-        base_repo["id"],
-        base_repo.get("full_name", ""),
-        pr["number"],
+        repo_id,
+        repo,
+        number,
         head_sha,
-        # verdicts.source is String(64) for exactly this; GitHub logins run
-        # to 39 characters.
-        f"review:{login}",
+        source,
         band,
         scored_at,
         raw={
             "review_id": review_.get("id"),
-            "state": review_.get("state"),
+            "state": state,
             "submitted_at": review_.get("submitted_at"),
         },
     )
@@ -691,13 +795,22 @@ async def github_webhook(
     try:
         payload = json.loads(body)
     except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
         # Signed, so it came from someone holding the secret — but not
         # something we can act on. 202 rather than 4xx: a retry loop over a
-        # body that will never parse helps nobody.
-        print("doug: webhook body was signed but not JSON", file=sys.stderr)
+        # body that will never parse helps nobody. A body that is valid JSON
+        # but not an object — a list, a bare string, null — lands here too:
+        # json.loads succeeds on it, so it never reaches the ValueError, and
+        # every line below is a lookup on a dict it is not.
+        print("doug: webhook body was signed but not a JSON object", file=sys.stderr)
         return Response(status_code=202)
 
-    action = payload.get("action", "")
+    # Not payload.get("action", ""): the gating table below is a set
+    # membership test, and an unhashable action (an object, an array) raises
+    # TypeError there — a 500 on the dispatch itself, before any handler is
+    # even chosen.
+    action = _text(payload.get("action")) or ""
     # The gating table, evaluated once and before any guard that touches the
     # store. An event we do not handle — ping, push, an action outside the
     # table — must not depend on a ledger it never reaches. Scoping this

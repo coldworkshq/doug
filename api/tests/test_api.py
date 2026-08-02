@@ -438,7 +438,15 @@ def test_a_new_head_sha_enqueues_a_second_job(tmp_path, monkeypatch):
 MERGED_AT = "2020-03-01T12:00:00Z"
 
 
-def _closed_payload(*, merged=True, merged_at=MERGED_AT, merge_sha="c" * 40, number=7):
+def _closed_payload(
+    *,
+    merged=True,
+    merged_at=MERGED_AT,
+    merge_sha="c" * 40,
+    number=7,
+    base_ref="main",
+    base_repo_id=987,
+):
     """A `closed` delivery. `merged` varies independently of the other two
     fields on purpose — see test_a_closed_but_unmerged_pull_request_writes_nothing.
     """
@@ -452,7 +460,7 @@ def _closed_payload(*, merged=True, merged_at=MERGED_AT, merge_sha="c" * 40, num
             "merged_at": merged_at,
             "merge_commit_sha": merge_sha,
             "head": {"sha": "a" * 40, "repo": {"id": 987}},
-            "base": {"ref": "main", "repo": {"id": 987, "full_name": "drewjst/doug"}},
+            "base": {"ref": base_ref, "repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
         },
     }
 
@@ -523,6 +531,80 @@ def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch
     assert _webhook("pull_request", _closed_payload(merged=False)).status_code == 202
     assert _table(tmp_path, store.outcome_jobs) == []
     assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_merge_missing_the_facts_the_row_is_built_from_is_ignored(tmp_path, monkeypatch):
+    """when it shipped, what shipped, where, which PR, whose repo — the five
+    facts an outcome row IS. A half-row is worse than no row here: base_ref
+    is what the adjudicator censors on, and github_repo_id is the tenancy it
+    is counted under, so a row built from a default would put a PR into a
+    published denominator under a repo nobody chose.
+
+    Every _closed_payload() call before this one used the defaults, so this
+    guard shipped completely unexercised — a 36-mutation battery replaced it
+    with `if False:` and all 402 tests stayed green."""
+    _hook_env(tmp_path, monkeypatch)
+    for payload in (
+        _closed_payload(merged_at=None),
+        _closed_payload(merged_at="not-a-timestamp"),
+        _closed_payload(merge_sha=None),
+        _closed_payload(merge_sha=""),
+        # Not a string at all: "absent" and "unusable" have to reach the
+        # same guard, or the value goes to a VARCHAR column as an int.
+        _closed_payload(merge_sha=123),
+        _closed_payload(base_ref=None),
+        _closed_payload(base_ref=""),
+        _closed_payload(base_ref=["main"]),
+        _closed_payload(number=None),
+        _closed_payload(number="7"),
+        _closed_payload(base_repo_id=None),
+        _closed_payload(base_repo_id="987"),
+    ):
+        assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.outcome_jobs) == []
+
+
+def test_facts_too_long_for_their_columns_are_refused_rather_than_written(
+    tmp_path, monkeypatch
+):
+    """Postgres answers an over-long INSERT with StringDataRightTruncation —
+    a 500, and so the same redelivery loop the shape guards prevent. sqlite
+    stores the long value instead, so this test asserts the guard (no row)
+    rather than the driver's error: it would pass on sqlite either way if the
+    guard were gone, which is exactly why the guard cannot be left to the
+    database.
+
+    Refused rather than truncated: a cut SHA names a different commit and a
+    cut full_name names a different repo."""
+    _hook_env(tmp_path, monkeypatch)
+    long_name = "drewjst/" + "d" * 200
+    long_sha = "a" * 200
+
+    pr = _pr_payload(sha=long_sha)
+    assert _webhook("pull_request", pr).status_code == 202
+    pr = _pr_payload()
+    pr["pull_request"]["base"]["repo"]["full_name"] = long_name
+    assert _webhook("pull_request", pr).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+    assert _webhook("pull_request", _closed_payload(merge_sha=long_sha)).status_code == 202
+    assert _webhook("pull_request", _closed_payload(base_ref="b" * 300)).status_code == 202
+    assert _table(tmp_path, store.outcome_jobs) == []
+
+    assert _webhook("pull_request_review", _review_payload(login="l" * 80)).status_code == 202
+    assert _webhook("pull_request_review", _review_payload(commit_id=long_sha)).status_code == 202
+    review = _review_payload()
+    review["pull_request"]["base"]["repo"]["full_name"] = long_name
+    assert _webhook("pull_request_review", review).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+
+    inst = {
+        "action": "created",
+        "installation": INSTALLATION,
+        "repositories": [{"id": 987, "full_name": long_name}],
+    }
+    assert _webhook("installation", inst).status_code == 202
+    assert _table(tmp_path, store.installation_repos) == []
 
 
 SUBMITTED_AT = "2026-07-20T09:30:00Z"
@@ -683,6 +765,11 @@ def test_a_review_missing_the_facts_it_would_be_dated_by_is_ignored(
         _review_payload(submitted_at="not-a-timestamp"),
         _review_payload(login=None),
         _review_payload(base_repo_id=None),
+        # Present but not a string: same guard, or an int reaches a VARCHAR.
+        _review_payload(commit_id=99),
+        _review_payload(login={"name": "alice"}),
+        _review_payload(base_repo_id="987"),
+        _review_payload(number=None),
     ):
         assert _webhook("pull_request_review", payload).status_code == 202
     assert _table(tmp_path, store.verdicts) == []
@@ -742,6 +829,258 @@ def test_a_payload_with_no_usable_installation_is_ignored(tmp_path, monkeypatch)
     assert _table(tmp_path, store.installations) == []
 
 
+# Signed deliveries that get PAST the installation guard and reach a handler
+# with a shape it cannot use. The guard's own test above covers the shapes
+# that exit AT the guard; these are the ones that get past it, which is
+# where each handler has to be total over its own payload. Every one of
+# these raised on this branch — a 500, which is exactly what GitHub
+# redelivers, so each was a permanent loop over a body that will never carry
+# what it is missing.
+MALFORMED_DELIVERIES = [
+    ("pr-no-pull_request", "pull_request", {"action": "opened"}),
+    ("pr-empty-pull_request", "pull_request", {"action": "opened", "pull_request": {}}),
+    (
+        "pr-base-without-repo",
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 1,
+                "draft": False,
+                "base": {},
+                "head": {"sha": "a" * 40, "repo": {"id": 987}},
+            },
+        },
+    ),
+    (
+        "pr-no-head",
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 1,
+                "draft": False,
+                "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+            },
+        },
+    ),
+    (
+        "pr-head-without-sha",
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 1,
+                "draft": False,
+                "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+                "head": {"repo": {"id": 987}},
+            },
+        },
+    ),
+    (
+        "pr-no-number",
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "draft": False,
+                "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+                "head": {"sha": "a" * 40, "repo": {"id": 987}},
+            },
+        },
+    ),
+    (
+        "pr-facts-that-are-not-strings",
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 1,
+                "draft": False,
+                "base": {"repo": {"id": 987, "full_name": 987}},
+                "head": {"sha": 42, "repo": {"id": 987}},
+            },
+        },
+    ),
+    ("closed-no-pull_request", "pull_request", {"action": "closed"}),
+    (
+        "closed-merged-base-without-repo",
+        "pull_request",
+        {
+            "action": "closed",
+            "pull_request": {
+                "number": 1,
+                "merged": True,
+                "merged_at": MERGED_AT,
+                "merge_commit_sha": "c" * 40,
+                "base": {"ref": "main"},
+            },
+        },
+    ),
+    (
+        "closed-merged-no-number",
+        "pull_request",
+        {
+            "action": "closed",
+            "pull_request": {
+                "merged": True,
+                "merged_at": MERGED_AT,
+                "merge_commit_sha": "c" * 40,
+                "base": {"ref": "main", "repo": {"id": 987}},
+            },
+        },
+    ),
+    (
+        "review-no-pr-number",
+        "pull_request_review",
+        {
+            "action": "submitted",
+            "pull_request": {"base": {"repo": {"id": 987, "full_name": "drewjst/doug"}}},
+            "review": {
+                "id": 5,
+                "state": "approved",
+                "commit_id": "a" * 40,
+                "submitted_at": SUBMITTED_AT,
+                "user": {"login": "bob"},
+            },
+        },
+    ),
+    ("review-is-a-list", "pull_request_review", {"action": "submitted", "review": []}),
+    (
+        "review-no-pull_request",
+        "pull_request_review",
+        {
+            "action": "submitted",
+            "review": {
+                "id": 5,
+                "state": "approved",
+                "commit_id": "a" * 40,
+                "submitted_at": SUBMITTED_AT,
+                "user": {"login": "bob"},
+            },
+        },
+    ),
+    ("created-repositories-null", "installation", {"action": "created", "repositories": None}),
+    (
+        "created-repo-entry-without-full_name",
+        "installation",
+        {"action": "created", "repositories": [{"id": 987}]},
+    ),
+    (
+        "created-repo-entry-without-id",
+        "installation",
+        {"action": "created", "repositories": [{"full_name": "drewjst/doug"}]},
+    ),
+    (
+        "created-repositories-is-an-object",
+        "installation",
+        {"action": "created", "repositories": {"id": 987}},
+    ),
+    (
+        "created-repo-entry-is-a-string",
+        "installation",
+        {"action": "created", "repositories": ["drewjst/doug"]},
+    ),
+    (
+        "installation_repositories-added-null",
+        "installation_repositories",
+        {"action": "added", "repositories_added": None},
+    ),
+    (
+        "installation_repositories-entry-without-id",
+        "installation_repositories",
+        {"action": "added", "repositories_added": [{"full_name": "drewjst/doug"}]},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("event", "payload"),
+    [(event, payload) for _, event, payload in MALFORMED_DELIVERIES],
+    ids=[label for label, _, _ in MALFORMED_DELIVERIES],
+)
+def test_a_signed_delivery_a_handler_cannot_use_is_202_and_writes_nothing(
+    event, payload, tmp_path, monkeypatch
+):
+    """A handler must be total over its own payload, not total over the
+    payloads GitHub sends today.
+
+    These all carry a usable installation, so they are past the guard that
+    makes installation["id"] safe and inside a handler. A KeyError or a
+    TypeError here is a 500, GitHub redelivers a 500, and the redelivery has
+    the same shape — so one reshaped, truncated or replayed delivery becomes
+    a loop that never ends and never reviews anything. Missing facts have to
+    fail a guard and be logged, which is what these assert: 202, and no row
+    built out of a guess."""
+    _hook_env(tmp_path, monkeypatch)
+    r = _webhook(event, {**payload, "installation": INSTALLATION})
+    assert r.status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert _table(tmp_path, store.outcome_jobs) == []
+    assert _table(tmp_path, store.verdicts) == []
+    assert _table(tmp_path, store.installation_repos) == []
+
+
+def test_a_malformed_repo_entry_does_not_cost_the_repos_beside_it(tmp_path, monkeypatch):
+    """One unusable entry drops itself, not the delivery. The installation
+    genuinely covers the other repos in that list, and dropping all of them
+    would take the healing path off every one — active_repos is what
+    reconcile reads."""
+    _hook_env(tmp_path, monkeypatch)
+    r = _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [
+                {"id": 987, "full_name": "drewjst/doug"},
+                {"id": None, "full_name": "drewjst/nameless"},
+                {"full_name": "drewjst/idless"},
+                "not-an-object",
+                {"id": 988, "full_name": "drewjst/other"},
+            ],
+        },
+    )
+    assert r.status_code == 202
+    repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
+    assert set(repos) == {987, 988}
+
+
+def test_a_pull_request_carrying_neither_repo_id_is_not_enqueued(tmp_path, monkeypatch):
+    """The fork gate compares ids; it must not compare two absences.
+
+    `base.repo.id: null` with `head.repo: null` makes `head_id != base_id`
+    False — None == None — so the payload that names no repo at all is the
+    one shape that gets *through* the spend gate. What stops it after that
+    is review_jobs.github_repo_id being NOT NULL, i.e. the insert raises and
+    the delivery 500s into a redelivery loop; the queue's identity is those
+    columns, so there was never a row for it to be. Non-int ids are a fork
+    here for the same reason worker._skip_reason calls them one: the safe
+    direction to be wrong in is skip."""
+    _hook_env(tmp_path, monkeypatch)
+    for base_id in (None, "987", {}):
+        payload = _pr_payload(head_repo_id=None)
+        payload["pull_request"]["base"]["repo"]["id"] = base_id
+        assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_pull_request_whose_draft_state_is_unknown_is_not_enqueued(tmp_path, monkeypatch):
+    """An absent or non-boolean `draft` is an unknown state, and unknown
+    skips — the same answer worker._skip_reason gives the same PR, whose
+    docstring calls the two one gate. Reading a missing key as "not a draft"
+    made them disagree: reconcile would decline to enqueue a PR the webhook
+    had just paid to review."""
+    _hook_env(tmp_path, monkeypatch)
+    for draft in (None, "false", {}):
+        payload = _pr_payload()
+        payload["pull_request"]["draft"] = draft
+        assert _webhook("pull_request", payload).status_code == 202
+    del payload["pull_request"]["draft"]
+    assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
 def test_a_signed_body_that_is_not_json_is_ignored(tmp_path, monkeypatch):
     _hook_env(tmp_path, monkeypatch)
     body = b"not json"
@@ -754,6 +1093,38 @@ def test_a_signed_body_that_is_not_json_is_ignored(tmp_path, monkeypatch):
         },
     )
     assert r.status_code == 202
+
+
+@pytest.mark.parametrize("body", [b"[1,2,3]", b"null", b'"a string"', b"7"])
+def test_a_signed_body_that_is_json_but_not_an_object_is_ignored(
+    body, tmp_path, monkeypatch
+):
+    """json.loads succeeds on all four, so none of them reaches the
+    not-JSON branch — and every line after that branch is a dict lookup.
+    `b"not json"` above is the one malformed shape that does NOT reach
+    this, which is why it was not enough."""
+    _hook_env(tmp_path, monkeypatch)
+    r = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sig(SECRET.encode(), body, "sha256"),
+        },
+    )
+    assert r.status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_an_action_that_is_not_a_string_is_ignored(tmp_path, monkeypatch):
+    """The gating table is a set membership test, and an unhashable action
+    raises TypeError before any handler is chosen — a 500 on the dispatch
+    itself rather than inside a handler."""
+    _hook_env(tmp_path, monkeypatch)
+    for action in ({}, [], 7, None):
+        payload = {"action": action, "installation": INSTALLATION}
+        assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
 
 
 def test_a_forged_signature_never_reaches_the_queue(tmp_path, monkeypatch):
