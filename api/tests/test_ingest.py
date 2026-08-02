@@ -555,3 +555,38 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     ingest.supersede(job_id)
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
+
+
+def test_an_unrecognized_trigger_falls_open_to_the_live_terms(tmp_path, monkeypatch):
+    """The fail-open direction itself, pinned against an input from outside
+    Trigger.
+
+    _revive selects the sweep's terms by testing `trigger == "reconcile"`, so
+    every other value — a third Trigger added later, a typo at a call site,
+    a value threaded through from a caller that hasn't been updated — takes the
+    live branch and the row comes back at once. Written the other way round
+    (`trigger != "live"`) the code is byte-identical over the two valid inputs
+    and inverted over every other one: an unrecognized trigger would claim the
+    sweep's cooloff, and a PR whose review failed would 202 and then never be
+    reviewed.
+
+    That asymmetry is the whole argument for the default. A wrong trigger has
+    to cost money, which this codebase has chosen to accept, rather than
+    silence, which it has not. Every other trigger test passes under either
+    spelling, because they all use the two values the code already knows about
+    — which is exactly why a mutation battery cannot see this branch and a test
+    has to.
+    """
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    # Failed, with a real finished_at, well inside the cooloff: the terms the
+    # trigger selects are the only thing that can decide this revival, so the
+    # NULL-finished_at escape hatch cannot account for the result below.
+    assert row["status"] == "failed" and row["finished_at"] is not None
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcille") == job_id
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "pending" and row["attempts"] == 0
