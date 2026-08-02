@@ -302,9 +302,11 @@ def read_intent(
 
     `scope` is the same one the risk read charged: both reads come out of
     one budget, so a PR costs two units and an operator has one number to
-    reason about rather than two.
+    reason about rather than two. It is also who this tier is switched on
+    for — the flag reads the scope rather than taking the installation id
+    separately, so "who pays" and "who opted in" cannot drift apart.
     """
-    if not (intent.enabled() and reader.enabled()):
+    if not (intent.enabled_for(reader.installation_from_scope(scope)) and reader.enabled()):
         return None
     try:
         docs = intent_providers.fetch(gh, owner, repo)

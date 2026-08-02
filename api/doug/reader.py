@@ -210,9 +210,29 @@ INSTALLATION_MONTHLY_READ_CAP = 4000
 SENTINEL_MONTHLY_READ_CAP = 1000
 
 
+_SCOPE_PREFIX = "installation:"
+
+
 def installation_scope(installation_id: int) -> str:
     """The one place an installation's scope string is built."""
-    return f"installation:{installation_id}"
+    return f"{_SCOPE_PREFIX}{installation_id}"
+
+
+def installation_from_scope(scope: str) -> int | None:
+    """Inverse of installation_scope: whose read is this, if anyone's.
+
+    Exists so a per-installation policy can read the SAME string the spend
+    cap charges, rather than taking the installation id as a second
+    parameter that could disagree with it. Un-tenanted callers charge
+    SENTINEL_SCOPE and get None — there is no installation to have opted
+    into anything, which is the safe direction to be wrong in.
+    """
+    if not scope.startswith(_SCOPE_PREFIX):
+        return None
+    try:
+        return int(scope[len(_SCOPE_PREFIX):])
+    except ValueError:
+        return None
 
 
 def cap_for(scope: str) -> int:
@@ -522,10 +542,6 @@ class DeviationFinding(BaseModel):
 class IntentReaderVerdict(ReaderVerdict):
     intent_alignment: int
     deviation_findings: list[DeviationFinding]
-
-
-def intent_enabled() -> bool:
-    return os.environ.get("DOUG_INTENT") == "1"
 
 
 def _intent_text(pr, diff: str, docs) -> str:
