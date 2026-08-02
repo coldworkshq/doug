@@ -1670,6 +1670,14 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
         installation_id=10,
         pr_meta={"head_sha": "a" * 40},
     )
+    github_repo_id_only = store.save_review(
+        "o/r",
+        33,
+        "reader",
+        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
+        github_repo_id=20,
+        pr_meta={"head_sha": "a" * 40},
+    )
     app_without_head = store.save_review(
         "o/r",
         33,
@@ -1687,6 +1695,7 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
     runs = response.json()["runs"]
     assert {run["id"] for run in runs} == {app_one, app_two, current_ci, legacy_ci}
     assert one_app_id not in {run["id"] for run in runs}
+    assert github_repo_id_only not in {run["id"] for run in runs}
     assert app_without_head not in {run["id"] for run in runs}
     assert [run["path"] for run in runs].count("app") == 2
     assert [run["path"] for run in runs].count("ci") == 2

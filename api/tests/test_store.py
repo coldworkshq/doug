@@ -1386,6 +1386,15 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
         pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
         installation_id=10,
     )
+    github_repo_id_only = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        github_repo_id=20,
+    )
     app_without_head = store.save_review(
         "o/r",
         7,
@@ -1405,6 +1414,7 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
         legacy_ci,
     }
     assert one_app_id not in {row["id"] for row in rows}
+    assert github_repo_id_only not in {row["id"] for row in rows}
     assert app_without_head not in {row["id"] for row in rows}
     by_id = {row["id"]: row for row in rows}
     assert by_id[app_one]["coverage"]["sent_chars"] == 10

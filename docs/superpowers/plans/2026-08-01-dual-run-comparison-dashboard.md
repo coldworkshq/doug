@@ -112,10 +112,20 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
         pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
         installation_id=10,
     )
+    inverse_mixed = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        github_repo_id=20,
+    )
 
     rows = store.comparison_reviews(repo="o/r")
     assert {row["id"] for row in rows} == {app_one, app_two, current_ci, legacy_ci}
     assert mixed not in {row["id"] for row in rows}
+    assert inverse_mixed not in {row["id"] for row in rows}
     by_id = {row["id"]: row for row in rows}
     assert by_id[app_one]["coverage"]["sent_chars"] == 10
     assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
