@@ -525,6 +525,167 @@ def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch
     assert _table(tmp_path, store.review_jobs) == []
 
 
+SUBMITTED_AT = "2026-07-20T09:30:00Z"
+
+
+def _review_payload(
+    state="approved",
+    *,
+    action="submitted",
+    login="alice",
+    commit_id="a" * 40,
+    submitted_at=SUBMITTED_AT,
+    review_id=55,
+    number=7,
+    head_repo_id=987,
+):
+    return {
+        "action": action,
+        "installation": INSTALLATION,
+        "review": {
+            "id": review_id,
+            "state": state,
+            "submitted_at": submitted_at,
+            "commit_id": commit_id,
+            "user": {"login": login},
+        },
+        "pull_request": {
+            "number": number,
+            "head": {"repo": {"id": head_repo_id}},
+            "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+        },
+    }
+
+
+def test_an_approving_review_is_ingested_as_a_dated_external_stance(
+    tmp_path, monkeypatch
+):
+    """The neutral-grader lane. A third-party stance lands in the same ledger
+    as Doug's verdicts, in Doug's own band vocabulary, so the two can be
+    adjudicated against the same outcome — and nothing is spent doing it: no
+    model call, no metering, no check run.
+
+    scored_at is the reviewer's submitted_at, not now(). The row is a dated
+    claim about when the stance was taken."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request_review", _review_payload()).status_code == 202
+
+    (v,) = _table(tmp_path, store.verdicts)
+    assert v["tier"] == "external"
+    assert v["score"] == 0.0 and v["threshold"] == 0.0
+    assert v["band"] == "cleared"
+    assert v["source"] == "review:alice"
+    assert v["installation_id"] == 150424894 and v["github_repo_id"] == 987
+    assert v["repo"] == "drewjst/doug" and v["pr_number"] == 7
+    assert v["head_sha"] == "a" * 40
+    assert _utc(v["scored_at"]) == datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+    assert v["raw"]["review_id"] == 55 and v["raw"]["state"] == "approved"
+    # Nothing was read, so nothing may claim to have been.
+    assert _table(tmp_path, store.findings) == []
+    assert _table(tmp_path, store.reads) == []
+    # And nothing was queued that would buy a read.
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+
+
+def test_a_changes_requested_review_lands_as_flagged(tmp_path, monkeypatch):
+    """The two stances map onto Doug's own bands. Recording both as the same
+    thing would make the lane useless for grading a reviewer against
+    outcomes, which is its entire purpose."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request_review", _review_payload("changes_requested"))
+    (v,) = _table(tmp_path, store.verdicts)
+    assert v["band"] == "flagged"
+
+
+def test_a_review_that_takes_no_stance_is_not_recorded(tmp_path, monkeypatch):
+    """`commented` is a note, not a position on whether the change should
+    land. There is nothing to grade against an outcome, so there is no row."""
+    _hook_env(tmp_path, monkeypatch)
+    for state in ("commented", "pending", "dismissed"):
+        assert (
+            _webhook("pull_request_review", _review_payload(state)).status_code == 202
+        )
+    assert _table(tmp_path, store.verdicts) == []
+
+
+def test_only_a_submitted_review_is_recorded(tmp_path, monkeypatch):
+    """`edited` and `dismissed` restate or retract a review that was already
+    ingested when it was submitted. Treating them as new stances would count
+    one reviewer's position two or three times."""
+    _hook_env(tmp_path, monkeypatch)
+    for action in ("edited", "dismissed"):
+        r = _webhook("pull_request_review", _review_payload(action=action))
+        assert r.status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+
+
+def test_a_redelivered_review_is_ingested_once(tmp_path, monkeypatch):
+    """Same reviewer, same head, same timestamp — one stance, however many
+    times GitHub sends it. Two rows would double that reviewer's weight in
+    any agreement measure taken over this ledger."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request_review", _review_payload())
+    _webhook("pull_request_review", _review_payload())
+    assert len(_table(tmp_path, store.verdicts)) == 1
+
+
+def test_a_reviewer_changing_their_mind_records_both_stances(tmp_path, monkeypatch):
+    """approve then changes_requested on the same commit is two real
+    positions at two times, not a correction. The ledger is append-only
+    dated claims, and the sequence is exactly what makes a reviewer worth
+    grading."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request_review", _review_payload("approved"))
+    _webhook(
+        "pull_request_review",
+        _review_payload(
+            "changes_requested", submitted_at="2026-07-20T11:00:00Z", review_id=56
+        ),
+    )
+    bands = [v["band"] for v in _table(tmp_path, store.verdicts)]
+    assert bands == ["cleared", "flagged"]
+
+
+def test_a_bot_reviewer_is_ingested_like_anyone_else(tmp_path, monkeypatch):
+    """Grading bot reviewers against outcomes is the point of this lane, so
+    there is deliberately no bot filter here — unlike the review-enqueue
+    path, where a stranger's PR can drive spend. Nothing is spent ingesting
+    a stance."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request_review", _review_payload(login="some-reviewer[bot]"))
+    (v,) = _table(tmp_path, store.verdicts)
+    assert v["source"] == "review:some-reviewer[bot]"
+
+
+def test_a_review_on_a_fork_pull_request_is_still_ingested(tmp_path, monkeypatch):
+    """The fork gate exists because a fork's raw diff enters the prompt and
+    an outsider could drive model spend. Ingesting a stance reads nothing
+    and spends nothing, so that gate does not apply — and a review left on
+    an outside contributor's PR is exactly as gradable as any other."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request_review", _review_payload(head_repo_id=555))
+    assert len(_table(tmp_path, store.verdicts)) == 1
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_review_missing_the_facts_it_would_be_dated_by_is_ignored(
+    tmp_path, monkeypatch
+):
+    """head_sha and scored_at are the row's identity and its dedup key. A
+    stance that cannot be attached to a commit or to a time is not a
+    gradable claim, so it is dropped rather than stored against a guess."""
+    _hook_env(tmp_path, monkeypatch)
+    for payload in (
+        _review_payload(commit_id=None),
+        _review_payload(submitted_at=None),
+        _review_payload(submitted_at="not-a-timestamp"),
+        _review_payload(login=None),
+    ):
+        assert _webhook("pull_request_review", payload).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+
+
 def test_unhandled_pull_request_actions_are_accepted_and_ignored(tmp_path, monkeypatch):
     """labeled/edited/review_requested/converted_to_draft do not change the
     diff. A 4xx would put GitHub into a redelivery loop over events we chose

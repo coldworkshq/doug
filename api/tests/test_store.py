@@ -45,6 +45,12 @@ def _db(tmp_path, monkeypatch):
     return url
 
 
+def _utc(dt: datetime) -> datetime:
+    """sqlite hands a DateTime(timezone=True) column back naive; Postgres
+    hands it back aware. The stored instant is UTC either way."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def test_disabled_without_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert not store.enabled()
@@ -947,3 +953,231 @@ def test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it(tm
 
     store.metadata.create_all(engine)  # what _get_engine() does on every call
     assert "deep_read_counters" in inspect(engine).get_table_names()
+
+
+# --- The neutral-grader lane: third-party reviews as external verdicts -------
+
+SUBMITTED = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+
+
+def _external(**overrides) -> int | None:
+    kwargs = {
+        "installation_id": INSTALL,
+        "github_repo_id": REPO_ID,
+        "repo": "o/r",
+        "pr_number": 7,
+        "head_sha": "a" * 40,
+        "source": "review:someone",
+        "band": Band.CLEARED,
+        "scored_at": SUBMITTED,
+        "raw": {"review_id": 1, "state": "approved"},
+    }
+    kwargs.update(overrides)
+    return store.save_external_review(**kwargs)
+
+
+def test_an_external_review_is_recorded_without_anything_being_scored(
+    tmp_path, monkeypatch
+):
+    """A third-party stance enters the same ledger as Doug's own verdicts so
+    the two are adjudicable side by side — but nothing was read and nothing
+    was spent, so score and threshold are 0.0 and the tier says so.
+
+    scored_at is the reviewer's submitted_at, not now(): the row is a dated
+    claim about when that stance was taken, and a redelivery days later must
+    not restate it as today's."""
+    url = _db(tmp_path, monkeypatch)
+    vid = _external()
+    with create_engine(url).connect() as conn:
+        v = conn.execute(select(store.verdicts)).mappings().one()
+        assert conn.execute(select(store.findings)).mappings().all() == []
+        assert conn.execute(select(store.reads)).mappings().all() == []
+    assert v["id"] == vid
+    assert v["tier"] == "external"
+    assert v["score"] == 0.0 and v["threshold"] == 0.0
+    assert v["band"] == "cleared"
+    assert v["source"] == "review:someone"
+    assert v["installation_id"] == INSTALL and v["github_repo_id"] == REPO_ID
+    assert v["head_sha"] == "a" * 40 and v["pr_number"] == 7
+    assert _utc(v["scored_at"]) == SUBMITTED
+    assert v["raw"]["review_id"] == 1
+    # No pr_meta: an external row describes a stance, not a PR that was read.
+    assert v["pr_meta"] is None
+
+
+def test_a_redelivered_review_is_not_recorded_twice(tmp_path, monkeypatch):
+    """GitHub redelivers. The same reviewer, head and timestamp is the same
+    stance restated, and counting it twice would double one person's weight
+    in any agreement measure taken over this ledger."""
+    url = _db(tmp_path, monkeypatch)
+    assert _external() is not None
+    assert _external() is None
+    with create_engine(url).connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).mappings().all()) == 1
+
+
+def test_a_reviewer_changing_their_mind_appends_rather_than_replacing(
+    tmp_path, monkeypatch
+):
+    """approve then changes_requested on the same commit is two real stances
+    at two times, not a correction of one. The ledger is append-only dated
+    claims, so both rows stay — which is also what makes the dedup above
+    key on scored_at rather than on the reviewer alone."""
+    url = _db(tmp_path, monkeypatch)
+    _external()
+    later = SUBMITTED.replace(hour=11)
+    _external(band=Band.FLAGGED, scored_at=later, raw={"review_id": 2})
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.verdicts).order_by(store.verdicts.c.id)).mappings().all()
+    assert [r["band"] for r in rows] == ["cleared", "flagged"]
+
+
+def test_two_reviewers_on_one_commit_are_two_rows(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    _external(source="review:alice")
+    _external(source="review:bob")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.verdicts)).mappings().all()
+    assert sorted(r["source"] for r in rows) == ["review:alice", "review:bob"]
+
+
+# --- External rows must never displace Doug's own verdict --------------------
+
+
+def _doug_verdict(**overrides) -> int | None:
+    kwargs = {
+        "repo": "o/r",
+        "pr_number": 7,
+        "tier": "reader",
+        "verdict": VERDICT,
+        "reader_verdict": RV,
+        "model": reader.MODEL,
+        "github_repo_id": REPO_ID,
+        "installation_id": INSTALL,
+        "head_sha": "a" * 40,
+        "source": "app",
+        "pr_meta": {"number": 7, "title": "t", "author": "a", "files": [], "head_sha": "a" * 40},
+    }
+    kwargs.update(overrides)
+    return store.save_review(**kwargs)
+
+
+def test_an_external_review_never_answers_the_workers_idempotency_read(
+    tmp_path, monkeypatch
+):
+    """find_verdict_by_identity keys on exactly the four columns an external
+    row also carries — head_sha included, because a review names the commit
+    it was left on. Without the tier filter, a human approving PR #7 at SHA
+    X makes worker.process_job believe SHA X was already reviewed: Doug
+    never reads that commit, and the check run renders a score=0.0 row as if
+    it were Doug's own verdict.
+
+    Ordering is id desc, so this is not a race — it is the steady state for
+    any PR a person reviews after Doug does."""
+    _db(tmp_path, monkeypatch)
+    _doug_verdict()
+    _external()
+    found = store.find_verdict_by_identity(INSTALL, REPO_ID, 7, "a" * 40)
+    assert found is not None
+    assert found["tier"] == "reader"
+    assert found["score"] == VERDICT.score
+
+
+def test_an_external_review_arriving_first_does_not_suppress_dougs_review(
+    tmp_path, monkeypatch
+):
+    """The other direction: a reviewer who approves before Doug's job runs
+    must not make that job think its work is already done. The job would be
+    completed against a verdict nobody scored."""
+    _db(tmp_path, monkeypatch)
+    _external()
+    assert store.find_verdict_by_identity(INSTALL, REPO_ID, 7, "a" * 40) is None
+
+
+def test_an_external_review_does_not_take_a_pr_off_the_queue(tmp_path, monkeypatch):
+    """latest_reviews groups by (repo, pr) and takes max(id). An external row
+    is newer than Doug's, so filtering only the outer query would drop the PR
+    from /v1/queue entirely rather than falling back — the subquery has to
+    exclude external rows before the max is taken."""
+    _db(tmp_path, monkeypatch)
+    _doug_verdict()
+    _external()
+    rows = store.latest_reviews()
+    assert [r["pr_number"] for r in rows] == [7]
+    assert rows[0]["tier"] == "reader"
+    assert rows[0]["score"] == VERDICT.score
+
+
+def test_find_review_ignores_external_rows(tmp_path, monkeypatch):
+    """Belt and braces. find_review matches pr_meta['head_sha'] as a JSON
+    key and external rows write no pr_meta, so it is already immune —
+    incidentally, not by design. The exclusion is explicit so that immunity
+    does not evaporate the day someone writes pr_meta on an external row."""
+    _db(tmp_path, monkeypatch)
+    _doug_verdict()
+    _external(raw={"review_id": 3})
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior is not None and prior["tier"] == "reader"
+
+
+def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
+    tmp_path, monkeypatch
+):
+    """The test above cannot fail if find_review's tier filter is deleted —
+    external rows write no pr_meta, so its JSON predicate is NULL for them
+    and never matches either way. That makes the filter's value invisible to
+    every other test here, which is how a guard gets "cleaned up" later.
+
+    So this one writes the row the incidental immunity does not cover: an
+    external verdict carrying pr_meta with a matching head_sha. Only the
+    explicit tier exclusion keeps Doug's verdict winning, and deleting it
+    fails exactly this test."""
+    url = _db(tmp_path, monkeypatch)
+    _doug_verdict()
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.verdicts.insert(),
+            {
+                "repo": "o/r",
+                "pr_number": 7,
+                "scored_at": SUBMITTED,
+                "tier": "external",
+                "score": 0.0,
+                "band": "cleared",
+                "threshold": 0.0,
+                "installation_id": INSTALL,
+                "github_repo_id": REPO_ID,
+                "head_sha": "a" * 40,
+                "source": "review:someone",
+                "pr_meta": {"head_sha": "a" * 40},
+            },
+        )
+    prior = store.find_review("o/r", 7, "a" * 40)
+    assert prior is not None and prior["tier"] == "reader"
+
+
+def test_an_external_review_does_not_erase_a_prs_findings_from_precision(
+    tmp_path, monkeypatch
+):
+    """pattern_join takes the same max(id) per (repo, pr) that latest_reviews
+    does, and feeds the published per-pattern precision. An external row
+    winning that max leaves the PR in the denominator while contributing no
+    findings to the numerator — every pattern that PR actually carried would
+    silently stop counting as a hit."""
+    url = _db(tmp_path, monkeypatch)
+    _doug_verdict()
+    _external()
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.outcomes.insert(),
+            {
+                "repo": "o/r",
+                "pr_number": 7,
+                "kind": "revert",
+                "observed_at": datetime.now(UTC),
+                "source": "git-labels",
+            },
+        )
+    joined = store.pattern_join()
+    assert [(p["repo"], p["pr_number"]) for p in joined["prs"]] == [("o/r", 7)]
+    assert [h["rule"] for h in joined["hits"]] == ["reader:race-condition"]

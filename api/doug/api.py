@@ -596,6 +596,61 @@ def _record_merge(payload: dict) -> None:
     )
 
 
+# A submitted review that takes a position, mapped onto Doug's own bands.
+# Everything else a reviewer can submit — `commented`, and the dismissal and
+# edit actions — states no position on whether the change should land, so
+# there is nothing to grade against an outcome and no row to write.
+REVIEW_BANDS = {"approved": Band.CLEARED, "changes_requested": Band.FLAGGED}
+
+
+def _record_external_review(payload: dict) -> None:
+    """Ingest a third-party review as a dated stance in Doug's ledger.
+
+    The neutral-grader lane. Nothing is spent here: no model call, no
+    metering, no check run, and deliberately no fork gate — that gate exists
+    because a fork's raw diff would enter the prompt, and nothing here reads
+    a diff. Bot reviewers are ingested like anyone else, because grading bot
+    reviewers is the point of the lane.
+    """
+    review_ = payload["review"]
+    band = REVIEW_BANDS.get(review_.get("state", ""))
+    if band is None:
+        return
+    scored_at = _payload_timestamp(review_.get("submitted_at"))
+    head_sha = review_.get("commit_id")
+    login = (review_.get("user") or {}).get("login")
+    if scored_at is None or not head_sha or not login:
+        # These three are the row's identity and its dedup key. A stance that
+        # cannot be attached to a commit, a time and a reviewer is not a
+        # gradable claim, and storing it against a guess would put an
+        # invented data point into a ledger whose whole product is calibrated
+        # claims.
+        print(
+            f"doug: review on PR #{payload['pull_request'].get('number')} carried no "
+            "usable commit_id/submitted_at/user.login; not ingested",
+            file=sys.stderr,
+        )
+        return
+    base_repo = payload["pull_request"]["base"]["repo"]
+    store.save_external_review(
+        payload["installation"]["id"],
+        base_repo["id"],
+        base_repo["full_name"],
+        payload["pull_request"]["number"],
+        head_sha,
+        # verdicts.source is String(64) for exactly this; GitHub logins run
+        # to 39 characters.
+        f"review:{login}",
+        band,
+        scored_at,
+        raw={
+            "review_id": review_.get("id"),
+            "state": review_.get("state"),
+            "submitted_at": review_.get("submitted_at"),
+        },
+    )
+
+
 @app.post("/webhooks/github", status_code=202)
 async def github_webhook(
     request: Request,
@@ -653,6 +708,7 @@ async def github_webhook(
             x_github_event == "pull_request"
             and (action in PR_ACTIONS or action == "closed")
         )
+        or (x_github_event == "pull_request_review" and action == "submitted")
     )
     if not handled:
         # Accepted and ignored, on purpose: a 4xx would put GitHub into a
@@ -694,5 +750,8 @@ async def github_webhook(
             job_id = await run_in_threadpool(_enqueue_pull_request, payload)
             if job_id is not None:
                 background.add_task(worker.drain)
+    elif x_github_event == "pull_request_review":
+        # A stance, not a review Doug pays for. No drain: nothing queued.
+        await run_in_threadpool(_record_external_review, payload)
 
     return Response(status_code=202)

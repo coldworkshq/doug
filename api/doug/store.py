@@ -42,7 +42,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from . import migrations
-from .models import Verdict
+from .models import Band, Verdict
 from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
@@ -266,6 +266,18 @@ deep_read_counters = Table(
     UniqueConstraint("scope", "period", name="uq_deep_read_period"),
 )
 
+# The neutral-grader lane's tier (see save_external_review): a third-party
+# reviewer's stance, with no read behind it, no findings, and score 0.0.
+#
+# Every helper that answers "what does this ledger already say about this
+# PR" must exclude these, and the reason is not stylistic. Each of those
+# helpers keys on columns an external row also carries — head_sha included,
+# because a review names the commit it was left on — so an unfiltered helper
+# hands back a score=0.0 row as if it were Doug's own verdict. The four call
+# sites below are the whole guard; there is no other reader of this table
+# that has to care.
+EXTERNAL_TIER = "external"
+
 _engine = None
 # The raw env string the engine was built from. Compared instead of
 # str(_engine.url) because SQLAlchemy masks passwords when rendering a URL
@@ -388,6 +400,80 @@ def save_review(
                 },
             )
     return int(row)
+
+
+def save_external_review(
+    installation_id: int,
+    github_repo_id: int,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    source: str,
+    band: Band,
+    scored_at: datetime,
+    raw: dict | None = None,
+) -> int | None:
+    """Record a third-party review as a verdict nobody scored.
+
+    A sibling of save_review rather than a call into it: save_review owns
+    `scored_at` (it hardcodes now()) and takes a Verdict, so using it would
+    mean building a scoring type for something that was never scored and
+    then overriding the one timestamp it deliberately decides. Here
+    `scored_at` is the reviewer's own submitted_at — the row is a dated
+    claim about when a stance was taken, and a redelivery a day later must
+    not restate it as today's.
+
+    score and threshold are 0.0 and tier is 'external' because no model ran
+    and no diff was read. The band is Doug's own vocabulary on purpose: it
+    is what lets a human's approval and Doug's verdict be adjudicated
+    against the same outcome in the same ledger. Nothing here writes
+    findings, reads or pr_meta — there was no read to describe.
+
+    Returns None when this exact stance is already recorded. That check is a
+    SELECT rather than a unique index, and the difference is worth stating
+    plainly: create_all() never adds a constraint to a table that already
+    exists, and `verdicts` is live in production, so no index is available
+    to enforce it. Two genuinely concurrent deliveries of one review can
+    therefore both miss the check and both insert. That is tolerated because
+    the cost is one duplicate append-only row, not a paid read — redeliveries
+    arrive sequentially in practice, which is the case this suppresses.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        existing = conn.execute(
+            select(verdicts.c.id).where(
+                verdicts.c.installation_id == installation_id,
+                verdicts.c.github_repo_id == github_repo_id,
+                verdicts.c.pr_number == pr_number,
+                verdicts.c.source == source,
+                verdicts.c.head_sha == head_sha,
+                verdicts.c.scored_at == scored_at,
+            )
+        ).scalar_one_or_none()
+    if existing is not None:
+        return None
+    with engine.begin() as conn:
+        return int(
+            conn.execute(
+                verdicts.insert().returning(verdicts.c.id),
+                {
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "scored_at": scored_at,
+                    "tier": EXTERNAL_TIER,
+                    "score": 0.0,
+                    "band": band.value,
+                    "threshold": 0.0,
+                    "raw": raw,
+                    "github_repo_id": github_repo_id,
+                    "installation_id": installation_id,
+                    "head_sha": head_sha,
+                    "source": source,
+                },
+            ).scalar_one()
+        )
 
 
 def upsert_installation(
@@ -692,6 +778,13 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
             verdicts.c.repo == repo,
             verdicts.c.pr_number == pr_number,
             verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
+            # Belt and braces. This helper is already immune by accident:
+            # external rows write no pr_meta, so the JSON predicate above is
+            # NULL for them and never matches. That immunity is incidental,
+            # not designed, and evaporates the moment anything writes pr_meta
+            # on an external row — so the exclusion is stated rather than
+            # relied upon.
+            verdicts.c.tier != EXTERNAL_TIER,
         )
         .order_by(verdicts.c.id.desc())
         .limit(1)
@@ -790,6 +883,15 @@ def find_verdict_by_identity(
             verdicts.c.github_repo_id == github_repo_id,
             verdicts.c.pr_number == pr_number,
             verdicts.c.head_sha == head_sha,
+            # An external row carries all four of the columns above — a
+            # review names the commit it was left on — so without this a
+            # human approving PR #7 at SHA X answers this read, and
+            # process_job completes against a verdict nobody scored: no read
+            # of that commit ever happens, and the check run renders a
+            # score=0.0 row as Doug's own. The ordering is id desc, so that
+            # is not a race but the steady state for any PR a person reviews
+            # after Doug does.
+            verdicts.c.tier != EXTERNAL_TIER,
         )
         .order_by(verdicts.c.id.desc())
         .limit(1)
@@ -883,8 +985,15 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
         return {"prs": [], "hits": []}
     from sqlalchemy import func, select
 
+    # Excluded inside the subquery for the same reason latest_reviews does
+    # it there, but the damage here is quieter. An external row winning
+    # max(id) leaves its PR in `prs` (the denominator) while contributing no
+    # findings to `hits`, because external rows have none — so every pattern
+    # that PR really carried silently stops counting as a hit, and the
+    # per-pattern precision this feeds is published.
     latest = (
         select(func.max(verdicts.c.id).label("id"))
+        .where(verdicts.c.tier != EXTERNAL_TIER)
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )
@@ -932,8 +1041,15 @@ def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
         return []
     from sqlalchemy import desc, func, select
 
+    # The external exclusion belongs INSIDE the grouped subquery, not on the
+    # outer query. Filtering outside would still let an external row win
+    # max(id) for its PR and then drop that row — so a PR someone reviewed
+    # after Doug would vanish from the queue entirely instead of falling
+    # back to Doug's verdict, which is a worse failure than the one being
+    # fixed.
     latest = (
         select(func.max(verdicts.c.id).label("id"))
+        .where(verdicts.c.tier != EXTERNAL_TIER)
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )
