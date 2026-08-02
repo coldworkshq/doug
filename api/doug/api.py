@@ -536,11 +536,34 @@ def _record_installation(payload: dict, action: str) -> None:
         INSTALLATION_STATES[action],
     )
     if action == "created":
-        # The only authoritative repo list we are ever sent; everything
-        # after this is a delta against it.
+        # Marks what this installation covers and never un-marks. `created`
+        # is replayable — the Redeliver button in the App's Advanced tab,
+        # GitHub retrying a failed delivery, two deliveries arriving out of
+        # order — and it carries the repo list as it was when GitHub
+        # generated the event, not as it is now. Treating it as
+        # authoritative at processing time flips back to 'removed' every
+        # repo granted since; active_repos is what reconcile reads, so that
+        # repo's backlog is then never healed again and no later event
+        # restores it. Nothing surfaces that, because live pull_request
+        # deliveries for it keep enqueueing.
+        #
+        # The opposite mistake a replay can now make is re-marking a repo
+        # that was removed since. That costs one reconcile call that 403s on
+        # a repo the installation token does not cover, logged and skipped —
+        # noise rather than silence, and no spend. Uninstall-then-reinstall
+        # still converges on the smaller set, because `deleted` below
+        # cleared coverage first.
         store.set_installation_repos(
-            inst["id"], _repo_list(payload.get("repositories")), replace=True
+            inst["id"], _repo_list(payload.get("repositories")), replace=False
         )
+    elif action == "deleted":
+        # The uninstall is what ends coverage, and now the only thing that
+        # does: an empty authoritative list marks every repo on this
+        # installation 'removed'. Rows are not deleted — a verdict written
+        # while the repo was installed still has to resolve to the repo it
+        # describes — so a reinstall's `created` marks the newly granted
+        # subset active again and the repos left out of it stay removed.
+        store.set_installation_repos(inst["id"], [], replace=True)
 
 
 def _merge_installation_repos(payload: dict) -> None:

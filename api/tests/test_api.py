@@ -225,17 +225,22 @@ def test_installation_created_records_the_account_and_its_repos(tmp_path, monkey
     assert kicks == [150424894, "drain"]
 
 
-def test_a_second_created_replaces_the_repo_list_rather_than_adding_to_it(
-    tmp_path, monkeypatch
-):
-    """`created` carries the authoritative list, not a delta — the handler's
-    own docstring says so, and nothing else was enforcing it.
+def test_uninstall_then_reinstall_converges_on_the_smaller_repo_set(tmp_path, monkeypatch):
+    """Reinstalling on fewer repos must leave the dropped one uncovered, and
+    the uninstall is what makes that true.
 
-    Uninstall-then-reinstall picking fewer repos is the ordinary way to land
-    here, and it is the case where getting this wrong is invisible: merging
-    instead of replacing leaves the dropped repo 'active' forever, so
-    reconcile keeps listing its open PRs and paying for reviews on a repo
-    this installation no longer covers."""
+    installation_repos is the only record of what an installation covers,
+    and active_repos is the only input the healing path has. A repo left
+    'active' after it stopped being granted is not a bill — an installation
+    token 403s on a repo it does not cover and reconcile swallows that with
+    a log line — it is a permanently wrong coverage record that makes every
+    pass log a skipped repo indistinguishable from a real outage on one
+    Doug is actually installed on.
+
+    An earlier version of this test ran two `created` deliveries back to
+    back and read convergence out of `created` being a replacing write.
+    Those two shapes are indistinguishable in the payload, and reading them
+    that way is what made a redelivery drop a repo — see the test below."""
     _hook_env(tmp_path, monkeypatch)
     _webhook(
         "installation",
@@ -248,6 +253,7 @@ def test_a_second_created_replaces_the_repo_list_rather_than_adding_to_it(
             ],
         },
     )
+    _webhook("installation", {"action": "deleted", "installation": INSTALLATION})
     _webhook(
         "installation",
         {
@@ -262,10 +268,53 @@ def test_a_second_created_replaces_the_repo_list_rather_than_adding_to_it(
     assert repos[988]["state"] == "removed"
 
 
+def test_a_redelivered_created_does_not_drop_a_repo_granted_since(tmp_path, monkeypatch):
+    """`created` is authoritative when GitHub generates it, not when this
+    service processes it.
+
+    The Redeliver button in the App's Advanced tab is an ordinary cutover
+    move, GitHub retries failed deliveries on its own schedule, and
+    deliveries can simply arrive out of order. Any of those replays a
+    `created` whose repo list predates every installation_repositories delta
+    since. Treated as a replacing write it marks those repos 'removed', and
+    because active_repos is what reconcile reads, that repo's backlog is
+    then never healed again — silently, with no event that ever restores
+    it. Live pull_request deliveries keep enqueuing, so nothing surfaces the
+    gap."""
+    _hook_env(tmp_path, monkeypatch)
+    created = {
+        "action": "created",
+        "installation": INSTALLATION,
+        "repositories": [{"id": 987, "full_name": "drewjst/doug"}],
+    }
+    _webhook("installation", created)
+    _webhook(
+        "installation_repositories",
+        {
+            "action": "added",
+            "installation": INSTALLATION,
+            "repositories_added": [{"id": 988, "full_name": "drewjst/other"}],
+        },
+    )
+    # The original delivery, replayed.
+    _webhook("installation", created)
+    repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
+    assert repos[987]["state"] == "active"
+    assert repos[988]["state"] == "active"
+    assert sorted(store.active_repos(150424894)) == [
+        (987, "drewjst/doug"),
+        (988, "drewjst/other"),
+    ]
+
+
 def test_installation_deleted_flips_state_without_dropping_history(tmp_path, monkeypatch):
     """Uninstalling ends the permission, not the record. Deleting rows
     would take the tenancy context off every verdict already written, and
-    reinstalling is the single most common thing a trialling team does."""
+    reinstalling is the single most common thing a trialling team does.
+
+    The repo rows move with it: coverage ended, so active_repos must stop
+    returning them, and the row survives because a verdict written while
+    the repo was installed still has to resolve to the repo it describes."""
     _hook_env(tmp_path, monkeypatch)
     _webhook(
         "installation",
@@ -284,7 +333,9 @@ def test_installation_deleted_flips_state_without_dropping_history(tmp_path, mon
 
     (inst,) = _table(tmp_path, store.installations)
     assert inst["state"] == "deleted"
-    assert len(_table(tmp_path, store.installation_repos)) == 1
+    (repo,) = _table(tmp_path, store.installation_repos)
+    assert repo["github_repo_id"] == 987 and repo["state"] == "removed"
+    assert store.active_repos(150424894) == []
 
 
 def test_installation_suspend_and_unsuspend_round_trip(tmp_path, monkeypatch):

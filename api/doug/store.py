@@ -528,11 +528,19 @@ def set_installation_repos(
     """Record which repos an installation covers.
 
     `replace=True` treats `repos` as authoritative — anything else on this
-    installation flips to 'removed'. That is the installation-created event,
-    which carries the full list. `replace=False` merges a delta, and the
-    caller says which delta it is: the `installation_repositories` webhook
-    sends added and removed in one payload, so removals arrive as their own
-    call with state='removed'.
+    installation flips to 'removed'. Its one caller is the
+    installation-deleted event, with an empty list: the uninstall is the
+    only delivery that can end coverage without naming what it ended, and
+    it is the only one whose repo list cannot be stale, because there isn't
+    one.
+
+    `replace=False` merges a delta, and the caller says which delta it is:
+    the `installation_repositories` webhook sends added and removed in one
+    payload, so removals arrive as their own call with state='removed'.
+    installation-created merges too, even though it carries a full list —
+    that list is authoritative when GitHub generated the event, and a
+    redelivery of it would otherwise mark 'removed' every repo granted
+    since (see _record_installation).
 
     Rows are never DELETEd. A removed repo's verdicts stay in the ledger and
     the join that explains them has to keep resolving.
