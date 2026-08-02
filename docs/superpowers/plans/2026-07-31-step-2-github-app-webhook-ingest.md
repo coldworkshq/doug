@@ -4044,7 +4044,7 @@ git push
 
 After this deploys, `lemahq/lema`'s copy of the workflow gets a 404. It never reddens the PR either way — the step carries `continue-on-error: true` — and if lema holds the guarded template version it renders a "Doug: unavailable" summary block. Task 10's cutover checklist removes it from lema.
 
-**Explicitly kept:** `/v1/queue` with its `DOUG_API_TOKEN` gate (interim until step 3 replaces it with WorkOS sessions), `/v1/score`, `/v1/score/read`, `/v1/patterns`, and the `doug-review` CLI (`doug/review.py:214-230`, `pyproject.toml:27`) — the CLI drives `githubkit` directly and never touched the endpoint.
+**Explicitly kept:** `/v1/queue` with its `DOUG_API_TOKEN` gate (interim until step 3 replaces it with WorkOS sessions), `/v1/score`, `/v1/score/read` (which now carries the same gate, for spend rather than for privacy), `/v1/patterns`, and the `doug-review` CLI (`doug/review.py:214-230`, `pyproject.toml:27`) — the CLI drives `githubkit` directly and never touched the endpoint.
 
 **Files:**
 - Modify: `api/doug/api.py:46-143` (delete), `:13` (import), `:151`, `:213-215`, `:323` (stale references)
@@ -4261,7 +4261,7 @@ git push
 - Delete (operator, Step 4 — untracked and gitignored, so it is not part of any commit): `api/.backtest-cache/llm-probe/api-key`
 
 **Interfaces:**
-- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6); `/v1/score/read`, kept by Task 9, as the post-deploy credential probe.
+- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6); `/v1/score/read`, kept by Task 9, as the post-deploy credential probe — and therefore `DOUG_API_TOKEN`, which now gates it.
 - Produces: a Cloud Run revision that can mint installation tokens and finish background work; a rotated `doug-anthropic-key`; an operator-run IAM prerequisite and an operator-run cutover.
 
 **Read before starting — the gap this task closes is already open.** `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` were set on prod out-of-band via `gcloud run services update` on 2026-07-31, and `deploy()` uses `--set-env-vars` / `--set-secrets`, which **replace** their whole blocks. Every push from Tasks 1–9 therefore deploys a revision with the App credentials wiped. That is survivable and is not a reason to reorder the plan: `app_auth.enabled()` returns `False` without them, so the App simply stays dormant — webhooks verify and enqueue, no tokens are minted, no paid reads happen from a half-built pipeline. Task 7's startup reconcile then picks up every PR missed during the gap on the first revision that has the credentials, which is the one this task ships. What is *not* survivable is landing this task and assuming prod was fine in between: check the logs at Step 6 rather than assuming.
@@ -4492,20 +4492,26 @@ gcloud run services logs read doug-api --project doug-prod0 --region us-central1
 Expect a `doug: reconcile enqueued N job(s)` line from the startup thread. `N` counts every open PR missed while the App credentials were absent. If the log reader is unavailable in your gcloud, use:
 `gcloud logging read 'resource.labels.service_name="doug-api"' --limit 50 --freshness=1h --project doug-prod0`.
 
-Then confirm the **rotated Anthropic key** actually works on this revision, before the old one is revoked. `/v1/score/read` survives Task 9 and needs no token, and it falls back loudly rather than erroring, which makes it the cheapest possible credential probe:
+Then confirm the **rotated Anthropic key** actually works on this revision, before the old one is revoked. `/v1/score/read` survives Task 9, and it falls back loudly rather than erroring, which makes it the cheapest possible credential probe. It is **token-gated on `DOUG_API_TOKEN`** — every call buys a model read and doug-api is `--allow-unauthenticated`, so the probe reads back the same secret `deploy()` binds:
 
 ```bash
 URL=$(gcloud run services describe doug-api --project doug-prod0 \
   --region us-central1 --format='value(status.url)')
+TOKEN=$(gcloud secrets versions access latest --secret=doug-api-token \
+  --project doug-prod0)
 curl -sS -X POST "$URL/v1/score/read" -H 'content-type: application/json' \
+  -H "x-doug-token: $TOKEN" \
   -d '{"pr":{"number":1,"title":"probe","author":"drewjst","files":["a.py"]},
        "diff":"--- a/a.py\n+++ b/a.py\n@@\n+x = 1\n"}' \
   | python3 -c 'import json,sys; v=json.load(sys.stdin); \
-rules=[r["rule"] for r in v["reasons"]]; print(rules); \
+sys.exit(f"not a verdict (auth or config): {v}") if "reasons" not in v else None; \
+rules=[r["rule"] for r in v["reasons"]]; print(v["threshold"], rules); \
 sys.exit(1 if "reader-unavailable" in rules else 0)'
 ```
 
-Exit 0 with at least one `reader:*` rule means the new key is live. A `reader-unavailable` rule (exit 1) means `ANTHROPIC_API_KEY` is wrong on this revision — stop, fix the secret version, and do **not** revoke the old key. This costs one small model call.
+Exit 0 with `threshold` printed as `0.3` means the new key is live: the reader bands at 0.3 and the deterministic scorer at 0.62, so the threshold is the tier signal and — unlike a `reader:*` rule — it does not depend on the probe diff producing findings. This one produces none, so do **not** read an empty rule list as failure.
+
+A `reader-unavailable` rule (exit 1) means `ANTHROPIC_API_KEY` is wrong on this revision — stop, fix the secret version, and do **not** revoke the old key. `not a verdict (auth or config)` means the request never reached the reader: a 401 is a wrong or missing `DOUG_API_TOKEN`, a 503 is that secret unbound on the revision. This costs one small model call.
 
 - [ ] **Step 7: Cutover — operator steps, run in this order.**
 

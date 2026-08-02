@@ -332,8 +332,14 @@ def _score_and_persist(
 
 
 @app.post("/v1/score/read")
-def score_pr_read(req: ReadScoreRequest) -> Verdict:
+def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verdict:
     """Reader-tier scoring: LLM diff-read when enabled, deterministic otherwise.
+
+    Token-gated on the same shared secret as /v1/queue, for a different
+    reason than /v1/queue's: this route spends money. Every call can buy a
+    model read and the service is deployed --allow-unauthenticated, so
+    without a gate the URL alone is authority to bill the account.
+    DIFF_BUDGET bounds what one call costs; only the token bounds how many.
 
     A failed read never 500s — it falls back to the deterministic verdict
     and says so in the reasons, because a silent downgrade would corrupt
@@ -342,6 +348,15 @@ def score_pr_read(req: ReadScoreRequest) -> Verdict:
     but it gets the same read-truncated reason so a caller of this endpoint
     isn't the one path left unable to tell a whole read from part of one.
     """
+    # Fourth inlined copy of this gate (review_pr, queue, patterns_precision,
+    # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
+    # is when the three survivors collapse into one helper; extracting it now
+    # would edit endpoints a concurrent session is reading.
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if not hmac.compare_digest(x_doug_token, expected):
+        raise HTTPException(status_code=401, detail="bad token")
     if not reader.enabled():
         return score(req.pr)
     try:
