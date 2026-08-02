@@ -19,9 +19,13 @@ were entirely absent from the ledger.
 ## Decision
 
 Doug's development goes through pull requests. `doug-review.yml` is
-installed on this repo with `DOUG_API_URL` and `DOUG_API_TOKEN`, and
-`DOUG_INTENT=1` so Doug reads this decisions directory when reviewing
-its own changes.
+installed on this repo with `DOUG_API_URL` and `DOUG_API_TOKEN`, and this
+repo's own install is opted in to the deviation tier.
+
+**Surface correction, 2026-08-02 — the decision stands.** The line above
+named `DOUG_INTENT=1`. That switch was process-wide, so it covered every
+tenant rather than this repo alone, which is not what this record says.
+Superseded by the `DOUG_INTENT_INSTALLATIONS` allowlist.
 
 ## Rejected
 

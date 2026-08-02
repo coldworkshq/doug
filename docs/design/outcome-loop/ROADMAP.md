@@ -155,6 +155,26 @@ executed as written — amendments folded in at their task, never as a second pa
   `worker._skip_reason` (`worker.py:236`) refuses one that reached the queue another way.
   Both treat non-integer repo ids as a fork, because the safe direction to be wrong in is
   skip. Merged #27. **Bot-author is still open**, and it is the half that still costs money.
+- [x] Per-installation gate on the **experimental intent tier**. **This item did not exist on
+  this list until 2026-08-02** — it was found by reading the cost lines #37 had just added,
+  which is the first time anyone could see that the intent read is the *larger* of the two paid
+  reads (`in=16601/out=1305` vs `in=14031/out=925` on #38). `design-lock.md:62` had committed
+  the tier to "a per-installation flag, default OFF, ON for the dogfood install" as a red-team
+  mitigation; the code had a process-wide `DOUG_INTENT` env var, and `gcp.sh` deployed it as
+  `DOUG_INTENT=1`, i.e. on for every installation the service reviews. One installation exists,
+  so nothing was ever mischarged — but M2's exit gate is *safe to point at strangers*, and this
+  would have charged stranger #1 for an experiment whose findings are still unbelieved.
+  Now `intent.enabled_for(installation_id)` over a `DOUG_INTENT_INSTALLATIONS` allowlist, with
+  the installation derived from the **same scope string the spend cap charges** — so the payer
+  and the opted-in party are one value and cannot drift. Un-tenanted callers (CI path, credential
+  probe, CLI, intent probe) resolve to `None` and buy no intent read at all, which also halves
+  the soak's intent spend. Default OFF is real: an unset allowlist enables nobody.
+  The deploy config is pinned by a test, because a flag that exists only in the source is not a
+  flag — and the failure mode here is *silent-off*, the safe direction and therefore the easy
+  one to ship by mistake.
+  **Chosen shape (Andrew, 2026-08-02): env allowlist, not an `installations` column** — no
+  migration, no collision with 005 below, right-sized for one install. It becomes a column when
+  the token-dispense item opens that table anyway.
 - [ ] Migration **005** — **UNIQUE** index on `verdicts` (installation_id, github_repo_id,
   pr_number, head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are
   untouched. **Renumbered 2026-08-02: 003 and 004 are taken** (#30 shipped 003, the partial
