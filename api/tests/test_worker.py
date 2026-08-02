@@ -1155,3 +1155,162 @@ def test_reconcile_skips_a_pr_whose_base_repo_id_disagrees_with_the_store(tmp_pa
     )
     assert worker.reconcile_installation(1) == 0
     assert ingest.claim() is None
+
+
+# --- observability: make a successful review visible in the log -----------
+#
+# process_job wrote nothing on any outcome that succeeded, so "the review
+# ran" and "the job was never claimed at all" were indistinguishable from
+# the logs — the only lines it could produce were drain's failure line and
+# the reclaim/skip lines. That was survivable only while doug-review.yml
+# still posted a job summary for every PR; Task 9 deletes that workflow and
+# the check run becomes the sole observable.
+#
+# Three outcomes returned silently, and the fresh-vs-replay pair is the
+# reason these tests are worded the way they are. A fresh review buys a
+# model read; a replay re-renders a verdict already in the ledger and buys
+# nothing. One line that covers both would be worse than no line, because an
+# operator counting reviews would be counting spend that never happened.
+
+
+def _pr_lines(capsys) -> list[str]:
+    """The process_job outcome lines for JOB's PR, in the order emitted.
+
+    Filtered on the repo#pr the line leads with, which is what keeps drain's
+    `doug: job N failed` line and the reclaim line (neither of which names a
+    PR) out of the assertions below."""
+    return [ln for ln in capsys.readouterr().err.splitlines() if "drewjst/doug#7" in ln]
+
+
+def test_a_fresh_review_logs_the_read_it_paid_for(tmp_path, monkeypatch, capsys):
+    """Outcome 1 of 3: score_one ran, a row landed, a check run posted.
+
+    This is the only one of the three that spent money, and the line has to
+    say so in its own words rather than leaving it inferable from the
+    absence of some other line. Carries what identifies the review — repo,
+    PR, short head SHA, tier, band, score, verdict id — and none of the
+    model's prose, which belongs on the check run and not in a log."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    verdict_id = worker.process_job(ingest.claim())
+
+    (line,) = _pr_lines(capsys)
+    assert "reviewed" in line
+    assert "paid read" in line
+    assert f"tier=reader band=flagged risk=0.62 verdict={verdict_id}" in line
+    # Short SHA, not the whole 40 — enough to identify the commit by eye.
+    assert "@" + "a" * 12 in line
+    assert "a" * 40 not in line
+    # Nothing sensitive: the finding's model-authored label stays on the
+    # check run. A log line is not a place to launder prompt output into.
+    assert "Cache write is not guarded" not in line
+
+
+def test_an_idempotent_replay_says_it_bought_nothing(tmp_path, monkeypatch, capsys):
+    """Outcome 2 of 3: find_verdict_by_identity answered, so the check run
+    is re-rendered from the stored row and no read was bought.
+
+    Same setup as the reclaim-replay test above — a worker that died between
+    save_review committing and ingest.complete running. The line reports the
+    same verdict the fresh line would, which is exactly why it cannot use
+    the same words for it."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    verdict_id = store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV,
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+    _age_started_at(url, claimed["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
+
+    assert worker.drain() == 1
+
+    (line,) = _pr_lines(capsys)
+    assert "replayed" in line
+    assert "paid read" not in line  # the whole point: no money changed hands
+    assert f"tier=reader band=flagged risk=0.62 verdict={verdict_id}" in line
+    assert "@" + "a" * 12 in line
+
+
+def test_a_superseded_job_says_it_read_nothing(tmp_path, monkeypatch, capsys):
+    """Outcome 3 of 3: the branch moved while the job sat in the queue, so
+    the job is retired and the PR's real head is enqueued in its place.
+
+    Nothing was read, so there is no verdict to name — and naming one would
+    be a lie about a commit this job never opened. Both SHAs appear, because
+    "which commit overtook it" is the only question this line is asked."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch, heads={7: "c" * 40})
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    (line,) = _pr_lines(capsys)
+    assert "superseded" in line
+    assert "paid read" not in line
+    assert "verdict=" not in line  # there is no verdict; do not invent one
+    assert "@" + "a" * 12 in line and "c" * 12 in line
+
+
+def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeypatch, capsys):
+    """The reason this change exists, pinned directly.
+
+    A fresh review and a replay of it agree on every field worth logging —
+    same repo, same PR, same head SHA, same tier, band, score and verdict
+    id. The single thing they disagree about is whether a model read was
+    bought, so that difference has to live in the wording or it does not
+    exist at all: a line reporting both identically would make spend
+    unauditable from the logs, with an operator counting reviews counting
+    replays as paid reads.
+
+    So this asserts the identifying fields are the SAME on both lines and
+    the paid-read claim appears on exactly one of them, in that order. A
+    test that only checked "both logged something" would survive the defect
+    it exists to catch.
+
+    The setup is ingest.complete raising after save_review already landed,
+    which is also why the fresh line is emitted before that call: the read
+    is paid for and the verdict durable by then, and the one failure that
+    re-pends a job in that state must not erase the record of what it cost.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    real_complete = ingest.complete
+    armed = {"boom": True}
+
+    def _flaky_complete(job_id, verdict_id):
+        if armed["boom"]:
+            armed["boom"] = False
+            raise RuntimeError("db hiccup")
+        real_complete(job_id, verdict_id)
+
+    monkeypatch.setattr(ingest, "complete", _flaky_complete)
+    ingest.enqueue(**JOB)
+
+    assert worker.drain() == 1  # scores, saves, posts — then complete blows up
+    assert worker.drain() == 1  # replays the durable verdict, buying nothing
+
+    (v,) = _rows(url, store.verdicts)
+    lines = _pr_lines(capsys)
+    assert len(lines) == 2, f"expected one outcome line per pass, got {lines}"
+
+    # Identical facts on both lines, so nothing incidental can be doing the
+    # distinguishing for the wording.
+    for ln in lines:
+        assert f"tier=reader band=flagged risk=0.62 verdict={v['id']}" in ln
+
+    assert lines[0] != lines[1]
+    # Exactly one paid read happened, and it is countable: the first pass.
+    assert [("paid read" in ln) for ln in lines] == [True, False]
