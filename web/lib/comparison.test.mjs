@@ -64,6 +64,28 @@ test("summarizeComparisons pairs only singleton App and CI runs for the exact sa
   assert.notEqual(unknownGroups[0].key, unknownGroups[1].key);
 });
 
+test("summarizeComparisons counts duplicate-only paths as missing without fabricating a delta", () => {
+  const view = summarizeComparisons([
+    run({ id: 20, head_sha: "f".repeat(40), path: "app", score: 0.8 }),
+    run({ id: 21, head_sha: "f".repeat(40), path: "app", score: 0.7 }),
+    run({ id: 22, head_sha: "g".repeat(40), path: "ci", score: 0.1 }),
+    run({ id: 23, head_sha: "g".repeat(40), path: "ci", score: 0.2 }),
+  ]);
+
+  const appOnly = view.groups.find((group) => group.head_sha === "f".repeat(40));
+  const ciOnly = view.groups.find((group) => group.head_sha === "g".repeat(40));
+
+  assert.equal(view.summary.missingApp, 1);
+  assert.equal(view.summary.missingCi, 1);
+  assert.equal(view.summary.duplicateGroups, 2);
+  assert.equal(view.summary.exactPairs, 0);
+  assert.equal(view.summary.meanSignedGap, null);
+  assert.equal(view.summary.meanAbsoluteGap, null);
+  assert.equal(view.summary.maxAbsoluteGap, null);
+  assert.deepEqual([appOnly.presence, appOnly.duplicate, appOnly.delta], ["app-only", true, null]);
+  assert.deepEqual([ciOnly.presence, ciOnly.duplicate, ciOnly.delta], ["ci-only", true, null]);
+});
+
 test("isComparisonResponse accepts complete renderable data and rejects malformed runs", () => {
   assert.equal(isComparisonResponse({ runs: [] }), true);
   assert.equal(isComparisonResponse({ runs: [run({ path: "queue" })] }), false);
