@@ -16,6 +16,7 @@ rules simply don't fire here; the reader doesn't use them at all.
 import argparse
 import functools
 import sys
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -30,6 +31,19 @@ print = functools.partial(print, flush=True)  # noqa: A001
 class ReviewItem(BaseModel):
     pr: PRMetadata
     verdict: Verdict
+
+
+@dataclass(frozen=True)
+class IntentFailure:
+    """The intent read was attempted and failed.
+
+    Distinct from None (feature off / no docs / nothing relevant): ADR-0007
+    requires a failed read to be recorded differently from "nothing found",
+    or precision and operators cannot tell a broken path from a quiet repo.
+    Never raises into the review — callers surface a weight-0 reason.
+    """
+
+    detail: str
 
 
 def _html_url(p) -> str | None:
@@ -253,13 +267,17 @@ class IntentRead(BaseModel):
     coverage: reader.Coverage
 
 
-def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> IntentRead | None:
-    """Judge the change against the repo's binding decisions, or None.
+def read_intent(
+    gh, owner: str, repo: str, meta: PRMetadata, diff: str
+) -> IntentRead | IntentFailure | None:
+    """Judge the change against the repo's binding decisions.
 
-    None means no read happened — the feature is off, the repo keeps no
-    decision records, none of them bear on this change, or the read
-    failed. Every one of those is ordinary, and none of them may disturb
-    the risk verdict this runs alongside.
+    None — no read happened (feature off, no docs, nothing relevant).
+    IntentFailure — a read was attempted and failed (surface on the risk
+    verdict; do not treat as "quietly healthy").
+    IntentRead — success.
+
+    None of these may move the risk score or band (ADR-0007).
     """
     if not (intent.enabled() and reader.enabled()):
         return None
@@ -270,11 +288,10 @@ def read_intent(gh, owner: str, repo: str, meta: PRMetadata, diff: str) -> Inten
             return None
         rv = reader.read_with_decisions(meta, diff, chosen)
     except Exception as e:  # noqa: BLE001 — advisory path, never fails a review
-        # Swallowed, but not silently: a read that fails every time would
-        # otherwise be indistinguishable from a repo that keeps no records,
-        # and the feature would look "quiet" rather than broken.
+        # Distinct from None: a read that fails every time must not look
+        # like a repo that keeps no records (ADR-0007).
         print(f"doug: intent read skipped ({type(e).__name__}: {e})", file=sys.stderr)
-        return None
+        return IntentFailure(detail=f"{type(e).__name__}: {e}"[:200])
     return IntentRead(
         alignment=rv.intent_alignment,
         refs=[d.id for d in chosen],

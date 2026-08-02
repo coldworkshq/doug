@@ -120,7 +120,12 @@ executed as written — amendments folded in at their task, never as a second pa
   `reader.py` neither imports it nor takes an `installation_id`. So there is a tested cap that
   nothing consults, which is worth less than it looks: spend is still uncapped in production.
   Wiring it needs `installation_id` threaded through `score_one`/`read_intent`.
-- [ ] `/v1/score/read`: authed or deleted
+- [x] `/v1/score/read`: **authed**, not deleted — nothing in the product calls it, but the step-2
+  plan's Task 10 Step 6 uses it as the post-deploy probe that a rotated Anthropic key works on a
+  live revision, which is a recurring operational need and the only check that needs no PR. It
+  now carries `/v1/queue`'s `DOUG_API_TOKEN` gate; the probe command was updated to send the
+  header in the same commit, since a gated endpoint plus a tokenless documented `curl` is the
+  same defect moved into a doc.
 - [x] Coverage integrity: paginate `list_files`, carry `changed_files` + `files_dropped`,
   `complete` ⇔ every changed file seen (a partial read can no longer render as a clean one).
   Merged #25.

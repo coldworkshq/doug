@@ -11,9 +11,11 @@ State:    building — M0 CLOSED. TASK 10 IS DONE: the App path is LIVE and
           cooloff fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite),
           7b (#28, startup sweep + the review-state casing fix — which
           CLOSES Task 7), #29 (the late #24 re-review), 10 (#32, code) with
-          the operator cutover run 2026-08-01.
+          the operator cutover run 2026-08-01, and #34 (m1-cutover-done),
+          which is main's HEAD — so the paragraph below describes shipped
+          code, not a branch still waiting to land.
 
-          THIS BRANCH (m1-cutover-done) is not a plan task. The cutover
+          #34 (m1-cutover-done) was not a plan task. The cutover
           exposed that worker.process_job wrote NOTHING to the log on any
           successful outcome, so "the review ran" and "the job was never
           claimed" were indistinguishable — answering "did that review
@@ -23,19 +25,24 @@ State:    building — M0 CLOSED. TASK 10 IS DONE: the App path is LIVE and
           confused: only the fresh one says "paid read", because only it
           bought one. See the decision below for why that distinction is
           the change rather than a detail of it.
-Next:     M1 Task 9 — retire the CI token path (delete
-          .github/workflows/doug-review.yml and /v1/review). Unblocked now
-          that Task 10 is verified live; that 10-then-9 order is the
-          reverse of the plan's and is deliberate — see the resequencing
-          decision below. Deleting doug-review.yml also deletes the job
-          summary that has been standing in as the "did a review run?"
-          signal, which is what this branch's logging exists to replace, so
-          land this branch first. Rebase vs. merged #15 still to be done
-          deliberately. AFTER Task 9, M1's exit gate is checkable end to
-          end and M2 (spend caps) starts — its `[~]` primitive
-          (store.record_deep_read, #25) is still wired to no call site, so
-          spend is uncapped in production TODAY, which matters more now
-          that the App path is the live one.
+Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
+          CI token path: delete .github/workflows/doug-review.yml and
+          /v1/review) is unblocked and code-ready, and is deliberately NOT
+          the next thing anyone does. Andrew's
+          call, 2026-08-02: the CI path and the App path run in PARALLEL
+          until the App path has been watched against an independent
+          reviewer, because Task 9 deletes that reviewer. Exit criteria are
+          counted in PRs, not days — see the soak decision below, which
+          also carries the reason and the concurrent UI work reading the
+          same rows. That decision supersedes nothing about the 10-then-9
+          resequencing; it adds a gate in front of the 9.
+          Land score-read-auth first (m1-cutover-done already landed, #34).
+          Rebase vs. merged #15 still to be done deliberately. AFTER the
+          soak and Task 9, M1's exit gate is checkable end to end and M2
+          (spend caps) starts — its `[~]` primitive (store.record_deep_read,
+          #25) is still wired to no call site, so spend is uncapped in
+          production TODAY, which matters more now that the App path is
+          the live one.
 
           What the cutover actually put in production, verified on the
           serving revision: doug-api runs as its OWN service account
@@ -121,6 +128,35 @@ Key facts for the executor:
   (workspace/ is untracked — lives only on Andrew's machine).
 
 Decisions this session (2026-08-01/02, cutover + the logging it exposed):
+- TASK 9 WAITS FOR A SOAK (Andrew, 2026-08-02). The CI path and the App
+  path run in parallel on purpose, so the new path can be compared against
+  an INDEPENDENT reviewer before the old one is deleted. The reason is the
+  App path's characteristic failure mode: SILENCE. Nothing turns red, no
+  job fails, no alert fires — the check run simply never appears, and an
+  absent check run looks exactly like a PR nobody pushed to. The CI job
+  summary is the second, independently-triggered observer that would make
+  that visible, and Task 9 is what deletes it, so it goes last.
+  Note this is a different claim from the logging work above: that logging
+  makes a review the operator ASKS about answerable in one grep. It cannot
+  reveal a review that was never triggered, because the missing line and
+  the un-triggered job are the same absence. Only a second path scoring
+  the same PR can.
+  EXIT CRITERIA — counted in PRs, not days. All four:
+  1. a PR with MULTIPLE PUSHES (exercises supersede + re-enqueue),
+  2. a COLD START whose startup sweep enqueues >0 jobs — it has only ever
+     logged 0 in production, so the backstop has never actually done
+     anything and is currently an untested claim, not a verified one,
+  3. a MERGE that writes an outcome_jobs row,
+  4. ~10 CHECK RUNS with none missing.
+- A SECOND SESSION is concurrently building the dual-run comparison UI in
+  web/, on branch dashboard-dual-run. It owns web/**, api/tests/test_api.py
+  and api/tests/test_store.py, and appends only in api/doug/api.py and
+  api/doug/store.py. What makes the comparison possible, and is NOT obvious
+  from the schema: App-path verdicts carry installation_id, github_repo_id
+  and head_sha (worker.py:145-148, plus source='app'); CI-path verdicts
+  leave all three NULL, because api.py's /v1/review handler passes none of
+  them to save_review (api.py:281-287). So the two paths' rows for the same
+  PR are separable by those columns and by nothing else in the row.
 - A FRESH REVIEW AND AN IDEMPOTENT REPLAY MUST NOT LOG ALIKE. They agree on
   every field either line could carry — repo, PR, head SHA, tier, band,
   score, verdict id — and differ in exactly one thing: the fresh one bought

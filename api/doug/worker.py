@@ -81,7 +81,16 @@ def process_job(job: dict) -> int | None:
                 coverage=cov,
             )
         title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
-        check_run.post(gh, owner, name, job["head_sha"], title, summary)
+        # complete before post: a lost claim must not emit a check run that a
+        # second holder will also post via the identity-replay path below.
+        if not ingest.complete(
+            job["id"], existing["id"], claim_generation=job["claim_generation"]
+        ):
+            print(
+                f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
+                file=sys.stderr,
+            )
+            return existing["id"]
         # Deliberately not the fresh-review wording below, and the difference
         # is the point rather than a nicety: this outcome and that one agree
         # on every field either line carries — repo, PR, head SHA, tier,
@@ -96,7 +105,7 @@ def process_job(job: dict) -> int | None:
             f"risk={existing['score']:.2f} verdict={existing['id']}",
             file=sys.stderr,
         )
-        ingest.complete(job["id"], existing["id"])
+        check_run.post(gh, owner, name, job["head_sha"], title, summary)
         return existing["id"]
 
     # Read the PR's current head before spending anything on it. A job can
@@ -110,7 +119,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"])
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -131,7 +140,15 @@ def process_job(job: dict) -> int | None:
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
     tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    intent_read: review.IntentRead | None
+    if isinstance(intent_result, review.IntentFailure):
+        verdict.reasons.append(
+            Reason(rule="intent-unavailable", label=intent_result.detail, weight=0.0)
+        )
+        intent_read = None
+    else:
+        intent_read = intent_result
 
     verdict_id = store.save_review(
         job["repo_full_name"],
@@ -161,17 +178,14 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
-    # The job's head SHA, never meta's: by now pulls.get may already be
-    # returning a newer commit, and that commit has its own job.
-    check_run.post(gh, owner, name, job["head_sha"], title, summary)
     # The one outcome of the three that bought a model read, and the only
     # line that says "paid read" — see the replay branch above for why those
     # two must not read alike. Emitted before ingest.complete, not after:
     # the read is already paid for and the verdict already durable by this
-    # point, so complete() raising — the one failure that re-pends a job in
-    # exactly that state — must not be able to erase the record of what the
-    # attempt cost. It is not a complete spend ledger even so: a read that
-    # dies before save_review commits leaves only drain's failure line.
+    # point, so a lost claim (complete returns False) or a raise must not
+    # erase the record of what the attempt cost. It is not a complete spend
+    # ledger even so: a read that dies before save_review commits leaves
+    # only drain's failure line.
     print(
         f"doug: reviewed {job['repo_full_name']}#{job['pr_number']}"
         f"@{job['head_sha'][:12]} (paid read) "
@@ -179,7 +193,18 @@ def process_job(job: dict) -> int | None:
         f"risk={verdict.score:.2f} verdict={verdict_id}",
         file=sys.stderr,
     )
-    ingest.complete(job["id"], verdict_id)
+    # complete before post — see the identity-replay path above. The job's
+    # head SHA, never meta's: by now pulls.get may already be returning a
+    # newer commit, and that commit has its own job.
+    if not ingest.complete(
+        job["id"], verdict_id, claim_generation=job["claim_generation"]
+    ):
+        print(
+            f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
+            file=sys.stderr,
+        )
+        return verdict_id
+    check_run.post(gh, owner, name, job["head_sha"], title, summary)
     return verdict_id
 
 
@@ -239,7 +264,7 @@ def drain(max_jobs: int = 20) -> int:
             # row's original id, which is the only property the seen-set
             # depends on, so it catches every one of them with no special
             # case.
-            ingest.release(job["id"])
+            ingest.release(job["id"], claim_generation=job["claim_generation"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -250,7 +275,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e))
+            ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
     return attempted
 
 

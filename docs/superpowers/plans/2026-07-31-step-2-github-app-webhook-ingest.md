@@ -2014,13 +2014,13 @@ git push
 - Test: `api/tests/test_worker.py`
 
 **Interfaces:**
-- Consumes: `app_auth.installation_client(installation_id: int) -> GitHub` (Task 1); `store.save_review(..., github_repo_id=, installation_id=, head_sha=, source=)` — all keyword, all defaulting to `None` (Task 2); `store.save_deviations(verdict_id, findings, refs, alignment)` (`store.py:249`); `review.fetch_pr(gh, owner, repo, number) -> (PRMetadata, str)` (`review.py:86`); `review.score_one(meta, diff) -> (tier, Verdict, ReaderVerdict|None, Coverage|None)` (`review.py:118`); `review.read_intent(gh, owner, repo, meta, diff) -> IntentRead | None` (`review.py:161`); `check_run.render/post` (Task 4); `reader.MODEL` (`reader.py:24`).
+- Consumes: `app_auth.installation_client(installation_id: int) -> GitHub` (Task 1); `store.save_review(..., github_repo_id=, installation_id=, head_sha=, source=)` — all keyword, all defaulting to `None` (Task 2); `store.save_deviations(verdict_id, findings, refs, alignment)` (`store.py:249`); `review.fetch_pr(gh, owner, repo, number) -> (PRMetadata, str)` (`review.py:86`); `review.score_one(meta, diff) -> (tier, Verdict, ReaderVerdict|None, Coverage|None)` (`review.py:118`); `review.read_intent(gh, owner, repo, meta, diff) -> IntentRead | IntentFailure | None` (`review.py:161`); `check_run.render/post` (Task 4); `reader.MODEL` (`reader.py:24`).
 - Consumes from Task 3 (`ingest.py`), confirmed against its draft:
   - `claim() -> dict | None` — a **plain dict** (not a `Row`; the worker holds it after the connection closes) carrying every `review_jobs` column, primary key under `"id"`. Returns `None` when the ledger is unconfigured, so `drain` is a safe no-op on a ledger-less deployment — do **not** wrap it in try/except for that case.
-  - `complete(job_id, verdict_id)` — `review_jobs.verdict_id` is a `ForeignKey("verdicts.id")`, unenforced on sqlite and enforced on Postgres. Pass a real `save_review` return value or `None`, never a placeholder int; `complete(job_id, None)` is the intended path for a job that finished without a ledger row.
-  - `fail(job_id, error, *, max_attempts=3)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
+  - `complete(job_id, verdict_id, *, claim_generation)`, `fail(job_id, error, *, claim_generation, max_attempts=3)`, `release(job_id, *, claim_generation)`, `supersede(job_id, *, claim_generation)` — all return `bool`. Terminals fence on `(status='running' AND claim_generation=<token>)` so a stale worker after reclaim cannot finish under someone else's claim. Pass `claim_generation=job["claim_generation"]` from every terminal call site. `started_at` remains the lease clock for `reclaim_stalled` only.
+  - `fail(...)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
   - `enqueue(...) -> int | None` — `None` on the unique-index duplicate; **raises `RuntimeError` when `DATABASE_URL` is unset** (see Task 6, which guards that at the edge).
-  - `release(job_id)` and `supersede(job_id)` — **two additions Task 3 must carry for this task**; both are five-line siblings of `complete`. `release` returns a claimed job to `'pending'` with `started_at=None` and no attempt spent; `supersede` sets `'superseded'` with `finished_at`.
+  - `IntentFailure` from `read_intent` surfaces as a weight-0 `intent-unavailable` reason; score/band unchanged (ADR-0007).
 - **The drain's retry behaviour is a two-part fix and neither half works alone.** `fail` re-pends a job, and `claim` takes the oldest pending, so a poison job is immediately re-claimed by the same pass: three attempts burn in under a second against a fault that has had no time to clear. Task 3's `enqueued_at=now` sends the re-pended job to the back so the drain reaches everything else first; Step 3's seen-set below stops the pass when it laps round to a job it already ran. Verified by running both: with the seen-set alone, `drain()` returns 1 instead of 2 on the two-job test and the second job never runs — the seen-set breaks the loop where the ordering change is what lets it get past.
 - Produces: `process_job(job: dict) -> int | None`; `drain(max_jobs: int = 20) -> int`. Task 6 calls `drain` from a `BackgroundTasks` kick; Task 7 adds `reconcile_installation` / `reconcile_all` to this module.
 
@@ -2260,7 +2260,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"])
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -2272,7 +2272,14 @@ def process_job(job: dict) -> int | None:
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
     tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    if isinstance(intent_result, review.IntentFailure):
+        verdict.reasons.append(
+            Reason(rule="intent-unavailable", label=intent_result.detail, weight=0.0)
+        )
+        intent_read = None
+    else:
+        intent_read = intent_result
 
     verdict_id = store.save_review(
         job["repo_full_name"],
@@ -2302,10 +2309,14 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
-    # The job's head SHA, never meta's: by now pulls.get may already be
-    # returning a newer commit, and that commit has its own job.
+    # complete before post: a lost claim must not emit a check run the
+    # second holder will also post via identity replay. The job's head SHA,
+    # never meta's: by now pulls.get may already be returning a newer commit.
+    if not ingest.complete(
+        job["id"], verdict_id, claim_generation=job["claim_generation"]
+    ):
+        return verdict_id  # claim lost — skip check run; second holder replays
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
-    ingest.complete(job["id"], verdict_id)
     return verdict_id
 
 
@@ -2321,6 +2332,7 @@ def drain(max_jobs: int = 20) -> int:
     queue is FIFO-ish and a poison job would otherwise block every PR
     opened after it.
     """
+    ingest.reclaim_stalled()
     attempted = 0
     seen: set[int] = set()
     while attempted < max_jobs:
@@ -2333,7 +2345,7 @@ def drain(max_jobs: int = 20) -> int:
             # already failed. Retrying it here is not a retry — nothing has
             # had time to change — and it would burn the whole attempt
             # budget against one transient fault in under a second.
-            ingest.release(job["id"])
+            ingest.release(job["id"], claim_generation=job["claim_generation"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -2344,7 +2356,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e))
+            ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
     return attempted
 ```
 
@@ -4032,7 +4044,7 @@ git push
 
 After this deploys, `lemahq/lema`'s copy of the workflow gets a 404. It never reddens the PR either way — the step carries `continue-on-error: true` — and if lema holds the guarded template version it renders a "Doug: unavailable" summary block. Task 10's cutover checklist removes it from lema.
 
-**Explicitly kept:** `/v1/queue` with its `DOUG_API_TOKEN` gate (interim until step 3 replaces it with WorkOS sessions), `/v1/score`, `/v1/score/read`, `/v1/patterns`, and the `doug-review` CLI (`doug/review.py:214-230`, `pyproject.toml:27`) — the CLI drives `githubkit` directly and never touched the endpoint.
+**Explicitly kept:** `/v1/queue` with its `DOUG_API_TOKEN` gate (interim until step 3 replaces it with WorkOS sessions), `/v1/score`, `/v1/score/read` (which now carries the same gate, for spend rather than for privacy), `/v1/patterns`, and the `doug-review` CLI (`doug/review.py:214-230`, `pyproject.toml:27`) — the CLI drives `githubkit` directly and never touched the endpoint.
 
 **Files:**
 - Modify: `api/doug/api.py:46-143` (delete), `:13` (import), `:151`, `:213-215`, `:323` (stale references)
@@ -4249,7 +4261,7 @@ git push
 - Delete (operator, Step 4 — untracked and gitignored, so it is not part of any commit): `api/.backtest-cache/llm-probe/api-key`
 
 **Interfaces:**
-- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6); `/v1/score/read`, kept by Task 9, as the post-deploy credential probe.
+- Consumes: `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` as read by `app_auth.enabled()` (Task 1); `GITHUB_WEBHOOK_SECRET` as required by the lifespan (Task 6); `/v1/score/read`, kept by Task 9, as the post-deploy credential probe — and therefore `DOUG_API_TOKEN`, which now gates it.
 - Produces: a Cloud Run revision that can mint installation tokens and finish background work; a rotated `doug-anthropic-key`; an operator-run IAM prerequisite and an operator-run cutover.
 
 **Read before starting — the gap this task closes is already open.** `DOUG_GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` were set on prod out-of-band via `gcloud run services update` on 2026-07-31, and `deploy()` uses `--set-env-vars` / `--set-secrets`, which **replace** their whole blocks. Every push from Tasks 1–9 therefore deploys a revision with the App credentials wiped. That is survivable and is not a reason to reorder the plan: `app_auth.enabled()` returns `False` without them, so the App simply stays dormant — webhooks verify and enqueue, no tokens are minted, no paid reads happen from a half-built pipeline. Task 7's startup reconcile then picks up every PR missed during the gap on the first revision that has the credentials, which is the one this task ships. What is *not* survivable is landing this task and assuming prod was fine in between: check the logs at Step 6 rather than assuming.
@@ -4480,20 +4492,26 @@ gcloud run services logs read doug-api --project doug-prod0 --region us-central1
 Expect a `doug: reconcile enqueued N job(s)` line from the startup thread. `N` counts every open PR missed while the App credentials were absent. If the log reader is unavailable in your gcloud, use:
 `gcloud logging read 'resource.labels.service_name="doug-api"' --limit 50 --freshness=1h --project doug-prod0`.
 
-Then confirm the **rotated Anthropic key** actually works on this revision, before the old one is revoked. `/v1/score/read` survives Task 9 and needs no token, and it falls back loudly rather than erroring, which makes it the cheapest possible credential probe:
+Then confirm the **rotated Anthropic key** actually works on this revision, before the old one is revoked. `/v1/score/read` survives Task 9, and it falls back loudly rather than erroring, which makes it the cheapest possible credential probe. It is **token-gated on `DOUG_API_TOKEN`** — every call buys a model read and doug-api is `--allow-unauthenticated`, so the probe reads back the same secret `deploy()` binds:
 
 ```bash
 URL=$(gcloud run services describe doug-api --project doug-prod0 \
   --region us-central1 --format='value(status.url)')
+TOKEN=$(gcloud secrets versions access latest --secret=doug-api-token \
+  --project doug-prod0)
 curl -sS -X POST "$URL/v1/score/read" -H 'content-type: application/json' \
+  -H "x-doug-token: $TOKEN" \
   -d '{"pr":{"number":1,"title":"probe","author":"drewjst","files":["a.py"]},
        "diff":"--- a/a.py\n+++ b/a.py\n@@\n+x = 1\n"}' \
   | python3 -c 'import json,sys; v=json.load(sys.stdin); \
-rules=[r["rule"] for r in v["reasons"]]; print(rules); \
+sys.exit(f"not a verdict (auth or config): {v}") if "reasons" not in v else None; \
+rules=[r["rule"] for r in v["reasons"]]; print(v["threshold"], rules); \
 sys.exit(1 if "reader-unavailable" in rules else 0)'
 ```
 
-Exit 0 with at least one `reader:*` rule means the new key is live. A `reader-unavailable` rule (exit 1) means `ANTHROPIC_API_KEY` is wrong on this revision — stop, fix the secret version, and do **not** revoke the old key. This costs one small model call.
+Exit 0 with `threshold` printed as `0.3` means the new key is live: the reader bands at 0.3 and the deterministic scorer at 0.62, so the threshold is the tier signal and — unlike a `reader:*` rule — it does not depend on the probe diff producing findings. This one produces none, so do **not** read an empty rule list as failure.
+
+A `reader-unavailable` rule (exit 1) means `ANTHROPIC_API_KEY` is wrong on this revision — stop, fix the secret version, and do **not** revoke the old key. `not a verdict (auth or config)` means the request never reached the reader: a 401 is a wrong or missing `DOUG_API_TOKEN`, a 503 is that secret unbound on the revision. This costs one small model call.
 
 - [ ] **Step 7: Cutover — operator steps, run in this order.**
 

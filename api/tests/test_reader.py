@@ -89,22 +89,85 @@ def test_verdict_mapping_and_threshold():
     assert reader.verdict_from_reader(low).band is Band.CLEARED
 
 
-def test_endpoint_deterministic_when_reader_off(monkeypatch):
-    monkeypatch.delenv("DOUG_READER", raising=False)
+# --- /v1/score/read is token-gated: every call here can buy a read -------
+#
+# doug-api is deployed --allow-unauthenticated with DOUG_READER=1
+# (api/deploy/gcp.sh:212,216), so before this gate anyone holding the URL
+# could bill the account once per request. DIFF_BUDGET bounds what a single
+# call costs; only the token bounds how many calls there are.
+
+TOKEN = "score-read-token"
+
+
+def _authed_read(diff: str = "+ x"):
+    """An authorised POST. The gate is exercised by the three tests that
+    follow; the behaviour tests after those carry the token so they keep
+    testing what they are named for rather than re-testing auth."""
+    return TestClient(app).post(
+        "/v1/score/read",
+        json={"pr": _pr().model_dump(mode="json"), "diff": diff},
+        headers={"x-doug-token": TOKEN},
+    )
+
+
+def test_score_read_rejects_anonymous_before_paying_for_a_read(monkeypatch):
+    """The 401 is only half the property worth having. The gate has to run
+    BEFORE reader.read_diff, or an anonymous caller still buys the model
+    call and merely fails to read the answer back — the spend hole would be
+    open with a 401 painted over it. So this asserts the read never
+    happened, not just the status code."""
+    monkeypatch.setenv("DOUG_API_TOKEN", TOKEN)
+    monkeypatch.setenv("DOUG_READER", "1")
+    reads: list[str] = []
+
+    def spy(pr, diff, client=None):
+        reads.append(diff)
+        return reader.ReaderVerdict.model_validate(PAYLOAD)
+
+    monkeypatch.setattr(reader, "read_diff", spy)
     r = TestClient(app).post(
         "/v1/score/read", json={"pr": _pr().model_dump(mode="json"), "diff": "+ x"}
     )
+    assert r.status_code == 401
+    assert reads == []
+
+
+def test_score_read_rejects_a_wrong_token(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", TOKEN)
+    r = TestClient(app).post(
+        "/v1/score/read",
+        json={"pr": _pr().model_dump(mode="json"), "diff": "+ x"},
+        headers={"x-doug-token": "not-the-token"},
+    )
+    assert r.status_code == 401
+
+
+def test_score_read_refuses_rather_than_running_open_when_unconfigured(monkeypatch):
+    """An unset DOUG_API_TOKEN must fail closed. Comparing against an empty
+    expected value would admit exactly the caller that sends no header —
+    i.e. restore the anonymous hole on any deployment that forgot the
+    secret, which is the deployment most likely to have forgotten it."""
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    r = TestClient(app).post(
+        "/v1/score/read", json={"pr": _pr().model_dump(mode="json"), "diff": "+ x"}
+    )
+    assert r.status_code == 503
+
+
+def test_endpoint_deterministic_when_reader_off(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", TOKEN)
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    r = _authed_read()
     assert r.status_code == 200
     assert all(not x["rule"].startswith("reader:") for x in r.json()["reasons"])
 
 
 def test_endpoint_uses_reader_when_enabled(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", TOKEN)
     monkeypatch.setenv("DOUG_READER", "1")
     fake = lambda pr, diff, client=None: reader.ReaderVerdict.model_validate(PAYLOAD)  # noqa: E731
     monkeypatch.setattr(reader, "read_diff", fake)
-    r = TestClient(app).post(
-        "/v1/score/read", json={"pr": _pr().model_dump(mode="json"), "diff": "+ x"}
-    )
+    r = _authed_read()
     assert r.status_code == 200
     body = r.json()
     assert body["band"] == "flagged"
@@ -112,15 +175,14 @@ def test_endpoint_uses_reader_when_enabled(monkeypatch):
 
 
 def test_endpoint_falls_back_loudly_on_reader_failure(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", TOKEN)
     monkeypatch.setenv("DOUG_READER", "1")
 
     def boom(pr, diff, client=None):
         raise reader.ReaderError("api down")
 
     monkeypatch.setattr(reader, "read_diff", boom)
-    r = TestClient(app).post(
-        "/v1/score/read", json={"pr": _pr().model_dump(mode="json"), "diff": "+ x"}
-    )
+    r = _authed_read()
     assert r.status_code == 200
     assert "reader-unavailable" in {x["rule"] for x in r.json()["reasons"]}
 

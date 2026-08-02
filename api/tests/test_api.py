@@ -619,7 +619,11 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     assert store.enabled()
     job_id = ingest.enqueue(150424894, 987, "drewjst/doug", 7, "a" * 40)
     for _ in range(3):
-        ingest.fail(job_id, "credentials missing")
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
 
     pull = SimpleNamespace(
         number=7,
