@@ -91,9 +91,10 @@ setup() {
     exit 1
   fi
 
-  # Not optional: the default compute SA reached Cloud SQL through the broad
-  # project roles it already carried, and a freshly created SA carries
-  # nothing at all — without this grant every ledger write fails on the
+  # Not optional: the default compute SA reached Cloud SQL through the
+  # roles/editor it carries on this project (verified 2026-08-02), and a
+  # freshly created SA carries nothing at all — without this grant every
+  # ledger write fails on the
   # first request after the cutover, at runtime, long after the deploy went
   # green. Unsuppressed for the same reason as the secret bindings below.
   gcloud projects add-iam-policy-binding "$PROJECT" \
