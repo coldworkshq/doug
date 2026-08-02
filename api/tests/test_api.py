@@ -3,12 +3,13 @@ import hmac
 import json
 import threading
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, store, worker
+from doug import api, app_auth, ingest, store, worker
 from doug.api import app
 
 client = TestClient(app)
@@ -337,7 +338,15 @@ def _hook_env(tmp_path, monkeypatch) -> list:
     assert store.enabled()
     kicks: list = []
     monkeypatch.setattr(worker, "drain", lambda *a, **k: kicks.append("drain"))
-    monkeypatch.setattr(worker, "reconcile_installation", lambda i: kicks.append(i))
+    # Mirrors reconcile_installation's real signature, default included. A stub
+    # that swallowed **kwargs would record a handler that passes no trigger
+    # identically to one that asks for the sweep's terms, and the difference
+    # between those two is max_attempts paid model reads per redelivery.
+    monkeypatch.setattr(
+        worker,
+        "reconcile_installation",
+        lambda i, *, trigger="live": kicks.append((i, trigger)),
+    )
     return kicks
 
 
@@ -395,8 +404,9 @@ def test_installation_created_records_the_account_and_its_repos(tmp_path, monkey
     assert all(r["state"] == "active" for r in repos.values())
     # Reconcile is queued, not run inline: it lists open PRs over the
     # network and the 202 must not wait on it. The drain is chained behind
-    # it inside the same task — see the dedicated test below.
-    assert kicks == [150424894, "drain"]
+    # it inside the same task — see the dedicated test below, and the one
+    # after it for the terms this call passes.
+    assert kicks == [(150424894, "reconcile"), "drain"]
 
 
 def test_uninstall_then_reinstall_converges_on_the_smaller_repo_set(tmp_path, monkeypatch):
@@ -564,7 +574,90 @@ def test_a_new_installation_reviews_its_backlog_without_waiting(tmp_path, monkey
         "installation",
         {"action": "created", "installation": INSTALLATION, "repositories": []},
     )
-    assert kicks == [150424894, "drain"]
+    assert kicks == [(150424894, "reconcile"), "drain"]
+
+
+def test_the_installation_created_handler_asks_for_the_sweeps_terms(tmp_path, monkeypatch):
+    """The handler must name its own terms, not inherit reconcile_installation's.
+
+    installation.created lists every open PR of an installation whether or not
+    anything about them changed, which is the sweep half of the distinction
+    reconcile_installation's `trigger` draws — and it is replayable (the App's
+    Advanced tab Redeliver button, or GitHub retrying a delivery), which
+    _record_installation's own comment already treats as ordinary. Left to the
+    live default, each replay revives every 'failed' row at once and re-arms
+    max_attempts paid model reads for a PR that has already burned them, which
+    is the spend leak FAILED_REVIVE_COOLOFF_SECONDS exists to close.
+
+    Asserted at the call site rather than on the function, because dropping the
+    argument is exactly how the leak comes back: the function's own contract
+    (test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise)
+    stays satisfied while the handler silently changes what it buys.
+    """
+    kicks = _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert kicks == [(150424894, "reconcile"), "drain"]
+
+
+def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
+    tmp_path, monkeypatch, capsys
+):
+    """The same thing again, through the real reconcile rather than a stub.
+
+    The stub above pins the argument; this pins what the argument buys, and it
+    is the assertion that survives someone rewriting the seam. A PR that burned
+    all three attempts on the first delivery must still be 'failed' after a
+    redelivery inside the cooloff — and the operator who redelivered must be
+    told that in the log, because "held back for another 3000s" and "already
+    reviewed" are otherwise the same silence.
+    """
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    assert store.enabled()
+    job_id = ingest.enqueue(150424894, 987, "drewjst/doug", 7, "a" * 40)
+    for _ in range(3):
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
+
+    pull = SimpleNamespace(
+        number=7,
+        draft=False,
+        head=SimpleNamespace(sha="a" * 40, repo=SimpleNamespace(id=987)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=987, full_name="drewjst/doug")),
+    )
+    monkeypatch.setattr(
+        worker.app_auth,
+        "installation_client",
+        lambda i: SimpleNamespace(
+            rest=SimpleNamespace(
+                pulls=SimpleNamespace(list=lambda **kw: SimpleNamespace(parsed_data=[pull]))
+            )
+        ),
+    )
+    # Only the drain is cut: it would otherwise run the real pipeline against
+    # whatever this test revived, which is the thing being asserted about.
+    monkeypatch.setattr(worker, "drain", lambda *a, **k: None)
+
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [{"id": 987, "full_name": "drewjst/doug"}],
+        },
+    )
+
+    (job,) = _table(tmp_path, store.review_jobs)
+    assert job["id"] == job_id
+    assert job["status"] == "failed" and job["attempts"] == 3, "the redelivery re-armed it"
+    err = capsys.readouterr().err
+    assert "drewjst/doug#7" in err and "cooloff" in err
 
 
 def test_only_a_new_installation_kicks_reconcile(tmp_path, monkeypatch):

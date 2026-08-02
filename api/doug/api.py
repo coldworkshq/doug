@@ -666,8 +666,21 @@ def _reconcile_then_drain(installation_id: int) -> None:
     the difference between "reviews appear within seconds of installing"
     and "reviews appear whenever someone next opens a PR". The cutover
     checklist in Task 10 asserts the first.
+
+    Asks for the sweep's terms explicitly. This lists every open PR of the
+    installation whether or not anything about them changed, and
+    installation.created is replayable — the Redeliver button in the App's
+    Advanced tab, or GitHub retrying a delivery, both of which
+    _record_installation above already treats as ordinary. On the live terms
+    each replay would revive every 'failed' row at once and buy up to
+    max_attempts model reads again for a PR that already burned them, so the
+    repetition FAILED_REVIVE_COOLOFF_SECONDS brakes is this caller's as much
+    as the startup sweep's. What a held-back PR costs instead is a wait, and
+    reconcile_installation logs each one it is deliberately waiting on
+    (ingest.cooloff_hold_remaining) so an operator who redelivered after
+    fixing credentials can see why nothing happened.
     """
-    worker.reconcile_installation(installation_id)
+    worker.reconcile_installation(installation_id, trigger="reconcile")
     worker.drain()
 
 

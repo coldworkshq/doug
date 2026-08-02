@@ -70,6 +70,37 @@ These are not cosmetic. This product sells calibrated claims, and a comment is a
 no test behind it. When a docstring states a property, find the code that enforces it —
 and if nothing does, the docstring is the bug.
 
+## Mutation testing cannot see a property whose tests share an assumption with the code
+
+A mutation battery answers "does any test notice this edit?" It cannot answer "does any test
+supply an input that would make this edit matter?" So a property whose every test input is
+drawn from the same assumption the code makes survives every mutant — and the survival reads
+as coverage.
+
+The case that produced this rule: `ingest._revive` picks the reconcile sweep's cooloff terms
+with `trigger == "reconcile"`, and the comment above it states the fail-open direction as a
+safety property — anything unrecognized takes the live branch, so a mistake costs spend rather
+than a PR that 202s and is never reviewed. Rewritten as `trigger != "live"` it is identical
+over the two values `Trigger` allows and inverted over every other one, which is the natural
+edit the moment somebody adds a third trigger. The whole suite passed against that mutant,
+through the implementer's battery, the controller's re-run of it, and every mutation either
+ran, because all of them used valid triggers. `api.py`'s `REVIEW_BANDS` is the same shape with
+the assumption in the fixtures: lowercase keys, lowercase states in every test payload, and a
+GitHub REST API that spells those states uppercase.
+
+The tell is a property that is load-bearing, stated in prose, and exercised only by inputs
+drawn from the set the code already assumes — two enum values, one letter case, one SQL
+dialect. The remedy is one input from outside that set, and the test is usually three lines,
+which is why it is worth writing rather than arguing about.
+
+Sweeping the rest of `ingest.py` for the shape found three more, left unfixed and recorded
+here instead: `REVIVABLE` can be emptied to `()` with the suite green (nine comments across
+four files cite it as what excludes `'running'` from revival; no code reads it — `_revive`
+spells the statuses literally), `claim()`'s Postgres `SKIP LOCKED` branch can be disabled
+outright because every test runs sqlite, which its own docstring says takes a different path,
+and `reclaim_stalled`'s `max(0, rowcount)` clamp can be dropped. A green mutation run over
+those is not evidence about them.
+
 ## Where the plan's own text is the defect
 
 The step-2 plan carries literal code. Several times its sample violated a constraint the

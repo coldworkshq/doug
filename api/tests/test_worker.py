@@ -452,6 +452,55 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
     assert posted == []
 
 
+def test_the_seen_set_catches_a_failed_row_the_catch_up_revived_mid_pass(tmp_path, monkeypatch):
+    """The fourth way into the seen-set, and the only one whose row reached
+    'failed'.
+
+    process_job's stale-head catch-up enqueues the PR's real head on live
+    terms, and live terms revive a row that burned every attempt. When that
+    head is the SHA the row gave up on, a job this pass already ran comes
+    straight back as pending work with attempts reset to 0 — so without the
+    seen-set the drain re-claims it at once and spends the whole restored
+    budget on the same fault inside one pass, this time paying for a read
+    each time round.
+
+    Two pending rows for one PR cannot be made with two enqueues (the second
+    supersedes the first), so the setup is the one the drain itself leaves
+    behind: the row was 'running' when the delivery for the other SHA landed,
+    and a lapped earlier pass released it with its queue position intact.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch, heads={7: "a" * 40})  # the PR's real head never left "a"
+
+    def _fetch(gh, owner, repo, number):
+        raise RuntimeError("reader exploded")
+
+    monkeypatch.setattr(review, "fetch_pr", _fetch)
+
+    a_id = ingest.enqueue(**JOB)
+    for _ in range(2):
+        claimed = ingest.claim()
+        assert claimed["id"] == a_id
+        assert ingest.fail(
+            a_id, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
+    claimed = ingest.claim()  # 'running', so the delivery below cannot supersede it
+    assert claimed["id"] == a_id
+    ingest.enqueue(**{**JOB, "head_sha": "b" * 40})
+    assert ingest.release(a_id, claim_generation=claimed["claim_generation"])
+
+    # Claimed and failed to the cap, then revived by the "b" job's catch-up.
+    assert worker.drain() == 2
+
+    jobs = {j["head_sha"]: j for j in _rows(url, store.review_jobs)}
+    assert jobs["b" * 40]["status"] == "superseded"
+    revived = jobs["a" * 40]
+    assert revived["id"] == a_id  # in place, which is what the seen-set keys on
+    # Pending with a full budget, and untouched since: re-running it here
+    # would have burned that budget (attempts 1..3) inside this same pass.
+    assert revived["status"] == "pending" and revived["attempts"] == 0
+
+
 # --- amendment: reclaim_stalled wired into drain --------------------------
 #
 # A worker that claims a job and then dies (a deploy, a scale-down, an OOM)
@@ -964,6 +1013,60 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     assert revived["status"] == "pending" and revived["attempts"] == 0
 
 
+def test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise(
+    tmp_path, monkeypatch
+):
+    """Which caller repeats itself is a property of the caller, not of
+    reconciling one installation.
+
+    FAILED_REVIVE_COOLOFF_SECONDS is a brake on a caller that re-derives the
+    whole world whether or not anything changed, and this function cannot know
+    whether its caller is one: hardcoding the sweep's terms one function deeper
+    would hand the brake to a future caller reacting to a single head change,
+    which has one event's worth of spend behind it and nothing to brake.
+
+    Both halves are asserted here — the default revives, and an explicit
+    'reconcile' still does not — because a default that revived everything on
+    both paths would pass the first assertion while deleting the cooloff.
+
+    This is the function's own contract, not any call site's. Every caller
+    today asks for 'reconcile' out loud, api.py's installation.created handler
+    included (test_api.py's
+    test_the_installation_created_handler_asks_for_the_sweeps_terms), so the
+    default below is exercised here rather than in production — deliberately,
+    since the direction it fails in is what a mistyped or forgotten trigger
+    inherits.
+    """
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    for _ in range(3):
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
+    (failed,) = _rows(url, store.review_jobs)
+    # Inside the cooloff, with a real finished_at: the terms the caller claims
+    # are the only thing that can decide the revival below.
+    assert failed["status"] == "failed" and failed["finished_at"] is not None
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+
+    # The sweep's terms, asked for explicitly: the brake still applies.
+    assert worker.reconcile_installation(1, trigger="reconcile") == 0
+    assert _rows(url, store.review_jobs)[0]["status"] == "failed"
+
+    # The default: what a caller that names no terms at all gets.
+    assert worker.reconcile_installation(1) == 1
+    (revived,) = _rows(url, store.review_jobs)
+    assert revived["id"] == job_id  # the same row, healed in place
+    assert revived["status"] == "pending" and revived["attempts"] == 0
+
+
 def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
     """_skip_reason's return value used to be computed and discarded at its
     only call site — an unreadable repo got a log line, but the spend gate
@@ -977,6 +1080,55 @@ def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
     assert worker.reconcile_installation(1) == 0
     err = capsys.readouterr().err
     assert "#9" in err and "draft" in err
+
+
+def test_reconcile_logs_a_pr_the_cooloff_held_back_but_not_an_ordinary_dedupe(
+    tmp_path, monkeypatch, capsys
+):
+    """The last reconcile skip with no audit trail.
+
+    test_reconcile_logs_why_a_pr_was_skipped states the principle: what is
+    worth being able to check after the fact is exactly why a given PR was not
+    reviewed. Draft/fork and the base-repo-id mismatch both log; the cooloff
+    did not, because enqueue returns None both when it deduped a row already
+    reviewed and when it held back a 'failed' one — an operator watching a PR
+    that Doug is silently waiting an hour on saw the same empty trace as one
+    that had already been reviewed.
+
+    The second half is why this is a log line and not noise: the boring case
+    is nearly every open PR on every sweep, and logging those would bury the
+    interesting one.
+    """
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    held = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    for _ in range(3):
+        claimed = ingest.claim()
+        assert claimed["id"] == held
+        assert ingest.fail(
+            held, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
+    reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40)
+    claimed = ingest.claim()
+    assert claimed["id"] == reviewed
+    assert ingest.complete(reviewed, None, claim_generation=claimed["claim_generation"])
+    assert {j["id"]: j["status"] for j in _rows(url, store.review_jobs)} == {
+        held: "failed", reviewed: "done",
+    }
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([
+            _pull(number=1, head_sha="a" * 40),
+            _pull(number=2, head_sha="b" * 40),
+        ]),
+    )
+    assert worker.reconcile_all() == 0  # neither is new work
+
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if "o/r#" in ln]
+    assert len(lines) == 1, f"expected exactly one PR-level line, got {lines}"
+    assert "o/r#1" in lines[0] and "cooloff" in lines[0]
 
 
 def test_skip_reason_treats_missing_or_unset_draft_as_skip():
