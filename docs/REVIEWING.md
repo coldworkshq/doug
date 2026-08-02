@@ -168,6 +168,35 @@ If the column is already migrated outside the diff, say so in the disposition an
 version + landing PR. Do not add a duplicate `ALTER` "to be safe" — that is noise, and on
 sqlite without `IF NOT EXISTS` it depends entirely on `_SATISFIED` text matching.
 
+PR #30's second Doug pass repeated this same high finding after `claim_generation`
+(migration 004) was added — still false for the same reason. The coverage line again
+cut before the older migration versions. A finding that returns after a disposition
+that named the landing migration is not new evidence; re-check the full `MIGRATIONS`
+list before reopening it.
+
+## "Post failure loses the check run" must distinguish raise from swallow, and retry from tradeoff
+
+PR #30 ordered `ingest.complete` before `check_run.post` so a lost claim cannot emit a
+second check run on the identity-replay path. Doug flagged that as "if the GitHub post
+raises or the process dies, the job is already done and never retried — the silent
+never-reviewed failure." Disposition: **half-true**.
+
+`check_run.post` **never raises** (ADR-0010: failure is swallowed and logged). The
+GitHub-outage path was already "reviewed with no check run" under the old order. What
+changed is only the process-death window *between* complete and post: that job will not
+retry, while death *before* complete still recovers via reclaim + identity-replay.
+
+That is the intentional tradeoff against duplicate check runs after reclaim. When
+disposing an ordering finding against this path:
+
+1. Read `check_run.post` — does it raise, or swallow?
+2. Ask which failure the queue can still retry (status still `running`) versus which it
+   cannot (already `done`).
+3. Name the competing defect the new order closes (here: double post on lost claim).
+   Do not treat "ADR-0010 says swallow post failure" as "posting must be ungated by
+   queue state" — skipping a post when the claim is lost is not the same as swallowing a
+   GitHub error after a held claim.
+
 ## A completeness check must be about content that could have been reviewed, not about hitting an API's raw file list
 
 PR #25 also introduced `Coverage.complete` requiring `files_sent == changed_files`, and got

@@ -29,6 +29,13 @@ def process_job(job: dict) -> int | None:
     a freshly scored one otherwise — or None when the job's head SHA no
     longer matches the PR's: that job lands 'superseded', not 'done', and
     the current head is enqueued in its place.
+
+    Each of those three outcomes prints one line to stderr, and they are
+    worded so that no two of them can be mistaken for each other. Only the
+    freshly scored one says "paid read", because only it bought one; the
+    check run is the sole surface a review has once Task 9 retires
+    doug-review.yml, so silence in the log must not be the only difference
+    between "reviewed" and "never ran".
     """
     gh = app_auth.installation_client(job["installation_id"])
     owner, name = job["repo_full_name"].split("/", 1)
@@ -84,6 +91,20 @@ def process_job(job: dict) -> int | None:
                 file=sys.stderr,
             )
             return existing["id"]
+        # Deliberately not the fresh-review wording below, and the difference
+        # is the point rather than a nicety: this outcome and that one agree
+        # on every field either line carries — repo, PR, head SHA, tier,
+        # band, score, verdict id — and disagree only about whether a model
+        # read was bought. Reported alike, the two would make spend
+        # unauditable from the logs, since an operator counting reviews would
+        # be counting replays that cost nothing.
+        print(
+            f"doug: replayed {job['repo_full_name']}#{job['pr_number']}"
+            f"@{job['head_sha'][:12]} (already recorded, nothing bought) "
+            f"tier={existing['tier']} band={existing['band']} "
+            f"risk={existing['score']:.2f} verdict={existing['id']}",
+            file=sys.stderr,
+        )
         check_run.post(gh, owner, name, job["head_sha"], title, summary)
         return existing["id"]
 
@@ -105,6 +126,15 @@ def process_job(job: dict) -> int | None:
             job["repo_full_name"],
             job["pr_number"],
             current,
+        )
+        # No verdict named here, because none was reached: this job opened
+        # nothing. A line that carried a tier or a score would be describing
+        # a read of a commit nobody made.
+        print(
+            f"doug: superseded {job['repo_full_name']}#{job['pr_number']}"
+            f"@{job['head_sha'][:12]} (nothing read, nothing bought) "
+            f"head is now {current[:12]}, which has its own job",
+            file=sys.stderr,
         )
         return None
 
@@ -148,6 +178,21 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
+    # The one outcome of the three that bought a model read, and the only
+    # line that says "paid read" — see the replay branch above for why those
+    # two must not read alike. Emitted before ingest.complete, not after:
+    # the read is already paid for and the verdict already durable by this
+    # point, so a lost claim (complete returns False) or a raise must not
+    # erase the record of what the attempt cost. It is not a complete spend
+    # ledger even so: a read that dies before save_review commits leaves
+    # only drain's failure line.
+    print(
+        f"doug: reviewed {job['repo_full_name']}#{job['pr_number']}"
+        f"@{job['head_sha'][:12]} (paid read) "
+        f"tier={tier} band={verdict.band.value} "
+        f"risk={verdict.score:.2f} verdict={verdict_id}",
+        file=sys.stderr,
+    )
     # complete before post — see the identity-replay path above. The job's
     # head SHA, never meta's: by now pulls.get may already be returning a
     # newer commit, and that commit has its own job.
