@@ -162,6 +162,26 @@ single outer join. The PR-group limit also did not bound duplicate rows; silentl
 them would corrupt pairing and missing-path metrics, so successful comparison responses
 remain lossless while results above the run ceiling fail with an explicit 413.
 
+The replacement review called that 413 a hard failure with no graceful degradation, but
+it did not read the web client. `web/lib/api.ts` converts every non-OK comparison response
+to the explicit `unavailable` source, and `/compare` renders that state without summary
+zeroes or partial runs. Pagination could improve availability later; returning a bounded
+but incomplete group now would be a correctness regression. Trace an error through its
+consumer before claiming the user sees a crash or fabricated state.
+
+It also called a both-App-ids-NULL row with no head SHA a classification heuristic. That
+is the accepted legacy CI identity, not a guess introduced by `_comparison_path`; rows
+with one App id are excluded in SQL. The web model assigns a null-head run its own
+`head-unknown` group, counts no missing path, and computes no delta. Check the producer-era
+contract and downstream neutral state before relabeling an intentionally unpairable row as
+malformed.
+
+The replacement pass's remaining query-cost warning is plausible but unproven: one
+set-based query can still become slow as the ledger grows. Require a production-scale
+execution plan or measured latency before replacing it again; SQL shape alone does not
+establish a regression, and speculative query rewrites can reintroduce the N+1 or cut
+duplicate evidence.
+
 ## New tables never need a migration — only new columns on an existing one do
 
 PR #25 got a medium finding: `deep_read_counters` and `verdicts.prompt_hash` looked
