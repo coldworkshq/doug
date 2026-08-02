@@ -480,6 +480,90 @@ def test_default_client_never_carries_the_sdk_default_timeout(monkeypatch):
     assert captured["timeout"] == 45.0
 
 
+# --- What a read cost ----------------------------------------------------
+#
+# reader.py read response.stop_reason and response.content and threw
+# response.usage away, discarding the cost of every read at the one moment
+# it is knowable. The cap above is a guess until this data exists; these
+# lines are what turns it into a number set from evidence.
+
+
+def _read_lines(capsys) -> list[str]:
+    return [x for x in capsys.readouterr().err.splitlines() if "(paid read)" in x]
+
+
+def test_a_paid_read_reports_what_it_cost(capsys):
+    client = FakeClient(usage=(8123, 612))
+
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+
+    (line,) = _read_lines(capsys)
+    assert "kind=risk" in line
+    assert f"scope={SCOPE}" in line
+    assert f"model={reader.MODEL}" in line
+    assert "in=8123" in line
+    assert "out=612" in line
+
+
+def test_the_two_reads_of_one_pr_report_their_costs_separately(capsys):
+    """One PR buys two reads. The roadmap's open question is which half the
+    money goes to — the intent read is the one flagged as both uncapped and
+    unmetered, and it carries the decision records on top of the same diff,
+    so it may well be the expensive one. A single summed line could not
+    answer that; two lines, each naming its kind, can.
+    """
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(usage=(8000, 500)))
+    reader.read_with_decisions(
+        _pr(), "+ x", DOCS,
+        scope=SCOPE,
+        client=FakeClient(payload=INTENT_PAYLOAD, usage=(9500, 700)),
+    )
+
+    risk, intent = _read_lines(capsys)
+    assert "kind=risk" in risk and "in=8000" in risk and "out=500" in risk
+    assert "kind=intent" in intent and "in=9500" in intent and "out=700" in intent
+
+
+def test_every_read_line_names_the_model_that_produced_it(capsys):
+    """reader.MODEL is one constant today and both lines quote it, which
+    looks redundant until someone splits the model per read — at which
+    point a line that silently changed meaning is this repo's recurring
+    defect. The name travels with the number instead."""
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
+    reader.read_with_decisions(
+        _pr(), "+ x", DOCS, scope=SCOPE, client=FakeClient(payload=INTENT_PAYLOAD)
+    )
+
+    assert all(f"model={reader.MODEL}" in line for line in _read_lines(capsys))
+
+
+def test_a_read_that_stopped_at_max_tokens_still_reports_its_cost(capsys):
+    """The failure that costs the most reports like the ones that cost
+    nothing unless this line is emitted before the stop_reason check: a
+    max_tokens stop means the model produced every one of MAX_TOKENS output
+    tokens and we are billed for all of them, then the read is thrown away.
+    Reporting cost on the success path only would hide exactly the reads
+    most worth finding."""
+    client = FakeClient(stop_reason="max_tokens", usage=(4000, reader.MAX_TOKENS))
+
+    with pytest.raises(reader.ReaderError):
+        reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+
+    (line,) = _read_lines(capsys)
+    assert f"out={reader.MAX_TOKENS}" in line
+
+
+def test_a_read_whose_usage_the_sdk_withheld_says_unknown_not_zero(capsys):
+    """`in=0 out=0` would sum into a spend total as a free read. These
+    lines exist to set the cap from evidence; a fabricated zero is worse
+    evidence than an admitted gap."""
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(usage=None))
+
+    (line,) = _read_lines(capsys)
+    assert "in=? out=?" in line
+    assert "in=0" not in line
+
+
 # --- ADR-0002: the reader's frozen prompt is the probe's, verbatim -------
 
 def test_reader_and_probe_share_the_validated_prompt_bytes():

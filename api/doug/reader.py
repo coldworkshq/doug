@@ -23,6 +23,7 @@ design.
 import hashlib
 import os
 import re
+import sys
 
 from pydantic import BaseModel, Field
 
@@ -245,6 +246,36 @@ def _charge(scope: str) -> None:
             f"{scope} has spent its cap of {cap} deep reads for this month; "
             "no model call was made"
         )
+
+
+def _report_cost(response, *, kind: str, scope: str, pr) -> None:
+    """One stderr line per paid read: what it cost and what bought it.
+
+    Emitted here because this is the only place `response.usage` exists —
+    and before the stop_reason check below, because a read that stops at
+    max_tokens is billed for every one of those tokens and then thrown
+    away. Reporting cost on the success path alone would hide the most
+    expensive reads there are.
+
+    `model` rides on every line even though MODEL is a single constant
+    today: the moment anyone splits it per read, a line that silently
+    changed meaning is this repo's recurring defect.
+
+    Unknown token counts print `?`, never 0 — the point of these lines is
+    to set the cap from evidence, and a read of unknown cost summed in as a
+    free one is worse than an admitted gap.
+    """
+    usage = getattr(response, "usage", None)
+    tokens_in = getattr(usage, "input_tokens", None)
+    tokens_out = getattr(usage, "output_tokens", None)
+    sha = getattr(pr, "head_sha", None)
+    print(
+        f"doug: read #{getattr(pr, 'number', '?')}@{sha[:12] if sha else '?'} (paid read) "
+        f"kind={kind} scope={scope} model={MODEL} "
+        f"in={tokens_in if tokens_in is not None else '?'} "
+        f"out={tokens_out if tokens_out is not None else '?'}",
+        file=sys.stderr,
+    )
 
 
 class ReaderFinding(BaseModel):
@@ -472,6 +503,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         # exhausted balance 500'd every customer's CI, reported as success
         # because the workflow step is continue-on-error.
         raise ReaderError(f"{type(e).__name__}: {e}") from e
+    _report_cost(response, kind="risk", scope=scope, pr=pr)
     if response.stop_reason != "end_turn":
         raise ReaderError(f"read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")
@@ -532,6 +564,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         system=DECISION_INTENT_SYSTEM,
         messages=[{"role": "user", "content": _intent_text(pr, diff, docs)}],
     )
+    _report_cost(response, kind="intent", scope=scope, pr=pr)
     if response.stop_reason != "end_turn":
         raise ReaderError(f"intent read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")
