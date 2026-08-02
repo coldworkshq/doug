@@ -1135,4 +1135,12 @@ def comparisons(
         raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-    return {"runs": [_comparison_run(row) for row in store.comparison_reviews(limit, repo)]}
+    try:
+        rows = store.comparison_reviews(
+            limit,
+            repo,
+            max_rows=store.COMPARISON_RUN_LIMIT,
+        )
+    except store.ComparisonResultTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return {"runs": [_comparison_run(row) for row in rows]}

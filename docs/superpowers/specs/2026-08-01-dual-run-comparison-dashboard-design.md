@@ -48,7 +48,7 @@ The path predicate is explicit in SQL:
 
 This is a current-base contract correction required by upstream PR #30, not a product-scope expansion: both current review paths write the shared commit identity to `head_sha` for idempotency, while only the App path writes the App id pair. The CI `/v1/review` replay lookup is scoped to rows with both App ids NULL so an App verdict cannot suppress the independent CI measurement for the same commit.
 
-The store function remains a lossless ledger read. It does not group runs, select a winner, or calculate deltas.
+The store function remains a lossless ledger read on every successful response. It does not group runs, select a winner, or calculate deltas. One set-based query attaches the latest coverage receipt for every selected verdict. A hard 500-run ceiling bounds one request; if the selected PR groups exceed it, the store raises and the endpoint returns `413` instead of slicing a group and presenting partial evidence as complete.
 
 ## API contract
 
@@ -131,6 +131,7 @@ The UI may visually connect the two singleton scores on a zero-to-one scale, but
 
 - Missing or incorrect API token: preserve `/v1/queue`'s `503` and `401` behavior.
 - Ledger not configured: API returns `503`; web renders unavailable.
+- More than 500 qualifying runs in the selected PR groups: API returns `413`; web renders unavailable rather than calculating metrics from partial evidence.
 - Configured ledger with no qualifying rows: API returns `{"runs": []}`; web renders an honest empty state.
 - Malformed API response, timeout, or network failure: web renders unavailable and never falls back to queue fixtures.
 - Missing `pr_meta`: retain the run with fallback title `PR #<number>`, repaired GitHub URL, and only identity-backed fields. Do not drop a missing-path signal because display metadata is incomplete.
@@ -144,13 +145,15 @@ API store tests will prove:
 - App and CI predicates include both paths while excluding mixed-identity and external rows.
 - Duplicate App rows remain separate.
 - Repo scope and recent-PR limit do not cut a selected PR's other runs.
-- Coverage is attached to the correct verdict and remains `None` when absent.
+- The latest coverage receipt is attached to the correct verdict and remains `None` when absent.
+- Coverage for all returned verdicts is attached in one SELECT rather than one query per run.
 - Disabled storage returns an empty store result.
 
 API endpoint tests will prove:
 
 - Shared-token configuration, rejection, and success match `/v1/queue`.
 - An unconfigured ledger returns `503`.
+- A result above the run ceiling returns `413` without exposing a partial group.
 - Path classification from the App id pair, current row-column SHA, legacy CI metadata fallback, null legacy SHA, coverage, and duplicate rows survive serialization.
 
 Web tests will use Node's built-in test runner with TypeScript stripping, adding no package dependency. They will prove:

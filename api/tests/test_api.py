@@ -1706,6 +1706,30 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
     assert covered["coverage"]["diff_chars"] == 20
 
 
+def test_comparisons_refuses_to_return_partial_evidence_when_run_cap_is_exceeded(
+    tmp_path, monkeypatch
+):
+    """A safety bound must fail loud, never cut a comparison group.
+
+    Returning the first N duplicate attempts would let the web layer infer a
+    missing path or score delta from an incomplete ledger slice.
+    """
+    _comparison_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(store, "COMPARISON_RUN_LIMIT", 2)
+    _comparison_api_review(app=True)
+    _comparison_api_review(app=False)
+    _comparison_api_review(app=True)
+
+    response = client.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "detail": "comparison contains more than 2 runs; narrow the repo or PR limit"
+    }
+
+
 def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
     tmp_path, monkeypatch
 ):

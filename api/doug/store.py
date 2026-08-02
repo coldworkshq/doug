@@ -47,6 +47,17 @@ from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
 
+COMPARISON_RUN_LIMIT = 500
+
+
+class ComparisonResultTooLarge(RuntimeError):
+    """The comparison cannot be returned without cutting ledger evidence."""
+
+    def __init__(self, limit: int):
+        super().__init__(
+            f"comparison contains more than {limit} runs; narrow the repo or PR limit"
+        )
+
 verdicts = Table(
     "verdicts",
     metadata,
@@ -1170,15 +1181,24 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
         ]
 
 
-def comparison_reviews(limit: int = 50, repo: str | None = None) -> list[dict]:
+def comparison_reviews(
+    limit: int = 50,
+    repo: str | None = None,
+    *,
+    max_rows: int = COMPARISON_RUN_LIMIT,
+) -> list[dict]:
     """All App and CI verdicts for the most recently scored PR groups.
 
     The limit counts PRs, not verdict rows, so one side of a pair and duplicate
-    App writes cannot be cut away at the boundary.
+    App writes cannot be cut away at the boundary. max_rows bounds the result
+    without making partial ledger evidence look complete: an oversized result
+    raises instead of cutting a comparison group.
     """
     engine = _get_engine()
     if engine is None or limit < 1:
         return []
+    if max_rows < 1:
+        raise ValueError("max_rows must be positive")
     from sqlalchemy import and_, desc, func, or_, select
 
     app_identity = and_(
@@ -1207,28 +1227,62 @@ def comparison_reviews(limit: int = 50, repo: str | None = None) -> list[dict]:
         .limit(limit)
         .subquery()
     )
+    latest_read_ids = (
+        select(
+            reads.c.verdict_id,
+            func.max(reads.c.id).label("read_id"),
+        )
+        .group_by(reads.c.verdict_id)
+        .subquery()
+    )
+    latest_read = reads.alias("latest_read")
     query = (
-        select(verdicts)
+        select(
+            verdicts,
+            latest_read.c.id.label("_coverage_id"),
+            latest_read.c.diff_chars.label("_coverage_diff_chars"),
+            latest_read.c.sent_chars.label("_coverage_sent_chars"),
+            latest_read.c.files_sent.label("_coverage_files_sent"),
+            latest_read.c.files_unseen.label("_coverage_files_unseen"),
+            latest_read.c.file_cut.label("_coverage_file_cut"),
+        )
         .join(
             recent,
             (recent.c.repo == verdicts.c.repo)
             & (recent.c.pr_number == verdicts.c.pr_number),
         )
+        .outerjoin(
+            latest_read_ids,
+            latest_read_ids.c.verdict_id == verdicts.c.id,
+        )
+        .outerjoin(latest_read, latest_read.c.id == latest_read_ids.c.read_id)
         .where(qualifies)
         .order_by(
             desc(recent.c.latest_scored_at),
             desc(verdicts.c.scored_at),
             desc(verdicts.c.id),
         )
+        .limit(max_rows + 1)
     )
-    out = []
     with engine.connect() as conn:
-        for verdict in conn.execute(query).mappings():
-            read = conn.execute(
-                select(reads)
-                .where(reads.c.verdict_id == verdict["id"])
-                .order_by(desc(reads.c.id))
-                .limit(1)
-            ).mappings().first()
-            out.append({**verdict, "coverage": dict(read) if read else None})
+        rows = conn.execute(query).mappings().all()
+    if len(rows) > max_rows:
+        raise ComparisonResultTooLarge(max_rows)
+    out = []
+    for row in rows:
+        verdict = {column.name: row[column.name] for column in verdicts.columns}
+        coverage = (
+            {
+                "id": row["_coverage_id"],
+                "verdict_id": verdict["id"],
+                "diff_chars": row["_coverage_diff_chars"],
+                "sent_chars": row["_coverage_sent_chars"],
+                "files_sent": row["_coverage_files_sent"],
+                "files_unseen": row["_coverage_files_unseen"],
+                "file_cut": row["_coverage_file_cut"],
+            }
+            if row["_coverage_id"] is not None
+            else None
+        )
+        out.append({**verdict, "coverage": coverage})
     return out

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from doug import reader, review, store
@@ -1489,6 +1489,54 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     assert by_id[app_two]["coverage"] is None
     assert by_id[current_ci]["coverage"] is None
     assert by_id[legacy_ci]["coverage"] is None
+
+
+def test_comparison_reviews_loads_all_coverage_in_one_select(tmp_path, monkeypatch):
+    """Adding another verdict must not add another database round trip.
+
+    The dashboard can request 200 PR groups and duplicates are deliberately
+    preserved. A SELECT inside the verdict loop turns that honest ledger read
+    into hundreds of sequential queries.
+    """
+    _db(tmp_path, monkeypatch)
+    coverage = reader.Coverage(
+        diff_chars=20,
+        sent_chars=10,
+        files_sent=1,
+        files_unseen=["second.py"],
+        file_cut="first.py",
+    )
+    covered = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
+    assert store.save_read(
+        covered,
+        reader.Coverage(
+            diff_chars=20,
+            sent_chars=18,
+            files_sent=2,
+            files_unseen=[],
+            file_cut=None,
+        ),
+    ) == 1
+    _comparison_review("o/r", 7, "a" * 40, app=False)
+    _comparison_review("o/r", 7, "a" * 40, app=True)
+    engine = store._get_engine()
+    assert engine is not None
+    selects: list[str] = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_select)
+    try:
+        rows = store.comparison_reviews(repo="o/r")
+    finally:
+        event.remove(engine, "before_cursor_execute", record_select)
+
+    assert len(selects) == 1
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[covered]["coverage"]["sent_chars"] == 18
+    assert by_id[covered]["coverage"]["file_cut"] is None
 
 
 def test_current_ci_review_is_visible_in_comparisons_with_its_exact_head(
