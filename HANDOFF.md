@@ -1,42 +1,64 @@
 # HANDOFF — doug
 
-State:    building — M0 CLOSED. M1 code COMPLETE except Tasks 9-10, ONE PR
+State:    building — M0 CLOSED. TASK 10 IS DONE: the App path is LIVE and
+          verified in production on drewjst/doug (neutral check run,
+          "Cleared · risk 0.02 · diff read", on PR #33 — tier in the title,
+          so it was a real read and not a deterministic fallback). M1 code
+          is complete except TASK 9, which is now the last M1 task. ONE PR
           PER TASK (Andrew's call, 2026-08-01: more Doug verdicts + smaller
           diffs Doug can actually read whole). Merged to main: Tasks 1-2
           (#18), 3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26
           cooloff fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite),
           7b (#28, startup sweep + the review-state casing fix — which
-          CLOSES Task 7). THIS PR (#29) is not a plan task: it acts on the
-          #24 re-review that arrived after #26 had already merged and so
-          was never addressed.
-Next:     M1 Task 10 — deploy + cutover. NEEDS ANDREW'S EXPLICIT GO-AHEAD
-          before anything deploys. THEN Task 9 (retire the CI token path);
-          that order is the reverse of the plan's and is deliberate — see
-          the Task 9/10 resequencing decision below.
+          CLOSES Task 7), #29 (the late #24 re-review), 10 (#32, code) with
+          the operator cutover run 2026-08-01.
 
-          Task 10 scope decided with Andrew 2026-08-02: it creates a
-          DEDICATED SERVICE ACCOUNT for doug-api rather than binding the
-          App private key to the default compute SA. Verified facts:
-          doug-api and doug-web BOTH run as the default compute SA, which
-          holds roles/editor on doug-prod0; roles/editor does NOT include
-          secretmanager.versions.access, so the explicit secretAccessor
-          bindings in api/deploy/gcp.sh:88-98 are load-bearing and the
-          gcp.sh:84-87 comment is accurate as written. Also missing from
-          the deploy today: DOUG_GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY
-          are NOT in --set-secrets at all, so app_auth.enabled() is FALSE
-          in production and nothing can mint an installation token — the
-          startup sweep never starts either, since its guard needs both
-          halves. --no-cpu-throttling is also absent, and the webhook
-          secret is bound as :latest (which IS v2 today), not pinned to :2
-          as this file previously claimed. doug-web keeps the default SA
-          through the cutover and gets its own SA in a separate PR right
-          after, so a misconfigured web SA cannot confuse the cutover.
-Blockers: none for code. Two things only Andrew can do:
+          THIS BRANCH (m1-cutover-done) is not a plan task. The cutover
+          exposed that worker.process_job wrote NOTHING to the log on any
+          successful outcome, so "the review ran" and "the job was never
+          claimed" were indistinguishable — answering "did that review
+          actually run?" took four tool calls, a dashboard fetch and a
+          browser screenshot. It adds one line per outcome, and the fresh
+          review and the idempotent replay are worded so they can never be
+          confused: only the fresh one says "paid read", because only it
+          bought one. See the decision below for why that distinction is
+          the change rather than a detail of it.
+Next:     M1 Task 9 — retire the CI token path (delete
+          .github/workflows/doug-review.yml and /v1/review). Unblocked now
+          that Task 10 is verified live; that 10-then-9 order is the
+          reverse of the plan's and is deliberate — see the resequencing
+          decision below. Deleting doug-review.yml also deletes the job
+          summary that has been standing in as the "did a review run?"
+          signal, which is what this branch's logging exists to replace, so
+          land this branch first. Rebase vs. merged #15 still to be done
+          deliberately. AFTER Task 9, M1's exit gate is checkable end to
+          end and M2 (spend caps) starts — its `[~]` primitive
+          (store.record_deep_read, #25) is still wired to no call site, so
+          spend is uncapped in production TODAY, which matters more now
+          that the App path is the live one.
+
+          What the cutover actually put in production, verified on the
+          serving revision: doug-api runs as its OWN service account
+          doug-api-sa (not the default compute SA, which holds
+          roles/editor on doug-prod0); DOUG_GITHUB_APP_ID and
+          GITHUB_APP_PRIVATE_KEY are both in --set-secrets, so
+          app_auth.enabled() is TRUE in prod for the first time;
+          --no-cpu-throttling is set, without which the background drain
+          is suspended the moment its request returns; and Task 7b's
+          startup sweep runs at boot, which needs both of those at once.
+          doug-web STILL runs as the default compute SA — held back
+          deliberately so a misconfigured web SA could not confuse the
+          cutover — and gets its own SA in a follow-on PR.
+Blockers: none for code. One thing only Andrew can do, and one loose end:
           - subscribe the App to the "Pull request review" event before
             Task 6's third-party ingest receives anything (handler is
-            inert but fully fixture-testable until then) — Task 10 checklist
-          - rotate + delete api/.backtest-cache/llm-probe/api-key
-            (confirmed never public; needs Anthropic console access)
+            inert but fully fixture-testable until then). STATUS NOT
+            RECONFIRMED since the cutover — check the App settings rather
+            than assuming the cutover checklist reached it.
+          - key rotation is DONE and verified (see below); the loose end is
+            that doug-anthropic-key version 1 is still `enabled` in Secret
+            Manager, so the superseded material is still readable there.
+            Disabling it is separate from revoking the key at Anthropic.
 
 Execution model (do not rediscover this):
 - One PR per task. Doug reviews each (ADR-0008); read its findings, but
@@ -67,15 +89,24 @@ Key facts for the executor:
 - App: dougs-review, App ID 4450932, installation 150424894 on drewjst
   (User, selected: doug only). Perms checks:write/contents:read/
   pull_requests:read/metadata:read; events: pull_request. Private key in
-  Secret Manager doug-github-app-key (no IAM grant yet — deliberate, Task
-  10 decides the dedicated-SA custody). Webhook secret doug-webhook-secret
-  v2 (v1 has a trailing newline; prod pinned to :2, disable v1 at cutover).
-  Webhook verified end-to-end in prod: ping + installation events 202 with
-  valid signatures. Deliveries no longer verify-and-discard — Task 6 (#27)
-  dispatches them — but nothing is deployed yet, so prod is still running
-  the discarding revision until Task 10.
+  Secret Manager doug-github-app-key — Task 10 SETTLED the custody
+  question: it is granted to the dedicated doug-api-sa, not to the default
+  compute SA. Webhook secret doug-webhook-secret v2 (v1 has a trailing
+  newline; bound as :latest, which IS v2 — this file once claimed it was
+  pinned to :2 and that was never true). Webhook verified end-to-end in
+  prod: ping + installation events 202 with valid signatures. Deliveries
+  no longer verify-and-discard — Task 6 (#27) dispatches them, and since
+  the 2026-08-01 cutover that is what production is actually running: the
+  discarding revision is gone.
 - Install visibility is "Only on this account" — flip to "Any account"
   before installing on lemahq/lema (Task 10 cutover).
+- Carried forward for the doug-web SA follow-on, verified during Task 10's
+  scoping and still true of doug-web: the default compute SA holds
+  roles/editor on doug-prod0, and roles/editor does NOT include
+  secretmanager.versions.access. So the explicit secretAccessor bindings in
+  api/deploy/gcp.sh:88-98 are LOAD-BEARING, not belt-and-braces, and the
+  gcp.sh:84-87 comment saying so is accurate as written. Do not "simplify"
+  those bindings away on the assumption editor covers them.
 - The plan was built by 3 drafting agents on locked interfaces, reviewed by
   2 adversarial verifiers (both verify by execution), 3 blockers + 5 majors
   fixed. Deepest invariants (do not "tidy" these away): enqueue REVIVES
@@ -88,6 +119,32 @@ Key facts for the executor:
   label. Positive-control experiment needed before further intent-stream
   investment. Full analysis: workspace/research/phase1-entry-preregistration.md
   (workspace/ is untracked — lives only on Andrew's machine).
+
+Decisions this session (2026-08-01/02, cutover + the logging it exposed):
+- A FRESH REVIEW AND AN IDEMPOTENT REPLAY MUST NOT LOG ALIKE. They agree on
+  every field either line could carry — repo, PR, head SHA, tier, band,
+  score, verdict id — and differ in exactly one thing: the fresh one bought
+  a model read and the replay re-rendered a row already in the ledger. So
+  the difference has to live in the WORDING or it does not exist: one line
+  covering both would make spend unauditable from the logs, with an
+  operator counting reviews counting replays that cost nothing. Only the
+  fresh line says "paid read" — rejected: a single "job N complete" line,
+  which is what "add a success log" naturally produces and is worse than
+  the silence it replaces.
+- The fresh line is emitted BEFORE ingest.complete, not after. By that
+  point the read is paid for and the verdict durable, and complete()
+  raising is the one failure that re-pends a job in exactly that state — it
+  must not be able to erase the record of what the attempt cost. It is
+  still not a complete spend ledger (a read dying before save_review
+  commits leaves only drain's failure line) and the code says so rather
+  than claiming a guarantee it does not make.
+- Key rotation CLOSED and verified rather than trusted: the plaintext
+  api/.backtest-cache/llm-probe/api-key is gone (whole llm-probe/ directory
+  with it) and doug-anthropic-key has a v2 created 2026-08-02. v1 still
+  enabled — recorded as a loose end, not ticked away.
+- ROADMAP's Task 10/Task 9 item SPLIT into two boxes. One box covering two
+  tasks cannot record that one is done and the other is not — rejected:
+  ticking the combined line, which would have read as Task 9 being done.
 
 Decisions this session (2026-08-01, M1 Tasks 6–7b):
 - Task 9 RESEQUENCED AFTER Task 10 (Andrew, 2026-08-01): Task 9 deletes
