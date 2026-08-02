@@ -55,15 +55,23 @@ export default async function QueuePage({
         >
           <DougLogo /> doug
         </Link>
-        <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
-          <span
-            className={
-              "size-1.5 rounded-full " +
-              (source === "live" ? "animate-pulse bg-clear" : "bg-muted-foreground")
-            }
-          />
-          {source === "live" ? "live api" : "bundled fixture"}
-        </span>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/compare"
+            className="glass rounded-full px-3 py-1.5 font-mono text-xs transition-colors hover:bg-white/10"
+          >
+            Compare
+          </Link>
+          <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
+            <span
+              className={
+                "size-1.5 rounded-full " +
+                (source === "live" ? "animate-pulse bg-clear" : "bg-muted-foreground")
+              }
+            />
+            {source === "live" ? "live api" : "bundled fixture"}
+          </span>
+        </div>
       </nav>
 
       <section className="py-10">
