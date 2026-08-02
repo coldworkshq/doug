@@ -399,7 +399,9 @@ def test_the_stale_head_catch_up_revives_a_failed_job_at_once(tmp_path, monkeypa
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == failed_id
-        assert ingest.fail(failed_id, "reader exploded", claim_generation=claimed["claim_generation"])
+        assert ingest.fail(
+            failed_id, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
     ingest.enqueue(**{**JOB, "head_sha": "b" * 40})  # a push, then a force-push back
 
     assert worker.process_job(ingest.claim()) is None  # the "b" job, now stale
@@ -930,7 +932,9 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == job_id
-        assert ingest.fail(job_id, "credentials missing", claim_generation=claimed["claim_generation"])
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
     (failed,) = _rows(url, store.review_jobs)
     assert failed["id"] == job_id and failed["status"] == "failed" and failed["attempts"] == 3
 
