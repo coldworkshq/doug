@@ -1,17 +1,36 @@
 # HANDOFF — doug
 
-State:    building — M0 CLOSED. M1 eight-tenths done, ONE PR PER TASK
-          (Andrew's call, 2026-08-01: more Doug verdicts + smaller diffs
-          Doug can actually read whole). Merged to main: Tasks 1-2 (#18),
-          3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26 cooloff
-          fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite). Task 7b —
-          Task 7's Step 4, wiring reconcile_all into the lifespan Task 6
-          created — is THIS PR, and it closes Task 7 and the M1 code
-          except Tasks 9-10.
+State:    building — M0 CLOSED. M1 code COMPLETE except Tasks 9-10, ONE PR
+          PER TASK (Andrew's call, 2026-08-01: more Doug verdicts + smaller
+          diffs Doug can actually read whole). Merged to main: Tasks 1-2
+          (#18), 3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26
+          cooloff fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite),
+          7b (#28, startup sweep + the review-state casing fix — which
+          CLOSES Task 7). THIS PR (#29) is not a plan task: it acts on the
+          #24 re-review that arrived after #26 had already merged and so
+          was never addressed.
 Next:     M1 Task 10 — deploy + cutover. NEEDS ANDREW'S EXPLICIT GO-AHEAD
           before anything deploys. THEN Task 9 (retire the CI token path);
           that order is the reverse of the plan's and is deliberate — see
           the Task 9/10 resequencing decision below.
+
+          Task 10 scope decided with Andrew 2026-08-02: it creates a
+          DEDICATED SERVICE ACCOUNT for doug-api rather than binding the
+          App private key to the default compute SA. Verified facts:
+          doug-api and doug-web BOTH run as the default compute SA, which
+          holds roles/editor on doug-prod0; roles/editor does NOT include
+          secretmanager.versions.access, so the explicit secretAccessor
+          bindings in api/deploy/gcp.sh:88-98 are load-bearing and the
+          gcp.sh:84-87 comment is accurate as written. Also missing from
+          the deploy today: DOUG_GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY
+          are NOT in --set-secrets at all, so app_auth.enabled() is FALSE
+          in production and nothing can mint an installation token — the
+          startup sweep never starts either, since its guard needs both
+          halves. --no-cpu-throttling is also absent, and the webhook
+          secret is bound as :latest (which IS v2 today), not pinned to :2
+          as this file previously claimed. doug-web keeps the default SA
+          through the cutover and gets its own SA in a separate PR right
+          after, so a misconfigured web SA cannot confuse the cutover.
 Blockers: none for code. Two things only Andrew can do:
           - subscribe the App to the "Pull request review" event before
             Task 6's third-party ingest receives anything (handler is

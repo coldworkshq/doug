@@ -435,13 +435,16 @@ def test_the_dedupe_marker_still_matches_the_real_constraint_name():
 def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(
     tmp_path, monkeypatch
 ):
-    """The cooloff belongs to the caller, not to the row. A reopen, or a
-    force-push back to the SHA whose review failed during an outage, is a
-    person asking for this PR now, and what enqueue promises a live caller is
-    "queue this SHA for review". Suppressing that for an hour is a PR silently
-    never reviewed — the opposite failure from the one the cooloff exists to
-    bound, which is a restart loop re-arming a poison PR. Only the reconcile
-    sweep pays that penalty; the default caller does not.
+    """The cooloff belongs to the caller, not to the row. A reopen, a
+    force-push back to the SHA whose review failed during an outage, or the
+    drain catching up to a head that moved — each is something that happened
+    to this one PR, and what enqueue promises a live caller is "queue this SHA
+    for review". Suppressing that leaves the PR unreviewed until some later
+    caller happens to ask again: the next live event, or the sweep on the
+    first process start past the cooloff, neither of which is a schedule. The
+    failure the cooloff exists to bound is the opposite one — a restart loop
+    re-arming a poison PR — and only the caller that repeats itself should pay
+    for it.
     """
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
@@ -510,12 +513,14 @@ def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(
     finished_at in the same UPDATE that sets 'failed' at the cap — and that is
     precisely why the reconcile branch has to answer for the state anyway. The
     cooloff asks whether finished_at is older than an hour, and SQL answers that
-    question NULL, not true, for a row that has none: the row would fail the
-    comparison on every sweep, forever, and reconcile is the only thing that
-    ever revisits it. The PR would then never be reviewed again — not delayed an
-    hour, gone. An older row written before fail() set finished_at at the cap, a
-    partial write, or a future change to fail() all reach that state, and none
-    of them are a reason to abandon a customer's PR, so the sweep heals it.
+    question NULL, not true, for a row that has none: without this branch the
+    row fails the comparison on every sweep, forever. A live event still revives
+    it, because the live path never asks the question at all — but the PR that
+    needs the sweep is exactly the one nobody pushes to or reopens, and for that
+    PR "forever" is the whole story rather than an hour's delay. An older row
+    written before fail() set finished_at at the cap, a partial write, or a
+    future change to fail() all reach that state, and none of them are a reason
+    to abandon a customer's PR, so the sweep heals it.
     """
     url = _db(tmp_path, monkeypatch)
     job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
@@ -555,3 +560,86 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     ingest.supersede(job_id)
     assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
+
+
+def test_the_cooloff_hold_is_reportable_and_only_for_a_row_actually_holding(
+    tmp_path, monkeypatch
+):
+    """enqueue answers "already queued" and "held back by the cooloff" with the
+    same None, and reconcile has no other way to tell them apart — which is why
+    the cooloff was the one reconcile skip with no log line, while draft/fork
+    and the base-repo-id mismatch both leave a trace.
+
+    This is the discriminator that closes that, so what it must NOT say is as
+    load-bearing as what it must: a dedupe of a row that is pending, running or
+    reviewed is the ordinary, uninteresting outcome for nearly every open PR on
+    every sweep, and reporting those as held back would bury the one line an
+    operator is looking for under one line per PR per restart. Only a 'failed'
+    row whose cooloff has not yet elapsed is a hold — once it has, the sweep
+    revives the row rather than skipping it, so there is nothing to report.
+    """
+    url = _db(tmp_path, monkeypatch)
+    # The queue's identity is the four columns the unique index carries;
+    # repo_full_name is display-only, which is why it is enqueue's argument
+    # and not this query's.
+    ident = (INSTALL, REPO_ID, 7, "a" * 40)
+
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    assert ingest.cooloff_hold_remaining(*ident) is None  # pending: a plain dedupe
+    ingest.claim()
+    assert ingest.cooloff_hold_remaining(*ident) is None  # running: still not a hold
+    ingest.complete(job_id, None)
+    assert ingest.cooloff_hold_remaining(*ident) is None  # reviewed and paid for
+
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+    held = ingest.cooloff_hold_remaining(*ident)
+    assert held is not None and 0 < held <= ingest.FAILED_REVIVE_COOLOFF_SECONDS
+
+    # Once the wait is over the sweep revives the row instead of skipping it,
+    # so there is no hold left to report — and never a negative one.
+    _age_finished_at(url, job_id, seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
+    assert ingest.cooloff_hold_remaining(*ident) is None
+
+
+def test_the_cooloff_hold_query_is_a_no_op_when_storage_is_disabled(monkeypatch):
+    """It exists to explain a skip in a log line, and a log line must never be
+    the thing that raises. Same no-op stance as claim() and reclaim_stalled,
+    not the RuntimeError enqueue answers a missing ledger with."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert ingest.cooloff_hold_remaining(INSTALL, REPO_ID, 7, "a" * 40) is None
+
+
+def test_an_unrecognized_trigger_falls_open_to_the_live_terms(tmp_path, monkeypatch):
+    """The fail-open direction itself, pinned against an input from outside
+    Trigger.
+
+    _revive selects the sweep's terms by testing `trigger == "reconcile"`, so
+    every other value — a third Trigger added later, a typo at a call site,
+    a value threaded through from a caller that hasn't been updated — takes the
+    live branch and the row comes back at once. Written the other way round
+    (`trigger != "live"`) the code is byte-identical over the two valid inputs
+    and inverted over every other one: an unrecognized trigger would claim the
+    sweep's cooloff, and a PR whose review failed would 202 and then never be
+    reviewed.
+
+    That asymmetry is the whole argument for the default. A wrong trigger has
+    to cost money, which this codebase has chosen to accept, rather than
+    silence, which it has not. Every other trigger test passes under either
+    spelling, because they all use the two values the code already knows about
+    — which is exactly why a mutation battery cannot see this branch and a test
+    has to.
+    """
+    url = _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "reader exploded")
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    # Failed, with a real finished_at, well inside the cooloff: the terms the
+    # trigger selects are the only thing that can decide this revival, so the
+    # NULL-finished_at escape hatch cannot account for the result below.
+    assert row["status"] == "failed" and row["finished_at"] is not None
+
+    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcille") == job_id
+    row = {j["id"]: j for j in _jobs(url)}[job_id]
+    assert row["status"] == "pending" and row["attempts"] == 0
