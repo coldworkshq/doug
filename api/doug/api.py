@@ -208,13 +208,16 @@ def _inflight_review(repo: str, pr_number: int, head_sha: str):
     key = (repo, pr_number, head_sha)
     with _inflight_guard:
         lock = _inflight_locks.setdefault(key, threading.Lock())
-    with lock:
-        yield
-    # Dropped after release, not refcounted: a waiter already holding this
-    # lock object proceeds fine, and by the time a third request misses the
-    # dict the verdict is durable, so its find_review hits.
-    with _inflight_guard:
-        _inflight_locks.pop(key, None)
+    try:
+        with lock:
+            yield
+    finally:
+        # Dropped after release, not refcounted: a waiter already holding this
+        # lock object proceeds fine, and by the time a third request misses the
+        # dict the verdict is durable, so its find_review hits. finally so an
+        # exception inside the body cannot leak the dict entry forever.
+        with _inflight_guard:
+            _inflight_locks.pop(key, None)
 
 
 def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | None:
@@ -265,7 +268,21 @@ def _score_and_persist(
     req: ReviewRequest, gh, owner: str, name: str, meta: PRMetadata, diff: str
 ) -> ReviewResponse:
     tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    intent_read: review.IntentRead | None
+    if isinstance(intent_result, review.IntentFailure):
+        # Weight 0: advisory signal only. Band/score stay the risk tier's
+        # (ADR-0007). Distinct from None so a broken intent path is visible.
+        verdict.reasons.append(
+            Reason(
+                rule="intent-unavailable",
+                label=intent_result.detail,
+                weight=0.0,
+            )
+        )
+        intent_read = None
+    else:
+        intent_read = intent_result
 
     # save_review commits the verdict, its findings, and (when given) its
     # coverage row together — coverage is passed in rather than written by a
@@ -284,6 +301,7 @@ def _score_and_persist(
             pr_meta=meta.model_dump(mode="json"),
             coverage=cov,
             prompt_hash=reader.PROMPT_HASH if tier == "reader" else None,
+            head_sha=meta.head_sha,
         )
     except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
         verdict.reasons.append(

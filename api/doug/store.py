@@ -202,6 +202,10 @@ review_jobs = Table(
     # pending | running | done | failed | superseded
     Column("status", String(12), nullable=False, index=True),
     Column("attempts", Integer, nullable=False, default=0),
+    # Incremented on every claim(); terminals fence on this integer rather
+    # than started_at equality (timezone/precision round-trips can make a
+    # live holder's complete() a silent no-op and leave the job stuck).
+    Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("enqueued_at", DateTime(timezone=True), nullable=False),
     Column("started_at", DateTime(timezone=True)),
     Column("finished_at", DateTime(timezone=True)),
@@ -797,22 +801,25 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
     The idempotency read: /v1/review consults it before paying for an LLM
     read, so a webhook redelivery or a retried CI job replays the recorded
     verdict instead of double-spending and inserting a duplicate ledger
-    row. Matches on the head_sha key inside pr_meta — a JSON key rather
-    than a column for the same reason `reads` is its own table: create_all
-    never adds columns to a live table. Rows scored before head_sha
-    existed simply never match, and get rescored once.
+    row. Matches on the head_sha column (indexed-capable, written by the App
+    and CI paths); falls back to pr_meta["head_sha"] for rows scored before
+    the column was populated. Rows with neither simply never match, and get
+    rescored once.
     """
     engine = _get_engine()
     if engine is None:
         return None
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
     q = (
         select(verdicts)
         .where(
             verdicts.c.repo == repo,
             verdicts.c.pr_number == pr_number,
-            verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
+            or_(
+                verdicts.c.head_sha == head_sha,
+                verdicts.c.pr_meta["head_sha"].as_string() == head_sha,
+            ),
             # Belt and braces. This helper is already immune by accident:
             # external rows write no pr_meta, so the JSON predicate above is
             # NULL for them and never matches. That immunity is incidental,

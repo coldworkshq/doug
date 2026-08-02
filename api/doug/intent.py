@@ -77,7 +77,13 @@ def _tokens(text: str) -> set[str]:
     return {w for w in _WORD.findall(text.lower()) if w not in _STOP and len(w) > 2}
 
 
-def relevance(title: str, files: list[str], doc: IntentDoc) -> float:
+def _change_tokens(title: str, files: list[str]) -> set[str]:
+    return _tokens(title) | _tokens(" ".join(files).replace("/", " ").replace(".", " "))
+
+
+def relevance(
+    title: str, files: list[str], doc: IntentDoc, *, change: set[str] | None = None
+) -> float:
     """How much a decision bears on a change. Pure, no I/O, no model.
 
     Jaccard-style overlap, with the record's own title weighted above its
@@ -85,8 +91,11 @@ def relevance(title: str, files: list[str], doc: IntentDoc) -> float:
     a PR touching reader.py even if the body never says "reader" again.
     Path segments are tokenised, so `doug/reader.py` matches a record
     about the reader.
+
+    `change` lets select() tokenise the PR once and reuse it across docs.
     """
-    change = _tokens(title) | _tokens(" ".join(files).replace("/", " ").replace(".", " "))
+    if change is None:
+        change = _change_tokens(title, files)
     if not change:
         return 0.0
     head = _tokens(doc.title)
@@ -107,8 +116,11 @@ def select(docs: list[IntentDoc], title: str, files: list[str]) -> list[IntentDo
     correct: most changes touch none of the recorded decisions, and a read
     against irrelevant records invites invented findings.
     """
+    change = _change_tokens(title, files)
     scored = [
-        (relevance(title, files, d), d) for d in docs if d.status.lower() == BINDING
+        (relevance(title, files, d, change=change), d)
+        for d in docs
+        if d.status.lower() == BINDING
     ]
     ranked = sorted(
         (sd for sd in scored if sd[0] >= MIN_RELEVANCE),

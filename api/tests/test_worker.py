@@ -397,7 +397,11 @@ def test_the_stale_head_catch_up_revives_a_failed_job_at_once(tmp_path, monkeypa
     _wire(monkeypatch, heads={7: "a" * 40})
     failed_id = ingest.enqueue(**JOB)
     for _ in range(3):
-        ingest.fail(failed_id, "reader exploded")
+        claimed = ingest.claim()
+        assert claimed["id"] == failed_id
+        assert ingest.fail(
+            failed_id, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
     ingest.enqueue(**{**JOB, "head_sha": "b" * 40})  # a push, then a force-push back
 
     assert worker.process_job(ingest.claim()) is None  # the "b" job, now stale
@@ -474,11 +478,16 @@ def test_the_seen_set_catches_a_failed_row_the_catch_up_revived_mid_pass(tmp_pat
     monkeypatch.setattr(review, "fetch_pr", _fetch)
 
     a_id = ingest.enqueue(**JOB)
-    ingest.fail(a_id, "reader exploded")
-    ingest.fail(a_id, "reader exploded")  # attempts=2, one short of the cap
-    ingest.claim()  # 'running', so the delivery below cannot supersede it
+    for _ in range(2):
+        claimed = ingest.claim()
+        assert claimed["id"] == a_id
+        assert ingest.fail(
+            a_id, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
+    claimed = ingest.claim()  # 'running', so the delivery below cannot supersede it
+    assert claimed["id"] == a_id
     ingest.enqueue(**{**JOB, "head_sha": "b" * 40})
-    ingest.release(a_id)  # an earlier pass lapped; the row keeps its place
+    assert ingest.release(a_id, claim_generation=claimed["claim_generation"])
 
     # Claimed and failed to the cap, then revived by the "b" job's catch-up.
     assert worker.drain() == 2
@@ -615,19 +624,19 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     re-pends a job whenever process_job raises for any reason, including
     ingest.complete itself blowing up after save_review already landed — no
     wall-clock wait needed to reach the same "verdict durable, job not
-    done" state a crash produces. The second drain() pass must not re-score
-    and does post a second, harmless, check run — the crash-after-post case
-    the fix report calls out as acceptable."""
+    done" state a crash produces. complete runs before the check-run post,
+    so the first attempt posts nothing; the second drain() replays without
+    re-scoring and posts once."""
     url = _db(tmp_path, monkeypatch)
     posted = _wire(monkeypatch)
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
-        real_complete(job_id, verdict_id)
+        return real_complete(job_id, verdict_id, claim_generation=claim_generation)
 
     monkeypatch.setattr(ingest, "complete", _flaky_complete)
     ingest.enqueue(**JOB)
@@ -638,7 +647,20 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     assert len(_rows(url, store.verdicts)) == 1
     (j,) = _rows(url, store.review_jobs)
     assert j["status"] == "done"
-    assert len(posted) == 2  # both attempts post; the second is the harmless duplicate
+    assert len(posted) == 1  # only the successful complete posts
+
+
+def test_a_lost_claim_after_save_skips_the_check_run(tmp_path, monkeypatch):
+    """When complete() returns False (reclaim handed the row to someone else),
+    this worker must not post — the second holder identity-replays and posts
+    once. Posting before complete produced duplicate check runs on that path."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    job = ingest.claim()
+    monkeypatch.setattr(ingest, "complete", lambda *a, **k: False)
+    assert worker.process_job(job) is not None
+    assert posted == []
 
 
 # --- reconcile: the healing path for missed deliveries --------------------
@@ -697,8 +719,9 @@ def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
     taken to 'done' collides on insert exactly like a pending one."""
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
-    ingest.claim()
-    ingest.complete(job_id, None)
+    claimed = ingest.claim()
+    assert claimed["id"] == job_id
+    assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
     monkeypatch.setattr(
         worker.app_auth, "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
@@ -956,7 +979,11 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
     for _ in range(3):
-        ingest.fail(job_id, "credentials missing")
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
     (failed,) = _rows(url, store.review_jobs)
     assert failed["id"] == job_id and failed["status"] == "failed" and failed["attempts"] == 3
 
@@ -1014,7 +1041,11 @@ def test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise
     _installed(tmp_path, monkeypatch)
     job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
     for _ in range(3):
-        ingest.fail(job_id, "credentials missing")
+        claimed = ingest.claim()
+        assert claimed["id"] == job_id
+        assert ingest.fail(
+            job_id, "credentials missing", claim_generation=claimed["claim_generation"]
+        )
     (failed,) = _rows(url, store.review_jobs)
     # Inside the cooloff, with a real finished_at: the terms the caller claims
     # are the only thing that can decide the revival below.
@@ -1072,10 +1103,15 @@ def test_reconcile_logs_a_pr_the_cooloff_held_back_but_not_an_ordinary_dedupe(
     _installed(tmp_path, monkeypatch)
     held = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
     for _ in range(3):
-        ingest.fail(held, "reader exploded")
+        claimed = ingest.claim()
+        assert claimed["id"] == held
+        assert ingest.fail(
+            held, "reader exploded", claim_generation=claimed["claim_generation"]
+        )
     reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40)
-    ingest.claim()
-    ingest.complete(reviewed, None)
+    claimed = ingest.claim()
+    assert claimed["id"] == reviewed
+    assert ingest.complete(reviewed, None, claim_generation=claimed["claim_generation"])
     assert {j["id"]: j["status"] for j in _rows(url, store.review_jobs)} == {
         held: "failed", reviewed: "done",
     }
@@ -1290,11 +1326,13 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
-        real_complete(job_id, verdict_id)
+        return real_complete(
+            job_id, verdict_id, claim_generation=claim_generation
+        )
 
     monkeypatch.setattr(ingest, "complete", _flaky_complete)
     ingest.enqueue(**JOB)

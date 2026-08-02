@@ -2014,13 +2014,13 @@ git push
 - Test: `api/tests/test_worker.py`
 
 **Interfaces:**
-- Consumes: `app_auth.installation_client(installation_id: int) -> GitHub` (Task 1); `store.save_review(..., github_repo_id=, installation_id=, head_sha=, source=)` — all keyword, all defaulting to `None` (Task 2); `store.save_deviations(verdict_id, findings, refs, alignment)` (`store.py:249`); `review.fetch_pr(gh, owner, repo, number) -> (PRMetadata, str)` (`review.py:86`); `review.score_one(meta, diff) -> (tier, Verdict, ReaderVerdict|None, Coverage|None)` (`review.py:118`); `review.read_intent(gh, owner, repo, meta, diff) -> IntentRead | None` (`review.py:161`); `check_run.render/post` (Task 4); `reader.MODEL` (`reader.py:24`).
+- Consumes: `app_auth.installation_client(installation_id: int) -> GitHub` (Task 1); `store.save_review(..., github_repo_id=, installation_id=, head_sha=, source=)` — all keyword, all defaulting to `None` (Task 2); `store.save_deviations(verdict_id, findings, refs, alignment)` (`store.py:249`); `review.fetch_pr(gh, owner, repo, number) -> (PRMetadata, str)` (`review.py:86`); `review.score_one(meta, diff) -> (tier, Verdict, ReaderVerdict|None, Coverage|None)` (`review.py:118`); `review.read_intent(gh, owner, repo, meta, diff) -> IntentRead | IntentFailure | None` (`review.py:161`); `check_run.render/post` (Task 4); `reader.MODEL` (`reader.py:24`).
 - Consumes from Task 3 (`ingest.py`), confirmed against its draft:
   - `claim() -> dict | None` — a **plain dict** (not a `Row`; the worker holds it after the connection closes) carrying every `review_jobs` column, primary key under `"id"`. Returns `None` when the ledger is unconfigured, so `drain` is a safe no-op on a ledger-less deployment — do **not** wrap it in try/except for that case.
-  - `complete(job_id, verdict_id)` — `review_jobs.verdict_id` is a `ForeignKey("verdicts.id")`, unenforced on sqlite and enforced on Postgres. Pass a real `save_review` return value or `None`, never a placeholder int; `complete(job_id, None)` is the intended path for a job that finished without a ledger row.
-  - `fail(job_id, error, *, max_attempts=3)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
+  - `complete(job_id, verdict_id, *, claim_generation)`, `fail(job_id, error, *, claim_generation, max_attempts=3)`, `release(job_id, *, claim_generation)`, `supersede(job_id, *, claim_generation)` — all return `bool`. Terminals fence on `(status='running' AND claim_generation=<token>)` so a stale worker after reclaim cannot finish under someone else's claim. Pass `claim_generation=job["claim_generation"]` from every terminal call site. `started_at` remains the lease clock for `reclaim_stalled` only.
+  - `fail(...)` — truncates `error` to 500 chars, clears `started_at`, and flips to `'failed'` at `attempts >= max_attempts`, so three attempts total. **It also sets `enqueued_at=now`**, which re-pends a job to the *back* of the queue.
   - `enqueue(...) -> int | None` — `None` on the unique-index duplicate; **raises `RuntimeError` when `DATABASE_URL` is unset** (see Task 6, which guards that at the edge).
-  - `release(job_id)` and `supersede(job_id)` — **two additions Task 3 must carry for this task**; both are five-line siblings of `complete`. `release` returns a claimed job to `'pending'` with `started_at=None` and no attempt spent; `supersede` sets `'superseded'` with `finished_at`.
+  - `IntentFailure` from `read_intent` surfaces as a weight-0 `intent-unavailable` reason; score/band unchanged (ADR-0007).
 - **The drain's retry behaviour is a two-part fix and neither half works alone.** `fail` re-pends a job, and `claim` takes the oldest pending, so a poison job is immediately re-claimed by the same pass: three attempts burn in under a second against a fault that has had no time to clear. Task 3's `enqueued_at=now` sends the re-pended job to the back so the drain reaches everything else first; Step 3's seen-set below stops the pass when it laps round to a job it already ran. Verified by running both: with the seen-set alone, `drain()` returns 1 instead of 2 on the two-job test and the second job never runs — the seen-set breaks the loop where the ordering change is what lets it get past.
 - Produces: `process_job(job: dict) -> int | None`; `drain(max_jobs: int = 20) -> int`. Task 6 calls `drain` from a `BackgroundTasks` kick; Task 7 adds `reconcile_installation` / `reconcile_all` to this module.
 
@@ -2260,7 +2260,7 @@ def process_job(job: dict) -> int | None:
         owner=owner, repo=name, pull_number=job["pr_number"]
     ).parsed_data.head.sha
     if current != job["head_sha"]:
-        ingest.supersede(job["id"])
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
             job["github_repo_id"],
@@ -2272,7 +2272,14 @@ def process_job(job: dict) -> int | None:
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
     tier, verdict, rv, cov = review.score_one(meta, diff)
-    intent_read = review.read_intent(gh, owner, name, meta, diff)
+    intent_result = review.read_intent(gh, owner, name, meta, diff)
+    if isinstance(intent_result, review.IntentFailure):
+        verdict.reasons.append(
+            Reason(rule="intent-unavailable", label=intent_result.detail, weight=0.0)
+        )
+        intent_read = None
+    else:
+        intent_read = intent_result
 
     verdict_id = store.save_review(
         job["repo_full_name"],
@@ -2302,10 +2309,14 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(tier, verdict, intent_read, cov)
-    # The job's head SHA, never meta's: by now pulls.get may already be
-    # returning a newer commit, and that commit has its own job.
+    # complete before post: a lost claim must not emit a check run the
+    # second holder will also post via identity replay. The job's head SHA,
+    # never meta's: by now pulls.get may already be returning a newer commit.
+    if not ingest.complete(
+        job["id"], verdict_id, claim_generation=job["claim_generation"]
+    ):
+        return verdict_id  # claim lost — skip check run; second holder replays
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
-    ingest.complete(job["id"], verdict_id)
     return verdict_id
 
 
@@ -2321,6 +2332,7 @@ def drain(max_jobs: int = 20) -> int:
     queue is FIFO-ish and a poison job would otherwise block every PR
     opened after it.
     """
+    ingest.reclaim_stalled()
     attempted = 0
     seen: set[int] = set()
     while attempted < max_jobs:
@@ -2333,7 +2345,7 @@ def drain(max_jobs: int = 20) -> int:
             # already failed. Retrying it here is not a retry — nothing has
             # had time to change — and it would burn the whole attempt
             # budget against one transient fault in under a second.
-            ingest.release(job["id"])
+            ingest.release(job["id"], claim_generation=job["claim_generation"])
             break
         seen.add(job["id"])
         attempted += 1
@@ -2344,7 +2356,7 @@ def drain(max_jobs: int = 20) -> int:
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
-            ingest.fail(job["id"], str(e))
+            ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
     return attempted
 ```
 

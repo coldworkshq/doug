@@ -104,14 +104,64 @@ def test_read_intent_returns_none_when_no_record_is_relevant(monkeypatch):
     assert review.read_intent(None, "o", "r", _pr(), "+ x") is None
 
 
-def test_read_intent_returns_none_when_the_read_fails(monkeypatch):
+def test_read_intent_returns_failure_when_the_read_fails(monkeypatch):
+    """A failed intent read must not look like 'feature off / no ADRs'
+    (ADR-0007). IntentFailure is the distinct signal; the risk path surfaces
+    it as a weight-0 reason without moving score or band."""
     _enable(monkeypatch)
 
     def _boom(pr, diff, chosen):
         raise reader.ReaderError("truncated")
 
     monkeypatch.setattr(reader, "read_with_decisions", _boom)
-    assert review.read_intent(None, "o", "r", _pr(), "+ x") is None
+    out = review.read_intent(None, "o", "r", _pr(), "+ x")
+    assert isinstance(out, review.IntentFailure)
+    assert "truncated" in out.detail
+
+
+def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
+    tmp_path, monkeypatch
+):
+    """Operators and precision must see a broken intent path on the verdict,
+    not a quietly empty deviations list that looks like 'no ADRs'."""
+    from fastapi.testclient import TestClient
+
+    from doug.api import app
+    from doug.models import Band, Reason, Verdict
+
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    _enable(monkeypatch)
+
+    def _boom(pr, diff, chosen):
+        raise reader.ReaderError("timeout")
+
+    monkeypatch.setattr(reader, "read_with_decisions", _boom)
+    monkeypatch.setattr(
+        review,
+        "fetch_pr",
+        lambda gh, o, r, n: (_pr().model_copy(update={"head_sha": "a" * 40}), "+ x"),
+    )
+    fixed = Verdict(
+        score=0.4,
+        band=Band.CLEARED,
+        threshold=0.62,
+        reasons=[Reason(rule="size", label="small", weight=0.0)],
+    )
+    monkeypatch.setattr(
+        review,
+        "score_one",
+        lambda meta, diff: ("deterministic", fixed, None, None),
+    )
+
+    body = TestClient(app).post(
+        "/v1/review",
+        json={"repo": "o/r", "pr_number": 7},
+        headers={"x-doug-token": "secret"},
+    ).json()
+    assert body["score"] == 0.4 and body["band"] == "cleared"
+    assert body["deviations"] == []
+    assert any(r["rule"] == "intent-unavailable" for r in body["reasons"])
 
 
 def test_read_intent_carries_provenance(monkeypatch):
