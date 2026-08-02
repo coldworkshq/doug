@@ -757,10 +757,25 @@ def _record_merge(payload: dict) -> None:
 
 
 # A submitted review that takes a position, mapped onto Doug's own bands.
-# Everything else a reviewer can submit — `commented`, and the dismissal and
-# edit actions — states no position on whether the change should land, so
-# there is nothing to grade against an outcome and no row to write.
+# Keyed lowercase because that is the spelling the lookup is done in — see
+# _record_external_review — not because it is the spelling GitHub sends.
 REVIEW_BANDS = {"approved": Band.CLEARED, "changes_requested": Band.FLAGGED}
+
+# The review states GitHub can carry that take no position on whether the
+# change should land: a note, a retraction, a review not yet submitted.
+# There is nothing to grade against an outcome, so there is no row.
+#
+# Written out rather than left as an absence from REVIEW_BANDS, and that is
+# the whole point of it: skipping these is a decision, skipping a state
+# nobody has ever seen is not, and only the second one logs. `commented` is
+# by far the most common review state on GitHub and `dismissed` is routine,
+# so logging them would fire on the normal case — and a line that fires on
+# the normal case is one an operator learns to scroll past, which costs the
+# signal the unrecognized-state line exists to carry.
+#
+# Whether `dismissed` should instead be banded is a live design question and
+# is deliberately not settled here; this records today's answer.
+REVIEW_STATES_WITHOUT_A_STANCE = frozenset({"commented", "dismissed", "pending"})
 
 
 def _record_external_review(payload: dict) -> None:
@@ -771,13 +786,40 @@ def _record_external_review(payload: dict) -> None:
     because a fork's raw diff would enter the prompt, and nothing here reads
     a diff. Bot reviewers are ingested like anyone else, because grading bot
     reviewers is the point of the lane.
+
+    The state is matched lowercased. GitHub spells one state two ways —
+    this webhook delivers `approved`, the REST reviews endpoint returns
+    `APPROVED` for that same review, which is the spelling
+    review._review_state matches — and nothing in a payload says which
+    vocabulary produced it. Matching the delivered casing raw put a whole
+    grading lane on that assumption, and got it wrong in the quietest
+    possible way: an unmatched state writes no row and still 202s, so the
+    lane would ingest nothing indefinitely with no error to notice it by.
+    Lowercasing cannot band a state wrongly — no two GitHub review states
+    differ only in case — so it strictly removes that failure without
+    admitting anything new.
     """
     review_ = _obj(payload.get("review"))
-    state = review_.get("state")
-    band = REVIEW_BANDS.get(state) if isinstance(state, str) else None
-    if band is None:
-        return
     pr = _obj(payload.get("pull_request"))
+    state = review_.get("state")
+    normalized = state.lower() if isinstance(state, str) else None
+    band = REVIEW_BANDS.get(normalized)
+    if band is None:
+        if normalized not in REVIEW_STATES_WITHOUT_A_STANCE:
+            # Neither banded nor deliberately skipped: GitHub added a review
+            # state, or this payload is not the shape it claims (a `review`
+            # that is not an object lands here too, as a None state). No row
+            # either way — a stance that cannot be read is not a gradable
+            # claim — but this is the only drop on this path that nobody
+            # chose, so it is the only one that gets to be loud. !r because
+            # the state is a remote string and a bare newline in it would
+            # otherwise forge a second log line.
+            print(
+                f"doug: review on PR #{pr.get('number')} carried unrecognized "
+                f"state {state!r}; not ingested",
+                file=sys.stderr,
+            )
+        return
     base_repo = _obj(_obj(pr.get("base")).get("repo"))
     scored_at = _payload_timestamp(review_.get("submitted_at"))
     head_sha = _text(review_.get("commit_id"), store.verdicts.c.head_sha)

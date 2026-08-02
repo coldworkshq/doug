@@ -918,6 +918,69 @@ def test_a_review_that_takes_no_stance_is_not_recorded(tmp_path, monkeypatch):
     assert _table(tmp_path, store.verdicts) == []
 
 
+def test_a_rest_cased_review_state_bands_the_same_as_a_webhook_cased_one(
+    tmp_path, monkeypatch
+):
+    """GitHub spells one state two ways: this webhook delivers `approved`,
+    and the REST reviews endpoint returns `APPROVED` for that same review —
+    which is the spelling review._review_state matches. Nothing in the
+    payload says which vocabulary it came from, so the band must not depend
+    on the casing.
+
+    Being wrong about that fails silently, in the direction that looks like a
+    quiet week: an unmatched state takes the no-band return, so every review
+    would drop, the tier-`external` lane would ingest nothing, and GitHub
+    would still get its 202. That lane is the denominator the outcome loop
+    publishes against, so the damage is a claim computed over nothing."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request_review", _review_payload("APPROVED")).status_code == 202
+    _webhook(
+        "pull_request_review",
+        _review_payload(
+            "CHANGES_REQUESTED", submitted_at="2026-07-20T11:00:00Z", review_id=56
+        ),
+    )
+    rows = _table(tmp_path, store.verdicts)
+    assert [v["band"] for v in rows] == ["cleared", "flagged"]
+    assert [v["tier"] for v in rows] == ["external", "external"]
+    assert [v["source"] for v in rows] == ["review:alice", "review:alice"]
+    # Normalising decides the band; it does not rewrite the ledger. raw is
+    # what GitHub actually sent, which is the only copy of that fact.
+    assert [v["raw"]["state"] for v in rows] == ["APPROVED", "CHANGES_REQUESTED"]
+
+
+def test_an_unrecognized_review_state_is_logged_rather_than_dropped_in_silence(
+    tmp_path, monkeypatch, capsys
+):
+    """A state in neither set is the hazard normalising does not close:
+    GitHub adds a review state, or one was never accounted for. No row is
+    written — a stance we cannot read is not a gradable claim — but this is
+    the one drop on this path that nobody chose, so it must not be silent.
+    Silent, an ingest-nothing lane is indistinguishable from a quiet week,
+    and there is no error and no 4xx anywhere else to notice it by."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request_review", _review_payload("endorsed")).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+    assert "carried unrecognized state 'endorsed'" in capsys.readouterr().err
+
+
+def test_a_review_state_we_deliberately_do_not_band_is_skipped_without_a_log_line(
+    tmp_path, monkeypatch, capsys
+):
+    """`commented` is by far the most common review state on GitHub and
+    `dismissed` is routine. Both are skipped on purpose, so neither may log:
+    a warning that fires on the normal case is one an operator learns to
+    scroll past, which costs exactly the signal the unrecognized-state line
+    exists to carry. That makes the silence load-bearing, not incidental.
+
+    Both spellings, for the reason the casing test above gives."""
+    _hook_env(tmp_path, monkeypatch)
+    for state in ("commented", "COMMENTED", "dismissed", "pending"):
+        assert _webhook("pull_request_review", _review_payload(state)).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+    assert capsys.readouterr().err == ""
+
+
 def test_only_a_submitted_review_is_recorded(tmp_path, monkeypatch):
     """`edited` and `dismissed` restate or retract a review that was already
     ingested when it was submitted. Treating them as new stances would count
