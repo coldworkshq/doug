@@ -461,6 +461,71 @@ def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, mo
         assert len(conn.execute(select(store.verdicts)).all()) == 1
 
 
+def test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict(
+    tmp_path, monkeypatch
+):
+    """App and CI are independent soak instruments for the same commit.
+
+    Replaying an App verdict into /v1/review suppresses the entire CI side, so
+    the comparison falsely reports a missing baseline even though CI ran.
+    """
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DOUG_READER", raising=False)
+    sha = "c" * 40
+    app_id = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta=_pr_with_sha(sha).model_dump(mode="json"),
+        installation_id=10,
+        github_repo_id=20,
+        head_sha=sha,
+        source="app",
+    )
+    monkeypatch.setattr(
+        review,
+        "fetch_pr",
+        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
+    )
+    scored = []
+    real_score_one = review.score_one
+    monkeypatch.setattr(
+        review,
+        "score_one",
+        lambda meta, diff: scored.append(1) or real_score_one(meta, diff),
+    )
+    c = TestClient(app)
+
+    response = c.post(
+        "/v1/review",
+        json={"repo": "o/r", "pr_number": 7},
+        headers={"X-Doug-Token": "secret", "X-GitHub-Token": "gh"},
+    )
+    assert response.status_code == 200
+    assert scored == [1], "CI must score instead of replaying the App instrument"
+    assert not any(reason["rule"] == "idempotent-replay" for reason in response.json()["reasons"])
+
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.verdicts).order_by(store.verdicts.c.id)).mappings().all()
+    assert len(rows) == 2
+    assert rows[0]["id"] == app_id
+    assert (rows[1]["installation_id"], rows[1]["github_repo_id"], rows[1]["head_sha"]) == (
+        None,
+        None,
+        sha,
+    )
+
+    runs = c.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    ).json()["runs"]
+    assert {run["id"] for run in runs} == {row["id"] for row in rows}
+    assert {run["path"] for run in runs} == {"app", "ci"}
+    assert {run["head_sha"] for run in runs} == {sha}
+
+
 def test_review_force_rescore_and_new_commit_both_score_again(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
@@ -1258,7 +1323,7 @@ def test_find_review_ignores_external_rows(tmp_path, monkeypatch):
     incidentally, not by design. The exclusion is explicit so that immunity
     does not evaporate the day someone writes pr_meta on an external row."""
     _db(tmp_path, monkeypatch)
-    _doug_verdict()
+    _doug_verdict(installation_id=None, github_repo_id=None, source=None)
     _external(raw={"review_id": 3})
     prior = store.find_review("o/r", 7, "a" * 40)
     assert prior is not None and prior["tier"] == "reader"
@@ -1273,11 +1338,11 @@ def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
     every other test here, which is how a guard gets "cleaned up" later.
 
     So this one writes the row the incidental immunity does not cover: an
-    external verdict carrying pr_meta with a matching head_sha. Only the
-    explicit tier exclusion keeps Doug's verdict winning, and deleting it
-    fails exactly this test."""
+    external verdict carrying CI identity and pr_meta with a matching
+    head_sha. Only the explicit tier exclusion keeps the CI verdict winning,
+    and deleting it fails exactly this test."""
     url = _db(tmp_path, monkeypatch)
-    _doug_verdict()
+    _doug_verdict(installation_id=None, github_repo_id=None, source=None)
     with create_engine(url).begin() as conn:
         conn.execute(
             store.verdicts.insert(),
@@ -1289,8 +1354,8 @@ def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
                 "score": 0.0,
                 "band": "cleared",
                 "threshold": 0.0,
-                "installation_id": INSTALL,
-                "github_repo_id": REPO_ID,
+                "installation_id": None,
+                "github_repo_id": None,
                 "head_sha": "a" * 40,
                 "source": "review:someone",
                 "pr_meta": {"head_sha": "a" * 40},

@@ -86,6 +86,21 @@ test("summarizeComparisons counts duplicate-only paths as missing without fabric
   assert.deepEqual([ciOnly.presence, ciOnly.duplicate, ciOnly.delta], ["ci-only", true, null]);
 });
 
+test("summarizeComparisons keeps null-head App and CI runs neutral and run-specific", () => {
+  const view = summarizeComparisons([
+    run({ id: 30, head_sha: null, path: "app", scored_at: "2026-08-07T05:12:00Z" }),
+    run({ id: 31, head_sha: null, path: "ci", scored_at: "2026-08-08T05:12:00Z" }),
+  ]);
+
+  assert.equal(view.groups.length, 2);
+  assert.equal(new Set(view.groups.map((group) => group.key)).size, 2);
+  assert.deepEqual(view.groups.map((group) => group.presence), ["head-unknown", "head-unknown"]);
+  assert.deepEqual(view.groups.map((group) => group.delta), [null, null]);
+  assert.equal(view.summary.exactPairs, 0);
+  assert.equal(view.summary.missingApp, 0);
+  assert.equal(view.summary.missingCi, 0);
+});
+
 test("isComparisonResponse accepts complete renderable data and rejects malformed runs", () => {
   assert.equal(isComparisonResponse({ runs: [] }), true);
   assert.equal(isComparisonResponse({ runs: [run({ path: "queue" })] }), false);

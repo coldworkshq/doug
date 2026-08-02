@@ -796,15 +796,17 @@ def save_deviations(
 
 
 def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
-    """The newest verdict already recorded for this exact commit, or None.
+    """The newest CI verdict already recorded for this exact commit, or None.
 
     The idempotency read: /v1/review consults it before paying for an LLM
     read, so a webhook redelivery or a retried CI job replays the recorded
     verdict instead of double-spending and inserting a duplicate ledger
     row. Matches on the head_sha column (indexed-capable, written by the App
     and CI paths); falls back to pr_meta["head_sha"] for rows scored before
-    the column was populated. Rows with neither simply never match, and get
-    rescored once.
+    the column was populated. The null App-id pair keeps this replay scoped
+    to CI so an App verdict for the same commit cannot suppress the
+    independent CI instrument. Rows with neither SHA simply never match, and
+    get rescored once.
     """
     engine = _get_engine()
     if engine is None:
@@ -816,6 +818,8 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
         .where(
             verdicts.c.repo == repo,
             verdicts.c.pr_number == pr_number,
+            verdicts.c.installation_id.is_(None),
+            verdicts.c.github_repo_id.is_(None),
             or_(
                 verdicts.c.head_sha == head_sha,
                 verdicts.c.pr_meta["head_sha"].as_string() == head_sha,

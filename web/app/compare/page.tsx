@@ -174,21 +174,30 @@ function SummaryCard({
 }
 
 function PresenceBadge({ presence }: { presence: ComparisonPresence }) {
-  const label =
-    presence === "paired"
-      ? "exact head present on both paths"
-      : presence === "app-only"
-        ? "App only · CI absent"
-        : "CI only · App absent";
+  const copy: Record<ComparisonPresence, { label: string; tone: string }> = {
+    paired: {
+      label: "exact head present on both paths",
+      tone: "bg-clear/10 text-clear",
+    },
+    "app-only": {
+      label: "App only · CI absent",
+      tone: "bg-white/5 text-muted-foreground",
+    },
+    "ci-only": {
+      label: "CI only · App absent",
+      tone: "bg-flag/15 text-flag",
+    },
+    "head-unknown": {
+      label: "unpaired · head unknown",
+      tone: "bg-white/5 text-muted-foreground",
+    },
+  };
+  const { label, tone } = copy[presence];
   return (
     <span
       className={
         "rounded-full px-2.5 py-1 font-mono text-[0.68rem] uppercase tracking-wide " +
-        (presence === "paired"
-          ? "bg-clear/10 text-clear"
-          : presence === "ci-only"
-            ? "bg-flag/15 text-flag"
-            : "bg-white/5 text-muted-foreground")
+        tone
       }
     >
       {label}
@@ -281,7 +290,25 @@ function RunCard({
   );
 }
 
-function MissingRun({ path }: { path: "app" | "ci" }) {
+function MissingRun({
+  path,
+  headUnknown = false,
+}: {
+  path: "app" | "ci";
+  headUnknown?: boolean;
+}) {
+  if (headUnknown) {
+    return (
+      <div className="flex min-h-36 items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-5 text-center text-muted-foreground">
+        <div>
+          <p className="font-mono text-sm font-medium">counterpart unknown</p>
+          <p className="mt-1 font-mono text-[0.68rem] uppercase tracking-wider">
+            head identity unavailable
+          </p>
+        </div>
+      </div>
+    );
+  }
   const app = path === "app";
   return (
     <div
@@ -401,7 +428,7 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
               App delivery · {group.app.length} {group.app.length === 1 ? "run" : "runs"}
             </h3>
             {group.app.length === 0 ? (
-              <MissingRun path="app" />
+              <MissingRun path="app" headUnknown={group.presence === "head-unknown"} />
             ) : (
               <div className="space-y-3">
                 {group.app.map((run, index) => (
@@ -420,7 +447,7 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
               CI delivery · {group.ci.length} {group.ci.length === 1 ? "run" : "runs"}
             </h3>
             {group.ci.length === 0 ? (
-              <MissingRun path="ci" />
+              <MissingRun path="ci" headUnknown={group.presence === "head-unknown"} />
             ) : (
               <div className="space-y-3">
                 {group.ci.map((run, index) => (
@@ -490,7 +517,7 @@ export default async function ComparePage() {
           <p className="font-mono text-xs text-muted-foreground md:text-right">
             {comparison.runs.length} runs
             <br />
-            {groups.length} revision heads
+            {groups.length} revision groups
           </p>
         </div>
       </header>
@@ -555,7 +582,7 @@ export default async function ComparePage() {
               Revision evidence
             </p>
             <h2 id="revisions-heading" className="font-heading mt-2 text-3xl font-semibold">
-              Newest scored head first
+              Newest evidence group first
             </h2>
           </div>
           <p className="max-w-md font-mono text-[0.68rem] leading-relaxed text-muted-foreground">

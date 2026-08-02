@@ -26,7 +26,7 @@ export interface ComparisonResponse {
   runs: ComparisonRun[];
 }
 
-export type ComparisonPresence = "paired" | "app-only" | "ci-only";
+export type ComparisonPresence = "paired" | "app-only" | "ci-only" | "head-unknown";
 
 export interface ComparisonGroup {
   key: string;
@@ -121,7 +121,7 @@ export function summarizeComparisons(runs: ComparisonRun[]): ComparisonView {
         head_sha: run.head_sha,
         app: [],
         ci: [],
-        presence: "app-only",
+        presence: run.head_sha === null ? "head-unknown" : "app-only",
         duplicate: false,
         delta: null,
         newest_scored_at: run.scored_at,
@@ -138,9 +138,15 @@ export function summarizeComparisons(runs: ComparisonRun[]): ComparisonView {
     .map((group) => {
       const hasApp = group.app.length > 0;
       const hasCi = group.ci.length > 0;
-      group.presence = hasApp && hasCi ? "paired" : hasApp ? "app-only" : "ci-only";
+      group.presence = group.head_sha === null
+        ? "head-unknown"
+        : hasApp && hasCi
+          ? "paired"
+          : hasApp
+            ? "app-only"
+            : "ci-only";
       group.duplicate = group.app.length > 1 || group.ci.length > 1;
-      group.delta = !group.duplicate && hasApp && hasCi
+      group.delta = !group.duplicate && group.presence === "paired"
         ? group.app[0].score - group.ci[0].score
         : null;
       return group;
@@ -156,9 +162,8 @@ export function summarizeComparisons(runs: ComparisonRun[]): ComparisonView {
     groups: orderedGroups,
     summary: {
       exactPairs,
-      // Without a SHA, the API cannot identify a head whose counterpart is missing.
-      missingApp: orderedGroups.filter((group) => group.head_sha !== null && group.presence === "ci-only").length,
-      missingCi: orderedGroups.filter((group) => group.head_sha !== null && group.presence === "app-only").length,
+      missingApp: orderedGroups.filter((group) => group.presence === "ci-only").length,
+      missingCi: orderedGroups.filter((group) => group.presence === "app-only").length,
       duplicateGroups: orderedGroups.filter((group) => group.duplicate).length,
       meanSignedGap: exactPairs ? totalSignedGap / exactPairs : null,
       meanAbsoluteGap: exactPairs

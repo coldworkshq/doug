@@ -158,7 +158,10 @@ Decisions this session (2026-08-01/02, cutover + the logging it exposed):
   populated; legacy CI rows may have all three NULL. The comparison separates
   paths by the App id pair after the store predicate qualifies a row, and
   excludes either one-id shape, both App ids without a head SHA, and
-  tier='external'.
+  tier='external'. `/v1/review` replay is scoped to the same null App-id pair,
+  so an App verdict cannot suppress the independent CI measurement. A legacy
+  row with no head remains visible as neutral, unpairable evidence; it cannot
+  establish that either path is missing.
 - A FRESH REVIEW AND AN IDEMPOTENT REPLAY MUST NOT LOG ALIKE. They agree on
   every field either line could carry — repo, PR, head SHA, tier, band,
   score, verdict id — and differ in exactly one thing: the fresh one bought

@@ -46,7 +46,7 @@ The path predicate is explicit in SQL:
 - CI: `installation_id` and `github_repo_id` are both NULL; `head_sha` may be non-NULL for current rows or NULL for legacy rows.
 - One-App-id rows, App-like rows with both ids but no head SHA, and external-tier rows: excluded.
 
-This is a current-base contract correction required by upstream PR #30, not a product-scope expansion: both current review paths write the shared commit identity to `head_sha` for idempotency, while only the App path writes the App id pair.
+This is a current-base contract correction required by upstream PR #30, not a product-scope expansion: both current review paths write the shared commit identity to `head_sha` for idempotency, while only the App path writes the App id pair. The CI `/v1/review` replay lookup is scoped to rows with both App ids NULL so an App verdict cannot suppress the independent CI measurement for the same commit.
 
 The store function remains a lossless ledger read. It does not group runs, select a winner, or calculate deltas.
 
@@ -96,11 +96,12 @@ Add `web/lib/comparison.ts` as a pure transformation from flat runs to revision 
 
 Each revision group contains all App runs and all CI runs. Its path-presence state is:
 
+- `head-unknown`: the run has no commit identity, so counterpart presence or absence cannot be established.
 - `paired`: at least one App run and at least one CI run.
 - `app-only`: one or more App runs and no CI run.
 - `ci-only`: one or more CI runs and no App run.
 
-Separately, a group is marked `duplicate` whenever either path has more than one run. This preserves both facts when, for example, two App attempts exist and CI is missing. Duplicates remain rendered as individual attempts. Only a paired, non-duplicate group is an exact pair; a duplicate group does not contribute to score-gap statistics because choosing a run or creating a Cartesian set of deltas would silently invent a pairing.
+The `head-unknown` state is assigned before ordinary path-presence classification. Its run-specific group remains visible and neutral, never claims a missing counterpart, and never receives a delta. Separately, a group is marked `duplicate` whenever either path has more than one run. This preserves both facts when, for example, two App attempts exist and CI is missing. Duplicates remain rendered as individual attempts. Only a paired, non-duplicate group is an exact pair; a duplicate group does not contribute to score-gap statistics because choosing a run or creating a Cartesian set of deltas would silently invent a pairing.
 
 Only exact pairs contribute to:
 
@@ -133,7 +134,7 @@ The UI may visually connect the two singleton scores on a zero-to-one scale, but
 - Configured ledger with no qualifying rows: API returns `{"runs": []}`; web renders an honest empty state.
 - Malformed API response, timeout, or network failure: web renders unavailable and never falls back to queue fixtures.
 - Missing `pr_meta`: retain the run with fallback title `PR #<number>`, repaired GitHub URL, and only identity-backed fields. Do not drop a missing-path signal because display metadata is incomplete.
-- Missing head SHA: keep the run visible but unpaired.
+- Missing head SHA: keep the run visible in a neutral, run-specific `head-unknown` group; do not claim either path is missing.
 - Missing coverage row: show “coverage unavailable.”
 
 ## Verification
@@ -158,7 +159,7 @@ Web tests will use Node's built-in test runner with TypeScript stripping, adding
 - Exact pairs produce the expected signed, absolute, and maximum gaps.
 - Missing App and missing CI counts are separate.
 - Duplicates remain visible and do not enter aggregate deltas.
-- Missing SHAs cannot pair accidentally.
+- Missing SHAs cannot pair accidentally, receive deltas, or claim a missing counterpart.
 
 Mutation checks will deliberately break the identity predicate, duplicate preservation, coverage attachment, and web pairing rule; each named test must fail before the code is restored.
 

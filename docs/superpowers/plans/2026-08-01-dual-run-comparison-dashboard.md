@@ -14,6 +14,7 @@
 - Do not change `store.latest_reviews`, `/v1/queue`, the reader prompt, migration 003, authentication, spend controls, or safety-session-owned files.
 - Append new code to `api/doug/store.py`, `api/doug/api.py`, `api/tests/test_store.py`, and `api/tests/test_api.py`; do not reorder or reformat unrelated regions.
 - Preserve every qualifying verdict. App means both App ids and `head_sha` are set; CI means both App ids are NULL while `head_sha` may be set on current rows or NULL on legacy rows. One-id rows, App-like rows with no head SHA, and `tier='external'` are excluded. This current-base contract correction is required by upstream PR #30 and does not expand product scope.
+- Keep `/v1/review` replay CI-specific by requiring both App ids NULL in `find_review`; App worker idempotency remains in its separate identity helper.
 - Never infer complete coverage from tier or a missing coverage row.
 - The comparison UI has no fixture fallback.
 - Run the full API suite and Ruff before every commit; run web tests, lint, and build before every web commit.
@@ -544,6 +545,8 @@ assert.ok(Math.abs(view.summary.meanSignedGap - 0) < 1e-9);
 assert.ok(Math.abs(view.summary.meanAbsoluteGap - 0.2) < 1e-9);
 assert.ok(Math.abs(view.summary.maxAbsoluteGap - 0.2) < 1e-9);
 assert.notEqual(unknownGroups[0].key, unknownGroups[1].key);
+assert.deepEqual(unknownGroups.map((group) => group.presence), ["head-unknown", "head-unknown"]);
+assert.deepEqual(unknownGroups.map((group) => group.delta), [null, null]);
 ```
 
 Add validator cases for a valid empty response, malformed `path`, malformed coverage, invalid timestamp, and a missing field the page dereferences.
@@ -600,7 +603,7 @@ const keyFor = (run: ComparisonRun) =>
     : `${run.repo}:${run.pr_number}:unknown:${run.id}`;
 ```
 
-For each group, retain all path arrays, set presence from non-empty arrays, set `duplicate` when either array length exceeds one, and set `delta` only when both arrays have length one. Sort groups by newest `scored_at`. Calculate all gap metrics from non-null deltas only and return `null` metrics when there are no exact pairs.
+For each group, retain all path arrays. Assign `head-unknown` first whenever `head_sha` is null; only known-head groups derive paired/App-only/CI-only presence from non-empty arrays. Set `duplicate` when either array length exceeds one, and set `delta` only for a known-head singleton pair. Sort groups by newest `scored_at`. Calculate all gap metrics from non-null deltas only and return `null` metrics when there are no exact pairs.
 
 - [ ] **Step 6: Run tests, then mutation-check the grouping contract**
 
@@ -660,8 +663,8 @@ Render:
 
 - Header: “Two paths. One head.” with live API badge.
 - Cards: exact pairs, missing App, missing CI, duplicate groups, signed mean gap, mean absolute gap, and maximum absolute gap. Each gap card includes the exact-pair count.
-- Revision cards sorted by the pure model. Each shows repo, PR link, short SHA or `head unknown`, presence badge, duplicate badge, and singleton delta.
-- Side-by-side App and CI columns. Missing App uses the flag tone and literal `missing App run`; missing CI says `missing CI run` without the same alert priority.
+- Revision cards sorted by the pure model. Each shows repo, PR link, short SHA or `head unknown`, presence badge, duplicate badge, and singleton delta. Null-head groups use neutral `unpaired · head unknown` copy and are counted as revision groups, not heads.
+- Side-by-side App and CI columns. For known heads, missing App uses the flag tone and literal `missing App run`; missing CI says `missing CI run` without the same alert priority. For unknown heads, the empty lane uses neutral counterpart-unknown copy and never claims either path is absent.
 - Every run shows score, band, tier, scored timestamp, and coverage. Coverage is `coverage unavailable` when null; otherwise show rounded percentage plus sent/total characters, cut file, and unseen files.
 - A zero-to-one score rail for exact pairs, with separate labeled App and CI markers. Exact numeric scores remain visible.
 
