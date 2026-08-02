@@ -68,24 +68,40 @@ setup() {
   # deploy: re-binding IAM on every merge would force the CI principal to
   # carry admin rights it has no other reason to hold.
   #
-  # Resolved from the project number, not a display-name filter: the filter
-  # returned empty on projects where the SA didn't exist yet, the empty
-  # string flowed into --member, and `|| true` swallowed every failed
+  # doug-api gets its own identity: the App private key mints installation
+  # tokens for every repo Doug is installed on, and a secret bound to the
+  # default compute service account is readable by every workload in the
+  # project.
+  gcloud iam service-accounts create doug-api-sa \
+    --display-name "doug-api runtime" --project "$PROJECT" 2>/dev/null \
+    || echo "doug-api-sa exists; leaving it"
+  # Constructed, never resolved by a display-name filter: the filter this
+  # replaced returned empty on projects where the SA didn't exist yet, the
+  # empty string flowed into --member, and `|| true` swallowed every failed
   # binding — "setup done" with secrets bound to nobody, surfacing later as
-  # an opaque permission crash on the first real request.
-  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-  SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+  # an opaque permission crash on the first real request. The describe is
+  # the other half of that guard: the create above is `|| echo`'d, so a
+  # create that failed for any reason other than "already exists" must not
+  # reach the bindings below.
+  SA="doug-api-sa@$PROJECT.iam.gserviceaccount.com"
   if ! gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1; then
-    echo "ERROR: default compute service account $SA does not exist yet." >&2
-    echo "Enabling compute.googleapis.com (done above) creates it, but not instantly —" >&2
-    echo "wait a minute and re-run setup." >&2
+    echo "ERROR: service account $SA is not visible after create." >&2
+    echo "Either the create failed (it needs roles/iam.serviceAccountAdmin) or it has" >&2
+    echo "not propagated yet — wait a minute and re-run setup." >&2
     exit 1
   fi
-  # NOTE for the GitHub App work: this binds secrets to the *default*
-  # compute service account, so every workload in the project can read
-  # them. Tolerable for these four; not tolerable for an App private key,
-  # which needs a dedicated service account.
-  for s in doug-database-url doug-api-token doug-anthropic-key doug-webhook-secret; do
+
+  # Not optional: the default compute SA reached Cloud SQL through the
+  # roles/editor it carries on this project (verified 2026-08-02), and a
+  # freshly created SA carries nothing at all — without this grant every
+  # ledger write fails on the
+  # first request after the cutover, at runtime, long after the deploy went
+  # green. Unsuppressed for the same reason as the secret bindings below.
+  gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:$SA" --role=roles/cloudsql.client >/dev/null
+
+  for s in doug-database-url doug-api-token doug-anthropic-key \
+           doug-webhook-secret doug-github-app-key; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -96,6 +112,31 @@ setup() {
       --member="serviceAccount:$SA" \
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
+
+  # The default compute SA keeps every binding it already holds — nothing
+  # here revokes one. doug-web has no --service-account of its own yet (see
+  # web()), so it runs as that SA and reads doug-api-token as that identity;
+  # that single binding is asserted below rather than dropped when doug-api
+  # moved off the shared identity. Do not "tidy" either the binding or this
+  # block away: losing it breaks the dashboard on the next web deploy, not
+  # on this command, which is the worst possible moment to find out. Both go
+  # when doug-web gets its own SA.
+  #
+  # Resolved from the project number for the same reason $SA is constructed
+  # rather than filtered: a display-name filter returns empty on a project
+  # where the SA does not exist yet, and the empty string flows into
+  # --member.
+  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+  WEB_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+  if ! gcloud iam service-accounts describe "$WEB_SA" --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: default compute service account $WEB_SA does not exist yet." >&2
+    echo "Enabling compute.googleapis.com (done above) creates it, but not instantly —" >&2
+    echo "wait a minute and re-run setup." >&2
+    exit 1
+  fi
+  gcloud secrets add-iam-policy-binding doug-api-token --project "$PROJECT" \
+    --member="serviceAccount:$WEB_SA" \
+    --role=roles/secretmanager.secretAccessor >/dev/null
 
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
@@ -155,13 +196,25 @@ deploy() {
   service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # Both tiers are set here on purpose: --set-env-vars replaces the whole
   # env block, so anything set out-of-band is wiped by the next deploy.
+  #
+  # --no-cpu-throttling: the drain runs *after* the response is written
+  # (BackgroundTasks) and again in the startup reconcile thread. Under
+  # request-based throttling Cloud Run freezes the instance's CPU the moment
+  # the response goes out, so a claimed job would sit half-run, holding its
+  # row in 'running', until some unrelated request thawed the instance. The
+  # queue would look alive and be stalled.
+  #
+  # DOUG_GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are what app_auth.enabled()
+  # reads; both must be present or there is no App path at all.
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
+    --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT=1" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT=1,DOUG_GITHUB_APP_ID=4450932" \
+    --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
   if [ -n "$traffic_flags" ]; then
