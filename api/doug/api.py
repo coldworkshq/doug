@@ -769,12 +769,25 @@ async def github_webhook(
 
     The 202 is sent only after the job is durable — GitHub does not
     redeliver on our schedule and a job held in memory dies with the
-    instance. Everything expensive happens in worker.drain, kicked as a
-    background task after the response.
+    instance. Everything expensive happens in worker.drain, which is kicked
+    as a background task after the response and is best-effort by
+    construction: Starlette runs background tasks after the response body is
+    sent, so on Cloud Run's default request-based CPU allocation the kick
+    can be throttled, and the instance can be scaled to zero out from under
+    an in-flight drain. Losing a kick loses no work — the job row is
+    already committed — it only delays it until something kicks a drain
+    again. The durable backstop for that is worker.reconcile_all, which
+    nothing calls yet; Task 7b wires it into the lifespan, and until it does
+    the next delivery's kick is the only thing that reaches a stranded row.
 
-    async only because the signature needs the raw body; every synchronous
-    line below runs in the threadpool so a delivery burst cannot block the
-    event loop.
+    async only because the signature needs the raw body. verify_webhook and
+    json.loads run on the event loop thread deliberately: both are CPU-bound
+    work on a body already in memory, and handing a few microseconds of
+    HMAC to a worker thread would cost more than it saves. Everything that
+    can touch the database — store.enabled() included, because on a cold
+    engine it builds one, runs create_all() and applies migrations, all
+    under a threading.Lock — goes through run_in_threadpool, so a delivery
+    burst cannot block the event loop on a round trip.
     """
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     if not secret:
@@ -830,7 +843,14 @@ async def github_webhook(
         # Accepted and ignored, on purpose: a 4xx would put GitHub into a
         # redelivery loop over events we chose not to handle.
         return Response(status_code=202)
-    if not store.enabled():
+    if not await run_in_threadpool(store.enabled):
+        # In the threadpool because this is not the cheap read it looks
+        # like: on a cold engine store._get_engine() creates one, runs
+        # create_all() and applies migrations — a full DDL round trip
+        # against Cloud SQL — and it takes a threading.Lock on every call,
+        # so the loop thread would also stall behind any worker already
+        # inside it.
+        #
         # ingest.enqueue raises without a database rather than no-opping,
         # and store's installation writes would no-op silently. Either way
         # a 202 here would mean "queued" over an empty ledger. Refused at

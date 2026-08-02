@@ -1,13 +1,14 @@
 import hashlib
 import hmac
 import json
+import threading
 from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import store, worker
+from doug import api, store, worker
 from doug.api import app
 
 client = TestClient(app)
@@ -1146,6 +1147,38 @@ def test_the_webhook_refuses_when_there_is_no_ledger(tmp_path, monkeypatch):
     _hook_env(tmp_path, monkeypatch)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert _webhook("pull_request", _pr_payload()).status_code == 503
+
+
+def test_the_ledger_check_does_not_run_on_the_event_loop_thread(tmp_path, monkeypatch):
+    """store.enabled() is not the cheap read it looks like: on a cold engine
+    store._get_engine() creates one, runs create_all() and applies
+    migrations — a DDL round trip against Cloud SQL — and it takes a
+    threading.Lock on every call, so the loop thread stalls behind any
+    worker already inside it too. Left on the event loop thread it blocks
+    every other in-flight delivery for the duration.
+
+    The signature check is the marker for the loop thread rather than a
+    hardcoded thread name: verify_webhook is deliberately there, being
+    CPU-bound work on a body already in memory. Asserting the two ran on
+    different threads is the property; which thread is an implementation
+    detail of the server."""
+    _hook_env(tmp_path, monkeypatch)
+    seen: dict[str, str] = {}
+
+    def _verify(secret, body, signature):
+        seen["loop"] = threading.current_thread().name
+        return True
+
+    def _enabled():
+        seen["ledger"] = threading.current_thread().name
+        return True
+
+    monkeypatch.setattr(api, "verify_webhook", _verify)
+    monkeypatch.setattr(store, "enabled", _enabled)
+    # A draft: past the ledger check, and it writes nothing.
+    assert _webhook("pull_request", _pr_payload(draft=True)).status_code == 202
+    assert seen["loop"] and seen["ledger"]
+    assert seen["ledger"] != seen["loop"]
 
 
 def test_ping_answers_even_without_a_ledger(monkeypatch):
