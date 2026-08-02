@@ -330,10 +330,10 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     but it gets the same read-truncated reason so a caller of this endpoint
     isn't the one path left unable to tell a whole read from part of one.
     """
-    # Third inlined copy of this gate (review_pr, queue, here). Deliberate:
-    # review_pr dies with Task 9, and that is when the two survivors collapse
-    # into one helper — extracting it now would edit endpoints a concurrent
-    # session is reading.
+    # Fourth inlined copy of this gate (review_pr, queue, patterns_precision,
+    # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
+    # is when the three survivors collapse into one helper; extracting it now
+    # would edit endpoints a concurrent session is reading.
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
