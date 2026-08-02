@@ -845,6 +845,97 @@ def test_outcome_jobs_permits_the_same_pr_with_a_different_window(tmp_path, monk
     assert len(rows) == 2
 
 
+MERGED = datetime(2020, 3, 1, 12, 0, tzinfo=UTC)
+
+
+def _enqueue_outcome(**overrides) -> int | None:
+    kwargs = {
+        "installation_id": INSTALL,
+        "github_repo_id": REPO_ID,
+        "pr_number": 42,
+        "merge_commit_sha": "a" * 40,
+        "merged_at": MERGED,
+        "base_ref": "main",
+    }
+    kwargs.update(overrides)
+    return store.enqueue_outcome_job(**kwargs)
+
+
+def test_enqueue_outcome_job_dates_the_window_from_the_merge(tmp_path, monkeypatch):
+    """The three tests above are about the Table; this is about the function
+    that writes it, which nothing covered directly.
+
+    due_at is merged_at + window_days and never now(): the same merge can
+    reach this seconds after it lands, hours later via a redelivery, or
+    months later via a backfill, and the window has to mean "fourteen days
+    after this code shipped" in all three."""
+    url = _db(tmp_path, monkeypatch)
+    assert _enqueue_outcome() is not None
+    with create_engine(url).connect() as conn:
+        row = conn.execute(select(store.outcome_jobs)).mappings().one()
+    assert _utc(row["merged_at"]) == MERGED
+    assert _utc(row["due_at"]) == datetime(2020, 3, 15, 12, 0, tzinfo=UTC)
+    assert row["window_days"] == 14
+    assert row["status"] == "pending"
+
+
+def test_enqueue_outcome_job_honours_a_per_row_window(tmp_path, monkeypatch):
+    """window_days is stored rather than derived at query time because it is
+    part of the unique key and "may differ per row" — a claim the kwarg has
+    to actually support, since the same merge queued under two windows is
+    two legitimate rows with two due dates. Nothing reached this parameter
+    before: the webhook only ever calls the default."""
+    url = _db(tmp_path, monkeypatch)
+    assert _enqueue_outcome(window_days=30) is not None
+    assert _enqueue_outcome() is not None
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(
+            select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days)
+        ).mappings().all()
+    assert [r["window_days"] for r in rows] == [14, 30]
+    assert [_utc(r["due_at"]) for r in rows] == [
+        datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2020, 3, 31, 12, 0, tzinfo=UTC),
+    ]
+
+
+def test_enqueue_outcome_job_reads_a_redelivery_as_already_queued(tmp_path, monkeypatch):
+    """Dedup is the unique index rather than a check-then-insert: two
+    deliveries racing a SELECT would both miss it and both insert, giving
+    one merge two independent due dates and two votes in a published
+    denominator. The collision comes back as None, not as an exception the
+    webhook would 500 on."""
+    url = _db(tmp_path, monkeypatch)
+    assert _enqueue_outcome() is not None
+    assert _enqueue_outcome() is None
+    with create_engine(url).connect() as conn:
+        assert len(conn.execute(select(store.outcome_jobs)).mappings().all()) == 1
+
+
+def test_enqueue_outcome_job_re_raises_an_integrity_error_it_did_not_cause(
+    tmp_path, monkeypatch
+):
+    """Only the dedup collision is read as "already queued". Any other
+    IntegrityError is a real integrity problem this function did not cause,
+    and swallowing it would drop a merge out of the denominator silently —
+    the same rule ingest._DEDUPE_COLLISION states, which has a marker test
+    and this one did not.
+
+    NOT NULL on base_ref stands in for that class: it is an IntegrityError
+    from the same INSERT that is not a uniqueness collision."""
+    _db(tmp_path, monkeypatch)
+    with pytest.raises(IntegrityError):
+        _enqueue_outcome(base_ref=None)
+
+
+def test_enqueue_outcome_job_is_a_noop_without_a_ledger(monkeypatch):
+    """Matches every other webhook-written helper: no database, no row, no
+    exception. The webhook's own 503 is what stops that silence from being
+    answered as "queued"."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _enqueue_outcome() is None
+
+
 # --- Deep-read spend cap -------------------------------------------------
 
 def test_record_deep_read_allows_reads_under_the_cap(tmp_path, monkeypatch):
@@ -1014,6 +1105,42 @@ def test_a_redelivered_review_is_not_recorded_twice(tmp_path, monkeypatch):
     assert _external() is None
     with create_engine(url).connect() as conn:
         assert len(conn.execute(select(store.verdicts)).mappings().all()) == 1
+
+
+def test_a_duplicate_left_by_the_tolerated_race_does_not_poison_that_review(
+    tmp_path, monkeypatch
+):
+    """The dedup read is an existence check, not a uniqueness assertion.
+
+    The race this function tolerates — two concurrent deliveries of one
+    review both reading before either commits — leaves two rows for one
+    identity. `.scalar_one_or_none()` then raised MultipleResultsFound on
+    every LATER delivery of that same review, so the tolerated cost was not
+    one duplicate row: it was that review's identity 500ing out of the
+    webhook, and a 500 is what GitHub redelivers, into the same 500,
+    forever. Tolerating a race means surviving what it leaves behind."""
+    url = _db(tmp_path, monkeypatch)
+    assert _external() is not None
+    # Exactly what the race produces: a second row for one identity,
+    # written by a delivery that read the table before the first committed.
+    with create_engine(url).begin() as conn:
+        row = dict(conn.execute(select(store.verdicts)).mappings().one())
+        del row["id"]
+        conn.execute(store.verdicts.insert(), row)
+
+    assert _external() is None
+    with create_engine(url).connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).mappings().all()) == 2
+
+
+def test_save_external_review_is_a_noop_without_a_ledger(monkeypatch):
+    """Its siblings — upsert_installation, set_installation_repos,
+    enqueue_outcome_job — all degrade to a no-op without DATABASE_URL, and
+    the webhook's 503 is what stops that silence from being read as
+    "queued". Raising here instead would make the review lane the one
+    handler that cannot run on a ledger-less deployment."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _external() is None
 
 
 def test_a_reviewer_changing_their_mind_appends_rather_than_replacing(

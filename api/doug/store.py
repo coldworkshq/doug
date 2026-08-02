@@ -431,19 +431,37 @@ def save_external_review(
 
     Returns None when this exact stance is already recorded. That check is a
     SELECT rather than a unique index, and the difference is worth stating
-    plainly: create_all() never adds a constraint to a table that already
-    exists, and `verdicts` is live in production, so no index is available
-    to enforce it. Two genuinely concurrent deliveries of one review can
-    therefore both miss the check and both insert. That is tolerated because
-    the cost is one duplicate append-only row, not a paid read — redeliveries
-    arrive sequentially in practice, which is the case this suppresses.
+    plainly. create_all() never adds a constraint to a table that already
+    exists and `verdicts` is live in production, so an index would have to
+    come from migrations.py — which runs arbitrary DDL and mechanically
+    could, but deliberately carries none: "an index created by create_all()
+    but not by a migration is the same divergence in a new place". This is
+    that convention, not an impossibility, and what replaces the index is
+    weaker in one specific way: two genuinely concurrent deliveries of one
+    review can both read before either commits, and both insert.
+
+    The cost when that happens is one reviewer's stance counted twice in any
+    agreement measure taken over this ledger — the same harm the dedup
+    exists to prevent, on the concurrent pair instead of the ordinary one,
+    and nothing downstream repairs it. Small, real, and not free. What this
+    check does reliably suppress is the sequential case: a redelivery that
+    arrives after the first row committed reads it and stops.
+
+    The read is .first() rather than .scalar_one_or_none() for the same
+    reason. It is an existence check against a table with no uniqueness
+    guarantee, so it has to survive what the race can leave behind —
+    asserting uniqueness there turned a duplicate pair into
+    MultipleResultsFound on every later delivery of that review, a 500 out
+    of the webhook that GitHub redelivers into the same 500. That is
+    strictly worse than the duplicate row it was reacting to.
     """
     engine = _get_engine()
     if engine is None:
         return None
     with engine.connect() as conn:
         existing = conn.execute(
-            select(verdicts.c.id).where(
+            select(verdicts.c.id)
+            .where(
                 verdicts.c.installation_id == installation_id,
                 verdicts.c.github_repo_id == github_repo_id,
                 verdicts.c.pr_number == pr_number,
@@ -451,7 +469,8 @@ def save_external_review(
                 verdicts.c.head_sha == head_sha,
                 verdicts.c.scored_at == scored_at,
             )
-        ).scalar_one_or_none()
+            .limit(1)
+        ).first()
     if existing is not None:
         return None
     with engine.begin() as conn:
