@@ -33,12 +33,16 @@ from .scoring import default_threshold, score
 async def lifespan(app: FastAPI):
     """Refuse to boot without the webhook secret.
 
-    Production's secret was set out-of-band and the current deploy()
-    wipes it on the next CI run (see Task 10 — the two must ship
-    together). Without it the handler cannot verify anything, and an
-    unverified delivery under the App is a paid model read triggered by
-    anyone who can POST. A crash-looping revision is a visible failure;
-    a running service accepting forged deliveries is not.
+    The reason is not that a deploy would wipe it: deploy() has carried
+    GITHUB_WEBHOOK_SECRET in --set-secrets since #14, and --set-env-vars
+    replaces the env block without disturbing a secret binding. It is that
+    every remaining way this can go missing is silent — a revision deployed
+    by hand or by some path that is not deploy(), a new project whose
+    Secret Manager entry does not exist yet, a local run. Without it the
+    handler cannot verify anything, and an unverified delivery under the App
+    is a paid model read triggered by anyone who can POST. A crash-looping
+    revision is a visible failure; a running service accepting forged
+    deliveries is not.
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
         raise RuntimeError(

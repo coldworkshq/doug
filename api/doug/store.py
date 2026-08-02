@@ -274,8 +274,16 @@ deep_read_counters = Table(
 # helpers keys on columns an external row also carries — head_sha included,
 # because a review names the commit it was left on — so an unfiltered helper
 # hands back a score=0.0 row as if it were Doug's own verdict. The four call
-# sites below are the whole guard; there is no other reader of this table
-# that has to care.
+# sites below are the whole guard among them.
+#
+# One other reader of this table exists and is not filtered:
+# scripts/backfill_ledger.py counts verdicts filtered on `model == MODEL`,
+# and external rows never set `model`. That immunity is incidental, exactly
+# like the one find_review has (its pr_meta predicate is NULL for these
+# rows) — which this file refused to rely on there, filtering explicitly and
+# adding a test that can fail. The asymmetry is deliberate: the backfill is
+# a one-shot script over named probe repos, not a live read of a tenant's
+# ledger, so it is named here rather than filtered.
 EXTERNAL_TIER = "external"
 
 _engine = None

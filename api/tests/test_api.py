@@ -112,12 +112,15 @@ def test_webhook_accepts_a_valid_sha256_signature(monkeypatch):
 
 
 def test_startup_refuses_to_run_without_a_webhook_secret(monkeypatch):
-    """GITHUB_WEBHOOK_SECRET was set out-of-band in production and the
-    current deploy() wipes it. A service that boots without it looks
-    perfectly healthy while every delivery it accepts is unverifiable —
-    and under the App, an accepted delivery is a paid model read that
-    anyone who can POST gets to trigger. Refusing at startup is the only
-    version of this that shows up in a deploy instead of a bill.
+    """deploy() does set GITHUB_WEBHOOK_SECRET — it has been in
+    --set-secrets since #14 — so this is not defending against the CI path.
+    It defends against every other way a revision can come up without it: a
+    hand-deployed revision, a new project with no Secret Manager entry, a
+    local run. A service that boots without it looks perfectly healthy while
+    every delivery it accepts is unverifiable — and under the App, an
+    accepted delivery is a paid model read that anyone who can POST gets to
+    trigger. Refusing at startup is the only version of this that shows up
+    in a deploy instead of a bill.
 
     Note: this only fires when the client is entered as a context manager,
     which is why the module-level `client` above keeps working."""
