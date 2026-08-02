@@ -1147,3 +1147,68 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def comparison_reviews(limit: int = 50, repo: str | None = None) -> list[dict]:
+    """All App and CI verdicts for the most recently scored PR groups.
+
+    The limit counts PRs, not verdict rows, so one side of a pair and duplicate
+    App writes cannot be cut away at the boundary.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1:
+        return []
+    from sqlalchemy import and_, desc, func, or_, select
+
+    app_identity = and_(
+        verdicts.c.installation_id.is_not(None),
+        verdicts.c.github_repo_id.is_not(None),
+        verdicts.c.head_sha.is_not(None),
+    )
+    ci_identity = and_(
+        verdicts.c.installation_id.is_(None),
+        verdicts.c.github_repo_id.is_(None),
+        verdicts.c.head_sha.is_(None),
+    )
+    qualifies = and_(
+        verdicts.c.tier != EXTERNAL_TIER,
+        or_(app_identity, ci_identity),
+    )
+    recent = select(
+        verdicts.c.repo,
+        verdicts.c.pr_number,
+        func.max(verdicts.c.scored_at).label("latest_scored_at"),
+    ).where(qualifies)
+    if repo:
+        recent = recent.where(verdicts.c.repo == repo)
+    recent = (
+        recent.group_by(verdicts.c.repo, verdicts.c.pr_number)
+        .order_by(desc("latest_scored_at"))
+        .limit(limit)
+        .subquery()
+    )
+    query = (
+        select(verdicts)
+        .join(
+            recent,
+            (recent.c.repo == verdicts.c.repo)
+            & (recent.c.pr_number == verdicts.c.pr_number),
+        )
+        .where(qualifies)
+        .order_by(
+            desc(recent.c.latest_scored_at),
+            desc(verdicts.c.scored_at),
+            desc(verdicts.c.id),
+        )
+    )
+    out = []
+    with engine.connect() as conn:
+        for verdict in conn.execute(query).mappings():
+            read = conn.execute(
+                select(reads)
+                .where(reads.c.verdict_id == verdict["id"])
+                .order_by(desc(reads.c.id))
+                .limit(1)
+            ).mappings().first()
+            out.append({**verdict, "coverage": dict(read) if read else None})
+    return out

@@ -1308,3 +1308,98 @@ def test_an_external_review_does_not_erase_a_prs_findings_from_precision(
     joined = store.pattern_join()
     assert [(p["repo"], p["pr_number"]) for p in joined["prs"]] == [("o/r", 7)]
     assert [h["rule"] for h in joined["hits"]] == ["reader:race-condition"]
+
+
+def _comparison_review(
+    repo: str,
+    pr_number: int,
+    sha: str,
+    *,
+    app: bool,
+    coverage: reader.Coverage | None = None,
+) -> int:
+    identity = (
+        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
+        if app else {}
+    )
+    verdict_id = store.save_review(
+        repo,
+        pr_number,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "number": pr_number, "head_sha": sha},
+        coverage=coverage,
+        **identity,
+    )
+    assert verdict_id is not None
+    return verdict_id
+
+
+def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
+    tmp_path, monkeypatch
+):
+    """The comparison read must preserve every qualifying App and CI run.
+
+    Dropping the CI-side predicate, deduplicating rows, or failing to load a
+    reader receipt makes the App-versus-CI dashboard claim a comparison it
+    cannot actually show.
+    """
+    _db(tmp_path, monkeypatch)
+    coverage = reader.Coverage(
+        diff_chars=20,
+        sent_chars=10,
+        files_sent=1,
+        files_unseen=["second.py"],
+        file_cut="first.py",
+    )
+    app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
+    app_two = _comparison_review("o/r", 7, "a" * 40, app=True)
+    ci = _comparison_review("o/r", 7, "a" * 40, app=False)
+    _external()
+    mixed = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
+        installation_id=10,
+    )
+
+    rows = store.comparison_reviews(repo="o/r")
+    assert {row["id"] for row in rows} == {app_one, app_two, ci}
+    assert mixed not in {row["id"] for row in rows}
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[app_one]["coverage"]["sent_chars"] == 10
+    assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
+    assert by_id[app_two]["coverage"] is None
+    assert by_id[ci]["coverage"] is None
+
+
+def test_comparison_reviews_limits_pr_groups_without_cutting_their_runs(
+    tmp_path, monkeypatch
+):
+    """The limit counts scored PR groups, never one side of a comparison."""
+    _db(tmp_path, monkeypatch)
+    _comparison_review("o/r", 1, "a" * 40, app=True)
+    _comparison_review("o/r", 1, "a" * 40, app=False)
+    newest_app = _comparison_review("o/r", 2, "b" * 40, app=True)
+    newest_ci = _comparison_review("o/r", 2, "b" * 40, app=False)
+
+    rows = store.comparison_reviews(limit=1)
+    assert {row["id"] for row in rows} == {newest_app, newest_ci}
+    assert {row["pr_number"] for row in rows} == {2}
+
+
+def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
+    tmp_path, monkeypatch
+):
+    """A repo view cannot leak another repo, and disabled storage stays inert."""
+    _db(tmp_path, monkeypatch)
+    wanted = _comparison_review("a/x", 1, "a" * 40, app=True)
+    _comparison_review("b/y", 2, "b" * 40, app=True)
+    assert [row["id"] for row in store.comparison_reviews(repo="a/x")] == [wanted]
+
+    monkeypatch.delenv("DATABASE_URL")
+    assert store.comparison_reviews() == []
