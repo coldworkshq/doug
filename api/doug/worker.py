@@ -248,8 +248,18 @@ def _skip_reason(p) -> str | None:
 _MAX_OPEN_PRS_PER_REPO = 1000
 
 
-def reconcile_installation(installation_id: int) -> int:
+def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "live") -> int:
     """Enqueue every reviewable open PR this installation can see.
+
+    `trigger` is the terms a collision with a 'failed' row comes back on, and
+    it is a parameter rather than a constant because this function has two
+    callers with opposite claims to it. reconcile_all passes 'reconcile': the
+    startup sweep re-derives every open PR whether or not anything changed, so
+    FAILED_REVIVE_COOLOFF_SECONDS is charged to its repetition. api.py's
+    installation.created handler passes nothing and gets the live default,
+    because installing an App is an event that happened once, not a machine
+    repeating itself. Repetition is a property of the caller; deciding it here
+    would hand every caller the brake that belongs to one of them.
 
     The healing path for missed deliveries. GitHub retries a *failed*
     delivery, but a delivery this service 202s and then loses to a restart
@@ -347,13 +357,12 @@ def reconcile_installation(installation_id: int) -> int:
             # here too. That's deliberate — a PR that burned every attempt
             # before a restart is healed rather than staying dead forever —
             # but it isn't free: a revived job pays for up to max_attempts
-            # model reads again. trigger='reconcile' is what bounds the
-            # repetition: this sweep runs on every cold start, so a 'failed'
-            # row it meets inside FAILED_REVIVE_COOLOFF_SECONDS is left
-            # alone and the same broken PR costs one budget per cooloff
-            # window rather than one per restart. This is the only caller
-            # that passes it — a live event revives immediately, because
-            # nobody reopens a PR every ninety seconds.
+            # model reads again. `trigger` is what bounds the repetition, and
+            # it comes from the caller: reconcile_all runs on every cold
+            # start, so a 'failed' row its sweep meets inside
+            # FAILED_REVIVE_COOLOFF_SECONDS is left alone and the same broken
+            # PR costs one budget per cooloff window rather than one per
+            # restart. A live caller revives it at once instead.
             if (
                 ingest.enqueue(
                     installation_id,
@@ -361,7 +370,7 @@ def reconcile_installation(installation_id: int) -> int:
                     full_name,
                     p.number,
                     head_sha,
-                    trigger="reconcile",
+                    trigger=trigger,
                 )
                 is not None
             ):
@@ -372,10 +381,13 @@ def reconcile_installation(installation_id: int) -> int:
 def reconcile_all() -> int:
     """Reconcile every active installation. Returns total jobs enqueued.
 
-    This is the startup reconcile path (Task 7's amendment): the one thing
-    it does that reconcile_installation deliberately does not is call
+    This is the startup reconcile path (Task 7's amendment). Two things it
+    does that reconcile_installation deliberately does not: it calls
     ingest.reclaim_stalled() once, up front, before the per-installation
-    enqueue sweep below runs for anyone.
+    enqueue sweep below runs for anyone; and it is the caller that claims
+    trigger='reconcile', because the cooloff brakes a caller that repeats
+    itself and this is the one that does — it re-derives every open PR on
+    every process start, whether or not anything changed.
 
     A missed *delivery* is healed by re-deriving the world from the API and
     letting enqueue's unique index dedupe against it — that's
@@ -422,7 +434,7 @@ def reconcile_all() -> int:
     total = 0
     for installation_id in store.active_installations():
         try:
-            total += reconcile_installation(installation_id)
+            total += reconcile_installation(installation_id, trigger="reconcile")
         except Exception as e:  # noqa: BLE001 — one bad tenant must not stop the rest
             print(
                 f"doug: reconcile failed for installation {installation_id} "

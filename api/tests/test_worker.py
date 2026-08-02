@@ -942,6 +942,54 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     assert revived["status"] == "pending" and revived["attempts"] == 0
 
 
+def test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise(
+    tmp_path, monkeypatch
+):
+    """Which caller repeats itself is a property of reconcile_all, not of
+    reconciling one installation.
+
+    FAILED_REVIVE_COOLOFF_SECONDS is a brake on a machine that re-derives the
+    whole world on every process start. reconcile_installation is also the
+    installation.created handler's call (api.py's _reconcile_then_drain), and
+    that is a live event — so hardcoding the sweep's terms one function too
+    deep hands a live handler the brake meant for the sweep.
+
+    Reachable today, not only at the next feature: a redelivery of
+    installation.created (the App's Advanced tab, or any retried delivery)
+    after the first pass's reviews burned their attempts is the same
+    installation id with a 'failed' row in scope. An operator who fixed the
+    credentials and redelivered would watch nothing happen for an hour, with
+    no log line saying why. Both halves are asserted here — the live default
+    revives, and the sweep's explicit trigger still does not — because a
+    default that revived everything on both paths would pass the first
+    assertion while deleting the cooloff.
+    """
+    url = f"sqlite:///{tmp_path}/doug.db"
+    _installed(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    for _ in range(3):
+        ingest.fail(job_id, "credentials missing")
+    (failed,) = _rows(url, store.review_jobs)
+    # Inside the cooloff, with a real finished_at: the terms the caller claims
+    # are the only thing that can decide the revival below.
+    assert failed["status"] == "failed" and failed["finished_at"] is not None
+
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
+    )
+
+    # The sweep's terms, asked for explicitly: the brake still applies.
+    assert worker.reconcile_installation(1, trigger="reconcile") == 0
+    assert _rows(url, store.review_jobs)[0]["status"] == "failed"
+
+    # The webhook handler's call, which passes no trigger at all.
+    assert worker.reconcile_installation(1) == 1
+    (revived,) = _rows(url, store.review_jobs)
+    assert revived["id"] == job_id  # the same row, healed in place
+    assert revived["status"] == "pending" and revived["attempts"] == 0
+
+
 def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
     """_skip_reason's return value used to be computed and discarded at its
     only call site — an unreadable repo got a log line, but the spend gate
