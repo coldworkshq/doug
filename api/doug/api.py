@@ -1030,3 +1030,52 @@ async def github_webhook(
         await run_in_threadpool(_record_external_review, payload)
 
     return Response(status_code=202)
+
+
+def _comparison_path(row: dict) -> str:
+    identity = (row["installation_id"], row["github_repo_id"], row["head_sha"])
+    return "app" if all(value is not None for value in identity) else "ci"
+
+
+def _comparison_run(row: dict) -> dict:
+    path = _comparison_path(row)
+    meta = row.get("pr_meta") if isinstance(row.get("pr_meta"), dict) else {}
+    coverage = row.get("coverage")
+    return {
+        "id": row["id"],
+        "repo": row["repo"],
+        "pr_number": row["pr_number"],
+        "title": meta.get("title") or f"PR #{row['pr_number']}",
+        "url": meta.get("url") or f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
+        "head_sha": row["head_sha"] if path == "app" else meta.get("head_sha"),
+        "path": path,
+        "scored_at": row["scored_at"],
+        "score": row["score"],
+        "band": row["band"],
+        "threshold": row["threshold"],
+        "tier": row["tier"],
+        "coverage": (
+            {key: coverage[key] for key in (
+                "diff_chars", "sent_chars", "files_sent", "files_unseen", "file_cut"
+            )}
+            if coverage else None
+        ),
+    }
+
+
+@app.get("/v1/comparisons")
+def comparisons(
+    repo: str | None = None,
+    limit: int = 50,
+    x_doug_token: str = Header(""),
+) -> dict:
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if not hmac.compare_digest(x_doug_token, expected):
+        raise HTTPException(status_code=401, detail="bad token")
+    if not 1 <= limit <= 200:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    return {"runs": [_comparison_run(row) for row in store.comparison_reviews(limit, repo)]}

@@ -1565,3 +1565,122 @@ def test_ping_answers_even_without_a_ledger(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert _webhook("ping", {"zen": "Speak like a human."}).status_code == 202
+
+
+def _comparison_db(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/comparison.db")
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    assert store.enabled()
+
+
+def _comparison_api_review(*, app: bool, coverage=None, pr_meta=None) -> int:
+    sha = "a" * 40
+    verdict = api.Verdict(
+        score=0.2,
+        band=api.Band.CLEARED,
+        threshold=0.3,
+        reasons=[],
+    )
+    identity = (
+        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
+        if app else {}
+    )
+    verdict_id = store.save_review(
+        "o/r",
+        33,
+        "reader",
+        verdict,
+        pr_meta=(
+            {"number": 33, "title": "Compare paths", "author": "dev", "files": [],
+             "head_sha": sha}
+            if pr_meta is None else pr_meta
+        ),
+        coverage=coverage,
+        **identity,
+    )
+    assert verdict_id is not None
+    return verdict_id
+
+
+def test_comparisons_requires_the_shared_token(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    assert client.get("/v1/comparisons").status_code == 401
+
+
+def test_comparisons_refuses_when_the_token_is_unconfigured(monkeypatch):
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    response = client.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "anything"}
+    )
+    assert response.status_code == 503
+
+
+def test_comparisons_refuses_when_the_ledger_is_unconfigured(monkeypatch):
+    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    response = client.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    )
+    assert response.status_code == 503
+
+
+def test_comparisons_rejects_a_limit_outside_one_through_two_hundred(
+    tmp_path, monkeypatch
+):
+    _comparison_db(tmp_path, monkeypatch)
+    for limit in (0, 201):
+        response = client.get(
+            "/v1/comparisons",
+            params={"limit": limit},
+            headers={"X-Doug-Token": "secret"},
+        )
+        assert response.status_code == 422
+
+
+def test_comparisons_serializes_both_paths_duplicates_and_coverage(
+    tmp_path, monkeypatch
+):
+    _comparison_db(tmp_path, monkeypatch)
+    coverage = api.reader.Coverage(
+        diff_chars=20,
+        sent_chars=10,
+        files_sent=1,
+        files_unseen=["second.py"],
+        file_cut="first.py",
+    )
+    app_one = _comparison_api_review(app=True, coverage=coverage)
+    app_two = _comparison_api_review(app=True)
+    ci = _comparison_api_review(app=False)
+
+    response = client.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    )
+    assert response.status_code == 200
+    runs = response.json()["runs"]
+    assert {run["id"] for run in runs} == {app_one, app_two, ci}
+    assert [run["path"] for run in runs].count("app") == 2
+    assert [run["path"] for run in runs].count("ci") == 1
+    assert {run["head_sha"] for run in runs} == {"a" * 40}
+    covered = next(run for run in runs if run["id"] == app_one)
+    assert covered["coverage"]["sent_chars"] == 10
+    assert covered["coverage"]["diff_chars"] == 20
+
+
+def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
+    tmp_path, monkeypatch
+):
+    _comparison_db(tmp_path, monkeypatch)
+    verdict = api.Verdict(
+        score=0.2,
+        band=api.Band.CLEARED,
+        threshold=0.3,
+        reasons=[],
+    )
+    store.save_review("o/r", 9, "deterministic", verdict, pr_meta=None)
+
+    run = client.get(
+        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
+    ).json()["runs"][0]
+    assert run["title"] == "PR #9"
+    assert run["url"] == "https://github.com/o/r/pull/9"
+    assert run["head_sha"] is None
