@@ -3,16 +3,18 @@
 import hmac
 import json
 import os
+import sys
 import threading
 from contextlib import asynccontextmanager, contextmanager
 from importlib import resources
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-from . import __version__, precision, reader, review, store
+from . import __version__, ingest, precision, reader, review, store, worker
 from .models import (
     Band,
     PRMetadata,
@@ -453,20 +455,115 @@ def patterns_precision(
     )
 
 
+# Actions that mean "this PR's head changed, or is newly eligible". Anything
+# else — closed, labeled, edited, review_requested — is not a new diff and
+# must not buy a read.
+PR_ACTIONS = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
+INSTALLATION_STATES = {
+    "created": "active",
+    "deleted": "deleted",
+    "suspend": "suspended",
+    "unsuspend": "active",
+}
+
+
+def _record_installation(payload: dict, action: str) -> None:
+    inst = payload["installation"]
+    account = inst.get("account") or {}
+    store.upsert_installation(
+        inst["id"],
+        account.get("login", ""),
+        account.get("type", ""),
+        INSTALLATION_STATES[action],
+    )
+    if action == "created":
+        # The only authoritative repo list we are ever sent; everything
+        # after this is a delta against it.
+        store.set_installation_repos(
+            inst["id"],
+            [(r["id"], r["full_name"]) for r in payload.get("repositories", [])],
+            replace=True,
+        )
+
+
+def _merge_installation_repos(payload: dict) -> None:
+    inst_id = payload["installation"]["id"]
+    for key, state in (
+        ("repositories_added", "active"),
+        ("repositories_removed", "removed"),
+    ):
+        repos = [(r["id"], r["full_name"]) for r in payload.get(key, [])]
+        if repos:
+            # A removal marks state and never deletes: verdicts already
+            # written must still resolve to the repo they describe.
+            store.set_installation_repos(inst_id, repos, replace=False, state=state)
+
+
+def _reconcile_then_drain(installation_id: int) -> None:
+    """Heal the backlog, then actually review it.
+
+    reconcile_installation only enqueues. Without the drain chained behind
+    it, everything a new installation just discovered sits pending until
+    some unrelated delivery happens to kick one — which on a quiet repo is
+    the difference between "reviews appear within seconds of installing"
+    and "reviews appear whenever someone next opens a PR". The cutover
+    checklist in Task 10 asserts the first.
+    """
+    worker.reconcile_installation(installation_id)
+    worker.drain()
+
+
+def _enqueue_pull_request(payload: dict) -> int | None:
+    """Gate then enqueue. None means deliberately skipped or a duplicate."""
+    pr = payload["pull_request"]
+    if pr.get("draft"):
+        # Work in progress nobody has asked for review on. ready_for_review
+        # is the event that admits it.
+        return None
+    base = pr["base"]["repo"]
+    # head.repo is null when the fork was deleted, which fails this the same
+    # way a fork does — correctly.
+    head = pr["head"].get("repo") or {}
+    if head.get("id") != base["id"]:
+        # Fork PRs never enqueue: the raw diff enters the prompt
+        # (reader._user_text), so an outside contributor opening PRs against
+        # a public repo could otherwise drive this account's model spend at
+        # will.
+        return None
+    return ingest.enqueue(
+        payload["installation"]["id"],
+        base["id"],
+        base["full_name"],
+        pr["number"],
+        pr["head"]["sha"],
+    )
+
+
 @app.post("/webhooks/github", status_code=202)
 async def github_webhook(
     request: Request,
+    background: BackgroundTasks,
     x_github_event: str = Header(default=""),
     x_hub_signature_256: str = Header(default=""),
 ) -> Response:
+    """Verify, record, enqueue, 202. Never reviews inline.
+
+    The 202 is sent only after the job is durable — GitHub does not
+    redeliver on our schedule and a job held in memory dies with the
+    instance. Everything expensive happens in worker.drain, kicked as a
+    background task after the response.
+
+    async only because the signature needs the raw body; every synchronous
+    line below runs in the threadpool so a delivery burst cannot block the
+    event loop.
+    """
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     if not secret:
-        # Fail closed, matching /v1/review and /v1/patterns. Accepting
-        # unverified payloads was survivable while this endpoint discarded
-        # everything; under the App a delivery triggers a paid model read.
-        raise HTTPException(
-            status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured"
-        )
+        # Unreachable when the app booted through its lifespan, which
+        # refuses without this. Kept because verify() with an empty key is
+        # forgeable by anyone and a lifespan is bypassable (sub-app mount,
+        # a TestClient not used as a context manager).
+        raise HTTPException(status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured")
     body = await request.body()
     # githubkit's verify() reads the digest from the signature prefix, not
     # from the header name, so an attacker-supplied "sha1=" would downgrade
@@ -476,7 +573,60 @@ async def github_webhook(
     if not verify_webhook(secret, body, x_hub_signature_256):
         raise HTTPException(status_code=401, detail="bad signature")
 
-    # Phase 2 (the Live Gate) will parse pull_request events here, extract
-    # features, score, and post a check run. Accepting and discarding is
-    # deliberate until then.
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        # Signed, so it came from someone holding the secret — but not
+        # something we can act on. 202 rather than 4xx: a retry loop over a
+        # body that will never parse helps nobody.
+        print("doug: webhook body was signed but not JSON", file=sys.stderr)
+        return Response(status_code=202)
+
+    action = payload.get("action", "")
+    # The gating table, evaluated once and before any guard that touches the
+    # store. An event we do not handle — ping, push, an action outside the
+    # table — must not depend on a ledger it never reaches. Scoping this
+    # narrowly is load-bearing: the pre-existing
+    # test_webhook_accepts_a_valid_sha256_signature posts a valid signature
+    # with no event header and no database, and must still get its 202.
+    handled = (
+        (x_github_event == "installation" and action in INSTALLATION_STATES)
+        or (x_github_event == "installation_repositories" and action in ("added", "removed"))
+        or (x_github_event == "pull_request" and action in PR_ACTIONS)
+    )
+    if not handled:
+        # Accepted and ignored, on purpose: a 4xx would put GitHub into a
+        # redelivery loop over events we chose not to handle.
+        return Response(status_code=202)
+    if not store.enabled():
+        # ingest.enqueue raises without a database rather than no-opping,
+        # and store's installation writes would no-op silently. Either way
+        # a 202 here would mean "queued" over an empty ledger. Refused at
+        # this endpoint only: DATABASE_URL stays optional for the rest of
+        # the service (store.py's module docstring), so it cannot go in the
+        # lifespan.
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    inst = payload.get("installation")
+    if not isinstance(inst, dict) or not isinstance(inst.get("id"), int):
+        # Defensive: App webhooks always carry this, and a ping never does.
+        # Without it there is no tenant to attribute the work to and no
+        # token to do it with. The id is checked here, not just the key,
+        # because every branch below indexes installation["id"] — this is
+        # what makes those indexes total instead of a KeyError 500 that
+        # GitHub would redeliver into the same 500.
+        return Response(status_code=202)
+
+    if x_github_event == "installation":
+        await run_in_threadpool(_record_installation, payload, action)
+        if action == "created":
+            # Heal what the App missed before it was installed. Queued, not
+            # inline: it lists every open PR over the network.
+            background.add_task(_reconcile_then_drain, inst["id"])
+    elif x_github_event == "installation_repositories":
+        await run_in_threadpool(_merge_installation_repos, payload)
+    elif x_github_event == "pull_request":
+        job_id = await run_in_threadpool(_enqueue_pull_request, payload)
+        if job_id is not None:
+            background.add_task(worker.drain)
+
     return Response(status_code=202)

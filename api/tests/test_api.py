@@ -1,9 +1,12 @@
 import hashlib
 import hmac
+import json
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
 
+from doug import store, worker
 from doug.api import app
 
 client = TestClient(app)
@@ -136,3 +139,383 @@ def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
         "/webhooks/github", content=b'{"zen":"x"}', headers={"X-GitHub-Event": "ping"}
     )
     assert r.status_code == 401
+
+
+SECRET = "s3cret"
+INSTALLATION = {"id": 150424894, "account": {"login": "drewjst", "type": "User"}}
+
+
+def _hook_env(tmp_path, monkeypatch) -> list:
+    """Configure the webhook and cut the two background kicks.
+
+    The kicks must be cut, not tolerated: TestClient waits for background
+    tasks, so a real worker.drain would claim the job these tests just
+    asserted on and run it against a monkeypatch-free pipeline."""
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    # Materialise the schema here rather than leaving it to whichever
+    # request happens to write first. The tests that assert a delivery
+    # wrote NOTHING (401s, ignored events, drafts, forks) never reach a
+    # write, so without this _table() opens an empty sqlite file and the
+    # assertion dies on "no such table" instead of passing.
+    assert store.enabled()
+    kicks: list = []
+    monkeypatch.setattr(worker, "drain", lambda *a, **k: kicks.append("drain"))
+    monkeypatch.setattr(worker, "reconcile_installation", lambda i: kicks.append(i))
+    return kicks
+
+
+def _webhook(event: str, payload: dict, secret: str = SECRET):
+    body = json.dumps(payload).encode()
+    return client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": event,
+            "X-Hub-Signature-256": _sig(secret.encode(), body, "sha256"),
+        },
+    )
+
+
+def _table(tmp_path, table) -> list[dict]:
+    with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
+        return [dict(r) for r in conn.execute(select(table)).mappings()]
+
+
+def test_installation_created_records_the_account_and_its_repos(tmp_path, monkeypatch):
+    """The authoritative repo list arrives exactly once, on this event.
+    Everything after it is a delta, so getting this write wrong means an
+    installation whose repo set is never correct again."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    r = _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [
+                {"id": 987, "full_name": "drewjst/doug"},
+                {"id": 988, "full_name": "drewjst/other"},
+            ],
+        },
+    )
+    assert r.status_code == 202
+
+    (inst,) = _table(tmp_path, store.installations)
+    assert inst["installation_id"] == 150424894
+    assert inst["account_login"] == "drewjst" and inst["account_type"] == "User"
+    assert inst["state"] == "active"
+
+    repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
+    assert set(repos) == {987, 988}
+    assert repos[987]["full_name"] == "drewjst/doug"
+    assert all(r["state"] == "active" for r in repos.values())
+    # Reconcile is queued, not run inline: it lists open PRs over the
+    # network and the 202 must not wait on it. The drain is chained behind
+    # it inside the same task — see the dedicated test below.
+    assert kicks == [150424894, "drain"]
+
+
+def test_a_second_created_replaces_the_repo_list_rather_than_adding_to_it(
+    tmp_path, monkeypatch
+):
+    """`created` carries the authoritative list, not a delta — the handler's
+    own docstring says so, and nothing else was enforcing it.
+
+    Uninstall-then-reinstall picking fewer repos is the ordinary way to land
+    here, and it is the case where getting this wrong is invisible: merging
+    instead of replacing leaves the dropped repo 'active' forever, so
+    reconcile keeps listing its open PRs and paying for reviews on a repo
+    this installation no longer covers."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [
+                {"id": 987, "full_name": "drewjst/doug"},
+                {"id": 988, "full_name": "drewjst/other"},
+            ],
+        },
+    )
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [{"id": 987, "full_name": "drewjst/doug"}],
+        },
+    )
+    repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
+    assert repos[987]["state"] == "active"
+    # Still present — a removal never deletes — but no longer covered.
+    assert repos[988]["state"] == "removed"
+
+
+def test_installation_deleted_flips_state_without_dropping_history(tmp_path, monkeypatch):
+    """Uninstalling ends the permission, not the record. Deleting rows
+    would take the tenancy context off every verdict already written, and
+    reinstalling is the single most common thing a trialling team does."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [{"id": 987, "full_name": "drewjst/doug"}],
+        },
+    )
+    assert (
+        _webhook(
+            "installation", {"action": "deleted", "installation": INSTALLATION}
+        ).status_code
+        == 202
+    )
+
+    (inst,) = _table(tmp_path, store.installations)
+    assert inst["state"] == "deleted"
+    assert len(_table(tmp_path, store.installation_repos)) == 1
+
+
+def test_installation_suspend_and_unsuspend_round_trip(tmp_path, monkeypatch):
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    _webhook("installation", {"action": "suspend", "installation": INSTALLATION})
+    assert _table(tmp_path, store.installations)[0]["state"] == "suspended"
+    _webhook("installation", {"action": "unsuspend", "installation": INSTALLATION})
+    assert _table(tmp_path, store.installations)[0]["state"] == "active"
+
+
+def test_installation_repositories_merges_both_deltas(tmp_path, monkeypatch):
+    """One delivery can carry both lists. A removal marks state rather than
+    deleting the row, so a verdict written while the repo was installed
+    still resolves to the repo it was written about."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [{"id": 987, "full_name": "drewjst/doug"}],
+        },
+    )
+    r = _webhook(
+        "installation_repositories",
+        {
+            "action": "added",
+            "installation": INSTALLATION,
+            "repositories_added": [{"id": 988, "full_name": "drewjst/other"}],
+            "repositories_removed": [{"id": 987, "full_name": "drewjst/doug"}],
+        },
+    )
+    assert r.status_code == 202
+    repos = {r["github_repo_id"]: r for r in _table(tmp_path, store.installation_repos)}
+    assert repos[987]["state"] == "removed"
+    assert repos[988]["state"] == "active"
+
+
+def test_a_new_installation_reviews_its_backlog_without_waiting(tmp_path, monkeypatch):
+    """reconcile_installation only enqueues. Chaining the drain behind it is
+    what makes the cutover's "a check run appears within seconds of
+    installing" true — otherwise a fresh install's whole backlog sits
+    pending until somebody happens to open the next PR, which on a quiet
+    repo can be days. Order matters: draining first would drain an empty
+    queue."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert kicks == [150424894, "drain"]
+
+
+def test_only_a_new_installation_kicks_reconcile(tmp_path, monkeypatch):
+    """Suspend/unsuspend/delete change state and nothing else. Reconciling on
+    them would list every open PR of an installation that just told us to
+    stop looking at it."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    for action in ("suspend", "unsuspend", "deleted"):
+        _webhook("installation", {"action": action, "installation": INSTALLATION})
+    assert kicks == []
+
+
+def _pr_payload(action="opened", *, draft=False, head_repo_id=987, sha="a" * 40, number=7):
+    head_repo = None if head_repo_id is None else {"id": head_repo_id}
+    return {
+        "action": action,
+        "installation": INSTALLATION,
+        "pull_request": {
+            "number": number,
+            "draft": draft,
+            "head": {"sha": sha, "repo": head_repo},
+            "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+        },
+    }
+
+
+def test_a_pull_request_event_enqueues_one_durable_job(tmp_path, monkeypatch):
+    """The 202 has to mean the work survives this instance. GitHub
+    redelivers on its own terms and reconcile is the backstop — neither is
+    a reason to answer 202 for a job held only in memory."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _pr_payload()).status_code == 202
+
+    (j,) = _table(tmp_path, store.review_jobs)
+    assert j["installation_id"] == 150424894
+    assert j["github_repo_id"] == 987
+    assert j["repo_full_name"] == "drewjst/doug"
+    assert j["pr_number"] == 7 and j["head_sha"] == "a" * 40
+    assert j["status"] == "pending"
+    assert kicks == ["drain"]
+
+
+def test_every_head_moving_action_enqueues(tmp_path, monkeypatch):
+    _hook_env(tmp_path, monkeypatch)
+    for i, action in enumerate(("opened", "synchronize", "reopened", "ready_for_review")):
+        _webhook("pull_request", _pr_payload(action, sha=f"{i}" * 40))
+    assert len(_table(tmp_path, store.review_jobs)) == 4
+
+
+def test_a_draft_pull_request_is_not_enqueued(tmp_path, monkeypatch):
+    """A read per push on a branch nobody has asked for review on is spend
+    with no consumer. ready_for_review admits it later."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _pr_payload(draft=True)).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+
+
+def test_a_fork_pull_request_is_not_enqueued(tmp_path, monkeypatch):
+    """The raw diff enters the prompt (reader._user_text). If forks
+    enqueued, any GitHub user could drive this account's model spend by
+    opening PRs against a public repo — no install, no relationship."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _pr_payload(head_repo_id=555)).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_pull_request_whose_fork_was_deleted_is_not_enqueued(tmp_path, monkeypatch):
+    """head.repo is null once the fork is gone. It must fail the fork gate
+    rather than raise — a KeyError here 500s and GitHub redelivers it."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _pr_payload(head_repo_id=None)).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_redelivery_of_the_same_head_sha_does_not_duplicate(tmp_path, monkeypatch):
+    """GitHub redelivers on its own schedule, and 'opened' then
+    'synchronize' for one push is normal. Two deliveries of one commit must
+    be one review, not two paid reads."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request", _pr_payload("opened"))
+    _webhook("pull_request", _pr_payload("synchronize"))
+    assert len(_table(tmp_path, store.review_jobs)) == 1
+
+
+def test_a_new_head_sha_enqueues_a_second_job(tmp_path, monkeypatch):
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request", _pr_payload("opened"))
+    _webhook("pull_request", _pr_payload("synchronize", sha="b" * 40))
+    shas = sorted(j["head_sha"] for j in _table(tmp_path, store.review_jobs))
+    assert shas == ["a" * 40, "b" * 40]
+
+
+def test_unhandled_pull_request_actions_are_accepted_and_ignored(tmp_path, monkeypatch):
+    """labeled/edited/review_requested/converted_to_draft do not change the
+    diff. A 4xx would put GitHub into a redelivery loop over events we chose
+    not to handle, so they are 202 — but they must not reach the queue.
+
+    'closed' is deliberately absent: it IS handled, on its own branch that
+    starts the outcome clock without buying a read."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    for action in ("labeled", "edited", "review_requested", "converted_to_draft"):
+        assert _webhook("pull_request", _pr_payload(action)).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+
+
+def test_unhandled_events_are_accepted_and_ignored(tmp_path, monkeypatch):
+    _hook_env(tmp_path, monkeypatch)
+    for event in ("push", "check_suite", "issues", "installation_target"):
+        r = _webhook(event, {"action": "created", "installation": INSTALLATION})
+        assert r.status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert _table(tmp_path, store.installations) == []
+
+
+def test_ping_is_accepted_without_an_installation(tmp_path, monkeypatch):
+    """The App's first delivery, and the only one production has ever sent
+    (2026-07-31 23:23:32) — it went through the discard path, so no handler
+    that parses a body has ever seen it. Pinging from the App settings page
+    rather than from an installation sends no installation key at all, so
+    nothing downstream of here may reach for one."""
+    _hook_env(tmp_path, monkeypatch)
+    assert (
+        _webhook("ping", {"zen": "Non-blocking is better than blocking."}).status_code
+        == 202
+    )
+
+
+def test_a_payload_with_no_usable_installation_is_ignored(tmp_path, monkeypatch):
+    """Every branch past the guard indexes installation["id"], so the guard
+    checks the id and not just the key. Otherwise a malformed-but-signed
+    payload is a KeyError 500, and GitHub redelivers it into the same 500.
+
+    All three shapes are quiet 202s: absent, explicitly null, and present
+    but id-less."""
+    _hook_env(tmp_path, monkeypatch)
+    for payload in (
+        {"action": "opened"},
+        {"action": "opened", "installation": None},
+        {"action": "opened", "installation": {"account": {"login": "drewjst"}}},
+    ):
+        assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert _table(tmp_path, store.installations) == []
+
+
+def test_a_signed_body_that_is_not_json_is_ignored(tmp_path, monkeypatch):
+    _hook_env(tmp_path, monkeypatch)
+    body = b"not json"
+    r = client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sig(SECRET.encode(), body, "sha256"),
+        },
+    )
+    assert r.status_code == 202
+
+
+def test_a_forged_signature_never_reaches_the_queue(tmp_path, monkeypatch):
+    """The gating table is only worth anything behind verification. A
+    valid-looking payload signed with the wrong key must 401 before any of
+    it is parsed."""
+    _hook_env(tmp_path, monkeypatch)
+    r = _webhook("pull_request", _pr_payload(), secret="wrong-key")
+    assert r.status_code == 401
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_the_webhook_refuses_when_there_is_no_ledger(tmp_path, monkeypatch):
+    """A 202 means "queued". Without a database there is no queue: the
+    installation writes would no-op silently and ingest.enqueue raises. The
+    refusal is scoped to this endpoint because DATABASE_URL is optional for
+    the rest of the service by design — /v1/score and the fixture-backed
+    queue must keep working without one."""
+    _hook_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _webhook("pull_request", _pr_payload()).status_code == 503
+
+
+def test_ping_answers_even_without_a_ledger(monkeypatch):
+    """The App's connectivity test is the first delivery a new install
+    sends, and answering it 503 would read as "the webhook is broken" while
+    pointing at the wrong thing."""
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _webhook("ping", {"zen": "Speak like a human."}).status_code == 202
