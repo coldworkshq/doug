@@ -195,9 +195,9 @@ def _revive(
     Read off `trigger` rather than off the row, because the row cannot tell
     the two callers apart: 'failed' at this SHA looks identical whichever one
     arrives. What the parameter distinguishes is not a person from a machine —
-    the live path's callers include worker.process_job's stale-head catch-up,
-    which fires after a container boot and an expired lease with nobody
-    involved — but a caller reacting to one specific head change from the
+    worker.process_job's stale-head catch-up is a live caller and needs nobody
+    involved at all, a container boot and an expired lease being enough to
+    reach it — but a caller reacting to one specific head change from the
     sweep that re-derives every open PR whether or not anything changed.
 
     The status test lives in the UPDATE's WHERE rather than in a SELECT before
@@ -289,7 +289,7 @@ def cooloff_hold_remaining(
     engine = store._get_engine()
     if engine is None:
         return None
-    with engine.begin() as conn:
+    with engine.connect() as conn:
         row = conn.execute(
             select(store.review_jobs.c.status, store.review_jobs.c.finished_at).where(
                 *_job_filter(installation_id, github_repo_id, pr_number),
