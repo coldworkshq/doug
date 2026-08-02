@@ -20,7 +20,7 @@ alone would appear in every test and in no production row.
 
 import os
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
     JSON,
@@ -491,6 +491,68 @@ def set_installation_repos(
                 # update, not insert again — `known` only reflects rows that
                 # existed before this call started.
                 known[repo_id] = result.inserted_primary_key[0]
+
+
+# outcome_jobs' unique key, named the two ways the two backends report it:
+# Postgres names the constraint, sqlite lists the table and its columns. Same
+# shape as ingest._DEDUPE_COLLISION and for the same reason — anything else is
+# a real integrity problem this code did not cause, and reading it as "already
+# queued" would drop a merge out of the denominator silently.
+_OUTCOME_COLLISION = ("uq_outcome_job", "unique constraint failed: outcome_jobs.")
+
+
+def enqueue_outcome_job(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merge_commit_sha: str,
+    merged_at: datetime,
+    base_ref: str,
+    *,
+    window_days: int = 14,
+) -> int | None:
+    """Start the outcome-observation window for one merged PR.
+
+    Returns the new row's id, or None when this merge is already queued at
+    this window — which is the ordinary case for a webhook redelivery.
+
+    `due_at` is computed from `merged_at` and never from the wall clock. The
+    same merge can reach this function seconds after it lands, hours later
+    via a redelivery, or months later via a backfill, and the window has to
+    mean "fourteen days after this code shipped" in all three. It is stored
+    rather than derived at query time because window_days is part of the
+    unique key and may differ per row.
+
+    Dedup is the unique index, not a check-then-insert: GitHub redelivers,
+    and two deliveries racing a SELECT would both miss it and both insert,
+    giving one merge two independent due dates and two votes in a published
+    denominator.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.begin() as conn:
+            return int(
+                conn.execute(
+                    outcome_jobs.insert().returning(outcome_jobs.c.id),
+                    {
+                        "installation_id": installation_id,
+                        "github_repo_id": github_repo_id,
+                        "pr_number": pr_number,
+                        "merge_commit_sha": merge_commit_sha,
+                        "merged_at": merged_at,
+                        "base_ref": base_ref,
+                        "window_days": window_days,
+                        "due_at": merged_at + timedelta(days=window_days),
+                        "created_at": datetime.now(UTC),
+                    },
+                ).scalar_one()
+            )
+    except IntegrityError as e:
+        if not any(m in str(e.orig).lower() for m in _OUTCOME_COLLISION):
+            raise
+        return None
 
 
 def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bool:

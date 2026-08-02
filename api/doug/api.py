@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 from contextlib import asynccontextmanager, contextmanager
+from datetime import UTC, datetime
 from importlib import resources
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
@@ -456,8 +457,9 @@ def patterns_precision(
 
 
 # Actions that mean "this PR's head changed, or is newly eligible". Anything
-# else — closed, labeled, edited, review_requested — is not a new diff and
-# must not buy a read.
+# else — labeled, edited, review_requested — is not a new diff and must not
+# buy a read. 'closed' is handled too, but deliberately not from here: it
+# starts the outcome clock on its own branch and never enqueues a review.
 PR_ACTIONS = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
 INSTALLATION_STATES = {
     "created": "active",
@@ -539,6 +541,61 @@ def _enqueue_pull_request(payload: dict) -> int | None:
     )
 
 
+def _payload_timestamp(raw) -> datetime | None:
+    """One of GitHub's ISO-8601 timestamps, or None if it is unusable.
+
+    fromisoformat has accepted the trailing "Z" since 3.11. A naive result
+    is read as UTC, which is what GitHub sends and what every DateTime
+    column in the ledger stores.
+    """
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _record_merge(payload: dict) -> None:
+    """Start the outcome-observation window on a merge, and nothing else.
+
+    A merge must never buy a model read: there is no new diff, and this is
+    the one webhook branch whose whole job is to note that the clock has
+    started. The adjudicator picks the row up once due_at passes.
+    """
+    pr = payload["pull_request"]
+    if not pr.get("merged"):
+        # Closed without merging. Nothing shipped, so there is no outcome to
+        # observe — and a row here would put a PR that never landed into the
+        # denominator of a claim about shipped code.
+        return
+    base = pr.get("base") or {}
+    merged_at = _payload_timestamp(pr.get("merged_at"))
+    merge_sha = pr.get("merge_commit_sha")
+    base_ref = base.get("ref")
+    if merged_at is None or not merge_sha or not base_ref:
+        # Signed, and a merge, but missing one of the three facts the row is
+        # built from: when it shipped, what shipped, and where. Logged and
+        # 202'd rather than raised — a 500 is a redelivery loop over a body
+        # that will never carry them, and a half-row is worse than a missing
+        # one here, because base_ref is what the adjudicator censors on.
+        print(
+            f"doug: merged PR #{pr.get('number')} carried no usable "
+            "merged_at/merge_commit_sha/base.ref; outcome clock not started",
+            file=sys.stderr,
+        )
+        return
+    store.enqueue_outcome_job(
+        payload["installation"]["id"],
+        base["repo"]["id"],
+        pr["number"],
+        merge_sha,
+        merged_at,
+        base_ref,
+    )
+
+
 @app.post("/webhooks/github", status_code=202)
 async def github_webhook(
     request: Request,
@@ -592,7 +649,10 @@ async def github_webhook(
     handled = (
         (x_github_event == "installation" and action in INSTALLATION_STATES)
         or (x_github_event == "installation_repositories" and action in ("added", "removed"))
-        or (x_github_event == "pull_request" and action in PR_ACTIONS)
+        or (
+            x_github_event == "pull_request"
+            and (action in PR_ACTIONS or action == "closed")
+        )
     )
     if not handled:
         # Accepted and ignored, on purpose: a 4xx would put GitHub into a
@@ -625,8 +685,14 @@ async def github_webhook(
     elif x_github_event == "installation_repositories":
         await run_in_threadpool(_merge_installation_repos, payload)
     elif x_github_event == "pull_request":
-        job_id = await run_in_threadpool(_enqueue_pull_request, payload)
-        if job_id is not None:
-            background.add_task(worker.drain)
+        if action == "closed":
+            # Its own branch, never PR_ACTIONS: a merge starts the outcome
+            # clock and must not buy a read. No drain is kicked, because
+            # nothing reviewable was queued.
+            await run_in_threadpool(_record_merge, payload)
+        else:
+            job_id = await run_in_threadpool(_enqueue_pull_request, payload)
+            if job_id is not None:
+                background.add_task(worker.drain)
 
     return Response(status_code=202)

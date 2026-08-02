@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -180,6 +181,14 @@ def _webhook(event: str, payload: dict, secret: str = SECRET):
 def _table(tmp_path, table) -> list[dict]:
     with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
         return [dict(r) for r in conn.execute(select(table)).mappings()]
+
+
+def _utc(dt: datetime) -> datetime:
+    """sqlite hands a DateTime(timezone=True) column back naive; Postgres
+    hands it back aware. The stored instant is UTC either way, so normalise
+    before comparing — otherwise these assertions would be about the driver
+    rather than about the timestamp."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def test_installation_created_records_the_account_and_its_repos(tmp_path, monkeypatch):
@@ -421,6 +430,99 @@ def test_a_new_head_sha_enqueues_a_second_job(tmp_path, monkeypatch):
     _webhook("pull_request", _pr_payload("synchronize", sha="b" * 40))
     shas = sorted(j["head_sha"] for j in _table(tmp_path, store.review_jobs))
     assert shas == ["a" * 40, "b" * 40]
+
+
+# Deliberately nowhere near now(): every assertion about the observation
+# window below is only worth something if a wall-clock implementation fails
+# it, and one merged today would agree with now() to within a rounding error.
+MERGED_AT = "2020-03-01T12:00:00Z"
+
+
+def _closed_payload(*, merged=True, merged_at=MERGED_AT, merge_sha="c" * 40, number=7):
+    """A `closed` delivery. `merged` varies independently of the other two
+    fields on purpose — see test_a_closed_but_unmerged_pull_request_writes_nothing.
+    """
+    return {
+        "action": "closed",
+        "installation": INSTALLATION,
+        "pull_request": {
+            "number": number,
+            "draft": False,
+            "merged": merged,
+            "merged_at": merged_at,
+            "merge_commit_sha": merge_sha,
+            "head": {"sha": "a" * 40, "repo": {"id": 987}},
+            "base": {"ref": "main", "repo": {"id": 987, "full_name": "drewjst/doug"}},
+        },
+    }
+
+
+def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
+    tmp_path, monkeypatch
+):
+    """The merge is the outcome loop's ignition — and it must never buy a
+    model read. A closed PR has no new diff to review, so the only thing
+    this delivery may do is record that the observation window has started.
+
+    The ids come off the payload, never parsed out of a name: full_name is
+    a display string that changes under a rename, and the denominator this
+    row eventually feeds is published."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+
+    (job,) = _table(tmp_path, store.outcome_jobs)
+    assert job["installation_id"] == 150424894
+    assert job["github_repo_id"] == 987
+    assert job["pr_number"] == 7
+    assert job["merge_commit_sha"] == "c" * 40
+    assert job["base_ref"] == "main"
+    assert job["window_days"] == 14
+    assert job["status"] == "pending"
+    # No read bought, and nothing queued that would buy one.
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+
+
+def test_the_outcome_window_is_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
+    """due_at is merged_at + 14 days, computed from the payload's own
+    timestamp. Deriving it from the wall clock would silently re-date every
+    row a redelivery or a backfill ever touched, and the window is what the
+    published defect-rate denominator means."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook("pull_request", _closed_payload())
+
+    (job,) = _table(tmp_path, store.outcome_jobs)
+    assert _utc(job["merged_at"]) == datetime(2020, 3, 1, 12, 0, tzinfo=UTC)
+    assert _utc(job["due_at"]) == datetime(2020, 3, 15, 12, 0, tzinfo=UTC)
+
+
+def test_a_redelivered_merge_does_not_start_a_second_clock(tmp_path, monkeypatch):
+    """GitHub redelivers on its own schedule. Two 'closed' deliveries for one
+    merge must be one observation window, not two — a second row would be a
+    second vote in the denominator for a single merge."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+    assert len(_table(tmp_path, store.outcome_jobs)) == 1
+
+
+def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch):
+    """An abandoned PR has no merge to observe the consequences of. Recording
+    one would put a PR that never shipped into the denominator of a claim
+    about shipped code.
+
+    `merged` is the only field that decides this, which is why the payload
+    below still carries a merge_commit_sha and a merged_at. Those two are
+    not evidence a merge happened — merge_commit_sha in particular is a
+    field GitHub also populates with a computed test-merge commit — so a
+    guard that keyed off their presence instead of off the flag would
+    enqueue an observation window for a PR that never landed. The first
+    version of this test nulled them alongside the flag and therefore passed
+    against a build with no `merged` check at all."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload(merged=False)).status_code == 202
+    assert _table(tmp_path, store.outcome_jobs) == []
+    assert _table(tmp_path, store.review_jobs) == []
 
 
 def test_unhandled_pull_request_actions_are_accepted_and_ignored(tmp_path, monkeypatch):
