@@ -51,34 +51,39 @@ function PageShell({
   children: React.ReactNode;
 }) {
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 sm:px-6">
-      <nav className="flex flex-wrap items-center justify-between gap-3 py-6">
-        <Link
-          href="/"
-          className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight"
-        >
-          <DougLogo /> doug
-        </Link>
-        <div className="flex items-center gap-2">
-          <span className="glass flex items-center gap-1 rounded-full p-1 font-mono text-xs">
-            <Link
-              href="/queue"
-              className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
-            >
-              Queue
-            </Link>
-            <a
-              href="https://github.com/drewjst/doug"
-              className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
-            >
-              GitHub
-            </a>
-          </span>
-          <SourceBadge live={live} />
-        </div>
-      </nav>
-      {children}
-    </main>
+    // Forced dark, full-bleed — see the matching comment in
+    // app/queue/page.tsx for why this wrapper is needed now that the
+    // landing page has a light default theme.
+    <div className="dark min-h-full bg-background text-foreground">
+      <main className="mx-auto w-full max-w-6xl px-4 sm:px-6">
+        <nav className="flex flex-wrap items-center justify-between gap-3 py-6">
+          <Link
+            href="/"
+            className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight"
+          >
+            <DougLogo /> doug
+          </Link>
+          <div className="flex items-center gap-2">
+            <span className="glass flex items-center gap-1 rounded-full p-1 font-mono text-xs">
+              <Link
+                href="/queue"
+                className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+              >
+                Queue
+              </Link>
+              <a
+                href="https://github.com/drewjst/doug"
+                className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+              >
+                GitHub
+              </a>
+            </span>
+            <SourceBadge live={live} />
+          </div>
+        </nav>
+        {children}
+      </main>
+    </div>
   );
 }
 
@@ -222,7 +227,8 @@ function Coverage({ coverage }: { coverage: ComparisonCoverage | null }) {
         </span>{" "}
         · {coverage.sent_chars.toLocaleString("en-US")}/
         {coverage.diff_chars.toLocaleString("en-US")} characters ·{" "}
-        {coverage.files_sent} {coverage.files_sent === 1 ? "file" : "files"} sent
+        {coverage.files_sent} {coverage.files_sent === 1 ? "file" : "files"}{" "}
+        sent
       </p>
       {coverage.file_cut !== null && (
         <p className="break-all">
@@ -280,7 +286,9 @@ function RunCard({
         </div>
         <div>
           <dt className="text-muted-foreground">scored</dt>
-          <dd className="mt-0.5 text-foreground">{formatTime(run.scored_at)}</dd>
+          <dd className="mt-0.5 text-foreground">
+            {formatTime(run.scored_at)}
+          </dd>
         </div>
       </dl>
       <div className="mt-3 border-t border-white/5 pt-3">
@@ -332,7 +340,8 @@ function MissingRun({
 }
 
 function ScoreRail({ app, ci }: { app: ComparisonRun; ci: ComparisonRun }) {
-  const position = (score: number) => `${Math.min(1, Math.max(0, score)) * 100}%`;
+  const position = (score: number) =>
+    `${Math.min(1, Math.max(0, score)) * 100}%`;
 
   return (
     <figure className="rounded-xl border border-white/10 bg-black/15 px-4 py-4 sm:px-5">
@@ -385,7 +394,8 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">
-              <span className="break-all">{group.repo}</span> · #{group.pr_number}
+              <span className="break-all">{group.repo}</span> · #
+              {group.pr_number}
             </p>
             <h2 className="font-heading mt-2 min-w-0 text-xl font-medium leading-snug">
               <a
@@ -401,7 +411,9 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
               {group.head_sha === null ? (
                 "head unknown"
               ) : (
-                <span title={group.head_sha}>head {group.head_sha.slice(0, 8)}</span>
+                <span title={group.head_sha}>
+                  head {group.head_sha.slice(0, 8)}
+                </span>
               )}
             </p>
           </div>
@@ -420,15 +432,23 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
           </div>
         </div>
 
-        {exactPair && <div className="mt-5"><ScoreRail app={group.app[0]} ci={group.ci[0]} /></div>}
+        {exactPair && (
+          <div className="mt-5">
+            <ScoreRail app={group.app[0]} ci={group.ci[0]} />
+          </div>
+        )}
 
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           <section aria-label="App runs" className="min-w-0">
             <h3 className="mb-2 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sheen">
-              App delivery · {group.app.length} {group.app.length === 1 ? "run" : "runs"}
+              App delivery · {group.app.length}{" "}
+              {group.app.length === 1 ? "run" : "runs"}
             </h3>
             {group.app.length === 0 ? (
-              <MissingRun path="app" headUnknown={group.presence === "head-unknown"} />
+              <MissingRun
+                path="app"
+                headUnknown={group.presence === "head-unknown"}
+              />
             ) : (
               <div className="space-y-3">
                 {group.app.map((run, index) => (
@@ -444,10 +464,14 @@ function RevisionCard({ group }: { group: ComparisonGroup }) {
           </section>
           <section aria-label="CI runs" className="min-w-0">
             <h3 className="mb-2 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">
-              CI delivery · {group.ci.length} {group.ci.length === 1 ? "run" : "runs"}
+              CI delivery · {group.ci.length}{" "}
+              {group.ci.length === 1 ? "run" : "runs"}
             </h3>
             {group.ci.length === 0 ? (
-              <MissingRun path="ci" headUnknown={group.presence === "head-unknown"} />
+              <MissingRun
+                path="ci"
+                headUnknown={group.presence === "head-unknown"}
+              />
             ) : (
               <div className="space-y-3">
                 {group.ci.map((run, index) => (
@@ -581,7 +605,10 @@ export default async function ComparePage() {
             <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Revision evidence
             </p>
-            <h2 id="revisions-heading" className="font-heading mt-2 text-3xl font-semibold">
+            <h2
+              id="revisions-heading"
+              className="font-heading mt-2 text-3xl font-semibold"
+            >
               Newest evidence group first
             </h2>
           </div>

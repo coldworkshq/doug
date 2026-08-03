@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getQueue } from "@/lib/api";
 
 const RULES = [
@@ -79,25 +80,28 @@ export default async function Home() {
         <span className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight">
           <DougLogo /> doug
         </span>
-        <span className="glass flex items-center gap-1 rounded-full px-1.5 py-1.5 font-mono text-xs">
+        <span className="panel flex items-center gap-1 rounded-full px-1.5 py-1.5 font-mono text-xs">
           <Link
             href="/queue"
-            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             Queue
           </Link>
           <Link
             href="/compare"
-            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             Compare
           </Link>
           <a
             href="https://github.com/drewjst/doug"
-            className="rounded-full px-3 py-1 transition-colors hover:bg-white/10"
+            className="rounded-full px-3 py-1 transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             GitHub
           </a>
+          <span className="ml-0.5 border-l border-border pl-1.5">
+            <ThemeToggle />
+          </span>
         </span>
       </nav>
 
@@ -108,7 +112,7 @@ export default async function Home() {
               dot over fixture numbers — a confident, false claim on the one
               page most likely to be shared. */}
           <p
-            className="animate-rise glass inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
+            className="animate-rise panel inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
             style={{ animationDelay: "0ms" }}
           >
             {live ? (
@@ -151,7 +155,7 @@ export default async function Home() {
             </Link>
             <a
               href="https://github.com/drewjst/doug"
-              className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
+              className="panel rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               Read the thesis →
             </a>
@@ -159,7 +163,7 @@ export default async function Home() {
         </div>
 
         <div
-          className="animate-rise glass relative self-end overflow-hidden rounded-2xl p-6 md:w-64"
+          className="animate-rise panel relative self-end overflow-hidden rounded-2xl p-6 md:w-64"
           style={{ animationDelay: "320ms" }}
         >
           <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
@@ -187,9 +191,11 @@ export default async function Home() {
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-8">
+      <section className="panel rounded-2xl p-8">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          {live ? "The open queue, pinned by risk" : "A sample queue, pinned by risk"}
+          {live
+            ? "The open queue, pinned by risk"
+            : "A sample queue, pinned by risk"}
         </p>
         <div className="mt-6">
           <ScoreStrip
@@ -206,7 +212,7 @@ export default async function Home() {
         {RULES.map((r) => (
           <div
             key={r.n}
-            className="glass group rounded-2xl p-8 transition-transform hover:-translate-y-1"
+            className="panel group rounded-2xl p-8 transition-transform hover:-translate-y-1"
           >
             <span className="text-iridescent font-mono text-sm">{r.n}</span>
             <h2 className="font-heading mt-3 text-xl font-semibold">
@@ -228,7 +234,7 @@ export default async function Home() {
             {READS.map((r) => (
               <li
                 key={r}
-                className="glass rounded-full px-3.5 py-1.5 font-mono text-xs transition-colors hover:bg-white/10"
+                className="panel rounded-full px-3.5 py-1.5 font-mono text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 {r}
               </li>
@@ -241,7 +247,7 @@ export default async function Home() {
             {NOT_TOLD.map((r) => (
               <li
                 key={r}
-                className="rounded-full border border-white/10 px-3.5 py-1.5 font-mono text-xs text-muted-foreground/70 line-through decoration-white/20"
+                className="rounded-full border border-border px-3.5 py-1.5 font-mono text-xs text-muted-foreground/70 line-through decoration-muted-foreground/30"
               >
                 {r}
               </li>
@@ -255,13 +261,13 @@ export default async function Home() {
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted-foreground">
             Doug does see authorship elsewhere. The deterministic fallback —
             used when a read fails — scores a PR higher when a bot opened it,
-            and the queue tells you who wrote each one, because you need that
-            to route. What it never does is let the reader grade the code
-            against the author&rsquo;s reputation.
+            and the queue tells you who wrote each one, because you need that to
+            route. What it never does is let the reader grade the code against
+            the author&rsquo;s reputation.
           </p>
         </div>
 
-        <div className="glass relative overflow-hidden rounded-2xl p-8">
+        <div className="panel relative overflow-hidden rounded-2xl p-8">
           <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
             What&rsquo;s actually measured
@@ -276,7 +282,7 @@ export default async function Home() {
             on grafana every metadata method we tried lands at or below random.
             Reading the diff is the first thing that survived a second repo.
           </p>
-          <div className="mt-6 border-t border-white/5 pt-5">
+          <div className="mt-6 border-t border-border pt-5">
             <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Published miss rate
             </p>
@@ -284,9 +290,9 @@ export default async function Home() {
               —
             </p>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Not yet. That needs verdicts joined to outcomes in production,
-              and Doug has been live for days, not months. The number lands
-              here with a date next to it, good or bad.
+              Not yet. That needs verdicts joined to outcomes in production, and
+              Doug has been live for days, not months. The number lands here
+              with a date next to it, good or bad.
             </p>
           </div>
         </div>
@@ -304,9 +310,9 @@ export default async function Home() {
           {LAYERS.map((l) => (
             <div
               key={l.title}
-              className="glass group rounded-2xl p-8 transition-transform hover:-translate-y-1"
+              className="panel group rounded-2xl p-8 transition-transform hover:-translate-y-1"
             >
-              <span className="glass rounded-full px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+              <span className="panel rounded-full px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {l.tag}
               </span>
               <h3 className="font-heading mt-4 text-xl font-semibold">
@@ -320,13 +326,13 @@ export default async function Home() {
         </div>
       </section>
 
-      <section className="glass relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
+      <section className="panel relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
         <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-70" />
         <div
           className="pointer-events-none absolute inset-0 opacity-20"
           style={{
             background:
-              "radial-gradient(40rem 16rem at 50% 120%, oklch(0.7 0.12 195 / 60%), transparent 70%)",
+              "radial-gradient(40rem 16rem at 50% 120%, var(--ring), transparent 70%)",
           }}
         />
         <h2 className="font-heading mx-auto max-w-lg text-3xl font-semibold tracking-tight md:text-4xl">
@@ -346,14 +352,14 @@ export default async function Home() {
           </Link>
           <a
             href="https://github.com/drewjst/doug"
-            className="glass rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-white/10"
+            className="panel rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             Star on GitHub
           </a>
         </div>
       </section>
 
-      <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
+      <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border py-8 font-mono text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <DougLogo size={16} /> doug · routes, never blocks
         </span>

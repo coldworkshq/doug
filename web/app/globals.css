@@ -52,7 +52,63 @@
 }
 
 :root {
-  /* Dark SaaS palette with an iridescent accent. */
+  /* Light palette, matched to the GitHub Pages marketing site
+     (drewjst.github.io/doug) so the two surfaces read as one brand. Same
+     hex values as that site's :root, remapped onto shadcn's variable
+     names. This is now the default theme — see .dark below for the
+     "iridescent SaaS" look this app used exclusively before. */
+  --sheen: #5b6470;
+  --flag: #c93a2b;
+  --clear: #177a50;
+  --iridescent: #d1571e;
+
+  --background: #fcfcfa;
+  --foreground: #111311;
+  --card: #ffffff;
+  --card-foreground: #111311;
+  --popover: #ffffff;
+  --popover-foreground: #111311;
+  --primary: #111311;
+  --primary-foreground: #fcfcfa;
+  --secondary: #f6f5f1;
+  --secondary-foreground: #111311;
+  --muted: #f6f5f1;
+  --muted-foreground: #545852;
+  --accent: #fbefe6;
+  --accent-foreground: #a83f0f;
+  --destructive: var(--flag);
+  --border: #e7e5de;
+  --input: #d9d6cd;
+  --ring: #d1571e;
+  --chart-1: #111311;
+  --chart-2: var(--sheen);
+  --chart-3: var(--flag);
+  --chart-4: #545852;
+  --chart-5: #d9d6cd;
+  --radius: 0.875rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #111311;
+  --sidebar-primary: #111311;
+  --sidebar-primary-foreground: #fcfcfa;
+  --sidebar-accent: #fbefe6;
+  --sidebar-accent-foreground: #a83f0f;
+  --sidebar-border: #e7e5de;
+  --sidebar-ring: #d1571e;
+
+  --atmosphere:
+    radial-gradient(
+      50rem 26rem at 50% -8%,
+      rgba(209, 87, 30, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(#d9d6cd 1px, transparent 1px);
+  --atmosphere-size: 100% 100%, 22px 22px;
+}
+
+.dark {
+  /* Doug-web's original (and, until now, only) theme: dark SaaS palette
+     with an iridescent accent. Preserved exactly so toggling dark looks
+     identical to how this app looked before the light theme existed. */
   --sheen: oklch(0.82 0.12 190);
   --flag: oklch(0.72 0.16 40);
   --clear: oklch(0.78 0.11 165);
@@ -89,41 +145,22 @@
   --sidebar-accent: oklch(0.26 0.03 220);
   --sidebar-accent-foreground: oklch(0.9 0.06 195);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: var(--sheen);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --atmosphere:
+    radial-gradient(
+      60rem 32rem at 15% -10%,
+      oklch(0.7 0.12 195 / 14%),
+      transparent 60%
+    ),
+    radial-gradient(
+      50rem 28rem at 85% -5%,
+      oklch(0.6 0.15 300 / 12%),
+      transparent 60%
+    ),
+    linear-gradient(oklch(1 0 0 / 2.5%) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 2.5%) 1px, transparent 1px);
+  --atmosphere-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
 }
 
 @layer base {
@@ -134,30 +171,23 @@
     @apply bg-background text-foreground;
     position: relative;
   }
-  /* Atmosphere: iridescent glows and a faint engineering grid. */
+  /* Atmosphere: a soft accent glow plus a faint texture, both theme-aware
+     via the --atmosphere custom properties above. */
   body::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: -1;
-    background:
-      radial-gradient(60rem 32rem at 15% -10%, oklch(0.7 0.12 195 / 14%), transparent 60%),
-      radial-gradient(50rem 28rem at 85% -5%, oklch(0.6 0.15 300 / 12%), transparent 60%),
-      linear-gradient(oklch(1 0 0 / 2.5%) 1px, transparent 1px),
-      linear-gradient(90deg, oklch(1 0 0 / 2.5%) 1px, transparent 1px);
-    background-size:
-      100% 100%,
-      100% 100%,
-      44px 44px,
-      44px 44px;
+    background: var(--atmosphere);
+    background-size: var(--atmosphere-size);
   }
   html {
     @apply font-sans;
   }
   ::selection {
-    background: var(--sheen);
-    color: var(--background);
+    background: var(--accent);
+    color: var(--accent-foreground);
   }
 }
 
@@ -175,7 +205,10 @@
   .animate-rise {
     animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  /* Brand gradient, for text and hairline accents. */
+  /* Brand accent, for text and hairline highlights. --iridescent is a
+     solid color in light mode (matching the GitHub Pages site's h1 .hl)
+     and the original gradient in dark mode — background-clip handles
+     both uniformly. */
   .text-iridescent {
     background: var(--iridescent);
     -webkit-background-clip: text;
@@ -184,6 +217,15 @@
   }
   .bg-iridescent {
     background: var(--iridescent);
+  }
+  /* Bento-style panel: solid card + hairline border, matching the
+     GitHub Pages site's .cell. Used by the landing page (app/page.tsx).
+     /queue, /compare, and the shared loading skeleton still use .glass
+     below — they're forced dark regardless of the site theme, so the
+     frosted look it was tuned for still applies unchanged. */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
   }
   .glass {
     background: oklch(1 0 0 / 4%);
