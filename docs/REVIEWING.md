@@ -32,6 +32,34 @@ Neither was a bad finding; both were unresolvable from what it was shown. Check 
 surrounding code before fixing or dismissing, and record which one it was. The same rule
 binds agent reviewers, who should mark these ⚠️ rather than assert them.
 
+## Settle a resolution finding with the check that already ran
+
+PR #28's `reader:missing-import` said `threading.Thread` was newly used with no
+`import threading` in the diff. The import was already at `api/doug/api.py:7`, three tests
+spawn that thread, and `ruff check` — which runs on every PR under
+`select = ["E", "F", "I", "UP", "B"]` — was green before Doug emitted the finding. F821 is
+undefined-name. **The falsifier had already run.**
+
+Before disposing a finding about a name, an import, or a symbol, check whether CI already
+answered it. Ruff's boundary, measured 2026-08-02 against a probe file with that exact
+select list:
+
+| ruff catches | ruff misses |
+|---|---|
+| `F821` undefined name, intra-file — including a function-scoped import referenced from another function | a `TYPE_CHECKING`-only import dereferenced at runtime (a live `NameError`) |
+| `F403` / `F405` star imports | `from x import Y` where `Y` is absent from the target module |
+| | an import of a module that does not exist at all |
+| | `getattr(obj, "made_up_attribute", "")` |
+
+Those four are the only places a resolution finding can still be real. Everything else in
+the class is disproved by a command that ran green before the review started.
+
+The general form is worth more than the table. **A claim about an absence cannot be settled
+by looking at the same place the claim came from.** "No `import threading` was added" is a
+fact about the diff; whether the import exists is a fact about the repo. Re-reading the diff
+confirms the finding every time and proves nothing — the check and the error are the same
+observation. Go to the file.
+
 ## Verify platform semantics before fixing a platform finding
 
 PR #22 produced a plausible warning that a `neutral` check run might not satisfy a
@@ -126,6 +154,49 @@ that was. Before accepting one, check whether the fix it suggests is the fix the
 actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
 was not to add a lock but to upgrade an already-planned index to a unique one.
 
+## Log every finding, not only the ones that taught something
+
+"Roughly half" above is an impression, not a measurement, and this file cannot make it one:
+a finding that produced no lesson never got written down, so there is no denominator here
+and never will be.
+
+`docs/findings-log.jsonl` is the denominator. One line per finding, appended at disposition
+time — when you already hold the answer, because the rule above already makes you name the
+file that settled it before dismissing anything. It is transcription, not new work.
+
+```json
+{"date":"2026-08-02","pr":28,"layer":"doug","rule":"reader:missing-import",
+ "verdict":"disproved","changed":false,
+ "settled_by":"api/doug/api.py:7 — already imported; ruff F821 green before the finding",
+ "source":"prospective","note":"optional, one line"}
+```
+
+(Shown wrapped; it is one line in the file. `jq -e . docs/findings-log.jsonl` is the check.)
+
+`layer` is `doug` or `agent-reviewer` — the two layers this file exists to track, kept
+separable so one never speaks for the other. `verdict` is `real | disproved | adjacent`.
+
+Three rules, each of which someone will otherwise get wrong:
+
+- **`adjacent` is not a soft `disproved`.** It is the third category above — wrong as
+  stated, right about something nearby — and it is *the valuable one and the easiest to
+  throw away*. Two of the entries seeded into the log bought a test each while being false.
+- **`changed` is a separate axis from `verdict`, and you need both.** A true finding that
+  changed nothing is a re-report of something the code already documents; a false finding
+  that changed something found a real gap by the wrong route. Collapsing them into one
+  column loses exactly the distinction that makes the log worth keeping, and it would score
+  Doug's best mode — *"this code does not justify itself"* — as failure.
+- **Backfilled rows carry `"source":"backfill"` and are excluded from every rate.** The
+  seeded rows were reconstructed from this file's prose and from `IDEAS.md`, not recorded at
+  disposition. They demonstrate the schema; they are not evidence. The denominator starts
+  with the first `prospective` row. Same discipline as `verdicts.source` quarantining
+  `replay` and `research` from published numbers.
+
+**This is not precision.** ADR-0005 reserves that word for defect prediction and mandates
+two tables for it. Whether a finding is *true* is a different quantity from whether it
+*predicted a defect* — a finding can be true and worthless, or false and load-bearing. Never
+report a rate from this log as precision, and never put the two in the same table.
+
 ## A shared commit SHA does not make App and CI the same idempotency domain
 
 PR #38's medium finding said making `find_review` require NULL App ids intentionally
@@ -217,8 +288,13 @@ missing-migration finding as Critical/High:
 1. Read Doug's coverage line (unread `migrations.py` / tests are a stop sign).
 2. Open the full `MIGRATIONS` list and search for `ADD COLUMN <name>` in *every* version,
    not only the ones in the diff hunk.
-3. Confirm the `Table()` definition and the migration agree (the reverse-drift tests exist
-   for this).
+3. Confirm the `Table()` definition and the migration agree — but know how far that guard
+   reaches. `test_no_migrated_table_has_a_column_unaccounted_for_by_baseline_or_migration`
+   (`api/tests/test_migrations.py:163`) loops `for table in _BASELINE_DDL`, and
+   `_BASELINE_DDL` holds **only `verdicts` and `outcomes`**. A new column on `findings`,
+   `reads`, or `deviations` is unguarded in both directions: the suite stays green while
+   production lacks the column. Add the table to `_BASELINE_DDL` in the same PR that adds
+   the column, or the drift test everyone will cite is not watching.
 
 If the column is already migrated outside the diff, say so in the disposition and name the
 version + landing PR. Do not add a duplicate `ALTER` "to be safe" — that is noise, and on
