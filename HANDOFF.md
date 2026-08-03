@@ -39,16 +39,95 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
           Rebase vs. merged #15 still to be done deliberately. AFTER the
           soak and Task 9, M1's exit gate is checkable end to end.
 
+          SOAK TALLY as of 2026-08-02 ~15:30Z (counted from the prod logs;
+          nothing was counting it before, so re-count rather than trust this
+          if much time has passed). Source: `gcloud run services logs read
+          doug-api --region us-central1 --project doug-prod0 | grep
+          "doug: reviewed"`.
+          1. MULTIPLE PUSHES — MET, twice: #37 (78649827, bc0968a5) and #38
+             (1294e160, bee606e2) each scored at two head SHAs.
+          2. COLD START, sweep enqueues >0 — NOT MET, and it will NOT be met
+             by waiting. Every reconcile line in the window says "enqueued 0
+             job(s)". The webhook path drains jobs promptly, so at any boot
+             there is nothing pending for the sweep to find. The criterion
+             asks the backstop to prove itself, and passive soaking cannot
+             create the condition it needs. ANDREW RULED 2026-08-02: FORCE
+             THE CONDITION, rather than rewrite the criterion or drop it —
+             it was written to test an untested claim, so weakening it to
+             pass would defeat its purpose. Procedure agreed, NOT YET RUN
+             and deliberately not run unattended, because step 1 is a
+             deliberate production degradation: (1) stop deliveries reaching
+             the queue, (2) push to an open PR so no job is enqueued, (3)
+             let the service cold-start, (4) expect "doug: reconcile
+             enqueued 1 job(s)" plus a check run for that SHA. Costs one
+             paid read. Run this WITH Andrew, not for him.
+          3. MERGE writes an outcome_jobs row — UNVERIFIED. #35/#36/#37 all
+             merged 2026-08-02 and no log line covers this path, so it needs
+             a ledger read, not a grep. Cheapest honest check available.
+          4. ~10 CHECK RUNS none missing — 7/10. Reviews: #30@afee4cac,
+             #35@5c59fe84, #36@36606df3, #37 ×2, #38 ×2. No gaps: every PR
+             that saw a push since the line existed produced one. Note the
+             count only starts at #34's merge (06:22Z), because the
+             "reviewed" line did not exist before it.
+
           M2 SAFETY WORK IS NOW MOSTLY DONE, out of order and deliberately,
           because the cutover changed the risk: paid reads are now triggered
           by webhook deliveries — PR activity Doug does not control — rather
           than by our own CI. Merged: #35 (/v1/score/read was unauthenticated
-          AND paid on a public --allow-unauthenticated service; now gated).
-          OPEN AS PR #37: the spend cap wired to every paid call site, plus
-          per-read cost capture. Once #37 lands, spend is bounded and
-          measurable for the first time.
+          AND paid on a public --allow-unauthenticated service; now gated)
+          and #37 (MERGED 2026-08-02T07:26Z, a8cc396, main's HEAD): the spend
+          cap wired to every paid call site, plus per-read cost capture.
+          Spend is now bounded AND measured — the cost lines are live in
+          production, confirmed on the serving revision from 15:16Z.
 
           The remaining M2 items, in the order I would do them:
+          0. NEW, FOUND 2026-08-02 BY READING #37's OWN COST LINES — the
+             intent read's per-installation flag DOES NOT EXIST. design-lock
+             .md:62 (red-team mitigation "overclaim #4 = scope #1") commits
+             to "per-installation flag, default OFF, ON for the dogfood
+             install; labeled experimental; stays off until the pre-
+             registered positive control passes." What is actually in the
+             code is a PROCESS-WIDE env var: intent.enabled() is
+             `os.environ.get("DOUG_INTENT") == "1"` (api/doug/intent.py:73,
+             duplicated at api/doug/reader.py:527), consulted once in
+             review.read_intent (api/doug/review.py:307) and never per
+             installation. It is ON in production — the kind=intent lines
+             prove it. Harmless at one installation; the moment there is a
+             second, that tenant gets the experimental read, charged to
+             THEIR ceiling, with no per-tenant off switch. M2's exit gate is
+             "safe to point at strangers", so this belongs in M2 and is not
+             on the roadmap's M2 list at all. NOT a live incident: install
+             visibility is still "Only on this account".
+             BUILT — PR #39 OPEN (branch intent-per-installation-flag; 500
+             passed, was 492; ruff clean; 6 mutations caught). Doug reviewed
+             it: FLAGGED 0.32 vs 0.30, and its 90% PARTIAL READ was caused by
+             a stray file this branch should never have carried (see the
+             git-add note below). Findings answered in a PR comment — 2
+             fixed (canonical scope parsing; the deploy test now pins "and
+             nobody else" instead of unpacking one line), 1 disproved
+             (reader.intent_enabled had no caller anywhere), 1 already
+             disclosed (config drift until gcp.sh runs). Andrew ruled ENV
+             ALLOWLIST over an installations column — no migration, no
+             collision with 005, right size for one install; it becomes a
+             column when item 3's dispense work opens that table anyway.
+             Shape: intent.enabled_for(installation_id) over
+             DOUG_INTENT_INSTALLATIONS, with the id derived from the SAME
+             scope string the spend cap charges (reader.installation_from_
+             scope), so payer and opted-in party cannot drift. Untenanted
+             callers → None → no intent read, which also halves the soak's
+             intent spend. gcp.sh switched to the allowlist and PINNED by a
+             test, because silent-off is the safe direction and therefore
+             the easy one to ship by accident.
+             NOT YET DEPLOYED — until gcp.sh runs, prod still has the old
+             DOUG_INTENT=1 and the fix is source-only.
+             Cost context, first real numbers Doug has ever had: on #38 each
+             push bought FOUR reads, because the soak dual-runs both paths —
+             risk and intent, each on scope=installation:150424894 and again
+             on scope=untenanted. The intent read is the LARGER of the two
+             (in=16601/out=1305 vs in=14031/out=925), so the unvalidated
+             feature is over half the input tokens per PR. Cross-reference
+             the derangement check below: intent findings are UNBELIEVED and
+             a positive control is still unrun.
           1. Migration 005 (NOT 003 — #30 took 003 and 004): the UNIQUE
              index on verdicts. Now an integrity item, not a spend one —
              see the roadmap entry, rewritten 2026-08-02.
@@ -111,6 +190,19 @@ Execution model (do not rediscover this):
   at 3267 of that slice), T9 4025-4244, T10 4245-4591.
 
 Standing rules this branch learned the hard way:
+- NEVER `git add -A` at this repo's root. The main worktree carries other
+  sessions' UNTRACKED files — .claude/worktrees/ holds six live branches —
+  and a repo-wide add swept a landing-theme design spec into #39. It cost a
+  commit to undo and it degraded Doug's review of that PR to a 90% partial
+  read, cut inside the stray itself. Stage explicit paths. Undo with
+  `git rm --cached` so the other session's on-disk copy survives.
+- Doug's deviation stream is UNBELIEVED by policy (failed derangement check)
+  and has now flagged the real defect TWICE on the same subject: arms.json:187
+  had already caught the DOUG_INTENT=1 service-wide deviation that #39 fixes,
+  and the #39 review's beyond-ticket finding is what caught the stray file.
+  This is NOT validation — a failed derangement check validates nothing in
+  either direction — but it is the concrete argument for scheduling the
+  positive control instead of leaving the tier disbelieved indefinitely.
 - A docstring asserting a durability/ordering/concurrency property must be
   TRUE. Eight separate findings here were comments promising guarantees
   the code did not make. If nothing enforces the claim, the comment is the
@@ -211,8 +303,9 @@ Decisions this session (2026-08-01/02, cutover + the logging it exposed):
   than claiming a guarantee it does not make.
 - Key rotation CLOSED and verified rather than trusted: the plaintext
   api/.backtest-cache/llm-probe/api-key is gone (whole llm-probe/ directory
-  with it) and doug-anthropic-key has a v2 created 2026-08-02. v1 still
-  enabled — recorded as a loose end, not ticked away.
+  with it) and doug-anthropic-key has a v2 created 2026-08-02. The "v1 still
+  enabled" loose end this line used to carry is CLOSED — v1 is disabled and
+  verified; see Blockers, which is the current record.
 - ROADMAP's Task 10/Task 9 item SPLIT into two boxes. One box covering two
   tasks cannot record that one is done and the other is not — rejected:
   ticking the combined line, which would have read as Task 9 being done.

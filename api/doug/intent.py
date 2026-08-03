@@ -69,8 +69,27 @@ class IntentDoc(BaseModel):
     ref: str  # provenance, carried into every deviation finding
 
 
-def enabled() -> bool:
-    return os.environ.get("DOUG_INTENT") == "1"
+ALLOWLIST_ENV = "DOUG_INTENT_INSTALLATIONS"
+
+
+def enabled_for(installation_id: int | None) -> bool:
+    """Is the experimental intent tier on for THIS installation?
+
+    design-lock.md:62 ("overclaim #4 = scope #1") scopes this tier to a
+    per-installation flag, default OFF, on for the dogfood install only,
+    and holds it there until the pre-registered positive control passes.
+    The 2026-07-31 derangement check FAILED its bar, so that control is
+    still unrun and every deviation finding is unbelieved — an unset
+    allowlist therefore enables nobody rather than everybody.
+
+    This replaced a process-wide DOUG_INTENT env var, which turned the tier
+    on for every installation the service reviewed. Doug's own intent probe
+    flagged exactly that deviation against ADR-0008.
+    """
+    if installation_id is None:
+        return False
+    allow = os.environ.get(ALLOWLIST_ENV, "")
+    return str(installation_id) in {i.strip() for i in allow.split(",") if i.strip()}
 
 
 def _tokens(text: str) -> set[str]:

@@ -5,6 +5,8 @@ anything if it is enforced, so these tests treat "the score changed
 because intent ran" as the defect it would be.
 """
 
+import re
+
 from sqlalchemy import create_engine, select
 
 from doug import intent_providers, reader, review, store
@@ -60,7 +62,9 @@ def _db(tmp_path, monkeypatch):
 
 def _enable(monkeypatch, docs=(DOC,)):
     monkeypatch.setenv("DOUG_READER", "1")
-    monkeypatch.setenv("DOUG_INTENT", "1")
+    # SCOPE is installation 1, so that is the installation these tests opt
+    # in — the tier is per-installation now, not process-wide.
+    monkeypatch.setenv("DOUG_INTENT_INSTALLATIONS", "1")
     monkeypatch.setattr(intent_providers, "fetch", lambda *a, **k: list(docs))
     client = FakeClient(INTENT_PAYLOAD)
     monkeypatch.setattr(
@@ -145,11 +149,23 @@ def test_an_intent_read_at_the_cap_is_named_apart_from_a_broken_one(monkeypatch)
     assert out.rule == "intent-capped"
 
 
-def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
+def test_the_untenanted_review_path_buys_no_intent_read_at_all(
     tmp_path, monkeypatch
 ):
-    """Operators and precision must see a broken intent path on the verdict,
-    not a quietly empty deviations list that looks like 'no ADRs'."""
+    """/v1/review is the CI path: it charges SENTINEL_SCOPE and holds no
+    installation, so there is nobody who could have opted into the
+    experimental tier and it must not run.
+
+    This test used to assert the opposite — that a BROKEN intent read
+    surfaced `intent-unavailable` in this response — because the tier was
+    switched on process-wide and therefore ran here too. That property did
+    not disappear, it moved to where the tier actually runs: the unit case
+    is `test_read_intent_returns_failure_when_the_read_fails` above, and the
+    App path is `test_a_failed_intent_read_reaches_the_verdict_under_its_own
+    _name` in test_worker.py. What is pinned HERE is the new invariant: this
+    path's empty deviations list is honest emptiness, not a swallowed
+    failure.
+    """
     from fastapi.testclient import TestClient
 
     from doug.api import app
@@ -160,7 +176,7 @@ def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
     _enable(monkeypatch)
 
     def _boom(pr, diff, chosen, *, scope):
-        raise reader.ReaderError("timeout")
+        raise AssertionError("the untenanted CI path bought an intent read")
 
     monkeypatch.setattr(reader, "read_with_decisions", _boom)
     monkeypatch.setattr(
@@ -187,7 +203,9 @@ def test_failed_intent_read_surfaces_intent_unavailable_without_moving_score(
     ).json()
     assert body["score"] == 0.4 and body["band"] == "cleared"
     assert body["deviations"] == []
-    assert any(r["rule"] == "intent-unavailable" for r in body["reasons"])
+    # No intent reason of ANY kind: the read never happened, so neither
+    # "it broke" nor "it was capped" would be a true thing to say.
+    assert not any(r["rule"].startswith("intent-") for r in body["reasons"])
 
 
 def test_read_intent_carries_provenance(monkeypatch):
@@ -276,3 +294,169 @@ def test_decision_prompt_is_not_the_ticket_prompt():
     assert "decisions this team has" in reader.DECISION_INTENT_SYSTEM
     assert "claims to resolve" not in reader.DECISION_INTENT_SYSTEM
     assert reader.DECISION_INTENT_SYSTEM.startswith(reader.SYSTEM[:60])
+
+
+# --- The per-installation gate -------------------------------------------
+#
+# design-lock.md:62 (red-team mitigation "overclaim #4 = scope #1") commits
+# the intent tier to a "per-installation flag, default OFF, ON for the
+# dogfood install; labeled experimental; stays off until the pre-registered
+# positive control passes." The 2026-07-31 derangement check FAILED its bar,
+# so that positive control is still unrun and every deviation finding is
+# UNBELIEVED. These tests treat "an installation nobody opted in paid for an
+# experimental read" as the defect it would be — the intent read is the
+# LARGER of the two paid reads (in=16601 vs in=14031 on #38), so this is the
+# expensive direction to be wrong in.
+
+DOGFOOD = 150424894
+
+
+def _no_read_may_happen(monkeypatch):
+    """Booby-trap the paid call site.
+
+    Asserting `read_intent(...) is None` alone would still pass if the read
+    were bought and its result discarded. This fails on the *purchase*.
+    """
+
+    def _explode(*a, **k):
+        raise AssertionError("a disabled installation reached the paid intent read")
+
+    monkeypatch.setattr(reader, "read_with_decisions", _explode)
+    monkeypatch.setattr(intent_providers, "fetch", lambda *a, **k: [DOC])
+    # DOUG_INTENT=1 deliberately. Without it these tests pass whether or not
+    # an allowlist exists, because the old process-wide gate being off is
+    # enough to return None on its own — they would be vacuous. Setting it
+    # makes the allowlist the ONLY thing that can keep the read from firing.
+    monkeypatch.setenv("DOUG_INTENT", "1")
+
+
+def test_an_installation_off_the_allowlist_buys_no_intent_read(monkeypatch):
+    """The whole point: one tenant opting in must not opt in the next one."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setenv("DOUG_INTENT_INSTALLATIONS", str(DOGFOOD))
+    _no_read_may_happen(monkeypatch)
+
+    stranger = reader.installation_scope(999)
+    assert review.read_intent(None, "o", "r", _pr(), "+ x", scope=stranger) is None
+
+
+def test_the_allowlisted_installation_still_gets_its_intent_read(monkeypatch):
+    """The other half — a gate that blocks everything is not a gate.
+
+    DOUG_INTENT is deliberately UNSET here: the allowlist alone must be able
+    to turn the read on, or the old switch is still load-bearing."""
+    _enable(monkeypatch)
+    # After _enable, which sets its own allowlist — this test is about the
+    # dogfood id specifically.
+    monkeypatch.setenv("DOUG_INTENT_INSTALLATIONS", str(DOGFOOD))
+    monkeypatch.delenv("DOUG_INTENT", raising=False)
+
+    got = review.read_intent(None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD))
+    assert isinstance(got, review.IntentRead)
+
+
+def test_intent_is_off_when_no_allowlist_is_configured(monkeypatch):
+    """Default OFF, per design-lock. An unset env var must not mean 'all'."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.delenv("DOUG_INTENT_INSTALLATIONS", raising=False)
+    _no_read_may_happen(monkeypatch)
+
+    assert review.read_intent(
+        None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD)
+    ) is None
+
+
+def test_untenanted_callers_never_buy_an_intent_read(monkeypatch):
+    """The CI path, the credential probe, the CLI and the intent probe all
+    charge SENTINEL_SCOPE and hold no installation. There is no installation
+    to have opted in, so the experimental read must not fire for them."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setenv("DOUG_INTENT_INSTALLATIONS", str(DOGFOOD))
+    _no_read_may_happen(monkeypatch)
+
+    assert review.read_intent(
+        None, "o", "r", _pr(), "+ x", scope=reader.SENTINEL_SCOPE
+    ) is None
+
+
+def test_the_old_global_env_var_cannot_enable_intent_by_itself(monkeypatch):
+    """DOUG_INTENT=1 was a process-wide switch: it turned the experimental
+    read on for every installation the service reviewed. Doug's own intent
+    probe flagged that deviation (.backtest-cache/decision-intent-probe/
+    arms.json:187) and it was disbelieved along with the rest of the tier.
+    Deleting the switch is the fix; this pins that it cannot creep back as a
+    second, wider gate beside the allowlist."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.setenv("DOUG_INTENT", "1")
+    monkeypatch.delenv("DOUG_INTENT_INSTALLATIONS", raising=False)
+    _no_read_may_happen(monkeypatch)
+
+    assert review.read_intent(
+        None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD)
+    ) is None
+
+
+def test_installation_id_round_trips_through_the_scope_string(monkeypatch):
+    """The flag reads the same string the spend cap charges, so the two can
+    never disagree about whose read this is."""
+    assert reader.installation_from_scope(reader.installation_scope(DOGFOOD)) == DOGFOOD
+    assert reader.installation_from_scope(reader.SENTINEL_SCOPE) is None
+
+
+def test_the_deployed_config_opts_the_dogfood_installation_in_and_nobody_else():
+    """A per-installation flag whose deployment still sets the retired
+    process-wide switch is a flag in the source and nothing in production.
+
+    The gate defaults OFF, so a stale deploy config cannot over-enable — it
+    silently turns the dogfood intent read OFF instead. Silent-off is the
+    safe direction and therefore the easy one to ship by accident, which is
+    exactly why it is pinned here rather than left to the deploy checklist.
+    """
+    from pathlib import Path
+
+    from doug import intent
+
+    gcp = (Path(__file__).resolve().parents[1] / "deploy" / "gcp.sh").read_text()
+    # The DEPLOYED env vars, not the prose around them — the comment above
+    # them names the retired switch in order to explain why it is gone, and
+    # a test that cannot tell those apart would forbid documenting it.
+    # Every deployed env block, joined — NOT "the one line containing
+    # DOUG_READER". An earlier draft unpacked exactly one such line and
+    # broke the moment it met the second service's block, which is a test
+    # failing on the file's shape rather than on the config being wrong.
+    # Adding a service, reflowing a continuation or changing the quoting
+    # must not fail this; deploying the wrong thing must.
+    deployed = "\n".join(
+        ln for ln in gcp.splitlines()
+        if "--set-env-vars" in ln and not ln.lstrip().startswith("#")
+    )
+
+    opted_in = re.findall(rf"{intent.ALLOWLIST_ENV}=([^,\"'\s]*)", deployed)
+    assert opted_in, "the deploy configures no intent allowlist at all"
+    # "and nobody else" is half the property and the half a substring check
+    # would have missed: this reads the VALUE, so adding a second id fails.
+    assert opted_in == [str(DOGFOOD)]
+    assert "DOUG_INTENT=1" not in deployed, (
+        "the retired process-wide switch is still deployed"
+    )
+
+
+def test_only_a_canonical_scope_string_names_an_installation():
+    """installation_from_scope is the exact inverse of installation_scope,
+    and nothing looser.
+
+    'installation:007' and 'installation:-5' are not strings this codebase
+    can produce — installation_scope builds them all — so accepting them
+    would mean honouring an id that came from somewhere else. int() alone
+    would take both, and '007' would then resolve to installation 7 while
+    an allowlist entry of '007' matched nothing: two spellings of one id,
+    disagreeing. Refusing is the safe direction — an unrecognised scope
+    names nobody, and nobody is opted in.
+    """
+    assert reader.installation_from_scope("installation:007") is None
+    assert reader.installation_from_scope("installation:-5") is None
+    assert reader.installation_from_scope("installation: 7") is None
+    assert reader.installation_from_scope("installation:") is None
+    assert reader.installation_from_scope("installation:abc") is None
+    # The canonical form still round-trips, including a plain zero.
+    assert reader.installation_from_scope(reader.installation_scope(7)) == 7

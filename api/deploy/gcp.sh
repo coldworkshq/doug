@@ -194,8 +194,11 @@ promote_if_healthy() { # $1 service, $2 smoke path
 deploy() {
   local traffic_flags=""
   service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
-  # Both tiers are set here on purpose: --set-env-vars replaces the whole
-  # env block, so anything set out-of-band is wiped by the next deploy.
+  # Both tiers are configured here on purpose: --set-env-vars replaces the
+  # whole env block, so anything set out-of-band is wiped by the next deploy.
+  # That cuts both ways for the intent allowlist below — an installation
+  # opted in by hand on the console does not survive a deploy, so opting one
+  # in means editing this line.
   #
   # --no-cpu-throttling: the drain runs *after* the response is written
   # (BackgroundTasks) and again in the startup reconcile thread. Under
@@ -206,6 +209,15 @@ deploy() {
   #
   # DOUG_GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are what app_auth.enabled()
   # reads; both must be present or there is no App path at all.
+  #
+  # DOUG_INTENT_INSTALLATIONS is an ALLOWLIST, not a switch. It replaced
+  # DOUG_INTENT=1, which turned the experimental intent tier on for every
+  # installation this service reviews — fine while there is one, wrong the
+  # moment there are two, because that tier's findings are still unbelieved
+  # (the 2026-07-31 derangement check failed its bar) and its read is the
+  # larger of the two paid reads. 150424894 is the dogfood installation on
+  # drewjst. Adding an id here opts a real tenant into an experiment and
+  # charges them for it, so it is a deliberate act, not a default.
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
@@ -213,7 +225,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT=1,DOUG_GITHUB_APP_ID=4450932" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
