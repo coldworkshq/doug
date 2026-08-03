@@ -25,6 +25,7 @@
      code-rail's .block surface, one step darker than --night — reused here
      it would collide with that, so the toggle's card tone is spelled out */
   :root[data-theme="dark"]{
+    color-scheme:dark;
     --bg:var(--night);
     --bg2:#181B18;
     --card:#181B18;
@@ -42,6 +43,8 @@
     --plan:#8FBBD9;
     --plan-soft:rgba(143,187,217,.14);
   }
+  :root[data-theme="dark"] .codecol{background:#0B0D0B}
+  :root[data-theme="dark"] .block{background:#000}
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
   html,body{margin:0;padding:0}
@@ -69,6 +72,7 @@
   .llmtxt{font-family:var(--mono);font-size:11.5px;color:var(--ink3);text-decoration:none}
   .llmtxt:hover{color:var(--ink)}
   @media(max-width:640px){.llmtxt,.toplink{display:none}}
+  @media(max-width:520px){.llmbtn{padding:7px 9px}.llmbtn span{display:none}}
   .gh{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;text-decoration:none;
     border:1px solid var(--line2);border-radius:9px;padding:7px 13px}
   .gh:hover{border-color:var(--ink3)}
@@ -186,7 +190,7 @@
   <div class="topspace"></div>
   <button class="llmbtn" id="copyllm" type="button" title="Copy these docs as markdown for an LLM's context window">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-    Copy for LLM
+    <span>Copy for LLM</span>
   </button>
   <a class="llmtxt" href="../llms.txt">llms.txt</a>
   <a class="toplink" href="../#scoreboard">The scoreboard</a>
