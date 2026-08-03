@@ -98,8 +98,15 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
              "safe to point at strangers", so this belongs in M2 and is not
              on the roadmap's M2 list at all. NOT a live incident: install
              visibility is still "Only on this account".
-             BUILT — PR #39 OPEN (branch intent-per-installation-flag; 499
-             passed, was 492; ruff clean; 4 mutations caught). Andrew ruled ENV
+             BUILT — PR #39 OPEN (branch intent-per-installation-flag; 500
+             passed, was 492; ruff clean; 6 mutations caught). Doug reviewed
+             it: FLAGGED 0.32 vs 0.30, and its 90% PARTIAL READ was caused by
+             a stray file this branch should never have carried (see the
+             git-add note below). Findings answered in a PR comment — 2
+             fixed (canonical scope parsing; the deploy test now pins "and
+             nobody else" instead of unpacking one line), 1 disproved
+             (reader.intent_enabled had no caller anywhere), 1 already
+             disclosed (config drift until gcp.sh runs). Andrew ruled ENV
              ALLOWLIST over an installations column — no migration, no
              collision with 005, right size for one install; it becomes a
              column when item 3's dispense work opens that table anyway.
@@ -183,6 +190,19 @@ Execution model (do not rediscover this):
   at 3267 of that slice), T9 4025-4244, T10 4245-4591.
 
 Standing rules this branch learned the hard way:
+- NEVER `git add -A` at this repo's root. The main worktree carries other
+  sessions' UNTRACKED files — .claude/worktrees/ holds six live branches —
+  and a repo-wide add swept a landing-theme design spec into #39. It cost a
+  commit to undo and it degraded Doug's review of that PR to a 90% partial
+  read, cut inside the stray itself. Stage explicit paths. Undo with
+  `git rm --cached` so the other session's on-disk copy survives.
+- Doug's deviation stream is UNBELIEVED by policy (failed derangement check)
+  and has now flagged the real defect TWICE on the same subject: arms.json:187
+  had already caught the DOUG_INTENT=1 service-wide deviation that #39 fixes,
+  and the #39 review's beyond-ticket finding is what caught the stray file.
+  This is NOT validation — a failed derangement check validates nothing in
+  either direction — but it is the concrete argument for scheduling the
+  positive control instead of leaving the tier disbelieved indefinitely.
 - A docstring asserting a durability/ordering/concurrency property must be
   TRUE. Eight separate findings here were comments promising guarantees
   the code did not make. If nothing enforces the claim, the comment is the
