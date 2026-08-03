@@ -5,6 +5,8 @@ anything if it is enforced, so these tests treat "the score changed
 because intent ran" as the defect it would be.
 """
 
+import re
+
 from sqlalchemy import create_engine, select
 
 from doug import intent_providers, reader, review, store
@@ -418,14 +420,43 @@ def test_the_deployed_config_opts_the_dogfood_installation_in_and_nobody_else():
     # The DEPLOYED env vars, not the prose around them — the comment above
     # them names the retired switch in order to explain why it is gone, and
     # a test that cannot tell those apart would forbid documenting it.
-    env_lines = [
+    # Every deployed env block, joined — NOT "the one line containing
+    # DOUG_READER". An earlier draft unpacked exactly one such line and
+    # broke the moment it met the second service's block, which is a test
+    # failing on the file's shape rather than on the config being wrong.
+    # Adding a service, reflowing a continuation or changing the quoting
+    # must not fail this; deploying the wrong thing must.
+    deployed = "\n".join(
         ln for ln in gcp.splitlines()
         if "--set-env-vars" in ln and not ln.lstrip().startswith("#")
-    ]
-    # doug-api and doug-web each get one block; the tier belongs to the API.
-    (api_env,) = [ln for ln in env_lines if "DOUG_READER=1" in ln]
-    assert f"{intent.ALLOWLIST_ENV}={DOGFOOD}" in api_env
-    # Checked across BOTH services, not just the one that should carry it.
-    assert not any("DOUG_INTENT=1" in ln for ln in env_lines), (
+    )
+
+    opted_in = re.findall(rf"{intent.ALLOWLIST_ENV}=([^,\"'\s]*)", deployed)
+    assert opted_in, "the deploy configures no intent allowlist at all"
+    # "and nobody else" is half the property and the half a substring check
+    # would have missed: this reads the VALUE, so adding a second id fails.
+    assert opted_in == [str(DOGFOOD)]
+    assert "DOUG_INTENT=1" not in deployed, (
         "the retired process-wide switch is still deployed"
     )
+
+
+def test_only_a_canonical_scope_string_names_an_installation():
+    """installation_from_scope is the exact inverse of installation_scope,
+    and nothing looser.
+
+    'installation:007' and 'installation:-5' are not strings this codebase
+    can produce — installation_scope builds them all — so accepting them
+    would mean honouring an id that came from somewhere else. int() alone
+    would take both, and '007' would then resolve to installation 7 while
+    an allowlist entry of '007' matched nothing: two spellings of one id,
+    disagreeing. Refusing is the safe direction — an unrecognised scope
+    names nobody, and nobody is opted in.
+    """
+    assert reader.installation_from_scope("installation:007") is None
+    assert reader.installation_from_scope("installation:-5") is None
+    assert reader.installation_from_scope("installation: 7") is None
+    assert reader.installation_from_scope("installation:") is None
+    assert reader.installation_from_scope("installation:abc") is None
+    # The canonical form still round-trips, including a plain zero.
+    assert reader.installation_from_scope(reader.installation_scope(7)) == 7

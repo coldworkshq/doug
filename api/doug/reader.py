@@ -226,13 +226,21 @@ def installation_from_scope(scope: str) -> int | None:
     parameter that could disagree with it. Un-tenanted callers charge
     SENTINEL_SCOPE and get None — there is no installation to have opted
     into anything, which is the safe direction to be wrong in.
+
+    Canonical form only — exactly what installation_scope emits. A looser
+    int() would accept "installation:007" as installation 7, which no code
+    here can produce, and an allowlist entry of "007" would then fail to
+    match the same id written the other way. Two spellings of one id that
+    disagree is worse than not recognising the string at all, and an
+    unrecognised scope names nobody, which is the safe direction.
     """
     if not scope.startswith(_SCOPE_PREFIX):
         return None
-    try:
-        return int(scope[len(_SCOPE_PREFIX):])
-    except ValueError:
+    rest = scope[len(_SCOPE_PREFIX):]
+    if not rest.isdigit():
         return None
+    value = int(rest)
+    return value if str(value) == rest else None
 
 
 def cap_for(scope: str) -> int:
