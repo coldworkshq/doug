@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="../theme.js"></script>
 <title>Doug Docs — CLI, concepts & API</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,6 +21,30 @@
     --sans:'Geist',system-ui,sans-serif;
     --mono:'Geist Mono',ui-monospace,monospace;
   }
+  /* literal hex, not var(--night2): this file's --night2 (#0B0D0B) is the
+     code-rail's .block surface, one step darker than --night — reused here
+     it would collide with that, so the toggle's card tone is spelled out */
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:var(--night);
+    --bg2:#181B18;
+    --card:#181B18;
+    --ink:#F2F5F0;
+    --ink2:#9AA298;
+    --ink3:#6E756D;
+    --line:var(--night-line);
+    --line2:#3A3F39;
+    --accent-ink:#EFA167;
+    --accent-soft:rgba(209,87,30,.16);
+    --ok:#5CC98B;
+    --ok-soft:rgba(92,201,139,.14);
+    --warn:#EFA167;
+    --warn-soft:rgba(239,161,103,.14);
+    --plan:#8FBBD9;
+    --plan-soft:rgba(143,187,217,.14);
+  }
+  :root[data-theme="dark"] .codecol{background:#0B0D0B}
+  :root[data-theme="dark"] .block{background:#000}
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
   html,body{margin:0;padding:0}
@@ -32,6 +57,7 @@
   /* ---------- TOP BAR ---------- */
   .topbar{position:fixed;inset:0 0 auto 0;height:56px;z-index:60;display:flex;align-items:center;gap:18px;
     padding:0 20px;background:rgba(252,252,250,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  :root[data-theme="dark"] .topbar{background:rgba(16,18,16,.85)}
   .brand{display:flex;align-items:center;gap:9px;text-decoration:none;font-weight:600;font-size:16px}
   .brand .docs{color:var(--ink3);font-weight:500}
   .ver{font-family:var(--mono);font-size:11.5px;color:var(--accent-ink);background:var(--accent-soft);
@@ -46,9 +72,15 @@
   .llmtxt{font-family:var(--mono);font-size:11.5px;color:var(--ink3);text-decoration:none}
   .llmtxt:hover{color:var(--ink)}
   @media(max-width:640px){.llmtxt,.toplink{display:none}}
+  @media(max-width:520px){.llmbtn{padding:7px 9px}.llmbtn span{display:none}}
   .gh{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;text-decoration:none;
     border:1px solid var(--line2);border-radius:9px;padding:7px 13px}
   .gh:hover{border-color:var(--ink3)}
+  .theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;
+    border:1px solid var(--line2);border-radius:10px;background:transparent;color:var(--ink2);
+    cursor:pointer;transition:all .16s;flex-shrink:0}
+  .theme-toggle:hover{border-color:var(--ink3);color:var(--ink);background:var(--card)}
+  .theme-toggle svg{display:block}
 
   /* ---------- LAYOUT ---------- */
   /* full-bleed: the code rail must reach the right viewport edge — no white gutter */
@@ -158,10 +190,11 @@
   <div class="topspace"></div>
   <button class="llmbtn" id="copyllm" type="button" title="Copy these docs as markdown for an LLM's context window">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-    Copy for LLM
+    <span>Copy for LLM</span>
   </button>
   <a class="llmtxt" href="../llms.txt">llms.txt</a>
   <a class="toplink" href="../#scoreboard">The scoreboard</a>
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme" aria-pressed="false"></button>
   <a class="gh" href="https://github.com/drewjst/doug">
     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
     GitHub
