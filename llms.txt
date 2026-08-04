@@ -64,6 +64,33 @@ Printed tables: capture curve (doug/size-only/random + AUC), cleared band
 half, else honestly omitted). Misses are listed by PR number so you can read the
 ones Doug got wrong. JSON schema is early-preview; printed tables are the stable contract.
 
+## Doug's own findings (AVAILABLE — the log; there is no rate yet)
+Doug reviews every PR in his own repository and the dispositions are written down.
+Roughly half his findings are disproved by code he wasn't shown: he reads a diff,
+not a repository, and does not reliably separate what a diff PROVES from what it
+merely PERMITS. Two recurring failure classes: (1) a conclusion drawn from an
+absence in the diff ("this name is used and no import was added" — it was already
+imported elsewhere); (2) re-reporting a tradeoff the code already documents.
+The rule that came out of (1), which generalizes: a claim about an absence cannot
+be settled by looking at the same place the claim came from. "No import was added"
+is a fact about the diff; whether the import exists is a fact about the repo.
+Re-reading the diff confirms the finding every time and proves nothing — the check
+and the error are the same observation. In that case the linter had already
+answered it, green, before the finding was emitted.
+Each finding gets one line at disposition (docs/findings-log.jsonl): verdict
+real|disproved|adjacent ("adjacent" = wrong as stated, right about something
+nearby), whether anything in the codebase actually changed, and the file that
+settled it. Two axes because one loses the interesting cases — a true finding that
+changed nothing is a re-report; a false finding that changed something found a real
+gap by the wrong route. Doug's strongest mode is "this code does not justify
+itself," and a single score would grade that as failure.
+NO RATE IS PUBLISHED. Every row today is backfill — reconstructed after the fact,
+not recorded at the time — and is excluded from every rate by construction; the
+denominator starts at the first prospectively logged finding. When a number exists
+it will NOT be called precision: whether a finding is TRUE is a different quantity
+from whether it PREDICTED A DEFECT, and a finding can be true and worthless or
+false and load-bearing.
+
 ## MCP — Pattern Garden (PREVIEW, in training)
 An MCP server a coding agent queries BEFORE writing. Serves outcome-anchored
 patterns distilled from public-repo history: per problem shape, the solution
@@ -104,4 +131,10 @@ stated). The shipped deterministic scorer is a single-repo result — its cross-
 replication FAILED (grafana at random), which we publish rather than bury. The LLM
 diff-read result above is the piece that replicated across both repos, and it is
 research, not the shipped scorer. Misses are published, not buried. Doug never
-blocks a merge.
+blocks a merge. What Doug himself gets wrong is written down too (see "Doug's own
+findings") — including the fact that there is not yet enough of it to quote a rate.
+A design for an agent review crew with a falsifier-adjudicated finding ledger was
+reviewed by six independent reviewers in 2026-08 and cut: four of six proposed
+"agent lenses" were checks that already ran or free platform features, and the
+ledger's motivating case was one its own mechanism could not fix, because the
+obvious falsifier restates the error. We publish the designs we kill, too.
