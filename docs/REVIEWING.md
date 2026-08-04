@@ -349,3 +349,39 @@ display fact for the receipt ("N of M"), decoupled from the boolean.
 Same shape as the idempotency-pre-read case above: the finding named a real gap and
 suggested the wrong repair. The useful move was asking what GitHub's own data can actually
 distinguish before picking which files count as "dropped."
+
+## Intentional uniqueness is not a behavior-change defect
+
+PR #43's migration 005 made App-path `(installation, repo, pr, head_sha)` unique so the
+published denominator cannot double-count. Doug flagged `reader:behavior-change`: same-SHA
+re-scores no longer insert a new verdict row. That is the decision, not a regression — ADR-0011
+records it. A finding that restates a locked uniqueness contract as an accidental change
+should be dismissed, not "fixed" by re-opening duplicate ledger rows.
+
+## Do not invent schema dependents the unread files would disprove
+
+Same PR, `reader:unsafe-migration` (high): migration 005 deletes duplicate verdicts after
+clearing findings/reads/deviations, and Doug warned that "e.g. outcomes" would dangle or
+violate an FK. outcomes has never carried `verdict_id`; it joins by identity columns. The
+tables that *do* FK to `verdicts.id` are declared in `store.py` — which the coverage line
+said was never sent (`Partial read … Never sent: api/tests/test_store.py`). The finding
+treated a guessed dependent as fact.
+
+Disposition when this shape appears: read the coverage line first (see above), then check
+`store.metadata` foreign keys before expanding a destructive migration. The repair on #43
+was a pin of the real closed FK set plus a migration comment, not deleting from tables that
+do not reference the row.
+
+## A beyond-ticket finding about a missing decision wants an ADR, not a revert
+
+PR #43 also got unvalidated `beyond-ticket` notes: ADR-0001 had rejected a migration
+framework until data-in-flight needed preserving, and the index-not-on-Table convention was
+undocumented. Both were decision-record gaps. The right move was ADR-0011 (sanction
+destructive constraint prep; name the create_all divergence), not ripping out migration 005
+or declaring the unique index on the SQLAlchemy `Table` (which would reintroduce the
+divergence migration 003 already refused).
+
+When Doug says the code went past a recorded rejection, either (a) the rejection still
+binds and the code is wrong, or (b) the situation the ADR said to revisit has arrived and
+the record needs updating. Pick deliberately; do not "fix" (b) by reverting the work that
+forced the revisit.

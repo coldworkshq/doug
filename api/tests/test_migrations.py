@@ -3,6 +3,26 @@ from sqlalchemy import create_engine, inspect, select
 from doug import migrations, store
 
 APP_COLUMNS = {"github_repo_id", "installation_id", "head_sha", "source"}
+ALL_VERSIONS = [v for v, _ in migrations.MIGRATIONS]
+
+# Hand-built pre-001 verdicts stub for apply-from-older-schema tests.
+# pr_number and tier are baseline columns migration 005's index predicate
+# names; App-identity columns are absent (migration 001 adds those).
+_OLDER_VERDICTS_DDL = (
+    "CREATE TABLE verdicts ("
+    "id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL, "
+    "pr_number INTEGER NOT NULL DEFAULT 0, "
+    "tier VARCHAR(20) NOT NULL DEFAULT 'deterministic')"
+)
+
+# Migration 005's dedupe deletes from these before creating the unique
+# index. Production has them from create_all; hand-built older schemas need
+# empty stubs so apply() does not fail on a missing table.
+_OLDER_DEPENDENT_DDL = (
+    "CREATE TABLE findings (id INTEGER PRIMARY KEY, verdict_id INTEGER)",
+    "CREATE TABLE reads (id INTEGER PRIMARY KEY, verdict_id INTEGER)",
+    "CREATE TABLE deviations (id INTEGER PRIMARY KEY, verdict_id INTEGER)",
+)
 
 
 def _columns(engine, table: str) -> set[str]:
@@ -24,9 +44,7 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     """
     engine = create_engine(f"sqlite:///{tmp_path}/old.db")
     with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
-        )
+        conn.exec_driver_sql(_OLDER_VERDICTS_DDL)
         conn.exec_driver_sql(
             "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
         )
@@ -35,13 +53,15 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), "
-            "enqueued_at DATETIME, started_at DATETIME)"
+            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER)"
         )
         conn.exec_driver_sql(
             "CREATE TABLE outcome_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), due_at DATETIME)"
         )
-    assert migrations.apply(engine) == [1, 2, 3, 4]
+        for ddl in _OLDER_DEPENDENT_DDL:
+            conn.exec_driver_sql(ddl)
+    assert migrations.apply(engine) == ALL_VERSIONS
     assert APP_COLUMNS <= _columns(engine, "verdicts")
     assert {"prompt_hash"} <= _columns(engine, "verdicts")
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
@@ -59,10 +79,10 @@ def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
     store.metadata.create_all(engine)
     assert APP_COLUMNS <= _columns(engine, "verdicts")
 
-    assert migrations.apply(engine) == [1, 2, 3, 4]
+    assert migrations.apply(engine) == ALL_VERSIONS
     with engine.connect() as conn:
         versions = [r[0] for r in conn.execute(select(migrations.schema_migrations.c.version))]
-    assert versions == [1, 2, 3, 4]
+    assert versions == ALL_VERSIONS
 
 
 def test_apply_reports_only_newly_applied_versions(tmp_path):
@@ -71,7 +91,7 @@ def test_apply_reports_only_newly_applied_versions(tmp_path):
     and take the process down at first ledger use."""
     engine = create_engine(f"sqlite:///{tmp_path}/twice.db")
     store.metadata.create_all(engine)
-    assert migrations.apply(engine) == [1, 2, 3, 4]
+    assert migrations.apply(engine) == ALL_VERSIONS
     assert migrations.apply(engine) == []
 
 
@@ -239,7 +259,7 @@ def test_apply_does_not_raise_when_two_racers_insert_the_same_version(tmp_path, 
         versions = sorted(
             r[0] for r in conn.execute(select(migrations.schema_migrations.c.version))
         )
-    assert versions == [v for v, _ in migrations.MIGRATIONS]
+    assert versions == ALL_VERSIONS
 
 
 def test_get_engine_applies_migrations(tmp_path, monkeypatch):
@@ -248,7 +268,7 @@ def test_get_engine_applies_migrations(tmp_path, monkeypatch):
     engine = store._get_engine()
     with engine.connect() as conn:
         versions = [r[0] for r in conn.execute(select(migrations.schema_migrations.c.version))]
-    assert versions == [v for v, _ in migrations.MIGRATIONS]
+    assert versions == ALL_VERSIONS
 
 
 def test_migration_003_installs_the_queue_hot_path_indexes(tmp_path):
@@ -272,20 +292,197 @@ def test_migration_004_adds_claim_generation(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/gen.db")
     with engine.begin() as conn:
         # Minimal pre-004 shape: earlier migrations need these tables present.
-        conn.exec_driver_sql(
-            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
-        )
+        conn.exec_driver_sql(_OLDER_VERDICTS_DDL)
         conn.exec_driver_sql(
             "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
         )
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), "
-            "enqueued_at DATETIME, started_at DATETIME)"
+            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER)"
         )
         conn.exec_driver_sql(
             "CREATE TABLE outcome_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), due_at DATETIME)"
         )
+        for ddl in _OLDER_DEPENDENT_DDL:
+            conn.exec_driver_sql(ddl)
     assert 4 in migrations.apply(engine)
     assert "claim_generation" in _columns(engine, "review_jobs")
+
+
+def test_migration_005_names_every_foreign_key_to_verdicts():
+    """Destructive dedupe must clear or re-point every dependent. outcomes
+    joins by identity columns, not verdict_id — Doug's 'unsafe-migration'
+    finding named it as an example FK and was wrong; this pin is the check
+    that keeps the closed set honest when a real FK is added later.
+    """
+    fks = {
+        (fk.parent.table.name, fk.parent.name)
+        for table in store.metadata.tables.values()
+        for fk in table.foreign_keys
+        if fk.column.table.name == "verdicts"
+    }
+    assert fks == {
+        ("findings", "verdict_id"),
+        ("reads", "verdict_id"),
+        ("deviations", "verdict_id"),
+        ("review_jobs", "verdict_id"),
+    }
+
+
+def test_app_identity_collision_markers_match_sqlite_and_not_other_verdicts_uniques():
+    """Measured sqlite wording for uq_verdicts_app_identity, plus the
+    postgres constraint name. A bare 'verdicts.' substring would also match
+    a future unique on any other verdicts column — refuse that."""
+    from sqlalchemy.exc import IntegrityError
+
+    from doug.store import _is_app_identity_collision
+
+    class _Orig(Exception):
+        pass
+
+    def _exc(msg: str) -> IntegrityError:
+        return IntegrityError("stmt", {}, _Orig(msg))
+
+    assert _is_app_identity_collision(
+        _exc(
+            "UNIQUE constraint failed: verdicts.installation_id, "
+            "verdicts.github_repo_id, verdicts.pr_number, verdicts.head_sha"
+        )
+    )
+    assert _is_app_identity_collision(
+        _exc('duplicate key value violates unique constraint "uq_verdicts_app_identity"')
+    )
+    assert not _is_app_identity_collision(
+        _exc("UNIQUE constraint failed: verdicts.repo, verdicts.pr_number")
+    )
+
+
+def test_migration_005_installs_app_identity_unique_index(tmp_path):
+    """Ledger integrity for the published denominator: two App-path workers
+    that both pass the advisory find_verdict_by_identity pre-read must not
+    both insert. The index is the constraint; the pre-read stays the cheap
+    path. Partial — pre-App/CI rows (NULL installation_id) and external
+    grader rows (tier='external') share the same four columns and must keep
+    coexisting with Doug's scored row for that SHA.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/uq.db")
+    store.metadata.create_all(engine)
+    assert 5 in migrations.apply(engine)
+    indexes = inspect(engine).get_indexes("verdicts")
+    by_name = {idx["name"]: idx for idx in indexes}
+    assert "uq_verdicts_app_identity" in by_name
+    assert by_name["uq_verdicts_app_identity"].get("unique")
+    # Unique + partial: the migration is the only place this shape lives
+    # (not on the Table — create_all would diverge from production).
+    stmt = dict(migrations.MIGRATIONS)[5][-1]
+    assert "UNIQUE" in stmt.upper()
+    assert "installation_id IS NOT NULL" in stmt
+    assert "tier <> 'external'" in stmt
+
+
+def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_path):
+    """CREATE UNIQUE INDEX would fail (and brick apply-on-boot) if any
+    App-identity duplicates already exist. The migration must collapse them
+    to the lowest id first, keep dependents pointed at the survivor, and
+    leave external / CI rows alone.
+    """
+    from datetime import UTC, datetime
+
+    engine = create_engine(f"sqlite:///{tmp_path}/dedupe.db")
+    store.metadata.create_all(engine)
+    migrations.schema_migrations.create(engine, checkfirst=True)
+    # Apply 1–4 only, then seed duplicates, then let 5 land.
+    for version, statements in migrations.MIGRATIONS:
+        if version >= 5:
+            break
+        for statement in statements:
+            migrations._run(engine, statement)
+        with engine.begin() as conn:
+            conn.execute(
+                migrations.schema_migrations.insert(),
+                {"version": version, "applied_at": datetime.now(UTC)},
+            )
+    sha = "a" * 40
+    with engine.begin() as conn:
+        for _ in range(2):
+            conn.exec_driver_sql(
+                "INSERT INTO verdicts ("
+                "repo, pr_number, scored_at, tier, score, band, threshold, "
+                "installation_id, github_repo_id, head_sha, source"
+                ") VALUES ("
+                f"'o/r', 7, '2026-08-01', 'reader', 0.5, 'flagged', 0.3, "
+                f"10, 20, '{sha}', 'app')"
+            )
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts ("
+            "repo, pr_number, scored_at, tier, score, band, threshold, "
+            "installation_id, github_repo_id, head_sha, source"
+            ") VALUES ("
+            f"'o/r', 7, '2026-08-01', 'external', 0.0, 'cleared', 0.0, "
+            f"10, 20, '{sha}', 'review:alice')"
+        )
+        for _ in range(2):
+            conn.exec_driver_sql(
+                "INSERT INTO verdicts ("
+                "repo, pr_number, scored_at, tier, score, band, threshold, "
+                "head_sha, source"
+                ") VALUES ("
+                f"'o/r', 7, '2026-08-01', 'reader', 0.5, 'flagged', 0.3, "
+                f"'{sha}', 'ci')"
+            )
+        ids = [
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT id FROM verdicts WHERE installation_id = 10 "
+                "AND tier = 'reader' ORDER BY id"
+            )
+        ]
+        keeper, duplicate = ids[0], ids[1]
+        conn.exec_driver_sql(
+            f"INSERT INTO findings (verdict_id, rule, label, weight) "
+            f"VALUES ({duplicate}, 'r', 'l', 0.0)"
+        )
+        conn.exec_driver_sql(
+            f"INSERT INTO review_jobs ("
+            f"installation_id, github_repo_id, repo_full_name, pr_number, "
+            f"head_sha, status, attempts, claim_generation, enqueued_at, verdict_id"
+            f") VALUES ("
+            f"10, 20, 'o/r', 7, '{sha}', 'done', 1, 1, '2026-08-01', {duplicate})"
+        )
+
+    assert migrations.apply(engine) == [5]
+    with engine.connect() as conn:
+        app_ids = [
+            r[0]
+            for r in conn.exec_driver_sql(
+                "SELECT id FROM verdicts WHERE installation_id = 10 "
+                "AND tier = 'reader' ORDER BY id"
+            )
+        ]
+        assert app_ids == [keeper]
+        assert (
+            conn.exec_driver_sql(
+                "SELECT COUNT(*) FROM verdicts WHERE tier = 'external'"
+            ).scalar()
+            == 1
+        )
+        assert (
+            conn.exec_driver_sql(
+                "SELECT COUNT(*) FROM verdicts WHERE installation_id IS NULL"
+            ).scalar()
+            == 2
+        )
+        assert (
+            conn.exec_driver_sql(
+                f"SELECT COUNT(*) FROM findings WHERE verdict_id = {duplicate}"
+            ).scalar()
+            == 0
+        )
+        assert (
+            conn.exec_driver_sql("SELECT verdict_id FROM review_jobs").scalar()
+            == keeper
+        )
+        names = {idx["name"] for idx in inspect(engine).get_indexes("verdicts")}
+        assert "uq_verdicts_app_identity" in names

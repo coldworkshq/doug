@@ -24,6 +24,73 @@ from . import app_auth, check_run, ingest, reader, review, store
 from .models import Band, Reason, Verdict
 
 
+def _replay_recorded(
+    job: dict,
+    gh,
+    owner: str,
+    name: str,
+    existing: dict,
+    *,
+    discarded_paid_read: bool = False,
+) -> int:
+    """Post the already-durable verdict. Shared by the pre-read hit and the
+    migration-005 race floor (save_review returned a peer's id)."""
+    verdict = Verdict(
+        score=existing["score"],
+        band=Band(existing["band"]),
+        threshold=existing["threshold"],
+        reasons=[Reason(**r) for r in existing["reasons"]],
+    )
+    cov = reader.Coverage(**existing["coverage"]) if existing["coverage"] else None
+    # Both reads truncate the same diff at the same DIFF_BUDGET (see
+    # store.find_verdict_by_identity), so the risk read's stored
+    # coverage is also what the intent read saw — reused rather than
+    # invented. Without it there is nothing to hedge a replayed
+    # deviation with, so the section is left out entirely rather than
+    # rendered as if the read had been complete (ADR-0007's "a partial
+    # read must never render as a whole one" cuts both ways here).
+    intent_read = None
+    if existing["intent_alignment"] is not None and cov is not None:
+        intent_read = review.IntentRead(
+            alignment=existing["intent_alignment"],
+            refs=existing["intent_refs"],
+            findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
+            coverage=cov,
+        )
+    title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
+    # complete before post: a lost claim must not emit a check run that a
+    # second holder will also post via this path.
+    if not ingest.complete(
+        job["id"], existing["id"], claim_generation=job["claim_generation"]
+    ):
+        print(
+            f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
+            file=sys.stderr,
+        )
+        return existing["id"]
+    # Two callers share this path and must not share wording: the pre-read
+    # hit bought nothing; the race loser already paid for a read that could
+    # not become the durable row. Confusing those makes spend unauditable.
+    if discarded_paid_read:
+        print(
+            f"doug: raced {job['repo_full_name']}#{job['pr_number']}"
+            f"@{job['head_sha'][:12]} (paid read discarded; peer owns identity) "
+            f"tier={existing['tier']} band={existing['band']} "
+            f"risk={existing['score']:.2f} verdict={existing['id']}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"doug: replayed {job['repo_full_name']}#{job['pr_number']}"
+            f"@{job['head_sha'][:12]} (already recorded, nothing bought) "
+            f"tier={existing['tier']} band={existing['band']} "
+            f"risk={existing['score']:.2f} verdict={existing['id']}",
+            file=sys.stderr,
+        )
+    check_run.post(gh, owner, name, job["head_sha"], title, summary)
+    return existing["id"]
+
+
 def process_job(job: dict) -> int | None:
     """Run one job. Returns the verdict id — the recorded one on a replay,
     a freshly scored one otherwise — or None when the job's head SHA no
@@ -46,67 +113,19 @@ def process_job(job: dict) -> int | None:
     # 'running' job whose save_review already landed but whose check-run
     # post or ingest.complete never ran: the worker died somewhere in
     # between. A naive retry would re-score from scratch — a second paid
-    # score_one/read_intent, and a second verdicts row for the same commit,
-    # since verdicts carries no unique constraint to stop it. Ordering this
-    # ahead of the head-freshness check matters, not just for cost: a job
-    # with an already-durable verdict must replay it regardless of whether
-    # the PR has since moved on, or the head check below would supersede
-    # this row — leaving a verdict in the ledger whose job never reached
-    # 'done' and whose check run never posted, for a commit that really was
-    # read.
+    # score_one/read_intent. Migration 005's unique index stops a second
+    # verdicts row; this pre-read is still the cheap path that avoids buying
+    # the second read. Ordering ahead of the head-freshness check matters:
+    # a job with an already-durable verdict must replay it regardless of
+    # whether the PR has since moved on, or the head check below would
+    # supersede this row — leaving a verdict in the ledger whose job never
+    # reached 'done' and whose check run never posted, for a commit that
+    # really was read.
     existing = store.find_verdict_by_identity(
         job["installation_id"], job["github_repo_id"], job["pr_number"], job["head_sha"]
     )
     if existing is not None:
-        verdict = Verdict(
-            score=existing["score"],
-            band=Band(existing["band"]),
-            threshold=existing["threshold"],
-            reasons=[Reason(**r) for r in existing["reasons"]],
-        )
-        cov = reader.Coverage(**existing["coverage"]) if existing["coverage"] else None
-        # Both reads truncate the same diff at the same DIFF_BUDGET (see
-        # store.find_verdict_by_identity), so the risk read's stored
-        # coverage is also what the intent read saw — reused rather than
-        # invented. Without it there is nothing to hedge a replayed
-        # deviation with, so the section is left out entirely rather than
-        # rendered as if the read had been complete (ADR-0007's "a partial
-        # read must never render as a whole one" cuts both ways here).
-        intent_read = None
-        if existing["intent_alignment"] is not None and cov is not None:
-            intent_read = review.IntentRead(
-                alignment=existing["intent_alignment"],
-                refs=existing["intent_refs"],
-                findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
-                coverage=cov,
-            )
-        title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
-        # complete before post: a lost claim must not emit a check run that a
-        # second holder will also post via the identity-replay path below.
-        if not ingest.complete(
-            job["id"], existing["id"], claim_generation=job["claim_generation"]
-        ):
-            print(
-                f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
-                file=sys.stderr,
-            )
-            return existing["id"]
-        # Deliberately not the fresh-review wording below, and the difference
-        # is the point rather than a nicety: this outcome and that one agree
-        # on every field either line carries — repo, PR, head SHA, tier,
-        # band, score, verdict id — and disagree only about whether a model
-        # read was bought. Reported alike, the two would make spend
-        # unauditable from the logs, since an operator counting reviews would
-        # be counting replays that cost nothing.
-        print(
-            f"doug: replayed {job['repo_full_name']}#{job['pr_number']}"
-            f"@{job['head_sha'][:12]} (already recorded, nothing bought) "
-            f"tier={existing['tier']} band={existing['band']} "
-            f"risk={existing['score']:.2f} verdict={existing['id']}",
-            file=sys.stderr,
-        )
-        check_run.post(gh, owner, name, job["head_sha"], title, summary)
-        return existing["id"]
+        return _replay_recorded(job, gh, owner, name, existing)
 
     # Read the PR's current head before spending anything on it. A job can
     # sit in the queue behind a backlog, or be re-pended by a retry, long
@@ -154,6 +173,7 @@ def process_job(job: dict) -> int | None:
     else:
         intent_read = intent_result
 
+    created: list[bool] = []
     verdict_id = store.save_review(
         job["repo_full_name"],
         job["pr_number"],
@@ -167,7 +187,29 @@ def process_job(job: dict) -> int | None:
         installation_id=job["installation_id"],
         head_sha=job["head_sha"],
         source="app",
+        created=created,
     )
+    # Race floor: a peer already owns this identity. Do not hang our local
+    # deviations or a locally rendered check run on their row — replay theirs.
+    # `created == [False]` only — an empty list means storage was disabled
+    # (save_review returned without marking), which must not look like a race.
+    if created == [False]:
+        peer = store.find_verdict_by_identity(
+            job["installation_id"],
+            job["github_repo_id"],
+            job["pr_number"],
+            job["head_sha"],
+        ) or store.find_verdict_by_id(verdict_id)
+        if peer is None:
+            raise RuntimeError(
+                f"save_review reported an existing identity for "
+                f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]} "
+                f"(id={verdict_id}) but neither identity nor id lookup found it"
+            )
+        return _replay_recorded(
+            job, gh, owner, name, peer, discarded_paid_read=True
+        )
+
     if intent_read is not None:
         try:
             store.save_deviations(

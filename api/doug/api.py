@@ -51,10 +51,11 @@ def _startup_reconcile() -> None:
     is checked against store.find_verdict_by_identity before any paid read.
     Repeated sweeps therefore cost GitHub list calls, not model spend.
 
-    The gap that leaves: that pre-read is advisory, because verdicts carries
-    no unique index on the identity it reads (roadmap M2, migration 003), so
-    two workers racing the same reclaimed job can both pass it. The claim
-    lease bounds that window rather than closing it.
+    The gap that leaves on spend: the pre-read is still advisory, so two
+    workers racing the same reclaimed job can both pass it and both pay.
+    Migration 005's unique index stops the second verdicts row; the claim
+    fence stops a superseded holder finishing the job. Double-spend of the
+    read is bounded by the spend cap, not by this path.
     """
     try:
         n = worker.reconcile_all()

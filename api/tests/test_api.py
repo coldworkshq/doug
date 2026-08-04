@@ -1578,9 +1578,14 @@ def _comparison_db(tmp_path, monkeypatch) -> None:
 
 
 def _comparison_api_review(
-    *, app: bool, legacy_ci: bool = False, coverage=None, pr_meta=None
+    *,
+    app: bool,
+    legacy_ci: bool = False,
+    coverage=None,
+    pr_meta=None,
+    head_sha: str | None = None,
 ) -> int:
-    sha = "a" * 40
+    sha = head_sha or "a" * 40
     verdict = api.Verdict(
         score=0.2,
         band=api.Band.CLEARED,
@@ -1656,7 +1661,8 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
         file_cut="first.py",
     )
     app_one = _comparison_api_review(app=True, coverage=coverage)
-    app_two = _comparison_api_review(app=True)
+    # Migration 005: a second App save for the same SHA is idempotent.
+    assert _comparison_api_review(app=True) == app_one
     current_ci = _comparison_api_review(
         app=False,
         pr_meta={"number": 33, "title": "Current CI", "author": "dev", "files": []},
@@ -1693,11 +1699,11 @@ def test_comparisons_serializes_both_paths_duplicates_and_coverage(
     )
     assert response.status_code == 200
     runs = response.json()["runs"]
-    assert {run["id"] for run in runs} == {app_one, app_two, current_ci, legacy_ci}
+    assert {run["id"] for run in runs} == {app_one, current_ci, legacy_ci}
     assert one_app_id not in {run["id"] for run in runs}
     assert github_repo_id_only not in {run["id"] for run in runs}
     assert app_without_head not in {run["id"] for run in runs}
-    assert [run["path"] for run in runs].count("app") == 2
+    assert [run["path"] for run in runs].count("app") == 1
     assert [run["path"] for run in runs].count("ci") == 2
     assert next(run for run in runs if run["id"] == current_ci)["head_sha"] == "a" * 40
     assert {run["head_sha"] for run in runs} == {"a" * 40}
@@ -1711,14 +1717,18 @@ def test_comparisons_refuses_to_return_partial_evidence_when_run_cap_is_exceeded
 ):
     """A safety bound must fail loud, never cut a comparison group.
 
-    Returning the first N duplicate attempts would let the web layer infer a
-    missing path or score delta from an incomplete ledger slice.
+    Returning the first N runs would let the web layer infer a missing path
+    or score delta from an incomplete ledger slice. Cap is exercised with
+    distinct App SHAs plus CI — App-path identity is unique per SHA
+    (migration 005), so a second save of the same App identity no longer
+    inflates the count.
     """
     _comparison_db(tmp_path, monkeypatch)
     monkeypatch.setattr(store, "COMPARISON_RUN_LIMIT", 2)
     _comparison_api_review(app=True)
     _comparison_api_review(app=False)
-    _comparison_api_review(app=True)
+    # Third qualifying run: a later App commit (distinct SHA under migration 005).
+    _comparison_api_review(app=True, head_sha="b" * 40)
 
     response = client.get(
         "/v1/comparisons", headers={"X-Doug-Token": "secret"}

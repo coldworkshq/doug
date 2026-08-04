@@ -175,13 +175,16 @@ executed as written — amendments folded in at their task, never as a second pa
   **Chosen shape (Andrew, 2026-08-02): env allowlist, not an `installations` column** — no
   migration, no collision with 005 below, right-sized for one install. It becomes a column when
   the token-dispense item opens that table anyway.
-- [ ] Migration **005** — **UNIQUE** index on `verdicts` (installation_id, github_repo_id,
-  pr_number, head_sha), partial `WHERE installation_id IS NOT NULL` so pre-App rows are
-  untouched. **Renumbered 2026-08-02: 003 and 004 are taken** (#30 shipped 003, the partial
+- [x] Migration **005** — **UNIQUE** index on `verdicts` (installation_id, github_repo_id,
+  pr_number, head_sha), partial
+  `WHERE installation_id IS NOT NULL AND tier <> 'external'` so pre-App/CI rows and Task 6
+  external grader rows stay able to share the four columns with Doug's scored row.
+  **Renumbered 2026-08-02: 003 and 004 are taken** (#30 shipped 003, the partial
   queue indexes, and 004, `review_jobs.claim_generation`). Two jobs in one: the idempotency
   pre-read runs on every job over unindexed columns (seq scan on a table that only grows —
   harmless at dogfood volume, a cliff at tenant volume), and that pre-read is still *advisory
-  only*.
+  only* — `save_review` converts the unique violation into an idempotent return of the
+  existing id so the race floor under the pre-read does not 500 the worker.
   **Rationale rewritten 2026-08-02, because #30 changed what is left to close.** The old
   wording — "the lease bounds that window; the index closes it" — is stale: #30's
   `claim_generation` fence is stronger than a lease and now bounds it, so a late `complete`/
@@ -191,7 +194,15 @@ executed as written — amendments folded in at their task, never as a second pa
   completed, and both had already paid before either could be fenced. So this item is now
   about **ledger integrity — an honest published denominator — rather than double-spend**,
   which the fence and the spend cap between them already bound.
-  Must be a migration, never a bare index (the constraint that governs columns governs indexes)
+  Must be a migration, never a bare index (the constraint that governs columns governs indexes).
+  **Shape amendment 2026-08-03:** a four-column UNIQUE with only
+  `installation_id IS NOT NULL` would collide with `tier='external'` rows that share the
+  same identity (`find_verdict_by_identity` already filters them out). External exclusion
+  belongs in the index predicate. Migration also **dedupes** existing App-identity groups
+  (keep lowest id, re-point `review_jobs`, drop dependents) before `CREATE UNIQUE INDEX`,
+  so advisory-era duplicates cannot brick `apply()` on boot. Race losers enter the
+  identity-replay path so they do not hang local deviations / a locally rendered check
+  run on the peer's row.
 - [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
 
 **Exit gate:** the attacker math closes — no unauthenticated paid endpoint, no uncapped spend

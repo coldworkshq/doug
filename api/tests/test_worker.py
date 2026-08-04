@@ -586,11 +586,10 @@ def test_a_stalled_claim_within_its_lease_is_left_strictly_alone(tmp_path, monke
 # The amendment above made reclaim_stalled() reachable from drain, which
 # reopened a path save_review never defended: if the worker dies (or
 # ingest.complete itself raises) anywhere between save_review committing
-# and the job reaching 'done', the row re-pends and a naive retry re-scores
-# from scratch — a second paid score_one/read_intent, and a second verdicts
-# row for the same commit, since verdicts carries no unique constraint.
-# process_job now checks store.find_verdict_by_identity before spending
-# anything, and replays the durable verdict instead.
+# and the job reaching 'done', the row re-pends and a naive retry would
+# re-score from scratch. process_job checks find_verdict_by_identity before
+# spending; migration 005's unique index stops a second verdicts row when
+# two holders both miss that pre-read.
 
 
 def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_read(
@@ -1384,6 +1383,66 @@ def test_an_idempotent_replay_says_it_bought_nothing(tmp_path, monkeypatch, caps
     assert "paid read" not in line  # the whole point: no money changed hands
     assert f"tier=reader band=flagged risk=0.62 verdict={verdict_id}" in line
     assert "@" + "a" * 12 in line
+
+
+def test_a_race_loser_replays_the_peer_and_does_not_attach_local_deviations(
+    tmp_path, monkeypatch, capsys
+):
+    """Migration 005 race floor: both holders miss the pre-read and both pay;
+    save_review returns the peer's id. The loser must post the peer's check
+    run (not a locally rendered one) and must not write its intent findings
+    onto the peer's row.
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    peer_id = store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "deterministic",
+        Verdict(score=0.01, band=Band.CLEARED, threshold=0.30, reasons=[]),
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+    calls = {"n": 0}
+    real = store.find_verdict_by_identity
+
+    def miss_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "find_verdict_by_identity", miss_once)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) == peer_id
+
+    (line,) = _pr_lines(capsys)
+    assert "raced" in line and "paid read discarded" in line
+    assert "replayed" not in line  # that wording means nothing was bought
+    assert f"verdict={peer_id}" in line
+    with create_engine(url).connect() as conn:
+        assert (
+            conn.execute(
+                select(store.verdicts).where(store.verdicts.c.id == peer_id)
+            )
+            .mappings()
+            .one()["tier"]
+            == "deterministic"
+        )
+        assert (
+            conn.execute(
+                select(store.deviations).where(store.deviations.c.verdict_id == peer_id)
+            )
+            .mappings()
+            .all()
+            == []
+        )
+    # Peer was deterministic/cleared 0.01 — not the locally scored reader 0.62.
+    assert len(posted) == 1
+    assert "0.01" in posted[0]["title"] or "Cleared" in posted[0]["title"]
 
 
 def test_a_superseded_job_says_it_read_nothing(tmp_path, monkeypatch, capsys):
