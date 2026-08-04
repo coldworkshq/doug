@@ -209,7 +209,33 @@ executed as written — amendments folded in at their task, never as a second pa
   not confuse the api cutover. **Ops still open:** this PR only touches `api/` +
   docs, so merge does not run `gcp.sh web` — first web deploy must use the new
   SA, then revoke the default compute SA's leftover accessor on `doug-api-token`.
-- [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
+- [x] Per-installation token dispense endpoint (GitHub-token-verified); scoped
+  `/v1/queue`; cross-tenant read attempt → 404 (test pinned). **Two token
+  classes, not one replaced:** `DOUG_API_TOKEN` survives as an unscoped
+  *operator* credential — scoping everything would have deleted the CI half of
+  `/v1/comparisons` mid-soak, and `doug-web` has no login to carry a tenant
+  token (its dashboard is M6's gated track). Dispensed tokens resolve to one
+  `installation_id` and reach `/v1/queue` alone.
+  **`/v1/patterns` is operator-only permanently**, on licensing rather than
+  scoping grounds: `design-lock.md:71` — nothing derived from the research
+  corpus is servable across tenants, because the rationales quote
+  getsentry/grafana source verbatim.
+  Dispense verifies PAT-first, app-JWT-second, because the app call spends
+  Doug's shared 5,000/hr REST quota on a public endpoint and the reverse order
+  is an anonymous drain loop. Receipt reads are **not** in this item — they are
+  M3's endpoint and inherit the same `tenancy.resolve`.
+  **Honest limit:** the operator token remains superuser. M2's gate is "no
+  cross-tenant read" and an operator is not a tenant, but "scoped reads" should
+  not be read as more than shipped. One token per installation, too — the
+  garden and a tenant's CI would share it; `installation_tokens` when that bites.
+  **Second honest limit, found by the Task 5 review:** the 404 on operator-only
+  endpoints does *not* hide their existence, because FastAPI serves
+  `/openapi.json` and `/docs` unauthenticated and they enumerate every route on
+  an `--allow-unauthenticated` service. 404 is still the right code (403 would
+  be worse) and the **cross-tenant `repo` 404 is unaffected** — repo names are
+  not in the OpenAPI schema — so the gate clause stands. Closing it for real is
+  `FastAPI(openapi_url=None, docs_url=None)` in prod: **follow-up task, not
+  done here.**
 
 **Exit gate:** the attacker math closes — no unauthenticated paid endpoint, no uncapped spend
 path, no cross-tenant read, no silent partial reads.

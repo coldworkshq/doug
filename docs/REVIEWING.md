@@ -399,3 +399,27 @@ When Doug says the code went past a recorded rejection, either (a) the rejection
 binds and the code is wrong, or (b) the situation the ADR said to revisit has arrived and
 the record needs updating. Pick deliberately; do not "fix" (b) by reverting the work that
 forced the revisit.
+
+## Two token classes
+
+`DOUG_API_TOKEN` is the **operator** credential: unscoped, reaches every
+endpoint, and is what `doug-web` sends server-side (`web/lib/api.ts`). Reviews
+that assume "the token" is tenant-scoped are reading the wrong class.
+
+A **tenant** token is dispensed by `POST /v1/installations/token`, stored only
+as `sha256` in `installations.token_hash`, and resolves to exactly one
+`installation_id`. It reaches `/v1/queue` and nothing else.
+
+Three things a reviewer should check, because each has a failure that looks
+fine in passing tests:
+
+1. **Any new filter on `latest_reviews` goes inside the grouped subquery.**
+   Outside, an excluded row can still win `max(id)` for its PR and then be
+   dropped — the PR vanishes rather than falling back. Pinned by
+   `test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row`.
+2. **Cross-tenant is 404, never an empty list.** An empty list reads as "no
+   reviews yet" and confirms the caller's guess might be real.
+3. **New GitHub calls on public endpoints check the caller's credential
+   first.** The shared 5,000/hr REST quota was exhausted twice on 2026-08-02;
+   a public endpoint that spends Doug's quota before the caller's is a drain
+   loop. Pinned by `test_non_admin_pat_never_spends_dougs_github_quota`.
