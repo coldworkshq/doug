@@ -818,7 +818,11 @@ def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
     )
     r = client.get("/v1/queue", headers={"X-Doug-Token": token})
     assert r.status_code == 200
-    assert [i["pr"]["repo"] for i in r.json()["items"]] == ["drewjst/doug"]
+    # PRMetadata carries no `repo` field, so the returned row is identified by
+    # the url _with_url back-fills from the ledger's repo + pr_number columns.
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["pr"]["url"] == "https://github.com/drewjst/doug/pull/1"
 
 
 def test_operator_token_still_sees_every_row(tmp_path, monkeypatch):
@@ -870,7 +874,11 @@ def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, pat
     cross-tenant repo."""
     token = _tenant(tmp_path, monkeypatch)
     call = client.post if path == "/v1/score/read" else client.get
-    kwargs = {"json": {"repo": "drewjst/doug", "number": 1}} if path == "/v1/score/read" else {}
+    # A VALID ReadScoreRequest body ({pr, diff}) — FastAPI validates the body
+    # before the handler runs, so a malformed one 422s and the test would
+    # never reach the auth gate it exists to check.
+    body = {"pr": {"number": 1, "title": "x", "author": "dev"}, "diff": ""}
+    kwargs = {"json": body} if path == "/v1/score/read" else {}
     r = call(path, headers={"X-Doug-Token": token}, **kwargs)
     assert r.status_code == 404
 
