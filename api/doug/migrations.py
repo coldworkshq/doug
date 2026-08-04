@@ -91,6 +91,97 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE review_jobs ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
         ),
     ),
+    (
+        5,
+        (
+            # App-path ledger identity. The find_verdict_by_identity pre-read
+            # is advisory — two claim holders can both miss it and both insert.
+            # The fence (#30) stops a superseded holder finishing the job; this
+            # index stops the second verdicts row so the published denominator
+            # stays honest. Partial: NULL installation_id excludes CI/CLI/
+            # pre-App rows; tier <> 'external' lets Task 6 third-party rows
+            # share the four columns with Doug's scored row for that SHA
+            # (same exclusion as find_verdict_by_identity). Not on the Table —
+            # see module docstring / migration 003.
+            #
+            # Dedupe first: CREATE UNIQUE INDEX fails (and bricks every cold
+            # start that runs apply()) if any App-identity duplicates already
+            # exist from the advisory-only era. Keep the lowest id per group;
+            # re-point review_jobs, drop dependents, then the extras. Nested
+            # SELECT wrappers are for sqlite (cannot delete from a table while
+            # a subquery reads it directly).
+            "UPDATE review_jobs SET verdict_id = ("
+            "  SELECT MIN(keeper.id) FROM verdicts dup"
+            "  JOIN verdicts keeper"
+            "    ON keeper.installation_id = dup.installation_id"
+            "   AND keeper.github_repo_id = dup.github_repo_id"
+            "   AND keeper.pr_number = dup.pr_number"
+            "   AND keeper.head_sha = dup.head_sha"
+            "   AND keeper.installation_id IS NOT NULL"
+            "   AND keeper.tier <> 'external'"
+            "  WHERE dup.id = review_jobs.verdict_id"
+            "    AND dup.installation_id IS NOT NULL"
+            "    AND dup.tier <> 'external'"
+            ") WHERE verdict_id IN ("
+            "  SELECT id FROM ("
+            "    SELECT v.id FROM verdicts v"
+            "    WHERE v.installation_id IS NOT NULL AND v.tier <> 'external'"
+            "      AND v.id NOT IN ("
+            "        SELECT MIN(id) FROM verdicts"
+            "        WHERE installation_id IS NOT NULL AND tier <> 'external'"
+            "        GROUP BY installation_id, github_repo_id, pr_number, head_sha"
+            "      )"
+            "  )"
+            ")",
+            "DELETE FROM findings WHERE verdict_id IN ("
+            "  SELECT id FROM ("
+            "    SELECT v.id FROM verdicts v"
+            "    WHERE v.installation_id IS NOT NULL AND v.tier <> 'external'"
+            "      AND v.id NOT IN ("
+            "        SELECT MIN(id) FROM verdicts"
+            "        WHERE installation_id IS NOT NULL AND tier <> 'external'"
+            "        GROUP BY installation_id, github_repo_id, pr_number, head_sha"
+            "      )"
+            "  )"
+            ")",
+            "DELETE FROM reads WHERE verdict_id IN ("
+            "  SELECT id FROM ("
+            "    SELECT v.id FROM verdicts v"
+            "    WHERE v.installation_id IS NOT NULL AND v.tier <> 'external'"
+            "      AND v.id NOT IN ("
+            "        SELECT MIN(id) FROM verdicts"
+            "        WHERE installation_id IS NOT NULL AND tier <> 'external'"
+            "        GROUP BY installation_id, github_repo_id, pr_number, head_sha"
+            "      )"
+            "  )"
+            ")",
+            "DELETE FROM deviations WHERE verdict_id IN ("
+            "  SELECT id FROM ("
+            "    SELECT v.id FROM verdicts v"
+            "    WHERE v.installation_id IS NOT NULL AND v.tier <> 'external'"
+            "      AND v.id NOT IN ("
+            "        SELECT MIN(id) FROM verdicts"
+            "        WHERE installation_id IS NOT NULL AND tier <> 'external'"
+            "        GROUP BY installation_id, github_repo_id, pr_number, head_sha"
+            "      )"
+            "  )"
+            ")",
+            "DELETE FROM verdicts WHERE id IN ("
+            "  SELECT id FROM ("
+            "    SELECT v.id FROM verdicts v"
+            "    WHERE v.installation_id IS NOT NULL AND v.tier <> 'external'"
+            "      AND v.id NOT IN ("
+            "        SELECT MIN(id) FROM verdicts"
+            "        WHERE installation_id IS NOT NULL AND tier <> 'external'"
+            "        GROUP BY installation_id, github_repo_id, pr_number, head_sha"
+            "      )"
+            "  )"
+            ")",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_verdicts_app_identity "
+            "ON verdicts (installation_id, github_repo_id, pr_number, head_sha) "
+            "WHERE installation_id IS NOT NULL AND tier <> 'external'",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

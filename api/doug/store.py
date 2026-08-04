@@ -79,8 +79,9 @@ verdicts = Table(
     Column("pr_meta", JSON),
     # App identity. Added to an existing table, so these four are also
     # migration 001 — the two definitions must stay identical or a fresh
-    # database and production diverge. Unindexed on purpose: create_all()
-    # would build an index here that no migration builds there.
+    # database and production diverge. Migration 005's partial unique index
+    # over App-scored rows is not declared here (create_all would otherwise
+    # diverge from production the same way).
     Column("github_repo_id", BigInteger),
     Column("installation_id", BigInteger),
     Column("head_sha", String(64)),
@@ -347,6 +348,20 @@ def enabled() -> bool:
     return _get_engine() is not None
 
 
+# Postgres names the constraint; sqlite lists table.column for the unique
+# index. Same shape as ingest._DEDUPE_COLLISION / _OUTCOME_COLLISION — only
+# this collision becomes an idempotent return; anything else propagates.
+_APP_IDENTITY_COLLISION = (
+    "uq_verdicts_app_identity",
+    "unique constraint failed: verdicts.",
+)
+
+
+def _is_app_identity_collision(exc: IntegrityError) -> bool:
+    message = str(exc.orig).lower()
+    return any(marker in message for marker in _APP_IDENTITY_COLLISION)
+
+
 def save_review(
     repo: str,
     pr_number: int,
@@ -361,6 +376,8 @@ def save_review(
     head_sha: str | None = None,
     source: str | None = None,
     prompt_hash: str | None = None,
+    *,
+    created: list[bool] | None = None,
 ) -> int | None:
     """Persist one scoring event. Returns the verdict id, or None when
     storage is disabled — callers never branch on persistence.
@@ -373,66 +390,96 @@ def save_review(
     The identity kwargs are None for every pre-App row and for the CLI, which
     has no installation. `github_repo_id` is the only stable repo identity —
     `repo` is a display string that changes when a repo is renamed.
+
+    App-path identity is unique (migration 005). A racing peer that already
+    committed the same (installation_id, github_repo_id, pr_number, head_sha)
+    makes this insert raise; we return that peer's id rather than failing the
+    job. The worker's find_verdict_by_identity pre-read remains the cheap
+    path — this is the race floor under it. Pass `created` (a one-element
+    list the caller reads after return) to learn whether this call inserted
+    the row (`True`) or resolved to a peer (`False`); the worker uses that
+    to enter the identity-replay path instead of hanging local deviations
+    and a locally rendered check run on the peer's id.
     """
     engine = _get_engine()
     if engine is None:
         return None
-    with engine.begin() as conn:
-        row = conn.execute(
-            verdicts.insert().returning(verdicts.c.id),
-            {
-                "repo": repo,
-                "pr_number": pr_number,
-                "scored_at": datetime.now(UTC),
-                "tier": tier,
-                "score": verdict.score,
-                "band": verdict.band.value,
-                "threshold": verdict.threshold,
-                "model": model,
-                "risk_score": reader_verdict.risk_score if reader_verdict else None,
-                "rationale": reader_verdict.rationale if reader_verdict else None,
-                "raw": reader_verdict.model_dump() if reader_verdict else None,
-                "pr_meta": pr_meta,
-                "github_repo_id": github_repo_id,
-                "installation_id": installation_id,
-                "head_sha": head_sha,
-                "source": source,
-                "prompt_hash": prompt_hash,
-            },
-        ).scalar_one()
-        rows = [
-            {
-                "verdict_id": row,
-                "rule": r.rule,
-                "label": r.label,
-                "weight": r.weight,
-                "file": None,
-                "severity": None,
-            }
-            for r in verdict.reasons
-        ]
-        if reader_verdict:
-            by_desc = {f.description: f for f in reader_verdict.findings}
-            for r in rows:
-                f = by_desc.get(r["label"])
-                if f:
-                    r["file"] = f.file
-                    r["severity"] = f.severity
-        if rows:
-            conn.execute(findings.insert(), rows)
-        if coverage is not None:
-            conn.execute(
-                reads.insert(),
+
+    def _mark(was_created: bool) -> None:
+        if created is not None:
+            created.clear()
+            created.append(was_created)
+
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                verdicts.insert().returning(verdicts.c.id),
+                {
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "scored_at": datetime.now(UTC),
+                    "tier": tier,
+                    "score": verdict.score,
+                    "band": verdict.band.value,
+                    "threshold": verdict.threshold,
+                    "model": model,
+                    "risk_score": reader_verdict.risk_score if reader_verdict else None,
+                    "rationale": reader_verdict.rationale if reader_verdict else None,
+                    "raw": reader_verdict.model_dump() if reader_verdict else None,
+                    "pr_meta": pr_meta,
+                    "github_repo_id": github_repo_id,
+                    "installation_id": installation_id,
+                    "head_sha": head_sha,
+                    "source": source,
+                    "prompt_hash": prompt_hash,
+                },
+            ).scalar_one()
+            rows = [
                 {
                     "verdict_id": row,
-                    "diff_chars": coverage.diff_chars,
-                    "sent_chars": coverage.sent_chars,
-                    "files_sent": coverage.files_sent,
-                    "files_unseen": coverage.files_unseen,
-                    "file_cut": coverage.file_cut,
-                },
-            )
-    return int(row)
+                    "rule": r.rule,
+                    "label": r.label,
+                    "weight": r.weight,
+                    "file": None,
+                    "severity": None,
+                }
+                for r in verdict.reasons
+            ]
+            if reader_verdict:
+                by_desc = {f.description: f for f in reader_verdict.findings}
+                for r in rows:
+                    f = by_desc.get(r["label"])
+                    if f:
+                        r["file"] = f.file
+                        r["severity"] = f.severity
+            if rows:
+                conn.execute(findings.insert(), rows)
+            if coverage is not None:
+                conn.execute(
+                    reads.insert(),
+                    {
+                        "verdict_id": row,
+                        "diff_chars": coverage.diff_chars,
+                        "sent_chars": coverage.sent_chars,
+                        "files_sent": coverage.files_sent,
+                        "files_unseen": coverage.files_unseen,
+                        "file_cut": coverage.file_cut,
+                    },
+                )
+        _mark(True)
+        return int(row)
+    except IntegrityError as e:
+        if not _is_app_identity_collision(e):
+            raise
+        if installation_id is None or github_repo_id is None or head_sha is None:
+            raise
+        existing = find_verdict_by_identity(
+            installation_id, github_repo_id, pr_number, head_sha
+        )
+        if existing is None:
+            raise
+        _mark(False)
+        return int(existing["id"])
 
 
 def save_external_review(
@@ -929,9 +976,10 @@ def find_verdict_by_identity(
     save_review lands and before the job is marked 'done' — mid check-run
     post, or before it ever starts. reclaim_stalled()/ingest.fail() then
     re-pend the row for another full attempt. Without this read, that retry
-    re-scores from scratch: a second paid score_one/read_intent, and a
-    second verdicts row for the same commit, because verdicts carries no
-    unique constraint of its own to stop it.
+    re-scores from scratch: a second paid score_one/read_intent. Migration
+    005's unique index stops the second verdicts row; this pre-read is still
+    the cheap path that avoids buying the second read when the first already
+    committed.
 
     Keyed on (installation_id, github_repo_id, pr_number, head_sha) rather
     than find_review's repo-string + pr_meta JSON match: the Global

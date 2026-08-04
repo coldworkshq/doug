@@ -725,6 +725,100 @@ def test_save_review_leaves_identity_null_for_the_ci_path(tmp_path, monkeypatch)
     assert v["installation_id"] is None and v["source"] is None
 
 
+def test_save_review_returns_existing_id_on_duplicate_app_identity(tmp_path, monkeypatch):
+    """Migration 005 makes the App identity unique. The advisory pre-read in
+    the worker still races: two holders can both miss it, both pay, and both
+    call save_review. The loser's insert must resolve to the winner's id —
+    not raise — or a lost claim after a successful peer write looks like a
+    hard failure and the denominator grows a second paid ghost on retry.
+    """
+    url = _db(tmp_path, monkeypatch)
+    sha = "a" * 40
+    created_first: list[bool] = []
+    first = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        github_repo_id=REPO_ID,
+        installation_id=INSTALL,
+        head_sha=sha,
+        source="app",
+        created=created_first,
+    )
+    created_second: list[bool] = []
+    second = store.save_review(
+        "o/r",
+        7,
+        "deterministic",
+        Verdict(score=0.01, band=Band.CLEARED, threshold=0.30, reasons=[]),
+        github_repo_id=REPO_ID,
+        installation_id=INSTALL,
+        head_sha=sha,
+        source="app",
+        created=created_second,
+    )
+    assert second == first
+    assert created_first == [True]
+    assert created_second == [False]
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.verdicts)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["tier"] == "reader"
+
+
+def test_app_and_external_verdicts_share_a_sha_under_the_unique_index(
+    tmp_path, monkeypatch
+):
+    """The unique index must not treat an external row as Doug's scored
+    commit. Same four identity columns, different tier — both stay.
+    """
+    url = _db(tmp_path, monkeypatch)
+    sha = "a" * 40
+    doug = store.save_review(
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        github_repo_id=REPO_ID,
+        installation_id=INSTALL,
+        head_sha=sha,
+        source="app",
+    )
+    external = store.save_external_review(
+        INSTALL,
+        REPO_ID,
+        "o/r",
+        7,
+        sha,
+        "review:alice",
+        Band.CLEARED,
+        datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert doug is not None and external is not None and doug != external
+    with create_engine(url).connect() as conn:
+        tiers = {
+            r["tier"]
+            for r in conn.execute(select(store.verdicts)).mappings().all()
+        }
+    assert tiers == {"reader", store.EXTERNAL_TIER}
+
+
+def test_ci_path_duplicates_are_still_allowed(tmp_path, monkeypatch):
+    """Partial index: NULL installation_id rows are outside the constraint.
+    The CI dual-run path has no installation and must keep writing.
+    """
+    url = _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 7, "deterministic", VERDICT)
+    store.save_review("o/r", 7, "deterministic", VERDICT)
+    with create_engine(url).connect() as conn:
+        assert len(conn.execute(select(store.verdicts)).mappings().all()) == 2
+
+
 # --- Installation helpers -----------------------------------------------------
 
 
@@ -1427,9 +1521,10 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
 ):
     """The comparison read must preserve every qualifying App and CI run.
 
-    Dropping the CI-side predicate, deduplicating rows, or failing to load a
-    reader receipt makes the App-versus-CI dashboard claim a comparison it
-    cannot actually show.
+    Dropping the CI-side predicate, collapsing CI duplicates, or failing to
+    load a reader receipt makes the App-versus-CI dashboard claim a
+    comparison it cannot actually show. App-path rows for one SHA are unique
+    (migration 005); CI duplicates and App+CI coexistence are what remain.
     """
     _db(tmp_path, monkeypatch)
     coverage = reader.Coverage(
@@ -1440,7 +1535,8 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
         file_cut="first.py",
     )
     app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
-    app_two = _comparison_review("o/r", 7, "a" * 40, app=True)
+    # Same App identity: ledger keeps one row; the second save is idempotent.
+    assert _comparison_review("o/r", 7, "a" * 40, app=True) == app_one
     current_ci = _comparison_review("o/r", 7, "a" * 40, app=False)
     legacy_ci = _comparison_review("o/r", 7, "a" * 40, app=False, legacy_ci=True)
     _external()
@@ -1476,7 +1572,6 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     rows = store.comparison_reviews(repo="o/r")
     assert {row["id"] for row in rows} == {
         app_one,
-        app_two,
         current_ci,
         legacy_ci,
     }
@@ -1486,7 +1581,6 @@ def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
     by_id = {row["id"]: row for row in rows}
     assert by_id[app_one]["coverage"]["sent_chars"] == 10
     assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
-    assert by_id[app_two]["coverage"] is None
     assert by_id[current_ci]["coverage"] is None
     assert by_id[legacy_ci]["coverage"] is None
 
