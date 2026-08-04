@@ -423,3 +423,42 @@ fine in passing tests:
    first.** The shared 5,000/hr REST quota was exhausted twice on 2026-08-02;
    a public endpoint that spends Doug's quota before the caller's is a drain
    loop. Pinned by `test_non_admin_pat_never_spends_dougs_github_quota`.
+
+## A table only a webhook populates can be empty in production
+
+Found 2026-08-04, by inspecting the production ledger while chasing an
+unrelated finding on PR #48.
+
+`installations` has **one writer** — `api.py:730`, inside the `installation`
+webhook handler — and it is read by `worker.reconcile_all` (via
+`store.active_installations`) and by `tenancy.mint`/`store.active_repos`.
+In production that table held **zero rows**, while `verdicts` held 33 rows
+carrying `installation_id = 150424894`. The App path was demonstrably working;
+the table describing the installation had simply never been written, because
+Doug was installed before that handler existed and no `installation` delivery
+was ever replayed.
+
+Every test seeds the row first — `upsert_installation(...)` is the opening line
+of the fixtures — so the whole suite passes against a state production is not
+in. The green suite is evidence about the code, not about the ledger.
+
+When reviewing anything that reads a table:
+
+1. **Ask who writes it, and whether that writer has definitely run in
+   production.** A webhook handler shipped after the event it handles will
+   never have fired for installations that predate it. Redelivery is a manual
+   act nobody performs by default.
+2. **Distrust a passing test whose fixture creates the row under review.** It
+   proves the read works given the row; it says nothing about whether the row
+   exists. This is the same class as ADR-0002's self-referential test — a check
+   that cannot fail in the direction that matters.
+3. **Prefer one query against the real ledger to any amount of reasoning about
+   it.** The reasoning here — "the table is populated by the webhook, the
+   webhook works, reviews are happening" — was individually true at every step
+   and wrong at the end.
+
+The symptom this hid: `reconcile_all` loops over `active_installations()`, so
+with an empty table the startup sweep enqueues nothing *by construction*. That
+had been recorded in HANDOFF as "the webhook path drains jobs promptly, so at
+any boot there is nothing pending for the sweep to find" — a plausible
+explanation for the right observation and the wrong reason.

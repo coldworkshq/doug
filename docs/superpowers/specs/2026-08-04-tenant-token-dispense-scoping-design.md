@@ -368,3 +368,57 @@ reviewers traced every direction and it fails closed: a stale name 404s a repo
 the tenant owns; a name belonging to the wrong installation still returns no
 rows. Real inconsistency, no leak. Worth unifying when receipts land and this
 check gets a second caller.
+
+### Finding 2 resolved, and a larger one found underneath it
+
+**`token_hash` IS present in production.** Verified 2026-08-04 against
+`doug-prod0` / database `doug` through `cloud-sql-proxy`, once working ADC was
+available: `installations` carries `token_hash text NULL`, and
+`schema_migrations` shows versions 1–5 applied. **Doug's medium finding is
+disproved, and no migration is needed.** (Note for anyone repeating this: the
+machine's ADC quota project was `vestige-00`, a deleted project, so the proxy
+needs `--quota-project doug-prod0` even after `application-default login`.)
+
+**The same query surfaced something worse, which no reviewer caught because
+every test hides it.** In production:
+
+| table | rows |
+|---|---|
+| `verdicts` with `installation_id = 150424894` | 33 |
+| `installations` | **0** |
+| `installation_repos` | **0** |
+
+The App path is working and writing App-identified verdicts, but the table
+*describing* the installation was never populated. Its only writer is
+`api.py:730`, inside the `installation` webhook handler — and Doug was
+installed before that handler existed, so the event never fired and nobody
+replayed it.
+
+Three consequences, in descending order of how much they hurt:
+
+1. **This feature does not work in production as shipped.**
+   `tenancy.mint(150424894)` issues `UPDATE installations ... WHERE
+   installation_id = 150424894`, which matches zero rows, so `mint` returns
+   `None` and `POST /v1/installations/token` returns **404 for the operator's
+   own installation**. Every test passes because every fixture calls
+   `upsert_installation` first — the suite proves the code is right about a
+   ledger state production is not in.
+2. **`reconcile_all` has been a structural no-op.** It loops over
+   `store.active_installations()`, which reads this table, so the startup sweep
+   can never enqueue anything. HANDOFF recorded soak criterion 2 as "NOT MET,
+   and it will NOT be met by waiting", explaining that the webhook drains
+   promptly so nothing is pending. The observation was right and the
+   explanation was wrong; forcing the condition would have failed for a reason
+   nobody expected.
+3. **A tenant `?repo=` filter would 404 everything**, since `active_repos()`
+   reads `installation_repos`, also empty.
+
+**The fix is operational, not code:** redeliver the `installation` event from
+the App's Advanced settings, which calls `_record_installation` and writes both
+rows. Do that *before* relying on dispense, and re-check whether the startup
+sweep starts enqueueing.
+
+**A new install is unaffected** — `installation.created` fires normally and
+populates both tables. So a fresh install (e.g. `lema`) would work while the
+original dogfood install does not, which is exactly the kind of asymmetry that
+stays hidden until someone tries the second one.
