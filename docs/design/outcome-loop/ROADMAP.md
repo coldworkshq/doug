@@ -11,9 +11,12 @@ Effort marks are engineer-days of focused work, not calendar days.
 
 `[x]` done and merged · `[ ]` not started · `[~]` **partially** landed, with the remaining half
 named in the item. `[~]` exists because items go half-true in a way that reads as done if you
-only count boxes: a shipped primitive nothing calls is not a shipped capability. One is left —
-M2's spend cap, whose primitive landed in #25 and is still wired to no call site. Task 7's
-reconcile was the other, and Task 7b calling it from the lifespan is what closed it.
+only count boxes: a shipped primitive nothing calls is not a shipped capability. Two are open —
+**fork-PR + bot-author exclusion** (the fork half is done, the bot-author half is not) and
+**doug-web's dedicated service account** (code merged in #44; the ops cutover has not run). Two
+closed the way this mark is meant to close: Task 7's reconcile, once Task 7b called it from the
+lifespan, and M2's spend cap, whose primitive landed in #25 and sat wired to nothing until #37
+put `_charge(scope)` in front of both paid entry points.
 
 ---
 
