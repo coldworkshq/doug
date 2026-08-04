@@ -1060,6 +1060,14 @@ with:
   cross-tenant read" and an operator is not a tenant, but "scoped reads" should
   not be read as more than shipped. One token per installation, too — the
   garden and a tenant's CI would share it; `installation_tokens` when that bites.
+  **Second honest limit, found by the Task 5 review:** the 404 on operator-only
+  endpoints does *not* hide their existence, because FastAPI serves
+  `/openapi.json` and `/docs` unauthenticated and they enumerate every route on
+  an `--allow-unauthenticated` service. 404 is still the right code (403 would
+  be worse) and the **cross-tenant `repo` 404 is unaffected** — repo names are
+  not in the OpenAPI schema — so the gate clause stands. Closing it for real is
+  `FastAPI(openapi_url=None, docs_url=None)` in prod: **follow-up task, not
+  done here.**
 ```
 
 - [ ] **Step 2: Append the operator/tenant split to REVIEWING.md**

@@ -205,6 +205,24 @@ list is indistinguishable from "no reviews yet", which is a worse answer than
 "no such thing". Absent or unresolvable token → 401. No ledger → 503. Missing
 `DOUG_API_TOKEN` → 503. All unchanged where they already exist.
 
+**Correction (2026-08-04, from the Task 5 review) — the endpoint half of that
+claim does not hold at the deployment level, and this paragraph overstated it.**
+FastAPI serves `/openapi.json` and `/docs` unauthenticated, and they enumerate
+every route; the reviewer confirmed a plain `GET /openapi.json` returns 200
+listing `/v1/patterns`, `/v1/comparisons`, `/v1/score/read`, and
+`/v1/installations/token`. On an `--allow-unauthenticated` service, a stranger
+already knows those endpoints exist, so 404-instead-of-403 conceals nothing
+from a tenant that anyone can get for free.
+
+Two things this does **not** change. **404 stays** — 403 would be strictly
+worse, and the code is correct as written. And the **cross-tenant `repo` 404 is
+unaffected**: repo names appear nowhere in the OpenAPI schema, so that one
+leaks nothing and the M2 gate clause it serves stands.
+
+What was wrong was the wording here, not the behaviour. Closing the gap for
+real means `FastAPI(openapi_url=None, docs_url=None)` in production — its own
+task, tracked as a follow-up, deliberately not smuggled into this one.
+
 ---
 
 ## Testing
