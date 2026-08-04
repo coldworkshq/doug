@@ -348,12 +348,14 @@ def enabled() -> bool:
     return _get_engine() is not None
 
 
-# Postgres names the constraint; sqlite lists table.column for the unique
-# index. Same shape as ingest._DEDUPE_COLLISION / _OUTCOME_COLLISION — only
-# this collision becomes an idempotent return; anything else propagates.
+# Postgres names the constraint; sqlite lists the indexed columns (measured
+# 2026-08-03: "UNIQUE constraint failed: verdicts.installation_id, …").
+# Match the first column, not "verdicts." alone — a future unique constraint
+# on any other verdicts column must not become an idempotent return.
+# Same shape as ingest._DEDUPE_COLLISION / _OUTCOME_COLLISION.
 _APP_IDENTITY_COLLISION = (
     "uq_verdicts_app_identity",
-    "unique constraint failed: verdicts.",
+    "unique constraint failed: verdicts.installation_id",
 )
 
 
@@ -966,6 +968,69 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
     }
 
 
+def _verdict_bundle(conn, v) -> dict:
+    """Findings / deviations / coverage for one verdicts row — shared by the
+    identity and id lookups so a race-loser holding only the peer's id can
+    still render the same check run as the pre-read hit."""
+    reason_rows = (
+        conn.execute(
+            select(findings).where(findings.c.verdict_id == v["id"]).order_by(findings.c.id)
+        )
+        .mappings()
+        .all()
+    )
+    dev_rows = (
+        conn.execute(
+            select(deviations)
+            .where(deviations.c.verdict_id == v["id"])
+            .order_by(deviations.c.id)
+        )
+        .mappings()
+        .all()
+    )
+    read_row = (
+        conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
+        .mappings()
+        .first()
+    )
+    return {
+        "id": v["id"],
+        "tier": v["tier"],
+        "score": v["score"],
+        "band": v["band"],
+        "threshold": v["threshold"],
+        "reasons": [
+            {
+                "rule": r["rule"],
+                "label": r["label"],
+                "weight": r["weight"],
+                "severity": r["severity"],
+            }
+            for r in reason_rows
+        ],
+        # kind="none" is the "read happened, found nothing" storage marker
+        # (see save_deviations) — it was never a response finding.
+        "deviations": [
+            {"type": d["kind"], "description": d["description"], "severity": d["severity"]}
+            for d in dev_rows
+            if d["kind"] != "none"
+        ],
+        "intent_alignment": dev_rows[0]["intent_alignment"] if dev_rows else None,
+        "intent_refs": (dev_rows[0]["intent_refs"] or []) if dev_rows else [],
+        "coverage": (
+            {
+                "diff_chars": read_row["diff_chars"],
+                "sent_chars": read_row["sent_chars"],
+                "files_sent": read_row["files_sent"],
+                "files_unseen": read_row["files_unseen"],
+                "file_cut": read_row["file_cut"],
+            }
+            if read_row
+            else None
+        ),
+    }
+
+
 def find_verdict_by_identity(
     installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
 ) -> dict | None:
@@ -1015,63 +1080,26 @@ def find_verdict_by_identity(
         v = conn.execute(q).mappings().first()
         if v is None:
             return None
-        reason_rows = (
-            conn.execute(
-                select(findings).where(findings.c.verdict_id == v["id"]).order_by(findings.c.id)
-            )
-            .mappings()
-            .all()
-        )
-        dev_rows = (
-            conn.execute(
-                select(deviations)
-                .where(deviations.c.verdict_id == v["id"])
-                .order_by(deviations.c.id)
-            )
-            .mappings()
-            .all()
-        )
-        read_row = (
-            conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
-            .mappings()
-            .first()
-        )
-    return {
-        "id": v["id"],
-        "tier": v["tier"],
-        "score": v["score"],
-        "band": v["band"],
-        "threshold": v["threshold"],
-        "reasons": [
-            {
-                "rule": r["rule"],
-                "label": r["label"],
-                "weight": r["weight"],
-                "severity": r["severity"],
-            }
-            for r in reason_rows
-        ],
-        # kind="none" is the "read happened, found nothing" storage marker
-        # (see save_deviations) — it was never a response finding.
-        "deviations": [
-            {"type": d["kind"], "description": d["description"], "severity": d["severity"]}
-            for d in dev_rows
-            if d["kind"] != "none"
-        ],
-        "intent_alignment": dev_rows[0]["intent_alignment"] if dev_rows else None,
-        "intent_refs": (dev_rows[0]["intent_refs"] or []) if dev_rows else [],
-        "coverage": (
-            {
-                "diff_chars": read_row["diff_chars"],
-                "sent_chars": read_row["sent_chars"],
-                "files_sent": read_row["files_sent"],
-                "files_unseen": read_row["files_unseen"],
-                "file_cut": read_row["file_cut"],
-            }
-            if read_row
-            else None
-        ),
-    }
+        return _verdict_bundle(conn, v)
+
+
+def find_verdict_by_id(verdict_id: int) -> dict | None:
+    """Load one verdict by primary key for the race-loser path.
+
+    save_review already resolved the peer's id; if the identity re-read
+    misses (should not, but must not 500 a paid attempt), this is the
+    durable handle.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        v = conn.execute(
+            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
+        ).mappings().first()
+        if v is None:
+            return None
+        return _verdict_bundle(conn, v)
 
 
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:

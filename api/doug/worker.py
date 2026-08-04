@@ -191,18 +191,20 @@ def process_job(job: dict) -> int | None:
     )
     # Race floor: a peer already owns this identity. Do not hang our local
     # deviations or a locally rendered check run on their row — replay theirs.
-    if created and not created[0]:
+    # `created == [False]` only — an empty list means storage was disabled
+    # (save_review returned without marking), which must not look like a race.
+    if created == [False]:
         peer = store.find_verdict_by_identity(
             job["installation_id"],
             job["github_repo_id"],
             job["pr_number"],
             job["head_sha"],
-        )
+        ) or store.find_verdict_by_id(verdict_id)
         if peer is None:
             raise RuntimeError(
                 f"save_review reported an existing identity for "
                 f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]} "
-                f"but find_verdict_by_identity returned None"
+                f"(id={verdict_id}) but neither identity nor id lookup found it"
             )
         return _replay_recorded(
             job, gh, owner, name, peer, discarded_paid_read=True

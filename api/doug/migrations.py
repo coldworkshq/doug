@@ -110,6 +110,11 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # re-point review_jobs, drop dependents, then the extras. Nested
             # SELECT wrappers are for sqlite (cannot delete from a table while
             # a subquery reads it directly).
+            #
+            # Closed FK set to verdicts.id (pinned by test): findings, reads,
+            # deviations, review_jobs. outcomes joins by (repo, pr_number) /
+            # identity columns — no verdict_id FK. External rows are verdicts
+            # themselves (tier='external'), not a dependent table.
             "UPDATE review_jobs SET verdict_id = ("
             "  SELECT MIN(keeper.id) FROM verdicts dup"
             "  JOIN verdicts keeper"

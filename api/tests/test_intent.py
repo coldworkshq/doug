@@ -232,11 +232,10 @@ def test_selection_on_dougs_own_records():
     assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == []
 
     # And the set stays tight rather than padding out to MAX_DOCS.
-    for title, files in [
-        ("Tighten the reader prompt wording", ["doug/reader.py"]),
-        ("Add a deviations table to the ledger", ["doug/store.py"]),
-    ]:
-        assert len(sent(title, files)) <= 3
+    # store.py's bound moved to 4 when ADR-0011 (migration list) joined the
+    # store-schema cluster; reader.py is unchanged.
+    assert len(sent("Tighten the reader prompt wording", ["doug/reader.py"])) <= 3
+    assert len(sent("Add a deviations table to the ledger", ["doug/store.py"])) <= 4
 
 
 def _probe():

@@ -349,3 +349,16 @@ display fact for the receipt ("N of M"), decoupled from the boolean.
 Same shape as the idempotency-pre-read case above: the finding named a real gap and
 suggested the wrong repair. The useful move was asking what GitHub's own data can actually
 distinguish before picking which files count as "dropped."
+
+## Intentional uniqueness is not a behavior-change defect
+
+PR #43's migration 005 made App-path `(installation, repo, pr, head_sha)` unique so the
+published denominator cannot double-count. Doug flagged `reader:behavior-change`: same-SHA
+re-scores no longer insert a new verdict row. That is the decision, not a regression — ADR-0011
+records it. A finding that restates a locked uniqueness contract as an accidental change
+should be dismissed, not "fixed" by re-opening duplicate ledger rows.
+
+The companion miss on that PR: `reader:unsafe-migration` named `outcomes` as an example FK
+to `verdicts.id`. outcomes has never carried `verdict_id`; it joins by identity columns. The
+repair was a metadata pin of the real closed FK set, not expanding the dedupe to tables that
+do not reference the row.

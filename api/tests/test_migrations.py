@@ -311,6 +311,54 @@ def test_migration_004_adds_claim_generation(tmp_path):
     assert "claim_generation" in _columns(engine, "review_jobs")
 
 
+def test_migration_005_names_every_foreign_key_to_verdicts():
+    """Destructive dedupe must clear or re-point every dependent. outcomes
+    joins by identity columns, not verdict_id — Doug's 'unsafe-migration'
+    finding named it as an example FK and was wrong; this pin is the check
+    that keeps the closed set honest when a real FK is added later.
+    """
+    fks = {
+        (fk.parent.table.name, fk.parent.name)
+        for table in store.metadata.tables.values()
+        for fk in table.foreign_keys
+        if fk.column.table.name == "verdicts"
+    }
+    assert fks == {
+        ("findings", "verdict_id"),
+        ("reads", "verdict_id"),
+        ("deviations", "verdict_id"),
+        ("review_jobs", "verdict_id"),
+    }
+
+
+def test_app_identity_collision_markers_match_sqlite_and_not_other_verdicts_uniques():
+    """Measured sqlite wording for uq_verdicts_app_identity, plus the
+    postgres constraint name. A bare 'verdicts.' substring would also match
+    a future unique on any other verdicts column — refuse that."""
+    from sqlalchemy.exc import IntegrityError
+
+    from doug.store import _is_app_identity_collision
+
+    class _Orig(Exception):
+        pass
+
+    def _exc(msg: str) -> IntegrityError:
+        return IntegrityError("stmt", {}, _Orig(msg))
+
+    assert _is_app_identity_collision(
+        _exc(
+            "UNIQUE constraint failed: verdicts.installation_id, "
+            "verdicts.github_repo_id, verdicts.pr_number, verdicts.head_sha"
+        )
+    )
+    assert _is_app_identity_collision(
+        _exc('duplicate key value violates unique constraint "uq_verdicts_app_identity"')
+    )
+    assert not _is_app_identity_collision(
+        _exc("UNIQUE constraint failed: verdicts.repo, verdicts.pr_number")
+    )
+
+
 def test_migration_005_installs_app_identity_unique_index(tmp_path):
     """Ledger integrity for the published denominator: two App-path workers
     that both pass the advisory find_verdict_by_identity pre-read must not
