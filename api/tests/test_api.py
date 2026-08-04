@@ -1758,3 +1758,85 @@ def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
     assert run["title"] == "PR #9"
     assert run["url"] == "https://github.com/o/r/pull/9"
     assert run["head_sha"] is None
+
+
+def _tenancy_ok(monkeypatch, installation_id=150424894):
+    monkeypatch.setattr(api.tenancy, "verify_admin", lambda pat, owner, repo: installation_id)
+
+
+def test_dispense_returns_a_token_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    _tenancy_ok(monkeypatch)
+    r = client.post(
+        "/v1/installations/token",
+        json={"repo": "drewjst/doug"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["installation_id"] == 150424894
+    assert body["repo"] == "drewjst/doug"
+    assert body["token"].startswith("doug_")
+    assert api.tenancy.resolve(body["token"]) == 150424894
+
+
+def test_dispense_without_a_github_token_is_401(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    r = client.post("/v1/installations/token", json={"repo": "drewjst/doug"})
+    assert r.status_code == 401
+
+
+def test_dispense_hides_every_verification_failure_behind_404(tmp_path, monkeypatch):
+    """403 would confirm the repo exists. So would a distinct message for
+    'not installed' versus 'not an admin'. One shape for all of them."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    monkeypatch.setattr(api.tenancy, "verify_admin", lambda pat, owner, repo: None)
+    r = client.post(
+        "/v1/installations/token",
+        json={"repo": "someone/private"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 404
+
+
+def test_dispense_404s_a_malformed_repo_without_calling_github(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    calls = []
+
+    def _spy(pat, owner, repo):
+        calls.append((owner, repo))
+        return 150424894
+
+    monkeypatch.setattr(api.tenancy, "verify_admin", _spy)
+    for bad in ("doug", "/doug", "drewjst/", ""):
+        r = client.post(
+            "/v1/installations/token",
+            json={"repo": bad},
+            headers={"X-GitHub-Token": "ghp_x"},
+        )
+        assert r.status_code == 404, bad
+    assert calls == []
+
+
+def test_dispense_404s_when_verification_passes_but_no_installation_row(tmp_path, monkeypatch):
+    """verify_admin says GitHub knows about the installation but the ledger
+    does not — mint refuses, and so must the endpoint."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    _tenancy_ok(monkeypatch, installation_id=999)
+    r = client.post(
+        "/v1/installations/token",
+        json={"repo": "drewjst/doug"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 404
+
+
+def test_dispense_without_a_ledger_is_503(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = client.post(
+        "/v1/installations/token",
+        json={"repo": "drewjst/doug"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 503

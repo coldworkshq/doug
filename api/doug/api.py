@@ -15,7 +15,7 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, review, store, worker
+from . import __version__, app_auth, ingest, precision, reader, review, store, tenancy, worker
 from .models import (
     Band,
     PRMetadata,
@@ -521,6 +521,52 @@ def queue(
         ),
         items=items,
     )
+
+
+class TokenRequest(BaseModel):
+    repo: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+    installation_id: int
+    repo: str
+
+
+@app.post("/v1/installations/token")
+def dispense_token(
+    body: TokenRequest,
+    x_github_token: str = Header(""),
+) -> TokenResponse:
+    """Mint this installation's API token, proving ownership through GitHub.
+
+    Deliberately public: the proof is the caller's own GitHub credential, so
+    an operator token here would defeat self-service without adding safety.
+
+    Every verification failure renders as 404 — not 403, which would confirm
+    the repo exists, and not a distinct message per cause, which would let a
+    caller separate "private repo I cannot administer" from "repo that does
+    not exist". The token rides in the response body once; only its hash is
+    stored, so this endpoint is also the rotation and lost-token path.
+    """
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    owner, _, name = body.repo.partition("/")
+    # Parse before either GitHub call: a malformed repo cannot be anyone's,
+    # so there is nothing to spend a quota proving.
+    if not owner or not name or "/" in name:
+        raise HTTPException(status_code=404, detail="not found")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    installation_id = tenancy.verify_admin(x_github_token, owner, name)
+    if installation_id is None:
+        raise HTTPException(status_code=404, detail="not found")
+    token = tenancy.mint(installation_id)
+    if token is None:
+        # GitHub knows this installation; the ledger does not. Same shape as
+        # every other failure — the caller learns nothing either way.
+        raise HTTPException(status_code=404, detail="not found")
+    return TokenResponse(token=token, installation_id=installation_id, repo=body.repo)
 
 
 class PatternRow(BaseModel):
