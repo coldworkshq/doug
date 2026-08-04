@@ -18,7 +18,7 @@
 - **404, never 403.** Cross-tenant repo, tenant token on an operator-only endpoint, Doug-not-installed, PAT-lacks-admin — all 404. An absent or unresolvable token is 401. Never return an empty list where 404 is meant: an empty list is indistinguishable from "no reviews yet".
 - **Token format:** `doug_` + `secrets.token_urlsafe(32)`. The prefix is load-bearing for leaked-secret sweeps.
 - **The plaintext token is returned exactly once and never logged.** Only `sha256(token)` is persisted.
-- **Baseline:** 539 tests pass on `main` before this work (`make test`). Every task's final test run must show a total greater than the previous task's.
+- **Baseline:** 539 tests pass on `main` before this work (`make test`). Each task states its own expected total; a task's run must hit that number and must never fall below the previous task's. Tasks 1–5 add tests and so go up; **Task 6 is documentation-only and stays at 572** — an unchanged count there is correct, not a missing test.
 - **Lint:** `cd api && uv run ruff check .` must be clean before every commit.
 - All commands below run from the repo root unless the command itself contains `cd api`.
 
@@ -519,7 +519,6 @@ def test_dispense_404s_when_verification_passes_but_no_installation_row(tmp_path
     """verify_admin says GitHub knows about the installation but the ledger
     does not — mint refuses, and so must the endpoint."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    store.enabled()
     _tenancy_ok(monkeypatch, installation_id=999)
     r = client.post(
         "/v1/installations/token",
