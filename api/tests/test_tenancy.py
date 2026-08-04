@@ -1,4 +1,6 @@
-from doug import store, tenancy
+from types import SimpleNamespace
+
+from doug import app_auth, store, tenancy
 
 
 def _db(tmp_path, monkeypatch):
@@ -78,3 +80,107 @@ def test_disabled_storage_mints_and_resolves_nothing(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert tenancy.mint(150424894) is None
     assert tenancy.resolve("doug_anything") is None
+
+
+class _Boom(Exception):
+    pass
+
+
+def _caller(admin: bool):
+    """A githubkit-shaped stub for the caller's PAT: GET /repos/{o}/{r}."""
+
+    def _get(owner, repo):
+        return SimpleNamespace(
+            parsed_data=SimpleNamespace(
+                permissions=SimpleNamespace(admin=admin)
+            )
+        )
+
+    return SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(get=_get)))
+
+
+def _app(installation_id=150424894, calls=None):
+    """A stub for the app JWT: GET /repos/{o}/{r}/installation."""
+
+    def _get_repo_installation(owner, repo):
+        if calls is not None:
+            calls.append((owner, repo))
+        if installation_id is None:
+            raise _Boom("not installed")
+        return SimpleNamespace(parsed_data=SimpleNamespace(id=installation_id))
+
+    return SimpleNamespace(
+        rest=SimpleNamespace(
+            apps=SimpleNamespace(get_repo_installation=_get_repo_installation)
+        )
+    )
+
+
+def test_verify_admin_returns_the_installation_id(monkeypatch):
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=True))
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app())
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") == 150424894
+
+
+def test_non_admin_pat_never_spends_dougs_github_quota(monkeypatch):
+    """The ordering test, and the reason this function exists in this shape.
+
+    GitHub's REST quota is 5,000/hr and shared across every Doug session; it
+    was exhausted twice on 2026-08-02. The app-JWT call spends DOUG'S quota,
+    the PAT call spends the CALLER'S. This endpoint is public, so if the app
+    call ran first an anonymous caller would have a loop that drains the
+    quota the review path needs to mint installation tokens. Assert on the
+    empty call list, not just the return value — a refactor that reorders
+    the two calls still returns None here and would slip through.
+    """
+    app_calls = []
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=False))
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app(calls=app_calls))
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+    assert app_calls == []
+
+
+def test_unreadable_repo_never_spends_dougs_quota(monkeypatch):
+    """A PAT that cannot see the repo at all takes the same early exit."""
+    app_calls = []
+
+    def _explode(pat):
+        raise _Boom("404")
+
+    monkeypatch.setattr(tenancy, "_caller_client", _explode)
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app(calls=app_calls))
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+    assert app_calls == []
+
+
+def test_admin_but_doug_not_installed(monkeypatch):
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=True))
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app(installation_id=None))
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+
+
+def test_missing_permissions_block_is_not_admin(monkeypatch):
+    """githubkit models an absent field as a sentinel, not None. Anything
+    that is not exactly True is 'not admin' — the safe direction to be
+    wrong in is refuse, the same choice worker._skip_reason makes for forks."""
+    caller = SimpleNamespace(
+        rest=SimpleNamespace(
+            repos=SimpleNamespace(
+                get=lambda owner, repo: SimpleNamespace(parsed_data=SimpleNamespace())
+            )
+        )
+    )
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: caller)
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app())
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+
+
+def test_app_path_disabled_verifies_nothing(monkeypatch):
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=True))
+    monkeypatch.setattr(app_auth, "enabled", lambda: False)
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
