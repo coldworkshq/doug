@@ -113,30 +113,36 @@ setup() {
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
 
-  # The default compute SA keeps every binding it already holds — nothing
-  # here revokes one. doug-web has no --service-account of its own yet (see
-  # web()), so it runs as that SA and reads doug-api-token as that identity;
-  # that single binding is asserted below rather than dropped when doug-api
-  # moved off the shared identity. Do not "tidy" either the binding or this
-  # block away: losing it breaks the dashboard on the next web deploy, not
-  # on this command, which is the worst possible moment to find out. Both go
-  # when doug-web gets its own SA.
-  #
-  # Resolved from the project number for the same reason $SA is constructed
-  # rather than filtered: a display-name filter returns empty on a project
-  # where the SA does not exist yet, and the empty string flows into
-  # --member.
-  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-  WEB_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+  # doug-web gets its own identity too. It only needs doug-api-token (the
+  # dashboard's server component calls the token-gated API). It must not
+  # share the default compute SA: that principal holds roles/editor on
+  # doug-prod0, and a browser-facing service running as editor is the
+  # blast radius Task 10 held doug-web back from. Same create/describe
+  # guard as doug-api-sa above — never a display-name filter.
+  gcloud iam service-accounts create doug-web-sa \
+    --display-name "doug-web runtime" --project "$PROJECT" 2>/dev/null \
+    || echo "doug-web-sa exists; leaving it"
+  WEB_SA="doug-web-sa@$PROJECT.iam.gserviceaccount.com"
   if ! gcloud iam service-accounts describe "$WEB_SA" --project "$PROJECT" >/dev/null 2>&1; then
-    echo "ERROR: default compute service account $WEB_SA does not exist yet." >&2
-    echo "Enabling compute.googleapis.com (done above) creates it, but not instantly —" >&2
-    echo "wait a minute and re-run setup." >&2
+    echo "ERROR: service account $WEB_SA is not visible after create." >&2
+    echo "Either the create failed (it needs roles/iam.serviceAccountAdmin) or it has" >&2
+    echo "not propagated yet — wait a minute and re-run setup." >&2
     exit 1
   fi
-  gcloud secrets add-iam-policy-binding doug-api-token --project "$PROJECT" \
-    --member="serviceAccount:$WEB_SA" \
-    --role=roles/secretmanager.secretAccessor >/dev/null
+  if gcloud secrets describe doug-api-token --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets add-iam-policy-binding doug-api-token --project "$PROJECT" \
+      --member="serviceAccount:$WEB_SA" \
+      --role=roles/secretmanager.secretAccessor >/dev/null
+  else
+    echo "WARN: secret doug-api-token does not exist yet — create it and re-run setup to bind access." >&2
+  fi
+  # setup does not revoke the default compute SA's leftover accessor on
+  # doug-api-token (that binding may still be live from the Task-10 era).
+  # After the first web deploy as doug-web-sa succeeds, remove it by hand:
+  #   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+  #   gcloud secrets remove-iam-policy-binding doug-api-token --project "$PROJECT" \
+  #     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  #     --role=roles/secretmanager.secretAccessor
 
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
@@ -244,10 +250,13 @@ web() {
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # Built from ../web, so this runs from api/ like every other command here.
   # DOUG_API_URL is read at request time by the dashboard's server component.
+  # --service-account: see setup()'s doug-web-sa block. Deploying without it
+  # silently falls back to the default compute SA (roles/editor).
   gcloud run deploy "$WEB_SERVICE" \
     --source ../web \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
+    --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
     --set-env-vars "DOUG_API_URL=$(api_url),DOUG_QUEUE_REPO=$QUEUE_REPO" \
     --set-secrets "DOUG_API_TOKEN=doug-api-token:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
