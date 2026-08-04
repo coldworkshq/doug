@@ -14,13 +14,14 @@ rules simply don't fire here; the reader doesn't use them at all.
 """
 
 import argparse
+import base64
 import functools
 import sys
 from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from . import intent, intent_providers, reader
+from . import intent, intent_providers, reader, settle
 from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict
 from .scoring import score
@@ -228,7 +229,43 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     return meta, diff
 
 
-def score_one(meta: PRMetadata, diff: str, *, scope: str):
+def head_file_text(gh, owner: str, repo: str, sha: str, path: str) -> str | None:
+    """File body at `sha`, or None when GitHub will not give us text.
+
+    Used only to settle resolution findings against the repo (see settle.py).
+    A missing/binary/unreadable file must not invent a settlement — returning
+    None keeps the finding.
+    """
+    try:
+        content = gh.rest.repos.get_content(
+            owner=owner, repo=repo, path=path, ref=sha
+        ).parsed_data
+    except Exception as e:  # noqa: BLE001 — settlement is advisory
+        print(
+            f"doug: settle fetch skipped for {path} ({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+        return None
+    # githubkit returns a list for directories; those are not settle targets.
+    if isinstance(content, list):
+        return None
+    raw = getattr(content, "content", None)
+    encoding = getattr(content, "encoding", None)
+    if not isinstance(raw, str) or encoding != "base64":
+        return None
+    try:
+        return base64.b64decode(raw).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def score_one(
+    meta: PRMetadata,
+    diff: str,
+    *,
+    scope: str,
+    resolve_file: settle.ResolveFile | None = None,
+):
     """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
 
     Reader failures fall back loudly — the deterministic verdict says
@@ -245,11 +282,27 @@ def score_one(meta: PRMetadata, diff: str, *, scope: str):
     codebase is built to avoid — but under its own rule name, because
     "top up the budget" and "page someone, the reader is broken" are not
     the same instruction.
+
+    `resolve_file`, when given, settles import/undefined-name findings
+    against the full file at head (REVIEWING.md resolution rule). It does
+    not change what the model was shown — ADR-0002 stands.
     """
     if reader.enabled():
         try:
             rv = reader.read_diff(meta, diff, scope=scope)
+            dropped: list[reader.ReaderFinding] = []
+            if resolve_file is not None:
+                rv, dropped = settle.drop_disproved_import_findings(rv, resolve_file)
+                if dropped:
+                    rules = ", ".join(f"reader:{d.category_slug}" for d in dropped)
+                    print(
+                        f"doug: settled {len(dropped)} missing-import finding(s) "
+                        f"against head file ({rules})",
+                        file=sys.stderr,
+                    )
             verdict = reader.verdict_from_reader(rv)
+            if settled := settle.settlement_notice(dropped):
+                verdict.reasons.append(settled)
             cov = reader.coverage(
                 diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
             )

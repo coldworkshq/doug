@@ -173,6 +173,20 @@ file that settled it before dismissing anything. It is transcription, not new wo
 
 (Shown wrapped; it is one line in the file. `jq -e . docs/findings-log.jsonl` is the check.)
 
+The schema is also enforced in code: `uv run python -m doug.findings_log check`
+(and the pin in `api/tests/test_findings_log.py`). Append at disposition time with
+`uv run python -m doug.findings_log append --pr N --layer doug --rule … --verdict
+disproved|real|adjacent --changed|--no-changed --settled-by "…"`. Rates are
+prospective-only (`… rate`); backfill never enters the denominator.
+
+The product path also applies the resolution rule without editing the frozen
+prompt (ADR-0002): after a reader verdict, **missing-import** findings are
+settled against runtime imports in the full file at the reviewed head
+(`doug/settle.py`). `if TYPE_CHECKING:` imports do not settle (residual-real
+per the table above). Dropped findings leave `risk_score` alone and add a
+weight-0 `settled-missing-import` reason so a flagged empty-finding check run
+is not silent.
+
 `layer` is `doug` or `agent-reviewer` — the two layers this file exists to track, kept
 separable so one never speaks for the other. `verdict` is `real | disproved | adjacent`.
 

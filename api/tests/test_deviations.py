@@ -193,7 +193,12 @@ def test_the_untenanted_review_path_buys_no_intent_read_at_all(
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff, *, scope: ("deterministic", fixed, None, None),
+        lambda meta, diff, *, scope, resolve_file=None: (
+            "deterministic",
+            fixed,
+            None,
+            None,
+        ),
     )
 
     body = TestClient(app).post(
