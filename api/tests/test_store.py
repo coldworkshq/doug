@@ -1692,3 +1692,58 @@ def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
 
     monkeypatch.delenv("DATABASE_URL")
     assert store.comparison_reviews() == []
+
+
+def _scored(repo, pr, installation_id, score=0.5):
+    """One verdict row, App-identified or CI-identified (installation None)."""
+    return store.save_review(
+        repo,
+        pr,
+        "reader",
+        Verdict(score=score, band=Band.FLAGGED, threshold=0.30, reasons=[]),
+        pr_meta=_pr().model_dump(),
+        installation_id=installation_id,
+        github_repo_id=1 if installation_id else None,
+        head_sha=("a" * 40) if installation_id else None,
+        source="app" if installation_id else "ci",
+    )
+
+
+def test_latest_reviews_scopes_to_one_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/doug", 1, 150424894)
+    _scored("someone/else", 2, 777)
+    rows = store.latest_reviews(installation_id=150424894)
+    assert [r["repo"] for r in rows] == ["drewjst/doug"]
+
+
+def test_latest_reviews_unscoped_still_sees_everything(tmp_path, monkeypatch):
+    """The operator path must not change at all — doug-web and the soak
+    both read through it."""
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/doug", 1, 150424894)
+    _scored("someone/else", 2, 777)
+    assert len(store.latest_reviews()) == 2
+
+
+def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, monkeypatch):
+    """THE regression test for this change.
+
+    latest_reviews picks max(id) GROUP BY (repo, pr_number) in a subquery.
+    Filter installation_id OUTSIDE that subquery and the CI row — written
+    second, so higher id, and carrying installation_id NULL — wins max(id)
+    for the PR and is then dropped, so the PR VANISHES from the tenant's
+    queue instead of falling back to their own App verdict. Disappearing is
+    a strictly worse failure than the one being fixed, and the function's
+    own docstring already records this exact trap for the external-tier
+    filter. If this test fails, the filter moved outside the subquery.
+    """
+    _db(tmp_path, monkeypatch)
+    app_id = _scored("drewjst/doug", 1, 150424894, score=0.61)
+    ci_id = _scored("drewjst/doug", 1, None, score=0.42)
+    assert ci_id > app_id, "the CI row must be the newer one for this test to mean anything"
+
+    rows = store.latest_reviews(installation_id=150424894)
+    assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
+    assert rows[0]["id"] == app_id
+    assert rows[0]["score"] == 0.61

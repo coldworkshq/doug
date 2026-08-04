@@ -1173,26 +1173,33 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
         }
 
 
-def latest_reviews(limit: int = 200, repo: str | None = None) -> list[dict]:
+def latest_reviews(
+    limit: int = 200, repo: str | None = None, installation_id: int | None = None
+) -> list[dict]:
     """Most recent verdict per (repo, pr) with findings — the live queue.
 
     `repo` scopes the queue; without it the ledger's every repo mixes
     together, which is an all-repos admin view, not a dashboard.
+    `installation_id` scopes the queue to one tenant; without it this is the
+    operator view. Both filters are inside the grouped subquery — see the
+    comment there before moving either.
     """
     engine = _get_engine()
     if engine is None:
         return []
     from sqlalchemy import desc, func, select
 
-    # The external exclusion belongs INSIDE the grouped subquery, not on the
-    # outer query. Filtering outside would still let an external row win
-    # max(id) for its PR and then drop that row — so a PR someone reviewed
-    # after Doug would vanish from the queue entirely instead of falling
-    # back to Doug's verdict, which is a worse failure than the one being
-    # fixed.
+    # The tenant filter belongs INSIDE this subquery for exactly the reason
+    # the external-tier filter does, spelled out above: a row excluded only
+    # on the outer query can still win max(id) for its PR and then be
+    # dropped, and the PR disappears instead of falling back. A CI row
+    # (installation_id NULL) on a tenant's own PR is precisely that case.
+    scoped = verdicts.c.tier != EXTERNAL_TIER
+    if installation_id is not None:
+        scoped = scoped & (verdicts.c.installation_id == installation_id)
     latest = (
         select(func.max(verdicts.c.id).label("id"))
-        .where(verdicts.c.tier != EXTERNAL_TIER)
+        .where(scoped)
         .group_by(verdicts.c.repo, verdicts.c.pr_number)
         .scalar_subquery()
     )
