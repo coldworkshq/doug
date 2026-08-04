@@ -11,8 +11,17 @@ from sqlalchemy import create_engine, select
 
 from doug import api, app_auth, ingest, store, worker
 from doug.api import app
+from doug.models import Band, Reason, Verdict
 
 client = TestClient(app)
+
+VERDICT_FOR_QUEUE = Verdict(
+    score=0.62,
+    band=Band.FLAGGED,
+    threshold=0.30,
+    reasons=[Reason(rule="reader:race-condition", label="Unguarded write", weight=0.0)],
+)
+PR_META = {"number": 1, "title": "Add cache", "author": "dev", "files": ["cache.py"]}
 
 
 def test_healthz():
@@ -1839,4 +1848,104 @@ def test_dispense_without_a_ledger_is_503(monkeypatch):
         json={"repo": "drewjst/doug"},
         headers={"X-GitHub-Token": "ghp_x"},
     )
+    assert r.status_code == 503
+
+
+def _tenant(tmp_path, monkeypatch, installation_id=150424894, login="drewjst"):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    store.upsert_installation(installation_id, login, "User", "active")
+    return api.tenancy.mint(installation_id)
+
+
+def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
+    token = _tenant(tmp_path, monkeypatch)
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
+    )
+    store.save_review(
+        "someone/else", 2, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=777
+    )
+    r = client.get("/v1/queue", headers={"X-Doug-Token": token})
+    assert r.status_code == 200
+    # PRMetadata carries no `repo` field, so the returned row is identified by
+    # the url _with_url back-fills from the ledger's repo + pr_number columns.
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["pr"]["url"] == "https://github.com/drewjst/doug/pull/1"
+
+
+def test_operator_token_still_sees_every_row(tmp_path, monkeypatch):
+    """No soak regression: doug-web and the dual-run comparison both read
+    through this path with the operator token."""
+    _tenant(tmp_path, monkeypatch)
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
+    )
+    store.save_review(
+        "someone/else", 2, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=777
+    )
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "operator-secret"})
+    assert r.status_code == 200
+    assert len(r.json()["items"]) == 2
+
+
+def test_cross_tenant_repo_is_404_not_an_empty_list(tmp_path, monkeypatch):
+    """The M2 exit gate, pinned. An empty list would be indistinguishable
+    from 'no reviews yet', which tells the caller their guess might be a
+    real repo. 404 says nothing at all."""
+    token = _tenant(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
+    r = client.get("/v1/queue", params={"repo": "someone/else"}, headers={"X-Doug-Token": token})
+    assert r.status_code == 404
+
+
+def test_in_scope_repo_filters_normally(tmp_path, monkeypatch):
+    token = _tenant(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
+    )
+    r = client.get("/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token})
+    assert r.status_code == 200
+    assert len(r.json()["items"]) == 1
+
+
+def test_unknown_token_is_401(tmp_path, monkeypatch):
+    _tenant(tmp_path, monkeypatch)
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "doug_nope"})
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read"])
+def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
+    """A valid credential pointed at an endpoint that is not theirs learns
+    only that there is nothing there — same no-existence-leak rule as a
+    cross-tenant repo."""
+    token = _tenant(tmp_path, monkeypatch)
+    call = client.post if path == "/v1/score/read" else client.get
+    # A VALID ReadScoreRequest body ({pr, diff}) — FastAPI validates the body
+    # before the handler runs, so a malformed one 422s and the test would
+    # never reach the auth gate it exists to check.
+    body = {"pr": {"number": 1, "title": "x", "author": "dev"}, "diff": ""}
+    kwargs = {"json": body} if path == "/v1/score/read" else {}
+    r = call(path, headers={"X-Doug-Token": token}, **kwargs)
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons"])
+def test_junk_token_is_still_401_on_operator_only_endpoints(tmp_path, monkeypatch, path):
+    _tenant(tmp_path, monkeypatch)
+    r = client.get(path, headers={"X-Doug-Token": "doug_nope"})
+    assert r.status_code == 401
+
+
+def test_queue_without_operator_token_configured_is_503(tmp_path, monkeypatch):
+    """A missing operator secret is a deployment misconfiguration and must
+    fail loudly, not be masked by tenant traffic that happens to work."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    token = api.tenancy.mint(150424894)
+    r = client.get("/v1/queue", headers={"X-Doug-Token": token})
     assert r.status_code == 503

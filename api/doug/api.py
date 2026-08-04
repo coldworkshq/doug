@@ -378,11 +378,7 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
     # is when the three survivors collapse into one helper; extracting it now
     # would edit endpoints a concurrent session is reading.
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    _operator_only(x_doug_token)
     if not reader.enabled():
         return score(req.pr)
     try:
@@ -443,6 +439,25 @@ def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
     return max(seen, key=lambda t: (seen[t], -t))
 
 
+def _operator_only(x_doug_token: str) -> None:
+    """Gate an endpoint that no tenant may reach.
+
+    Three outcomes, and the middle one is the point: a token that RESOLVES
+    to an installation is a real credential aimed at the wrong door, so it
+    gets 404 — the same no-existence-leak rule a cross-tenant repo gets.
+    A token that resolves to nothing is 401, because nothing about it was
+    ever valid.
+    """
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if hmac.compare_digest(x_doug_token, expected):
+        return
+    if tenancy.resolve(x_doug_token) is not None:
+        raise HTTPException(status_code=404, detail="not found")
+    raise HTTPException(status_code=401, detail="bad token")
+
+
 @app.get("/v1/queue")
 def queue(
     threshold: float | None = None,
@@ -453,14 +468,28 @@ def queue(
     /v1/review: these are real PR titles, authors and reader rationales,
     and the service is deployed --allow-unauthenticated.
 
-    `repo` stays a caller-supplied parameter until sessions exist; the
-    shared token stops anonymous reads, it does not separate tenants.
+    Two token classes reach this endpoint. DOUG_API_TOKEN is the operator's
+    and is unscoped. A dispensed token resolves to one installation and sees
+    only its rows, and `repo` becomes a filter WITHIN that scope rather than
+    a selector across scopes.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
+        # A missing operator secret is a misconfigured deployment. A tenant
+        # token does not depend on it and could be honoured anyway, but
+        # letting tenant traffic paper over the gap would hide the fault.
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    installation_id: int | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+        installation_id = tenancy.resolve(x_doug_token)
+        if installation_id is None:
+            raise HTTPException(status_code=401, detail="bad token")
+        if repo is not None and repo not in {
+            full_name for _, full_name in store.active_repos(installation_id)
+        }:
+            # 404, never an empty list: an empty list reads as "no reviews
+            # yet" and tells the caller their guess may be a real repo.
+            raise HTTPException(status_code=404, detail="not found")
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [
@@ -481,7 +510,7 @@ def queue(
                     ],
                 ),
             )
-            for row in store.latest_reviews(repo=repo)
+            for row in store.latest_reviews(repo=repo, installation_id=installation_id)
             if row["pr_meta"]
         ]
     else:
@@ -609,11 +638,7 @@ def patterns_precision(
     unpublished half of the evidence base, and the caveat travels in the
     response body so a number cannot be lifted out of it by accident.
     """
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    _operator_only(x_doug_token)
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
 
@@ -1184,11 +1209,7 @@ def comparisons(
     limit: int = 50,
     x_doug_token: str = Header(""),
 ) -> dict:
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    _operator_only(x_doug_token)
     if not 1 <= limit <= 200:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
     if not store.enabled():
