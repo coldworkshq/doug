@@ -216,6 +216,7 @@
       <a href="#risk-routing"><span class="dot ok"></span>Risk routing</a>
       <a href="#labels"><span class="dot ok"></span>Defect labels</a>
       <a href="#cleared-band"><span class="dot ok"></span>The cleared band</a>
+      <a href="#what-doug-gets-wrong"><span class="dot ok"></span>What Doug gets wrong</a>
     </div>
     <div class="group">
       <div class="g">Reference</div>
@@ -418,6 +419,62 @@ deletion_leaning          214     4  <span class="hot">0.82x</span>  <span class
       </div></div>
     </section>
 
+    <!-- WHAT DOUG GETS WRONG -->
+    <section class="row" id="what-doug-gets-wrong">
+      <div class="prose">
+        <p class="kick">Honesty</p>
+        <h2>What Doug gets wrong <span class="badge b-ok">Available</span></h2>
+        <p>Doug reviews every pull request in his own repository, and we write down what he got
+          wrong. <b>Roughly half his findings are disproved by code he wasn't shown</b> — he reads a
+          diff, not a repository, and he does not reliably distinguish what the diff <i>proves</i>
+          from what it merely <i>permits</i>.</p>
+        <p>Two failure classes recur often enough to have names:</p>
+        <ul>
+          <li><b>A conclusion drawn from an absence in the diff.</b> "This name is used and no import
+            was added" — when the import was already there, three files away.</li>
+          <li><b>Re-reporting a tradeoff the code already documents</b>, as though it were news.</li>
+        </ul>
+        <p>The first one produced a rule worth more than the bug it came from: <b>a claim about an
+          absence cannot be settled by looking at the same place the claim came from.</b> "No import
+          was added" is a fact about the diff; whether the import exists is a fact about the repo.
+          Re-reading the diff confirms the finding every time and proves nothing — the check and the
+          error are the same observation. In that particular case the linter had already answered it,
+          green, before Doug ever spoke.</p>
+        <p>So every finding now gets a line at disposition time: was it <b>real</b>, <b>disproved</b>,
+          or <b>adjacent</b> — wrong as stated, right about something nearby — and separately, did
+          anything in the codebase actually change because of it.</p>
+        <p>Two axes, deliberately, because one column loses the cases that matter. A true finding
+          that changed nothing is a re-report of something the code already says. A false finding
+          that changed something found a real gap by the wrong route. Doug's strongest mode is
+          <i>"this code does not justify itself"</i> — and a single score would grade that as failure.</p>
+        <div class="callout"><b>There is no rate here yet, and that is the point.</b> Every row in the
+          log today is backfilled — reconstructed from write-ups after the fact, not recorded at the
+          time — so every one of them is excluded from every rate by construction. The denominator
+          starts at the first finding logged prospectively. When there is a number, it will not be
+          called precision: whether a finding is <i>true</i> is a different quantity from whether it
+          <i>predicted a defect</i>, and a finding can be true and worthless or false and
+          load-bearing.</div>
+      </div>
+      <div class="codecol"><div class="sticky">
+        <div class="block">
+          <div class="bhead"><span class="t">FINDINGS LOG · ONE LINE PER FINDING</span></div>
+          <div class="bcode"><span class="wt">{</span><span class="st">"pr"</span>: 28,
+ <span class="st">"rule"</span>: <span class="st">"reader:missing-import"</span>,
+ <span class="st">"verdict"</span>: <span class="st">"disproved"</span>,
+ <span class="st">"changed"</span>: false,
+ <span class="st">"settled_by"</span>: <span class="st">"api/doug/api.py:7 —</span>
+<span class="st">   already imported; ruff F821 was</span>
+<span class="st">   green before the finding"</span><span class="wt">}</span>
+
+<span class="cm"># 12 rows today, every one backfill:</span>
+<span class="cm">#   9 disproved · 2 adjacent · 1 real</span>
+<span class="cm">#</span>
+<span class="cm"># excluded from every rate.</span>
+<span class="cm"># the denominator starts at row 13.</span></div>
+        </div>
+      </div></div>
+    </section>
+
     <!-- CLI -->
     <section class="row" id="cli">
       <div class="prose">
@@ -578,6 +635,16 @@ deletion_leaning          214     4  <span class="hot">0.82x</span>  <span class
       <div class="prose">
         <h2>Changelog</h2>
         <div class="params">
+          <div class="param"><div><span class="pn">2026-08</span></div>
+            <div class="pd">Doug's own findings now get a durable disposition — real / disproved /
+            adjacent, plus whether anything changed and which file settled it
+            (<code>docs/findings-log.jsonl</code>). All rows today are backfill and excluded from
+            every rate. A design for an agent review crew with a falsifier-adjudicated ledger was
+            put through six independent reviewers and <em>cut</em>: four of six proposed "agent
+            lenses" turned out to be checks that already run or free platform features, and the
+            ledger's own motivating case — a finding that draws a conclusion from an absence in the
+            diff — is one its mechanism could not have fixed, because the obvious falsifier restates
+            the error. What survived is the log and one reviewing rule.</div></div>
           <div class="param"><div><span class="pn">2026-07</span></div>
             <div class="pd">Phase-1 entry experiments, pre-registered end to end. RandomForest on Kamei's 14
             confirms the metadata ceiling (a plain size sort still wins). An LLM diff-read probe
