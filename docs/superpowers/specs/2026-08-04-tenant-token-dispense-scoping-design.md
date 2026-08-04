@@ -297,3 +297,74 @@ Tests encode why the behavior matters, not just that it happens.
   surprising invoice.
 - **`design-lock.md:38` amendment** (bot authors metered, not excluded) — its
   own commit.
+
+---
+
+## Doug's review of PR #48 — adjudication
+
+Doug reviewed this branch under ADR-0008 and returned five findings at
+**risk 0.34** (flag line 0.30), on a **29% partial read** — it never saw
+`REVIEWING.md`, `ROADMAP.md`, or the plan, so its findings cover the code only.
+Recorded with rulings, because a finding dismissed without a written reason is
+indistinguishable from one nobody read.
+
+**1. `api-contract-change` (low) — disproved as a practical concern.**
+The 404-instead-of-401 on operator-only endpoints is the designed
+no-existence-leak behaviour, not drift. Doug's worry is clients that classify
+auth failures on 401. Trace the three cases: an operator token still passes; an
+invalid token still gets 401, because `resolve()` returns `None`; only a *valid
+tenant token* gets the new 404. Zero tenant tokens exist, so the contract change
+reaches no client that exists today. No action.
+
+**2. `missing-migration-dependency` (medium) — UNRESOLVED, and deliberately not
+"fixed".** Doug is right that the diff adds no migration for
+`installations.token_hash`. It is right for the wrong reason: the column is on
+the Table definition and `installations` is a table `create_all()` makes whole,
+so any database built from main has it — table and column landed in the same
+squash-merge (`6a1a213`). The seam Doug cannot see is that on the *pre-merge
+branch* they landed separately (table `92fc5f9`, column `8904d02`), so a
+database created by a deploy between those two commits would lack it.
+
+Verifying production directly was not possible: this machine's
+application-default credentials point at a **deleted project** (`vestige-00`),
+so `cloud-sql-proxy` cannot authenticate.
+
+**An idempotent migration was written and then reverted, because it was worse
+than the problem.** `ALTER TABLE installations ADD COLUMN` raises `no such
+table` on a schema without that table, and `no such table` is not in
+`_SATISFIED` — so `apply()` would propagate it and crash-loop the revision on
+cold start. Three existing tests caught this immediately. In production
+`create_all()` precedes `apply()` so the table always exists, but trading a
+hypothetical missing column for a real crash path is a bad trade.
+
+**To close this:** run `gcloud auth application-default login`, then inspect
+`information_schema.columns` for `installations` through the proxy. If the
+column is absent, the migration is worth adding *with* the three test fixtures
+updated deliberately.
+
+**3. `unauthenticated-endpoint-abuse` (medium) — confirmed, documented, not
+code-fixed.** Found independently by the whole-branch reviewer too. Both halves
+are real: repeated dispense calls rotate a live token (denial against the
+tenant's own integration), and a caller who administers *any* repo passes check
+one, so check two spends Doug's app-JWT quota on a 404.
+
+The obvious mitigation — consult `installation_repos` before spending Doug's
+quota — **collides with finding 5**: if that table is stale or unpopulated,
+dispense would refuse repos the tenant genuinely owns. Trading a documented
+denial risk for an undocumented outage, on a branch already reviewed, is not a
+trade worth making without a design pass. Follow-up, not a patch.
+
+**4. `tenant-visibility-gap` (low) — true, and by design.** Verdict rows with
+`installation_id IS NULL` are CI-sourced and excluded from tenant queues.
+Tenants have no CI path — `doug-review.yml` is this repo's own dogfood workflow
+(ADR-0008) — so a real tenant has no CI rows to miss. It is visible only on the
+dogfood install, which is read with the operator token. Stated limit, no change.
+
+**5. `inconsistent-scope-check` (low) — confirmed, fails closed.** Also found
+independently by the whole-branch reviewer. Authorization reads
+`installation_repos.full_name` (annotated *display only* in `store.py`) while
+row filtering reads `verdicts.installation_id` — two sources of truth. Both
+reviewers traced every direction and it fails closed: a stale name 404s a repo
+the tenant owns; a name belonging to the wrong installation still returns no
+rows. Real inconsistency, no leak. Worth unifying when receipts land and this
+check gets a second caller.
