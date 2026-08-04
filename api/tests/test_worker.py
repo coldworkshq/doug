@@ -100,7 +100,7 @@ def _wire(
     monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
 
-    def _score_one(meta, diff, *, scope):
+    def _score_one(meta, diff, *, scope, resolve_file=None):
         if scopes is not None:
             scopes.append(("risk", scope))
         return (

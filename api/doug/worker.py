@@ -162,7 +162,14 @@ def process_job(job: dict) -> int | None:
     # charges a real tenant: both reads below come out of this
     # installation's monthly budget rather than the shared sentinel one.
     scope = reader.installation_scope(job["installation_id"])
-    tier, verdict, rv, cov = review.score_one(meta, diff, scope=scope)
+    # Settle resolution findings against the reviewed head — not the PR tip
+    # pulls.get might now show (we already refused a moved head above).
+    def resolve(path: str) -> str | None:
+        return review.head_file_text(gh, owner, name, job["head_sha"], path)
+
+    tier, verdict, rv, cov = review.score_one(
+        meta, diff, scope=scope, resolve_file=resolve
+    )
     intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):

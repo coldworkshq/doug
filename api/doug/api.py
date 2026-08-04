@@ -274,7 +274,18 @@ def _score_and_persist(
     # dual-running against the App path as the soak comparison right now,
     # and must not spend the dogfood installation's budget doing it. Dies
     # with this endpoint at Task 9.
-    tier, verdict, rv, cov = review.score_one(meta, diff, scope=reader.SENTINEL_SCOPE)
+    # head_sha is None only on odd harvest fixtures; without it we cannot
+    # pin the file body to the commit under review, so settlement no-ops.
+    resolve = None
+    if meta.head_sha:
+        sha = meta.head_sha
+
+        def resolve(path: str, _sha: str = sha) -> str | None:
+            return review.head_file_text(gh, owner, name, _sha, path)
+
+    tier, verdict, rv, cov = review.score_one(
+        meta, diff, scope=reader.SENTINEL_SCOPE, resolve_file=resolve
+    )
     intent_result = review.read_intent(
         gh, owner, name, meta, diff, scope=reader.SENTINEL_SCOPE
     )
