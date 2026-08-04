@@ -69,6 +69,46 @@ def test_resolve_rejects_junk_without_touching_storage(tmp_path, monkeypatch):
     assert tenancy.resolve(tenancy.TOKEN_PREFIX + "wrong") is None
 
 
+def _token_hash(engine, installation_id: int) -> str:
+    with engine.connect() as conn:
+        return conn.execute(
+            store.installations.select()
+            .where(store.installations.c.installation_id == installation_id)
+            .with_only_columns(store.installations.c.token_hash)
+        ).scalar_one()
+
+
+def test_mint_scopes_writes_to_the_named_installation(tmp_path, monkeypatch):
+    """Pins that mint() writes only the row it was asked to.
+
+    `mint`'s UPDATE carries a `.where(installation_id == ...)` clause with no
+    test of its own — delete that clause and every installation would share
+    whichever token was minted last, silently. Nothing else in this file
+    creates two installations, so that break would pass all 207 tests in the
+    touched files even though it hands one tenant's token authority over
+    every other tenant's rows.
+    """
+    _db(tmp_path, monkeypatch)
+    _install(150424894)
+    _install(999999999)
+    engine = store._get_engine()
+
+    first = tenancy.mint(150424894)
+    hash_first_before = _token_hash(engine, 150424894)
+
+    second = tenancy.mint(999999999)
+    hash_first_after = _token_hash(engine, 150424894)
+    hash_second = _token_hash(engine, 999999999)
+
+    # Each token resolves to its own installation, not the other's.
+    assert tenancy.resolve(first) == 150424894
+    assert tenancy.resolve(second) == 999999999
+
+    # Minting for the second installation left the first's hash untouched.
+    assert hash_first_after == hash_first_before
+    assert hash_first_after != hash_second
+
+
 def test_mint_refuses_an_installation_that_does_not_exist(tmp_path, monkeypatch):
     """No row means Doug was never installed there. Minting anyway would
     create a token that resolves to an id with no tenancy behind it."""

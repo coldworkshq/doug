@@ -139,6 +139,18 @@ tokens. So:
 
 Doug never stores the PAT — one request, then dropped.
 
+**Known limit: repo-admin proves one repo, mint scopes the whole
+installation.** `verify_admin` proves the caller administers exactly the repo
+named in the request; `mint` then issues a token scoped to the entire
+`installation_id`. On a User install these coincide — one account, one repo
+surface, nothing to widen. On an Organization install covering multiple
+repositories they do not: admin on any single repo is enough to mint a token
+that reads every repo's PR titles, authors and reader rationales across the
+whole org, and the same call silently rotates — and thereby invalidates — the
+token every other consumer of that installation was using. Org installs are
+where this bites; it is stated here as a known limit of the current design,
+not fixed in this pass.
+
 **Rejected: `GET /user/installations`.** One call instead of two, but that
 endpoint is specified for user-access tokens; classic-PAT behavior is less
 well-defined, which would make the auth story depend on a token type we cannot
@@ -155,6 +167,17 @@ forever, and the roadmap line says "GitHub-token-verified".
 - **Revoke** — operator sets `token_hash = NULL`.
 - **Lost token** — identical to rotate. There is no recovery path and there
   should not be one.
+- **Uninstall / suspend does not revoke.** `tenancy.resolve()` matches on
+  `token_hash` alone and never reads `installations.state`. The webhook's
+  uninstall path (`api.py`'s `_record_installation`, `deleted` branch) calls
+  `upsert_installation(..., "deleted")` and clears the repo list via
+  `set_installation_repos(inst["id"], [], replace=True)` — but never touches
+  `token_hash`. A token minted before uninstall keeps resolving after it. The
+  only real revocation is a manual `UPDATE installations SET token_hash =
+  NULL`, which no code path performs today. This is stated as a limit rather
+  than a cross-tenant hole — the token still only ever resolves to that same
+  installation's own `installation_id`, never another tenant's — and checking
+  `state` inside `resolve()` is a deliberate follow-up, not done here.
 
 **Stated limit: one token per installation.** `token_hash` is a single column,
 so when the MCP garden ships, an agent and a tenant's CI would share one token —
@@ -220,7 +243,22 @@ unaffected**: repo names appear nowhere in the OpenAPI schema, so that one
 leaks nothing and the M2 gate clause it serves stands.
 
 What was wrong was the wording here, not the behaviour. Closing the gap for
-real means `FastAPI(openapi_url=None, docs_url=None)` in production — its own
+real is **not** a one-liner. `openapi_url=None` is the FastAPI parameter that
+actually does the work — it 404s `/openapi.json` itself (and, as a side
+effect, `/redoc`, which also needs naming: `redoc_url=None`); `docs_url=None`
+alone only hides Swagger UI at `/docs` and leaves `/openapi.json` reachable.
+But `/openapi.json` is not just documentation in this deployment — it is the
+health-check route three call sites depend on being reachable and
+unauthenticated: `api/deploy/gcp.sh:241` (`promote_if_healthy "$SERVICE"
+/openapi.json`), `api/deploy/gcp.sh:243` (the first-deploy smoke check), and
+`.github/workflows/deploy.yml:127` (CI fails the deploy if it is not 200) —
+all three exist because `/healthz` is intercepted by the Google frontend and
+never reaches the app, which is why `/openapi.json` was chosen as the probe in
+the first place. Setting `openapi_url=None` without also giving those three
+call sites a replacement probe route that genuinely reaches the app would turn
+every deploy red. The real follow-up is therefore: add a replacement probe
+route, repoint `gcp.sh:241`, `gcp.sh:243`, and `deploy.yml:127` at it, and only
+then set `openapi_url=None` (and `redoc_url=None`) in production — its own
 task, tracked as a follow-up, deliberately not smuggled into this one.
 
 ---

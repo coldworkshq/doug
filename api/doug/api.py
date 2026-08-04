@@ -374,10 +374,11 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     installation in the request to charge — so it shares that ceiling with
     the CI review path rather than any customer's budget.
     """
-    # Fourth inlined copy of this gate (review_pr, queue, patterns_precision,
-    # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
-    # is when the three survivors collapse into one helper; extracting it now
-    # would edit endpoints a concurrent session is reading.
+    # The shared gate lives in _operator_only below; this route is one of
+    # its callers. /v1/review still carries the last inline copy of this
+    # check — Task 9 deletes that route outright, and that deletion is what
+    # retires the last inline copy rather than an extraction into this
+    # helper.
     _operator_only(x_doug_token)
     if not reader.enabled():
         return score(req.pr)
@@ -464,9 +465,8 @@ def queue(
     repo: str | None = None,
     x_doug_token: str = Header(""),
 ) -> QueueResponse:
-    """The review queue. Token-gated on the same shared secret as
-    /v1/review: these are real PR titles, authors and reader rationales,
-    and the service is deployed --allow-unauthenticated.
+    """The review queue: real PR titles, authors and reader rationales, on
+    a service deployed --allow-unauthenticated, so this stays token-gated.
 
     Two token classes reach this endpoint. DOUG_API_TOKEN is the operator's
     and is unscoped. A dispensed token resolves to one installation and sees
