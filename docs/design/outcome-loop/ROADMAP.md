@@ -203,11 +203,12 @@ executed as written — amendments folded in at their task, never as a second pa
   so advisory-era duplicates cannot brick `apply()` on boot. Race losers enter the
   identity-replay path so they do not hang local deviations / a locally rendered check
   run on the peer's row.
-- [ ] **doug-web dedicated service account** — `doug-web-sa`, secretAccessor on
-  `doug-api-token` only; `web()` deploy passes `--service-account`. Held back from
-  Task 10 so a misconfigured web SA could not confuse the api cutover. After the
-  first successful web deploy as `doug-web-sa`, revoke the default compute SA's
-  leftover accessor on `doug-api-token`.
+- [~] **doug-web dedicated service account** — code merged #44 (`5b06214`):
+  `setup()` creates `doug-web-sa` (token-only accessor); `web()` deploys with
+  `--service-account`. Held back from Task 10 so a misconfigured web SA could
+  not confuse the api cutover. **Ops still open:** this PR only touches `api/` +
+  docs, so merge does not run `gcp.sh web` — first web deploy must use the new
+  SA, then revoke the default compute SA's leftover accessor on `doug-api-token`.
 - [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
 
 **Exit gate:** the attacker math closes — no unauthenticated paid endpoint, no uncapped spend

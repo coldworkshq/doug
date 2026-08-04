@@ -1,19 +1,33 @@
 # HANDOFF — doug
 
-State:    building — M0 CLOSED. TASK 10 IS DONE: the App path is LIVE and
-          verified in production on drewjst/doug (neutral check run,
-          "Cleared · risk 0.02 · diff read", on PR #33 — tier in the title,
-          so it was a real read and not a deterministic fallback). M1 code
-          is complete except TASK 9, which is now the last M1 task. ONE PR
-          PER TASK (Andrew's call, 2026-08-01: more Doug verdicts + smaller
-          diffs Doug can actually read whole). Merged to main: Tasks 1-2
-          (#18), 3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26
+State:    building — late M2. HEAD main includes Migration 005 (#43),
+          findings-log + missing-import settlement (#45), doug-web SA code
+          (#44, `5b06214`). App path live; CI dual-run still on for soak /
+          Task 9 park.
+Next:     1) Finish #44 ops: deploy web as `doug-web-sa`, then revoke default
+          compute SA accessor on `doug-api-token` (merge alone does not
+          redeploy web). 2) Token dispense + scoped queue/receipt reads.
+          3) Bot-author ruling before build. 4) Log dispositions with
+          `python -m doug.findings_log append`.
+Blockers: none for code. Web SA cutover may still need the web deploy + revoke.
+Decisions: reader improved via settle/findings-log, not frozen prompt (ADR-0002).
+Pointers: ROADMAP M2 · REVIEWING.md · #45 follow-ups (typing.TYPE_CHECKING /
+          function-local import over-drop) unfixed if we care.
+
+---
+
+State (historical, still useful below): M0 CLOSED. TASK 10 IS DONE: the App
+          path is LIVE and verified in production on drewjst/doug (neutral
+          check run, "Cleared · risk 0.02 · diff read", on PR #33 — tier in
+          the title, so it was a real read and not a deterministic fallback).
+          M1 code is complete except TASK 9, which is now the last M1 task.
+          ONE PR PER TASK (Andrew's call, 2026-08-01: more Doug verdicts +
+          smaller diffs Doug can actually read whole). Merged to main: Tasks
+          1-2 (#18), 3 (#19), 4 (#20), 5 (#23), 7a Steps 1-3 (#24, + the #26
           cooloff fix), 8 (#22, ADR-0010), 6 (#27, the webhook rewrite),
           7b (#28, startup sweep + the review-state casing fix — which
           CLOSES Task 7), #29 (the late #24 re-review), 10 (#32, code) with
-          the operator cutover run 2026-08-01, and #34 (m1-cutover-done),
-          which is main's HEAD — so the paragraph below describes shipped
-          code, not a branch still waiting to land.
+          the operator cutover run 2026-08-01, and #34 (m1-cutover-done).
 
           #34 (m1-cutover-done) was not a plan task. The cutover
           exposed that worker.process_job wrote NOTHING to the log on any
@@ -128,13 +142,10 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
              feature is over half the input tokens per PR. Cross-reference
              the derangement check below: intent findings are UNBELIEVED and
              a positive control is still unrun.
-          1. Migration 005 (NOT 003 — #30 took 003 and 004): the UNIQUE
-             index on verdicts. Now an integrity item, not a spend one —
-             see the roadmap entry, rewritten 2026-08-02.
-          2. doug-web's own service account. It still runs as the default
-             compute SA, which holds roles/editor on doug-prod0, and it is
-             the browser-facing surface. Task list has the verified IAM
-             facts.
+          1. Migration 005 — DONE (#43). UNIQUE App-path verdict identity.
+          2. doug-web's own service account — CODE DONE (#44). Ops cutover
+             may remain: first `gcp.sh web` as `doug-web-sa`, then revoke
+             default compute SA’s leftover `doug-api-token` accessor.
           3. Per-installation scoped reads + token dispense. This is the
              one that actually gates real tenants, and it is untouched.
           4. Bot-author exclusion — RE-SCOPE THIS BEFORE BUILDING IT. The
@@ -154,9 +165,8 @@ Next:     A SOAK on the live App path, then M1 Task 9. Task 9 (retire the
           --no-cpu-throttling is set, without which the background drain
           is suspended the moment its request returns; and Task 7b's
           startup sweep runs at boot, which needs both of those at once.
-          doug-web STILL runs as the default compute SA — held back
-          deliberately so a misconfigured web SA could not confuse the
-          cutover — and gets its own SA in a follow-on PR.
+          doug-web SA code is on main (#44); confirm the serving web
+          revision identity after the next web deploy.
 Blockers: NONE. Both Andrew-only items closed 2026-08-02 and verified:
           - "Pull request review" event subscription ENABLED (Andrew
             confirmed). The tier='external' grader lane can now receive.
