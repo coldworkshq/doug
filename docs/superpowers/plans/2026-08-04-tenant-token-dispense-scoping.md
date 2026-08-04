@@ -841,14 +841,14 @@ def test_cross_tenant_repo_is_404_not_an_empty_list(tmp_path, monkeypatch):
     from 'no reviews yet', which tells the caller their guess might be a
     real repo. 404 says nothing at all."""
     token = _tenant(tmp_path, monkeypatch)
-    store.set_installation_repos(150424894, [(1, "drewjst/doug")])
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
     r = client.get("/v1/queue", params={"repo": "someone/else"}, headers={"X-Doug-Token": token})
     assert r.status_code == 404
 
 
 def test_in_scope_repo_filters_normally(tmp_path, monkeypatch):
     token = _tenant(tmp_path, monkeypatch)
-    store.set_installation_repos(150424894, [(1, "drewjst/doug")])
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
     store.save_review(
         "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
     )
