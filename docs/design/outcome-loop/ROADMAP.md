@@ -359,6 +359,17 @@ branch, which closes MT1, MT2, MT4 and MT5 above.
 **Exit gate:** MT0 and MT1 closed, and a second installation on a different
 account reads only its own rows — proven against the real ledger, not fixtures.
 
+**PROVEN 2026-08-05.** `api/deploy/prove-isolation.sh` ran 16/16 against prod:
+installations 150424894 (drewjst) and 151500529 (lemahq, `lema-verify`), each
+`all`-key seeing only its own rows, cross-account `?repo=` 404ing both ways,
+key lists tenant-scoped, cross-tenant revocation refused, same-tenant
+revocation dead next request. MT0 was closed operationally the same day
+(suspend/unsuspend + repo re-add fired fresh webhooks; the original deliveries
+had aged out — the redeliver-don't-reinstall rule held). The run also caught
+two live defects on its way in: the pepper secret's trailing newline (45
+bytes; `b64decode(validate=True)` refuses `\n`) and githubkit clients being
+GC'd mid-call-chain (#52) — an executable gate earns its keep.
+
 ---
 
 ## M5 — First design partners *(calendar-gated)*

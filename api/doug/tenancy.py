@@ -41,7 +41,11 @@ def _pepper(version: int) -> bytes | None:
     unsalted (the row is found by lookup, not by hash), so the secret
     ingredient has to live OUTSIDE the database."""
     name = "DOUG_TOKEN_PEPPER" if version == 1 else f"DOUG_TOKEN_PEPPER_V{version}"
-    raw = os.environ.get(name)
+    # strip(): every natural secret pipeline (print | gcloud secrets
+    # create) appends a newline, and b64decode(validate=True) refuses it —
+    # prod 503'd every mint until the secret was re-cut (2026-08-05).
+    # Whitespace carries no entropy; the 32-byte check below is the gate.
+    raw = (os.environ.get(name) or "").strip()
     if not raw:
         return None
     try:

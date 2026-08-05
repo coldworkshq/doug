@@ -44,7 +44,11 @@ setup() {
     | gcloud secrets create doug-api-token --data-file=- --project "$PROJECT" 2>/dev/null \
     || echo "doug-api-token secret exists; leaving it"
 
-  python3 -c "import base64,secrets;print(base64.b64encode(secrets.token_bytes(32)).decode())" \
+  # sys.stdout.write, not print(): the trailing newline is stored as part of
+  # the secret, and _pepper's validate=True b64decode refused it — prod
+  # 503'd every mint on 2026-08-05. The app now strips whitespace too
+  # (belt), but the secret should be clean at the source (braces).
+  python3 -c "import base64,secrets,sys;sys.stdout.write(base64.b64encode(secrets.token_bytes(32)).decode())" \
     | gcloud secrets create doug-token-pepper --data-file=- --project "$PROJECT" 2>/dev/null \
     || echo "doug-token-pepper secret exists; leaving it"
 

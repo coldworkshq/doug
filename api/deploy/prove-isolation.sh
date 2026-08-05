@@ -80,7 +80,7 @@ req GET /v1/queue "$B_KEY"
 check "B's queue answers 200" "$([ "$code" = 200 ] && echo true || echo false)"
 b_total=$(jq '.items | length' /tmp/doug-proof-body)
 b_foreign=$(jq --arg o "$A_OWNER" \
-  '[.items[].pr.repo | ascii_downcase | select(startswith(($o | ascii_downcase) + "/"))] | length' \
+  '[.items[].pr.url // "" | ascii_downcase | select(contains("github.com/" + ($o | ascii_downcase) + "/"))] | length' \
   /tmp/doug-proof-body)
 check "B's queue is non-empty (a vacuous pass proves nothing — review a PR on $B_REPO first)" \
   "$([ "$b_total" -gt 0 ] && echo true || echo false)"
@@ -88,7 +88,7 @@ check "B's queue carries zero rows from $A_OWNER/*" "$([ "$b_foreign" = 0 ] && e
 
 req GET /v1/queue "$A_KEY"
 a_foreign=$(jq --arg o "$B_OWNER" \
-  '[.items[].pr.repo | ascii_downcase | select(startswith(($o | ascii_downcase) + "/"))] | length' \
+  '[.items[].pr.url // "" | ascii_downcase | select(contains("github.com/" + ($o | ascii_downcase) + "/"))] | length' \
   /tmp/doug-proof-body)
 check "A's queue carries zero rows from $B_OWNER/*" "$([ "$a_foreign" = 0 ] && echo true || echo false)"
 
@@ -137,9 +137,9 @@ if [ -n "${DOUG_API_TOKEN:-}" ]; then
   echo "== operator sanity: the unscoped view still sees both =="
   req GET /v1/queue "$DOUG_API_TOKEN"
   op_sees_both=$(jq --arg a "$A_OWNER" --arg b "$B_OWNER" \
-    '[.items[].pr.repo | ascii_downcase] as $r
-     | (($r | map(select(startswith(($a | ascii_downcase) + "/"))) | length) > 0)
-       and (($r | map(select(startswith(($b | ascii_downcase) + "/"))) | length) > 0)' \
+    '[.items[].pr.url // "" | ascii_downcase] as $r
+     | (($r | map(select(contains("github.com/" + ($a | ascii_downcase) + "/"))) | length) > 0)
+       and (($r | map(select(contains("github.com/" + ($b | ascii_downcase) + "/"))) | length) > 0)' \
     /tmp/doug-proof-body)
   check "operator queue sees rows from both accounts" "$op_sees_both"
 fi

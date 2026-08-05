@@ -260,6 +260,19 @@ def test_pepper_must_be_exactly_32_bytes_of_valid_base64(monkeypatch):
     assert tenancy.keys_configured()
 
 
+def test_pepper_tolerates_the_trailing_newline_every_secret_pipeline_adds(monkeypatch):
+    """print() | gcloud secrets create stores 'base64\\n', and
+    b64decode(validate=True) refuses the newline — prod served 503s on
+    every mint until the secret was re-cut (2026-08-05, the isolation-proof
+    run). Surrounding whitespace carries no entropy and no meaning; strip
+    it rather than making every operator pipeline newline-perfect."""
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", PEPPER_B64 + "\n")
+    assert tenancy.keys_configured()
+    assert tenancy.hash_secret("s3cret", 1) == tenancy.hash_secret("s3cret", 1)
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", "  " + PEPPER_B64 + "  \n")
+    assert tenancy.keys_configured()
+
+
 def _org_caller(login="drewjst", role="admin", state="active", membership_raises=False):
     """Stub for the caller's PAT: GET /user and GET /user/memberships/orgs/{org}."""
 
