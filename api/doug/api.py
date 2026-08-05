@@ -485,6 +485,7 @@ def queue(
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
     repo_ids: frozenset[int] | None = None
+    ctx: tenancy.TokenContext | None = None
     if not hmac.compare_digest(x_doug_token, expected):
         try:
             ctx = tenancy.resolve(x_doug_token)
@@ -493,13 +494,20 @@ def queue(
         if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
         installation_id = ctx.installation_id
-        repo_ids = ctx.repo_ids
-        if repo is not None and repo not in {
-            full_name for _, full_name in store.active_repos(installation_id)
-        }:
-            # 404, never an empty list: an empty list reads as "no reviews
-            # yet" and tells the caller their guess may be a real repo.
-            raise HTTPException(status_code=404, detail="not found")
+        live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        # The key's effective scope, in ids: its frozen selection (already
+        # live-intersected by resolve) or, for 'all', everything live NOW.
+        # installation_repos is the ONE source of truth — verdicts.repo and
+        # full_name are display everywhere (MT4).
+        effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())
+        if repo is not None:
+            rid = live.get(repo)
+            if rid is None or rid not in effective:
+                # 404, never an empty list: an empty list reads as "no
+                # reviews yet" and confirms the repo's existence.
+                raise HTTPException(status_code=404, detail="not found")
+            effective = frozenset({rid})
+        repo_ids = effective
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [
@@ -521,7 +529,9 @@ def queue(
                 ),
             )
             for row in store.latest_reviews(
-                repo=repo, installation_id=installation_id, repo_ids=repo_ids
+                repo=repo if ctx is None else None,  # operator keeps the display filter
+                installation_id=installation_id,
+                repo_ids=repo_ids,
             )
             if row["pr_meta"]
         ]

@@ -2072,7 +2072,11 @@ def _tenant(tmp_path, monkeypatch, installation_id=150424894, login="drewjst"):
 
 def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
     token = _tenant(tmp_path, monkeypatch)
-    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894)
+    # An 'all' key's row filter now runs on live installation_repos ids (MT4),
+    # so the repo must be registered and the verdict carry a matching id —
+    # exactly what the real ingest path (worker.py) always writes together.
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=False)
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894, github_repo_id=1)
     _seed_verdict(repo="someone/else", pr_number=2, installation_id=777)
     r = client.get("/v1/queue", headers={"X-Doug-Token": token})
     assert r.status_code == 200
@@ -2107,7 +2111,8 @@ def test_cross_tenant_repo_is_404_not_an_empty_list(tmp_path, monkeypatch):
 def test_in_scope_repo_filters_normally(tmp_path, monkeypatch):
     token = _tenant(tmp_path, monkeypatch)
     store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
-    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894)
+    # MT4: the row filter now keys on this same live id, not just the name.
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894, github_repo_id=1)
     r = client.get("/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token})
     assert r.status_code == 200
     assert len(r.json()["items"]) == 1
@@ -2141,6 +2146,58 @@ def test_queue_selected_key_sees_only_its_repos_rows(tmp_path, monkeypatch):
     # back-fills from the ledger's repo + pr_number columns.
     urls_seen = {item["pr"]["url"] for item in r.json()["items"]}
     assert urls_seen == {"https://github.com/drewjst/a/pull/1"}
+
+
+def test_repo_param_outside_the_keys_selection_is_404_not_empty(tmp_path, monkeypatch):
+    """Slice A left a gap on purpose: a selected key naming a sibling ACTIVE
+    repo passed the name check and got an empty list — which confirms the
+    repo exists. MT4's id-unification closes it to a 404."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator")
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
+    )
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    r = client.get(
+        "/v1/queue", params={"repo": "drewjst/b"}, headers={"x-doug-token": minted.token}
+    )
+    assert r.status_code == 404
+
+
+def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypatch):
+    """MT4's consistency property, pinned: any repo the unfiltered queue
+    returns rows for, ?repo= must accept — and vice versa. The old shape
+    (names for the check, installation_id for the rows) could disagree."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator")
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    # A verdict for a repo the installation no longer covers (state flip):
+    _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=9)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    unfiltered = client.get("/v1/queue", headers={"x-doug-token": minted.token}).json()
+    # PRMetadata carries no `repo` field; identify rows by the URL _with_url
+    # back-fills from the ledger's repo + pr_number columns.
+    repos_served = {
+        item["pr"]["url"].removeprefix("https://github.com/").rsplit("/pull/", 1)[0]
+        for item in unfiltered["items"]
+    }
+    for full_name in repos_served:
+        assert (
+            client.get(
+                "/v1/queue", params={"repo": full_name},
+                headers={"x-doug-token": minted.token},
+            ).status_code == 200
+        ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
 @pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read"])
