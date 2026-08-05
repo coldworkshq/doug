@@ -2363,3 +2363,22 @@ def test_revoke_repo_admin_lookup_is_case_insensitive(tmp_path, monkeypatch):
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200 and r.json()["revoked"] is True
+
+
+def test_uninstall_webhook_bulk_revokes_keys(tmp_path, monkeypatch):
+    """resolve already fails on state='deleted' (MT2's live check). The bulk
+    stamp is belt-and-braces AND the audit trail: revoked_at answers 'when
+    did these keys die' after a reinstall flips state back to active —
+    without it, an old key would resurrect on reinstall."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    from doug.api import _record_installation
+    _record_installation({"installation": {"id": 150424894, "account": {}}}, "deleted")
+    # Reinstall: state flips back to active — the key must STAY dead.
+    _record_installation({"installation": {"id": 150424894, "account": {}}}, "created")
+    assert tenancy.resolve(minted.token) is None

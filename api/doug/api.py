@@ -947,6 +947,14 @@ def _record_installation(payload: dict, action: str) -> None:
         # describes — so a reinstall's `created` marks the newly granted
         # subset active again and the repos left out of it stay removed.
         store.set_installation_repos(inst["id"], [], replace=True)
+        # The live state check already ends access; this stamp is the audit
+        # trail AND the reinstall guard — 'created' flips state back to
+        # active, and without revoked_at every pre-uninstall key would
+        # quietly resurrect with it.
+        n = store.revoke_all_installation_tokens(inst["id"])
+        if n:
+            msg = f"doug: uninstall revoked {n} key(s) for installation {inst['id']}"
+            print(msg, file=sys.stderr)
 
 
 def _merge_installation_repos(payload: dict) -> None:
