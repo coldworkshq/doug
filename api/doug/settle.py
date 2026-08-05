@@ -218,9 +218,18 @@ def claimed_columns(f: ReaderFinding) -> list[tuple[str, str]]:
     """(table, column) pairs the finding asserts are not in the schema.
 
     A bare table name with no `.column` (the whole-new-table shape) yields
-    nothing — see the module docstring for why that claim needs a different
-    check. Empty ⇒ we cannot settle it.
+    nothing on its own — see the module docstring for why that claim needs a
+    different check. Its mere PRESENCE anywhere in the description empties
+    this out entirely, even alongside a resolvable pair: Doug's own review
+    of this file (PR #49, reader:overly-broad-regex-match) found that a
+    whole-table claim mixed with an unrelated real `table.column` mention
+    (e.g. "`deep_read_counters` … extends verdicts.id via a foreign key")
+    let the incidental pair settle a finding whose actual disputed claim was
+    never checked. We cannot tell which mention is the real claim, so we
+    settle neither rather than guess. Empty ⇒ we cannot settle it.
     """
+    if _NAME_IN_BACKTICKS.search(f.description):
+        return []
     return list(dict.fromkeys(_TABLE_DOT_COLUMN.findall(f.description)))
 
 

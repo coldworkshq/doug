@@ -100,6 +100,22 @@ def test_columns_of_reads_the_connected_database_not_the_current_table_object(
     assert "prompt_hash" not in store.columns_of("verdicts")
 
 
+def test_columns_of_returns_none_when_inspection_raises(monkeypatch):
+    """Doug's review of PR #49 (reader:unhandled-exception-path): a
+    transient DB failure during introspection must degrade to "cannot
+    tell" — the same as no DATABASE_URL — not crash the whole review job.
+    settle.py's caller has no except clause for this; the guard belongs
+    here, same posture as review.head_file_text's own catch-all.
+    """
+    monkeypatch.setattr(store, "_get_engine", lambda: object())
+
+    def _boom(engine):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(store, "inspect", _boom)
+    assert store.columns_of("verdicts") is None
+
+
 def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
     vid = store.save_review("o/r", 7, "reader", VERDICT, RV, model=reader.MODEL)

@@ -114,6 +114,39 @@ def test_claimed_columns_ignores_a_bare_table_name_with_no_column():
     assert settle.claimed_columns(f) == []
 
 
+def test_claimed_columns_is_empty_when_a_bare_table_mention_accompanies_a_real_pair():
+    """Doug's review of PR #49 (reader:overly-broad-regex-match): a
+    whole-new-table claim (`deep_read_counters`, out of scope by design — no
+    dot) must not be settled on an unrelated real `table.column` mentioned
+    in the same description for context. The presence of ANY bare
+    backtick-quoted name means we cannot tell which mention is the actual
+    disputed claim, so we settle nothing rather than guess.
+    """
+    f = _sf(
+        desc=(
+            "`deep_read_counters` looks unmigrated; it extends verdicts.id "
+            "via a foreign key and will raise on a deployed database"
+        )
+    )
+    assert settle.claimed_columns(f) == []
+
+
+def test_does_not_settle_a_whole_table_claim_via_an_incidental_column_mention():
+    """Same case as above, through the public entry point."""
+    f = _sf(
+        desc=(
+            "`deep_read_counters` looks unmigrated; it extends verdicts.id "
+            "via a foreign key and will raise on a deployed database"
+        )
+    )
+    rv = ReaderVerdict(risk_score=60, rationale="x", findings=[f])
+    out, dropped = settle.drop_disproved_schema_findings(
+        rv, lambda table: {"id"} if table == "verdicts" else None
+    )
+    assert dropped == []
+    assert out.findings == [f]
+
+
 def test_drops_schema_finding_when_column_exists_in_live_schema():
     rv = ReaderVerdict(risk_score=60, rationale="x", findings=[_sf()])
     out, dropped = settle.drop_disproved_schema_findings(
