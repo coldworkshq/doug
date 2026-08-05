@@ -2,6 +2,21 @@
 
 ## Tenant API keys
 
+### Provisioning the pepper (one-time, BEFORE the first deploy)
+
+`deploy()` binds `DOUG_TOKEN_PEPPER=doug-token-pepper:latest` in
+`--set-secrets`, but only `setup()` creates that secret. Cloud Run refuses a
+revision that references a missing secret, so a deploy in a project where
+setup was never re-run after this feature landed **fails outright — the
+revision never starts** (it does not degrade to 503; that failure mode only
+applies when the secret exists but is empty/malformed). Run the gcp.sh setup
+step once per project — or create the secret by hand:
+
+    python3 -c "import base64,secrets;print(base64.b64encode(secrets.token_bytes(32)).decode())" \
+      | gcloud secrets create doug-token-pepper --data-file=- --project "$PROJECT"
+
+before the first deploy that includes the tenant-keys feature.
+
 ### Break-glass: revoke a tenant's keys (operator, SQL)
 
 Soft revoke — rows are audit history, never DELETE:

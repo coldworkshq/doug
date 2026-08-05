@@ -2495,6 +2495,34 @@ def test_revoke_repo_admin_lookup_is_case_insensitive(tmp_path, monkeypatch):
     assert r.status_code == 200 and r.json()["revoked"] is True
 
 
+def test_revoke_malformed_owner_never_falls_through_to_the_repos_proof(
+    tmp_path, monkeypatch
+):
+    """A present owner is authoritative even when malformed. Before this pin,
+    owner="acme/x" silently yielded to the repos branch, so precedence
+    flipped on a typo — an incident responder who fat-fingers the org gets
+    whatever the repos param happens to authorize instead of a refusal
+    (Doug's own review of PR #50, low finding 4)."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    # The repos proof WOULD succeed — which is exactly why the malformed
+    # owner must refuse before that branch is ever considered.
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}",
+        params={"owner": "drewjst/doug", "repos": "drewjst/doug"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 404
+    assert tenancy.resolve(minted.token) is not None, "nothing may be revoked on the way out"
+
+
 def test_uninstall_webhook_bulk_revokes_keys(tmp_path, monkeypatch):
     """resolve already fails on state='deleted' (MT2's live check). The bulk
     stamp is belt-and-braces AND the audit trail: revoked_at answers 'when

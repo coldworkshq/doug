@@ -781,7 +781,13 @@ def revoke_token(
         raise HTTPException(status_code=401, detail="X-GitHub-Token required")
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-    if owner and "/" not in owner:
+    if owner:
+        # A present owner is authoritative. Malformed input refuses here
+        # rather than falling through to the repos proof — otherwise
+        # precedence would flip on a typo, and a mistyped org name would
+        # hand the decision to whatever the repos param happens to prove.
+        if "/" in owner:
+            raise _not_found()
         installation_id = tenancy.verify_org_admin(x_github_token, owner)
         if installation_id is None or not store.revoke_installation_token(
             token_id, installation_id
