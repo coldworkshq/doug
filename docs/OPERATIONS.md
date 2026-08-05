@@ -43,6 +43,25 @@ V2 is never reached and is ignored, with no error raised anywhere.
 Never remove a pepper version that live rows still reference — those keys
 would die unverifiable (fail closed, not fail open).
 
+### Exit gate: the second-account isolation proof
+
+ROADMAP § MT's exit gate — "a second installation on a different account
+reads only its own rows, proven against the real ledger" — is executable:
+`api/deploy/prove-isolation.sh` (env vars documented in its header). Order
+matters; each step depends on the one before it:
+
+1. Pepper provisioned (section above) and the tenant-keys build deployed.
+2. MT0 clean: redeliver the `installation` / `installation_repositories`
+   events for the EXISTING installation; a cold start printing zero
+   `doug: DRIFT` lines is the confirmation.
+3. App visibility → public (App settings → Advanced), then install Doug on
+   the second account, selecting at least one repo.
+4. Review at least one PR on that repo (open one, or redeliver a recent
+   `pull_request` event) — the proof refuses to pass on an empty queue,
+   because an empty tenant view proves nothing about isolation.
+5. Run the script. Every assertion must pass; the script revokes its own
+   proof keys as its final assertions, so it leaves no live credentials.
+
 ### MT0-class drift
 
 Startup logs one or both of these warnings; both mean a webhook never fired
