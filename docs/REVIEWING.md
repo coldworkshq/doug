@@ -399,3 +399,66 @@ When Doug says the code went past a recorded rejection, either (a) the rejection
 binds and the code is wrong, or (b) the situation the ADR said to revisit has arrived and
 the record needs updating. Pick deliberately; do not "fix" (b) by reverting the work that
 forced the revisit.
+
+## Two token classes
+
+`DOUG_API_TOKEN` is the **operator** credential: unscoped, reaches every
+endpoint, and is what `doug-web` sends server-side (`web/lib/api.ts`). Reviews
+that assume "the token" is tenant-scoped are reading the wrong class.
+
+A **tenant** token is dispensed by `POST /v1/installations/token`, stored only
+as `sha256` in `installations.token_hash`, and resolves to exactly one
+`installation_id`. It reaches `/v1/queue` and nothing else.
+
+Three things a reviewer should check, because each has a failure that looks
+fine in passing tests:
+
+1. **Any new filter on `latest_reviews` goes inside the grouped subquery.**
+   Outside, an excluded row can still win `max(id)` for its PR and then be
+   dropped — the PR vanishes rather than falling back. Pinned by
+   `test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row`.
+2. **Cross-tenant is 404, never an empty list.** An empty list reads as "no
+   reviews yet" and confirms the caller's guess might be real.
+3. **New GitHub calls on public endpoints check the caller's credential
+   first.** The shared 5,000/hr REST quota was exhausted twice on 2026-08-02;
+   a public endpoint that spends Doug's quota before the caller's is a drain
+   loop. Pinned by `test_non_admin_pat_never_spends_dougs_github_quota`.
+
+## A table only a webhook populates can be empty in production
+
+Found 2026-08-04, by inspecting the production ledger while chasing an
+unrelated finding on PR #48.
+
+`installations` has **one writer** — `api.py:730`, inside the `installation`
+webhook handler — and it is read by `worker.reconcile_all` (via
+`store.active_installations`) and by `tenancy.mint`/`store.active_repos`.
+In production that table held **zero rows**, while `verdicts` held 33 rows
+carrying `installation_id = 150424894`. The App path was demonstrably working;
+the table describing the installation had simply never been written, because
+Doug was installed before that handler existed and no `installation` delivery
+was ever replayed.
+
+Every test seeds the row first — `upsert_installation(...)` is the opening line
+of the fixtures — so the whole suite passes against a state production is not
+in. The green suite is evidence about the code, not about the ledger.
+
+When reviewing anything that reads a table:
+
+1. **Ask who writes it, and whether that writer has definitely run in
+   production.** A webhook handler shipped after the event it handles will
+   never have fired for installations that predate it. Redelivery is a manual
+   act nobody performs by default.
+2. **Distrust a passing test whose fixture creates the row under review.** It
+   proves the read works given the row; it says nothing about whether the row
+   exists. This is the same class as ADR-0002's self-referential test — a check
+   that cannot fail in the direction that matters.
+3. **Prefer one query against the real ledger to any amount of reasoning about
+   it.** The reasoning here — "the table is populated by the webhook, the
+   webhook works, reviews are happening" — was individually true at every step
+   and wrong at the end.
+
+The symptom this hid: `reconcile_all` loops over `active_installations()`, so
+with an empty table the startup sweep enqueues nothing *by construction*. That
+had been recorded in HANDOFF as "the webhook path drains jobs promptly, so at
+any boot there is nothing pending for the sweep to find" — a plausible
+explanation for the right observation and the wrong reason.

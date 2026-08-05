@@ -15,7 +15,7 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, review, store, worker
+from . import __version__, app_auth, ingest, precision, reader, review, store, tenancy, worker
 from .models import (
     Band,
     PRMetadata,
@@ -374,15 +374,12 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     installation in the request to charge — so it shares that ceiling with
     the CI review path rather than any customer's budget.
     """
-    # Fourth inlined copy of this gate (review_pr, queue, patterns_precision,
-    # here) — deliberate, not overlooked. Task 9 deletes review_pr, and that
-    # is when the three survivors collapse into one helper; extracting it now
-    # would edit endpoints a concurrent session is reading.
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    # The shared gate lives in _operator_only below; this route is one of
+    # its callers. /v1/review still carries the last inline copy of this
+    # check — Task 9 deletes that route outright, and that deletion is what
+    # retires the last inline copy rather than an extraction into this
+    # helper.
+    _operator_only(x_doug_token)
     if not reader.enabled():
         return score(req.pr)
     try:
@@ -443,24 +440,56 @@ def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
     return max(seen, key=lambda t: (seen[t], -t))
 
 
+def _operator_only(x_doug_token: str) -> None:
+    """Gate an endpoint that no tenant may reach.
+
+    Three outcomes, and the middle one is the point: a token that RESOLVES
+    to an installation is a real credential aimed at the wrong door, so it
+    gets 404 — the same no-existence-leak rule a cross-tenant repo gets.
+    A token that resolves to nothing is 401, because nothing about it was
+    ever valid.
+    """
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if hmac.compare_digest(x_doug_token, expected):
+        return
+    if tenancy.resolve(x_doug_token) is not None:
+        raise HTTPException(status_code=404, detail="not found")
+    raise HTTPException(status_code=401, detail="bad token")
+
+
 @app.get("/v1/queue")
 def queue(
     threshold: float | None = None,
     repo: str | None = None,
     x_doug_token: str = Header(""),
 ) -> QueueResponse:
-    """The review queue. Token-gated on the same shared secret as
-    /v1/review: these are real PR titles, authors and reader rationales,
-    and the service is deployed --allow-unauthenticated.
+    """The review queue: real PR titles, authors and reader rationales, on
+    a service deployed --allow-unauthenticated, so this stays token-gated.
 
-    `repo` stays a caller-supplied parameter until sessions exist; the
-    shared token stops anonymous reads, it does not separate tenants.
+    Two token classes reach this endpoint. DOUG_API_TOKEN is the operator's
+    and is unscoped. A dispensed token resolves to one installation and sees
+    only its rows, and `repo` becomes a filter WITHIN that scope rather than
+    a selector across scopes.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
+        # A missing operator secret is a misconfigured deployment. A tenant
+        # token does not depend on it and could be honoured anyway, but
+        # letting tenant traffic paper over the gap would hide the fault.
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    installation_id: int | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+        installation_id = tenancy.resolve(x_doug_token)
+        if installation_id is None:
+            raise HTTPException(status_code=401, detail="bad token")
+        if repo is not None and repo not in {
+            full_name for _, full_name in store.active_repos(installation_id)
+        }:
+            # 404, never an empty list: an empty list reads as "no reviews
+            # yet" and tells the caller their guess may be a real repo.
+            raise HTTPException(status_code=404, detail="not found")
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [
@@ -481,7 +510,7 @@ def queue(
                     ],
                 ),
             )
-            for row in store.latest_reviews(repo=repo)
+            for row in store.latest_reviews(repo=repo, installation_id=installation_id)
             if row["pr_meta"]
         ]
     else:
@@ -521,6 +550,52 @@ def queue(
         ),
         items=items,
     )
+
+
+class TokenRequest(BaseModel):
+    repo: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+    installation_id: int
+    repo: str
+
+
+@app.post("/v1/installations/token")
+def dispense_token(
+    body: TokenRequest,
+    x_github_token: str = Header(""),
+) -> TokenResponse:
+    """Mint this installation's API token, proving ownership through GitHub.
+
+    Deliberately public: the proof is the caller's own GitHub credential, so
+    an operator token here would defeat self-service without adding safety.
+
+    Every verification failure renders as 404 — not 403, which would confirm
+    the repo exists, and not a distinct message per cause, which would let a
+    caller separate "private repo I cannot administer" from "repo that does
+    not exist". The token rides in the response body once; only its hash is
+    stored, so this endpoint is also the rotation and lost-token path.
+    """
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    owner, _, name = body.repo.partition("/")
+    # Parse before either GitHub call: a malformed repo cannot be anyone's,
+    # so there is nothing to spend a quota proving.
+    if not owner or not name or "/" in name:
+        raise HTTPException(status_code=404, detail="not found")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    installation_id = tenancy.verify_admin(x_github_token, owner, name)
+    if installation_id is None:
+        raise HTTPException(status_code=404, detail="not found")
+    token = tenancy.mint(installation_id)
+    if token is None:
+        # GitHub knows this installation; the ledger does not. Same shape as
+        # every other failure — the caller learns nothing either way.
+        raise HTTPException(status_code=404, detail="not found")
+    return TokenResponse(token=token, installation_id=installation_id, repo=body.repo)
 
 
 class PatternRow(BaseModel):
@@ -563,11 +638,7 @@ def patterns_precision(
     unpublished half of the evidence base, and the caveat travels in the
     response body so a number cannot be lifted out of it by accident.
     """
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    _operator_only(x_doug_token)
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
 
@@ -1138,11 +1209,7 @@ def comparisons(
     limit: int = 50,
     x_doug_token: str = Header(""),
 ) -> dict:
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
+    _operator_only(x_doug_token)
     if not 1 <= limit <= 200:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
     if not store.enabled():

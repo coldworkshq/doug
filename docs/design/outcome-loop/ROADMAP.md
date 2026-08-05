@@ -212,7 +212,33 @@ executed as written — amendments folded in at their task, never as a second pa
   not confuse the api cutover. **Ops still open:** this PR only touches `api/` +
   docs, so merge does not run `gcp.sh web` — first web deploy must use the new
   SA, then revoke the default compute SA's leftover accessor on `doug-api-token`.
-- [ ] Per-installation token dispense endpoint (GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read attempt → 404 (test pinned)
+- [x] Per-installation token dispense endpoint (GitHub-token-verified); scoped
+  `/v1/queue`; cross-tenant read attempt → 404 (test pinned). **Two token
+  classes, not one replaced:** `DOUG_API_TOKEN` survives as an unscoped
+  *operator* credential — scoping everything would have deleted the CI half of
+  `/v1/comparisons` mid-soak, and `doug-web` has no login to carry a tenant
+  token (its dashboard is M6's gated track). Dispensed tokens resolve to one
+  `installation_id` and reach `/v1/queue` alone.
+  **`/v1/patterns` is operator-only permanently**, on licensing rather than
+  scoping grounds: `design-lock.md:71` — nothing derived from the research
+  corpus is servable across tenants, because the rationales quote
+  getsentry/grafana source verbatim.
+  Dispense verifies PAT-first, app-JWT-second, because the app call spends
+  Doug's shared 5,000/hr REST quota on a public endpoint and the reverse order
+  is an anonymous drain loop. Receipt reads are **not** in this item — they are
+  M3's endpoint and inherit the same `tenancy.resolve`.
+  **Honest limit:** the operator token remains superuser. M2's gate is "no
+  cross-tenant read" and an operator is not a tenant, but "scoped reads" should
+  not be read as more than shipped. One token per installation, too — the
+  garden and a tenant's CI would share it; `installation_tokens` when that bites.
+  **Second honest limit, found by the Task 5 review:** the 404 on operator-only
+  endpoints does *not* hide their existence, because FastAPI serves
+  `/openapi.json` and `/docs` unauthenticated and they enumerate every route on
+  an `--allow-unauthenticated` service. 404 is still the right code (403 would
+  be worse) and the **cross-tenant `repo` 404 is unaffected** — repo names are
+  not in the OpenAPI schema — so the gate clause stands. Closing it for real is
+  `FastAPI(openapi_url=None, docs_url=None)` in prod: **follow-up task, not
+  done here.**
 
 **Exit gate:** the attacker math closes — no unauthenticated paid endpoint, no uncapped spend
 path, no cross-tenant read, no silent partial reads.
@@ -251,9 +277,80 @@ receipt correct end-to-end; scoreboard rendering live counts; then one full webh
 
 ---
 
+## MT — Multi-tenant readiness *(blocks M5's first outside install)*
+
+The data model is already tenant-shaped and that half is done: `verdicts`
+carries `installation_id` + `github_repo_id` as real keys, migration 005's
+uniqueness is installation-scoped, `latest_reviews` filters inside the grouped
+subquery, spend caps charge per installation, the intent tier is
+per-installation, and PR #48's tokens resolve to exactly one installation.
+**What is not ready is the edges** — the places where "one honest operator on a
+User install" is baked in. Every item below was found by a review or a
+production check on 2026-08-04, not predicted; the ordering is by when each
+would bite a real tenant.
+
+- [ ] **MT0 — Populate `installations` for the existing install.** Production
+  holds **zero** rows in `installations` and `installation_repos` while
+  `verdicts` holds 33 rows for installation 150424894. Its only writer is the
+  `installation` webhook handler (`api.py:730`), which never fired for an App
+  installed before it existed. Consequences: `tenancy.mint` matches no row so
+  dispense 404s for our own install; `reconcile_all` loops over
+  `active_installations()` and is therefore a **structural no-op**, which is the
+  real reason the startup sweep never enqueues (M1's soak criterion 2 recorded a
+  different explanation and it was wrong). **Fix is operational** — redeliver
+  the `installation` event; do **not** uninstall/reinstall, which mints a new
+  `installation_id` and orphans every existing verdict.
+- [ ] **MT1 — Repo-admin must not mint an installation-wide token.**
+  `verify_admin` proves admin on **one repo**; `mint` issues a token scoped to
+  the **whole installation**. Identical on a User install, which is why it was
+  invisible. On an org install covering all repositories, admin on any single
+  repo reads every repo's PR titles, authors and reader rationales across the
+  org — data GitHub itself would not show that person — and the same call
+  silently rotates the org's live token. **This is the one item that must close
+  before any org install.**
+- [ ] **MT2 — Uninstall must revoke.** `tenancy.resolve` matches on
+  `token_hash` and never reads `installations.state`; the uninstall webhook
+  clears the repo list and leaves the hash. Uninstalling is the tenant-facing
+  revocation gesture and today it does nothing. Acceptable while the tenant is
+  us; not acceptable when it is someone else.
+- [ ] **MT3 — `reconcile_all` must not scale by repo count.** No cap on repos
+  per installation and no call budget (the existing `_MAX_OPEN_PRS_PER_REPO`
+  bounds PRs *per repo*, not repos). A 10k-repo installation is ≥10k REST calls
+  per cold start, on a scale-to-zero service where cold starts are frequent —
+  and the loop is **serial across installations**, so one large tenant delays
+  every tenant behind it. Fixing MT0 exposes this rather than causing it.
+- [ ] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
+  check reads `installation_repos.full_name` (annotated *display only* in
+  `store.py`) while row filtering reads `verdicts.installation_id`. Traced as
+  failing closed in every direction by two independent reviewers, so no leak —
+  but it means the unfiltered queue can return rows for a repo that `?repo=`
+  404s. Unify when receipts land and this check gets a second caller.
+- [ ] **MT5 — Rate-limit dispense.** `POST /v1/installations/token` is public
+  by design and unthrottled. A caller who administers *any* repo passes check
+  one, so check two spends Doug's app-JWT quota on a 404; repeated calls also
+  rotate a live token, denying the tenant's own integration. The obvious
+  mitigation (consult the ledger first) collides with MT4 — decide them
+  together.
+
+**Open design question — the credential model itself.** Andrew (2026-08-04):
+*lema has an API key system worth borrowing.* Doug's current model is one
+opaque token per installation, hash-only, rotate-by-remint, with no scopes, no
+expiry, no per-consumer attribution, and no record that a mint happened
+(`mint` writes no `updated_at`). MT1, MT2 and MT5 are all symptoms of that
+shape rather than independent bugs, so **evaluate lema's design before fixing
+them one at a time** — a keys-with-scopes model may close all three at once and
+would also answer the garden/CI sharing problem PR #48 recorded as a stated
+limit. Doug and lema stay separate products; this is borrowing a pattern, not
+coupling them.
+
+**Exit gate:** MT0 and MT1 closed, and a second installation on a different
+account reads only its own rows — proven against the real ledger, not fixtures.
+
+---
+
 ## M5 — First design partners *(calendar-gated)*
 
-- [ ] App visibility → "Any account"
+- [ ] App visibility → "Any account" *(gated on MT above)*
 - [ ] Onboard 2–3 design partners: $99/installation hand-invoiced, allowance rows, meter visible day 1
 - [ ] 30 days of fill: prospective counters ticking on a real tenant, zero cross-tenant reads
 - [ ] 60-day backfill run; **first pre-committed publication ships on its date, good or bad**

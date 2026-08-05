@@ -1,0 +1,424 @@
+# Per-installation token dispense + tenant-scoped reads
+
+**Status:** design approved (Andrew, 2026-08-04) · **Milestone:** M2, final item
+**Closes:** ROADMAP.md:212 — "Per-installation token dispense endpoint
+(GitHub-token-verified); scoped `/v1/queue` + receipt reads; cross-tenant read
+attempt → 404 (test pinned)"
+
+M2's exit gate is *safe to point at strangers*, and its remaining clause is "no
+cross-tenant read". Today there is exactly one credential — a shared
+`DOUG_API_TOKEN` — and `/v1/queue`'s own docstring admits what that means:
+"the shared token stops anonymous reads, it does not separate tenants."
+
+---
+
+## Two token classes, not one replaced
+
+`DOUG_API_TOKEN` **survives unchanged** as an operator credential. Dispensed
+per-installation tokens are a second, narrower class.
+
+| | Operator token | Tenant token |
+|---|---|---|
+| Source | `DOUG_API_TOKEN` secret | dispensed, hashed into `installations.token_hash` |
+| Scope | none — sees every row | exactly one `installation_id` |
+| Reaches | every endpoint | `/v1/queue` only (M3 receipts later) |
+| Consumers | `doug-web`, operator curl, the deploy probe | tenant API access, later the MCP garden |
+
+**Why not one scoped class for everyone.** Three reasons, in order of weight:
+
+1. **It would regress the live soak.** `comparison_reviews` (`store.py:1285`)
+   selects CI rows by `installation_id IS NULL AND github_repo_id IS NULL`.
+   Scope everything by `installation_id` and the CI half of every comparison
+   disappears — during the soak that exists to watch it.
+2. **`doug-web` has no login.** `web/lib/api.ts:114,161` sends one server-side
+   `process.env.DOUG_API_TOKEN`. There is no notion of who is looking. The
+   tenant dashboard is an M6 gated track (">3 tenants or first tenant ask"),
+   and `design-lock.md:65` already cut the tenant browser page while keeping
+   the token mint.
+3. Tenants have no UI to break, because they get API access and nothing else.
+
+**The limit this leaves, stated rather than implied:** `DOUG_API_TOKEN` remains
+a superuser credential. If it leaks, everything leaks. That is true today and
+this work does not change it. M2's gate is "no cross-tenant read" — an operator
+is not a tenant, so the gate closes honestly, but "scoped reads" must not be
+read as more than ships.
+
+---
+
+## Which endpoints tenant tokens reach
+
+**`/v1/queue` only.** The other three stay operator-only, and two of them
+permanently:
+
+- **`/v1/patterns` (`api.py:554`) — operator-only forever.** It computes
+  precision over the **research corpus**, and `design-lock.md:71` is a
+  licensing constraint, not a scoping preference: *"Nothing derived from the
+  research corpus is servable across tenants (rationales quote getsentry/grafana
+  source verbatim)."* There is no future version of this endpoint that becomes a
+  tenant surface. Scoped per-tenant it would also be a precision figure computed
+  over a handful of PRs — a number too small to mean anything, published from
+  the endpoint whose docstring calls it "the unpublished half of the evidence
+  base."
+- **`/v1/comparisons` (`api.py:1135`) — operator-only.** It compares App vs CI.
+  Tenants have no CI path; `doug-review.yml` is this repo's own dogfood workflow
+  (ADR-0008). It has nothing to show a tenant, and M1 Task 9 eventually deletes
+  half its inputs.
+- **`/v1/score/read` (`api.py:355`) — operator-only.** The post-deploy
+  credential probe. Operator by definition.
+
+This still closes the gate: there is no endpoint at which a tenant token can
+read another tenant's data, because there is one endpoint a tenant token opens
+at all.
+
+### What the future garden inherits
+
+`design-lock.md:65` cut the tenant browser page and kept the token mint with
+the reason attached: *"token mint survives — its consumers are the API and
+later MCP."* `design-lock.md:31` kills the alternatives by name — *"WorkOS-minted
+tokens (no dashboard exists); DIY OAuth."* So this token is the garden's auth
+mechanism and no second one is coming.
+
+The garden is a **separate Cloud Run service on the same image** (`:31`),
+v1.5, serving adjudicated history with citations under a min-n floor — different
+data from `/v1/patterns`, different store, different service. Three consequences
+land on *this* design, all cheap now and expensive later:
+
+1. **`doug/tenancy.py` is a module, not inline code in `api.py`.** A second
+   service must verify a token without importing the FastAPI app. (It also
+   keeps `api.py`, already 1158 lines, from absorbing another subsystem.)
+2. **Verification is a DB read of `installations.token_hash`**, so a second
+   service sharing the same Postgres authenticates with no new plumbing.
+3. **The token resolves to `installation_id` and nothing broader** — `:71`'s
+   no-cross-tenant-garden rule needs exactly the scope value we already mint.
+
+**Not building a garden endpoint now.** Its trigger is "adjudicated rows ≥ min-n
+on ≥1 tenant"; M3 has produced zero — `adjudicate.py` does not exist. `:31`:
+*"shipping a refusing tool spends the honesty budget on theater."*
+
+---
+
+## Components — `doug/tenancy.py`
+
+No FastAPI import.
+
+| Function | Responsibility |
+|---|---|
+| `mint(installation_id) -> str` | Generate token, write `sha256` to `token_hash`, return plaintext **once** |
+| `resolve(token) -> int \| None` | `sha256` → `installation_id`; constant-time compare |
+| `verify_admin(pat, owner, repo) -> int` | The two-call proof; returns `installation_id` |
+
+Token format: `doug_` + `secrets.token_urlsafe(32)`. The prefix makes it
+greppable in a leaked-secret sweep and is what GitHub secret scanning would key
+on later.
+
+**No migration.** `installations` and `token_hash` were introduced in the same
+commit (`6a1a213`, #18), so `create_all()` built the table with the column —
+verified by pickaxe over `store.py`, not assumed. The column's own docstring
+already promises this feature.
+
+---
+
+## Data flow — dispense
+
+`POST /v1/installations/token`, body `{repo: "owner/name"}`, header
+`X-GitHub-Token: <PAT>`.
+
+**The call order is PAT-first, and that ordering is load-bearing.** HANDOFF
+records a standing hazard: GitHub's 5,000/hr REST quota is shared across every
+session and *was exhausted twice on 2026-08-02*. The app-JWT call spends
+**Doug's** quota; the PAT call spends **the caller's**. On a public
+`--allow-unauthenticated` service, doing the app call first hands an anonymous
+caller a loop that drains the quota the review path needs to mint installation
+tokens. So:
+
+1. Caller's PAT → `GET /repos/{owner}/{repo}` → `permissions.admin` must be
+   `true`. Fails → 404, **and no app-JWT call is made**.
+2. App JWT → `GET /repos/{owner}/{repo}/installation` → `installation_id`
+   (proves Doug is installed there).
+3. Mint, store hash, return once.
+
+Doug never stores the PAT — one request, then dropped.
+
+**Known limit: repo-admin proves one repo, mint scopes the whole
+installation.** `verify_admin` proves the caller administers exactly the repo
+named in the request; `mint` then issues a token scoped to the entire
+`installation_id`. On a User install these coincide — one account, one repo
+surface, nothing to widen. On an Organization install covering multiple
+repositories they do not: admin on any single repo is enough to mint a token
+that reads every repo's PR titles, authors and reader rationales across the
+whole org, and the same call silently rotates — and thereby invalidates — the
+token every other consumer of that installation was using. Org installs are
+where this bites; it is stated here as a known limit of the current design,
+not fixed in this pass.
+
+**Rejected: `GET /user/installations`.** One call instead of two, but that
+endpoint is specified for user-access tokens; classic-PAT behavior is less
+well-defined, which would make the auth story depend on a token type we cannot
+check for. **Rejected: operator-minted only** — least code and it matches
+hand-invoiced M5 exactly, but it keeps Andrew in the loop for every rotation
+forever, and the roadmap line says "GitHub-token-verified".
+
+### Lifecycle
+
+- **Mint** — token returned in the response body **once**. Only `sha256(token)`
+  is stored, so it can never be shown again by construction rather than policy.
+- **Rotate** — call dispense again. New hash overwrites old; the old token dies
+  instantly. One column write, so rotation is free rather than a feature.
+- **Revoke** — operator sets `token_hash = NULL`.
+- **Lost token** — identical to rotate. There is no recovery path and there
+  should not be one.
+- **Uninstall / suspend does not revoke.** `tenancy.resolve()` matches on
+  `token_hash` alone and never reads `installations.state`. The webhook's
+  uninstall path (`api.py`'s `_record_installation`, `deleted` branch) calls
+  `upsert_installation(..., "deleted")` and clears the repo list via
+  `set_installation_repos(inst["id"], [], replace=True)` — but never touches
+  `token_hash`. A token minted before uninstall keeps resolving after it. The
+  only real revocation is a manual `UPDATE installations SET token_hash =
+  NULL`, which no code path performs today. This is stated as a limit rather
+  than a cross-tenant hole — the token still only ever resolves to that same
+  installation's own `installation_id`, never another tenant's — and checking
+  `state` inside `resolve()` is a deliberate follow-up, not done here.
+
+**Stated limit: one token per installation.** `token_hash` is a single column,
+so when the MCP garden ships, an agent and a tenant's CI would share one token —
+rotating for one silently breaks the other, and per-consumer usage cannot be
+attributed. Acceptable now (one install, no garden until M3 produces adjudicated
+rows). The upgrade is an `installation_tokens` table plus a migration, a path
+this repo has walked five times.
+
+---
+
+## Data flow — scoped read
+
+`GET /v1/queue` + `X-Doug-Token`:
+
+- token == `DOUG_API_TOKEN` → operator; **no filter, byte-identical to today**.
+- else `resolve(token)` → `installation_id` → `latest_reviews(installation_id=…)`.
+- unresolvable → 401.
+
+`repo` stays a caller-supplied parameter and becomes a **filter within scope**,
+never a selector across scopes: a tenant naming one of their own repos filters
+to it; a tenant naming any other repo gets 404 (below).
+
+**When `DOUG_API_TOKEN` is unset the endpoint still 503s**, before any
+resolution — unchanged from today. A tenant token is independent of that secret
+and could in principle be honored without it, but a missing operator secret is a
+deployment misconfiguration and should fail loudly rather than be masked by
+tenant traffic that happens to work.
+
+**The `installation_id` filter goes inside the grouped subquery.**
+`latest_reviews` (`store.py:1194`) selects `max(id) GROUP BY (repo, pr_number)`
+in a subquery, and its docstring already documents this exact bug class for the
+`EXTERNAL_TIER` filter: filtering *outside* lets a row win `max(id)` for its PR
+and then get dropped, so the PR **vanishes entirely** instead of falling back.
+Same trap here — a CI row (`installation_id IS NULL`) with a higher id would
+win, then be filtered, and the tenant's own App verdict would disappear from
+their queue.
+
+---
+
+## Error handling
+
+Everything that could confirm existence returns **404**: a cross-tenant `repo`,
+a tenant token on an operator-only endpoint, Doug-not-installed at dispense, and
+PAT-lacks-admin at dispense.
+
+Not 403 — that confirms the thing exists. Not an empty list either: an empty
+list is indistinguishable from "no reviews yet", which is a worse answer than
+"no such thing". Absent or unresolvable token → 401. No ledger → 503. Missing
+`DOUG_API_TOKEN` → 503. All unchanged where they already exist.
+
+**Correction (2026-08-04, from the Task 5 review) — the endpoint half of that
+claim does not hold at the deployment level, and this paragraph overstated it.**
+FastAPI serves `/openapi.json` and `/docs` unauthenticated, and they enumerate
+every route; the reviewer confirmed a plain `GET /openapi.json` returns 200
+listing `/v1/patterns`, `/v1/comparisons`, `/v1/score/read`, and
+`/v1/installations/token`. On an `--allow-unauthenticated` service, a stranger
+already knows those endpoints exist, so 404-instead-of-403 conceals nothing
+from a tenant that anyone can get for free.
+
+Two things this does **not** change. **404 stays** — 403 would be strictly
+worse, and the code is correct as written. And the **cross-tenant `repo` 404 is
+unaffected**: repo names appear nowhere in the OpenAPI schema, so that one
+leaks nothing and the M2 gate clause it serves stands.
+
+What was wrong was the wording here, not the behaviour. Closing the gap for
+real is **not** a one-liner. `openapi_url=None` is the FastAPI parameter that
+actually does the work — it 404s `/openapi.json` itself (and, as a side
+effect, `/redoc`, which also needs naming: `redoc_url=None`); `docs_url=None`
+alone only hides Swagger UI at `/docs` and leaves `/openapi.json` reachable.
+But `/openapi.json` is not just documentation in this deployment — it is the
+health-check route three call sites depend on being reachable and
+unauthenticated: `api/deploy/gcp.sh:241` (`promote_if_healthy "$SERVICE"
+/openapi.json`), `api/deploy/gcp.sh:243` (the first-deploy smoke check), and
+`.github/workflows/deploy.yml:127` (CI fails the deploy if it is not 200) —
+all three exist because `/healthz` is intercepted by the Google frontend and
+never reaches the app, which is why `/openapi.json` was chosen as the probe in
+the first place. Setting `openapi_url=None` without also giving those three
+call sites a replacement probe route that genuinely reaches the app would turn
+every deploy red. The real follow-up is therefore: add a replacement probe
+route, repoint `gcp.sh:241`, `gcp.sh:243`, and `deploy.yml:127` at it, and only
+then set `openapi_url=None` (and `redoc_url=None`) in production — its own
+task, tracked as a follow-up, deliberately not smuggled into this one.
+
+---
+
+## Testing
+
+Tests encode why the behavior matters, not just that it happens.
+
+1. **A PR with both a CI row (`installation_id` NULL, higher `id`) and an App
+   row still appears in the tenant's queue, showing the App verdict.** This is
+   the highest-value test in the set: it fails the moment someone moves the
+   filter outside the grouped subquery, and it cannot pass by accident.
+2. **Cross-tenant `repo` → 404** — the M2 exit gate itself, pinned.
+3. **Operator-token behavior byte-identical to today** — no soak regression.
+4. **Rotation** — mint twice; the first token 401s.
+5. **Revocation** — `token_hash = NULL` → 401.
+6. **Non-admin PAT → 404, and no token is minted.**
+7. **A failed PAT check makes no app-JWT call** — pins the quota-safe ordering,
+   which is otherwise invisible and easy to reverse in a later refactor.
+8. **The token is returned exactly once and never logged.**
+
+---
+
+## Out of scope, deliberately
+
+- **M3 receipts** (`GET /v1/prs/{n}/receipt`) do not exist yet. When built they
+  are tenant-scoped through the same `tenancy.resolve`.
+- **The MCP garden endpoint** — gated on adjudicated rows ≥ min-n.
+- **Multi-token per installation** — the `installation_tokens` upgrade above.
+- **Narrowing the spend cap.** Real per-read costs now exist ($0.093/read on
+  `claude-opus-5`; 200 included reads = $18.66 COGS against $99), which makes
+  the 4,000/installation cap a $373 exposure that is safe only when the
+  hand-invoiced overage is actually billed. ROADMAP M2 says caps "are guesses
+  until the cost lines below produce real numbers — M4 sets plan-shaped
+  figures." That is an M4 item; recorded here so it is not rediscovered by a
+  surprising invoice.
+- **`design-lock.md:38` amendment** (bot authors metered, not excluded) — its
+  own commit.
+
+---
+
+## Doug's review of PR #48 — adjudication
+
+Doug reviewed this branch under ADR-0008 and returned five findings at
+**risk 0.34** (flag line 0.30), on a **29% partial read** — it never saw
+`REVIEWING.md`, `ROADMAP.md`, or the plan, so its findings cover the code only.
+Recorded with rulings, because a finding dismissed without a written reason is
+indistinguishable from one nobody read.
+
+**1. `api-contract-change` (low) — disproved as a practical concern.**
+The 404-instead-of-401 on operator-only endpoints is the designed
+no-existence-leak behaviour, not drift. Doug's worry is clients that classify
+auth failures on 401. Trace the three cases: an operator token still passes; an
+invalid token still gets 401, because `resolve()` returns `None`; only a *valid
+tenant token* gets the new 404. Zero tenant tokens exist, so the contract change
+reaches no client that exists today. No action.
+
+**2. `missing-migration-dependency` (medium) — UNRESOLVED, and deliberately not
+"fixed".** Doug is right that the diff adds no migration for
+`installations.token_hash`. It is right for the wrong reason: the column is on
+the Table definition and `installations` is a table `create_all()` makes whole,
+so any database built from main has it — table and column landed in the same
+squash-merge (`6a1a213`). The seam Doug cannot see is that on the *pre-merge
+branch* they landed separately (table `92fc5f9`, column `8904d02`), so a
+database created by a deploy between those two commits would lack it.
+
+Verifying production directly was not possible: this machine's
+application-default credentials point at a **deleted project** (`vestige-00`),
+so `cloud-sql-proxy` cannot authenticate.
+
+**An idempotent migration was written and then reverted, because it was worse
+than the problem.** `ALTER TABLE installations ADD COLUMN` raises `no such
+table` on a schema without that table, and `no such table` is not in
+`_SATISFIED` — so `apply()` would propagate it and crash-loop the revision on
+cold start. Three existing tests caught this immediately. In production
+`create_all()` precedes `apply()` so the table always exists, but trading a
+hypothetical missing column for a real crash path is a bad trade.
+
+**To close this:** run `gcloud auth application-default login`, then inspect
+`information_schema.columns` for `installations` through the proxy. If the
+column is absent, the migration is worth adding *with* the three test fixtures
+updated deliberately.
+
+**3. `unauthenticated-endpoint-abuse` (medium) — confirmed, documented, not
+code-fixed.** Found independently by the whole-branch reviewer too. Both halves
+are real: repeated dispense calls rotate a live token (denial against the
+tenant's own integration), and a caller who administers *any* repo passes check
+one, so check two spends Doug's app-JWT quota on a 404.
+
+The obvious mitigation — consult `installation_repos` before spending Doug's
+quota — **collides with finding 5**: if that table is stale or unpopulated,
+dispense would refuse repos the tenant genuinely owns. Trading a documented
+denial risk for an undocumented outage, on a branch already reviewed, is not a
+trade worth making without a design pass. Follow-up, not a patch.
+
+**4. `tenant-visibility-gap` (low) — true, and by design.** Verdict rows with
+`installation_id IS NULL` are CI-sourced and excluded from tenant queues.
+Tenants have no CI path — `doug-review.yml` is this repo's own dogfood workflow
+(ADR-0008) — so a real tenant has no CI rows to miss. It is visible only on the
+dogfood install, which is read with the operator token. Stated limit, no change.
+
+**5. `inconsistent-scope-check` (low) — confirmed, fails closed.** Also found
+independently by the whole-branch reviewer. Authorization reads
+`installation_repos.full_name` (annotated *display only* in `store.py`) while
+row filtering reads `verdicts.installation_id` — two sources of truth. Both
+reviewers traced every direction and it fails closed: a stale name 404s a repo
+the tenant owns; a name belonging to the wrong installation still returns no
+rows. Real inconsistency, no leak. Worth unifying when receipts land and this
+check gets a second caller.
+
+### Finding 2 resolved, and a larger one found underneath it
+
+**`token_hash` IS present in production.** Verified 2026-08-04 against
+`doug-prod0` / database `doug` through `cloud-sql-proxy`, once working ADC was
+available: `installations` carries `token_hash text NULL`, and
+`schema_migrations` shows versions 1–5 applied. **Doug's medium finding is
+disproved, and no migration is needed.** (Note for anyone repeating this: the
+machine's ADC quota project was `vestige-00`, a deleted project, so the proxy
+needs `--quota-project doug-prod0` even after `application-default login`.)
+
+**The same query surfaced something worse, which no reviewer caught because
+every test hides it.** In production:
+
+| table | rows |
+|---|---|
+| `verdicts` with `installation_id = 150424894` | 33 |
+| `installations` | **0** |
+| `installation_repos` | **0** |
+
+The App path is working and writing App-identified verdicts, but the table
+*describing* the installation was never populated. Its only writer is
+`api.py:730`, inside the `installation` webhook handler — and Doug was
+installed before that handler existed, so the event never fired and nobody
+replayed it.
+
+Three consequences, in descending order of how much they hurt:
+
+1. **This feature does not work in production as shipped.**
+   `tenancy.mint(150424894)` issues `UPDATE installations ... WHERE
+   installation_id = 150424894`, which matches zero rows, so `mint` returns
+   `None` and `POST /v1/installations/token` returns **404 for the operator's
+   own installation**. Every test passes because every fixture calls
+   `upsert_installation` first — the suite proves the code is right about a
+   ledger state production is not in.
+2. **`reconcile_all` has been a structural no-op.** It loops over
+   `store.active_installations()`, which reads this table, so the startup sweep
+   can never enqueue anything. HANDOFF recorded soak criterion 2 as "NOT MET,
+   and it will NOT be met by waiting", explaining that the webhook drains
+   promptly so nothing is pending. The observation was right and the
+   explanation was wrong; forcing the condition would have failed for a reason
+   nobody expected.
+3. **A tenant `?repo=` filter would 404 everything**, since `active_repos()`
+   reads `installation_repos`, also empty.
+
+**The fix is operational, not code:** redeliver the `installation` event from
+the App's Advanced settings, which calls `_record_installation` and writes both
+rows. Do that *before* relying on dispense, and re-check whether the startup
+sweep starts enqueueing.
+
+**A new install is unaffected** — `installation.created` fires normally and
+populates both tables. So a fresh install (e.g. `lema`) would work while the
+original dogfood install does not, which is exactly the kind of asymmetry that
+stays hidden until someone tries the second one.
