@@ -483,6 +483,7 @@ def queue(
         # letting tenant traffic paper over the gap would hide the fault.
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
+    repo_ids: frozenset[int] | None = None
     if not hmac.compare_digest(x_doug_token, expected):
         try:
             ctx = tenancy.resolve(x_doug_token)
@@ -491,6 +492,7 @@ def queue(
         if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
         installation_id = ctx.installation_id
+        repo_ids = ctx.repo_ids
         if repo is not None and repo not in {
             full_name for _, full_name in store.active_repos(installation_id)
         }:
@@ -517,7 +519,9 @@ def queue(
                     ],
                 ),
             )
-            for row in store.latest_reviews(repo=repo, installation_id=installation_id)
+            for row in store.latest_reviews(
+                repo=repo, installation_id=installation_id, repo_ids=repo_ids
+            )
             if row["pr_meta"]
         ]
     else:
@@ -559,50 +563,132 @@ def queue(
     )
 
 
+MAX_REPOS_PER_MINT = 20   # bounds PAT-side GitHub calls per request
+MAX_MINTS_PER_DAY = 30    # per installation per UTC day; fail-open
+
+
 class TokenRequest(BaseModel):
-    repo: str
+    selection: str | None = None          # "all" | "selected"
+    owner: str | None = None              # required for selection="all"
+    repos: list[str] | None = None        # required for selection="selected"
+    repo: str | None = None               # legacy PR #48 body — one selected repo
+    label: str | None = None
+    expires_in_days: int = 0
 
 
 class TokenResponse(BaseModel):
     token: str
+    token_id: int
     installation_id: int
-    repo: str
+    selection: str
+    repos: list[str]
+    last4: str
+    expires_at: datetime | None
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail="not found")
 
 
 @app.post("/v1/installations/token")
-def dispense_token(
-    body: TokenRequest,
-    x_github_token: str = Header(""),
-) -> TokenResponse:
-    """Mint this installation's API token, proving ownership through GitHub.
+def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> TokenResponse:
+    """Mint a tenant API key, proving authority through GitHub.
 
-    Deliberately public: the proof is the caller's own GitHub credential, so
-    an operator token here would defeat self-service without adding safety.
+    Deliberately public: the proof is the caller's own GitHub credential.
+    PROOF MUST COVER THE SELECTION — org-admin (or the account owner, for a
+    User install) for selection='all'; admin on EVERY named repo for
+    selection='selected'. Every verification or validation failure is the
+    same 404: a caller can never distinguish "exists but refused" from
+    "does not exist".
 
-    Every verification failure renders as 404 — not 403, which would confirm
-    the repo exists, and not a distinct message per cause, which would let a
-    caller separate "private repo I cannot administer" from "repo that does
-    not exist". The token rides in the response body once; only its hash is
-    stored, so this endpoint is also the rotation and lost-token path.
+    Mint APPENDS — it never rotates another key, so this endpoint is no
+    longer a denial-of-service against the tenant's own integration (MT5).
     """
     if not x_github_token:
         raise HTTPException(status_code=401, detail="X-GitHub-Token required")
-    owner, _, name = body.repo.partition("/")
-    # Parse before either GitHub call: a malformed repo cannot be anyone's,
-    # so there is nothing to spend a quota proving.
-    if not owner or not name or "/" in name:
-        raise HTTPException(status_code=404, detail="not found")
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-    installation_id = tenancy.verify_admin(x_github_token, owner, name)
+
+    # Normalize the legacy body before validating anything else.
+    selection, repos, owner = body.selection, body.repos, body.owner
+    if selection is None and body.repo is not None:
+        selection, repos = "selected", [body.repo]
+
+    if not (0 <= body.expires_in_days <= 366):
+        raise _not_found()
+    if body.label is not None and len(body.label) > 100:
+        raise _not_found()
+
+    if selection == "selected":
+        if not repos or len(repos) > MAX_REPOS_PER_MINT:
+            raise _not_found()
+        parsed_repos: list[tuple[str, str]] = []
+        for full in repos:
+            repo_owner, _, name = full.partition("/")
+            if not repo_owner or not name or "/" in name:
+                raise _not_found()
+            parsed_repos.append((repo_owner, name))
+        installation_id = tenancy.verify_repos_admin(x_github_token, parsed_repos)
+    elif selection == "all":
+        if not owner or "/" in owner:
+            raise _not_found()
+        installation_id = tenancy.verify_org_admin(x_github_token, owner)
+    else:
+        raise _not_found()
     if installation_id is None:
-        raise HTTPException(status_code=404, detail="not found")
-    token = tenancy.mint(installation_id)
-    if token is None:
-        # GitHub knows this installation; the ledger does not. Same shape as
-        # every other failure — the caller learns nothing either way.
-        raise HTTPException(status_code=404, detail="not found")
-    return TokenResponse(token=token, installation_id=installation_id, repo=body.repo)
+        raise _not_found()
+
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    minted_today = store.count_installation_tokens_minted_since(installation_id, midnight)
+    if minted_today is not None and minted_today >= MAX_MINTS_PER_DAY:
+        # None means "could not count" and ALLOWS — the cap is fail-open.
+        raise _not_found()
+
+    minted_by = tenancy.caller_login(x_github_token)
+    if minted_by is None:
+        raise _not_found()
+
+    repo_ids: list[int] = []
+    if selection == "selected":
+        by_name = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        # The ledger may lag GitHub (MT0 taught how badly); GitHub already
+        # proved these repos belong to this installation, so a name the
+        # ledger has not heard of yet refuses the mint rather than minting
+        # a key whose junction rows point at nothing.
+        try:
+            repo_ids = [by_name[full] for full in repos]
+        except KeyError as exc:
+            raise _not_found() from exc
+
+    try:
+        minted = tenancy.mint_key(
+            installation_id,
+            repo_selection=selection,
+            repo_ids=repo_ids,
+            label=body.label,
+            expires_in_days=body.expires_in_days,
+            minted_by=minted_by,
+        )
+    except tenancy.KeysNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="token minting not configured") from exc
+    if minted is None:
+        raise _not_found()
+    # The token rides in the response ONCE. This log line is the only other
+    # trace of the mint and carries the id, never the credential.
+    print(
+        f"doug: minted key id={minted.token_id} installation={installation_id} "
+        f"selection={selection} last4={minted.last4} by={minted_by}",
+        file=sys.stderr,
+    )
+    return TokenResponse(
+        token=minted.token,
+        token_id=minted.token_id,
+        installation_id=installation_id,
+        selection=selection,
+        repos=repos if selection == "selected" else [],
+        last4=minted.last4,
+        expires_at=minted.expires_at,
+    )
 
 
 class PatternRow(BaseModel):

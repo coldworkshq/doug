@@ -26,94 +26,69 @@ def _install(installation_id: int = 150424894) -> None:
     store.upsert_installation(installation_id, "drewjst", "User", "active")
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_mint_returns_a_prefixed_token_that_resolves(tmp_path, monkeypatch):
-    _db(tmp_path, monkeypatch)
-    _install()
-    token = tenancy.mint(150424894)
-    assert token is not None
-    assert token.startswith(tenancy.TOKEN_PREFIX)
-    assert tenancy.resolve(token) == 150424894
-
-
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_plaintext_token_is_never_stored(tmp_path, monkeypatch):
-    """The token is unrecoverable by construction, not by policy. If this
-    fails, a ledger dump hands over every tenant's credential."""
-    _db(tmp_path, monkeypatch)
-    _install()
-    token = tenancy.mint(150424894)
-    engine = store._get_engine()
-    with engine.connect() as conn:
-        stored = conn.execute(
-            store.installations.select().with_only_columns(store.installations.c.token_hash)
-        ).scalar_one()
-    assert stored != token
-    assert token not in stored
-
-
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_resolve_rejects_junk_without_touching_storage(tmp_path, monkeypatch):
-    _db(tmp_path, monkeypatch)
-    _install()
-    tenancy.mint(150424894)
+def test_resolve_rejects_junk_without_touching_storage(monkeypatch):
+    """resolve's docstring calls keyformat.parse 'offline parse+CRC (zero
+    I/O)' — junk must die there, before keys_configured() or any lookup.
+    Pinning the mechanism (nothing called), not just the outcome (None),
+    matters here: a flood of garbage tokens must cost pure Python, never a
+    database round trip or a false 'keys not configured' 503."""
+    calls = []
+    monkeypatch.setattr(
+        tenancy, "keys_configured", lambda: calls.append("keys_configured") or True
+    )
+    monkeypatch.setattr(
+        store, "installation_token_by_lookup", lambda lookup: calls.append(lookup) or None
+    )
     assert tenancy.resolve("") is None
     assert tenancy.resolve("not-a-doug-token") is None
-    assert tenancy.resolve(tenancy.TOKEN_PREFIX + "wrong") is None
+    assert tenancy.resolve("doug_live_wrong") is None
+    assert calls == []
 
 
-def _token_hash(engine, installation_id: int) -> str:
-    with engine.connect() as conn:
-        return conn.execute(
-            store.installations.select()
-            .where(store.installations.c.installation_id == installation_id)
-            .with_only_columns(store.installations.c.token_hash)
-        ).scalar_one()
-
-
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_mint_scopes_writes_to_the_named_installation(tmp_path, monkeypatch):
-    """Pins that mint() writes only the row it was asked to.
-
-    `mint`'s UPDATE carries a `.where(installation_id == ...)` clause with no
-    test of its own — delete that clause and every installation would share
-    whichever token was minted last, silently. Nothing else in this file
-    creates two installations, so that break would pass all 207 tests in the
-    touched files even though it hands one tenant's token authority over
-    every other tenant's rows.
+def test_mint_key_scopes_writes_to_the_named_installation(tmp_path, monkeypatch):
+    """Pins that mint_key's INSERT carries the installation_id it was asked
+    to write, not a leftover from a previous call. Nothing else in this file
+    creates two installations, so a mint_key that dropped its installation_id
+    binding would pass every other test here while handing one tenant's key
+    authority to another.
     """
     _db(tmp_path, monkeypatch)
     _install(150424894)
     _install(999999999)
-    engine = store._get_engine()
+    _pepper_env(monkeypatch)
 
-    first = tenancy.mint(150424894)
-    hash_first_before = _token_hash(engine, 150424894)
+    first = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    second = tenancy.mint_key(
+        999999999, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
 
-    second = tenancy.mint(999999999)
-    hash_first_after = _token_hash(engine, 150424894)
-    hash_second = _token_hash(engine, 999999999)
-
-    # Each token resolves to its own installation, not the other's.
-    assert tenancy.resolve(first) == 150424894
-    assert tenancy.resolve(second) == 999999999
-
-    # Minting for the second installation left the first's hash untouched.
-    assert hash_first_after == hash_first_before
-    assert hash_first_after != hash_second
+    # Each key resolves to its own installation, not the other's.
+    assert tenancy.resolve(first.token).installation_id == 150424894
+    assert tenancy.resolve(second.token).installation_id == 999999999
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_mint_refuses_an_installation_that_does_not_exist(tmp_path, monkeypatch):
+def test_mint_key_refuses_an_installation_that_does_not_exist(tmp_path, monkeypatch):
     """No row means Doug was never installed there. Minting anyway would
-    create a token that resolves to an id with no tenancy behind it."""
+    create a key that resolves to an id with no tenancy behind it."""
     _db(tmp_path, monkeypatch)
-    assert tenancy.mint(999) is None
+    _pepper_env(monkeypatch)
+    assert tenancy.mint_key(
+        999, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    ) is None
 
 
 def test_disabled_storage_mints_and_resolves_nothing(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    assert tenancy.mint(150424894) is None
+    _pepper_env(monkeypatch)
+    assert tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    ) is None
     assert tenancy.resolve("doug_anything") is None
 
 
@@ -367,6 +342,24 @@ def test_stranger_matches_neither_login_nor_membership(monkeypatch):
     monkeypatch.setattr(app_auth, "app_client", lambda: _org_app(calls=app_calls))
     assert tenancy.verify_org_admin("ghp_x", "acme") is None
     assert app_calls == []
+
+
+def test_verify_org_admin_logs_why_it_denied_without_leaking_the_pat(monkeypatch, capsys):
+    """Sibling of test_verify_admin_logs_why_it_denied_without_leaking_the_pat
+    for the org-admin membership-check exception path: an operator still
+    needs to tell a GitHub outage from a genuine refusal, and the PAT must
+    never be part of how they learn it."""
+    monkeypatch.setattr(
+        tenancy, "_caller_client",
+        lambda pat: _org_caller(login="mallory", membership_raises=True),
+    )
+
+    assert tenancy.verify_org_admin("ghp_SUPERSECRET", "acme") is None
+
+    err = capsys.readouterr().err
+    assert "acme" in err
+    assert "membership check" in err
+    assert "ghp_SUPERSECRET" not in err, "the PAT must never reach the log"
 
 
 def test_repos_proof_requires_one_installation(monkeypatch):

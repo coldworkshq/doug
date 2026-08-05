@@ -6,9 +6,11 @@ design-lock.md:65 records that the token mint survived the tenant-page cut
 "because its consumers are the API and later MCP" — so verification has to be
 importable without dragging in the web app.
 
-Only sha256(token) is ever persisted. The plaintext is returned once by mint()
-and is unrecoverable afterwards, which makes "we cannot show you that token
-again" a property of the schema rather than a policy someone can relax.
+Only the peppered HMAC-SHA256 of a token's secret half is ever persisted
+(keyformat.py owns the doug_live_ wire format; hash_secret below owns the
+peppering). The plaintext is returned once by mint_key() and is unrecoverable
+afterwards, which makes "we cannot show you that token again" a property of
+the schema rather than a policy someone can relax.
 """
 
 import base64
@@ -16,20 +18,14 @@ import binascii
 import hashlib
 import hmac
 import os
-import secrets
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 from githubkit import GitHub
-from sqlalchemy import update
 
 from . import app_auth, keyformat, store
-
-# Greppable in a leaked-secret sweep, and the shape GitHub's secret scanning
-# would key on if Doug ever registers a pattern.
-TOKEN_PREFIX = "doug_"
 
 
 class KeysNotConfigured(Exception):
@@ -77,33 +73,6 @@ def hash_secret(secret: str, version: int) -> str | None:
 
 def keys_configured() -> bool:
     return _pepper(_current_hash_version()) is not None
-
-
-def _hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
-
-def mint(installation_id: int) -> str | None:
-    """Issue a token for an existing installation. Returns the plaintext
-    exactly once, or None when storage is off or the installation is unknown.
-
-    An UPDATE rather than an upsert on purpose: a token for an installation
-    with no row would resolve to an id that no tenancy backs, so the absence
-    of a row is a refusal, not something to paper over.
-    """
-    engine = store._get_engine()
-    if engine is None:
-        return None
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    with engine.begin() as conn:
-        result = conn.execute(
-            update(store.installations)
-            .where(store.installations.c.installation_id == installation_id)
-            .values(token_hash=_hash(token))
-        )
-    if result.rowcount == 0:
-        return None
-    return token
 
 
 _DUMMY_SECRET = "0" * keyformat.SECRET_LEN

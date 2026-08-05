@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, ingest, store, worker
+from doug import api, app_auth, ingest, store, tenancy, worker
 from doug.api import app
 from doug.models import Band, Reason, Verdict
 
@@ -1769,30 +1770,24 @@ def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
     assert run["head_sha"] is None
 
 
-def _tenancy_ok(monkeypatch, installation_id=150424894):
-    monkeypatch.setattr(api.tenancy, "verify_admin", lambda pat, owner, repo: installation_id)
-
-
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
-def test_dispense_returns_a_token_once(tmp_path, monkeypatch):
+def _api_db(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    store.upsert_installation(150424894, "drewjst", "User", "active")
-    _tenancy_ok(monkeypatch)
-    r = client.post(
-        "/v1/installations/token",
-        json={"repo": "drewjst/doug"},
-        headers={"X-GitHub-Token": "ghp_x"},
+
+
+def _pepper_env(monkeypatch):
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", base64.b64encode(b"p" * 32).decode())
+
+
+def _seed_verdict(*, repo, pr_number, installation_id, github_repo_id=None):
+    store.save_review(
+        repo, pr_number, "reader", VERDICT_FOR_QUEUE,
+        pr_meta={**PR_META, "number": pr_number},
+        installation_id=installation_id, github_repo_id=github_repo_id,
     )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["installation_id"] == 150424894
-    assert body["repo"] == "drewjst/doug"
-    assert body["token"].startswith("doug_")
-    assert api.tenancy.resolve(body["token"]) == 150424894
 
 
 def test_dispense_without_a_github_token_is_401(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    _api_db(tmp_path, monkeypatch)
     r = client.post("/v1/installations/token", json={"repo": "drewjst/doug"})
     assert r.status_code == 401
 
@@ -1800,8 +1795,8 @@ def test_dispense_without_a_github_token_is_401(tmp_path, monkeypatch):
 def test_dispense_hides_every_verification_failure_behind_404(tmp_path, monkeypatch):
     """403 would confirm the repo exists. So would a distinct message for
     'not installed' versus 'not an admin'. One shape for all of them."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    monkeypatch.setattr(api.tenancy, "verify_admin", lambda pat, owner, repo: None)
+    _api_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "verify_admin", lambda pat, owner, repo: None)
     r = client.post(
         "/v1/installations/token",
         json={"repo": "someone/private"},
@@ -1811,14 +1806,14 @@ def test_dispense_hides_every_verification_failure_behind_404(tmp_path, monkeypa
 
 
 def test_dispense_404s_a_malformed_repo_without_calling_github(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    _api_db(tmp_path, monkeypatch)
     calls = []
 
     def _spy(pat, owner, repo):
         calls.append((owner, repo))
         return 150424894
 
-    monkeypatch.setattr(api.tenancy, "verify_admin", _spy)
+    monkeypatch.setattr(tenancy, "verify_admin", _spy)
     for bad in ("doug", "/doug", "drewjst/", ""):
         r = client.post(
             "/v1/installations/token",
@@ -1829,15 +1824,16 @@ def test_dispense_404s_a_malformed_repo_without_calling_github(tmp_path, monkeyp
     assert calls == []
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_dispense_404s_when_verification_passes_but_no_installation_row(tmp_path, monkeypatch):
-    """verify_admin says GitHub knows about the installation but the ledger
-    does not — mint refuses, and so must the endpoint."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    _tenancy_ok(monkeypatch, installation_id=999)
+    """verify_org_admin says GitHub knows about the installation but the
+    ledger does not — mint_key refuses, and so must the endpoint."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 999)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
     r = client.post(
         "/v1/installations/token",
-        json={"repo": "drewjst/doug"},
+        json={"selection": "all", "owner": "drewjst"},
         headers={"X-GitHub-Token": "ghp_x"},
     )
     assert r.status_code == 404
@@ -1853,22 +1849,156 @@ def test_dispense_without_a_ledger_is_503(monkeypatch):
     assert r.status_code == 503
 
 
+def test_dispense_selected_returns_a_key_scoped_to_the_named_repos(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "selected", "repos": ["drewjst/doug"], "label": "ci"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["token"].startswith("doug_live_")
+    assert body["selection"] == "selected"
+    assert body["repos"] == ["drewjst/doug"]
+    ctx = tenancy.resolve(body["token"])
+    assert ctx.repo_ids == frozenset({111})
+
+
+def test_dispense_all_requires_org_admin_proof(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "acme", "Organization", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "all", "owner": "acme"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 404, "failed proof is indistinguishable from absence"
+
+
+def test_dispense_legacy_repo_body_still_mints_a_selected_key(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"repo": "drewjst/doug"},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 200
+    assert r.json()["selection"] == "selected"
+
+
+def test_dispense_never_rotates_an_existing_key(tmp_path, monkeypatch):
+    """The other half of MT5: repeat mints append; the first key keeps
+    resolving. (Replaces test_minting_again_invalidates_the_previous_token,
+    whose behavior was the bug.)"""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    body = {"selection": "all", "owner": "drewjst"}
+    headers = {"X-GitHub-Token": "t"}
+    first = client.post("/v1/installations/token", json=body, headers=headers).json()
+    second = client.post("/v1/installations/token", json=body, headers=headers).json()
+    assert first["token"] != second["token"]
+    assert tenancy.resolve(first["token"]) is not None
+    assert tenancy.resolve(second["token"]) is not None
+
+
+def test_dispense_daily_cap_is_fail_open(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    body = {"selection": "all", "owner": "drewjst"}
+    headers = {"X-GitHub-Token": "t"}
+    # Over the cap → 404 (uniform).
+    monkeypatch.setattr(store, "count_installation_tokens_minted_since", lambda i, s: 30)
+    assert client.post("/v1/installations/token", json=body, headers=headers).status_code == 404
+    # Counter broken → None → allow (fail-open by spec).
+    monkeypatch.setattr(store, "count_installation_tokens_minted_since", lambda i, s: None)
+    assert client.post("/v1/installations/token", json=body, headers=headers).status_code == 200
+
+
+def test_dispense_validation_is_uniform_404(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    headers = {"X-GitHub-Token": "t"}
+    for bad in (
+        {"selection": "all"},                                  # no owner
+        {"selection": "selected", "repos": []},                # empty selection
+        {"selection": "selected", "repos": ["notaslash"]},     # malformed repo
+        {"selection": "selected", "repos": [f"o/r{i}" for i in range(21)]},  # over cap
+        {"selection": "all", "owner": "acme", "expires_in_days": 400},       # out of range
+    ):
+        r = client.post("/v1/installations/token", json=bad, headers=headers)
+        assert r.status_code == 404, bad
+
+
+def test_dispense_without_pepper_is_503(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_TOKEN_PEPPER", raising=False)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "all", "owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 503
+
+
+def test_dispense_response_and_logs_never_carry_the_secret_twice(tmp_path, monkeypatch, capsys):
+    """Show-once: the token appears in the response body and NOWHERE else —
+    not in stderr, where every other diagnostic in this app writes."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "all", "owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    token = r.json()["token"]
+    from doug import keyformat
+    secret = keyformat.parse(token).secret
+    err = capsys.readouterr().err
+    assert token not in err and secret not in err
+
+
 def _tenant(tmp_path, monkeypatch, installation_id=150424894, login="drewjst"):
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    _api_db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    _pepper_env(monkeypatch)
     store.upsert_installation(installation_id, login, "User", "active")
-    return api.tenancy.mint(installation_id)
+    minted = tenancy.mint_key(
+        installation_id, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by=login,
+    )
+    return minted.token
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
     token = _tenant(tmp_path, monkeypatch)
-    store.save_review(
-        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
-    )
-    store.save_review(
-        "someone/else", 2, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=777
-    )
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894)
+    _seed_verdict(repo="someone/else", pr_number=2, installation_id=777)
     r = client.get("/v1/queue", headers={"X-Doug-Token": token})
     assert r.status_code == 200
     # PRMetadata carries no `repo` field, so the returned row is identified by
@@ -1878,23 +2008,17 @@ def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
     assert items[0]["pr"]["url"] == "https://github.com/drewjst/doug/pull/1"
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_operator_token_still_sees_every_row(tmp_path, monkeypatch):
     """No soak regression: doug-web and the dual-run comparison both read
     through this path with the operator token."""
     _tenant(tmp_path, monkeypatch)
-    store.save_review(
-        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
-    )
-    store.save_review(
-        "someone/else", 2, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=777
-    )
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894)
+    _seed_verdict(repo="someone/else", pr_number=2, installation_id=777)
     r = client.get("/v1/queue", headers={"X-Doug-Token": "operator-secret"})
     assert r.status_code == 200
     assert len(r.json()["items"]) == 2
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_cross_tenant_repo_is_404_not_an_empty_list(tmp_path, monkeypatch):
     """The M2 exit gate, pinned. An empty list would be indistinguishable
     from 'no reviews yet', which tells the caller their guess might be a
@@ -1905,27 +2029,46 @@ def test_cross_tenant_repo_is_404_not_an_empty_list(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_in_scope_repo_filters_normally(tmp_path, monkeypatch):
     token = _tenant(tmp_path, monkeypatch)
     store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
-    store.save_review(
-        "drewjst/doug", 1, "reader", VERDICT_FOR_QUEUE, pr_meta=PR_META, installation_id=150424894
-    )
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894)
     r = client.get("/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token})
     assert r.status_code == 200
     assert len(r.json()["items"]) == 1
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_unknown_token_is_401(tmp_path, monkeypatch):
     _tenant(tmp_path, monkeypatch)
     r = client.get("/v1/queue", headers={"X-Doug-Token": "doug_nope"})
     assert r.status_code == 401
 
 
+def test_queue_selected_key_sees_only_its_repos_rows(tmp_path, monkeypatch):
+    """MT1 at read time: a repo-scoped key must not read sibling repos'
+    verdicts even inside its own installation."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator")
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
+    )
+    _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
+    _seed_verdict(repo="drewjst/b", github_repo_id=222, installation_id=150424894, pr_number=2)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    r = client.get("/v1/queue", headers={"x-doug-token": minted.token})
+    assert r.status_code == 200
+    # PRMetadata carries no `repo` field; identify rows by the URL _with_url
+    # back-fills from the ledger's repo + pr_number columns.
+    urls_seen = {item["pr"]["url"] for item in r.json()["items"]}
+    assert urls_seen == {"https://github.com/drewjst/a/pull/1"}
+
+
 @pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read"])
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     """A valid credential pointed at an endpoint that is not theirs learns
     only that there is nothing there — same no-existence-leak rule as a
@@ -1942,20 +2085,22 @@ def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, pat
 
 
 @pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons"])
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_junk_token_is_still_401_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     _tenant(tmp_path, monkeypatch)
     r = client.get(path, headers={"X-Doug-Token": "doug_nope"})
     assert r.status_code == 401
 
 
-@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_queue_without_operator_token_configured_is_503(tmp_path, monkeypatch):
     """A missing operator secret is a deployment misconfiguration and must
     fail loudly, not be masked by tenant traffic that happens to work."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    _api_db(tmp_path, monkeypatch)
     monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
-    token = api.tenancy.mint(150424894)
-    r = client.get("/v1/queue", headers={"X-Doug-Token": token})
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    r = client.get("/v1/queue", headers={"X-Doug-Token": minted.token})
     assert r.status_code == 503

@@ -1683,7 +1683,7 @@ def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
     assert store.comparison_reviews() == []
 
 
-def _scored(repo, pr, installation_id, score=0.5):
+def _scored(repo, pr, installation_id, score=0.5, github_repo_id=None):
     """One verdict row, App-identified or CI-identified (installation None)."""
     return store.save_review(
         repo,
@@ -1692,7 +1692,9 @@ def _scored(repo, pr, installation_id, score=0.5):
         Verdict(score=score, band=Band.FLAGGED, threshold=0.30, reasons=[]),
         pr_meta=_pr().model_dump(),
         installation_id=installation_id,
-        github_repo_id=1 if installation_id else None,
+        github_repo_id=(
+            github_repo_id if github_repo_id is not None else (1 if installation_id else None)
+        ),
         head_sha=("a" * 40) if installation_id else None,
         source="app" if installation_id else "ci",
     )
@@ -1736,6 +1738,16 @@ def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, m
     assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
     assert rows[0]["id"] == app_id
     assert rows[0]["score"] == 0.61
+
+
+def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path, monkeypatch):
+    """A CI row or sibling-repo row must not win max(id) and then vanish —
+    same reasoning as the installation filter above."""
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    _scored("drewjst/b", 2, 150424894, github_repo_id=222)
+    rows = store.latest_reviews(installation_id=150424894, repo_ids={111})
+    assert {r["repo"] for r in rows} == {"drewjst/a"}
 
 
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---

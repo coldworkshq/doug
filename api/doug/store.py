@@ -1206,15 +1206,19 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
 
 
 def latest_reviews(
-    limit: int = 200, repo: str | None = None, installation_id: int | None = None
+    limit: int = 200,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    repo_ids: set[int] | None = None,
 ) -> list[dict]:
     """Most recent verdict per (repo, pr) with findings — the live queue.
 
     `repo` scopes the queue; without it the ledger's every repo mixes
     together, which is an all-repos admin view, not a dashboard.
     `installation_id` scopes the queue to one tenant; without it this is the
-    operator view. Both filters are inside the grouped subquery — see the
-    comment there before moving either.
+    operator view. `repo_ids`, when given, further scopes to a
+    'selected'-selection key's live repo set. All three filters are inside
+    the grouped subquery — see the comment there before moving any of them.
     """
     engine = _get_engine()
     if engine is None:
@@ -1229,6 +1233,11 @@ def latest_reviews(
     scoped = verdicts.c.tier != EXTERNAL_TIER
     if installation_id is not None:
         scoped = scoped & (verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        # Same placement rule as the tenant filter above: INSIDE the grouped
+        # subquery, or an out-of-selection row wins max(id) and its PR
+        # disappears instead of falling back.
+        scoped = scoped & (verdicts.c.github_repo_id.in_(repo_ids))
     latest = (
         select(func.max(verdicts.c.id).label("id"))
         .where(scoped)
