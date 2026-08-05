@@ -44,6 +44,10 @@ setup() {
     | gcloud secrets create doug-api-token --data-file=- --project "$PROJECT" 2>/dev/null \
     || echo "doug-api-token secret exists; leaving it"
 
+  python3 -c "import base64,secrets;print(base64.b64encode(secrets.token_bytes(32)).decode())" \
+    | gcloud secrets create doug-token-pepper --data-file=- --project "$PROJECT" 2>/dev/null \
+    || echo "doug-token-pepper secret exists; leaving it"
+
   STATE=$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT" \
     --format='value(state)' 2>/dev/null || echo CREATING)
   if [ "$STATE" != "RUNNABLE" ]; then
@@ -101,7 +105,7 @@ setup() {
     --member="serviceAccount:$SA" --role=roles/cloudsql.client >/dev/null
 
   for s in doug-database-url doug-api-token doug-anthropic-key \
-           doug-webhook-secret doug-github-app-key; do
+           doug-webhook-secret doug-github-app-key doug-token-pepper; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -230,7 +234,7 @@ deploy() {
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest" \
     --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
