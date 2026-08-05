@@ -187,6 +187,22 @@ per the table above). Dropped findings leave `risk_score` alone and add a
 weight-0 `settled-missing-import` reason so a flagged empty-finding check run
 is not silent.
 
+The same rule now also covers the **unmigrated-column** / **schema-dependency**
+class — 5/5 disproved across PRs 25, 30 (twice) and 48 (twice), see "No
+migration for this column…" and "Your disposition is invisible…" above.
+`doug/settle.py`'s `drop_disproved_schema_findings` asks the live database
+(`store.columns_of`, `inspect(engine).get_columns(...)`) rather than
+re-reading migrations.py's diff-touched versions, because that is the check
+that actually settled every one of the five — `installations.token_hash`
+never appears in any migration at all; it shipped with its table via
+`create_all()`. Same weight-0 notice pattern, rule `settled-schema-dependency`.
+Deliberately narrow in the same place missing-import is: a claim about a
+whole *new table* (not a column on an existing one) is not settled by this
+check — a brand-new table introduced by the diff under review is correctly
+absent from the live schema, and its disproof is migrations.py's own
+convention (new tables arrive via `create_all()`, never a migration), not a
+schema lookup.
+
 `layer` is `doug` or `agent-reviewer` — the two layers this file exists to track, kept
 separable so one never speaks for the other. `verdict` is `real | disproved | adjacent`.
 

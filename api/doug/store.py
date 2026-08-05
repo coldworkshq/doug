@@ -36,6 +36,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
     select,
     update,
 )
@@ -346,6 +347,26 @@ def _get_engine():
 
 def enabled() -> bool:
     return _get_engine() is not None
+
+
+def columns_of(table: str) -> frozenset[str] | None:
+    """Column names actually present on `table` in the connected database.
+
+    Ground truth for settle.py's schema-dependency filter (REVIEWING.md
+    resolution rule): the live schema, not migrations.py's text and not
+    this module's Table() declarations, which is the distinction that
+    matters — a database can lag either at any point in a rollout. None
+    means "cannot tell" (no DATABASE_URL, or the table does not exist
+    there yet), and settle.py treats that as "keep the finding," never as
+    "the column is absent."
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return None
+    return frozenset(c["name"] for c in inspector.get_columns(table))
 
 
 # Postgres names the constraint; sqlite lists the indexed columns (measured

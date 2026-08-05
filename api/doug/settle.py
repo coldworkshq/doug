@@ -12,6 +12,25 @@ exist, `from x import Y` when Y is absent, getattr. Those must not be
 settled by a coarse "name appears in the AST" check. So this module only
 counts Import / ImportFrom outside `if TYPE_CHECKING:` blocks, and only for
 the missing-import finding class — not undefined-name / use-before-assign.
+
+Second class, same rule, different ground truth: REVIEWING.md ("No migration
+for this column…", "Your disposition is invisible…") logs the
+unmigrated-column / schema-dependency finding class at 5/5 disproved across
+PRs 25, 30 (twice) and 48 (twice) — a claim that a column has no migration,
+settled by re-reading the diff's own touched migration versions rather than
+the two things that actually decide it: the full `MIGRATIONS` history, and
+the live schema. `docs/findings-log.jsonl` calls this the same shape as
+missing-import: an absence provable only from data the model was never
+given. `drop_disproved_schema_findings` asks the live database instead of
+migrations.py, because that is the check REVIEWING.md says "should have come
+first" (`installations.token_hash` shipped with its table via `create_all()`
+and never appears in any migration) — it does not need to know *why* a
+column exists, only whether it does. Out of scope, same discipline as
+TYPE_CHECKING above: a claim that a whole *table* is unmigrated. A brand-new
+table introduced by the very diff under review is correctly absent from the
+live schema — the disproof there is migrations.py's own convention (new
+tables arrive via `create_all()`, never a migration), not the live schema,
+and settling that would need a different check than this one.
 """
 
 from __future__ import annotations
@@ -31,6 +50,22 @@ _IMPORT_SLUGS = frozenset(
 
 _NAME_IN_BACKTICKS = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
 _IMPORT_WORD = re.compile(r"\bimport\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+_SCHEMA_SLUGS = frozenset(
+    {
+        "unmigrated-column",
+        "missing-migration",
+        "missing-migration-dependency",
+        "schema-dependency",
+    }
+)
+
+# `table.column`, backticked or bare — how every disproved instance in
+# findings-log.jsonl actually phrased the claim (`installations.token_hash`,
+# `verdicts.head_sha`, `verdicts.prompt_hash`). A bare table name with no
+# dot (the whole-new-table shape) deliberately does not match — see the
+# module docstring.
+_TABLE_DOT_COLUMN = re.compile(r"`?([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)`?")
 
 
 def looks_like_missing_import_finding(f: ReaderFinding) -> bool:
@@ -167,3 +202,84 @@ def settle_many(
     rv = ReaderVerdict(risk_score=0, rationale="", findings=list(findings))
     kept, _ = drop_disproved_import_findings(rv, resolve_file)
     return list(kept.findings)
+
+
+def looks_like_schema_dependency_finding(f: ReaderFinding) -> bool:
+    slug = f.category_slug.lower().removeprefix("reader:")
+    if slug in _SCHEMA_SLUGS:
+        return True
+    desc = f.description.lower()
+    return "migrat" in desc and any(
+        w in desc for w in ("missing", "no migration", "not migrated", "unmigrated")
+    )
+
+
+def claimed_columns(f: ReaderFinding) -> list[tuple[str, str]]:
+    """(table, column) pairs the finding asserts are not in the schema.
+
+    A bare table name with no `.column` (the whole-new-table shape) yields
+    nothing — see the module docstring for why that claim needs a different
+    check. Empty ⇒ we cannot settle it.
+    """
+    return list(dict.fromkeys(_TABLE_DOT_COLUMN.findall(f.description)))
+
+
+ResolveSchema = Callable[[str], "frozenset[str] | None"]
+
+
+def is_disproved_by_schema(f: ReaderFinding, resolve_schema: ResolveSchema) -> bool:
+    """True when every claimed (table, column) already exists in the live schema.
+
+    `resolve_schema(table)` returns None for "cannot tell" — table not
+    found, or no database configured — and None must never read as "absent";
+    the finding stays live until something can actually confirm the column
+    is not there.
+    """
+    pairs = claimed_columns(f)
+    if not pairs:
+        return False
+    for table, column in pairs:
+        columns = resolve_schema(table)
+        if columns is None or column not in columns:
+            return False
+    return True
+
+
+def drop_disproved_schema_findings(
+    rv: ReaderVerdict,
+    resolve_schema: ResolveSchema,
+) -> tuple[ReaderVerdict, list[ReaderFinding]]:
+    """Same contract as drop_disproved_import_findings, for the schema class.
+
+    risk_score is left alone for the same reason: the frozen instrument's
+    score is not ours to rewrite.
+    """
+    kept: list[ReaderFinding] = []
+    dropped: list[ReaderFinding] = []
+    for f in rv.findings:
+        if not looks_like_schema_dependency_finding(f):
+            kept.append(f)
+            continue
+        if is_disproved_by_schema(f, resolve_schema):
+            dropped.append(f)
+            continue
+        kept.append(f)
+    if not dropped:
+        return rv, []
+    return rv.model_copy(update={"findings": kept}), dropped
+
+
+def schema_settlement_notice(dropped: list[ReaderFinding]):
+    """Weight-0 reason so a score-flagged, findings-empty verdict stays honest."""
+    from .models import Reason
+
+    if not dropped:
+        return None
+    labels = "; ".join(
+        f"{d.file}: {d.category_slug} ({claimed_columns(d) or ['?']})" for d in dropped
+    )
+    return Reason(
+        rule="settled-schema-dependency",
+        label=f"Dropped {len(dropped)} finding(s) disproved by the live schema — {labels}",
+        weight=0.0,
+    )
