@@ -180,10 +180,6 @@ installations = Table(
     Column("account_type", String(20)),  # User | Organization
     Column("state", String(20), nullable=False),  # active | suspended | deleted
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    # M2's token-dispense endpoint mints an installation token and writes its
-    # hash here — never the token itself. NULL until then; this table is new
-    # on this branch, so the column ships with it rather than a migration.
-    Column("token_hash", Text),
 )
 
 installation_repos = Table(
@@ -196,6 +192,42 @@ installation_repos = Table(
     Column("state", String(20), nullable=False),  # active | removed
     Column("updated_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
+)
+
+# Tenant API keys (spec 2026-08-04). Multiple keys per installation; each
+# frozen to a repo selection at mint and intersected against the LIVE ledger
+# at resolve — installations.state and installation_repos.state are the
+# authority, these rows are the claim. Repo ids only: full_name is display
+# everywhere (the MT4 lesson, baked into the schema).
+installation_tokens = Table(
+    "installation_tokens",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False, index=True),
+    # Plaintext on purpose: the lookup is a key ID, not a secret — O(1)
+    # btree resolve, safe in logs and list output. The SECRET is what
+    # token_hash covers, and it is never stored in any form but the HMAC.
+    Column("token_lookup", String(8), nullable=False, unique=True),
+    Column("token_hash", Text, nullable=False),
+    Column("hash_version", Integer, nullable=False, server_default="1"),
+    Column("last4", String(4), nullable=False),
+    Column("label", String(100)),
+    Column("repo_selection", String(10), nullable=False),  # all | selected
+    Column("scopes", JSON, nullable=False),
+    Column("minted_by", String(200), nullable=False),  # audit only, never authority
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True)),  # NULL = durable
+    Column("revoked_at", DateTime(timezone=True)),  # soft revoke; rows never deleted
+    Column("last_used_at", DateTime(timezone=True)),
+)
+
+installation_token_repos = Table(
+    "installation_token_repos",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("token_id", Integer, nullable=False, index=True),
+    Column("github_repo_id", BigInteger, nullable=False),
+    UniqueConstraint("token_id", "github_repo_id", name="uq_installation_token_repo"),
 )
 
 # The durable gap between a delivery and a review. The unique constraint is
@@ -1262,6 +1294,171 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def _utc(dt):
+    """sqlite hands back naive datetimes for DateTime(timezone=True) columns;
+    every stored value is UTC, so naive means 'UTC, badly labelled'."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def insert_installation_token(
+    installation_id: int,
+    *,
+    token_lookup: str,
+    token_hash: str,
+    hash_version: int,
+    last4: str,
+    label: str | None,
+    repo_selection: str,
+    scopes: list[str],
+    minted_by: str,
+    expires_at: datetime | None,
+) -> int | None:
+    """A new key row, appended — NEVER an update of an existing one. Returns
+    None when storage is off or the installation has no row (no row means
+    Doug was never installed there; the absence is a refusal)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.begin() as conn:
+        known = conn.execute(
+            select(installations.c.id).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+        if known is None:
+            return None
+        return conn.execute(
+            installation_tokens.insert().returning(installation_tokens.c.id),
+            {
+                "installation_id": installation_id,
+                "token_lookup": token_lookup,
+                "token_hash": token_hash,
+                "hash_version": hash_version,
+                "last4": last4,
+                "label": label,
+                "repo_selection": repo_selection,
+                "scopes": scopes,
+                "minted_by": minted_by,
+                "created_at": datetime.now(UTC),
+                "expires_at": expires_at,
+            },
+        ).scalar_one()
+
+
+def set_installation_token_repos(token_id: int, repo_ids: list[int]) -> None:
+    engine = _get_engine()
+    if engine is None or not repo_ids:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            installation_token_repos.insert(),
+            [{"token_id": token_id, "github_repo_id": rid} for rid in repo_ids],
+        )
+
+
+def installation_token_by_lookup(token_lookup: str) -> dict | None:
+    """The key row plus the LIVE installation state, in one query. The JOIN
+    (not a LEFT JOIN) makes a key whose installation row is missing resolve
+    to nothing — fail closed, same direction as everything else here."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    installation_tokens,
+                    installations.c.state.label("installation_state"),
+                )
+                .join(
+                    installations,
+                    installations.c.installation_id
+                    == installation_tokens.c.installation_id,
+                )
+                .where(installation_tokens.c.token_lookup == token_lookup)
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    out = dict(row)
+    out["expires_at"] = _utc(out["expires_at"])
+    out["revoked_at"] = _utc(out["revoked_at"])
+    out["last_used_at"] = _utc(out["last_used_at"])
+    return out
+
+
+def installation_token_repo_ids(token_id: int) -> set[int]:
+    engine = _get_engine()
+    if engine is None:
+        return set()
+    with engine.connect() as conn:
+        return {
+            int(r.github_repo_id)
+            for r in conn.execute(
+                select(installation_token_repos.c.github_repo_id).where(
+                    installation_token_repos.c.token_id == token_id
+                )
+            )
+        }
+
+
+def count_installation_tokens_minted_since(
+    installation_id: int, since: datetime
+) -> int | None:
+    """None on ANY failure, including storage-off. The daily mint cap is
+    fail-open by spec: a counting error must log-and-allow at the caller,
+    never refuse a legitimate mint because a SELECT hiccuped."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        from sqlalchemy import func
+
+        with engine.connect() as conn:
+            return int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(installation_tokens)
+                    .where(
+                        (installation_tokens.c.installation_id == installation_id)
+                        & (installation_tokens.c.created_at >= since)
+                    )
+                ).scalar_one()
+            )
+    except Exception:  # noqa: BLE001 — fail-open is the contract
+        return None
+
+
+def touch_installation_token_last_used(token_id: int) -> None:
+    """Best-effort convenience timestamp, throttled to one write per key per
+    60s. Deliberately NOT part of the resolve contract: a failure here must
+    never fail a request, and the throttle keeps the hot path from writing
+    on every call."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    try:
+        now = datetime.now(UTC)
+        with engine.begin() as conn:
+            conn.execute(
+                update(installation_tokens)
+                .where(
+                    (installation_tokens.c.id == token_id)
+                    & (
+                        (installation_tokens.c.last_used_at.is_(None))
+                        | (installation_tokens.c.last_used_at < now - timedelta(seconds=60))
+                    )
+                )
+                .values(last_used_at=now)
+            )
+    except Exception:  # noqa: BLE001 — convenience, not audit
+        pass
 
 
 def comparison_reviews(

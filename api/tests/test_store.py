@@ -1747,3 +1747,120 @@ def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, m
     assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
     assert rows[0]["id"] == app_id
     assert rows[0]["score"] == 0.61
+
+
+# --- installation_tokens (tenant API keys spec, 2026-08-04) ---
+from datetime import UTC, datetime, timedelta
+
+
+def _seed_install(installation_id=150424894):
+    store.upsert_installation(installation_id, "drewjst", "User", "active")
+
+
+def test_insert_installation_token_requires_an_installation_row(tmp_path, monkeypatch):
+    """No installations row means Doug was never installed there — a key
+    minted anyway would resolve to an id no tenancy backs (PR #48 semantics,
+    kept)."""
+    _db(tmp_path, monkeypatch)
+    assert (
+        store.insert_installation_token(
+            999,
+            token_lookup="AAAAAAAA",
+            token_hash="ab" * 32,
+            hash_version=1,
+            last4="wxyz",
+            label=None,
+            repo_selection="all",
+            scopes=["queue:read"],
+            minted_by="drewjst",
+            expires_at=None,
+        )
+        is None
+    )
+
+
+def test_token_row_round_trips_with_installation_state(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    token_id = store.insert_installation_token(
+        150424894,
+        token_lookup="AAAAAAAA",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label="ci",
+        repo_selection="selected",
+        scopes=["queue:read"],
+        minted_by="drewjst",
+        expires_at=datetime.now(UTC) + timedelta(days=90),
+    )
+    assert isinstance(token_id, int)
+    store.set_installation_token_repos(token_id, [111, 222])
+    row = store.installation_token_by_lookup("AAAAAAAA")
+    assert row["id"] == token_id
+    assert row["installation_state"] == "active"
+    assert row["repo_selection"] == "selected"
+    assert row["hash_version"] == 1
+    assert row["expires_at"].tzinfo is not None, "sqlite naive datetimes must be normalized"
+    assert store.installation_token_repo_ids(token_id) == {111, 222}
+    assert store.installation_token_by_lookup("NOPENOPE") is None
+
+
+def test_second_token_does_not_disturb_the_first(tmp_path, monkeypatch):
+    """Mint appends. The single-column model's silent rotation was half of
+    MT5; two rows must coexist."""
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    b = store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    assert a != b
+    assert store.installation_token_by_lookup("AAAAAAAA")["id"] == a
+    assert store.installation_token_by_lookup("BBBBBBBB")["id"] == b
+
+
+def test_mint_count_since_counts_only_this_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install(150424894)
+    _seed_install(999999999)
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    store.insert_installation_token(999999999, token_lookup="BBBBBBBB", **kw)
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    assert store.count_installation_tokens_minted_since(150424894, midnight) == 1
+
+
+def test_mint_count_returns_none_when_storage_off(monkeypatch):
+    """None, not 0: the caller treats None as 'cannot count' and allows —
+    the cap is fail-open by spec."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.count_installation_tokens_minted_since(150424894, datetime.now(UTC)) is None
+
+
+def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
+    """Fresh DB: create_all builds installations WITHOUT token_hash, so the
+    DROP finds its work done and must not raise (the 'satisfied, not failed'
+    rule). Legacy DB: the column exists and is dropped."""
+    from sqlalchemy import create_engine, inspect
+    from doug import migrations
+
+    _db(tmp_path, monkeypatch)
+    store._get_engine()  # create_all + apply on the fresh path — must not raise
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
+    migrations.apply(engine)
+    assert "token_hash" not in {c["name"] for c in inspect(engine).get_columns("installations")}

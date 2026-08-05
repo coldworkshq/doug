@@ -187,6 +187,25 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "WHERE installation_id IS NOT NULL AND tier <> 'external'",
         ),
     ),
+    (
+        6,
+        (
+            # Tenant API keys (spec 2026-08-04): the single-column credential
+            # moves to the installation_tokens table (a NEW table, so
+            # create_all owns it — no DDL for it here). The only change an
+            # EXISTING table needs is dropping the retired column. No data
+            # migrates: no dispensed token exists in any environment (MT0
+            # meant prod dispense 404'd from the day it shipped).
+            #
+            # On a fresh database create_all() has already built
+            # installations WITHOUT token_hash, so this DROP finds its work
+            # done and lands in _SATISFIED's third marker below. The table
+            # itself always exists by the time apply() runs (create_all made
+            # it), so this is never the ALTER-on-missing-TABLE crash-loop
+            # PR #48 reverted.
+            "ALTER TABLE installations DROP COLUMN token_hash",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows
@@ -197,7 +216,11 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
 # correct by filtering on real installation ids rather than by excluding a
 # label after the fact.
 
-_SATISFIED = ("duplicate column name", "already exists")
+# "no such column" is sqlite's voice for a DROP COLUMN whose work is already
+# done; "does not exist" is Postgres's. Both only ever reach _run from a
+# statement in MIGRATIONS, so the blast radius of the broad Postgres string
+# is our own migration list, not arbitrary DDL.
+_SATISFIED = ("duplicate column name", "already exists", "no such column", "does not exist")
 
 
 def _run(engine, statement: str) -> None:
