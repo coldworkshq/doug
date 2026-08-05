@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import threading
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
 
@@ -16,7 +16,7 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, review, store, tenancy, worker
+from . import __version__, app_auth, ingest, precision, reader, store, tenancy, worker
 from .models import (
     Band,
     PRMetadata,
@@ -156,233 +156,6 @@ def score_pr(pr: PRMetadata) -> Verdict:
     return score(pr)
 
 
-class ReviewRequest(BaseModel):
-    repo: str  # owner/name
-    pr_number: int
-    # A deliberate rescore of an already-recorded commit. Without it, a
-    # repeat request for the same head sha replays the recorded verdict.
-    force: bool = False
-
-
-class ReviewResponse(Verdict):
-    """The risk verdict, plus the intent tier when it ran.
-
-    Subclasses Verdict so the wire shape stays a superset: existing CI
-    workflows parse band/score/threshold/reasons at the top level and keep
-    working untouched. `deviations` is absent-or-empty for every repo that
-    keeps no decision records, which is most of them.
-    """
-
-    deviations: list[reader.DeviationFinding] = []
-    intent_alignment: int | None = None
-    intent_refs: list[str] = []
-    # read_with_decisions truncates the same diff at the same DIFF_BUDGET as
-    # the risk read; set whenever that read ran partial, so a client
-    # rendering `deviations` alone still knows to hedge them.
-    intent_notice: str | None = None
-
-
-@app.post("/v1/review")
-def review_pr(
-    req: ReviewRequest,
-    x_doug_token: str = Header(""),
-    x_github_token: str = Header(""),
-) -> ReviewResponse:
-    """CI-facing review: fetch the PR, score through the reader tier, persist.
-
-    Auth is a shared token (DOUG_API_TOKEN); the GitHub token arrives
-    per-request from the caller's CI so this service holds no repo
-    credentials of its own. Unconfigured deployments refuse rather than
-    run open.
-    """
-    expected = os.environ.get("DOUG_API_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
-    if not hmac.compare_digest(x_doug_token, expected):
-        raise HTTPException(status_code=401, detail="bad token")
-    try:
-        owner, name = req.repo.split("/", 1)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail="repo must be owner/name") from e
-
-    from githubkit import GitHub
-
-    gh = GitHub(x_github_token or None)
-    meta, diff = review.fetch_pr(gh, owner, name, req.pr_number)
-
-    # Idempotency: a webhook redelivery or retried CI job for a commit this
-    # ledger has already scored replays the recorded verdict — no second
-    # paid read, no duplicate row for precision to double-count.
-    if meta.head_sha and not req.force:
-        # A read takes tens of seconds, so "already scored?" then "score"
-        # is a wide-open check-then-act: two overlapping deliveries would
-        # both miss the lookup and both pay. Serialise per (repo, pr, sha)
-        # so the duplicate waits, then replays. In-process only — a
-        # cross-instance duplicate stays possible and tolerated (consumers
-        # key off max(verdict id)); a DB unique index isn't available
-        # because create_all never alters live tables.
-        with _inflight_review(req.repo, req.pr_number, meta.head_sha):
-            if (replay := _replay_or_none(req, meta)) is not None:
-                return replay
-            return _score_and_persist(req, gh, owner, name, meta, diff)
-    return _score_and_persist(req, gh, owner, name, meta, diff)
-
-
-_inflight_guard = threading.Lock()
-_inflight_locks: dict[tuple[str, int, str], threading.Lock] = {}
-
-
-@contextmanager
-def _inflight_review(repo: str, pr_number: int, head_sha: str):
-    key = (repo, pr_number, head_sha)
-    with _inflight_guard:
-        lock = _inflight_locks.setdefault(key, threading.Lock())
-    try:
-        with lock:
-            yield
-    finally:
-        # Dropped after release, not refcounted: a waiter already holding this
-        # lock object proceeds fine, and by the time a third request misses the
-        # dict the verdict is durable, so its find_review hits. finally so an
-        # exception inside the body cannot leak the dict entry forever.
-        with _inflight_guard:
-            _inflight_locks.pop(key, None)
-
-
-def _replay_or_none(req: ReviewRequest, meta: PRMetadata) -> ReviewResponse | None:
-    """The recorded verdict for this exact commit, or None to score fresh.
-
-    Any lookup failure falls through to a fresh score: the worst case of a
-    broken dedup read is one duplicate, never a failed CI.
-    """
-    try:
-        prior = store.find_review(req.repo, req.pr_number, meta.head_sha)
-    except Exception:  # noqa: BLE001
-        prior = None
-    if prior is None:
-        return None
-    reasons = [Reason(**r) for r in prior["reasons"]]
-    reasons.append(
-        Reason(
-            rule="idempotent-replay",
-            label=(
-                f"Verdict for {meta.head_sha[:12]} was already recorded; "
-                "replayed without a new read. POST force=true to rescore."
-            ),
-            weight=0.0,
-        )
-    )
-    # intent_notice exists so a client rendering deviations alone knows the
-    # read behind them was partial. Both reads truncate the same diff at the
-    # same DIFF_BUDGET, so the stored risk-read coverage is also the intent
-    # read's — replaying without this hedge would make truncated deviation
-    # findings look complete on the second delivery of the same commit.
-    intent_notice = None
-    if prior["intent_alignment"] is not None and prior["coverage"] is not None:
-        notice = reader.truncation_reason(reader.Coverage(**prior["coverage"]))
-        intent_notice = notice.label if notice else None
-    return ReviewResponse(
-        score=prior["score"],
-        band=Band(prior["band"]),
-        threshold=prior["threshold"],
-        reasons=reasons,
-        deviations=[reader.DeviationFinding(**d) for d in prior["deviations"]],
-        intent_alignment=prior["intent_alignment"],
-        intent_refs=prior["intent_refs"],
-        intent_notice=intent_notice,
-    )
-
-
-def _score_and_persist(
-    req: ReviewRequest, gh, owner: str, name: str, meta: PRMetadata, diff: str
-) -> ReviewResponse:
-    # This path carries no tenancy at all — the caller authenticates with a
-    # shared CI token, not an installation — so its reads charge the shared
-    # sentinel scope. Its own ceiling, deliberately: the CI path is
-    # dual-running against the App path as the soak comparison right now,
-    # and must not spend the dogfood installation's budget doing it. Dies
-    # with this endpoint at Task 9.
-    # head_sha is None only on odd harvest fixtures; without it we cannot
-    # pin the file body to the commit under review, so settlement no-ops.
-    resolve = None
-    if meta.head_sha:
-        sha = meta.head_sha
-
-        def resolve(path: str, _sha: str = sha) -> str | None:
-            return review.head_file_text(gh, owner, name, _sha, path)
-
-    tier, verdict, rv, cov = review.score_one(
-        meta,
-        diff,
-        scope=reader.SENTINEL_SCOPE,
-        resolve_file=resolve,
-        resolve_schema=store.columns_of,
-    )
-    intent_result = review.read_intent(
-        gh, owner, name, meta, diff, scope=reader.SENTINEL_SCOPE
-    )
-    intent_read: review.IntentRead | None
-    if isinstance(intent_result, review.IntentFailure):
-        # Weight 0: advisory signal only. Band/score stay the risk tier's
-        # (ADR-0007). Distinct from None so a broken intent path is visible,
-        # and `rule` distinguishes a broken read from an exhausted budget.
-        verdict.reasons.append(
-            Reason(
-                rule=intent_result.rule,
-                label=intent_result.detail,
-                weight=0.0,
-            )
-        )
-        intent_read = None
-    else:
-        intent_read = intent_result
-
-    # save_review commits the verdict, its findings, and (when given) its
-    # coverage row together — coverage is passed in rather than written by a
-    # follow-up save_read() call, so it can never be the thing that
-    # succeeds-then-silently-vanishes if this request dies mid-write.
-    #
-    # save_deviations is a genuinely separate write (ADR-0007), so it keeps
-    # its own try: if save_review lands but save_deviations doesn't, the
-    # verdict this response describes really is durable, and calling that
-    # "ledger-unavailable" would be false.
-    verdict_id = None
-    try:
-        verdict_id = store.save_review(
-            req.repo, req.pr_number, tier, verdict, rv,
-            model=reader.MODEL if tier == "reader" else None,
-            pr_meta=meta.model_dump(mode="json"),
-            coverage=cov,
-            prompt_hash=reader.PROMPT_HASH if tier == "reader" else None,
-            head_sha=meta.head_sha,
-        )
-    except Exception as e:  # noqa: BLE001 — a down ledger must not fail CI
-        verdict.reasons.append(
-            Reason(rule="ledger-unavailable", label=str(e)[:200], weight=0.0)
-        )
-    else:
-        if intent_read is not None:
-            try:
-                store.save_deviations(
-                    verdict_id, intent_read.findings,
-                    intent_read.refs, intent_read.alignment,
-                )
-            except Exception as e:  # noqa: BLE001 — the verdict is already saved
-                verdict.reasons.append(
-                    Reason(rule="deviations-unrecorded", label=str(e)[:200], weight=0.0)
-                )
-
-    intent_notice = (
-        reader.truncation_reason(intent_read.coverage) if intent_read else None
-    )
-    return ReviewResponse(
-        **verdict.model_dump(),
-        deviations=intent_read.findings if intent_read else [],
-        intent_alignment=intent_read.alignment if intent_read else None,
-        intent_refs=intent_read.refs if intent_read else [],
-        intent_notice=intent_notice.label if intent_notice else None,
-    )
-
 
 @app.post("/v1/score/read")
 def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verdict:
@@ -397,7 +170,7 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     A failed read never 500s — it falls back to the deterministic verdict
     and says so in the reasons, because a silent downgrade would corrupt
     any calibration built on this endpoint's output. A partial read is not
-    a failure — it returns a verdict, same as /v1/review's score_one path —
+    a failure — it returns a verdict, same as the worker's score_one path —
     but it gets the same read-truncated reason so a caller of this endpoint
     isn't the one path left unable to tell a whole read from part of one.
 
@@ -407,10 +180,9 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
     the CI review path rather than any customer's budget.
     """
     # The shared gate lives in _operator_only below; this route is one of
-    # its callers. /v1/review still carries the last inline copy of this
-    # check — Task 9 deletes that route outright, and that deletion is what
-    # retires the last inline copy rather than an extraction into this
-    # helper.
+    # its callers. Task 9 (2026-08-05) deleted /v1/review, which carried the
+    # last inline copy of this check — every operator route goes through the
+    # shared gate now.
     _operator_only(x_doug_token)
     if not reader.enabled():
         return score(req.pr)
@@ -873,7 +645,7 @@ def patterns_precision(
 ) -> PatternsResponse:
     """Per-pattern precision from the findings x outcomes join.
 
-    Token-gated on the same shared secret as /v1/review: this is the
+    Token-gated on the operator's shared secret: this is the
     unpublished half of the evidence base, and the caveat travels in the
     response body so a number cannot be lifted out of it by accident.
     """

@@ -34,7 +34,7 @@ class PRMetadata(BaseModel):
     files_added: int | None = None
     files_modified: int | None = None
     url: str | None = None
-    # Head commit as fetched — the identity /v1/review dedups repeats on.
+    # Head commit as fetched — the identity review paths dedup repeats on.
     # None = not fetched (old caches, direct /v1/score callers); a review
     # without it is simply never treated as a repeat.
     head_sha: str | None = None

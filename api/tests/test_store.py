@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 
-from doug import reader, review, store
+from doug import reader, store
 from doug.api import app
 from doug.models import Band, PRMetadata, Reason, Verdict
 
@@ -136,74 +136,6 @@ def _pr() -> PRMetadata:
     return PRMetadata.model_validate(
         dict(number=7, title="Add cache", author="dev", files=["cache.py"])
     )
-
-
-def test_review_endpoint_requires_configuration(monkeypatch):
-    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
-    r = TestClient(app).post("/v1/review", json={"repo": "o/r", "pr_number": 7})
-    assert r.status_code == 503
-
-
-def test_review_endpoint_rejects_bad_token(monkeypatch):
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    r = TestClient(app).post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "wrong"},
-    )
-    assert r.status_code == 401
-
-
-def test_review_endpoint_scores_and_persists(tmp_path, monkeypatch):
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
-    r = TestClient(app).post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "secret", "x-github-token": "gh"},
-    )
-    assert r.status_code == 200
-    assert r.json()["band"] in ("cleared", "flagged")
-    engine = create_engine(url)
-    with engine.connect() as conn:
-        v = conn.execute(select(store.verdicts)).mappings().one()
-        assert v["tier"] == "deterministic" and v["pr_number"] == 7
-
-
-def test_review_endpoint_stamps_the_prompt_hash_on_reader_tier_verdicts(tmp_path, monkeypatch):
-    """The anchor a receipt points at to say 'this verdict used this exact
-    prompt' has to actually be written by the live path, not just
-    plumbed through save_review and left uncalled."""
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.setenv("DOUG_READER", "1")
-    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
-    monkeypatch.setattr(reader, "read_diff", lambda pr, diff, **_: RV)
-    TestClient(app).post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "secret", "x-github-token": "gh"},
-    )
-    with create_engine(url).connect() as conn:
-        v = conn.execute(select(store.verdicts)).mappings().one()
-    assert v["tier"] == "reader"
-    assert v["prompt_hash"] == reader.PROMPT_HASH
-
-
-def test_review_endpoint_leaves_prompt_hash_null_on_the_deterministic_tier(tmp_path, monkeypatch):
-    """The deterministic tier never opens the diff, so stamping a prompt
-    hash on it would claim an instrument that was never actually run."""
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
-    TestClient(app).post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "secret", "x-github-token": "gh"},
-    )
-    with create_engine(url).connect() as conn:
-        v = conn.execute(select(store.verdicts)).mappings().one()
-    assert v["tier"] == "deterministic"
-    assert v["prompt_hash"] is None
 
 
 def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
@@ -487,152 +419,6 @@ def _pr_with_sha(sha="a" * 40) -> PRMetadata:
     )
 
 
-def test_review_repeat_for_same_commit_replays_without_a_second_row(tmp_path, monkeypatch):
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
-    scored = []
-    real_score_one = review.score_one
-    monkeypatch.setattr(
-        review,
-        "score_one",
-        lambda meta, diff, **kw: scored.append(1) or real_score_one(meta, diff, **kw),
-    )
-
-    c = TestClient(app)
-    first = c.post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "secret"},
-    ).json()
-    with create_engine(url).connect() as conn:
-        written = conn.execute(select(store.verdicts.c.head_sha)).scalar_one()
-    assert written == "a" * 40
-    second = c.post(
-        "/v1/review", json={"repo": "o/r", "pr_number": 7},
-        headers={"x-doug-token": "secret"},
-    ).json()
-
-    assert len(scored) == 1, "the repeat must not score (or pay for a read) again"
-    assert second["band"] == first["band"] and second["score"] == first["score"]
-    assert any(r["rule"] == "idempotent-replay" for r in second["reasons"])
-    assert not any(r["rule"] == "idempotent-replay" for r in first["reasons"])
-    engine = create_engine(url)
-    with engine.connect() as conn:
-        assert len(conn.execute(select(store.verdicts)).all()) == 1
-
-
-def test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict(
-    tmp_path, monkeypatch
-):
-    """App and CI are independent soak instruments for the same commit.
-
-    Replaying an App verdict into /v1/review suppresses the entire CI side, so
-    the comparison falsely reports a missing baseline even though CI ran.
-    """
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    sha = "c" * 40
-    app_id = store.save_review(
-        "o/r",
-        7,
-        "reader",
-        VERDICT,
-        RV,
-        pr_meta=_pr_with_sha(sha).model_dump(mode="json"),
-        installation_id=10,
-        github_repo_id=20,
-        head_sha=sha,
-        source="app",
-    )
-    monkeypatch.setattr(
-        review,
-        "fetch_pr",
-        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
-    )
-    scored = []
-    real_score_one = review.score_one
-    monkeypatch.setattr(
-        review,
-        "score_one",
-        lambda meta, diff, **kw: scored.append(1) or real_score_one(meta, diff, **kw),
-    )
-    c = TestClient(app)
-
-    response = c.post(
-        "/v1/review",
-        json={"repo": "o/r", "pr_number": 7},
-        headers={"X-Doug-Token": "secret", "X-GitHub-Token": "gh"},
-    )
-    assert response.status_code == 200
-    assert scored == [1], "CI must score instead of replaying the App instrument"
-    assert not any(reason["rule"] == "idempotent-replay" for reason in response.json()["reasons"])
-
-    with create_engine(url).connect() as conn:
-        rows = conn.execute(select(store.verdicts).order_by(store.verdicts.c.id)).mappings().all()
-    assert len(rows) == 2
-    assert rows[0]["id"] == app_id
-    assert (rows[1]["installation_id"], rows[1]["github_repo_id"], rows[1]["head_sha"]) == (
-        None,
-        None,
-        sha,
-    )
-
-    runs = c.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    ).json()["runs"]
-    assert {run["id"] for run in runs} == {row["id"] for row in rows}
-    assert {run["path"] for run in runs} == {"app", "ci"}
-    assert {run["head_sha"] for run in runs} == {sha}
-
-
-def test_review_force_rescore_and_new_commit_both_score_again(tmp_path, monkeypatch):
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    sha = ["a" * 40]
-    monkeypatch.setattr(
-        review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(sha[0]), "+ x")
-    )
-    c = TestClient(app)
-    post = lambda body: c.post(  # noqa: E731
-        "/v1/review", json={"repo": "o/r", "pr_number": 7, **body},
-        headers={"x-doug-token": "secret"},
-    )
-
-    post({})
-    post({"force": True})  # deliberate rescore of the same commit
-    sha[0] = "b" * 40
-    post({})  # a new commit is never a repeat
-
-    engine = create_engine(url)
-    with engine.connect() as conn:
-        assert len(conn.execute(select(store.verdicts)).all()) == 3
-
-
-def test_replay_carries_the_recorded_deviations(tmp_path, monkeypatch):
-    """The replayed response must be the recorded review, intent tier
-    included — a replay that silently dropped deviations would make a
-    redelivered webhook look like the decisions read never ran."""
-    _db(tmp_path, monkeypatch)
-    vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        pr_meta=_pr_with_sha().model_dump(mode="json"),
-    )
-    store.save_deviations(
-        vid,
-        [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
-        ["ADR-3"], 72,
-    )
-    prior = store.find_review("o/r", 7, "a" * 40)
-    assert prior is not None and prior["band"] == "flagged"
-    assert prior["deviations"] == [
-        {"type": "beyond-ticket", "description": "adds a flag", "severity": "low"}
-    ]
-    assert prior["intent_refs"] == ["ADR-3"] and prior["intent_alignment"] == 72
-
-
 def test_deviation_none_marker_is_storage_only_never_replayed(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
@@ -663,59 +449,6 @@ def test_find_review_matches_the_head_sha_column_without_pr_meta(tmp_path, monke
     )
     prior = store.find_review("o/r", 7, "a" * 40)
     assert prior is not None and prior["band"] == "flagged"
-
-
-def test_concurrent_deliveries_for_one_commit_pay_once(tmp_path, monkeypatch):
-    """find_review-then-score is a check-then-act spanning a whole paid
-    read, so two overlapping webhook deliveries both missed the lookup and
-    both paid — the exact double-spend the dedup exists to prevent. The
-    per-(repo, pr, sha) in-flight lock makes the second delivery wait,
-    then replay. (In-process only: a cross-instance duplicate is still
-    possible and tolerated.)
-    """
-    import threading
-    import time
-
-    url = _db(tmp_path, monkeypatch)
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr_with_sha(), "+ x"))
-    scored = []
-    real_score_one = review.score_one
-
-    def slow_score(meta, diff, **kw):
-        scored.append(1)
-        time.sleep(0.2)  # hold the race window open
-        return real_score_one(meta, diff, **kw)
-
-    monkeypatch.setattr(review, "score_one", slow_score)
-
-    c = TestClient(app)
-    results = []
-
-    def hit():
-        results.append(
-            c.post(
-                "/v1/review", json={"repo": "o/r", "pr_number": 7},
-                headers={"x-doug-token": "secret"},
-            ).json()
-        )
-
-    threads = [threading.Thread(target=hit) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert len(scored) == 1, "the overlapping delivery must wait and replay, not pay"
-    replays = [
-        r for r in results
-        if any(x["rule"] == "idempotent-replay" for x in r["reasons"])
-    ]
-    assert len(replays) == 1
-    engine = create_engine(url)
-    with engine.connect() as conn:
-        assert len(conn.execute(select(store.verdicts)).all()) == 1
 
 
 def test_replay_keeps_the_partial_read_hedge_on_deviations(tmp_path, monkeypatch):
@@ -1684,31 +1417,16 @@ def test_comparison_reviews_loads_all_coverage_in_one_select(tmp_path, monkeypat
 def test_current_ci_review_is_visible_in_comparisons_with_its_exact_head(
     tmp_path, monkeypatch
 ):
-    """The CI endpoint writes head_sha for idempotency, without App ids.
+    """Historical CI rows (head_sha set, no App ids) must stay servable.
 
-    Treating any row with a head column as App or malformed hides every new
+    Treating any row with a head column as App or malformed hides every old
     CI result from the soak dashboard even though the review completed.
     """
-    url = _db(tmp_path, monkeypatch)
+    _db(tmp_path, monkeypatch)
     sha = "c" * 40
-    monkeypatch.delenv("DOUG_READER", raising=False)
-    monkeypatch.setattr(
-        review,
-        "fetch_pr",
-        lambda gh, o, r, n: (_pr_with_sha(sha), "+ x"),
-    )
-    c = TestClient(app)
+    verdict_id = _comparison_review("o/r", 7, sha, app=False)
 
-    reviewed = c.post(
-        "/v1/review",
-        json={"repo": "o/r", "pr_number": 7},
-        headers={**AUTH, "X-GitHub-Token": "gh"},
-    )
-    assert reviewed.status_code == 200
-    with create_engine(url).connect() as conn:
-        verdict_id = conn.execute(select(store.verdicts.c.id)).scalar_one()
-
-    runs = c.get("/v1/comparisons", headers=AUTH).json()["runs"]
+    runs = TestClient(app).get("/v1/comparisons", headers=AUTH).json()["runs"]
     assert [run["id"] for run in runs] == [verdict_id]
     assert runs[0]["path"] == "ci"
     assert runs[0]["head_sha"] == sha
