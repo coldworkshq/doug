@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from importlib import resources
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
@@ -702,6 +703,84 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
         last4=minted.last4,
         expires_at=minted.expires_at,
     )
+
+
+@app.get("/v1/installations/tokens")
+def list_tokens(owner: str = "", x_github_token: str = Header("")) -> dict:
+    """Masked key inventory. Org-admin (or account-owner) proof only — the
+    list names every key's lookup/label/selection, which is exactly the map
+    an attacker holding one repo's admin would want. X-Doug-Token is not
+    accepted here or on revoke: keys cannot manage keys."""
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if not owner or "/" in owner:
+        raise _not_found()
+    installation_id = tenancy.verify_org_admin(x_github_token, owner)
+    if installation_id is None:
+        raise _not_found()
+    rows = store.list_installation_tokens(installation_id)
+    for row in rows:
+        if row["repo_selection"] == "selected":
+            row["repo_ids"] = sorted(store.installation_token_repo_ids(row["id"]))
+    return {"tokens": jsonable_encoder(rows)}
+
+
+@app.delete("/v1/installations/token/{token_id}")
+def revoke_token(
+    token_id: int,
+    owner: str = "",
+    repos: str = "",
+    x_github_token: str = Header(""),
+) -> dict:
+    """Soft-revoke one key. Proof must cover the key's selection, mirroring
+    mint: org-admin proof revokes anything; repo-admin proof revokes a
+    'selected' key iff the proven repos cover every repo the key names."""
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if owner and "/" not in owner:
+        installation_id = tenancy.verify_org_admin(x_github_token, owner)
+        if installation_id is None or not store.revoke_installation_token(
+            token_id, installation_id
+        ):
+            raise _not_found()
+        return {"revoked": True}
+    if repos:
+        names = [r for r in repos.split(",") if r]
+        if not names or len(names) > MAX_REPOS_PER_MINT:
+            raise _not_found()
+        parsed_repos = []
+        for full in names:
+            repo_owner, _, name = full.partition("/")
+            if not repo_owner or not name or "/" in name:
+                raise _not_found()
+            parsed_repos.append((repo_owner, name))
+        installation_id = tenancy.verify_repos_admin(x_github_token, parsed_repos)
+        if installation_id is None:
+            raise _not_found()
+        # Lowercased on both sides, mirroring dispense_token's by_name map:
+        # GitHub repo names are case-insensitive, so a proven owner/Repo must
+        # not 404 against a ledger entry that merely differs in case.
+        by_name = {
+            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
+        }
+        try:
+            proven_ids = {by_name[full.lower()] for full in names}
+        except KeyError as exc:
+            raise _not_found() from exc
+        key_repo_ids = store.installation_token_repo_ids(token_id)
+        # Repo-admin proof reaches ONLY 'selected' keys it fully covers. An
+        # 'all' key has no junction rows → empty set → refused here, which
+        # is exactly the point: killing the org key takes org-admin proof.
+        if not key_repo_ids or not key_repo_ids <= proven_ids:
+            raise _not_found()
+        if not store.revoke_installation_token(token_id, installation_id):
+            raise _not_found()
+        return {"revoked": True}
+    raise _not_found()
 
 
 class PatternRow(BaseModel):

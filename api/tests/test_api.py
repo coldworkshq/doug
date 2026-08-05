@@ -2179,3 +2179,128 @@ def test_queue_without_operator_token_configured_is_503(tmp_path, monkeypatch):
     )
     r = client.get("/v1/queue", headers={"X-Doug-Token": minted.token})
     assert r.status_code == 503
+
+
+def test_list_tokens_requires_org_admin_and_masks(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label="dash",
+        expires_in_days=0, minted_by="drewjst",
+    )
+    # A second, pre-revoked key: the list is an audit trail, so a dead key
+    # must stay visible (with a non-null revoked_at) beside the live one.
+    revoked = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label="old-ci",
+        expires_in_days=0, minted_by="drewjst",
+    )
+    assert store.revoke_installation_token(revoked.token_id, 150424894)
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
+    assert client.get(
+        "/v1/installations/tokens", params={"owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    ).status_code == 404
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    r = client.get(
+        "/v1/installations/tokens", params={"owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200
+    rows = r.json()["tokens"]
+    assert len(rows) == 2
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[minted.token_id]["label"] == "dash"
+    assert by_id[minted.token_id]["last4"] == minted.last4
+    assert by_id[minted.token_id]["revoked_at"] is None
+    assert by_id[revoked.token_id]["label"] == "old-ci"
+    assert by_id[revoked.token_id]["revoked_at"] is not None
+    body = r.text
+    assert minted.token not in body and revoked.token not in body and "token_hash" not in body
+
+
+def test_management_endpoints_reject_doug_tokens_as_proof(tmp_path, monkeypatch):
+    """Keys cannot manage keys: a leaked key must never outrun revocation.
+    Management proof is a GitHub PAT, full stop."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    r = client.get(
+        "/v1/installations/tokens", params={"owner": "drewjst"},
+        headers={"X-GitHub-Token": minted.token},  # a doug key is not a PAT
+    )
+    assert r.status_code == 404  # verify_org_admin fails on it upstream
+
+
+def test_revoke_org_admin_can_kill_anything(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    assert tenancy.resolve(minted.token) is None, "revocation is next-request effective"
+
+
+def test_revoke_repo_admin_must_cover_the_keys_selection(tmp_path, monkeypatch):
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
+    )
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111, 222], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    # Proof covers only repo a → does not cover {a, b} → 404.
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 404
+    # Proof covers both → revoked.
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a,drewjst/b"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200
+    # A foreign token id under valid proof: same 404 as absence.
+    r = client.delete(
+        "/v1/installations/token/999999", params={"repos": "drewjst/a,drewjst/b"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 404
+
+
+def test_revoke_repo_admin_lookup_is_case_insensitive(tmp_path, monkeypatch):
+    """Mirrors dispense's by_name case fix: a proven owner/Repo must still
+    match a ledger entry that only differs in case."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "DrewJst/Doug")], replace=False)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/doug"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200 and r.json()["revoked"] is True
