@@ -109,6 +109,19 @@ def test_the_summary_says_the_check_never_blocks():
     assert "neutral" in summary
 
 
+def test_the_summary_says_risk_is_shape_not_a_grade():
+    """The number reads as a grade to anyone fresh — "0.52, we scored
+    poorly" — and then fixing findings not moving it reads as a bug. It
+    prices what the change touches, so the copy has to say so on BOTH
+    tiers, or the first author to fix four findings and re-push concludes
+    the tool is broken (that author was us, PR #50)."""
+    _, reader_summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    _, fallback_summary = check_run.render("deterministic", FLAGGED, None, None)
+    for summary in (reader_summary, fallback_summary):
+        assert "not a grade" in summary
+        assert "does not go down as findings are fixed" in summary
+
+
 def test_findings_render_with_their_rule_and_label():
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
     assert "reader:race-condition" in summary

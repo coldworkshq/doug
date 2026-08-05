@@ -6,74 +6,140 @@ design-lock.md:65 records that the token mint survived the tenant-page cut
 "because its consumers are the API and later MCP" — so verification has to be
 importable without dragging in the web app.
 
-Only sha256(token) is ever persisted. The plaintext is returned once by mint()
-and is unrecoverable afterwards, which makes "we cannot show you that token
-again" a property of the schema rather than a policy someone can relax.
+Only the peppered HMAC-SHA256 of a token's secret half is ever persisted
+(keyformat.py owns the doug_live_ wire format; hash_secret below owns the
+peppering). The plaintext is returned once by mint_key() and is unrecoverable
+afterwards, which makes "we cannot show you that token again" a property of
+the schema rather than a policy someone can relax.
 """
 
+import base64
+import binascii
 import hashlib
-import secrets
+import hmac
+import os
 import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from githubkit import GitHub
-from sqlalchemy import select, update
 
-from . import app_auth, store
-
-# Greppable in a leaked-secret sweep, and the shape GitHub's secret scanning
-# would key on if Doug ever registers a pattern.
-TOKEN_PREFIX = "doug_"
+from . import app_auth, keyformat, store
 
 
-def _hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+class KeysNotConfigured(Exception):
+    """Raised by mint/resolve when no valid pepper is configured. The API
+    layer renders it as 503: minting a key we could never verify (or
+    silently failing every verify) would be the config drift lema's
+    APIKeysConfigured() gate exists to prevent."""
 
 
-def mint(installation_id: int) -> str | None:
-    """Issue a token for an existing installation. Returns the plaintext
-    exactly once, or None when storage is off or the installation is unknown.
+def _pepper(version: int) -> bytes | None:
+    """The HMAC pepper for a hash_version, or None. Peppers are why a
+    DB-only breach yields unusable hashes: key hashes are effectively
+    unsalted (the row is found by lookup, not by hash), so the secret
+    ingredient has to live OUTSIDE the database."""
+    name = "DOUG_TOKEN_PEPPER" if version == 1 else f"DOUG_TOKEN_PEPPER_V{version}"
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        decoded = base64.b64decode(raw, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    return decoded if len(decoded) == 32 else None
 
-    An UPDATE rather than an upsert on purpose: a token for an installation
-    with no row would resolve to an id that no tenancy backs, so the absence
-    of a row is a refusal, not something to paper over.
+
+def _current_hash_version() -> int:
+    """Highest contiguously configured pepper version, scanning up from 1 — a
+    gap ends the scan, so configure versions without gaps (the rotation runbook
+    does). New mints use this; old keys keep verifying under their recorded
+    version, which is what makes pepper rotation rolling instead of a flag-day."""
+    v = 1
+    while _pepper(v + 1) is not None:
+        v += 1
+    return v
+
+
+def hash_secret(secret: str, version: int) -> str | None:
+    """Peppered HMAC-SHA256, hex. None when that version has no pepper —
+    an unknown version fails closed rather than guessing."""
+    pepper = _pepper(version)
+    if pepper is None:
+        return None
+    return hmac.new(pepper, secret.encode(), hashlib.sha256).hexdigest()
+
+
+def keys_configured() -> bool:
+    return _pepper(_current_hash_version()) is not None
+
+
+_DUMMY_SECRET = "0" * keyformat.SECRET_LEN
+
+
+@dataclass(frozen=True)
+class TokenContext:
+    """What a resolved key may see. repo_ids is None for selection='all'
+    (installation-wide: filter rows by installation_id only) and a non-empty
+    frozenset for 'selected' — never empty, because an empty live
+    intersection fails resolve instead of returning a context."""
+
+    installation_id: int
+    token_id: int
+    scopes: tuple[str, ...]
+    repo_ids: frozenset[int] | None
+
+
+def resolve(token: str) -> TokenContext | None:
+    """Map a presented token to its live context, or None.
+
+    Chain runs cheapest-first: offline parse+CRC (zero I/O), one indexed
+    SELECT, one HMAC, then the liveness checks. Every failure is the same
+    None — the route's uniform 401 leaks nothing about WHICH check failed.
+    The stored hash is compared via compare_digest, and a lookup miss burns
+    a dummy HMAC so a miss and a wrong secret cost the same clock.
+
+    The key's stored selection is a claim; installations.state and
+    installation_repos.state are the authority, read LIVE on every call.
+    That intersection is Doug's analog of lema's live-role re-derivation:
+    uninstall/suspend end access next request (MT2), and a 'selected' key
+    sheds any repo the installation no longer covers.
     """
-    engine = store._get_engine()
-    if engine is None:
+    parsed = keyformat.parse(token)
+    if parsed is None:
         return None
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    with engine.begin() as conn:
-        result = conn.execute(
-            update(store.installations)
-            .where(store.installations.c.installation_id == installation_id)
-            .values(token_hash=_hash(token))
-        )
-    if result.rowcount == 0:
+    if not keys_configured():
+        raise KeysNotConfigured()
+    row = store.installation_token_by_lookup(parsed.lookup)
+    if row is None:
+        hash_secret(_DUMMY_SECRET, _current_hash_version())
         return None
-    return token
-
-
-def resolve(token: str) -> int | None:
-    """Map a presented token to its installation id, or None.
-
-    The prefix check short-circuits before any query, so the operator token
-    and ordinary junk never reach storage. Lookup is by digest: the compared
-    value is already a hash, so an equality match leaks nothing a timing
-    attack could use — an attacker would need a preimage, not a clock.
-
-    token_hash is NULL until an installation mints, and SQL equality never
-    matches NULL, so un-minted installations are unreachable by design.
-    """
-    if not token.startswith(TOKEN_PREFIX):
+    expected = row["token_hash"]
+    computed = hash_secret(parsed.secret, row["hash_version"])
+    if computed is None or not hmac.compare_digest(computed, expected):
         return None
-    engine = store._get_engine()
-    if engine is None:
+    if row["revoked_at"] is not None:
         return None
-    with engine.connect() as conn:
-        return conn.execute(
-            select(store.installations.c.installation_id).where(
-                store.installations.c.token_hash == _hash(token)
-            )
-        ).scalar_one_or_none()
+    if row["expires_at"] is not None and row["expires_at"] <= datetime.now(UTC):
+        return None
+    if row["installation_state"] != "active":
+        return None
+    repo_ids: frozenset[int] | None = None
+    if row["repo_selection"] == "selected":
+        frozen = store.installation_token_repo_ids(row["id"])
+        live = {rid for rid, _ in store.active_repos(row["installation_id"])}
+        effective = frozen & live
+        if not effective:
+            return None
+        repo_ids = frozenset(effective)
+    store.touch_installation_token_last_used(row["id"])
+    return TokenContext(
+        installation_id=int(row["installation_id"]),
+        token_id=int(row["id"]),
+        scopes=tuple(row["scopes"] or ()),
+        repo_ids=repo_ids,
+    )
 
 
 def _caller_client(pat: str) -> GitHub:
@@ -137,3 +203,136 @@ def verify_admin(pat: str, owner: str, repo: str) -> int | None:
         return None
     installation_id = getattr(found.parsed_data, "id", None)
     return installation_id if isinstance(installation_id, int) else None
+
+
+class MintedKey(NamedTuple):
+    token: str
+    token_id: int
+    last4: str
+    expires_at: datetime | None
+
+
+def caller_login(pat: str) -> str | None:
+    """GET /user on the caller's own quota. Used for minted_by attribution
+    and as the cheap first hop of the User-install proof."""
+    try:
+        me = _caller_client(pat).rest.users.get_authenticated()
+    except Exception as e:  # noqa: BLE001 — an unusable PAT proves nothing
+        print(
+            f"doug: dispense denied at the identity check "
+            f"({type(e).__name__}: {str(e)[:200]})",
+            file=sys.stderr,
+        )
+        return None
+    login = getattr(me.parsed_data, "login", None)
+    return login if isinstance(login, str) and login else None
+
+
+def verify_org_admin(pat: str, owner: str) -> int | None:
+    """Prove the caller may hold an installation-wide key for `owner`.
+
+    Same load-bearing order as verify_admin: every PAT call (identity,
+    membership) runs before the app-JWT installation lookup, so a caller
+    who proves nothing spends only their own quota.
+
+    Two ways to prove it, tried cheapest-first:
+    - the caller IS the account (User-type install): login match,
+      case-insensitive because GitHub logins are;
+    - the caller holds an ACTIVE admin membership in the org.
+    """
+    login = caller_login(pat)
+    if login is None:
+        return None
+    is_owner = login.lower() == owner.lower()
+    if not is_owner:
+        try:
+            membership = _caller_client(pat).rest.orgs.get_membership_for_authenticated_user(
+                org=owner
+            )
+        except Exception as e:  # noqa: BLE001 — not a member, or org missing
+            print(
+                f"doug: dispense denied org-admin {owner} at the membership check "
+                f"({type(e).__name__}: {str(e)[:200]})",
+                file=sys.stderr,
+            )
+            return None
+        data = membership.parsed_data
+        if getattr(data, "role", None) != "admin" or getattr(data, "state", None) != "active":
+            return None
+
+    if not app_auth.enabled():
+        return None
+    try:
+        if is_owner:
+            found = app_auth.app_client().rest.apps.get_user_installation(username=owner)
+        else:
+            found = app_auth.app_client().rest.apps.get_org_installation(org=owner)
+    except Exception as e:  # noqa: BLE001 — 404 = Doug is not installed there
+        print(
+            f"doug: dispense denied org-admin {owner} at the installation lookup "
+            f"({type(e).__name__}: {str(e)[:200]})",
+            file=sys.stderr,
+        )
+        return None
+    installation_id = getattr(found.parsed_data, "id", None)
+    return installation_id if isinstance(installation_id, int) else None
+
+
+def verify_repos_admin(pat: str, repos: list[tuple[str, str]]) -> int | None:
+    """Prove admin on EVERY named repo, and that all of them live under one
+    installation. A mixed-owner list cannot be one installation's, so it is
+    refused before any call spends any quota at all."""
+    if not repos:
+        return None
+    owners = {owner.lower() for owner, _ in repos}
+    if len(owners) != 1:
+        return None
+    installation_ids = set()
+    for owner, name in repos:
+        installation_id = verify_admin(pat, owner, name)
+        if installation_id is None:
+            return None
+        installation_ids.add(installation_id)
+    if len(installation_ids) != 1:
+        return None
+    return installation_ids.pop()
+
+
+def mint_key(
+    installation_id: int,
+    *,
+    repo_selection: str,
+    repo_ids: list[int],
+    label: str | None,
+    expires_in_days: int,
+    minted_by: str,
+) -> MintedKey | None:
+    """Append a new key. Returns the plaintext exactly once, or None when
+    storage is off / the installation is unknown. Raises KeysNotConfigured
+    with no pepper — we never mint what we cannot verify."""
+    if not keys_configured():
+        raise KeysNotConfigured()
+    version = _current_hash_version()
+    minted = keyformat.generate()
+    expires_at = (
+        datetime.now(UTC) + timedelta(days=expires_in_days) if expires_in_days else None
+    )
+    token_id = store.insert_installation_token(
+        installation_id,
+        token_lookup=minted.lookup,
+        token_hash=hash_secret(minted.secret, version),
+        hash_version=version,
+        last4=minted.last4,
+        label=label,
+        repo_selection=repo_selection,
+        scopes=["queue:read"],
+        minted_by=minted_by,
+        expires_at=expires_at,
+    )
+    if token_id is None:
+        return None
+    if repo_selection == "selected":
+        store.set_installation_token_repos(token_id, repo_ids)
+    return MintedKey(
+        token=minted.token, token_id=token_id, last4=minted.last4, expires_at=expires_at
+    )

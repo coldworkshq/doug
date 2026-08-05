@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from importlib import resources
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
@@ -56,8 +57,35 @@ def _startup_reconcile() -> None:
     Migration 005's unique index stops the second verdicts row; the claim
     fence stops a superseded holder finishing the job. Double-spend of the
     read is bounded by the spend cap, not by this path.
+
+    Two drift checks run first, in their OWN try: they are diagnostic, and
+    the sweep is the job. Sharing one try with the catch-up meant a
+    diagnostic-only DB error landed in the except below and skipped
+    reconcile_all for the whole cold start — the same silent-no-op class
+    the diagnostics exist to detect. Doug's own review of PR #50 flagged
+    exactly that.
     """
     try:
+        try:
+            if store.enabled() and not store.active_installations():
+                referenced = store.count_installations_referenced_by_verdicts()
+                if referenced:
+                    print(
+                        f"doug: DRIFT — verdicts reference {referenced} installation(s) but the "
+                        "installations table is empty; reconcile_all and token dispense are "
+                        "structural no-ops. Redeliver the installation webhook (ROADMAP MT0).",
+                        file=sys.stderr,
+                    )
+            missing = store.count_verdict_repos_missing_from_ledger()
+            if missing:
+                print(
+                    f"doug: DRIFT — {missing} repo(s) referenced by verdicts have no "
+                    "installation_repos row; their tenants cannot see those verdicts. "
+                    "Redeliver the installation_repositories webhook (ROADMAP MT0-class).",
+                    file=sys.stderr,
+                )
+        except Exception as e:  # noqa: BLE001 — diagnostics never cost the sweep
+            print(f"doug: drift check failed ({type(e).__name__}: {e})", file=sys.stderr)
         n = worker.reconcile_all()
         print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
         worker.drain()
@@ -458,8 +486,11 @@ def _operator_only(x_doug_token: str) -> None:
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     if hmac.compare_digest(x_doug_token, expected):
         return
-    if tenancy.resolve(x_doug_token) is not None:
-        raise HTTPException(status_code=404, detail="not found")
+    try:
+        if tenancy.resolve(x_doug_token) is not None:
+            raise HTTPException(status_code=404, detail="not found")
+    except tenancy.KeysNotConfigured as e:
+        raise HTTPException(status_code=503, detail="token verification not configured") from e
     raise HTTPException(status_code=401, detail="bad token")
 
 
@@ -484,16 +515,37 @@ def queue(
         # letting tenant traffic paper over the gap would hide the fault.
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
+    repo_ids: frozenset[int] | None = None
+    ctx: tenancy.TokenContext | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        installation_id = tenancy.resolve(x_doug_token)
-        if installation_id is None:
+        try:
+            ctx = tenancy.resolve(x_doug_token)
+        except tenancy.KeysNotConfigured as e:
+            raise HTTPException(status_code=503, detail="token verification not configured") from e
+        if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
-        if repo is not None and repo not in {
-            full_name for _, full_name in store.active_repos(installation_id)
-        }:
-            # 404, never an empty list: an empty list reads as "no reviews
-            # yet" and tells the caller their guess may be a real repo.
-            raise HTTPException(status_code=404, detail="not found")
+        # Scope gate: every key mints with queue:read today, but the scopes
+        # column exists so a future receipts/MCP-only key does not silently
+        # inherit queue access it was never granted. Same posture as an
+        # unresolved token — 401, not 403 — so this route stays consistent
+        # with itself.
+        if "queue:read" not in ctx.scopes:
+            raise HTTPException(status_code=401, detail="bad token")
+        installation_id = ctx.installation_id
+        live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        # The key's effective scope, in ids: its frozen selection (already
+        # live-intersected by resolve) or, for 'all', everything live NOW.
+        # installation_repos is the ONE source of truth — verdicts.repo and
+        # full_name are display everywhere (MT4).
+        effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())
+        if repo is not None:
+            rid = live.get(repo)
+            if rid is None or rid not in effective:
+                # 404, never an empty list: an empty list reads as "no
+                # reviews yet" and confirms the repo's existence.
+                raise HTTPException(status_code=404, detail="not found")
+            effective = frozenset({rid})
+        repo_ids = effective
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
         items = [
@@ -514,7 +566,11 @@ def queue(
                     ],
                 ),
             )
-            for row in store.latest_reviews(repo=repo, installation_id=installation_id)
+            for row in store.latest_reviews(
+                repo=repo if ctx is None else None,  # operator keeps the display filter
+                installation_id=installation_id,
+                repo_ids=repo_ids,
+            )
             if row["pr_meta"]
         ]
     else:
@@ -556,50 +612,229 @@ def queue(
     )
 
 
+MAX_REPOS_PER_MINT = 20   # bounds PAT-side GitHub calls per request
+MAX_MINTS_PER_DAY = 30    # per installation per UTC day; fail-open
+
+
 class TokenRequest(BaseModel):
-    repo: str
+    selection: str | None = None          # "all" | "selected"
+    owner: str | None = None              # required for selection="all"
+    repos: list[str] | None = None        # required for selection="selected"
+    repo: str | None = None               # legacy PR #48 body — one selected repo
+    label: str | None = None
+    expires_in_days: int = 0
 
 
 class TokenResponse(BaseModel):
     token: str
+    token_id: int
     installation_id: int
-    repo: str
+    selection: str
+    repos: list[str]
+    last4: str
+    expires_at: datetime | None
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail="not found")
 
 
 @app.post("/v1/installations/token")
-def dispense_token(
-    body: TokenRequest,
-    x_github_token: str = Header(""),
-) -> TokenResponse:
-    """Mint this installation's API token, proving ownership through GitHub.
+def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> TokenResponse:
+    """Mint a tenant API key, proving authority through GitHub.
 
-    Deliberately public: the proof is the caller's own GitHub credential, so
-    an operator token here would defeat self-service without adding safety.
+    Deliberately public: the proof is the caller's own GitHub credential.
+    PROOF MUST COVER THE SELECTION — org-admin (or the account owner, for a
+    User install) for selection='all'; admin on EVERY named repo for
+    selection='selected'. Every verification or validation failure is the
+    same 404: a caller can never distinguish "exists but refused" from
+    "does not exist".
 
-    Every verification failure renders as 404 — not 403, which would confirm
-    the repo exists, and not a distinct message per cause, which would let a
-    caller separate "private repo I cannot administer" from "repo that does
-    not exist". The token rides in the response body once; only its hash is
-    stored, so this endpoint is also the rotation and lost-token path.
+    Mint APPENDS — it never rotates another key, so this endpoint is no
+    longer a denial-of-service against the tenant's own integration (MT5).
     """
     if not x_github_token:
         raise HTTPException(status_code=401, detail="X-GitHub-Token required")
-    owner, _, name = body.repo.partition("/")
-    # Parse before either GitHub call: a malformed repo cannot be anyone's,
-    # so there is nothing to spend a quota proving.
-    if not owner or not name or "/" in name:
-        raise HTTPException(status_code=404, detail="not found")
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-    installation_id = tenancy.verify_admin(x_github_token, owner, name)
+
+    # Normalize the legacy body before validating anything else.
+    selection, repos, owner = body.selection, body.repos, body.owner
+    if selection is None and body.repo is not None:
+        selection, repos = "selected", [body.repo]
+
+    if not (0 <= body.expires_in_days <= 366):
+        raise _not_found()
+    if body.label is not None and len(body.label) > 100:
+        raise _not_found()
+
+    if selection == "selected":
+        if not repos or len(repos) > MAX_REPOS_PER_MINT:
+            raise _not_found()
+        if len({full.lower() for full in repos}) != len(repos):
+            # GitHub treats repo names case-insensitively, so DrewJst/Doug
+            # and drewjst/doug collide on the same junction row. Reject
+            # before spending a single GitHub call proving either one —
+            # letting a duplicate through would insert the key row and then
+            # 500 on set_installation_token_repos' uq_installation_token_repo,
+            # leaving that key row orphaned with zero repos attached.
+            raise _not_found()
+        parsed_repos: list[tuple[str, str]] = []
+        for full in repos:
+            repo_owner, _, name = full.partition("/")
+            if not repo_owner or not name or "/" in name:
+                raise _not_found()
+            parsed_repos.append((repo_owner, name))
+        installation_id = tenancy.verify_repos_admin(x_github_token, parsed_repos)
+    elif selection == "all":
+        if not owner or "/" in owner:
+            raise _not_found()
+        installation_id = tenancy.verify_org_admin(x_github_token, owner)
+    else:
+        raise _not_found()
     if installation_id is None:
-        raise HTTPException(status_code=404, detail="not found")
-    token = tenancy.mint(installation_id)
-    if token is None:
-        # GitHub knows this installation; the ledger does not. Same shape as
-        # every other failure — the caller learns nothing either way.
-        raise HTTPException(status_code=404, detail="not found")
-    return TokenResponse(token=token, installation_id=installation_id, repo=body.repo)
+        raise _not_found()
+
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    minted_today = store.count_installation_tokens_minted_since(installation_id, midnight)
+    if minted_today is not None and minted_today >= MAX_MINTS_PER_DAY:
+        # None means "could not count" and ALLOWS — the cap is fail-open.
+        raise _not_found()
+
+    minted_by = tenancy.caller_login(x_github_token)
+    if minted_by is None:
+        raise _not_found()
+
+    repo_ids: list[int] = []
+    if selection == "selected":
+        # Lowercased on both sides: GitHub logins and repo names are
+        # case-insensitive, so a GitHub-proved admin must not 404 on a
+        # ledger entry that merely differs in case.
+        by_name = {
+            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
+        }
+        # The ledger may lag GitHub (MT0 taught how badly); GitHub already
+        # proved these repos belong to this installation, so a name the
+        # ledger has not heard of yet refuses the mint rather than minting
+        # a key whose junction rows point at nothing.
+        try:
+            repo_ids = [by_name[full.lower()] for full in repos]
+        except KeyError as exc:
+            raise _not_found() from exc
+
+    try:
+        minted = tenancy.mint_key(
+            installation_id,
+            repo_selection=selection,
+            repo_ids=repo_ids,
+            label=body.label,
+            expires_in_days=body.expires_in_days,
+            minted_by=minted_by,
+        )
+    except tenancy.KeysNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="token minting not configured") from exc
+    if minted is None:
+        raise _not_found()
+    # The token rides in the response ONCE. This log line is the only other
+    # trace of the mint and carries the id, never the credential.
+    print(
+        f"doug: minted key id={minted.token_id} installation={installation_id} "
+        f"selection={selection} last4={minted.last4} by={minted_by}",
+        file=sys.stderr,
+    )
+    return TokenResponse(
+        token=minted.token,
+        token_id=minted.token_id,
+        installation_id=installation_id,
+        selection=selection,
+        repos=repos if selection == "selected" else [],
+        last4=minted.last4,
+        expires_at=minted.expires_at,
+    )
+
+
+@app.get("/v1/installations/tokens")
+def list_tokens(owner: str = "", x_github_token: str = Header("")) -> dict:
+    """Masked key inventory. Org-admin (or account-owner) proof only — the
+    list names every key's lookup/label/selection, which is exactly the map
+    an attacker holding one repo's admin would want. X-Doug-Token is not
+    accepted here or on revoke: keys cannot manage keys."""
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if not owner or "/" in owner:
+        raise _not_found()
+    installation_id = tenancy.verify_org_admin(x_github_token, owner)
+    if installation_id is None:
+        raise _not_found()
+    rows = store.list_installation_tokens(installation_id)
+    for row in rows:
+        if row["repo_selection"] == "selected":
+            row["repo_ids"] = sorted(store.installation_token_repo_ids(row["id"]))
+    return {"tokens": jsonable_encoder(rows)}
+
+
+@app.delete("/v1/installations/token/{token_id}")
+def revoke_token(
+    token_id: int,
+    owner: str = "",
+    repos: str = "",
+    x_github_token: str = Header(""),
+) -> dict:
+    """Soft-revoke one key. Proof must cover the key's selection, mirroring
+    mint: org-admin proof revokes anything; repo-admin proof revokes a
+    'selected' key iff the proven repos cover every repo the key names."""
+    if not x_github_token:
+        raise HTTPException(status_code=401, detail="X-GitHub-Token required")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if owner:
+        # A present owner is authoritative. Malformed input refuses here
+        # rather than falling through to the repos proof — otherwise
+        # precedence would flip on a typo, and a mistyped org name would
+        # hand the decision to whatever the repos param happens to prove.
+        if "/" in owner:
+            raise _not_found()
+        installation_id = tenancy.verify_org_admin(x_github_token, owner)
+        if installation_id is None or not store.revoke_installation_token(
+            token_id, installation_id
+        ):
+            raise _not_found()
+        return {"revoked": True}
+    if repos:
+        names = [r for r in repos.split(",") if r]
+        if not names or len(names) > MAX_REPOS_PER_MINT:
+            raise _not_found()
+        parsed_repos = []
+        for full in names:
+            repo_owner, _, name = full.partition("/")
+            if not repo_owner or not name or "/" in name:
+                raise _not_found()
+            parsed_repos.append((repo_owner, name))
+        installation_id = tenancy.verify_repos_admin(x_github_token, parsed_repos)
+        if installation_id is None:
+            raise _not_found()
+        # Lowercased on both sides, mirroring dispense_token's by_name map:
+        # GitHub repo names are case-insensitive, so a proven owner/Repo must
+        # not 404 against a ledger entry that merely differs in case.
+        by_name = {
+            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
+        }
+        try:
+            proven_ids = {by_name[full.lower()] for full in names}
+        except KeyError as exc:
+            raise _not_found() from exc
+        key_repo_ids = store.installation_token_repo_ids(token_id)
+        # Repo-admin proof reaches ONLY 'selected' keys it fully covers. An
+        # 'all' key has no junction rows → empty set → refused here, which
+        # is exactly the point: killing the org key takes org-admin proof.
+        if not key_repo_ids or not key_repo_ids <= proven_ids:
+            raise _not_found()
+        if not store.revoke_installation_token(token_id, installation_id):
+            raise _not_found()
+        return {"revoked": True}
+    raise _not_found()
 
 
 class PatternRow(BaseModel):
@@ -766,6 +1001,14 @@ def _record_installation(payload: dict, action: str) -> None:
         # describes — so a reinstall's `created` marks the newly granted
         # subset active again and the repos left out of it stay removed.
         store.set_installation_repos(inst["id"], [], replace=True)
+        # The live state check already ends access; this stamp is the audit
+        # trail AND the reinstall guard — 'created' flips state back to
+        # active, and without revoked_at every pre-uninstall key would
+        # quietly resurrect with it.
+        n = store.revoke_all_installation_tokens(inst["id"])
+        if n:
+            msg = f"doug: uninstall revoked {n} key(s) for installation {inst['id']}"
+            print(msg, file=sys.stderr)
 
 
 def _merge_installation_repos(payload: dict) -> None:

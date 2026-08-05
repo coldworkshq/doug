@@ -1,4 +1,6 @@
+import pytest
 from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.exc import DatabaseError
 
 from doug import migrations, store
 
@@ -61,11 +63,21 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         )
         for ddl in _OLDER_DEPENDENT_DDL:
             conn.exec_driver_sql(ddl)
+        # Migration 6's target: the pre-Task-2 `installations` shape, with the
+        # column it drops, so the DROP has real work to do here rather than
+        # finding it already gone.
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
     assert migrations.apply(engine) == ALL_VERSIONS
     assert APP_COLUMNS <= _columns(engine, "verdicts")
     assert {"prompt_hash"} <= _columns(engine, "verdicts")
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
     assert "claim_generation" in _columns(engine, "review_jobs")
+    assert "token_hash" not in _columns(engine, "installations")
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -307,6 +319,15 @@ def test_migration_004_adds_claim_generation(tmp_path):
         )
         for ddl in _OLDER_DEPENDENT_DDL:
             conn.exec_driver_sql(ddl)
+        # Migration 6 also runs against this engine (apply() runs every
+        # pending migration in order); give it a real `installations` table
+        # in the legacy shape so it has actual work to do.
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
     assert 4 in migrations.apply(engine)
     assert "claim_generation" in _columns(engine, "review_jobs")
 
@@ -452,7 +473,11 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
             f"10, 20, 'o/r', 7, '{sha}', 'done', 1, 1, '2026-08-01', {duplicate})"
         )
 
-    assert migrations.apply(engine) == [5]
+    # store.metadata.create_all() above already built `installations` without
+    # `token_hash`, so migration 6 runs too (nothing else was pre-recorded
+    # past 4) and finds its DROP already satisfied — landing as version 6
+    # alongside 5, not instead of it.
+    assert migrations.apply(engine) == [5, 6]
     with engine.connect() as conn:
         app_ids = [
             r[0]
@@ -486,3 +511,86 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
         names = {idx["name"] for idx in inspect(engine).get_indexes("verdicts")}
         assert "uq_verdicts_app_identity" in names
+
+
+def test_satisfied_never_swallows_a_missing_table():
+    """Postgres phrases missing-column and missing-TABLE errors with the
+    same tail. The first is 'work already done'; the second is the PR #48
+    crash-loop and must raise."""
+    assert migrations._satisfied('column "token_hash" of relation "installations" does not exist')
+    assert migrations._satisfied("no such column: token_hash")
+    assert not migrations._satisfied('relation "installations" does not exist')
+    assert not migrations._satisfied("no such table: installations")
+
+
+def test_satisfied_against_the_bare_driver_message_ignores_the_sql_echo():
+    """SQLAlchemy's DatabaseError str() appends the offending statement
+    ('...does not exist\\n\\n[SQL: ALTER TABLE installations DROP COLUMN
+    token_hash]'), so 'column' shows up for EVERY ALTER regardless of what
+    actually went missing — _satisfied has no way to tell the echo from a
+    real mention of 'column' in the driver's own message. That is exactly
+    why _run evaluates e.orig (the bare driver exception, without the
+    echo) rather than str(e): evaluated against only the driver part of
+    these two realistic shapes, the missing-table string must not satisfy
+    and the missing-column string must.
+    """
+    missing_table_full = (
+        '(psycopg2.errors.UndefinedTable) relation "installations" does not exist\n\n'
+        "[SQL: ALTER TABLE installations DROP COLUMN token_hash]"
+    )
+    missing_column_full = (
+        '(psycopg2.errors.UndefinedColumn) column "token_hash" of relation '
+        '"installations" does not exist\n\n'
+        "[SQL: ALTER TABLE installations DROP COLUMN token_hash]"
+    )
+    driver_part_table = missing_table_full.split("\n\n[SQL:")[0]
+    driver_part_column = missing_column_full.split("\n\n[SQL:")[0]
+    assert not migrations._satisfied(driver_part_table)
+    assert migrations._satisfied(driver_part_column)
+    # The trap itself, made concrete: evaluated against the FULL string
+    # (what str(e) gives you, echo included) the missing-table case wrongly
+    # satisfies — this is what _run must never hand to _satisfied.
+    assert migrations._satisfied(missing_table_full)
+
+
+def test_run_evaluates_the_driver_message_not_the_sql_echoing_str():
+    """_run-level proof, not just _satisfied: SQLAlchemy's own DatabaseError
+    constructor produces the SQL-echoing str() (verified — it appends '[SQL:
+    ...]' to the driver message), so a stubbed DatabaseError built the real
+    way already carries the trap. If _run evaluated str(e) instead of
+    str(e.orig), the SQL echo's 'column' would satisfy the missing-TABLE
+    case too, and a genuinely missing table would be swallowed instead of
+    raising — the PR #48 crash-loop, reintroduced silently."""
+
+    class _Orig(Exception):
+        pass
+
+    statement = "ALTER TABLE installations DROP COLUMN token_hash"
+    missing_table_orig = _Orig('relation "installations" does not exist')
+    missing_column_orig = _Orig(
+        'column "token_hash" of relation "installations" does not exist'
+    )
+
+    class _FakeConn:
+        def __init__(self, orig):
+            self._orig = orig
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def exec_driver_sql(self, stmt):
+            raise DatabaseError(stmt, {}, self._orig)
+
+    class _FakeEngine:
+        def __init__(self, orig):
+            self._orig = orig
+
+        def begin(self):
+            return _FakeConn(self._orig)
+
+    with pytest.raises(DatabaseError):
+        migrations._run(_FakeEngine(missing_table_orig), statement)
+    migrations._run(_FakeEngine(missing_column_orig), statement)  # must not raise

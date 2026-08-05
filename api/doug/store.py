@@ -182,10 +182,6 @@ installations = Table(
     Column("account_type", String(20)),  # User | Organization
     Column("state", String(20), nullable=False),  # active | suspended | deleted
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    # M2's token-dispense endpoint mints an installation token and writes its
-    # hash here — never the token itself. NULL until then; this table is new
-    # on this branch, so the column ships with it rather than a migration.
-    Column("token_hash", Text),
 )
 
 installation_repos = Table(
@@ -198,6 +194,42 @@ installation_repos = Table(
     Column("state", String(20), nullable=False),  # active | removed
     Column("updated_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
+)
+
+# Tenant API keys (spec 2026-08-04). Multiple keys per installation; each
+# frozen to a repo selection at mint and intersected against the LIVE ledger
+# at resolve — installations.state and installation_repos.state are the
+# authority, these rows are the claim. Repo ids only: full_name is display
+# everywhere (the MT4 lesson, baked into the schema).
+installation_tokens = Table(
+    "installation_tokens",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", BigInteger, nullable=False, index=True),
+    # Plaintext on purpose: the lookup is a key ID, not a secret — O(1)
+    # btree resolve, safe in logs and list output. The SECRET is what
+    # token_hash covers, and it is never stored in any form but the HMAC.
+    Column("token_lookup", String(8), nullable=False, unique=True),
+    Column("token_hash", Text, nullable=False),
+    Column("hash_version", Integer, nullable=False, server_default="1"),
+    Column("last4", String(4), nullable=False),
+    Column("label", String(100)),
+    Column("repo_selection", String(10), nullable=False),  # all | selected
+    Column("scopes", JSON, nullable=False),
+    Column("minted_by", String(200), nullable=False),  # audit only, never authority
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True)),  # NULL = durable
+    Column("revoked_at", DateTime(timezone=True)),  # soft revoke; rows never deleted
+    Column("last_used_at", DateTime(timezone=True)),
+)
+
+installation_token_repos = Table(
+    "installation_token_repos",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("token_id", Integer, nullable=False, index=True),
+    Column("github_repo_id", BigInteger, nullable=False),
+    UniqueConstraint("token_id", "github_repo_id", name="uq_installation_token_repo"),
 )
 
 # The durable gap between a delivery and a review. The unique constraint is
@@ -1225,15 +1257,19 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
 
 
 def latest_reviews(
-    limit: int = 200, repo: str | None = None, installation_id: int | None = None
+    limit: int = 200,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    repo_ids: set[int] | None = None,
 ) -> list[dict]:
     """Most recent verdict per (repo, pr) with findings — the live queue.
 
     `repo` scopes the queue; without it the ledger's every repo mixes
     together, which is an all-repos admin view, not a dashboard.
     `installation_id` scopes the queue to one tenant; without it this is the
-    operator view. Both filters are inside the grouped subquery — see the
-    comment there before moving either.
+    operator view. `repo_ids`, when given, further scopes to a
+    'selected'-selection key's live repo set. All three filters are inside
+    the grouped subquery — see the comment there before moving any of them.
     """
     engine = _get_engine()
     if engine is None:
@@ -1248,6 +1284,11 @@ def latest_reviews(
     scoped = verdicts.c.tier != EXTERNAL_TIER
     if installation_id is not None:
         scoped = scoped & (verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        # Same placement rule as the tenant filter above: INSIDE the grouped
+        # subquery, or an out-of-selection row wins max(id) and its PR
+        # disappears instead of falling back.
+        scoped = scoped & (verdicts.c.github_repo_id.in_(repo_ids))
     latest = (
         select(func.max(verdicts.c.id).label("id"))
         .where(scoped)
@@ -1313,6 +1354,296 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def count_installations_referenced_by_verdicts() -> int:
+    """How many distinct installations the verdicts ledger names. Compared
+    against active_installations() at startup: verdicts referencing tenants
+    the installations table has never heard of is the MT0 signature — a
+    webhook that never arrived — and reconcile_all is silently dead."""
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    from sqlalchemy import func
+
+    with engine.connect() as conn:
+        return int(
+            conn.execute(
+                select(func.count(func.distinct(verdicts.c.installation_id))).where(
+                    verdicts.c.installation_id.is_not(None)
+                )
+            ).scalar_one()
+        )
+
+
+def count_verdict_repos_missing_from_ledger() -> int:
+    """How many distinct (installation_id, github_repo_id) pairs verdicts
+    names that installation_repos has no row for at all — regardless of
+    state.
+
+    Task 10 made tenant queue reads join through installation_repos by id,
+    so a repo whose repositories_added delivery never arrived is now
+    invisible to its own tenant's queue while the operator's unscoped queue
+    (keyed on installation_id alone) still shows it — a second, per-repo
+    drift mode the ledger-emptiness check above cannot see: that check only
+    fires when installations is empty outright, and this table can be
+    entirely absent for one repo while every other repo on the same
+    installation is fine.
+
+    A 'removed' row does NOT count here — that is a delivery that DID
+    arrive, recording deliberate coverage-ending, the opposite of what this
+    counts. Only a row's total absence is the MT0-class signature.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    from sqlalchemy import func
+
+    with engine.connect() as conn:
+        pairs = (
+            select(verdicts.c.installation_id, verdicts.c.github_repo_id)
+            .where(
+                verdicts.c.installation_id.is_not(None),
+                verdicts.c.github_repo_id.is_not(None),
+            )
+            .distinct()
+            .subquery()
+        )
+        covered = select(installation_repos.c.id).where(
+            installation_repos.c.installation_id == pairs.c.installation_id,
+            installation_repos.c.github_repo_id == pairs.c.github_repo_id,
+        )
+        return int(
+            conn.execute(
+                select(func.count()).select_from(pairs).where(~covered.exists())
+            ).scalar_one()
+        )
+
+
+def _utc(dt):
+    """sqlite hands back naive datetimes for DateTime(timezone=True) columns;
+    every stored value is UTC, so naive means 'UTC, badly labelled'."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def insert_installation_token(
+    installation_id: int,
+    *,
+    token_lookup: str,
+    token_hash: str,
+    hash_version: int,
+    last4: str,
+    label: str | None,
+    repo_selection: str,
+    scopes: list[str],
+    minted_by: str,
+    expires_at: datetime | None,
+) -> int | None:
+    """A new key row, appended — NEVER an update of an existing one. Returns
+    None when storage is off or the installation has no row (no row means
+    Doug was never installed there; the absence is a refusal)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.begin() as conn:
+        known = conn.execute(
+            select(installations.c.id).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+        if known is None:
+            return None
+        return conn.execute(
+            installation_tokens.insert().returning(installation_tokens.c.id),
+            {
+                "installation_id": installation_id,
+                "token_lookup": token_lookup,
+                "token_hash": token_hash,
+                "hash_version": hash_version,
+                "last4": last4,
+                "label": label,
+                "repo_selection": repo_selection,
+                "scopes": scopes,
+                "minted_by": minted_by,
+                "created_at": datetime.now(UTC),
+                "expires_at": expires_at,
+            },
+        ).scalar_one()
+
+
+def set_installation_token_repos(token_id: int, repo_ids: list[int]) -> None:
+    engine = _get_engine()
+    if engine is None or not repo_ids:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            installation_token_repos.insert(),
+            [{"token_id": token_id, "github_repo_id": rid} for rid in repo_ids],
+        )
+
+
+def installation_token_by_lookup(token_lookup: str) -> dict | None:
+    """The key row plus the LIVE installation state, in one query. The JOIN
+    (not a LEFT JOIN) makes a key whose installation row is missing resolve
+    to nothing — fail closed, same direction as everything else here."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    installation_tokens,
+                    installations.c.state.label("installation_state"),
+                )
+                .join(
+                    installations,
+                    installations.c.installation_id
+                    == installation_tokens.c.installation_id,
+                )
+                .where(installation_tokens.c.token_lookup == token_lookup)
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    out = dict(row)
+    out["expires_at"] = _utc(out["expires_at"])
+    out["revoked_at"] = _utc(out["revoked_at"])
+    out["last_used_at"] = _utc(out["last_used_at"])
+    return out
+
+
+def installation_token_repo_ids(token_id: int) -> set[int]:
+    engine = _get_engine()
+    if engine is None:
+        return set()
+    with engine.connect() as conn:
+        return {
+            int(r.github_repo_id)
+            for r in conn.execute(
+                select(installation_token_repos.c.github_repo_id).where(
+                    installation_token_repos.c.token_id == token_id
+                )
+            )
+        }
+
+
+def count_installation_tokens_minted_since(
+    installation_id: int, since: datetime
+) -> int | None:
+    """None on ANY failure, including storage-off. The daily mint cap is
+    fail-open by spec: a counting error must log-and-allow at the caller,
+    never refuse a legitimate mint because a SELECT hiccuped."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        from sqlalchemy import func
+
+        with engine.connect() as conn:
+            return int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(installation_tokens)
+                    .where(
+                        (installation_tokens.c.installation_id == installation_id)
+                        & (installation_tokens.c.created_at >= since)
+                    )
+                ).scalar_one()
+            )
+    except Exception:  # noqa: BLE001 — fail-open is the contract
+        return None
+
+
+def touch_installation_token_last_used(token_id: int) -> None:
+    """Best-effort convenience timestamp, throttled to one write per key per
+    60s. Deliberately NOT part of the resolve contract: a failure here must
+    never fail a request, and the throttle keeps the hot path from writing
+    on every call."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    try:
+        now = datetime.now(UTC)
+        with engine.begin() as conn:
+            conn.execute(
+                update(installation_tokens)
+                .where(
+                    (installation_tokens.c.id == token_id)
+                    & (
+                        (installation_tokens.c.last_used_at.is_(None))
+                        | (installation_tokens.c.last_used_at < now - timedelta(seconds=60))
+                    )
+                )
+                .values(last_used_at=now)
+            )
+    except Exception:  # noqa: BLE001 — convenience, not audit
+        pass
+
+
+def list_installation_tokens(installation_id: int) -> list[dict]:
+    """Masked list for the management endpoint: everything but the hash.
+    Revoked rows stay listed — they are the audit trail, and 'when did that
+    key die' is a question this table exists to answer."""
+    engine = _get_engine()
+    if engine is None:
+        return []
+    cols = [c for c in installation_tokens.c if c.name != "token_hash"]
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(*cols)
+            .where(installation_tokens.c.installation_id == installation_id)
+            .order_by(installation_tokens.c.id.desc())
+        ).mappings().all()
+    out = []
+    for row in rows:
+        d = dict(row)
+        for key in ("expires_at", "revoked_at", "last_used_at", "created_at"):
+            d[key] = _utc(d[key])
+        out.append(d)
+    return out
+
+
+def revoke_installation_token(token_id: int, installation_id: int) -> bool:
+    """Soft revoke, idempotent, ownership INSIDE the where: a foreign
+    token_id matches nothing and is indistinguishable from a missing one."""
+    engine = _get_engine()
+    if engine is None:
+        return False
+    from sqlalchemy import func
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_tokens)
+            .where(
+                (installation_tokens.c.id == token_id)
+                & (installation_tokens.c.installation_id == installation_id)
+            )
+            .values(revoked_at=func.coalesce(installation_tokens.c.revoked_at, datetime.now(UTC)))
+        )
+    return result.rowcount > 0
+
+
+def revoke_all_installation_tokens(installation_id: int) -> int:
+    """The uninstall webhook's bulk stamp. Belt-and-braces on top of
+    resolve's live state check — the audit trail is the point."""
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_tokens)
+            .where(
+                (installation_tokens.c.installation_id == installation_id)
+                & (installation_tokens.c.revoked_at.is_(None))
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    return result.rowcount
 
 
 def comparison_reviews(

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1009,17 +1009,6 @@ def test_a_duplicate_repo_id_in_one_call_updates_not_double_inserts(tmp_path, mo
 # --- Outcome-loop schema (M1 amendment) ---------------------------------------
 
 
-def test_installations_has_a_nullable_token_hash_column(tmp_path):
-    """M2's token-dispense endpoint writes this column; `installations` is
-    new on this branch so it ships with the table instead of a migration.
-    Nullable because every installation exists before its token is minted."""
-    engine = create_engine(f"sqlite:///{tmp_path}/inst.db")
-    store.metadata.create_all(engine)
-    cols = {c["name"]: c for c in inspect(engine).get_columns("installations")}
-    assert "token_hash" in cols
-    assert cols["token_hash"]["nullable"] is True
-
-
 def _outcome_job(**overrides) -> dict:
     now = datetime.now(UTC)
     base = {
@@ -1265,7 +1254,7 @@ def test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it(tm
     already exists. This proves the mechanism directly: a database built
     before deep_read_counters existed still gets it, the same way
     review_jobs/installations/outcome_jobs did when each was added."""
-    from sqlalchemy import create_engine, inspect
+    from sqlalchemy import create_engine
 
     from doug import migrations
 
@@ -1753,7 +1742,7 @@ def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
     assert store.comparison_reviews() == []
 
 
-def _scored(repo, pr, installation_id, score=0.5):
+def _scored(repo, pr, installation_id, score=0.5, github_repo_id=None):
     """One verdict row, App-identified or CI-identified (installation None)."""
     return store.save_review(
         repo,
@@ -1762,7 +1751,9 @@ def _scored(repo, pr, installation_id, score=0.5):
         Verdict(score=score, band=Band.FLAGGED, threshold=0.30, reasons=[]),
         pr_meta=_pr().model_dump(),
         installation_id=installation_id,
-        github_repo_id=1 if installation_id else None,
+        github_repo_id=(
+            github_repo_id if github_repo_id is not None else (1 if installation_id else None)
+        ),
         head_sha=("a" * 40) if installation_id else None,
         source="app" if installation_id else "ci",
     )
@@ -1806,3 +1797,253 @@ def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, m
     assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
     assert rows[0]["id"] == app_id
     assert rows[0]["score"] == 0.61
+
+
+def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path, monkeypatch):
+    """latest_reviews picks max(id) GROUP BY (repo, pr_number) in a subquery.
+    Filter repo_ids OUTSIDE that subquery and an out-of-selection row on the
+    SAME (repo, pr_number) — written second, so higher id — wins max(id) for
+    the PR and is then dropped, so the PR VANISHES instead of falling back
+    to the in-scope row. Same trap, same shape, as
+    test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row above.
+    If this test fails, the filter moved outside the subquery.
+    """
+    _db(tmp_path, monkeypatch)
+    in_scope_id = _scored("drewjst/doug", 1, 150424894, score=0.61, github_repo_id=111)
+    out_of_scope_id = _scored("drewjst/doug", 1, 150424894, score=0.42, github_repo_id=222)
+    assert out_of_scope_id > in_scope_id, "the out-of-selection row must be the newer one"
+
+    rows = store.latest_reviews(installation_id=150424894, repo_ids={111})
+    assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
+    assert rows[0]["id"] == in_scope_id
+    assert rows[0]["score"] == 0.61
+
+
+# --- installation_tokens (tenant API keys spec, 2026-08-04) ---
+
+
+def _seed_install(installation_id=150424894):
+    store.upsert_installation(installation_id, "drewjst", "User", "active")
+
+
+def test_insert_installation_token_requires_an_installation_row(tmp_path, monkeypatch):
+    """No installations row means Doug was never installed there — a key
+    minted anyway would resolve to an id no tenancy backs (PR #48 semantics,
+    kept)."""
+    _db(tmp_path, monkeypatch)
+    assert (
+        store.insert_installation_token(
+            999,
+            token_lookup="AAAAAAAA",
+            token_hash="ab" * 32,
+            hash_version=1,
+            last4="wxyz",
+            label=None,
+            repo_selection="all",
+            scopes=["queue:read"],
+            minted_by="drewjst",
+            expires_at=None,
+        )
+        is None
+    )
+
+
+def test_token_row_round_trips_with_installation_state(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    token_id = store.insert_installation_token(
+        150424894,
+        token_lookup="AAAAAAAA",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label="ci",
+        repo_selection="selected",
+        scopes=["queue:read"],
+        minted_by="drewjst",
+        expires_at=datetime.now(UTC) + timedelta(days=90),
+    )
+    assert isinstance(token_id, int)
+    store.set_installation_token_repos(token_id, [111, 222])
+    row = store.installation_token_by_lookup("AAAAAAAA")
+    assert row["id"] == token_id
+    assert row["installation_state"] == "active"
+    assert row["repo_selection"] == "selected"
+    assert row["hash_version"] == 1
+    assert row["expires_at"].tzinfo is not None, "sqlite naive datetimes must be normalized"
+    assert store.installation_token_repo_ids(token_id) == {111, 222}
+    assert store.installation_token_by_lookup("NOPENOPE") is None
+
+
+def test_second_token_does_not_disturb_the_first(tmp_path, monkeypatch):
+    """Mint appends. The single-column model's silent rotation was half of
+    MT5; two rows must coexist."""
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    b = store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    assert a != b
+    assert store.installation_token_by_lookup("AAAAAAAA")["id"] == a
+    assert store.installation_token_by_lookup("BBBBBBBB")["id"] == b
+
+
+def test_mint_count_since_counts_only_this_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install(150424894)
+    _seed_install(999999999)
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    store.insert_installation_token(999999999, token_lookup="BBBBBBBB", **kw)
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    assert store.count_installation_tokens_minted_since(150424894, midnight) == 1
+
+
+def test_mint_count_returns_none_when_storage_off(monkeypatch):
+    """None, not 0: the caller treats None as 'cannot count' and allows —
+    the cap is fail-open by spec."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.count_installation_tokens_minted_since(150424894, datetime.now(UTC)) is None
+
+
+def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
+    """Fresh DB: create_all builds installations WITHOUT token_hash, so the
+    DROP finds its work done and must not raise (the 'satisfied, not failed'
+    rule). Legacy DB: the column exists and is dropped."""
+    from sqlalchemy import create_engine
+
+    from doug import migrations
+
+    _db(tmp_path, monkeypatch)
+    store._get_engine()  # create_all + apply on the fresh path — must not raise
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
+    # apply() always runs after create_all() in production (see this module's
+    # docstring), so by the time migration 6 runs an `installations` table
+    # always exists and migrations 1-5's target tables (verdicts, outcomes,
+    # review_jobs, ...) are already there too. This engine only ever built
+    # `installations` by hand, so migrations 1-5 are seeded as already-done
+    # here to isolate the one thing this test means to exercise: migration 6
+    # against a real legacy `installations` shape.
+    migrations.schema_migrations.create(engine, checkfirst=True)
+    with engine.begin() as conn:
+        conn.execute(
+            migrations.schema_migrations.insert(),
+            [{"version": v, "applied_at": datetime.now(UTC)} for v in range(1, 6)],
+        )
+    migrations.apply(engine)
+    assert "token_hash" not in {c["name"] for c in inspect(engine).get_columns("installations")}
+
+
+def test_list_tokens_masks_the_hash_and_orders_newest_first(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    b = store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    rows = store.list_installation_tokens(150424894)
+    assert [r["id"] for r in rows] == [b, a]
+    assert all("token_hash" not in r for r in rows)
+
+
+def test_revoke_is_ownership_scoped_and_idempotent(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install(150424894)
+    _seed_install(999999999)
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    token_id = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    # Foreign installation id in the WHERE → no match, indistinguishable from absent.
+    assert store.revoke_installation_token(token_id, 999999999) is False
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] is None
+    assert store.revoke_installation_token(token_id, 150424894) is True
+    first_stamp = store.installation_token_by_lookup("AAAAAAAA")["revoked_at"]
+    assert store.revoke_installation_token(token_id, 150424894) is True  # idempotent
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] == first_stamp
+
+
+def test_revoke_all_stamps_only_live_keys(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    store.revoke_installation_token(a, 150424894)
+    stamp_a = store.installation_token_by_lookup("AAAAAAAA")["revoked_at"]
+    assert store.revoke_all_installation_tokens(150424894) == 1  # only B was live
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] == stamp_a
+    assert store.installation_token_by_lookup("BBBBBBBB")["revoked_at"] is not None
+
+
+# --- Startup drift diagnostics (Task 11) ------------------------------------
+
+
+def test_count_installations_referenced_by_verdicts(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    _scored("drewjst/a", 2, 150424894, github_repo_id=111)
+    _scored("ci/x", 3, None)  # installation_id and github_repo_id both NULL
+    assert store.count_installations_referenced_by_verdicts() == 1
+
+
+def test_missing_from_ledger_is_zero_when_the_pair_is_covered(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+def test_missing_from_ledger_counts_a_repo_the_ledger_never_heard_of(tmp_path, monkeypatch):
+    """No installation_repos row at all for this (installation, repo) pair —
+    the repositories_added webhook never arrived. Two verdicts on the same
+    pair (two PRs) must still count as one missing pair, not two."""
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/gone", 1, 150424894, github_repo_id=333)
+    _scored("drewjst/gone", 2, 150424894, github_repo_id=333)
+    assert store.count_verdict_repos_missing_from_ledger() == 1
+
+
+def test_missing_from_ledger_ignores_ci_rows(tmp_path, monkeypatch):
+    """A CI verdict carries installation_id=None and github_repo_id=None —
+    neither identifies a tenant repo, so it must not be read as a missing
+    pair."""
+    _db(tmp_path, monkeypatch)
+    _scored("ci/x", 1, None)
+    assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+def test_missing_from_ledger_treats_a_removed_row_as_covered(tmp_path, monkeypatch):
+    """A 'removed' installation_repos row is deliberate coverage-ending,
+    recorded by a delivery that DID arrive — the opposite of the MT0-class
+    drift this helper exists to catch. Only a row's total absence counts."""
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a")], replace=False, state="removed"
+    )
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    assert store.count_verdict_repos_missing_from_ledger() == 0

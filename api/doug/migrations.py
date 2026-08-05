@@ -187,6 +187,25 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "WHERE installation_id IS NOT NULL AND tier <> 'external'",
         ),
     ),
+    (
+        6,
+        (
+            # Tenant API keys (spec 2026-08-04): the single-column credential
+            # moves to the installation_tokens table (a NEW table, so
+            # create_all owns it — no DDL for it here). The only change an
+            # EXISTING table needs is dropping the retired column. No data
+            # migrates: no dispensed token exists in any environment (MT0
+            # meant prod dispense 404'd from the day it shipped).
+            #
+            # On a fresh database create_all() has already built
+            # installations WITHOUT token_hash, so this DROP finds its work
+            # done and lands in _SATISFIED's third marker below. The table
+            # itself always exists by the time apply() runs (create_all made
+            # it), so this is never the ALTER-on-missing-TABLE crash-loop
+            # PR #48 reverted.
+            "ALTER TABLE installations DROP COLUMN token_hash",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows
@@ -197,7 +216,24 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
 # correct by filtering on real installation ids rather than by excluding a
 # label after the fact.
 
-_SATISFIED = ("duplicate column name", "already exists")
+# "no such column" is sqlite's voice for a DROP COLUMN whose work is already
+# done. Both only ever reach _run from a statement in MIGRATIONS, so the
+# blast radius of the broad Postgres string is our own migration list, not
+# arbitrary DDL.
+_SATISFIED = ("duplicate column name", "already exists", "no such column")
+
+
+def _satisfied(message: str) -> bool:
+    msg = message.lower()
+    if any(m in msg for m in _SATISFIED):
+        return True
+    # Postgres's missing-column voice — 'column "x" of relation "y" does
+    # not exist' — shares its tail with the missing-TABLE error
+    # ('relation "y" does not exist'), which must never be swallowed
+    # (see module docstring; the PR #48 crash-loop lesson). Requiring
+    # 'column' alongside the tail keeps DROP COLUMN idempotent without
+    # muting a missing table.
+    return "does not exist" in msg and "column" in msg
 
 
 def _run(engine, statement: str) -> None:
@@ -208,7 +244,13 @@ def _run(engine, statement: str) -> None:
         with engine.begin() as conn:
             conn.exec_driver_sql(statement)
     except DatabaseError as e:
-        if not any(m in str(e).lower() for m in _SATISFIED):
+        # str(e) echoes the offending SQL after the driver message ("...does
+        # not exist\n\n[SQL: ALTER TABLE ... DROP COLUMN ...]"), so an ALTER
+        # statement makes 'column' appear in str(e) even for a missing-TABLE
+        # error, defeating _satisfied's missing-table guard. e.orig is the
+        # bare driver exception, without the echo; str(e) is kept only as a
+        # fallback for the (untested-in-practice) case orig is None.
+        if not _satisfied(str(e.orig) if e.orig is not None else str(e)):
             raise
 
 
