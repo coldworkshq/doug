@@ -283,3 +283,156 @@ def test_pepper_must_be_exactly_32_bytes_of_valid_base64(monkeypatch):
     assert not tenancy.keys_configured()
     _pepper_env(monkeypatch)
     assert tenancy.keys_configured()
+
+
+def _org_caller(login="drewjst", role="admin", state="active", membership_raises=False):
+    """Stub for the caller's PAT: GET /user and GET /user/memberships/orgs/{org}."""
+
+    def _get_authenticated():
+        return SimpleNamespace(parsed_data=SimpleNamespace(login=login))
+
+    def _membership(org):
+        if membership_raises:
+            raise _Boom("404 not a member")
+        return SimpleNamespace(parsed_data=SimpleNamespace(role=role, state=state))
+
+    return SimpleNamespace(
+        rest=SimpleNamespace(
+            users=SimpleNamespace(get_authenticated=_get_authenticated),
+            orgs=SimpleNamespace(get_membership_for_authenticated_user=_membership),
+        )
+    )
+
+
+def _org_app(installation_id=150424894, calls=None):
+    """Stub for the app JWT: org/user installation lookups."""
+
+    def _get_org_installation(org):
+        if calls is not None:
+            calls.append(("org", org))
+        return SimpleNamespace(parsed_data=SimpleNamespace(id=installation_id))
+
+    def _get_user_installation(username):
+        if calls is not None:
+            calls.append(("user", username))
+        return SimpleNamespace(parsed_data=SimpleNamespace(id=installation_id))
+
+    return SimpleNamespace(
+        rest=SimpleNamespace(
+            apps=SimpleNamespace(
+                get_org_installation=_get_org_installation,
+                get_user_installation=_get_user_installation,
+            )
+        )
+    )
+
+
+def test_org_admin_proof_mints_for_the_org(monkeypatch):
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _org_caller())
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _org_app())
+    assert tenancy.verify_org_admin("ghp_x", "acme") == 150424894
+
+
+def test_org_member_but_not_admin_is_refused_before_dougs_quota(monkeypatch):
+    """Same load-bearing order as verify_admin: the membership check is the
+    caller's quota; a non-admin must never reach the app-JWT call."""
+    app_calls = []
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _org_caller(role="member"))
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _org_app(calls=app_calls))
+    assert tenancy.verify_org_admin("ghp_x", "acme") is None
+    assert app_calls == []
+
+
+def test_user_install_proof_is_pat_owner_equals_owner(monkeypatch):
+    """For a User-type install the account owner IS the only admin. The
+    login match is case-insensitive because GitHub logins are."""
+    monkeypatch.setattr(
+        tenancy, "_caller_client",
+        lambda pat: _org_caller(login="DrewJST", membership_raises=True),
+    )
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _org_app())
+    assert tenancy.verify_org_admin("ghp_x", "drewjst") == 150424894
+
+
+def test_stranger_matches_neither_login_nor_membership(monkeypatch):
+    app_calls = []
+    monkeypatch.setattr(
+        tenancy, "_caller_client",
+        lambda pat: _org_caller(login="mallory", membership_raises=True),
+    )
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _org_app(calls=app_calls))
+    assert tenancy.verify_org_admin("ghp_x", "acme") is None
+    assert app_calls == []
+
+
+def test_repos_proof_requires_one_installation(monkeypatch):
+    """Two repos proving to two different installations is a cross-tenant
+    key request; refuse before minting anything."""
+    ids = iter([150424894, 999999999])
+    monkeypatch.setattr(
+        tenancy, "verify_admin", lambda pat, owner, repo: next(ids)
+    )
+    assert tenancy.verify_repos_admin("ghp_x", [("acme", "a"), ("acme", "b")]) is None
+
+
+def test_repos_proof_requires_a_single_owner_before_any_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tenancy, "verify_admin",
+        lambda pat, owner, repo: calls.append((owner, repo)) or 150424894,
+    )
+    assert tenancy.verify_repos_admin("ghp_x", [("acme", "a"), ("evil", "b")]) is None
+    assert calls == [], "mixed owners must not spend anyone's quota"
+
+
+def test_mint_key_appends_and_never_disturbs_existing_keys(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _install()
+    _pepper_env(monkeypatch)
+    first = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    second = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label="ci",
+        expires_in_days=90, minted_by="drewjst",
+    )
+    assert first.token != second.token
+    assert first.token.startswith("doug_live_")
+    assert second.expires_at is not None and first.expires_at is None
+    assert store.installation_token_repo_ids(second.token_id) == {111}
+    # Both rows live: nothing rotated.
+    from doug import keyformat
+    assert store.installation_token_by_lookup(keyformat.parse(first.token).lookup) is not None
+
+
+def test_mint_key_without_pepper_raises_keys_not_configured(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _install()
+    monkeypatch.delenv("DOUG_TOKEN_PEPPER", raising=False)
+    with pytest.raises(tenancy.KeysNotConfigured):
+        tenancy.mint_key(
+            150424894, repo_selection="all", repo_ids=[], label=None,
+            expires_in_days=0, minted_by="drewjst",
+        )
+
+
+def test_mint_key_stores_only_the_peppered_hash(tmp_path, monkeypatch):
+    """The plaintext-never-stored property, restated for the new schema."""
+    _db(tmp_path, monkeypatch)
+    _install()
+    _pepper_env(monkeypatch)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    from doug import keyformat
+    parsed = keyformat.parse(minted.token)
+    row = store.installation_token_by_lookup(parsed.lookup)
+    assert parsed.secret not in row["token_hash"]
+    assert minted.token not in row["token_hash"]
+    assert row["token_hash"] == tenancy.hash_secret(parsed.secret, row["hash_version"])
