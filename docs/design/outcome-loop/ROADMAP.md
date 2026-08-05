@@ -85,7 +85,7 @@ executed as written — amendments folded in at their task, never as a second pa
   actually runs at boot, which needs both of the preceding two to be true at once. `doug-web` still
   runs as the default compute SA — held back deliberately, so a misconfigured web SA could not
   confuse the cutover — and gets its own in a follow-on PR.
-- [ ] Task 9: retire the CI-token review path — deletes `.github/workflows/doug-review.yml` and the
+- [x] Task 9: retire the CI-token review path — deletes `.github/workflows/doug-review.yml` and the
   `/v1/review` endpoint it calls. **Sequenced after Task 10** (Andrew, 2026-08-01), and this is the
   whole reason for the reversal: `doug-review.yml` is the surface producing Doug's reviews on this
   repo today, so landing Task 9 first would have left every PR reviewed by nothing — including the
@@ -93,7 +93,14 @@ executed as written — amendments folded in at their task, never as a second pa
   whoever takes it: deleting that workflow also deletes the job summary that has been standing in
   as the "did a review run?" signal, which is why `worker.process_job` had to start logging its
   successful outcomes first — after Task 9 the check run is the only other observable.
-  (Rebase vs. merged #15 still to be done deliberately.)
+  **Closed (Andrew, 2026-08-05):** soak concluded, dual runs stopped. Both copies of
+  `doug-review.yml` are gone along with `/v1/review`, `ReviewRequest`/`ReviewResponse` and the
+  idempotency machinery (`_inflight_review`/`_replay_or_none`/`_score_and_persist`) that lived only
+  in that route — `worker.process_job`'s success logging, landed above for exactly this, is now the
+  check run's only companion observable. `/v1/review`'s inline auth copy died with the route: every
+  operator route goes through the shared `_operator_only` gate now (`api.py`). The stale
+  "(Rebase vs. merged #15 still to be done deliberately.)" parenthetical this line used to carry is
+  moot — Task 9 was implemented fresh from main, so there was no old branch to rebase.
 - [x] Research-corpus quarantine — **resolved as a write-time convention, not a data migration**:
   no research rows exist in the app database, so there is nothing to `UPDATE`. The sentinel
   installation plus `source='research'` at insert is documented in the migration docstring.
@@ -124,7 +131,8 @@ executed as written — amendments folded in at their task, never as a second pa
   `scope` is **required** on both and on `score_one`/`read_intent` — no default anywhere on the
   path, so a new caller is a `TypeError` rather than an unmetered read. Un-tenanted callers (the
   CI path, the credential probe, the CLI, the intent probe script) charge a sentinel scope, which
-  keeps the CI dual-run and the probe alive without letting either touch a tenant's ceiling.
+  kept the CI dual-run and the probe alive without letting either touch a tenant's ceiling — the CI
+  path itself is retired (Task 9), so only the probe and the CLI still draw on that sentinel today.
   At the cap: `SpendCapExceeded(ReaderError)` → deterministic fallback under its own rule name,
   and the check run renders the **deterministic** tier honestly (pinned end-to-end, ADR-0010).
   **Caps are runaway guards, not plan limits** (4,000/installation/month ≈ 2,000 PRs, 1,000

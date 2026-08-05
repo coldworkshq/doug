@@ -951,7 +951,7 @@ def save_deviations(
 def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
     """The newest CI verdict already recorded for this exact commit, or None.
 
-    The idempotency read: /v1/review consults it before paying for an LLM
+    The idempotency read: the review paths consult it before paying for an LLM
     read, so a webhook redelivery or a retried CI job replays the recorded
     verdict instead of double-spending and inserting a duplicate ledger
     row. Matches on the head_sha column (indexed-capable, written by the App
@@ -1134,7 +1134,7 @@ def find_verdict_by_identity(
     Constraint makes those four columns the uniqueness key everywhere, and
     the worker populates all of them on every App-path row. find_review
     predates the App path and stays keyed the old way; its only caller
-    (/v1/review) retires in Task 9.
+    (/v1/review) retired in Task 9 (2026-08-05); CI rows before that date remain.
     """
     engine = _get_engine()
     if engine is None:

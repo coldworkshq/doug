@@ -8,7 +8,7 @@ return 202; a delivery must never wait on a paid model read.
 Failure policy differs from the CI-token review path's on purpose. There, a
 down ledger must not fail somebody's CI, so save_review's exception becomes
 a reason on the response and the review still "succeeds" (api.py's
-/v1/review handler). Here the durable row IS the deliverable — a job
+late /v1/review handler, retired in Task 9). Here the durable row IS the deliverable — a job
 marked done having written nothing is a green checkmark over an empty
 ledger — so save_review raising propagates, failing the job, and
 ingest.fail decides whether to retry. save_deviations keeps the same
@@ -100,7 +100,7 @@ def process_job(job: dict) -> int | None:
     Each of those three outcomes prints one line to stderr, and they are
     worded so that no two of them can be mistaken for each other. Only the
     freshly scored one says "paid read", because only it bought one; the
-    check run is the sole surface a review has once Task 9 retires
+    check run is the sole surface a review has now that Task 9 has retired
     doug-review.yml, so silence in the log must not be the only difference
     between "reviewed" and "never ran".
     """
@@ -188,6 +188,7 @@ def process_job(job: dict) -> int | None:
         verdict,
         rv,
         model=reader.MODEL if tier == "reader" else None,
+        prompt_hash=reader.PROMPT_HASH if tier == "reader" else None,
         pr_meta=meta.model_dump(mode="json"),
         coverage=cov,
         github_repo_id=job["github_repo_id"],

@@ -189,6 +189,31 @@ def test_the_deterministic_tier_claims_no_model_and_no_coverage(tmp_path, monkey
     assert _rows(url, store.reads) == []
 
 
+def test_the_reader_tier_stamps_the_prompt_hash(tmp_path, monkeypatch):
+    """The anchor a receipt points at to say 'this verdict used this exact
+    prompt' has to actually be written by the live path, not just plumbed
+    through save_review and left uncalled."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)  # tier="reader" default
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    (v,) = _rows(url, store.verdicts)
+    assert v["tier"] == "reader"
+    assert v["prompt_hash"] == reader.PROMPT_HASH
+
+
+def test_the_deterministic_tier_leaves_the_prompt_hash_null(tmp_path, monkeypatch):
+    """The deterministic tier never opens the diff, so stamping a prompt
+    hash on it would claim an instrument that was never actually run."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch, tier="deterministic")
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    (v,) = _rows(url, store.verdicts)
+    assert v["tier"] == "deterministic"
+    assert v["prompt_hash"] is None
+
+
 def test_the_check_run_is_posted_against_the_jobs_head_sha(tmp_path, monkeypatch):
     """Not the PR's current SHA. A push burst means pulls.get already
     returns a newer commit than the one this job was enqueued for, and
@@ -1232,8 +1257,8 @@ def test_reconcile_skips_a_pr_whose_base_repo_id_disagrees_with_the_store(tmp_pa
 # ran" and "the job was never claimed at all" were indistinguishable from
 # the logs — the only lines it could produce were drain's failure line and
 # the reclaim/skip lines. That was survivable only while doug-review.yml
-# still posted a job summary for every PR; Task 9 deletes that workflow and
-# the check run becomes the sole observable.
+# still posted a job summary for every PR; Task 9 deleted that workflow, and
+# the check run is now the sole observable.
 #
 # Three outcomes returned silently, and the fresh-vs-replay pair is the
 # reason these tests are worded the way they are. A fresh review buys a
