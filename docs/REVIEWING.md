@@ -187,6 +187,46 @@ per the table above). Dropped findings leave `risk_score` alone and add a
 weight-0 `settled-missing-import` reason so a flagged empty-finding check run
 is not silent.
 
+The same rule now also covers the **unmigrated-column** / **schema-dependency**
+class — 5/5 disproved across PRs 25, 30 (twice) and 48 (twice), see "No
+migration for this column…" and "Your disposition is invisible…" above.
+`doug/settle.py`'s `drop_disproved_schema_findings` asks the live database
+(`store.columns_of`, `inspect(engine).get_columns(...)`) rather than
+re-reading migrations.py's diff-touched versions, because that is the check
+that actually settled every one of the five — `installations.token_hash`
+never appears in any migration at all; it shipped with its table via
+`create_all()`. Same weight-0 notice pattern, rule `settled-schema-dependency`.
+Deliberately narrow in the same place missing-import is: a claim about a
+whole *new table* (not a column on an existing one) is not settled by this
+check — a brand-new table introduced by the diff under review is correctly
+absent from the live schema, and its disproof is migrations.py's own
+convention (new tables arrive via `create_all()`, never a migration), not a
+schema lookup.
+
+**Doug's own review of PR #49** — the branch that added this filter — found
+three real gaps in it before merge, all verified by reproduction rather than
+taken on faith (REVIEWING.md's own rule):
+
+1. **`reader:overly-broad-regex-match`**, medium: a whole-table claim mixed
+   with an unrelated real `table.column` mention in the same description
+   settled on the incidental pair instead of the actual (unresolvable)
+   claim. Fixed: `claimed_columns` now returns nothing when a bare
+   backtick-quoted name appears anywhere in the description — we cannot
+   tell which mention is the real one, so we settle neither.
+2. **`reader:unhandled-exception-path`**, medium: `columns_of` had no
+   guard around `inspect(engine)` — a transient DB failure would raise
+   straight through `score_one` (whose except clauses only name
+   `SpendCapExceeded`/`ReaderError`) and crash the review job. Fixed: same
+   catch-all posture as `review.head_file_text`, returns None on any
+   failure.
+3. **`reader:environment-drift`**, low: `columns_of` reads `DATABASE_URL`,
+   which is Doug's own ledger database, not a per-target-repo one. Correct
+   only because self-review makes the two coincide; degrades safely (not
+   wrongly) against a real tenant repo, since a tenant's table names
+   essentially never collide with Doug's own — but it is a silent no-op
+   there, not a working check, until Doug can reach the reviewed repo's own
+   schema. Documented, not yet fixed — no current install exercises it.
+
 `layer` is `doug` or `agent-reviewer` — the two layers this file exists to track, kept
 separable so one never speaks for the other. `verdict` is `real | disproved | adjacent`.
 

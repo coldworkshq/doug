@@ -57,6 +57,65 @@ def test_disabled_without_database_url(monkeypatch):
     assert store.save_review("o/r", 1, "deterministic", VERDICT) is None
 
 
+def test_columns_of_returns_none_without_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.columns_of("verdicts") is None
+
+
+def test_columns_of_returns_none_for_an_unknown_table(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 1, "deterministic", VERDICT)  # forces create_all()
+    assert store.columns_of("no_such_table") is None
+
+
+def test_columns_of_returns_the_live_columns_of_a_known_table(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 1, "deterministic", VERDICT)  # forces create_all()
+    columns = store.columns_of("verdicts")
+    assert columns is not None
+    assert {"id", "repo", "pr_number", "prompt_hash"} <= columns
+
+
+def test_columns_of_reads_the_connected_database_not_the_current_table_object(
+    tmp_path, monkeypatch
+):
+    """The property that makes this a settlement, not a restatement of
+    store.py: a database can lag the current Table() definitions (an
+    unmigrated production instance is exactly that case), and columns_of
+    must report what is actually there, not what the running code declares.
+
+    `_get_engine()` always self-migrates on first use, so a genuinely
+    older schema can only be observed by handing columns_of a raw engine
+    directly — same hand-built-older-schema shape test_migrations.py uses,
+    routed in via monkeypatch instead of through DATABASE_URL.
+    """
+    url = f"sqlite:///{tmp_path}/older.db"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200))"
+        )
+    monkeypatch.setattr(store, "_get_engine", lambda: engine)
+    assert store.columns_of("verdicts") == {"id", "repo"}
+    assert "prompt_hash" not in store.columns_of("verdicts")
+
+
+def test_columns_of_returns_none_when_inspection_raises(monkeypatch):
+    """Doug's review of PR #49 (reader:unhandled-exception-path): a
+    transient DB failure during introspection must degrade to "cannot
+    tell" — the same as no DATABASE_URL — not crash the whole review job.
+    settle.py's caller has no except clause for this; the guard belongs
+    here, same posture as review.head_file_text's own catch-all.
+    """
+    monkeypatch.setattr(store, "_get_engine", lambda: object())
+
+    def _boom(engine):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(store, "inspect", _boom)
+    assert store.columns_of("verdicts") is None
+
+
 def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
     vid = store.save_review("o/r", 7, "reader", VERDICT, RV, model=reader.MODEL)

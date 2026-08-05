@@ -19,6 +19,7 @@ alone would appear in every test and in no production row.
 """
 
 import os
+import sys
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -36,6 +37,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
     select,
     update,
 )
@@ -346,6 +348,55 @@ def _get_engine():
 
 def enabled() -> bool:
     return _get_engine() is not None
+
+
+def columns_of(table: str) -> frozenset[str] | None:
+    """Column names actually present on `table` in the connected database.
+
+    Ground truth for settle.py's schema-dependency filter (REVIEWING.md
+    resolution rule): the live schema, not migrations.py's text and not
+    this module's Table() declarations, which is the distinction that
+    matters — a database can lag either at any point in a rollout. None
+    means "cannot tell" (no DATABASE_URL, the table does not exist there
+    yet, or introspection failed), and settle.py treats that as "keep the
+    finding," never as "the column is absent."
+
+    ENVIRONMENT ASSUMPTION (Doug's review of PR #49, reader:environment-drift,
+    low): `DATABASE_URL` is Doug's OWN ledger database (this same table's
+    other rows — verdicts, findings, installations, …), not a
+    per-target-repo database Doug has no way to reach. Self-review is the
+    one case where "Doug's schema" and "the reviewed repo's schema"
+    coincide by construction. Against a genuine tenant repo this degrades
+    safely rather than wrongly — a tenant table name essentially never
+    matches one of Doug's own, so `has_table` returns False and the finding
+    stays live — but it is a silent no-op there, not a working check. A
+    correct multi-repo version needs a way to reach the REVIEWED repo's
+    schema (its own migration state, or a read-only connection scoped to
+    it), not Doug's.
+
+    Catches broadly and returns None on failure rather than raising: Doug's
+    review of PR #49 (reader:unhandled-exception-path) — this runs on every
+    scored PR via review.score_one, whose try/except only names
+    SpendCapExceeded and ReaderError, so an uncaught DB error here would
+    crash the review job instead of degrading, exactly the failure mode
+    this codebase exists to avoid. Same posture as review.head_file_text's
+    own catch-all: settlement is advisory, never load-bearing for whether a
+    review completes.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table(table):
+            return None
+        return frozenset(c["name"] for c in inspector.get_columns(table))
+    except Exception as e:  # noqa: BLE001 — settlement is advisory
+        print(
+            f"doug: columns_of({table!r}) failed ({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+        return None
 
 
 # Postgres names the constraint; sqlite lists the indexed columns (measured

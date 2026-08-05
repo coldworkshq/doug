@@ -265,6 +265,7 @@ def score_one(
     *,
     scope: str,
     resolve_file: settle.ResolveFile | None = None,
+    resolve_schema: settle.ResolveSchema | None = None,
 ):
     """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
 
@@ -286,6 +287,12 @@ def score_one(
     `resolve_file`, when given, settles import/undefined-name findings
     against the full file at head (REVIEWING.md resolution rule). It does
     not change what the model was shown — ADR-0002 stands.
+
+    `resolve_schema`, when given, settles unmigrated-column/schema-dependency
+    findings against the live database schema (same rule, same doc — 5/5
+    disproved, see settle.py's module docstring). Independent of head_sha:
+    schema is schema, not tied to a git commit, so this settles even when
+    `resolve_file` is None.
     """
     if reader.enabled():
         try:
@@ -300,9 +307,25 @@ def score_one(
                         f"against head file ({rules})",
                         file=sys.stderr,
                     )
+            schema_dropped: list[reader.ReaderFinding] = []
+            if resolve_schema is not None:
+                rv, schema_dropped = settle.drop_disproved_schema_findings(
+                    rv, resolve_schema
+                )
+                if schema_dropped:
+                    rules = ", ".join(
+                        f"reader:{d.category_slug}" for d in schema_dropped
+                    )
+                    print(
+                        f"doug: settled {len(schema_dropped)} schema-dependency "
+                        f"finding(s) against the live schema ({rules})",
+                        file=sys.stderr,
+                    )
             verdict = reader.verdict_from_reader(rv)
             if settled := settle.settlement_notice(dropped):
                 verdict.reasons.append(settled)
+            if schema_settled := settle.schema_settlement_notice(schema_dropped):
+                verdict.reasons.append(schema_settled)
             cov = reader.coverage(
                 diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
             )
