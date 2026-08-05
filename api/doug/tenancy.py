@@ -13,6 +13,7 @@ again" a property of the schema rather than a policy someone can relax.
 
 import hashlib
 import secrets
+import sys
 
 from githubkit import GitHub
 from sqlalchemy import select, update
@@ -100,7 +101,16 @@ def verify_admin(pat: str, owner: str, repo: str) -> int | None:
     # 1. The caller's own credential and the caller's own quota.
     try:
         seen = _caller_client(pat).rest.repos.get(owner=owner, repo=repo)
-    except Exception:  # noqa: BLE001 — any failure is "cannot prove it"
+    except Exception as e:  # noqa: BLE001 — any failure is "cannot prove it"
+        # Collapsed to 404 for the caller on purpose (see the docstring), but
+        # the operator still needs to tell a GitHub outage or a rate-limit 403
+        # apart from a genuine refusal. Undifferentiated to them, diagnosable
+        # to us. The PAT is never logged — only what was asked and what broke.
+        print(
+            f"doug: dispense denied {owner}/{repo} at the caller check "
+            f"({type(e).__name__}: {str(e)[:200]})",
+            file=sys.stderr,
+        )
         return None
     permissions = getattr(seen.parsed_data, "permissions", None)
     # Only an explicit True proceeds. githubkit models an absent field as a
@@ -113,7 +123,17 @@ def verify_admin(pat: str, owner: str, repo: str) -> int | None:
         return None
     try:
         found = app_auth.app_client().rest.apps.get_repo_installation(owner=owner, repo=repo)
-    except Exception:  # noqa: BLE001 — 404 here means Doug is not installed
+    except Exception as e:  # noqa: BLE001 — 404 here means Doug is not installed
+        # Same reasoning as the caller check above. This one is the more
+        # valuable line of the two: a 404 here is the ordinary "Doug is not
+        # installed there" case, so anything that is NOT a 404 — a 5xx, a
+        # timeout, a rate limit — means Doug's own app credentials or quota
+        # are in trouble, and nothing else in the system would say so.
+        print(
+            f"doug: dispense denied {owner}/{repo} at the installation lookup "
+            f"({type(e).__name__}: {str(e)[:200]})",
+            file=sys.stderr,
+        )
         return None
     installation_id = getattr(found.parsed_data, "id", None)
     return installation_id if isinstance(installation_id, int) else None

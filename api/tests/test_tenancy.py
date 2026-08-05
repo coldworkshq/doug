@@ -224,3 +224,43 @@ def test_app_path_disabled_verifies_nothing(monkeypatch):
     monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=True))
     monkeypatch.setattr(app_auth, "enabled", lambda: False)
     assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+
+
+def test_verify_admin_logs_why_it_denied_without_leaking_the_pat(monkeypatch, capsys):
+    """The caller gets an undifferentiated 404 on purpose — that is the
+    no-existence-leak property. But an operator still has to tell a GitHub
+    outage from a genuine refusal, and before this the two were identical
+    silence. Doug's own review of PR #48 flagged exactly that.
+
+    Both halves matter: the cause reaches stderr, and the PAT does not.
+    """
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app())
+
+    def _explode(pat):
+        raise _Boom("502 Bad Gateway")
+
+    monkeypatch.setattr(tenancy, "_caller_client", _explode)
+    assert tenancy.verify_admin("ghp_SUPERSECRET", "drewjst", "doug") is None
+
+    err = capsys.readouterr().err
+    assert "drewjst/doug" in err
+    assert "caller check" in err
+    assert "502 Bad Gateway" in err
+    assert "ghp_SUPERSECRET" not in err, "the PAT must never reach the log"
+
+
+def test_verify_admin_logs_a_failing_installation_lookup(monkeypatch, capsys):
+    """The more valuable of the two lines: a 404 here is the ordinary
+    not-installed case, so anything else means Doug's own app credentials or
+    quota are in trouble and nothing else in the system reports it.
+    """
+    monkeypatch.setattr(tenancy, "_caller_client", lambda pat: _caller(admin=True))
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(app_auth, "app_client", lambda: _app(installation_id=None))
+
+    assert tenancy.verify_admin("ghp_x", "drewjst", "doug") is None
+
+    err = capsys.readouterr().err
+    assert "installation lookup" in err
+    assert "drewjst/doug" in err
