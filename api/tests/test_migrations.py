@@ -61,11 +61,21 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         )
         for ddl in _OLDER_DEPENDENT_DDL:
             conn.exec_driver_sql(ddl)
+        # Migration 6's target: the pre-Task-2 `installations` shape, with the
+        # column it drops, so the DROP has real work to do here rather than
+        # finding it already gone.
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
     assert migrations.apply(engine) == ALL_VERSIONS
     assert APP_COLUMNS <= _columns(engine, "verdicts")
     assert {"prompt_hash"} <= _columns(engine, "verdicts")
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
     assert "claim_generation" in _columns(engine, "review_jobs")
+    assert "token_hash" not in _columns(engine, "installations")
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -307,6 +317,15 @@ def test_migration_004_adds_claim_generation(tmp_path):
         )
         for ddl in _OLDER_DEPENDENT_DDL:
             conn.exec_driver_sql(ddl)
+        # Migration 6 also runs against this engine (apply() runs every
+        # pending migration in order); give it a real `installations` table
+        # in the legacy shape so it has actual work to do.
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
     assert 4 in migrations.apply(engine)
     assert "claim_generation" in _columns(engine, "review_jobs")
 
@@ -452,7 +471,11 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
             f"10, 20, 'o/r', 7, '{sha}', 'done', 1, 1, '2026-08-01', {duplicate})"
         )
 
-    assert migrations.apply(engine) == [5]
+    # store.metadata.create_all() above already built `installations` without
+    # `token_hash`, so migration 6 runs too (nothing else was pre-recorded
+    # past 4) and finds its DROP already satisfied — landing as version 6
+    # alongside 5, not instead of it.
+    assert migrations.apply(engine) == [5, 6]
     with engine.connect() as conn:
         app_ids = [
             r[0]

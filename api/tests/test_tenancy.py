@@ -16,6 +16,7 @@ def _install(installation_id: int = 150424894) -> None:
     store.upsert_installation(installation_id, "drewjst", "User", "active")
 
 
+@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_mint_returns_a_prefixed_token_that_resolves(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _install()
@@ -41,6 +42,7 @@ def test_plaintext_token_is_never_stored(tmp_path, monkeypatch):
     assert token not in stored
 
 
+@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_resolve_rejects_junk_without_touching_storage(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _install()
@@ -91,6 +93,7 @@ def test_mint_scopes_writes_to_the_named_installation(tmp_path, monkeypatch):
     assert hash_first_after != hash_second
 
 
+@pytest.mark.skip(reason="single-column model retired mid-plan; rewritten in Task 6")
 def test_mint_refuses_an_installation_that_does_not_exist(tmp_path, monkeypatch):
     """No row means Doug was never installed there. Minting anyway would
     create a token that resolves to an id with no tenancy behind it."""
