@@ -1470,6 +1470,67 @@ def touch_installation_token_last_used(token_id: int) -> None:
         pass
 
 
+def list_installation_tokens(installation_id: int) -> list[dict]:
+    """Masked list for the management endpoint: everything but the hash.
+    Revoked rows stay listed — they are the audit trail, and 'when did that
+    key die' is a question this table exists to answer."""
+    engine = _get_engine()
+    if engine is None:
+        return []
+    cols = [c for c in installation_tokens.c if c.name != "token_hash"]
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(*cols)
+            .where(installation_tokens.c.installation_id == installation_id)
+            .order_by(installation_tokens.c.id.desc())
+        ).mappings().all()
+    out = []
+    for row in rows:
+        d = dict(row)
+        for key in ("expires_at", "revoked_at", "last_used_at", "created_at"):
+            d[key] = _utc(d[key])
+        out.append(d)
+    return out
+
+
+def revoke_installation_token(token_id: int, installation_id: int) -> bool:
+    """Soft revoke, idempotent, ownership INSIDE the where: a foreign
+    token_id matches nothing and is indistinguishable from a missing one."""
+    engine = _get_engine()
+    if engine is None:
+        return False
+    from sqlalchemy import func
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_tokens)
+            .where(
+                (installation_tokens.c.id == token_id)
+                & (installation_tokens.c.installation_id == installation_id)
+            )
+            .values(revoked_at=func.coalesce(installation_tokens.c.revoked_at, datetime.now(UTC)))
+        )
+    return result.rowcount > 0
+
+
+def revoke_all_installation_tokens(installation_id: int) -> int:
+    """The uninstall webhook's bulk stamp. Belt-and-braces on top of
+    resolve's live state check — the audit trail is the point."""
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_tokens)
+            .where(
+                (installation_tokens.c.installation_id == installation_id)
+                & (installation_tokens.c.revoked_at.is_(None))
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    return result.rowcount
+
+
 def comparison_reviews(
     limit: int = 50,
     repo: str | None = None,

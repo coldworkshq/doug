@@ -1888,3 +1888,54 @@ def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
         )
     migrations.apply(engine)
     assert "token_hash" not in {c["name"] for c in inspect(engine).get_columns("installations")}
+
+
+def test_list_tokens_masks_the_hash_and_orders_newest_first(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    b = store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    rows = store.list_installation_tokens(150424894)
+    assert [r["id"] for r in rows] == [b, a]
+    assert all("token_hash" not in r for r in rows)
+
+
+def test_revoke_is_ownership_scoped_and_idempotent(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install(150424894)
+    _seed_install(999999999)
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    token_id = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    # Foreign installation id in the WHERE → no match, indistinguishable from absent.
+    assert store.revoke_installation_token(token_id, 999999999) is False
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] is None
+    assert store.revoke_installation_token(token_id, 150424894) is True
+    first_stamp = store.installation_token_by_lookup("AAAAAAAA")["revoked_at"]
+    assert store.revoke_installation_token(token_id, 150424894) is True  # idempotent
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] == first_stamp
+
+
+def test_revoke_all_stamps_only_live_keys(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _seed_install()
+    kw = dict(
+        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
+        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        expires_at=None,
+    )
+    a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
+    store.insert_installation_token(150424894, token_lookup="BBBBBBBB", **kw)
+    store.revoke_installation_token(a, 150424894)
+    stamp_a = store.installation_token_by_lookup("AAAAAAAA")["revoked_at"]
+    assert store.revoke_all_installation_tokens(150424894) == 1  # only B was live
+    assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] == stamp_a
+    assert store.installation_token_by_lookup("BBBBBBBB")["revoked_at"] is not None
