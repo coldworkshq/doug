@@ -1,8 +1,19 @@
 from types import SimpleNamespace
 
+import base64
 import pytest
 
 from doug import app_auth, store, tenancy
+
+
+PEPPER_B64 = base64.b64encode(b"p" * 32).decode()
+PEPPER2_B64 = base64.b64encode(b"q" * 32).decode()
+
+
+def _pepper_env(monkeypatch, **extra):
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", PEPPER_B64)
+    for name, val in extra.items():
+        monkeypatch.setenv(name, val)
 
 
 def _db(tmp_path, monkeypatch):
@@ -249,3 +260,27 @@ def test_verify_admin_logs_a_failing_installation_lookup(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "installation lookup" in err
     assert "drewjst/doug" in err
+
+
+def test_hash_secret_is_stable_and_version_selects_the_pepper(monkeypatch):
+    _pepper_env(monkeypatch, DOUG_TOKEN_PEPPER_V2=PEPPER2_B64)
+    a = tenancy.hash_secret("s3cret", 1)
+    assert a == tenancy.hash_secret("s3cret", 1)
+    assert a != tenancy.hash_secret("s3cret", 2)
+    assert tenancy._current_hash_version() == 2
+
+
+def test_unknown_hash_version_fails_closed(monkeypatch):
+    _pepper_env(monkeypatch)
+    assert tenancy.hash_secret("s3cret", 7) is None
+
+
+def test_pepper_must_be_exactly_32_bytes_of_valid_base64(monkeypatch):
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", base64.b64encode(b"short").decode())
+    assert not tenancy.keys_configured()
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", "not!!base64@@")
+    assert not tenancy.keys_configured()
+    monkeypatch.delenv("DOUG_TOKEN_PEPPER", raising=False)
+    assert not tenancy.keys_configured()
+    _pepper_env(monkeypatch)
+    assert tenancy.keys_configured()

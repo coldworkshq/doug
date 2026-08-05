@@ -11,7 +11,11 @@ and is unrecoverable afterwards, which makes "we cannot show you that token
 again" a property of the schema rather than a policy someone can relax.
 """
 
+import base64
+import binascii
 import hashlib
+import hmac
+import os
 import secrets
 import sys
 
@@ -23,6 +27,52 @@ from . import app_auth, store
 # Greppable in a leaked-secret sweep, and the shape GitHub's secret scanning
 # would key on if Doug ever registers a pattern.
 TOKEN_PREFIX = "doug_"
+
+
+class KeysNotConfigured(Exception):
+    """Raised by mint/resolve when no valid pepper is configured. The API
+    layer renders it as 503: minting a key we could never verify (or
+    silently failing every verify) would be the config drift lema's
+    APIKeysConfigured() gate exists to prevent."""
+
+
+def _pepper(version: int) -> bytes | None:
+    """The HMAC pepper for a hash_version, or None. Peppers are why a
+    DB-only breach yields unusable hashes: key hashes are effectively
+    unsalted (the row is found by lookup, not by hash), so the secret
+    ingredient has to live OUTSIDE the database."""
+    name = "DOUG_TOKEN_PEPPER" if version == 1 else f"DOUG_TOKEN_PEPPER_V{version}"
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        decoded = base64.b64decode(raw, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    return decoded if len(decoded) == 32 else None
+
+
+def _current_hash_version() -> int:
+    """Highest configured pepper version — what NEW mints use. Old keys keep
+    verifying under their recorded version, which is what makes pepper
+    rotation rolling instead of lema's accepted flag-day."""
+    v = 1
+    while _pepper(v + 1) is not None:
+        v += 1
+    return v
+
+
+def hash_secret(secret: str, version: int) -> str | None:
+    """Peppered HMAC-SHA256, hex. None when that version has no pepper —
+    an unknown version fails closed rather than guessing."""
+    pepper = _pepper(version)
+    if pepper is None:
+        return None
+    return hmac.new(pepper, secret.encode(), hashlib.sha256).hexdigest()
+
+
+def keys_configured() -> bool:
+    return _pepper(_current_hash_version()) is not None
 
 
 def _hash(token: str) -> str:
