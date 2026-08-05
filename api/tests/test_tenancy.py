@@ -1,10 +1,9 @@
+import base64
 from types import SimpleNamespace
 
-import base64
 import pytest
 
 from doug import app_auth, store, tenancy
-
 
 PEPPER_B64 = base64.b64encode(b"p" * 32).decode()
 PEPPER2_B64 = base64.b64encode(b"q" * 32).decode()

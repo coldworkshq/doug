@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1195,7 +1195,7 @@ def test_deep_read_counters_needs_no_migration_on_a_database_that_predates_it(tm
     already exists. This proves the mechanism directly: a database built
     before deep_read_counters existed still gets it, the same way
     review_jobs/installations/outcome_jobs did when each was added."""
-    from sqlalchemy import create_engine, inspect
+    from sqlalchemy import create_engine
 
     from doug import migrations
 
@@ -1739,7 +1739,6 @@ def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, m
 
 
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---
-from datetime import UTC, datetime, timedelta
 
 
 def _seed_install(installation_id=150424894):
@@ -1838,7 +1837,8 @@ def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
     """Fresh DB: create_all builds installations WITHOUT token_hash, so the
     DROP finds its work done and must not raise (the 'satisfied, not failed'
     rule). Legacy DB: the column exists and is dropped."""
-    from sqlalchemy import create_engine, inspect
+    from sqlalchemy import create_engine
+
     from doug import migrations
 
     _db(tmp_path, monkeypatch)

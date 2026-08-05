@@ -53,9 +53,10 @@ def _pepper(version: int) -> bytes | None:
 
 
 def _current_hash_version() -> int:
-    """Highest configured pepper version — what NEW mints use. Old keys keep
-    verifying under their recorded version, which is what makes pepper
-    rotation rolling instead of lema's accepted flag-day."""
+    """Highest contiguously configured pepper version, scanning up from 1 — a
+    gap ends the scan, so configure versions without gaps (the rotation runbook
+    does). New mints use this; old keys keep verifying under their recorded
+    version, which is what makes pepper rotation rolling instead of a flag-day."""
     v = 1
     while _pepper(v + 1) is not None:
         v += 1
