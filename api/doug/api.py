@@ -57,8 +57,31 @@ def _startup_reconcile() -> None:
     Migration 005's unique index stops the second verdicts row; the claim
     fence stops a superseded holder finishing the job. Double-spend of the
     read is bounded by the spend cap, not by this path.
+
+    Two drift checks run first, both inside the same try as the catch-up
+    itself — deliberately: a DB error surfacing either check must land in
+    the except below and log-not-raise, the same as any other failure here,
+    rather than escape past reconcile_all and block the sweep over a read
+    that is diagnostic, not required.
     """
     try:
+        if store.enabled() and not store.active_installations():
+            referenced = store.count_installations_referenced_by_verdicts()
+            if referenced:
+                print(
+                    f"doug: DRIFT — verdicts reference {referenced} installation(s) but the "
+                    "installations table is empty; reconcile_all and token dispense are "
+                    "structural no-ops. Redeliver the installation webhook (ROADMAP MT0).",
+                    file=sys.stderr,
+                )
+        missing = store.count_verdict_repos_missing_from_ledger()
+        if missing:
+            print(
+                f"doug: DRIFT — {missing} repo(s) referenced by verdicts have no "
+                "installation_repos row; their tenants cannot see those verdicts. "
+                "Redeliver the installation_repositories webhook (ROADMAP MT0-class).",
+                file=sys.stderr,
+            )
         n = worker.reconcile_all()
         print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
         worker.drain()

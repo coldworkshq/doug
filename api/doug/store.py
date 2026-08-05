@@ -1305,6 +1305,70 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
         ]
 
 
+def count_installations_referenced_by_verdicts() -> int:
+    """How many distinct installations the verdicts ledger names. Compared
+    against active_installations() at startup: verdicts referencing tenants
+    the installations table has never heard of is the MT0 signature — a
+    webhook that never arrived — and reconcile_all is silently dead."""
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    from sqlalchemy import func
+
+    with engine.connect() as conn:
+        return int(
+            conn.execute(
+                select(func.count(func.distinct(verdicts.c.installation_id))).where(
+                    verdicts.c.installation_id.is_not(None)
+                )
+            ).scalar_one()
+        )
+
+
+def count_verdict_repos_missing_from_ledger() -> int:
+    """How many distinct (installation_id, github_repo_id) pairs verdicts
+    names that installation_repos has no row for at all — regardless of
+    state.
+
+    Task 10 made tenant queue reads join through installation_repos by id,
+    so a repo whose repositories_added delivery never arrived is now
+    invisible to its own tenant's queue while the operator's unscoped queue
+    (keyed on installation_id alone) still shows it — a second, per-repo
+    drift mode the ledger-emptiness check above cannot see: that check only
+    fires when installations is empty outright, and this table can be
+    entirely absent for one repo while every other repo on the same
+    installation is fine.
+
+    A 'removed' row does NOT count here — that is a delivery that DID
+    arrive, recording deliberate coverage-ending, the opposite of what this
+    counts. Only a row's total absence is the MT0-class signature.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return 0
+    from sqlalchemy import func
+
+    with engine.connect() as conn:
+        pairs = (
+            select(verdicts.c.installation_id, verdicts.c.github_repo_id)
+            .where(
+                verdicts.c.installation_id.is_not(None),
+                verdicts.c.github_repo_id.is_not(None),
+            )
+            .distinct()
+            .subquery()
+        )
+        covered = select(installation_repos.c.id).where(
+            installation_repos.c.installation_id == pairs.c.installation_id,
+            installation_repos.c.github_repo_id == pairs.c.github_repo_id,
+        )
+        return int(
+            conn.execute(
+                select(func.count()).select_from(pairs).where(~covered.exists())
+            ).scalar_one()
+        )
+
+
 def _utc(dt):
     """sqlite hands back naive datetimes for DateTime(timezone=True) columns;
     every stored value is UTC, so naive means 'UTC, badly labelled'."""

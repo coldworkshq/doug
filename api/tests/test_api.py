@@ -318,6 +318,46 @@ def test_a_failing_startup_reconcile_neither_escapes_nor_reaches_the_drain(monke
     assert "startup reconcile failed (RuntimeError: github said no)" in capsys.readouterr().err
 
 
+def test_startup_warns_when_verdicts_reference_installations_the_ledger_lacks(
+    tmp_path, monkeypatch, capsys
+):
+    """REVIEWING.md § 'A table only a webhook populates': prod sat for weeks
+    with 33 verdicts and ZERO installations rows, and reconcile_all was a
+    silent structural no-op. The next MT0-class state must be a loud line,
+    not a quiet nothing."""
+    _api_db(tmp_path, monkeypatch)
+    _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
+    monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "drain", lambda: None)
+    from doug.api import _startup_reconcile
+
+    _startup_reconcile()
+    err = capsys.readouterr().err
+    assert "DRIFT" in err and "installation webhook" in err and "MT0" in err
+
+
+def test_startup_warns_when_verdicts_reference_repos_the_ledger_lacks(
+    tmp_path, monkeypatch, capsys
+):
+    """The per-repo sibling of the case above. Task 10 made tenant queue
+    reads join through installation_repos by (installation_id,
+    github_repo_id), so a repo whose repositories_added delivery never
+    arrived is now invisible to its own tenant's queue while the operator's
+    unscoped queue (installation_id alone) still shows it — a second
+    MT0-class drift mode the empty-ledger check above cannot see, because
+    the installations row for this tenant DOES exist here."""
+    _api_db(tmp_path, monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=1)
+    monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "drain", lambda: None)
+    from doug.api import _startup_reconcile
+
+    _startup_reconcile()
+    err = capsys.readouterr().err
+    assert "DRIFT" in err and "installation_repos" in err and "MT0" in err
+
+
 def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
     """The wrong-digest case is covered above; this is the shape an
     attacker sends first, and nothing covered it."""

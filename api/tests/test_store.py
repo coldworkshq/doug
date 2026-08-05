@@ -1939,3 +1939,52 @@ def test_revoke_all_stamps_only_live_keys(tmp_path, monkeypatch):
     assert store.revoke_all_installation_tokens(150424894) == 1  # only B was live
     assert store.installation_token_by_lookup("AAAAAAAA")["revoked_at"] == stamp_a
     assert store.installation_token_by_lookup("BBBBBBBB")["revoked_at"] is not None
+
+
+# --- Startup drift diagnostics (Task 11) ------------------------------------
+
+
+def test_count_installations_referenced_by_verdicts(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    _scored("drewjst/a", 2, 150424894, github_repo_id=111)
+    _scored("ci/x", 3, None)  # installation_id and github_repo_id both NULL
+    assert store.count_installations_referenced_by_verdicts() == 1
+
+
+def test_missing_from_ledger_is_zero_when_the_pair_is_covered(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+def test_missing_from_ledger_counts_a_repo_the_ledger_never_heard_of(tmp_path, monkeypatch):
+    """No installation_repos row at all for this (installation, repo) pair —
+    the repositories_added webhook never arrived. Two verdicts on the same
+    pair (two PRs) must still count as one missing pair, not two."""
+    _db(tmp_path, monkeypatch)
+    _scored("drewjst/gone", 1, 150424894, github_repo_id=333)
+    _scored("drewjst/gone", 2, 150424894, github_repo_id=333)
+    assert store.count_verdict_repos_missing_from_ledger() == 1
+
+
+def test_missing_from_ledger_ignores_ci_rows(tmp_path, monkeypatch):
+    """A CI verdict carries installation_id=None and github_repo_id=None —
+    neither identifies a tenant repo, so it must not be read as a missing
+    pair."""
+    _db(tmp_path, monkeypatch)
+    _scored("ci/x", 1, None)
+    assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+def test_missing_from_ledger_treats_a_removed_row_as_covered(tmp_path, monkeypatch):
+    """A 'removed' installation_repos row is deliberate coverage-ending,
+    recorded by a delivery that DID arrive — the opposite of the MT0-class
+    drift this helper exists to catch. Only a row's total absence counts."""
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a")], replace=False, state="removed"
+    )
+    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
+    assert store.count_verdict_repos_missing_from_ledger() == 0
