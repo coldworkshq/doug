@@ -436,3 +436,122 @@ def test_mint_key_stores_only_the_peppered_hash(tmp_path, monkeypatch):
     assert parsed.secret not in row["token_hash"]
     assert minted.token not in row["token_hash"]
     assert row["token_hash"] == tenancy.hash_secret(parsed.secret, row["hash_version"])
+
+
+def _minted_all(monkeypatch, tmp_path, installation_id=150424894):
+    _db(tmp_path, monkeypatch)
+    _install(installation_id)
+    _pepper_env(monkeypatch)
+    return tenancy.mint_key(
+        installation_id, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+
+
+def test_resolve_returns_a_context_for_a_live_key(tmp_path, monkeypatch):
+    minted = _minted_all(monkeypatch, tmp_path)
+    ctx = tenancy.resolve(minted.token)
+    assert ctx.installation_id == 150424894
+    assert ctx.token_id == minted.token_id
+    assert ctx.repo_ids is None  # 'all' — filter by installation only
+    assert "queue:read" in ctx.scopes
+
+
+def test_resolve_rejects_wrong_secret_same_lookup(tmp_path, monkeypatch):
+    """Right lookup + wrong secret must die at the HMAC compare."""
+    minted = _minted_all(monkeypatch, tmp_path)
+    from doug import keyformat
+    parsed = keyformat.parse(minted.token)
+    forged_secret = ("A" * keyformat.SECRET_LEN)
+    forged = (
+        keyformat.PREFIX + parsed.lookup + "_" + forged_secret
+        + keyformat._crc(parsed.lookup, forged_secret)
+    )
+    assert tenancy.resolve(forged) is None
+
+
+def test_resolve_rejects_revoked_and_expired(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+    minted = _minted_all(monkeypatch, tmp_path)
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            store.installation_tokens.update()
+            .where(store.installation_tokens.c.id == minted.token_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
+    assert tenancy.resolve(minted.token) is None
+    second = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=1, minted_by="drewjst",
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            store.installation_tokens.update()
+            .where(store.installation_tokens.c.id == second.token_id)
+            .values(expires_at=datetime(2020, 1, 1, tzinfo=UTC))
+        )
+    assert tenancy.resolve(second.token) is None
+
+
+def test_uninstall_kills_every_key_structurally(tmp_path, monkeypatch):
+    """MT2. resolve reads installations.state LIVE; no revocation write is
+    needed for an uninstall to end access on the very next request."""
+    minted = _minted_all(monkeypatch, tmp_path)
+    assert tenancy.resolve(minted.token) is not None
+    store.upsert_installation(150424894, "drewjst", "User", "deleted")
+    assert tenancy.resolve(minted.token) is None
+    store.upsert_installation(150424894, "drewjst", "User", "suspended")
+    assert tenancy.resolve(minted.token) is None
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    assert tenancy.resolve(minted.token) is not None, "unsuspend restores, no key churn"
+
+
+def test_selected_key_intersects_against_the_live_repo_ledger(tmp_path, monkeypatch):
+    """The frozen selection is a CLAIM; installation_repos is the authority.
+    A repo removed from the installation vanishes from the key, and a key
+    whose every repo is gone resolves to nothing (empty intersection fails
+    closed, lema's rule)."""
+    _db(tmp_path, monkeypatch)
+    _install()
+    _pepper_env(monkeypatch)
+    store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111, 222], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    assert tenancy.resolve(minted.token).repo_ids == frozenset({111, 222})
+    store.set_installation_repos(150424894, [(222, "drewjst/b")], replace=False, state="removed")
+    assert tenancy.resolve(minted.token).repo_ids == frozenset({111})
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False, state="removed")
+    assert tenancy.resolve(minted.token) is None
+
+
+def test_resolve_ignores_non_key_tokens_and_flags_unconfigured_keys(tmp_path, monkeypatch):
+    """Junk and operator tokens return None (no pepper involved). A token
+    that IS key-shaped while no pepper is configured raises — the route
+    turns that into 503, because 'we cannot verify anything' must not read
+    as 'your key is bad'."""
+    minted = _minted_all(monkeypatch, tmp_path)
+    assert tenancy.resolve("not-a-token") is None
+    assert tenancy.resolve("doug_" + "x" * 43) is None
+    monkeypatch.delenv("DOUG_TOKEN_PEPPER", raising=False)
+    with pytest.raises(tenancy.KeysNotConfigured):
+        tenancy.resolve(minted.token)
+
+
+def test_resolve_runs_a_dummy_hmac_on_lookup_miss(tmp_path, monkeypatch):
+    """A miss must be timing-indistinguishable from a wrong secret. Pin the
+    mechanism (hash_secret called even when no row matched), not the clock."""
+    _db(tmp_path, monkeypatch)
+    _install()
+    _pepper_env(monkeypatch)
+    calls = []
+    real = tenancy.hash_secret
+    monkeypatch.setattr(
+        tenancy, "hash_secret", lambda s, v: calls.append(v) or real(s, v)
+    )
+    from doug import keyformat
+    ghost = keyformat.generate()  # never inserted → guaranteed lookup miss
+    assert tenancy.resolve(ghost.token) is None
+    assert calls, "lookup miss must still burn one HMAC"

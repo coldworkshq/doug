@@ -18,11 +18,12 @@ import hmac
 import os
 import secrets
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 from githubkit import GitHub
-from sqlalchemy import select, update
+from sqlalchemy import update
 
 from . import app_auth, keyformat, store
 
@@ -105,28 +106,71 @@ def mint(installation_id: int) -> str | None:
     return token
 
 
-def resolve(token: str) -> int | None:
-    """Map a presented token to its installation id, or None.
+_DUMMY_SECRET = "0" * keyformat.SECRET_LEN
 
-    The prefix check short-circuits before any query, so the operator token
-    and ordinary junk never reach storage. Lookup is by digest: the compared
-    value is already a hash, so an equality match leaks nothing a timing
-    attack could use — an attacker would need a preimage, not a clock.
 
-    token_hash is NULL until an installation mints, and SQL equality never
-    matches NULL, so un-minted installations are unreachable by design.
+@dataclass(frozen=True)
+class TokenContext:
+    """What a resolved key may see. repo_ids is None for selection='all'
+    (installation-wide: filter rows by installation_id only) and a non-empty
+    frozenset for 'selected' — never empty, because an empty live
+    intersection fails resolve instead of returning a context."""
+
+    installation_id: int
+    token_id: int
+    scopes: tuple[str, ...]
+    repo_ids: frozenset[int] | None
+
+
+def resolve(token: str) -> TokenContext | None:
+    """Map a presented token to its live context, or None.
+
+    Chain runs cheapest-first: offline parse+CRC (zero I/O), one indexed
+    SELECT, one HMAC, then the liveness checks. Every failure is the same
+    None — the route's uniform 401 leaks nothing about WHICH check failed.
+    The stored hash is compared via compare_digest, and a lookup miss burns
+    a dummy HMAC so a miss and a wrong secret cost the same clock.
+
+    The key's stored selection is a claim; installations.state and
+    installation_repos.state are the authority, read LIVE on every call.
+    That intersection is Doug's analog of lema's live-role re-derivation:
+    uninstall/suspend end access next request (MT2), and a 'selected' key
+    sheds any repo the installation no longer covers.
     """
-    if not token.startswith(TOKEN_PREFIX):
+    parsed = keyformat.parse(token)
+    if parsed is None:
         return None
-    engine = store._get_engine()
-    if engine is None:
+    if not keys_configured():
+        raise KeysNotConfigured()
+    row = store.installation_token_by_lookup(parsed.lookup)
+    if row is None:
+        hash_secret(_DUMMY_SECRET, _current_hash_version())
         return None
-    with engine.connect() as conn:
-        return conn.execute(
-            select(store.installations.c.installation_id).where(
-                store.installations.c.token_hash == _hash(token)
-            )
-        ).scalar_one_or_none()
+    expected = row["token_hash"]
+    computed = hash_secret(parsed.secret, row["hash_version"])
+    if computed is None or not hmac.compare_digest(computed, expected):
+        return None
+    if row["revoked_at"] is not None:
+        return None
+    if row["expires_at"] is not None and row["expires_at"] <= datetime.now(UTC):
+        return None
+    if row["installation_state"] != "active":
+        return None
+    repo_ids: frozenset[int] | None = None
+    if row["repo_selection"] == "selected":
+        frozen = store.installation_token_repo_ids(row["id"])
+        live = {rid for rid, _ in store.active_repos(row["installation_id"])}
+        effective = frozen & live
+        if not effective:
+            return None
+        repo_ids = frozenset(effective)
+    store.touch_installation_token_last_used(row["id"])
+    return TokenContext(
+        installation_id=int(row["installation_id"]),
+        token_id=int(row["id"]),
+        scopes=tuple(row["scopes"] or ()),
+        repo_ids=repo_ids,
+    )
 
 
 def _caller_client(pat: str) -> GitHub:

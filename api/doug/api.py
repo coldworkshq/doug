@@ -454,8 +454,11 @@ def _operator_only(x_doug_token: str) -> None:
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     if hmac.compare_digest(x_doug_token, expected):
         return
-    if tenancy.resolve(x_doug_token) is not None:
-        raise HTTPException(status_code=404, detail="not found")
+    try:
+        if tenancy.resolve(x_doug_token) is not None:
+            raise HTTPException(status_code=404, detail="not found")
+    except tenancy.KeysNotConfigured as e:
+        raise HTTPException(status_code=503, detail="token verification not configured") from e
     raise HTTPException(status_code=401, detail="bad token")
 
 
@@ -481,9 +484,13 @@ def queue(
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        installation_id = tenancy.resolve(x_doug_token)
-        if installation_id is None:
+        try:
+            ctx = tenancy.resolve(x_doug_token)
+        except tenancy.KeysNotConfigured as e:
+            raise HTTPException(status_code=503, detail="token verification not configured") from e
+        if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
+        installation_id = ctx.installation_id
         if repo is not None and repo not in {
             full_name for _, full_name in store.active_repos(installation_id)
         }:
