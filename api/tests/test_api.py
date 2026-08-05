@@ -2077,7 +2077,12 @@ def test_tenant_token_sees_only_its_own_rows(tmp_path, monkeypatch):
     # exactly what the real ingest path (worker.py) always writes together.
     store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=False)
     _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894, github_repo_id=1)
-    _seed_verdict(repo="someone/else", pr_number=2, installation_id=777)
+    # Same github_repo_id as the tenant's own live repo, on a different
+    # installation: this is the reachable window the installation filter
+    # alone must close (id-scope can't, since the id collides) — the same
+    # repo id can be active under two installations mid-transfer, or after a
+    # missed repositories_removed delivery leaves the old owner's row stale.
+    _seed_verdict(repo="someone/else", pr_number=2, installation_id=777, github_repo_id=1)
     r = client.get("/v1/queue", headers={"X-Doug-Token": token})
     assert r.status_code == 200
     # PRMetadata carries no `repo` field, so the returned row is identified by
@@ -2178,6 +2183,9 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
     monkeypatch.setenv("DOUG_API_TOKEN", "operator")
     store.upsert_installation(150424894, "drewjst", "User", "active")
     store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    # The live repo's own verdict — without this, repos_served is empty and
+    # the loop below never runs, proving nothing.
+    _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
     # A verdict for a repo the installation no longer covers (state flip):
     _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=9)
     minted = tenancy.mint_key(
@@ -2191,6 +2199,11 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
         item["pr"]["url"].removeprefix("https://github.com/").rsplit("/pull/", 1)[0]
         for item in unfiltered["items"]
     }
+    # Proves the served side: the live repo is in, the removed one is out —
+    # the row filter already agrees with installation_repos on its own.
+    assert repos_served == {"drewjst/a"}
+    # Proves the acceptance side: what the unfiltered queue serves, ?repo=
+    # must accept too (vacuous now that repos_served is non-empty).
     for full_name in repos_served:
         assert (
             client.get(
