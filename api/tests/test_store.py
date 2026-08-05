@@ -1741,13 +1741,23 @@ def test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row(tmp_path, m
 
 
 def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path, monkeypatch):
-    """A CI row or sibling-repo row must not win max(id) and then vanish —
-    same reasoning as the installation filter above."""
+    """latest_reviews picks max(id) GROUP BY (repo, pr_number) in a subquery.
+    Filter repo_ids OUTSIDE that subquery and an out-of-selection row on the
+    SAME (repo, pr_number) — written second, so higher id — wins max(id) for
+    the PR and is then dropped, so the PR VANISHES instead of falling back
+    to the in-scope row. Same trap, same shape, as
+    test_scoped_queue_falls_back_to_the_app_row_under_a_newer_ci_row above.
+    If this test fails, the filter moved outside the subquery.
+    """
     _db(tmp_path, monkeypatch)
-    _scored("drewjst/a", 1, 150424894, github_repo_id=111)
-    _scored("drewjst/b", 2, 150424894, github_repo_id=222)
+    in_scope_id = _scored("drewjst/doug", 1, 150424894, score=0.61, github_repo_id=111)
+    out_of_scope_id = _scored("drewjst/doug", 1, 150424894, score=0.42, github_repo_id=222)
+    assert out_of_scope_id > in_scope_id, "the out-of-selection row must be the newer one"
+
     rows = store.latest_reviews(installation_id=150424894, repo_ids={111})
-    assert {r["repo"] for r in rows} == {"drewjst/a"}
+    assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
+    assert rows[0]["id"] == in_scope_id
+    assert rows[0]["score"] == 0.61
 
 
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---

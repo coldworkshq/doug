@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -1821,7 +1821,42 @@ def test_dispense_404s_a_malformed_repo_without_calling_github(tmp_path, monkeyp
             headers={"X-GitHub-Token": "ghp_x"},
         )
         assert r.status_code == 404, bad
+    # Over the per-mint repo cap: refused before it can spend a single
+    # GitHub call proving any of the 21 repos — the cap check runs before
+    # any proof, the same as a malformed name does.
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "selected", "repos": [f"o/r{i}" for i in range(21)]},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 404
     assert calls == []
+
+
+def test_dispense_rejects_duplicate_repo_names_before_any_proof(tmp_path, monkeypatch):
+    """Case-insensitive dedupe: GitHub treats repo names case-insensitively,
+    so DrewJst/Doug and drewjst/doug collide on the same junction row. Left
+    unchecked, mint_key would insert the key row and then 500 on
+    set_installation_token_repos' uq_installation_token_repo — orphaning that
+    key row with zero repos attached. Reject before spending anyone's GitHub
+    quota proving either name."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
+    calls = []
+    monkeypatch.setattr(
+        tenancy, "verify_admin",
+        lambda pat, owner, repo: calls.append((owner, repo)) or 150424894,
+    )
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "selected", "repos": ["drewjst/doug", "DrewJst/Doug"]},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 404
+    assert calls == [], "duplicate names must not spend a single GitHub call"
+    assert _table(tmp_path, store.installation_tokens) == [], "no orphaned key row"
 
 
 def test_dispense_404s_when_verification_passes_but_no_installation_row(tmp_path, monkeypatch):
@@ -1864,6 +1899,7 @@ def test_dispense_selected_returns_a_key_scoped_to_the_named_repos(tmp_path, mon
     assert r.status_code == 200
     body = r.json()
     assert body["token"].startswith("doug_live_")
+    assert body["installation_id"] == 150424894
     assert body["selection"] == "selected"
     assert body["repos"] == ["drewjst/doug"]
     ctx = tenancy.resolve(body["token"])
@@ -1947,6 +1983,45 @@ def test_dispense_validation_is_uniform_404(tmp_path, monkeypatch):
     ):
         r = client.post("/v1/installations/token", json=bad, headers=headers)
         assert r.status_code == 404, bad
+
+
+def test_dispense_expires_in_days_is_wired_into_the_response(tmp_path, monkeypatch):
+    """Pins that body.expires_in_days actually reaches mint_key and comes
+    back out on the response, not just that the field round-trips."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "all", "owner": "drewjst", "expires_in_days": 90},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200
+    expires_at = datetime.fromisoformat(r.json()["expires_at"])
+    delta = expires_at - datetime.now(UTC)
+    assert timedelta(days=85) < delta < timedelta(days=95)
+
+
+def test_dispense_selected_repo_lookup_is_case_insensitive(tmp_path, monkeypatch):
+    """GitHub-proved admins must not 404 on a ledger entry that merely
+    differs in case: GitHub repo names are case-insensitive, so the
+    active_repos lookup keying the mint's repo_ids must be too."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "DrewJst/Doug")], replace=False)
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "selected", "repos": ["drewjst/doug"]},
+        headers={"X-GitHub-Token": "ghp_x"},
+    )
+    assert r.status_code == 200
+    ctx = tenancy.resolve(r.json()["token"])
+    assert ctx.repo_ids == frozenset({111})
 
 
 def test_dispense_without_pepper_is_503(tmp_path, monkeypatch):

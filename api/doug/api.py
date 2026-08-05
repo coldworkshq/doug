@@ -622,6 +622,14 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
     if selection == "selected":
         if not repos or len(repos) > MAX_REPOS_PER_MINT:
             raise _not_found()
+        if len({full.lower() for full in repos}) != len(repos):
+            # GitHub treats repo names case-insensitively, so DrewJst/Doug
+            # and drewjst/doug collide on the same junction row. Reject
+            # before spending a single GitHub call proving either one —
+            # letting a duplicate through would insert the key row and then
+            # 500 on set_installation_token_repos' uq_installation_token_repo,
+            # leaving that key row orphaned with zero repos attached.
+            raise _not_found()
         parsed_repos: list[tuple[str, str]] = []
         for full in repos:
             repo_owner, _, name = full.partition("/")
@@ -650,13 +658,18 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
 
     repo_ids: list[int] = []
     if selection == "selected":
-        by_name = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        # Lowercased on both sides: GitHub logins and repo names are
+        # case-insensitive, so a GitHub-proved admin must not 404 on a
+        # ledger entry that merely differs in case.
+        by_name = {
+            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
+        }
         # The ledger may lag GitHub (MT0 taught how badly); GitHub already
         # proved these repos belong to this installation, so a name the
         # ledger has not heard of yet refuses the mint rather than minting
         # a key whose junction rows point at nothing.
         try:
-            repo_ids = [by_name[full] for full in repos]
+            repo_ids = [by_name[full.lower()] for full in repos]
         except KeyError as exc:
             raise _not_found() from exc
 
