@@ -217,10 +217,23 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
 # label after the fact.
 
 # "no such column" is sqlite's voice for a DROP COLUMN whose work is already
-# done; "does not exist" is Postgres's. Both only ever reach _run from a
-# statement in MIGRATIONS, so the blast radius of the broad Postgres string
-# is our own migration list, not arbitrary DDL.
-_SATISFIED = ("duplicate column name", "already exists", "no such column", "does not exist")
+# done. Both only ever reach _run from a statement in MIGRATIONS, so the
+# blast radius of the broad Postgres string is our own migration list, not
+# arbitrary DDL.
+_SATISFIED = ("duplicate column name", "already exists", "no such column")
+
+
+def _satisfied(message: str) -> bool:
+    msg = message.lower()
+    if any(m in msg for m in _SATISFIED):
+        return True
+    # Postgres's missing-column voice — 'column "x" of relation "y" does
+    # not exist' — shares its tail with the missing-TABLE error
+    # ('relation "y" does not exist'), which must never be swallowed
+    # (see module docstring; the PR #48 crash-loop lesson). Requiring
+    # 'column' alongside the tail keeps DROP COLUMN idempotent without
+    # muting a missing table.
+    return "does not exist" in msg and "column" in msg
 
 
 def _run(engine, statement: str) -> None:
@@ -231,7 +244,7 @@ def _run(engine, statement: str) -> None:
         with engine.begin() as conn:
             conn.exec_driver_sql(statement)
     except DatabaseError as e:
-        if not any(m in str(e).lower() for m in _SATISFIED):
+        if not _satisfied(str(e)):
             raise
 
 

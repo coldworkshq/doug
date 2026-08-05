@@ -509,3 +509,13 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
         names = {idx["name"] for idx in inspect(engine).get_indexes("verdicts")}
         assert "uq_verdicts_app_identity" in names
+
+
+def test_satisfied_never_swallows_a_missing_table():
+    """Postgres phrases missing-column and missing-TABLE errors with the
+    same tail. The first is 'work already done'; the second is the PR #48
+    crash-loop and must raise."""
+    assert migrations._satisfied('column "token_hash" of relation "installations" does not exist')
+    assert migrations._satisfied("no such column: token_hash")
+    assert not migrations._satisfied('relation "installations" does not exist')
+    assert not migrations._satisfied("no such table: installations")
