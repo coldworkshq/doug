@@ -516,6 +516,13 @@ def queue(
             raise HTTPException(status_code=503, detail="token verification not configured") from e
         if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
+        # Scope gate: every key mints with queue:read today, but the scopes
+        # column exists so a future receipts/MCP-only key does not silently
+        # inherit queue access it was never granted. Same posture as an
+        # unresolved token — 401, not 403 — so this route stays consistent
+        # with itself.
+        if "queue:read" not in ctx.scopes:
+            raise HTTPException(status_code=401, detail="bad token")
         installation_id = ctx.installation_id
         live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
         # The key's effective scope, in ids: its frozen selection (already

@@ -244,7 +244,13 @@ def _run(engine, statement: str) -> None:
         with engine.begin() as conn:
             conn.exec_driver_sql(statement)
     except DatabaseError as e:
-        if not _satisfied(str(e)):
+        # str(e) echoes the offending SQL after the driver message ("...does
+        # not exist\n\n[SQL: ALTER TABLE ... DROP COLUMN ...]"), so an ALTER
+        # statement makes 'column' appear in str(e) even for a missing-TABLE
+        # error, defeating _satisfied's missing-table guard. e.orig is the
+        # bare driver exception, without the echo; str(e) is kept only as a
+        # fallback for the (untested-in-practice) case orig is None.
+        if not _satisfied(str(e.orig) if e.orig is not None else str(e)):
             raise
 
 

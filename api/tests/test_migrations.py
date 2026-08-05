@@ -1,4 +1,6 @@
+import pytest
 from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.exc import DatabaseError
 
 from doug import migrations, store
 
@@ -519,3 +521,76 @@ def test_satisfied_never_swallows_a_missing_table():
     assert migrations._satisfied("no such column: token_hash")
     assert not migrations._satisfied('relation "installations" does not exist')
     assert not migrations._satisfied("no such table: installations")
+
+
+def test_satisfied_against_the_bare_driver_message_ignores_the_sql_echo():
+    """SQLAlchemy's DatabaseError str() appends the offending statement
+    ('...does not exist\\n\\n[SQL: ALTER TABLE installations DROP COLUMN
+    token_hash]'), so 'column' shows up for EVERY ALTER regardless of what
+    actually went missing — _satisfied has no way to tell the echo from a
+    real mention of 'column' in the driver's own message. That is exactly
+    why _run evaluates e.orig (the bare driver exception, without the
+    echo) rather than str(e): evaluated against only the driver part of
+    these two realistic shapes, the missing-table string must not satisfy
+    and the missing-column string must.
+    """
+    missing_table_full = (
+        '(psycopg2.errors.UndefinedTable) relation "installations" does not exist\n\n'
+        "[SQL: ALTER TABLE installations DROP COLUMN token_hash]"
+    )
+    missing_column_full = (
+        '(psycopg2.errors.UndefinedColumn) column "token_hash" of relation '
+        '"installations" does not exist\n\n'
+        "[SQL: ALTER TABLE installations DROP COLUMN token_hash]"
+    )
+    driver_part_table = missing_table_full.split("\n\n[SQL:")[0]
+    driver_part_column = missing_column_full.split("\n\n[SQL:")[0]
+    assert not migrations._satisfied(driver_part_table)
+    assert migrations._satisfied(driver_part_column)
+    # The trap itself, made concrete: evaluated against the FULL string
+    # (what str(e) gives you, echo included) the missing-table case wrongly
+    # satisfies — this is what _run must never hand to _satisfied.
+    assert migrations._satisfied(missing_table_full)
+
+
+def test_run_evaluates_the_driver_message_not_the_sql_echoing_str():
+    """_run-level proof, not just _satisfied: SQLAlchemy's own DatabaseError
+    constructor produces the SQL-echoing str() (verified — it appends '[SQL:
+    ...]' to the driver message), so a stubbed DatabaseError built the real
+    way already carries the trap. If _run evaluated str(e) instead of
+    str(e.orig), the SQL echo's 'column' would satisfy the missing-TABLE
+    case too, and a genuinely missing table would be swallowed instead of
+    raising — the PR #48 crash-loop, reintroduced silently."""
+
+    class _Orig(Exception):
+        pass
+
+    statement = "ALTER TABLE installations DROP COLUMN token_hash"
+    missing_table_orig = _Orig('relation "installations" does not exist')
+    missing_column_orig = _Orig(
+        'column "token_hash" of relation "installations" does not exist'
+    )
+
+    class _FakeConn:
+        def __init__(self, orig):
+            self._orig = orig
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def exec_driver_sql(self, stmt):
+            raise DatabaseError(stmt, {}, self._orig)
+
+    class _FakeEngine:
+        def __init__(self, orig):
+            self._orig = orig
+
+        def begin(self):
+            return _FakeConn(self._orig)
+
+    with pytest.raises(DatabaseError):
+        migrations._run(_FakeEngine(missing_table_orig), statement)
+    migrations._run(_FakeEngine(missing_column_orig), statement)  # must not raise

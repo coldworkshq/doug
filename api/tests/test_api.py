@@ -2163,6 +2163,26 @@ def test_in_scope_repo_filters_normally(tmp_path, monkeypatch):
     assert len(r.json()["items"]) == 1
 
 
+def test_queue_refuses_a_key_lacking_queue_read_scope(tmp_path, monkeypatch):
+    """Every key mints with queue:read today (see test_operator_token_still_
+    sees_every_row for the pass side on a normal key), but the scopes column
+    is the real gate: a key stripped of it — or minted for something else
+    entirely, like a future receipts/MCP scope — must not read the queue."""
+    token = _tenant(tmp_path, monkeypatch)
+    from doug import keyformat
+    parsed = keyformat.parse(token)
+    row = store.installation_token_by_lookup(parsed.lookup)
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            store.installation_tokens.update()
+            .where(store.installation_tokens.c.id == row["id"])
+            .values(scopes=["receipts:read"])
+        )
+    r = client.get("/v1/queue", headers={"X-Doug-Token": token})
+    assert r.status_code == 401
+
+
 def test_unknown_token_is_401(tmp_path, monkeypatch):
     _tenant(tmp_path, monkeypatch)
     r = client.get("/v1/queue", headers={"X-Doug-Token": "doug_nope"})
