@@ -2221,7 +2221,17 @@ def test_list_tokens_requires_org_admin_and_masks(tmp_path, monkeypatch):
 
 def test_management_endpoints_reject_doug_tokens_as_proof(tmp_path, monkeypatch):
     """Keys cannot manage keys: a leaked key must never outrun revocation.
-    Management proof is a GitHub PAT, full stop."""
+    Management proof is a GitHub PAT, full stop.
+
+    _caller_client is monkeypatched to raise rather than letting a doug
+    token attempt a real GitHub call: that call would fail anyway (a doug
+    key is not a usable PAT), but leaving it unmocked makes the test's
+    outcome and timing depend on the sandbox's network reachability rather
+    than on the code under test. Patching _caller_client (not caller_login
+    itself) keeps caller_login's own try/except in the loop, so the failure
+    still flows through the exact exception-to-None path a real network
+    failure would take.
+    """
     _api_db(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
@@ -2229,6 +2239,11 @@ def test_management_endpoints_reject_doug_tokens_as_proof(tmp_path, monkeypatch)
         150424894, repo_selection="all", repo_ids=[], label=None,
         expires_in_days=0, minted_by="drewjst",
     )
+
+    def _boom(pat):
+        raise RuntimeError("a doug key is not a usable GitHub PAT")
+
+    monkeypatch.setattr(tenancy, "_caller_client", _boom)
     r = client.get(
         "/v1/installations/tokens", params={"owner": "drewjst"},
         headers={"X-GitHub-Token": minted.token},  # a doug key is not a PAT
@@ -2251,6 +2266,26 @@ def test_revoke_org_admin_can_kill_anything(tmp_path, monkeypatch):
     )
     assert r.status_code == 200 and r.json()["revoked"] is True
     assert tenancy.resolve(minted.token) is None, "revocation is next-request effective"
+
+
+def test_revoke_org_admin_can_kill_a_selected_key(tmp_path, monkeypatch):
+    """Org-admin proof is not limited to 'all' keys — it revokes anything,
+    a 'selected' key included."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="selected", repo_ids=[111], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    assert tenancy.resolve(minted.token) is None
 
 
 def test_revoke_repo_admin_must_cover_the_keys_selection(tmp_path, monkeypatch):
@@ -2284,6 +2319,30 @@ def test_revoke_repo_admin_must_cover_the_keys_selection(tmp_path, monkeypatch):
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 404
+
+
+def test_revoke_repo_admin_cannot_kill_an_all_selection_key(tmp_path, monkeypatch):
+    """Killing the org-wide key takes org-admin proof, full stop — even a
+    FULLY COVERING, valid repo-admin proof must not reach it. An 'all' key
+    has no junction rows, so repo-admin proof (which can only ever prove
+    coverage of named repos) has nothing to intersect against. The second
+    assertion pins that a refused attempt revokes nothing: no half-revoke
+    on a wrong-proof-type request."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
+    minted = tenancy.mint_key(
+        150424894, repo_selection="all", repo_ids=[], label=None,
+        expires_in_days=0, minted_by="drewjst",
+    )
+    monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
+    r = client.delete(
+        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 404
+    assert tenancy.resolve(minted.token) is not None, "must not be half-revoked"
 
 
 def test_revoke_repo_admin_lookup_is_case_insensitive(tmp_path, monkeypatch):
