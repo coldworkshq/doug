@@ -192,9 +192,11 @@ export default async function QueuePage({
         </section>
 
         <footer className="border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
-          Every finding names the pattern it matched, so a score can be argued
-          with. Reader findings come from a model reading the diff; the
-          deterministic fallback names a weighted rule instead.
+          The score is not a grade — it prices what a change touches and how
+          much of it, so it routes attention and does not fall as findings
+          are fixed. Every finding names the pattern it matched, so a score
+          can be argued with. Reader findings come from a model reading the
+          diff; the deterministic fallback names a weighted rule instead.
         </footer>
       </main>
     </div>

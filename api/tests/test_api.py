@@ -358,6 +358,31 @@ def test_startup_warns_when_verdicts_reference_repos_the_ledger_lacks(
     assert "DRIFT" in err and "installation_repos" in err and "MT0" in err
 
 
+def test_a_failing_drift_check_never_blocks_the_catchup_sweep(
+    tmp_path, monkeypatch, capsys
+):
+    """Doug's own review of PR #50 (startup-error-path): the drift
+    diagnostics shared one try with the sweep, so a diagnostic-only DB error
+    skipped reconcile_all for the whole cold start — the exact silent-no-op
+    class the diagnostics exist to prevent. They are advisory; the sweep is
+    the job."""
+    _api_db(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(worker, "reconcile_all", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(worker, "drain", lambda: None)
+
+    def _boom():
+        raise RuntimeError("diagnostic db hiccup")
+
+    monkeypatch.setattr(store, "count_verdict_repos_missing_from_ledger", _boom)
+    from doug.api import _startup_reconcile
+
+    _startup_reconcile()
+    assert ran, "the sweep must run even when a drift diagnostic fails"
+    err = capsys.readouterr().err
+    assert "drift check failed" in err and "diagnostic db hiccup" in err
+
+
 def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
     """The wrong-digest case is covered above; this is the shape an
     attacker sends first, and nothing covered it."""

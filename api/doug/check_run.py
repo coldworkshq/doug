@@ -40,6 +40,15 @@ NEUTRAL_NOTE = (
     "Doug is advisory: this check is always neutral and never blocks a "
     "merge, whatever the band says."
 )
+# The first author to fix four findings and re-push read the unchanged
+# number as a bug (PR #50). The score prices the PR's shape — it routes
+# attention; the findings are the judgment.
+RISK_NOTE = (
+    "Risk is not a grade and does not go down as findings are fixed: it "
+    "prices what this change touches and how much of it, so a change of "
+    "this shape earns the same look on every push. What the read actually "
+    "found is below."
+)
 FALLBACK_NOTE = (
     "**The validated diff-reader did not run.** This band and score come "
     "from the deterministic scorer, which never opens the diff — it scores "
@@ -99,6 +108,7 @@ def render(
         f"**{title}**",
         "",
         f"Risk {verdict.score:.2f} against a flag line of {verdict.threshold:.2f}.",
+        RISK_NOTE,
         NEUTRAL_NOTE,
     ]
     if tier != "reader":
