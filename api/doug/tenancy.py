@@ -165,8 +165,16 @@ def verify_admin(pat: str, owner: str, repo: str) -> int | None:
     the difference to discover whether a private repo exists.
     """
     # 1. The caller's own credential and the caller's own quota.
+    #
+    # Every GitHub client below is bound to a local for the duration of its
+    # call. githubkit's .rest namespace holds the client weakly, and a
+    # construct-and-chain temporary (`GitHub(pat).rest.x.y()`) can be
+    # garbage-collected mid-call — "GitHub client has already been
+    # collected", seen in prod on 2026-08-05 at the identity check. Tests
+    # stub _caller_client wholesale, so only prod traffic exercises this.
     try:
-        seen = _caller_client(pat).rest.repos.get(owner=owner, repo=repo)
+        caller = _caller_client(pat)
+        seen = caller.rest.repos.get(owner=owner, repo=repo)
     except Exception as e:  # noqa: BLE001 — any failure is "cannot prove it"
         # Collapsed to 404 for the caller on purpose (see the docstring), but
         # the operator still needs to tell a GitHub outage or a rate-limit 403
@@ -188,7 +196,8 @@ def verify_admin(pat: str, owner: str, repo: str) -> int | None:
     if not app_auth.enabled():
         return None
     try:
-        found = app_auth.app_client().rest.apps.get_repo_installation(owner=owner, repo=repo)
+        app = app_auth.app_client()
+        found = app.rest.apps.get_repo_installation(owner=owner, repo=repo)
     except Exception as e:  # noqa: BLE001 — 404 here means Doug is not installed
         # Same reasoning as the caller check above. This one is the more
         # valuable line of the two: a 404 here is the ordinary "Doug is not
@@ -216,7 +225,8 @@ def caller_login(pat: str) -> str | None:
     """GET /user on the caller's own quota. Used for minted_by attribution
     and as the cheap first hop of the User-install proof."""
     try:
-        me = _caller_client(pat).rest.users.get_authenticated()
+        caller = _caller_client(pat)  # bound: see verify_admin's lifetime note
+        me = caller.rest.users.get_authenticated()
     except Exception as e:  # noqa: BLE001 — an unusable PAT proves nothing
         print(
             f"doug: dispense denied at the identity check "
@@ -246,9 +256,8 @@ def verify_org_admin(pat: str, owner: str) -> int | None:
     is_owner = login.lower() == owner.lower()
     if not is_owner:
         try:
-            membership = _caller_client(pat).rest.orgs.get_membership_for_authenticated_user(
-                org=owner
-            )
+            caller = _caller_client(pat)  # bound: see verify_admin's lifetime note
+            membership = caller.rest.orgs.get_membership_for_authenticated_user(org=owner)
         except Exception as e:  # noqa: BLE001 — not a member, or org missing
             print(
                 f"doug: dispense denied org-admin {owner} at the membership check "
@@ -263,10 +272,11 @@ def verify_org_admin(pat: str, owner: str) -> int | None:
     if not app_auth.enabled():
         return None
     try:
+        app = app_auth.app_client()  # bound: see verify_admin's lifetime note
         if is_owner:
-            found = app_auth.app_client().rest.apps.get_user_installation(username=owner)
+            found = app.rest.apps.get_user_installation(username=owner)
         else:
-            found = app_auth.app_client().rest.apps.get_org_installation(org=owner)
+            found = app.rest.apps.get_org_installation(org=owner)
     except Exception as e:  # noqa: BLE001 — 404 = Doug is not installed there
         print(
             f"doug: dispense denied org-admin {owner} at the installation lookup "

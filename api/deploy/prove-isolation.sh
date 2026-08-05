@@ -62,8 +62,12 @@ mint() { # mint <owner> -> token \t token_id \t installation_id  (empty on failu
 }
 
 echo "== mint one 'all' key per account (proof: account owner / org admin) =="
-A_MINT=$(mint "$A_OWNER"); check "mint for $A_OWNER returns a key" "$([ -n "$A_MINT" ] && echo true || echo false)"
-B_MINT=$(mint "$B_OWNER"); check "mint for $B_OWNER returns a key" "$([ -n "$B_MINT" ] && echo true || echo false)"
+# mint() runs in a command substitution, so its body= never reaches this
+# shell — re-read the response file here or failures print an empty body.
+A_MINT=$(mint "$A_OWNER"); body=$(cat /tmp/doug-proof-body 2>/dev/null)
+check "mint for $A_OWNER returns a key" "$([ -n "$A_MINT" ] && echo true || echo false)"
+B_MINT=$(mint "$B_OWNER"); body=$(cat /tmp/doug-proof-body 2>/dev/null)
+check "mint for $B_OWNER returns a key" "$([ -n "$B_MINT" ] && echo true || echo false)"
 if [ -z "$A_MINT" ] || [ -z "$B_MINT" ]; then
   echo "cannot continue without both keys"
   exit 1
