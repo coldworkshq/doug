@@ -12,10 +12,19 @@ revision never starts** (it does not degrade to 503; that failure mode only
 applies when the secret exists but is empty/malformed). Run the gcp.sh setup
 step once per project — or create the secret by hand:
 
-    python3 -c "import base64,secrets;print(base64.b64encode(secrets.token_bytes(32)).decode())" \
+    python3 -c "import base64,secrets,sys;sys.stdout.write(base64.b64encode(secrets.token_bytes(32)).decode())" \
       | gcloud secrets create doug-token-pepper --data-file=- --project "$PROJECT"
 
 before the first deploy that includes the tenant-keys feature.
+
+Note the `sys.stdout.write` — a `print()` here stores its trailing newline
+INSIDE the secret (45 bytes, not 44), and that is exactly how prod 503'd
+every mint on 2026-08-05. The app now strips surrounding whitespace before
+decoding, so a newline-bearing secret works — but cut them clean anyway,
+and `gcloud secrets versions access latest --secret doug-token-pepper | wc -c`
+answering 44 is the quick health check. Env-var secrets bound `:latest`
+resolve at INSTANCE start, so after adding a version, roll a new revision
+(or wait out scale-to-zero) before expecting the change.
 
 ### Break-glass: revoke a tenant's keys (operator, SQL)
 
