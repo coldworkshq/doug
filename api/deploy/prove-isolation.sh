@@ -49,22 +49,27 @@ req() { # req <method> <path> <token-header-value> [json-body]; sets code/body
   body=$(cat /tmp/doug-proof-body)
 }
 
-mint() { # mint <owner> -> token \t token_id  (empty on failure)
+mint() { # mint <owner> -> token \t token_id \t installation_id  (empty on failure)
   local owner=$1
   code=$(curl -s -o /tmp/doug-proof-body -w '%{http_code}' \
     -X POST "$DOUG_URL/v1/installations/token" \
     -H "X-GitHub-Token: $GITHUB_PAT" -H 'content-type: application/json' \
     -d "{\"selection\": \"all\", \"owner\": \"$owner\", \"label\": \"isolation-proof\"}")
   body=$(cat /tmp/doug-proof-body)
-  [ "$code" = "200" ] && jq -r '[.token, (.token_id | tostring)] | join("\t")' /tmp/doug-proof-body
+  [ "$code" = "200" ] && jq -r \
+    '[.token, (.token_id | tostring), (.installation_id | tostring)] | join("\t")' \
+    /tmp/doug-proof-body
 }
 
 echo "== mint one 'all' key per account (proof: account owner / org admin) =="
 A_MINT=$(mint "$A_OWNER"); check "mint for $A_OWNER returns a key" "$([ -n "$A_MINT" ] && echo true || echo false)"
 B_MINT=$(mint "$B_OWNER"); check "mint for $B_OWNER returns a key" "$([ -n "$B_MINT" ] && echo true || echo false)"
-[ -z "$A_MINT" ] || [ -z "$B_MINT" ] && { echo "cannot continue without both keys"; exit 1; }
-A_KEY=${A_MINT%%$'\t'*}; A_ID=${A_MINT##*$'\t'}
-B_KEY=${B_MINT%%$'\t'*}; B_ID=${B_MINT##*$'\t'}
+if [ -z "$A_MINT" ] || [ -z "$B_MINT" ]; then
+  echo "cannot continue without both keys"
+  exit 1
+fi
+IFS=$'\t' read -r A_KEY A_ID _A_INST <<<"$A_MINT"
+IFS=$'\t' read -r B_KEY B_ID B_INST <<<"$B_MINT"
 
 echo "== each key sees only its own account's rows =="
 req GET /v1/queue "$B_KEY"
@@ -95,8 +100,16 @@ echo "== management surfaces are tenant-scoped too =="
 code=$(curl -s -o /tmp/doug-proof-body -w '%{http_code}' \
   "$DOUG_URL/v1/installations/tokens?owner=$B_OWNER" -H "X-GitHub-Token: $GITHUB_PAT")
 body=$(cat /tmp/doug-proof-body)
-b_inst=$(jq --argjson id "$B_ID" '[.tokens[] | select(.id == $id)] | first | .installation_id' /tmp/doug-proof-body)
-list_cross=$(jq --argjson inst "${b_inst:-0}" '[.tokens[] | select(.installation_id != $inst)] | length' /tmp/doug-proof-body)
+# Anchor on the installation id the MINT response named — never on a value
+# re-derived from the list under test (jq's `null` would satisfy a `:-0`
+# fallback and turn an empty list into a vacuous pass; Doug's review of
+# this script caught exactly that).
+b_has_own=$(jq --argjson id "$B_ID" --argjson inst "$B_INST" \
+  '[.tokens[] | select(.id == $id and .installation_id == $inst)] | length' /tmp/doug-proof-body)
+list_cross=$(jq --argjson inst "$B_INST" \
+  '[.tokens[] | select(.installation_id != $inst)] | length' /tmp/doug-proof-body)
+check "B's list contains the key just minted, under B's installation" \
+  "$([ "$b_has_own" = 1 ] && echo true || echo false)"
 check "B's key list contains only B's installation" "$([ "$list_cross" = 0 ] && echo true || echo false)"
 
 code=$(curl -s -o /tmp/doug-proof-body -w '%{http_code}' -X DELETE \
