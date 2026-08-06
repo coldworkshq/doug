@@ -383,3 +383,200 @@ def test_fetch_pr_degrades_gracefully_when_review_state_is_unreadable():
     assert meta.approvals == 0
     assert meta.approval_latency_s is None
     assert diff  # the actually load-bearing part still worked
+
+
+def _f(filename: str, patch_len: int, status: str = "modified"):
+    """A GitHub file object as far as read_order cares: .filename + .patch."""
+    return SimpleNamespace(
+        filename=filename,
+        status=status,
+        additions=1,
+        deletions=0,
+        patch="x" * patch_len,
+    )
+
+
+def test_read_order_puts_code_before_tests_before_prose():
+    """DIFF_BUDGET cuts the assembled diff linearly, so whatever sorts last
+    is what the reader never sees. Prose last is the single biggest win:
+    across 30 first-parent commits, 37% of diffs truncated but only 20% had
+    CODE over budget — the gap was docs and tests crowding out code."""
+    files = [
+        _f("docs/ROADMAP.md", 100),
+        _f("api/tests/test_tenancy.py", 100),
+        _f("api/doug/tenancy.py", 100),
+    ]
+    assert [f.filename for f in review.read_order(files)] == [
+        "api/doug/tenancy.py",
+        "api/tests/test_tenancy.py",
+        "docs/ROADMAP.md",
+    ]
+
+
+def test_read_order_sends_smallest_first_within_a_tier():
+    """Smallest-patch-first usually maximises whole files, which is what lets
+    the reader reason correctly rather than half-correctly. The cost — the
+    biggest patch in a tier is likeliest to be cut or dropped — is paid visibly
+    via coverage.file_cut or coverage.files_unseen, not silently."""
+    files = [_f("big.py", 900), _f("small.py", 100), _f("mid.py", 500)]
+    assert [f.filename for f in review.read_order(files)] == [
+        "small.py",
+        "mid.py",
+        "big.py",
+    ]
+
+
+def test_read_order_is_deterministic_for_equal_keys():
+    """Two files of identical tier and size must not swap between runs.
+    A nondeterministic order makes the same head_sha produce different
+    reads, which would make verdicts unreproducible and quietly break the
+    idempotency pre-read's assumption that a re-run sees the same input."""
+    files = [_f("b.py", 100), _f("a.py", 100), _f("c.py", 100)]
+    once = [f.filename for f in review.read_order(files)]
+    twice = [f.filename for f in review.read_order(list(files))]
+    assert once == twice == ["b.py", "a.py", "c.py"]  # input order preserved
+
+
+def test_read_order_tolerates_files_with_no_patch():
+    """GitHub returns binaries and too-large-to-inline files with
+    patch=None. They are filtered out at the join, but read_order sees them
+    first and must not raise on len(None)."""
+    files = [_f("a.py", 100), SimpleNamespace(filename="logo.png", patch=None)]
+    assert len(review.read_order(files)) == 2
+
+
+def _tier_ordered_diff(files):
+    """Synthetic tiered diff for reader coverage invariants.
+
+    Caller-level ordering regressions below exercise fetch_pr and
+    fetch_open_prs directly, so this helper deliberately stays limited to
+    coverage's pure input/output contract.
+    """
+    return reader.CHUNK_SEPARATOR.join(
+        reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
+        for f in review.read_order(files)
+        if f.patch
+    )
+
+
+def _pr50_files():
+    """Representative PR #50 (41182c1) slice at real per-file sizes.
+
+    It retains the motivating code/test/docs shape for this regression
+    without claiming to reproduce all 18 files or 275,858 characters.
+    """
+    return [
+        _f("api/deploy/gcp.sh", 2126),
+        _f("api/doug/api.py", 18606),
+        _f("api/doug/check_run.py", 1158),
+        _f("api/doug/keyformat.py", 2812),
+        _f("api/doug/migrations.py", 3341),
+        _f("api/doug/store.py", 15404),
+        _f("api/doug/tenancy.py", 13014),
+        _f("api/tests/test_api.py", 39769),
+        _f("docs/superpowers/plans/2026-08-04-tenant-api-keys.md", 105749),
+    ]
+
+
+class PR50FakeGH:
+    """The GitHub boundary needed to return PR #50's real file ordering."""
+
+    def __init__(self, pull, files):
+        self._pull = pull
+        self._files = files
+
+    @property
+    def rest(self):
+        return SimpleNamespace(
+            pulls=SimpleNamespace(
+                get=lambda **kw: SimpleNamespace(parsed_data=self._pull),
+                list=lambda **kw: SimpleNamespace(parsed_data=[self._pull]),
+                list_files=lambda **kw: SimpleNamespace(
+                    parsed_data=(self._files if kw.get("page", 1) == 1 else [])
+                ),
+                list_reviews=lambda **kw: SimpleNamespace(parsed_data=[]),
+            )
+        )
+
+
+def _pr50_gh():
+    return PR50FakeGH(_pull_full(changed_files=9), _pr50_files())
+
+
+def test_pr50_fetch_pr_reads_tenancy_at_the_old_budget(monkeypatch):
+    """The regression, pinned at the OLD 30k budget so it tests the
+    ORDERING alone and stays meaningful independent of Task 4.
+
+    Three consecutive reviews of the tenancy work never read tenancy.py:
+    api.py (18,606 chars) ate 62% of the budget purely because 'a' sorts
+    before 't'. After tiering, the 13,014-char tenancy.py is sent whole and
+    api.py is the one named as unseen."""
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
+    _meta, diff = review.fetch_pr(_pr50_gh(), "o", "r", 7)
+    cov = reader.coverage(diff)
+
+    assert "api/doug/tenancy.py" not in cov.files_unseen
+    assert cov.file_cut == "api/doug/store.py"
+    assert "api/doug/api.py" in cov.files_unseen
+
+
+def test_pr50_fetch_open_prs_reads_tenancy_at_the_old_budget(monkeypatch):
+    """Both call sites build their own diff string, so each must protect
+    tenancy.py from a top-of-list api.py crowding it out at 30k."""
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
+    items = review.fetch_open_prs(_pr50_gh(), "o", "r", limit=1)
+    cov = reader.coverage(items[0][1])
+
+    assert "api/doug/tenancy.py" not in cov.files_unseen
+    assert cov.file_cut == "api/doug/store.py"
+    assert "api/doug/api.py" in cov.files_unseen
+
+
+def test_pr50_reads_every_code_file_at_the_shipped_budget():
+    """At 100k the ordering plus the raised ceiling send all 57,441 chars
+    of PR #50's code. Docs still rank last and are cut partway through —
+    that is the design, not a gap."""
+    cov = reader.coverage(_tier_ordered_diff(_pr50_files()))
+
+    for code_file in (
+        "api/doug/tenancy.py",
+        "api/doug/api.py",
+        "api/doug/store.py",
+        "api/doug/keyformat.py",
+        "api/doug/migrations.py",
+        "api/doug/check_run.py",
+        "api/deploy/gcp.sh",
+    ):
+        assert code_file not in cov.files_unseen, code_file
+
+    docs_path = "docs/superpowers/plans/2026-08-04-tenant-api-keys.md"
+    assert docs_path not in cov.files_unseen
+    assert cov.file_cut == docs_path
+
+
+def test_reordering_keeps_coverage_honest(monkeypatch):
+    """The invariant reader.py's coverage block exists to protect: a
+    partial read must never look like a complete one. Reordering changes
+    WHICH files are dropped, so it must not change whether the drop is
+    reported — every unsent file still appears in files_unseen, and
+    complete stays False."""
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 5_000)
+    cov = reader.coverage(_tier_ordered_diff(_pr50_files()))
+
+    assert not cov.complete
+    assert len(cov.files_unseen) > 0
+    sent = {f.filename for f in _pr50_files()} - set(cov.files_unseen)
+    assert sent, "at least one file should have been sent"
+    assert len(cov.files_unseen) + len(sent) == 9
+
+
+def test_ordering_is_a_noop_below_the_budget():
+    """A PR that fits sends every file no matter how it is ordered. This
+    guards against a tiering bug that silently drops a file even when
+    there was room for it."""
+    files = [_f("docs/a.md", 50), _f("b.py", 50), _f("tests/test_c.py", 50)]
+    cov = reader.coverage(_tier_ordered_diff(files))
+
+    assert cov.complete
+    assert cov.files_unseen == []
+    assert cov.files_sent == 3

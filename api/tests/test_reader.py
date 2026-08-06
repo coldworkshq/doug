@@ -567,16 +567,18 @@ def test_a_read_whose_usage_the_sdk_withheld_says_unknown_not_zero(capsys):
 # --- ADR-0002: the reader's frozen prompt is the probe's, verbatim -------
 
 def test_reader_and_probe_share_the_validated_prompt_bytes():
-    """ADR-0002 claims reader.py is byte-identical to scripts/llm_probe.py,
+    """ADR-0002 froze six constants byte-identical to scripts/llm_probe.py,
     the module the Phase-1 probes actually validated (AUC 0.687/0.668,
-    pre-registered, replicated). Until now nothing checked that — the only
-    existing assertion near this compared reader.py to itself (read_diff
-    passes reader.SYSTEM to the API call; of course it equals reader.SYSTEM).
-    llm_probe.py keeps its own independent copies of these constants
-    (unlike SLUG_MERGES, which the probe imports from doug.patterns), so
-    only a real cross-module comparison can catch the two drifting —
-    at which point the live service would be running an unvalidated
-    instrument under a validated instrument's claimed AUC."""
+    pre-registered, replicated). llm_probe.py keeps its own independent
+    copies (unlike SLUG_MERGES, which it imports from doug.patterns), so
+    only a real cross-module comparison can catch the two drifting — at
+    which point the live service would be running an unvalidated
+    instrument under a validated instrument's claimed AUC.
+
+    ADR-0012 supersedes ADR-0002 and narrows the freeze to FIVE constants;
+    DIFF_BUDGET is now governed by a coverage bar instead and is asserted
+    separately below. MAX_TOKENS and EFFORT are pinned here for the first
+    time — ADR-0002 always claimed them, this test never checked them."""
     import sys
     from pathlib import Path
 
@@ -585,8 +587,30 @@ def test_reader_and_probe_share_the_validated_prompt_bytes():
 
     assert reader.SYSTEM == llm_probe.SYSTEM
     assert reader.SCHEMA == llm_probe.SCHEMA
-    assert reader.DIFF_BUDGET == llm_probe.DIFF_BUDGET
     assert reader.MODEL == llm_probe.MODEL
+    assert reader.MAX_TOKENS == llm_probe.MAX_TOKENS
+    assert reader.EFFORT == llm_probe.EFFORT
+
+
+def test_diff_budget_diverges_from_the_probe_on_purpose():
+    """ADR-0012. The probe's DIFF_BUDGET stays at the 30,000 it actually
+    measured; the shipped reader reads more. Asserting BOTH sides pins the
+    divergence as intentional and sized: anyone who 'fixes the drift' by
+    syncing either constant to the other breaks this test and gets sent to
+    ADR-0012 rather than silently re-anchoring the instrument.
+
+    The consequence this encodes, which ADR-0012 states in full: AUC
+    0.687 sentry / 0.668 grafana describe the 30,000-char configuration,
+    not what ships."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import llm_probe
+
+    assert reader.DIFF_BUDGET == 100_000
+    assert llm_probe.DIFF_BUDGET == 30_000
+    assert reader.DIFF_BUDGET > llm_probe.DIFF_BUDGET
 
 
 def test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes(monkeypatch):
