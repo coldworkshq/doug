@@ -1,4 +1,4 @@
-"""Post-read settlements that do not touch the frozen prompt (ADR-0002).
+"""Post-read settlements that do not touch ADR-0012's frozen five constants.
 
 REVIEWING.md: a claim about an absence cannot be settled by re-reading the
 diff — the check and the error are the same observation. When the full file

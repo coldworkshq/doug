@@ -79,12 +79,12 @@ checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-re
 
 ## Read Doug's coverage line before trusting its verdict
 
-Every verdict carries what was actually read: `Partial read: 83% of the diff (30,000 of
-35,956 chars). Cut inside api/tests/test_ingest.py. Never sent: ROADMAP.md.` A clear on a
+Every verdict carries what was actually read: `Partial read: 83% of the diff (100,000 of
+120,481 chars). Cut inside api/tests/test_ingest.py. Never sent: ROADMAP.md.` A clear on a
 partial read is not evidence about the unread part, and Doug says so itself.
 
 This is also a PR-size signal pointing the same way as one-PR-per-task: a diff small enough
-to be read whole produces a verdict worth something. A 36k-char diff does not.
+to be read whole produces a verdict worth something. A 121k-char diff does not.
 
 ## The recurring defect class here is a comment that outlives its truth
 
@@ -180,7 +180,7 @@ disproved|real|adjacent --changed|--no-changed --settled-by "…"`. Rates are
 prospective-only (`… rate`); backfill never enters the denominator.
 
 The product path also applies the resolution rule without editing the frozen
-prompt (ADR-0002): after a reader verdict, **missing-import** findings are
+prompt (ADR-0012's retained five-constant freeze): after a reader verdict, **missing-import** findings are
 settled against runtime imports in the full file at the reviewed head
 (`doug/settle.py`). `if TYPE_CHECKING:` imports do not settle (residual-real
 per the table above). Dropped findings leave `risk_score` alone and add a

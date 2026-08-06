@@ -320,7 +320,8 @@ def score_one(
 
     `resolve_file`, when given, settles import/undefined-name findings
     against the full file at head (REVIEWING.md resolution rule). It does
-    not change what the model was shown — ADR-0002 stands.
+    not change what the model was shown — ADR-0012's five-constant freeze
+    stands.
 
     `resolve_schema`, when given, settles unmigrated-column/schema-dependency
     findings against the live database schema (same rule, same doc — 5/5

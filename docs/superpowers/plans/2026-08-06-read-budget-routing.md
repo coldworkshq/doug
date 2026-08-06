@@ -893,7 +893,7 @@ is conservative in the safe direction."
 
 ## Done means
 
-- [ ] `make test` green, count ≥ 642 + 13 new
+- [ ] `make test` green, 653 (642 baseline + 11 net new tests)
 - [ ] `make lint` clean
 - [ ] `uv run python scripts/read_budget_gate.py` exits 0 with 30/30
 - [ ] `reader.py` diff is the `DIFF_BUDGET` line and its comment, nothing else
