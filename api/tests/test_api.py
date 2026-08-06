@@ -2751,7 +2751,7 @@ RV = api.reader.ReaderVerdict.model_validate(
 )
 
 
-def client_get_detail(verdict_id: int, monkeypatch) -> dict:
+def client_get_detail(verdict_id: int) -> dict:
     res = TestClient(app).get(f"/v1/runs/{verdict_id}", headers=AUTH)
     assert res.status_code == 200, res.text
     return res.json()
@@ -2767,9 +2767,14 @@ def _parsed_utc(iso: str) -> datetime:
 
 
 def test_run_detail_404s_an_unknown_verdict(tmp_path, monkeypatch):
+    """FastAPI's own missing-route 404 is indistinguishable from this one by
+    status code alone — the body pins it to the route's not-found branch
+    rather than a route that does not exist."""
     _db(tmp_path, monkeypatch)
     client = TestClient(app)
-    assert client.get("/v1/runs/4242", headers=AUTH).status_code == 404
+    res = client.get("/v1/runs/4242", headers=AUTH)
+    assert res.status_code == 404
+    assert res.json()["detail"] == "not found"
 
 
 def test_run_detail_refuses_without_the_operator_token(tmp_path, monkeypatch):
@@ -2797,6 +2802,16 @@ def test_run_detail_404s_a_tenant_key(tmp_path, monkeypatch):
     assert res.status_code == 404
 
 
+def test_run_detail_503s_without_a_ledger(tmp_path, monkeypatch):
+    """Mirrors test_runs_503s_without_a_ledger for the same route family:
+    an operator token that checks out fine (DOUG_API_TOKEN is set and
+    matches) still refuses when there is nothing to query."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    client = TestClient(app)
+    assert client.get("/v1/runs/1", headers=AUTH).status_code == 503
+
+
 def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatch):
     """Historical App-path reader verdicts carry NULL because the worker
     never stamped it (the CI endpoint did, masking the bug). Serialising
@@ -2806,7 +2821,7 @@ def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatc
         "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
-    body = client_get_detail(vid, monkeypatch)
+    body = client_get_detail(vid)
     assert body["prompt_hash"] is None
 
 
@@ -2820,7 +2835,7 @@ def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypat
             files_unseen=["api/doug/tenancy.py"], file_cut="api/doug/api.py",
         ),
     )
-    body = client_get_detail(vid, monkeypatch)
+    body = client_get_detail(vid)
     assert body["coverage"]["files_unseen"] == ["api/doug/tenancy.py"]
     assert body["coverage"]["file_cut"] == "api/doug/api.py"
     assert body["reasons"][0]["rule"] == "reader:race-condition"
@@ -2836,7 +2851,7 @@ def test_run_detail_reports_no_job_as_null_and_no_outcomes_as_empty(tmp_path, mo
         "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
-    body = client_get_detail(vid, monkeypatch)
+    body = client_get_detail(vid)
     assert body["job"] is None
     assert body["outcomes"] == []
     assert body["outcome_jobs"] == []
@@ -2858,7 +2873,7 @@ def test_run_detail_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
         "o/r", 9, "deterministic", VERDICT,
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
-    body = client_get_detail(vid, monkeypatch)
+    body = client_get_detail(vid)
     assert body["pr"] is None
 
 
@@ -2916,7 +2931,7 @@ def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monk
             due_at=datetime(2026, 8, 15, tzinfo=UTC), status="pending",
             created_at=datetime(2026, 8, 1, tzinfo=UTC),
         ))
-    body = client_get_detail(vid, monkeypatch)
+    body = client_get_detail(vid)
     assert body["verdict_id"] == vid
     assert body["repo"] == "o/r"
     assert body["pr_number"] == 7
