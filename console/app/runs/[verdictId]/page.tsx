@@ -113,7 +113,11 @@ export default async function RunDetailPage({
         <div className="flex flex-col gap-6 pt-5 lg:pl-6">
           <Block title="What the reader was given">
             {run.coverage ? (
-              <CoverageRuler coverage={run.coverage} changedFiles={changedFiles} />
+              <CoverageRuler
+                coverage={run.coverage}
+                changedFiles={changedFiles}
+                filesDropped={run.pr?.files_dropped ?? []}
+              />
             ) : (
               <p className="mono rounded-[5px] bg-muted px-3 py-2.5 text-xs text-muted-foreground">
                 No read. This run was scored by the deterministic tier, so the diff was

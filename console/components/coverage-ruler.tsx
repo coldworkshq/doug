@@ -24,13 +24,24 @@ import { coverageLabel, coveragePercent, type RunCoverage } from "@/lib/runs";
  *  The cut marker (and its "budget cut" label) only renders when
  *  `coverage.file_cut` is set, matching the header's own "cut at …" gate —
  *  a complete read, or one whose budget happened to land clean between two
- *  whole files, has no single file to point the marker at. */
+ *  whole files, has no single file to point the marker at.
+ *
+ *  `filesDropped` (PRMetadata.files_dropped, not part of `coverage` at
+ *  all) is a THIRD, separate fact from `files_unseen`: a binary or
+ *  oversize file GitHub reports but that never had a chance to be read —
+ *  reader.py's coverage() can't even see it, since a file with no patch
+ *  never produces the `### path (…)` header `files_unseen` is derived
+ *  from. It gets its own list, never folded into `files_unseen` or the
+ *  bar's geometry above: the bar's widths are char-based, and a dropped
+ *  file contributes no chars to `diff_chars` to be sized by. */
 export function CoverageRuler({
   coverage,
   changedFiles,
+  filesDropped,
 }: {
   coverage: RunCoverage;
   changedFiles: number | null;
+  filesDropped: string[];
 }) {
   const result = coveragePercent(coverage, changedFiles);
   const seenShare = coverage.sent_chars;
@@ -73,15 +84,18 @@ export function CoverageRuler({
         )}
       </div>
 
-      {/* mb-6 clears the "budget cut ↑" label, which is absolutely
+      {/* mb-7 clears the "budget cut ↑" label, which is absolutely
           positioned below the bar (top: calc(100% + 4px), inside a marker
           div stretched taller than the bar by -my-[7px] on top of that) —
           it needs room below the bar regardless of what renders next.
           Moving that margin onto the legend below and leaving none here
           let the label overprint the legend's in-flow text whenever the
           cut lands in roughly the left quarter of the track — precisely
-          the low-coverage case this page exists to explain. */}
-      <div className="mb-6 flex h-[26px] items-stretch gap-0.5">
+          the low-coverage case this page exists to explain. mb-6 cleared
+          this by only ~0-1px; mb-7 gives the label real headroom against a
+          font-metrics or Tailwind spacing change, with no render test able
+          to catch a regression here. */}
+      <div className="mb-7 flex h-[26px] items-stretch gap-0.5">
         <div className="cov-fill min-w-0.5 rounded-[2px]" style={{ flex: `${seenShare} 1 0` }} />
         {coverage.file_cut && (
           <div className="relative -my-[7px] mx-[3px] w-px flex-none bg-foreground">
@@ -137,6 +151,27 @@ export function CoverageRuler({
           </li>
         ))}
       </ul>
+
+      {filesDropped.length > 0 && (
+        <>
+          {/* A different cause from the block above, so a different list:
+              these never reached the reader's input at all — no header, no
+              chars, no place in files_unseen or the bar. Naming the cause
+              here is what keeps this from reading as a second, contradictory
+              "unseen" claim. */}
+          <div className="mono mt-4 border-t border-border pt-3 text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+            Never fetched — no patch (binary or oversize) — {filesDropped.length} files
+          </div>
+          <ul>
+            {filesDropped.map((path) => (
+              <li key={path} className="mono flex items-center gap-2.5 py-[3px] text-xs">
+                <span className="text-muted-foreground">{path}</span>
+                <span className="ml-auto text-[10.5px] text-muted-foreground/60">binary or oversize</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
