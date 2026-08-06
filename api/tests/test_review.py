@@ -532,8 +532,8 @@ def test_pr50_fetch_open_prs_reads_tenancy_at_the_old_budget(monkeypatch):
 
 def test_pr50_reads_every_code_file_at_the_shipped_budget():
     """At 100k the ordering plus the raised ceiling send all 57,441 chars
-    of PR #50's code. Docs still rank last and still lose — that is the
-    design, not a gap."""
+    of PR #50's code. Docs still rank last and are cut partway through —
+    that is the design, not a gap."""
     cov = reader.coverage(_tier_ordered_diff(_pr50_files()))
 
     for code_file in (
@@ -547,7 +547,9 @@ def test_pr50_reads_every_code_file_at_the_shipped_budget():
     ):
         assert code_file not in cov.files_unseen, code_file
 
-    assert "docs/superpowers/plans/2026-08-04-tenant-api-keys.md" in cov.files_unseen
+    docs_path = "docs/superpowers/plans/2026-08-04-tenant-api-keys.md"
+    assert docs_path not in cov.files_unseen
+    assert cov.file_cut == docs_path
 
 
 def test_reordering_keeps_coverage_honest(monkeypatch):

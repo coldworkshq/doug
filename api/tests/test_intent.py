@@ -198,7 +198,9 @@ def test_selection_on_dougs_own_records():
     def sent(title, files):
         return [d.id for d in intent.select(docs, title, files)]
 
-    assert sent("Tighten the reader prompt wording", ["doug/reader.py"])[0] == "ADR-0002"
+    # ADR-0012 retains ADR-0002's five-constant freeze while moving only
+    # DIFF_BUDGET to a coverage bar, so it is the binding reader record.
+    assert sent("Tighten the reader prompt wording", ["doug/reader.py"])[0] == "ADR-0012"
     # ADR-0003 used to answer this and is now superseded by ADR-0010. A
     # superseded record must stop steering the reader: left binding, it
     # would have Doug flag its own check-run code as deviating from a rule

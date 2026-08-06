@@ -1,7 +1,8 @@
 ---
 title: Freeze the reader's prompt and schema to the validated probe
-status: accepted
+status: superseded
 date: 2026-07-29
+superseded_by: ADR-0012
 ---
 
 ## Context

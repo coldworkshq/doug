@@ -32,7 +32,12 @@ from .models import Band, Reason, Verdict
 MODEL = "claude-opus-5"
 MAX_TOKENS = 6000
 EFFORT = "medium"
-DIFF_BUDGET = 30_000  # chars
+# chars. Governed by ADR-0012's coverage bar, NOT by the probe — the
+# probe's own DIFF_BUDGET stays at the 30,000 it measured. 100,000 is
+# where code+tests coverage saturates (100%/97% over 30 first-parent
+# commits) at +$0.019 mean per read; the budget is a ceiling, not a
+# spend, and 63% of PRs already fit under 30,000.
+DIFF_BUDGET = 100_000
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
 DEFAULT_READ_TIMEOUT_S = 120  # seconds, whole read incl. retries' backoff
 
@@ -376,9 +381,10 @@ def _user_text(pr, diff: str) -> str:
 # the cut, and the mutation-verified test file that would have deduped two
 # of its other findings was never sent at all.
 #
-# These functions do not change what the model is given — DIFF_BUDGET and
-# _user_text are frozen probe parameters (ADR-0002). They only make the cut
-# observable, so a partial read stops looking like a complete one.
+# These functions only observe the cut. DIFF_BUDGET is governed by
+# ADR-0012's coverage bar; SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS
+# remain frozen to the validated probe. A partial read therefore stops
+# looking like a complete one.
 
 
 def diff_chunk(filename: str, status: str, additions: int, deletions: int, patch: str) -> str:
