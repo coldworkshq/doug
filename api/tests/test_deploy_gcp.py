@@ -24,11 +24,6 @@ def _function_body(name: str) -> str:
         if ln.startswith(f"{name}()"):
             in_fn = True
             continue
-        if in_fn and ln.endswith("() {") and not ln[0].isspace():
-            break
-        if in_fn and ln == "}" and body and not body[-1].startswith(" "):
-            # closing brace of the function at column 0 — rare; keep scanning
-            pass
         if in_fn:
             # Top-level sibling function: `foo() {` at column 0.
             if ln.endswith("() {") and not ln.startswith((" ", "\t")):
@@ -72,6 +67,13 @@ def test_console_is_never_deployed_unauthenticated():
     body = _function_body("console")
     assert "--no-allow-unauthenticated" in body
     assert "--allow-unauthenticated" not in body.replace("--no-allow-unauthenticated", "")
+    # --no-allow-unauthenticated only blocks the default deploy-time policy.
+    # A later `services add-iam-policy-binding ... --member=allUsers` — in
+    # console() or in setup() — would leave both assertions above passing
+    # while the service is world-readable, so this checks the whole script,
+    # not just console()'s body.
+    assert "allUsers" not in GCP
+    assert "allAuthenticatedUsers" not in GCP
 
 
 def test_console_runs_as_its_own_service_account():
