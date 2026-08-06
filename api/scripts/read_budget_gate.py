@@ -2,8 +2,10 @@
 
     uv run python scripts/read_budget_gate.py
 
-The bar: 100% of code-tier characters sent on >=95% of PRs, over the 30
-first-parent commits ending at END_SHA.
+The statistical bar: every code-tier file sent whole on >=95% of PRs, over
+the 30 first-parent commits ending at END_SHA. This pinned range is also a
+fixed sanity sample whose observed result is 30/30; the shipped gate requires
+that exact sample and result rather than silently accepting a smaller set.
 
 Costs ZERO model calls — reader.coverage is pure over the assembled diff
 string, so the metric governing DIFF_BUDGET is verifiable by anyone at any
@@ -14,12 +16,12 @@ END_SHA is pinned rather than "the last 30 commits" on purpose: a moving
 window would drift under the gate and let a later commit re-open it
 silently.
 
-Honest limit, stated rather than discovered later: this reconstructs each
-PR's diff from `git diff`, whose per-file output carries `diff --git` and
-index headers that GitHub's `f.patch` does not. Sizes here therefore run
-slightly LARGER than what the service actually assembles, which makes the
-gate conservative — it can report a miss the live path would not have, but
-it cannot report a pass the live path would have missed.
+Honest limit, stated rather than discovered later: this reconstructs every
+patch available in local Git. Its per-file output carries `diff --git` and
+index headers that GitHub's `f.patch` does not, so those reconstructed sizes
+run slightly larger than the service input. Local Git cannot model a separate
+GitHub API omission where `patch=None`; production `files_dropped` receipts
+cover that hole. This gate therefore makes no universal no-false-pass claim.
 """
 
 import subprocess
@@ -81,7 +83,10 @@ def main() -> int:
         )
         cov = reader.coverage(diff)
         code = [f.filename for f in files if _is_code(f.filename)]
-        missed = [f for f in code if f in cov.files_unseen]
+        missed_evidence = set(cov.files_unseen)
+        if cov.file_cut is not None:
+            missed_evidence.add(cov.file_cut)
+        missed = list(dict.fromkeys(f for f in code if f in missed_evidence))
         ok = not missed
         met += ok
         rows.append((sha, len(files), cov.diff_chars, ok, missed))
@@ -91,14 +96,21 @@ def main() -> int:
 
     print(f"ADR-0012 coverage bar — DIFF_BUDGET = {reader.DIFF_BUDGET:,}")
     print(f"range: {N_COMMITS} first-parent commits ending {END_SHA}\n")
-    print(f"{'sha':>9}  {'files':>5}  {'chars':>9}  all-code-sent")
+    print(f"{'sha':>9}  {'files':>5}  {'chars':>9}  all-code-whole")
     print("-" * 46)
     for sha, nfiles, chars, ok, missed in rows:
         mark = "yes" if ok else f"NO  {', '.join(missed[:2])}"
         print(f"{sha:>9}  {nfiles:>5}  {chars:>9,}  {mark}")
 
-    print(f"\nall code sent on {met}/{total} ({rate:.0%}); bar is {BAR:.0%}")
-    if rate >= BAR:
+    print(f"\nall code sent whole on {met}/{total} ({rate:.0%})")
+    print(f"statistical bar: >= {BAR:.0%}")
+    print(
+        f"fixed-sample sanity: {len(shas)}/{N_COMMITS} SHAs, "
+        f"{total}/{N_COMMITS} evaluated rows, {met}/{N_COMMITS} passing; "
+        f"requires {N_COMMITS}/{N_COMMITS}"
+    )
+    sample_complete = len(shas) == N_COMMITS and total == N_COMMITS
+    if sample_complete and met == N_COMMITS and rate >= BAR:
         print("PASS")
         return 0
     print("FAIL")

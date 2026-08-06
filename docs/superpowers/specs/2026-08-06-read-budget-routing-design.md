@@ -159,8 +159,8 @@ ADR-0012 restates the whole rule:
 - **Five constants stay frozen** — `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT`,
   `MAX_TOKENS`, still pinned by the existing cross-pin test.
 - **`DIFF_BUDGET` is governed by a pre-registered coverage bar instead of by
-  the probe.** The bar: *100% of code-tier characters sent on ≥95% of PRs, over
-  the last 30 first-parent commits.* Verified deterministically — `coverage()`
+  the probe.** The bar: *every code-tier file sent whole on ≥95% of PRs, over
+  the 30 first-parent commits ending at `135c8e5`.* Verified deterministically — `coverage()`
   is a pure function, so the bar costs **zero model calls** to check.
 
 **The honest limit, and it is the reason this needs a record at all.** After
@@ -180,20 +180,29 @@ TDD. Each test encodes why the behaviour matters, not just what it does.
 
 | test | encodes |
 |---|---|
-| 100k of markdown + 5k of code → all code sent | prose cannot contain the defect class the reader is asked to find |
+| 100k of markdown + 5k of code → all code sent whole | prose cannot contain the defect class the reader is asked to find |
 | `test_tenancy.py` does not displace `tenancy.py` | tests are context for the code, not competitors with it |
-| PR #50's shape reconstructed → `tenancy.py` sent, `files_unseen` names `api.py` | the motivating defect, pinned |
+| PR #50's shape reconstructed through both callers → `tenancy.py` sent whole, `file_cut` names `store.py`, and `files_unseen` names `api.py` | the motivating defect, pinned without mistaking a partial file for a whole one |
 | same input ordered twice → identical output | no set iteration; a nondeterministic order makes verdicts unreproducible |
 | `coverage().files_unseen` names every unsent file after reordering | the partial-read-cannot-look-complete invariant survives reordering |
 | a fully-fitting PR sends every file regardless of order | ordering must be a no-op below the budget |
 | `DIFF_BUDGET == 100_000` pinned, and the five frozen constants still cross-pin to `llm_probe.py` | ADR-0012's split: one constant moved, five did not |
 
-**Exit gate:** the pre-registered coverage bar above, plus the full suite green
-and ruff clean. The bar is checked by a script committed alongside the change,
-run over a **fixed commit range pinned in the script** (the 30 first-parent
-commits ending at this branch's merge base) — not "the last 30", which would
-move under the gate and let a later commit re-open it silently. Zero model
-calls, so the gate is re-runnable by anyone at any time.
+**Exit gate:** the pre-registered 95% coverage bar above, the pinned range's
+known 30/30 sanity result, the full suite green, and ruff clean. A code-tier
+`file_cut` is a miss just like a code-tier `files_unseen` entry: the file did
+not arrive whole. The script requires exactly 30 SHAs, exactly 30 evaluated
+rows, and 30/30 passing rows, so an incomplete sample cannot shrink the
+denominator or pass merely because it remains above 95%. A negative regression
+runs the real fixed range at 30k and requires strict 24/30 plus exit 1.
+
+The gate reconstructs every patch available in local Git over the **fixed
+commit range pinned in the script** (the 30 first-parent commits ending at
+this branch's merge base) — not "the last 30", which would move under the gate
+and let a later commit re-open it silently. Local Git cannot model GitHub
+`patch=None` omissions; production `files_dropped` receipts cover that
+separate hole. Zero model calls, so the gate is re-runnable by anyone at any
+time.
 
 ---
 

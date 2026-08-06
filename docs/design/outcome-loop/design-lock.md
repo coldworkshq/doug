@@ -73,7 +73,7 @@ Everything runs on what's deployed: Cloud Run + Cloud SQL Postgres 18, merge-to-
 - **No per-author-type (agent vs human) claims** until the data exists (~150k PRs).
 - **Nothing outcome-derived enters `score()`** unless `backtest/replay.py:56` can replay it; any garden→review entry additionally gates on the 2.34× disjoint-population bar (IDEAS.md). ADR-0012's retained five-constant separate-frozen-prompt rule stands.
 - **Doug never writes code, never opens a PR, never blocks.** Unchanged, load-bearing, brand-level.
-- **Closed ADRs stay closed:** 0001, 0002 (now actually test-pinned), 0004, 0005 (extended: caveats travel inside MCP payload strings), 0006, 0007, 0008, 0009 (with the accepted-risk note above).
+- **Closed ADRs stay closed:** 0001, 0004, 0005 (extended: caveats travel inside MCP payload strings), 0006, 0007, 0008, 0009 (with the accepted-risk note above), and 0012 (the current five-constant freeze and read-budget gate). Superseded ADR-0002 remains history, not current policy.
 - **Deterministic-tier ranking is not the product** (near-random on repo #2); it is the loud, labeled fallback.
 
 ## Open risks (explicit, unresolved)

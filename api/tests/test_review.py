@@ -416,8 +416,8 @@ def test_read_order_puts_code_before_tests_before_prose():
 def test_read_order_sends_smallest_first_within_a_tier():
     """Smallest-first maximises how many files arrive WHOLE, which is what
     lets the reader reason correctly rather than half-correctly. The cost —
-    the biggest file in a tier is likeliest to be dropped — is paid visibly
-    via coverage.files_unseen, not silently."""
+    the biggest file in a tier is likeliest to be cut or dropped — is paid
+    visibly via coverage.file_cut or coverage.files_unseen, not silently."""
     files = [_f("big.py", 900), _f("small.py", 100), _f("mid.py", 500)]
     assert [f.filename for f in review.read_order(files)] == [
         "small.py",
@@ -516,6 +516,7 @@ def test_pr50_fetch_pr_reads_tenancy_at_the_old_budget(monkeypatch):
     cov = reader.coverage(diff)
 
     assert "api/doug/tenancy.py" not in cov.files_unseen
+    assert cov.file_cut == "api/doug/store.py"
     assert "api/doug/api.py" in cov.files_unseen
 
 
@@ -527,6 +528,7 @@ def test_pr50_fetch_open_prs_reads_tenancy_at_the_old_budget(monkeypatch):
     cov = reader.coverage(items[0][1])
 
     assert "api/doug/tenancy.py" not in cov.files_unseen
+    assert cov.file_cut == "api/doug/store.py"
     assert "api/doug/api.py" in cov.files_unseen
 
 

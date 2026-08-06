@@ -1,11 +1,11 @@
-"""LLM diff-reader — the tier the Phase-1 probes validated.
+"""LLM diff-reader — descended from the tier the Phase-1 probes validated.
 
-Prompt, schema, and read parameters are byte-identical to
-scripts/llm_probe.py as of commit 0064e6b, where they were validated
-pre-registered on two repos (AUC 0.687 sentry / 0.668 grafana against best
-deterministic baselines of 0.591 / 0.518, ReDef polarity counterfactual
-passed on both). They are load-bearing evidence — a change here is a new
-experiment, not a tweak.
+SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS remain byte-identical to
+scripts/llm_probe.py as of commit 0064e6b. The probe's AUC 0.687 sentry /
+0.668 grafana and its ReDef polarity result belong to its 30k diff-budget
+configuration. The shipped DIFF_BUDGET is 100k under ADR-0012, so those AUC
+figures do not validate the larger live read. The five frozen parameters are
+load-bearing evidence — changing one is a new experiment, not a tweak.
 
 Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
 Callers fall back to the deterministic score when either is missing or a

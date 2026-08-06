@@ -14,7 +14,7 @@
 - Branch: `read-budget-routing`, already created, spec committed at `c61f842`. Off `main` @ `135c8e5`.
 - Run tests: `make test` (= `cd api && uv run pytest`). Run lint: `make lint`.
 - **Baseline is 642 passing in ~12s.** Every task ends green. If the count drops, something was deleted — stop and say so.
-- `reader.py` is modified in **exactly one place**: the `DIFF_BUDGET` integer in Task 4. `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT`, `MAX_TOKENS`, `_sent_slice`, `_user_text`, `coverage`, `truncation_reason` are **not touched**. If a task seems to need an edit there, stop.
+- `reader.py` has exactly one **executable** change: the `DIFF_BUDGET` integer in Task 4. `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT`, `MAX_TOKENS`, `_sent_slice`, `_user_text`, `coverage`, and `truncation_reason` are **not touched**. The approved final evidence reconciliation may correct the module docstring and nearby evidence comments without changing execution. If a task seems to need another executable edit there, stop.
 - `api/scripts/llm_probe.py` is **never** modified. It is the frozen instrument; its `DIFF_BUDGET = 30_000` is what the probe actually measured.
 - Do **not** add a test asserting `PROMPT_HASH` is unmoved by the budget change. `PROMPT_HASH = sha256(SYSTEM + repr(SCHEMA))` — `DIFF_BUDGET` was never an input, so such a test cannot fail and would violate the house rule that a test must be able to fail when behaviour changes. The existing `test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes` already pins the hash's inputs.
 - Commit after every task. Conventional-commit prefixes (`feat:`, `test:`, `docs:`).
@@ -29,11 +29,13 @@
 | `api/tests/test_features.py` | `_is_prose` behaviour | 1 |
 | `api/doug/review.py` | add `_read_tier` + `read_order`; call it at both join sites | 2, 3 |
 | `api/tests/test_review.py` | ordering behaviour; PR #50 regression; coverage invariant | 2, 3 |
-| `api/doug/reader.py` | `DIFF_BUDGET` integer only | 4 |
+| `api/doug/reader.py` | `DIFF_BUDGET` executable change; approved evidence prose corrections | 4, final review |
 | `api/tests/test_reader.py` | split the ADR-0002 cross-pin | 4 |
 | `docs/decisions/ADR-0012-diff-budget-is-governed-by-a-coverage-bar.md` | new record | 4 |
 | `docs/decisions/ADR-0002-reader-prompt-is-frozen.md` | frontmatter → superseded | 4 |
 | `api/scripts/read_budget_gate.py` | the pre-registered exit gate, zero model calls | 5 |
+| `api/scripts/backfill_ledger.py` | measure Phase-1 receipts with the probe's historical 30k budget | final review |
+| `api/tests/test_read_budget_scripts.py` | real-range negative gate and historical probe-coverage regressions | final review |
 
 ---
 
@@ -240,9 +242,10 @@ def read_order(files: list) -> list:
 
     Smallest-first maximises how many files arrive WHOLE, which is what
     lets the reader reason correctly rather than half-correctly. It also
-    makes the largest file in a tier the likeliest to be dropped — that
-    file is named in coverage.files_unseen and rendered on the check run
-    by truncation_reason, so the cost is visible rather than silent.
+    makes the largest file in a tier the likeliest to be cut or dropped —
+    that file is named in coverage.file_cut or coverage.files_unseen and
+    rendered on the check run by truncation_reason, so the cost is visible
+    rather than silent.
 
     Deliberately NOT risk-ordered. features._is_sensitive and _MIGRATION_RE
     fire on zero files in the PRs that motivated this work (tenancy.py,
@@ -329,6 +332,7 @@ def test_pr50_reads_tenancy_at_the_old_budget(monkeypatch):
     cov = reader.coverage(_assemble(_pr50_files()))
 
     assert "api/doug/tenancy.py" not in cov.files_unseen
+    assert cov.file_cut == "api/doug/store.py"
     assert "api/doug/api.py" in cov.files_unseen
 
 
@@ -590,7 +594,7 @@ survives for them intact.
 `DIFF_BUDGET` is removed from the freeze and governed instead by a
 pre-registered coverage bar:
 
-> **100% of code-tier characters sent on ≥95% of PRs**, over the 30
+> **Every code-tier file sent whole on ≥95% of PRs**, over the 30
 > first-parent commits ending at `135c8e5`.
 
 It is set to **100,000 characters**. The bar is checked by
@@ -599,6 +603,14 @@ It is set to **100,000 characters**. The bar is checked by
 governing metric is verifiable by anyone at any time without spending a
 cent. That is the property that makes a coverage bar a safe replacement
 for a freeze.
+
+The pinned range is also a fixed sanity sample with a known 30/30 result.
+The shipped gate requires exactly 30 SHAs, exactly 30 evaluated rows, and
+30/30 whole-code rows; the 95% statistical bar does not permit this fixed
+sample to shrink or regress. A code-tier `file_cut` is a miss, not a sent
+file. Local Git reconstructs every patch available in Git but cannot model
+GitHub `patch=None` omissions; live `files_dropped` receipts cover that
+separate production hole.
 
 The probe's own `DIFF_BUDGET` stays at 30,000. It is the frozen
 instrument and must keep reporting what it actually measured.
@@ -718,7 +730,9 @@ what ships. We are not re-running the probe."
 
 **Files:**
 - Create: `api/scripts/read_budget_gate.py`
-- Test: run it (it is itself the check; it needs no unit test)
+- Test: `api/tests/test_read_budget_scripts.py` runs the real fixed range at
+  30k and proves the gate fails at strict 24/30 rather than false-passing at
+  29/30.
 
 **Interfaces:**
 - Consumes: `doug.review.read_order`, `doug.reader` (`DIFF_BUDGET`, `diff_chunk`, `CHUNK_SEPARATOR`, `coverage`), `doug.features._is_prose`/`_is_test`
@@ -733,8 +747,10 @@ Create `api/scripts/read_budget_gate.py`:
 
     uv run python scripts/read_budget_gate.py
 
-The bar: 100% of code-tier characters sent on >=95% of PRs, over the 30
-first-parent commits ending at END_SHA.
+The statistical bar: every code-tier file sent whole on >=95% of PRs, over
+the 30 first-parent commits ending at END_SHA. This pinned range is also a
+fixed sanity sample whose observed result is 30/30; the shipped gate requires
+that exact sample and result rather than silently accepting a smaller set.
 
 Costs ZERO model calls — reader.coverage is pure over the assembled diff
 string, so the metric governing DIFF_BUDGET is verifiable by anyone at any
@@ -745,12 +761,12 @@ END_SHA is pinned rather than "the last 30 commits" on purpose: a moving
 window would drift under the gate and let a later commit re-open it
 silently.
 
-Honest limit, stated rather than discovered later: this reconstructs each
-PR's diff from `git diff`, whose per-file output carries `diff --git` and
-index headers that GitHub's `f.patch` does not. Sizes here therefore run
-slightly LARGER than what the service actually assembles, which makes the
-gate conservative — it can report a miss the live path would not have, but
-it cannot report a pass the live path would have missed.
+Honest limit, stated rather than discovered later: this reconstructs every
+patch available in local Git. Its per-file output carries `diff --git` and
+index headers that GitHub's `f.patch` does not, so those reconstructed sizes
+run slightly larger than the service input. Local Git cannot model a separate
+GitHub API omission where `patch=None`; production `files_dropped` receipts
+cover that hole. This gate therefore makes no universal no-false-pass claim.
 """
 
 import subprocess
@@ -812,7 +828,10 @@ def main() -> int:
         )
         cov = reader.coverage(diff)
         code = [f.filename for f in files if _is_code(f.filename)]
-        missed = [f for f in code if f in cov.files_unseen]
+        missed_evidence = set(cov.files_unseen)
+        if cov.file_cut is not None:
+            missed_evidence.add(cov.file_cut)
+        missed = list(dict.fromkeys(f for f in code if f in missed_evidence))
         ok = not missed
         met += ok
         rows.append((sha, len(files), cov.diff_chars, ok, missed))
@@ -822,14 +841,21 @@ def main() -> int:
 
     print(f"ADR-0012 coverage bar — DIFF_BUDGET = {reader.DIFF_BUDGET:,}")
     print(f"range: {N_COMMITS} first-parent commits ending {END_SHA}\n")
-    print(f"{'sha':>9}  {'files':>5}  {'chars':>9}  all-code-sent")
+    print(f"{'sha':>9}  {'files':>5}  {'chars':>9}  all-code-whole")
     print("-" * 46)
     for sha, nfiles, chars, ok, missed in rows:
         mark = "yes" if ok else f"NO  {', '.join(missed[:2])}"
         print(f"{sha:>9}  {nfiles:>5}  {chars:>9,}  {mark}")
 
-    print(f"\nall code sent on {met}/{total} ({rate:.0%}); bar is {BAR:.0%}")
-    if rate >= BAR:
+    print(f"\nall code sent whole on {met}/{total} ({rate:.0%})")
+    print(f"statistical bar: >= {BAR:.0%}")
+    print(
+        f"fixed-sample sanity: {len(shas)}/{N_COMMITS} SHAs, "
+        f"{total}/{N_COMMITS} evaluated rows, {met}/{N_COMMITS} passing; "
+        f"requires {N_COMMITS}/{N_COMMITS}"
+    )
+    sample_complete = len(shas) == N_COMMITS and total == N_COMMITS
+    if sample_complete and met == N_COMMITS and rate >= BAR:
         print("PASS")
         return 0
     print("FAIL")
@@ -843,7 +869,11 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run the gate**
 
 Run: `cd api && uv run python scripts/read_budget_gate.py`
-Expected: `PASS`, with `all code sent on 30/30 (100%)`.
+Expected: `PASS`, with `all code sent whole on 30/30 (100%)` and the
+fixed-sample sanity line showing exactly 30 SHAs and 30 evaluated rows.
+
+Run the focused negative regression with `reader.DIFF_BUDGET` monkeypatched
+to the probe's 30k ceiling. Expected: strict `24/30 (80%)`, `FAIL`, exit 1.
 
 If it reports below 100%, do not adjust the bar — report the numbers and stop. The measured max code-only in this range is 58,977 chars, well inside 100,000, so a miss means the tiering or the gate is wrong, not the budget.
 
@@ -868,7 +898,7 @@ Anything else is a doc asserting a value that is no longer true — fix it. Pay 
 - [ ] **Step 4: Full verification**
 
 ```bash
-make test    # 642 + new, all green
+make test    # 655 passed after the two final-review regressions
 make lint    # clean
 cd api && uv run python scripts/read_budget_gate.py   # PASS
 ```
@@ -886,19 +916,36 @@ the metric governing DIFF_BUDGET is checkable by anyone for free.
 
 Reconstructs diffs from git, whose per-file output carries headers
 GitHub's f.patch does not, so sizes run slightly large and the gate
-is conservative in the safe direction."
+cannot model GitHub patch=None omissions; production files_dropped
+receipts cover that separate hole."
 ```
+
+---
+
+### Final-review correction: historical probe receipts
+
+Phase-1 backfill reconstructs the exact pre-slice diff in the probe's original
+file-detail order. Both database and `--emit-sql` paths must call a shared
+`_probe_coverage(diff)` helper that temporarily applies
+`llm_probe.DIFF_BUDGET` and restores `reader.DIFF_BUDGET` in `finally`. The
+constant is imported from the frozen probe, never duplicated. The regression
+uses a synthetic 68k historical file and requires `sent_chars == 30_000`,
+incomplete coverage, the expected `file_cut`, and an unchanged live budget.
+
+`api/scripts/llm_probe.py` remains frozen. No selector, scoring, live reader,
+coverage, or read-order behavior changes in this correction.
 
 ---
 
 ## Done means
 
-- [ ] `make test` green, 653 (642 baseline + 11 net new tests)
+- [ ] `make test` green, 655 (the observed post-fix count; two focused final-review regressions added)
 - [ ] `make lint` clean
-- [ ] `uv run python scripts/read_budget_gate.py` exits 0 with 30/30
-- [ ] `reader.py` diff is the `DIFF_BUDGET` line and its comment, nothing else
-- [ ] `scripts/llm_probe.py` untouched
+- [ ] `uv run python scripts/read_budget_gate.py` exits 0 with strict 30/30 whole-code coverage; the real-range 30k regression exits 1 at 24/30
+- [ ] `reader.py` has no executable branch change beyond `DIFF_BUDGET`; only the approved evidence prose is additionally corrected
+- [ ] `git diff origin/main -- api/scripts/llm_probe.py` is empty
 - [ ] ADR-0002 status is `superseded`, ADR-0012 is `accepted`
 - [ ] No doc outside the allow-list in Task 5 Step 3 still asserts a 30,000 budget
+- [ ] One consolidated final-review `fix:` commit contains the correction wave
 
 Then open the PR and let Doug review it. This repo's convention is to verify each finding by reproduction before fixing or dismissing — roughly half of Doug's findings on its own PRs are disproved by files outside the diff. Log every finding to `docs/findings-log.jsonl` (25 rows today: 12 disproved, 8 real, 5 adjacent) whichever way it goes.

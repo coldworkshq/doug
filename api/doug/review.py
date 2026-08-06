@@ -129,9 +129,10 @@ def read_order(files: list) -> list:
 
     Smallest-first maximises how many files arrive WHOLE, which is what
     lets the reader reason correctly rather than half-correctly. It also
-    makes the largest file in a tier the likeliest to be dropped — that
-    file is named in coverage.files_unseen and rendered on the check run
-    by truncation_reason, so the cost is visible rather than silent.
+    makes the largest file in a tier the likeliest to be cut or dropped —
+    that file is named in coverage.file_cut or coverage.files_unseen and
+    rendered on the check run by truncation_reason, so the cost is visible
+    rather than silent.
 
     Deliberately NOT risk-ordered. features._is_sensitive and _MIGRATION_RE
     fire on zero files in the PRs that motivated this work (tenancy.py,

@@ -41,7 +41,7 @@ survives for them intact.
 `DIFF_BUDGET` is removed from the freeze and governed instead by a
 pre-registered coverage bar:
 
-> **100% of code-tier characters sent on ≥95% of PRs**, over the 30
+> **Every code-tier file sent whole on ≥95% of PRs**, over the 30
 > first-parent commits ending at `135c8e5`.
 
 It is set to **100,000 characters**. The bar is checked by
@@ -50,6 +50,14 @@ It is set to **100,000 characters**. The bar is checked by
 governing metric is verifiable by anyone at any time without spending a
 cent. That is the property that makes a coverage bar a safe replacement
 for a freeze.
+
+The pinned range is also a fixed sanity sample with a known 30/30 result.
+The shipped gate requires exactly 30 SHAs, exactly 30 evaluated rows, and
+30/30 whole-code rows; the 95% statistical bar does not permit this fixed
+sample to shrink or regress. A code-tier `file_cut` is a miss, not a sent
+file. Local Git reconstructs every patch available in Git but cannot model
+GitHub `patch=None` omissions; live `files_dropped` receipts cover that
+separate production hole.
 
 The probe's own `DIFF_BUDGET` stays at 30,000. It is the frozen
 instrument and must keep reporting what it actually measured.
