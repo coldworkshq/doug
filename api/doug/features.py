@@ -136,6 +136,23 @@ def _is_test(path: str) -> bool:
     return bool(_TEST_RE.search(path))
 
 
+_PROSE_SUFFIXES = (".md", ".txt", ".rst")
+
+
+def _is_prose(path: str) -> bool:
+    """Files that cannot hold the defect class the reader is asked to find.
+
+    Used only by the read-budget tiering (review.read_order, ADR-0012), not
+    by scoring — a docs-only PR still scores normally, it just loses the
+    contest for the reader's budget.
+
+    Lockfiles count as prose deliberately: generated, enormous, and never
+    read by a human in review. Their manifests are code and stay tier 0.
+    """
+    name = PurePosixPath(path).name
+    return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
+
+
 def _is_sensitive(path: str) -> bool:
     p = PurePosixPath(path)
     if any(part.lower() in SENSITIVE_SEGMENTS for part in p.parts):
