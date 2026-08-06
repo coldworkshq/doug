@@ -6,6 +6,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { RunSpine } from "@/components/run-spine";
 import { Shell } from "@/components/shell";
 import { getRunDetail, isError } from "@/lib/api";
+import { utcTimestamp } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
@@ -35,10 +36,18 @@ export default async function RunDetailPage({
   const scope = { tenant: null, repo: null };
 
   if (isError(run)) {
+    // A well-formed but nonexistent id (the API's 404) and an unreachable
+    // API are different facts — the raw detail string is the only place
+    // they otherwise differ, and it's easy to miss under "The API did not
+    // answer.", which specifically claims the API couldn't be reached.
+    // Both branches still show zero numbers.
+    const unknownId = /→ HTTP 404$/.test(run.error);
     return (
       <Shell scope={scope} active="runs">
         <div className="mono mt-10 rounded-[6px] border border-[var(--flag)]/40 bg-[color-mix(in_srgb,var(--flag)_6%,transparent)] p-4 text-xs">
-          <p className="font-semibold text-[var(--flag)]">The API did not answer.</p>
+          <p className="font-semibold text-[var(--flag)]">
+            {unknownId ? "No run with that id." : "The API did not answer."}
+          </p>
           <p className="mt-1 text-muted-foreground">{run.error}</p>
           <p className="mt-2 text-muted-foreground">
             Nothing is rendered below because nothing is known.
@@ -138,7 +147,7 @@ export default async function RunDetailPage({
               <dt className="mono text-[10.5px] uppercase tracking-[.06em] text-muted-foreground">risk score</dt>
               <dd className="mono text-xs">{run.risk_score ?? "—"} <span className="text-muted-foreground">/ 100</span></dd>
               <dt className="mono text-[10.5px] uppercase tracking-[.06em] text-muted-foreground">scored at</dt>
-              <dd className="mono text-xs">{run.scored_at}</dd>
+              <dd className="mono text-xs">{utcTimestamp(run.scored_at)}</dd>
               <dt className="mono text-[10.5px] uppercase tracking-[.06em] text-muted-foreground">head sha</dt>
               <dd className="mono text-xs">{run.head_sha?.slice(0, 7) ?? "—"}</dd>
               {run.rationale && (
@@ -197,10 +206,19 @@ export default async function RunDetailPage({
 
           <Block title="Outcome">
             <div className="flex gap-2.5">
-              {run.outcomes.map((o) => (
-                <div key={o.window_days} className="panel flex-1 rounded-[6px] px-3.5 py-3">
+              {run.outcomes.map((o, i) => (
+                // window_days is nullable (outcome rows written before the
+                // outcome-loop identity migration carry NULL) — keying and
+                // labeling on it directly would print "null-day window"
+                // and collide as a React key if more than one such row
+                // exists for this run. The index keeps the key unique
+                // without claiming a window this row doesn't record.
+                <div
+                  key={`${o.window_days ?? "unrecorded"}-${i}`}
+                  className="panel flex-1 rounded-[6px] px-3.5 py-3"
+                >
                   <div className="mono text-[10px] uppercase tracking-[.12em] text-muted-foreground">
-                    {o.window_days}-day window
+                    {o.window_days !== null ? `${o.window_days}-day window` : "window not recorded"}
                   </div>
                   <div className={"mono mt-1.5 text-[17px] font-semibold " + (o.kind === "clean" ? "data-clear" : "data-flag")}>
                     {o.kind === "clean" ? "✓ clean" : `↩ ${o.kind}`}

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { coveragePercent, jobDuration, parseTenantId, relativeAge } from "./runs.ts";
+import {
+  coveragePercent,
+  jobDuration,
+  parseTenantId,
+  relativeAge,
+  utcClock,
+  utcTimestamp,
+} from "./runs.ts";
 
 const coverage = {
   diff_chars: 108200,
@@ -76,6 +83,27 @@ test("jobDuration refuses to guess when either timestamp is missing", () => {
 test("parseTenantId accepts a real installation id and is absent when there's no tenant param", () => {
   assert.deepEqual(parseTenantId(undefined), { kind: "absent" });
   assert.deepEqual(parseTenantId("150424894"), { kind: "present", id: 150424894 });
+});
+
+test("utcClock parses and normalizes to UTC rather than slicing the source string", () => {
+  // A non-UTC offset must be converted, not read positionally: slicing
+  // characters 11-19 out of "...T09:00:00+05:00" would print the source
+  // timezone's clock digits and label them UTC, which is wrong by the
+  // offset. Parsing first and re-serializing through toISOString() is what
+  // makes this actually a UTC value rather than a lucky string position.
+  assert.equal(utcClock("2026-08-06T09:00:00+05:00"), "04:00:00 UTC");
+  assert.equal(utcClock("2026-08-06T14:22:07Z"), "14:22:07 UTC");
+  assert.equal(utcClock(null), "—");
+  assert.equal(utcClock("not a date"), "—");
+});
+
+test("utcTimestamp renders the full date and time, UTC-normalized", () => {
+  assert.equal(utcTimestamp("2026-08-03T14:22:48Z"), "2026-08-03 14:22:48 UTC");
+  assert.equal(utcTimestamp("2026-08-03T09:22:48-05:00"), "2026-08-03 14:22:48 UTC");
+  // Falls back to the raw string rather than hiding a malformed value
+  // behind a dash — this is the one place a caller has no null case to
+  // fall through to (scored_at is a required field on RunDetail).
+  assert.equal(utcTimestamp("not a date"), "not a date");
 });
 
 test("parseTenantId rejects everything Number() would silently coerce to 0 or NaN", () => {

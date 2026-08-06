@@ -3,18 +3,28 @@ import { coveragePercent, type RunCoverage } from "@/lib/runs";
 /** The console's signature element: every file the reader was given, in
  *  budget-consumption order, sized by share of the diff. Read is solid;
  *  never-read is hatched. The emptiness of the right-hand side IS the
- *  alarm — no hue is spent here.
+ *  alarm — no hue is spent here; a low reading also gets a dotted
+ *  underline and a warning glyph on the headline number, a structural
+ *  mark rather than a colour one.
  *
- *  Segments use flex-grow with a zero basis so the 2px gaps are subtracted
- *  from the track rather than added to it; percentage bases plus gaps
- *  overflow by exactly the sum of the gaps. The cut marker is an in-flow
- *  flex item, so it lands between the last read file and the first unread
- *  one by construction rather than by a hand-computed offset.
+ *  The unseen remainder is ONE block sized by `unseenShare`
+ *  (`diff_chars - sent_chars`), not one box per `files_unseen` entry. The
+ *  payload carries no per-file char count for anything unseen, so
+ *  dividing evenly by file count would draw invented magnitude — a 40k-char
+ *  lockfile and a 200-char `__init__.py` would get identical widths. The
+ *  block instead carries thin hairline dividers, one per extra file, as a
+ *  count cue rather than a measurement. Sizing it by `unseenShare` (rather
+ *  than being present only when `files_unseen` is non-empty) also covers
+ *  the case `files_unseen` can't: a budget that runs out mid-file, on the
+ *  very last file, cuts real content while leaving `files_unseen` empty —
+ *  every file's header still arrived, so none of them is "unseen" by name,
+ *  but `sent_chars < diff_chars` all the same. Without this block that
+ *  case rendered as a silent 100%-filled bar.
  *
- *  Unseen files carry no sensitive marking — see run-spine.tsx's sibling
- *  page for why: features._is_sensitive fires on zero of the files that
- *  motivated this page (tenancy.py, keyformat.py, migrations.py), so
- *  marking on it would be inert exactly when it matters. */
+ *  The cut marker (and its "budget cut" label) only renders when
+ *  `coverage.file_cut` is set, matching the header's own "cut at …" gate —
+ *  a complete read, or one whose budget happened to land clean between two
+ *  whole files, has no single file to point the marker at. */
 export function CoverageRuler({
   coverage,
   changedFiles,
@@ -25,20 +35,42 @@ export function CoverageRuler({
   const result = coveragePercent(coverage, changedFiles);
   const seenShare = coverage.sent_chars;
   const unseenShare = Math.max(0, coverage.diff_chars - coverage.sent_chars);
-  const perUnseen = coverage.files_unseen.length
-    ? unseenShare / coverage.files_unseen.length
-    : 0;
+  const unseenCount = coverage.files_unseen.length;
+
+  // Files, not chars, headline this ruler — changed_files gives files a
+  // trustworthy denominator and a file count is what an operator acts on.
+  // Math.round alone would print 99.5% (199 of 200 files) as a false
+  // "100%", the same complete-read claim `coveragePercent` itself already
+  // refuses to invent when the true ratio is 100.0 exactly.
+  const pctLabel = (() => {
+    if (result.kind !== "known") return "—";
+    if (result.pct >= 100) return "100%";
+    const rounded = Math.round(result.pct);
+    return rounded >= 100 ? "<100%" : `${rounded}%`;
+  })();
+  const low = result.kind === "known" && result.low;
 
   return (
     <div className="panel rounded-[6px] p-4">
       <div className="mono mb-3 flex items-baseline gap-2.5 text-xs text-muted-foreground">
-        <span className="text-[19px] font-semibold text-foreground">
-          {result.kind === "known" ? `${Math.round(result.pct)}%` : "—"}
+        <span
+          className={
+            "text-[19px] font-semibold text-foreground" +
+            (low ? " underline decoration-dotted underline-offset-[4px]" : "")
+          }
+        >
+          {pctLabel}
         </span>
         <span>
-          of the diff · {coverage.files_sent} of {changedFiles ?? "?"} files ·{" "}
-          {coverage.sent_chars.toLocaleString()} of {coverage.diff_chars.toLocaleString()} chars
+          of files · {coverage.files_sent} of {changedFiles ?? "?"} ·{" "}
+          {coverage.sent_chars.toLocaleString()} of {coverage.diff_chars.toLocaleString()} chars in
+          the bar below
         </span>
+        {low && (
+          <span className="text-[11px]" role="img" aria-label="low coverage">
+            ⚠
+          </span>
+        )}
         {coverage.file_cut && (
           <span className="ml-auto">
             cut at <code>{coverage.file_cut}</code>
@@ -46,21 +78,49 @@ export function CoverageRuler({
         )}
       </div>
 
-      <div className="mb-6 flex h-[26px] items-stretch gap-0.5">
+      <div className="flex h-[26px] items-stretch gap-0.5">
         <div className="cov-fill min-w-0.5 rounded-[2px]" style={{ flex: `${seenShare} 1 0` }} />
-        <div className="relative -my-[7px] mx-[3px] w-px flex-none bg-foreground">
-          <span className="mono absolute left-[-2px] top-[calc(100%+4px)] whitespace-nowrap text-[9px] uppercase tracking-[.08em]">
-            budget cut ↑
-          </span>
-        </div>
-        {coverage.files_unseen.map((path) => (
+        {coverage.file_cut && (
+          <div className="relative -my-[7px] mx-[3px] w-px flex-none bg-foreground">
+            <span className="mono absolute left-[-2px] top-[calc(100%+4px)] whitespace-nowrap text-[9px] uppercase tracking-[.08em]">
+              budget cut ↑
+            </span>
+          </div>
+        )}
+        {unseenShare > 0 && (
           <div
-            key={path}
-            title={`${path} — never read`}
-            className="min-w-0.5 rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
-            style={{ flex: `${perUnseen} 1 0` }}
-          />
-        ))}
+            className="relative min-w-0.5 overflow-hidden rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            style={{ flex: `${unseenShare} 1 0` }}
+            title={
+              unseenCount
+                ? `${unseenCount} file${unseenCount === 1 ? "" : "s"} never read — widths inside this block are even, not measured per file`
+                : `never read past the cut${coverage.file_cut ? ` in ${coverage.file_cut}` : ""}`
+            }
+          >
+            {Array.from({ length: Math.max(0, unseenCount - 1) }).map((_, i) => (
+              <span
+                key={i}
+                aria-hidden="true"
+                className="absolute top-0 bottom-0 w-px bg-background/70"
+                style={{ left: `${((i + 1) / unseenCount) * 100}%` }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mono mb-6 flex items-center gap-4 pt-2.5 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="cov-fill inline-block size-2 rounded-[2px]" aria-hidden="true" /> sent to
+          the reader
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            className="inline-block size-2 rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            aria-hidden="true"
+          />{" "}
+          never read — budget
+        </span>
       </div>
 
       <div className="mono border-t border-border pt-3 text-[10px] uppercase tracking-[.12em] text-muted-foreground">

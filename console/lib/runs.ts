@@ -78,3 +78,26 @@ export function jobDuration(startedAt: string | null, finishedAt: string | null)
   const s = seconds % 60;
   return m > 0 ? `${m}m${s}s` : `${s}s`;
 }
+
+/** "14:22:07 UTC" from an ISO datetime, or "—" for null/unparseable.
+ *
+ *  Genuinely parses via `Date` and re-serializes through `toISOString()`
+ *  (which always normalizes to UTC) rather than positionally slicing the
+ *  source string. A raw slice would silently mislabel a non-UTC offset as
+ *  if it were already UTC — correct only by accident, for whatever
+ *  serialization happens to be in use today. */
+export function utcClock(iso: string | null): string {
+  if (iso === null) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : `${d.toISOString().slice(11, 19)} UTC`;
+}
+
+/** "2026-08-03 14:22:48 UTC" from an ISO datetime — utcClock's full-stamp
+ *  sibling, for the one place this page shows a date and not just a
+ *  time-of-day. Falls back to the raw string on a value that doesn't
+ *  parse, rather than hiding a malformed one behind an em dash. */
+export function utcTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)} UTC`;
+}

@@ -1,5 +1,5 @@
 import type { RunDetail } from "@/lib/api";
-import { jobDuration } from "@/lib/runs";
+import { jobDuration, utcClock } from "@/lib/runs";
 
 function Event({
   title,
@@ -10,14 +10,12 @@ function Event({
   title: string;
   stamp: string;
   sub: string;
-  state: "done" | "now" | "wait";
+  state: "done" | "wait";
 }) {
   const node =
-    state === "now"
-      ? "bg-[var(--clear)] border-[var(--clear)]"
-      : state === "done"
-        ? "bg-[#3d403c] border-[#3d403c]"
-        : "bg-background border-[#c9c6bd]";
+    state === "done"
+      ? "bg-[#3d403c] border-[#3d403c]"
+      : "bg-background border-[#c9c6bd]";
   return (
     <li className="relative pb-5 pl-5 last:pb-0 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-[3.5px] [&:not(:last-child)]:before:top-[11px] [&:not(:last-child)]:before:bottom-[-3px] [&:not(:last-child)]:before:w-px [&:not(:last-child)]:before:bg-border">
       <span className={`absolute left-0 top-[5px] size-2 rounded-full border-[1.5px] ${node}`} />
@@ -31,9 +29,16 @@ function Event({
 }
 
 /** The literal answer to "what did Doug do": webhook through outcome clock,
- *  with the real timestamps and durations from review_jobs. */
+ *  with the real timestamps and durations from review_jobs.
+ *
+ *  Every node here is neutral (done) or hollow (wait) — never --flag or
+ *  --clear. A graded outcome's kind (clean / revert / hotfix) is a
+ *  judgment, and that judgment already renders in colour, with its word,
+ *  200px away in the Outcome block; colouring the SAME fact a second time
+ *  on a bare dot with no word next to it would assert it twice, and a
+ *  reverted PR's dot would have nothing to say why it's green. The sub-line
+ *  text ("graded revert") already carries the word this dot doesn't. */
 export function RunSpine({ run }: { run: RunDetail }) {
-  const t = (iso: string | null) => (iso ? iso.slice(11, 19) : "—");
   const readDuration = jobDuration(run.job?.started_at ?? null, run.job?.finished_at ?? null);
   // run.pr is independently nullable from run.coverage — a deterministic
   // run can have pr_meta, and a read run can lack it. changed_files lives
@@ -47,17 +52,29 @@ export function RunSpine({ run }: { run: RunDetail }) {
         The run
       </h2>
       <ol>
-        <Event title="job enqueued" stamp={t(run.job?.enqueued_at ?? null)} sub={`attempt ${run.job?.attempts ?? "?"} · gen ${run.job?.claim_generation ?? "?"}`} state="done" />
-        <Event title="claimed" stamp={t(run.job?.started_at ?? null)} sub={run.job?.status ?? "no job row"} state="done" />
+        <Event title="job enqueued" stamp={utcClock(run.job?.enqueued_at ?? null)} sub={`attempt ${run.job?.attempts ?? "?"} · gen ${run.job?.claim_generation ?? "?"}`} state="done" />
+        <Event title="claimed" stamp={utcClock(run.job?.started_at ?? null)} sub={run.job?.status ?? "no job row"} state="done" />
         <Event
           title="read"
           stamp={readDuration ?? "—"}
           sub={run.coverage ? `${run.coverage.files_sent} of ${changedFiles ?? "?"} files sent` : "no read — deterministic tier"}
           state="done"
         />
-        <Event title={`verdict ${run.verdict_id}`} stamp={t(run.scored_at)} sub={`${run.tier} · ${run.score.toFixed(2)} ${run.band}`} state="done" />
-        {run.outcomes.map((o) => (
-          <Event key={o.window_days} title={`${o.window_days}d outcome`} stamp={o.observed_at.slice(5, 10)} sub={`graded ${o.kind}`} state="now" />
+        <Event title={`verdict ${run.verdict_id}`} stamp={utcClock(run.scored_at)} sub={`${run.tier} · ${run.score.toFixed(2)} ${run.band}`} state="done" />
+        {run.outcomes.map((o, i) => (
+          // window_days is nullable — outcome rows written before the
+          // outcome-loop identity migration carry NULL (store.py). A
+          // template literal would silently print "nulld outcome", and
+          // window_days alone as the key would collide if two null-window
+          // rows exist for one run; the index makes the key unique without
+          // pretending the window is known.
+          <Event
+            key={`${o.window_days ?? "unrecorded"}-${i}`}
+            title={o.window_days !== null ? `${o.window_days}d outcome` : "outcome, window unrecorded"}
+            stamp={o.observed_at.slice(5, 10)}
+            sub={`graded ${o.kind}`}
+            state="done"
+          />
         ))}
         {run.outcome_jobs
           .filter((j) => !run.outcomes.some((o) => o.window_days === j.window_days))
