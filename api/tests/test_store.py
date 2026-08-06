@@ -1537,6 +1537,94 @@ def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path,
     assert rows[0]["score"] == 0.61
 
 
+def test_run_history_returns_every_run_for_a_pr_not_just_the_latest(tmp_path, monkeypatch):
+    """The defining difference from latest_reviews. A PR pushed three times
+    is three runs; a console that collapses them cannot answer "what did
+    Doug do on this push" — which is the whole point of the page."""
+    _db(tmp_path, monkeypatch)
+    for sha in ("a" * 40, "b" * 40, "c" * 40):
+        store.save_review(
+            "o/r", 7, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+        )
+    rows = store.run_history()
+    assert len(rows) == 3
+    assert {r["head_sha"] for r in rows} == {"a" * 40, "b" * 40, "c" * 40}
+    assert store.latest_reviews() and len(store.latest_reviews()) == 1
+
+
+def test_run_history_carries_repo_and_installation(tmp_path, monkeypatch):
+    """The field latest_reviews drops. Without it the console cannot group
+    per repo, which is the reported gap."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    row = store.run_history()[0]
+    assert row["repo"] == "o/r"
+    assert row["installation_id"] == 99
+    assert row["github_repo_id"] == 1
+
+
+def test_run_history_excludes_untenanted_rows_by_default(tmp_path, monkeypatch):
+    """Backfilled probe corpora, CLI rows and the research quarantine all
+    carry no installation_id. Including them would flood the console with
+    thousands of rows that are not tenant traffic — the exact failure
+    DOUG_QUEUE_REPO exists to paper over on doug-web."""
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 1, "reader", VERDICT)  # no installation — CLI/backfill
+    store.save_review(
+        "o/r", 2, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert [r["pr_number"] for r in store.run_history()] == [2]
+    assert {r["pr_number"] for r in store.run_history(include_untenanted=True)} == {1, 2}
+
+
+def test_run_history_excludes_external_tier(tmp_path, monkeypatch):
+    """External rows are other reviewers' verdicts, not Doug's runs."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, store.EXTERNAL_TIER, VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40,
+    )
+    assert store.run_history() == []
+
+
+def test_run_history_scopes_by_repo_and_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/one", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=11, head_sha="a" * 40, source="app",
+    )
+    store.save_review(
+        "o/two", 2, "reader", VERDICT,
+        github_repo_id=2, installation_id=22, head_sha="b" * 40, source="app",
+    )
+    assert [r["repo"] for r in store.run_history(repo="o/one")] == ["o/one"]
+    assert [r["installation_id"] for r in store.run_history(installation_id=22)] == [22]
+
+
+def test_run_history_paginates_newest_first(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    for n in range(5):
+        vid = store.save_review(
+            "o/r", n, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=str(n) * 40, source="app",
+        )
+        engine = store._get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                store.verdicts.update()
+                .where(store.verdicts.c.id == vid)
+                .values(scored_at=base + timedelta(hours=n))
+            )
+    assert [r["pr_number"] for r in store.run_history(limit=2)] == [4, 3]
+    assert [r["pr_number"] for r in store.run_history(limit=2, offset=2)] == [2, 1]
+
+
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---
 
 

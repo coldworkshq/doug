@@ -1310,6 +1310,47 @@ def latest_reviews(
     return out
 
 
+def run_history(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+) -> list[dict]:
+    """Verdict HISTORY, newest first — every run, not one row per PR.
+
+    `latest_reviews` answers "what is the current state of the queue".
+    This answers "what has Doug done", which is a different question: a PR
+    pushed three times is three runs, and collapsing them hides exactly the
+    comparison an operator opens the console to make.
+
+    Untenanted rows (installation_id IS NULL) are excluded by default. That
+    is the filter migrations.py:211 names as the correct one — real
+    installation ids rather than a label — and it is what keeps backfilled
+    probe corpora, CLI rows and the research quarantine out of a console
+    that is meant to show tenant traffic.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0:
+        return []
+    from sqlalchemy import desc, select
+
+    query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
+    if not include_untenanted:
+        query = query.where(verdicts.c.installation_id.is_not(None))
+    if repo:
+        query = query.where(verdicts.c.repo == repo)
+    if installation_id is not None:
+        query = query.where(verdicts.c.installation_id == installation_id)
+    query = (
+        query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
+        .limit(limit)
+        .offset(offset)
+    )
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(query).mappings()]
+
+
 def active_installations() -> list[int]:
     """Installation ids in state 'active'. [] when storage is disabled."""
     engine = _get_engine()
