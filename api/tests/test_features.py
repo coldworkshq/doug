@@ -1,3 +1,4 @@
+from doug import features
 from doug.features import extract_features
 from doug.models import AuthorType, PRMetadata
 
@@ -124,3 +125,34 @@ def test_deletion_leaning():
 def test_small_deletions_not_deletion_leaning():
     pr = PRMetadata(number=1, title="t", author="d", additions=2, deletions=8)
     assert not extract_features(pr).deletion_leaning
+
+
+def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
+    """The reader is asked for logic errors, unsafe migrations, concurrency
+    hazards, error-handling gaps and contract mismatches (reader.SYSTEM).
+    The accepted routing policy ranks prose and generated lockfiles after
+    code and tests for that review task.
+
+    A manifest carries real dependency decisions, including conventional
+    requirements/constraints variants and CMake's build file despite their
+    suffix. These files stay code."""
+    assert features._is_prose("docs/design/outcome-loop/ROADMAP.md")
+    assert features._is_prose("README.rst")
+    assert features._is_prose("notes.txt")
+    assert features._is_prose("web/package-lock.json")
+    assert features._is_prose("uv.lock")
+    assert features._is_prose("api/CHANGELOG.MD")  # case-insensitive
+
+    assert not features._is_prose("web/package.json")
+    assert not features._is_prose("api/pyproject.toml")
+    assert not features._is_prose("api/requirements.txt")
+    assert not features._is_prose("api/requirements-dev.txt")
+    assert not features._is_prose("api/constraints.txt")
+    assert not features._is_prose("native/CMakeLists.txt")
+    assert not features._is_prose("api/doug/tenancy.py")
+    assert not features._is_prose("api/deploy/gcp.sh")
+
+    cmake = extract_features(_pr(files=["native/CMakeLists.txt"]))
+    assert not cmake.manifest
+    assert not cmake.runtime_dep
+    assert not cmake.dep_only

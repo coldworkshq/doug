@@ -4,7 +4,7 @@ Prospective rows are the only ones that count toward rates. Backfill rows
 seeded from prose demonstrate the schema; they are quarantined the same way
 `verdicts.source` quarantines `replay` / `research`.
 
-This module does not change the frozen reader (ADR-0002). It only makes the
+This module does not change ADR-0012's frozen five reader constants. It only makes the
 meta-review denominator enforceable: schema check, append, and rates.
 """
 

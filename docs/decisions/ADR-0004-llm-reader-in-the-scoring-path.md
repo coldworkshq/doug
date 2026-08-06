@@ -46,6 +46,7 @@ before the run, which is the only reason the result is worth anything.
 
 - COGS now scale with PR volume. The economics claim on the public site
   ("no model in the hot path, ~$0.001/PR") is false and must be rewritten.
-- The reader's prompt is load-bearing evidence — see ADR-0002.
+- The reader's prompt is load-bearing evidence — see ADR-0012, which
+  supersedes ADR-0002 while preserving its historical record.
 - Deterministic scoring is not deleted; it is the degraded mode, and it
   keeps the open-source and no-credential paths alive.

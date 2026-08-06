@@ -136,6 +136,36 @@ def _is_test(path: str) -> bool:
     return bool(_TEST_RE.search(path))
 
 
+_PROSE_SUFFIXES = (".md", ".txt", ".rst")
+_CODE_TEXT_NAMES = {"CMakeLists.txt"}
+_DEPENDENCY_TEXT_RE = re.compile(
+    r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
+)
+
+
+def _is_prose(path: str) -> bool:
+    """Files the accepted routing policy ranks after code and tests.
+
+    Used only by the read-budget tiering (review.read_order, ADR-0012), not
+    by scoring — a docs-only PR still scores normally, it just loses the
+    contest for the reader's budget.
+
+    Lockfiles count as prose deliberately: generated, enormous, and never
+    read by a human in review. Known manifests are code and stay tier 0,
+    including conventional requirements/constraints variants despite their
+    otherwise-prose suffix. Code-bearing text entry points use routing-only
+    exceptions so this helper does not change scoring features.
+    """
+    name = PurePosixPath(path).name
+    if (
+        name in MANIFESTS
+        or name in _CODE_TEXT_NAMES
+        or _DEPENDENCY_TEXT_RE.fullmatch(name)
+    ):
+        return False
+    return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
+
+
 def _is_sensitive(path: str) -> bool:
     p = PurePosixPath(path)
     if any(part.lower() in SENSITIVE_SEGMENTS for part in p.parts):

@@ -22,7 +22,7 @@ import re
 from pydantic import BaseModel
 
 # Enough decisions to cover a change, few enough to stay inside a read
-# that is already carrying 30k characters of diff.
+# that may already carry up to 100k characters of diff.
 MAX_DOCS = 6
 DOC_BUDGET = 12_000  # chars across all selected records
 BODY_BUDGET = 4_000  # chars of any single record, matching the probe's ticket budget

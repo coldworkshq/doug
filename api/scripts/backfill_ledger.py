@@ -23,6 +23,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from llm_probe import DIFF_BUDGET as PROBE_DIFF_BUDGET
 from rf_kamei import REPOS, load
 
 from doug import reader, store
@@ -40,7 +41,7 @@ PROBES = [
 
 
 def _rebuild_diff(pr) -> str | None:
-    """The exact diff review.fetch_pr would have built for this PR, live.
+    """The exact pre-slice diff the Phase-1 probe built, in original order.
 
     The probe's own cache (findings-main.json) never kept the diff text it
     read, only the verdict — but the harvest cache the probe was labeled
@@ -60,6 +61,11 @@ def _rebuild_diff(pr) -> str | None:
         for f in pr.file_details
         if f.patch
     )
+
+
+def _probe_coverage(diff: str) -> reader.Coverage:
+    """Measure a historical read with the probe's own 30k instrument."""
+    return reader.coverage(diff, budget=PROBE_DIFF_BUDGET)
 
 
 def _database_url_from_gcp(project: str) -> str:
@@ -110,7 +116,7 @@ def backfill(force: bool) -> int:
             )
             cov = None
             if (diff := _rebuild_diff(pr)) is not None:
-                cov = reader.coverage(diff)
+                cov = _probe_coverage(diff)
             store.save_review(
                 repo, n, "reader", verdict_from_reader(rv), rv,
                 model=MODEL, pr_meta=to_metadata(pr).model_dump(mode="json"),
@@ -211,7 +217,7 @@ def emit_sql(out: Path) -> int:
             n_v += 1
             diff = _rebuild_diff(pr)
             if diff is not None:
-                cov = reader.coverage(diff)
+                cov = _probe_coverage(diff)
                 # No RETURNING id to chain off of here — this verdict's
                 # insert already ran as its own statement above. (repo,
                 # pr_number, model) is unique within this file's own DELETE

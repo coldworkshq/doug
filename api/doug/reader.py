@@ -1,11 +1,12 @@
-"""LLM diff-reader — the tier the Phase-1 probes validated.
+"""LLM diff-reader — descended from the tier the Phase-1 probes validated.
 
-Prompt, schema, and read parameters are byte-identical to
-scripts/llm_probe.py as of commit 0064e6b, where they were validated
-pre-registered on two repos (AUC 0.687 sentry / 0.668 grafana against best
-deterministic baselines of 0.591 / 0.518, ReDef polarity counterfactual
-passed on both). They are load-bearing evidence — a change here is a new
-experiment, not a tweak.
+SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS remain byte-identical to
+scripts/llm_probe.py as of commit 0064e6b. The probe's AUC 0.687 sentry /
+0.668 grafana and its ReDef polarity result belong to its 30k diff-budget
+configuration. The shipped DIFF_BUDGET is 100k under ADR-0012 and its files
+are tier-ordered, so those AUC figures do not validate the larger, reordered
+live read. The five frozen parameters are load-bearing evidence — changing
+one is a new experiment, not a tweak.
 
 Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
 Callers fall back to the deterministic score when either is missing or a
@@ -32,7 +33,12 @@ from .models import Band, Reason, Verdict
 MODEL = "claude-opus-5"
 MAX_TOKENS = 6000
 EFFORT = "medium"
-DIFF_BUDGET = 30_000  # chars
+# chars. Governed by ADR-0012's coverage bar, NOT by the probe — the
+# probe's own DIFF_BUDGET stays at the 30,000 it measured. 100,000 is
+# where code+tests coverage saturates (100%/97% over 30 first-parent
+# commits) at +$0.019 mean per read; the budget is a ceiling, not a
+# spend, and 63% of PRs already fit under 30,000.
+DIFF_BUDGET = 100_000
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
 DEFAULT_READ_TIMEOUT_S = 120  # seconds, whole read incl. retries' backoff
 
@@ -346,13 +352,15 @@ def _client():
     return anthropic.Anthropic(timeout=read_timeout())
 
 
-def _sent_slice(diff: str) -> str:
-    """The exact bytes DIFF_BUDGET admits — the one place this slice happens.
+def _sent_slice(diff: str, *, budget: int | None = None) -> str:
+    """The exact bytes the selected budget admits — the one slice point.
 
     coverage() re-derives what a read saw from this same function, so it can
-    never drift from what _user_text actually sent to the model.
+    never drift from what _user_text actually sent to the model. Historical
+    evidence callers may name their own instrument budget without mutating the
+    live module global.
     """
-    return diff[:DIFF_BUDGET]
+    return diff[: DIFF_BUDGET if budget is None else budget]
 
 
 def _user_text(pr, diff: str) -> str:
@@ -376,9 +384,10 @@ def _user_text(pr, diff: str) -> str:
 # the cut, and the mutation-verified test file that would have deduped two
 # of its other findings was never sent at all.
 #
-# These functions do not change what the model is given — DIFF_BUDGET and
-# _user_text are frozen probe parameters (ADR-0002). They only make the cut
-# observable, so a partial read stops looking like a complete one.
+# These functions only observe the cut. DIFF_BUDGET is governed by
+# ADR-0012's coverage bar; SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS
+# remain frozen to the validated probe. A partial read therefore stops
+# looking like a complete one.
 
 
 def diff_chunk(filename: str, status: str, additions: int, deletions: int, patch: str) -> str:
@@ -437,12 +446,16 @@ class Coverage(BaseModel):
 
 
 def coverage(
-    diff: str, *, changed_files: int | None = None, files_dropped: list[str] | None = None
+    diff: str,
+    *,
+    changed_files: int | None = None,
+    files_dropped: list[str] | None = None,
+    budget: int | None = None,
 ) -> Coverage:
-    """Observe the truncation _user_text performs. Pure over `diff`; sends
-    nothing. `changed_files`/`files_dropped` are supplied by the caller,
-    not derived here — they describe files that never reached this
-    function's input at all (fetch_pr drops files GitHub returns without a
+    """Observe the truncation _user_text performs. Pure over `diff` and the
+    selected budget; sends nothing. `changed_files`/`files_dropped` are
+    supplied by the caller, not derived here — they describe files that never
+    reached this function's input at all (fetch_pr drops files GitHub returns without a
     patch: binary, or too large to inline), which is a different hole from
     the budget truncation this function observes directly.
 
@@ -450,7 +463,7 @@ def coverage(
     rather than from a PR's file list, for the same reason: a file with no
     patch never produces a header, so it cannot appear in files_unseen.
     """
-    sent = _sent_slice(diff)
+    sent = _sent_slice(diff, budget=budget)
     matches = list(_FILE_HEADER.finditer(diff))
     all_files = [m.group(1) for m in matches]
     # A header counts as sent only if it arrived in full — a header cut

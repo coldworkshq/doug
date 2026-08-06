@@ -20,6 +20,20 @@ When the fix is an explanation rather than a behavior change, the re-reviewer ha
 evaluate the new explanation on its merits, against the mechanism it describes. A diff that
 replaces a wrong claim with a different wrong claim reads exactly like a successful fix.
 
+## A removed line is not current behavior
+
+PR #56 removed a `try/finally` block that temporarily assigned the historical 30k
+budget to `reader.DIFF_BUDGET`. The next Doug pass reported that deleted assignment as
+a current global-mutation race even though `_probe_coverage` now passed
+`budget=PROBE_DIFF_BUDGET` directly and the module contained no assignment to
+`reader.DIFF_BUDGET` at all.
+
+A patch shows both the old and new program. Before reporting behavior from a changed
+hunk, check the line's polarity and then inspect the current file. A `-` line can explain
+what the change fixes; it cannot prove what the resulting program still does. Settle a
+claim about remaining behavior against the checked-out head, not by paraphrasing both
+sides of the diff as if they coexist.
+
 ## A finding that depends on code outside the diff must say so
 
 Doug reviews a diff, not a repository, and it reports two kinds of finding without
@@ -79,12 +93,12 @@ checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-re
 
 ## Read Doug's coverage line before trusting its verdict
 
-Every verdict carries what was actually read: `Partial read: 83% of the diff (30,000 of
-35,956 chars). Cut inside api/tests/test_ingest.py. Never sent: ROADMAP.md.` A clear on a
+Every verdict carries what was actually read: `Partial read: 83% of the diff (100,000 of
+120,481 chars). Cut inside api/tests/test_ingest.py. Never sent: ROADMAP.md.` A clear on a
 partial read is not evidence about the unread part, and Doug says so itself.
 
 This is also a PR-size signal pointing the same way as one-PR-per-task: a diff small enough
-to be read whole produces a verdict worth something. A 36k-char diff does not.
+to be read whole produces a verdict worth something. A 121k-char diff does not.
 
 ## The recurring defect class here is a comment that outlives its truth
 
@@ -180,7 +194,7 @@ disproved|real|adjacent --changed|--no-changed --settled-by "…"`. Rates are
 prospective-only (`… rate`); backfill never enters the denominator.
 
 The product path also applies the resolution rule without editing the frozen
-prompt (ADR-0002): after a reader verdict, **missing-import** findings are
+prompt (ADR-0012's retained five-constant freeze): after a reader verdict, **missing-import** findings are
 settled against runtime imports in the full file at the reviewed head
 (`doug/settle.py`). `if TYPE_CHECKING:` imports do not settle (residual-real
 per the table above). Dropped findings leave `risk_score` alone and add a
@@ -502,3 +516,86 @@ with an empty table the startup sweep enqueues nothing *by construction*. That
 had been recorded in HANDOFF as "the webhook path drains jobs promptly, so at
 any boot there is nothing pending for the sweep to find" — a plausible
 explanation for the right observation and the wrong reason.
+
+## A successor ADR in the PR is invisible to the deployed intent read
+
+PR #56 proposed ADR-0012, superseding ADR-0002's six-constant freeze with a
+five-constant freeze plus a coverage-governed `DIFF_BUDGET`. Doug's unvalidated
+intent pass repeatedly said no decision sanctioned that change and reported it
+as a violation of ADR-0002. The missing mechanism was not in the prose: it was
+which Git ref the intent provider reads.
+
+`review.read_intent` calls `intent_providers.fetch(gh, owner, repo)` with no
+`ref`, so GitHub serves the default branch. While the PR is open, that branch
+still has ADR-0002 accepted and has no ADR-0012. The PR head has the opposite
+binding set: ADR-0002 superseded, ADR-0012 accepted. The deployed intent read
+therefore cannot evaluate the successor record in the change that introduces
+it; `Judged against: ADR-0004, ADR-0002` is a receipt of that limitation.
+
+Do not automatically feed a proposed ADR from the head into the same PR's
+policy check — that lets code self-authorize by adding its own decision. Treat
+the deviation as a base-policy warning for the human decision maker. Before
+calling it a defect, compare the base and head frontmatter, read the check's
+`Judged against` line, and verify whether the successor was explicitly approved.
+After merge, `intent.select`'s accepted-only filter makes the successor binding
+and excludes the superseded record.
+
+## Separate an accepted behavior change from an unmeasured regression
+
+The same PR produced repeated findings that tier ordering and a 100k ceiling
+change the model input and could reduce verdict quality. The first clause is
+true and ADR-0012 records it as the decision, including the loss of the old AUC
+claim. Restating that accepted trade as a behavior-change finding is not a new
+defect and should not be "fixed" by restoring alphabetical 30k reads.
+
+Compound performance findings need to be split at the evidence boundary. The
+input-cost increase was measured; latency and timeout frequency were not.
+`DEFAULT_READ_TIMEOUT_S` and `MAX_TOKENS` staying fixed make a regression
+plausible, not observed. Disposition the combined claim as adjacent until a
+latency distribution, timeout count, or production fallback rate establishes
+the second half.
+
+The same present-versus-future rule applies to concurrency. The historical
+backfill was a standalone synchronous script, so no concurrent live reader
+shared its process. That made the reported corruption path hypothetical, but
+the module-global mutation was still avoidable. The useful change was an
+explicit `coverage(..., budget=30_000)` argument, pinned by a test that pauses
+the historical call and observes the live global from another thread. Do not
+claim a current race without a caller; do not defend unnecessary shared state
+when a value can travel as data.
+
+## Test script imports through the entrypoint the repository supports
+
+PR #56's `reader:fragile-import` said `backfill_ledger.py` fails when run from
+another working directory because it imports sibling probe scripts by name.
+Executing the documented file path from both the repository root and `/tmp`
+got through every import and reached the expected `DATABASE_URL not set`
+guard. Python places the script's own directory on `sys.path` for that form.
+
+`python -m scripts.backfill_ledger` and `import scripts.backfill_ledger` from
+the API root do fail because `scripts` is not a supported package interface;
+no production caller uses either form. Do not turn an unsupported invocation
+into a runtime defect. If module execution becomes a contract, make the scripts
+a package, convert all sibling imports coherently, and add that exact invocation
+to the tests rather than patching one import in isolation.
+
+## Deprioritized files are not silently omitted
+
+`features._is_prose` is a routing heuristic: it sends prose after code and
+tests, but `read_order` still includes every patch. If the budget lands before
+or inside one, `Coverage.files_unseen` or `Coverage.file_cut` names it and the
+check run renders that receipt. "May not reach the model" can be true;
+"silently never reaches the reader" is false for a file GitHub supplied.
+
+Still verify the classifier rather than dismissing every edge case. PR #56's
+earlier passes found real dependency manifests (`requirements.txt`,
+`requirements-dev.txt`, `constraints.txt`) falling through the `.txt` suffix;
+those now stay code and have regression tests. A later pass supplied the concrete
+`CMakeLists.txt`, which was also misclassified by its `.txt` suffix even though it
+drives the build. It now has a routing-only exception: adding it to the scorer's
+global manifest set would have changed unrelated risk features.
+
+For a new claim, provide a concrete behavior-bearing path, check whether it is
+already excepted, and then distinguish a bad classification from the
+already-visible cost of an accepted lower tier. Keep a routing repair scoped to
+routing unless the scoring taxonomy is independently wrong.

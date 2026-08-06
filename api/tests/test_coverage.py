@@ -51,10 +51,11 @@ def _pr(files=PR643):
     )
 
 
-def test_coverage_names_the_files_the_read_never_saw():
+def test_coverage_names_the_files_the_read_never_saw(monkeypatch):
     """The failure in one assertion: the mutation-verified test file that
     would have deduped two findings was not sent, and the file holding the
     real bug was cut in half."""
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
     cov = reader.coverage(_diff())
 
     assert not cov.complete
@@ -118,7 +119,8 @@ def test_file_cut_names_the_file_actually_cut_mid_content(monkeypatch):
     assert cov.files_unseen == []  # b.py's header arrived; only its tail didn't
 
 
-def test_the_notice_states_the_share_read_and_the_files_dropped():
+def test_the_notice_states_the_share_read_and_the_files_dropped(monkeypatch):
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
     notice = reader.truncation_reason(reader.coverage(_diff()))
 
     assert notice is not None
@@ -152,6 +154,7 @@ def test_diff_chunk_and_file_header_agree_on_the_shape():
 
 
 def test_a_partial_read_says_so_on_the_verdict(monkeypatch):
+    monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(
         reader, "read_diff",

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from . import intent, intent_providers, reader, settle
+from . import features, intent, intent_providers, reader, settle
 from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict
 from .scoring import score
@@ -109,6 +109,42 @@ def _dropped_files(files: list) -> list[str]:
     return [f.filename for f in files if not f.patch and (f.additions or f.deletions)]
 
 
+def _read_tier(filename: str) -> int:
+    """Lower tiers reach the model first. See ADR-0012."""
+    if features._is_prose(filename):
+        return 2
+    if features._is_test(filename):
+        return 1
+    return 0
+
+
+def read_order(files: list) -> list:
+    """The order files reach the model, highest-value first.
+
+    DIFF_BUDGET cuts the assembled diff linearly, so order *is* selection:
+    whatever sorts last is what the reader never sees. Two keys — tier
+    (code, then tests, then prose) and patch size ascending. Python's sort
+    is stable, so files with equal keys keep GitHub's own order; that
+    stability is the deterministic tiebreak and is pinned by test.
+
+    Patch length is a cheap proxy for the assembled chunk length; header
+    overhead can invert contrived near-ties. Smallest-patch-first usually
+    maximises how many files arrive WHOLE, which is what lets the reader
+    reason correctly rather than half-correctly. It also makes the largest
+    file in a tier the likeliest to be cut or dropped — that file is named
+    in coverage.file_cut or coverage.files_unseen and rendered on the check
+    run by truncation_reason, so the cost is visible rather than silent.
+
+    Deliberately NOT risk-ordered. features._is_sensitive and _MIGRATION_RE
+    fire on zero files in the PRs that motivated this work (tenancy.py,
+    keyformat.py, migrations.py all False), and inventing new path
+    vocabulary to fix that is the move that already failed replication:
+    hotspot_path and config_flag fire zero times across all 12,000 grafana
+    PRs because both dictionaries are sentry vocabulary (THESIS.md §1a).
+    """
+    return sorted(files, key=lambda f: (_read_tier(f.filename), len(f.patch or "")))
+
+
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",
@@ -146,7 +182,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
         )
         diff = reader.CHUNK_SEPARATOR.join(
             reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
-            for f in files
+            for f in read_order(files)
             if f.patch
         )
         out.append((meta, diff))
@@ -223,7 +259,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
-        for f in files
+        for f in read_order(files)
         if f.patch
     )
     return meta, diff
@@ -286,7 +322,8 @@ def score_one(
 
     `resolve_file`, when given, settles import/undefined-name findings
     against the full file at head (REVIEWING.md resolution rule). It does
-    not change what the model was shown — ADR-0002 stands.
+    not change what the model was shown — ADR-0012's five-constant freeze
+    stands.
 
     `resolve_schema`, when given, settles unmigrated-column/schema-dependency
     findings against the live database schema (same rule, same doc — 5/5
