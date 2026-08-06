@@ -414,10 +414,10 @@ def test_read_order_puts_code_before_tests_before_prose():
 
 
 def test_read_order_sends_smallest_first_within_a_tier():
-    """Smallest-first maximises how many files arrive WHOLE, which is what
-    lets the reader reason correctly rather than half-correctly. The cost —
-    the biggest file in a tier is likeliest to be cut or dropped — is paid
-    visibly via coverage.file_cut or coverage.files_unseen, not silently."""
+    """Smallest-patch-first usually maximises whole files, which is what lets
+    the reader reason correctly rather than half-correctly. The cost — the
+    biggest patch in a tier is likeliest to be cut or dropped — is paid visibly
+    via coverage.file_cut or coverage.files_unseen, not silently."""
     files = [_f("big.py", 900), _f("small.py", 100), _f("mid.py", 500)]
     assert [f.filename for f in review.read_order(files)] == [
         "small.py",

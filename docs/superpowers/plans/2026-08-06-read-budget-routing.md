@@ -172,10 +172,10 @@ def test_read_order_puts_code_before_tests_before_prose():
 
 
 def test_read_order_sends_smallest_first_within_a_tier():
-    """Smallest-first maximises how many files arrive WHOLE, which is what
-    lets the reader reason correctly rather than half-correctly. The cost —
-    the biggest file in a tier is likeliest to be dropped — is paid visibly
-    via coverage.files_unseen, not silently."""
+    """Smallest-patch-first usually maximises whole files, which is what lets
+    the reader reason correctly rather than half-correctly. The cost — the
+    biggest patch in a tier is likeliest to be cut or dropped — is paid visibly
+    via coverage.file_cut or coverage.files_unseen, not silently."""
     files = [_f("big.py", 900), _f("small.py", 100), _f("mid.py", 500)]
     assert [f.filename for f in review.read_order(files)] == [
         "small.py",
@@ -243,12 +243,13 @@ def read_order(files: list) -> list:
     is stable, so files with equal keys keep GitHub's own order; that
     stability is the deterministic tiebreak and is pinned by test.
 
-    Smallest-first maximises how many files arrive WHOLE, which is what
-    lets the reader reason correctly rather than half-correctly. It also
-    makes the largest file in a tier the likeliest to be cut or dropped —
-    that file is named in coverage.file_cut or coverage.files_unseen and
-    rendered on the check run by truncation_reason, so the cost is visible
-    rather than silent.
+    Patch length is a cheap proxy for the assembled chunk length; header
+    overhead can invert contrived near-ties. Smallest-patch-first usually
+    maximises how many files arrive WHOLE, which is what lets the reader
+    reason correctly rather than half-correctly. It also makes the largest
+    file in a tier the likeliest to be cut or dropped — that file is named
+    in coverage.file_cut or coverage.files_unseen and rendered on the check
+    run by truncation_reason, so the cost is visible rather than silent.
 
     Deliberately NOT risk-ordered. features._is_sensitive and _MIGRATION_RE
     fire on zero files in the PRs that motivated this work (tenancy.py,

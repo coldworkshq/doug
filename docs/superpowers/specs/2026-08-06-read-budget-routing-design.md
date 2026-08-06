@@ -98,8 +98,10 @@ files here (above), so risk-ordering would mean inventing new path vocabulary.
 That is precisely the move that failed replication: `hotspot_path` and
 `config_flag` fire zero times across all 12,000 grafana PRs because both
 dictionaries are sentry vocabulary (THESIS.md §1a). Smallest-first needs no
-vocabulary, works in any language, and maximises how many files the reader sees
-**whole** — which is what lets it reason correctly rather than half-correctly.
+vocabulary and works in any language. Patch length is a proxy for assembled
+chunk length because headers add a small variable overhead; smallest-patch-first
+usually maximises how many files the reader sees **whole** — which is what lets
+it reason correctly rather than half-correctly.
 
 **The cost, stated rather than implied:** smallest-first makes the largest file
 in a tier the likeliest to be dropped, and the largest file is often the
