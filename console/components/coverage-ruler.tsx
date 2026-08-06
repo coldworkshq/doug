@@ -27,13 +27,18 @@ import { coverageLabel, coveragePercent, type RunCoverage } from "@/lib/runs";
  *  whole files, has no single file to point the marker at.
  *
  *  `filesDropped` (PRMetadata.files_dropped, not part of `coverage` at
- *  all) is a THIRD, separate fact from `files_unseen`: a binary or
- *  oversize file GitHub reports but that never had a chance to be read —
- *  reader.py's coverage() can't even see it, since a file with no patch
- *  never produces the `### path (…)` header `files_unseen` is derived
- *  from. It gets its own list, never folded into `files_unseen` or the
- *  bar's geometry above: the bar's widths are char-based, and a dropped
- *  file contributes no chars to `diff_chars` to be sized by. */
+ *  all) is a THIRD, separate fact from `files_unseen`: a file GitHub
+ *  reports changed but sent no patch for, that never had a chance to be
+ *  read — reader.py's coverage() can't even see it, since a file with no
+ *  patch never produces the `### path (…)` header `files_unseen` is
+ *  derived from. review.py's `_dropped_files` deliberately excludes
+ *  genuine binaries (additions == deletions == 0 alongside no patch) —
+ *  these are real text files too large for GitHub to inline, which is
+ *  sharper and more alarming than "binary": reviewable content Doug could
+ *  have read and didn't. It gets its own list, never folded into
+ *  `files_unseen` or the bar's geometry above: the bar's widths are
+ *  char-based, and a dropped file contributes no chars to `diff_chars` to
+ *  be sized by. */
 export function CoverageRuler({
   coverage,
   changedFiles,
@@ -160,13 +165,13 @@ export function CoverageRuler({
               here is what keeps this from reading as a second, contradictory
               "unseen" claim. */}
           <div className="mono mt-4 border-t border-border pt-3 text-[10px] uppercase tracking-[.12em] text-muted-foreground">
-            Never fetched — no patch (binary or oversize) — {filesDropped.length} files
+            Never fetched — GitHub sent no patch (too large to inline) — {filesDropped.length} files
           </div>
           <ul>
             {filesDropped.map((path) => (
               <li key={path} className="mono flex items-center gap-2.5 py-[3px] text-xs">
                 <span className="text-muted-foreground">{path}</span>
-                <span className="ml-auto text-[10.5px] text-muted-foreground/60">binary or oversize</span>
+                <span className="ml-auto text-[10.5px] text-muted-foreground/60">no patch — too large</span>
               </li>
             ))}
           </ul>
