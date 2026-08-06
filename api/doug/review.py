@@ -180,7 +180,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
         )
         diff = reader.CHUNK_SEPARATOR.join(
             reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
-            for f in files
+            for f in read_order(files)
             if f.patch
         )
         out.append((meta, diff))
@@ -257,7 +257,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     )
     diff = reader.CHUNK_SEPARATOR.join(
         reader.diff_chunk(f.filename, f.status, f.additions, f.deletions, f.patch)
-        for f in files
+        for f in read_order(files)
         if f.patch
     )
     return meta, diff
