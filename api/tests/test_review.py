@@ -383,3 +383,63 @@ def test_fetch_pr_degrades_gracefully_when_review_state_is_unreadable():
     assert meta.approvals == 0
     assert meta.approval_latency_s is None
     assert diff  # the actually load-bearing part still worked
+
+
+def _f(filename: str, patch_len: int, status: str = "modified"):
+    """A GitHub file object as far as read_order cares: .filename + .patch."""
+    return SimpleNamespace(
+        filename=filename,
+        status=status,
+        additions=1,
+        deletions=0,
+        patch="x" * patch_len,
+    )
+
+
+def test_read_order_puts_code_before_tests_before_prose():
+    """DIFF_BUDGET cuts the assembled diff linearly, so whatever sorts last
+    is what the reader never sees. Prose last is the single biggest win:
+    across 30 first-parent commits, 37% of diffs truncated but only 20% had
+    CODE over budget — the gap was docs and tests crowding out code."""
+    files = [
+        _f("docs/ROADMAP.md", 100),
+        _f("api/tests/test_tenancy.py", 100),
+        _f("api/doug/tenancy.py", 100),
+    ]
+    assert [f.filename for f in review.read_order(files)] == [
+        "api/doug/tenancy.py",
+        "api/tests/test_tenancy.py",
+        "docs/ROADMAP.md",
+    ]
+
+
+def test_read_order_sends_smallest_first_within_a_tier():
+    """Smallest-first maximises how many files arrive WHOLE, which is what
+    lets the reader reason correctly rather than half-correctly. The cost —
+    the biggest file in a tier is likeliest to be dropped — is paid visibly
+    via coverage.files_unseen, not silently."""
+    files = [_f("big.py", 900), _f("small.py", 100), _f("mid.py", 500)]
+    assert [f.filename for f in review.read_order(files)] == [
+        "small.py",
+        "mid.py",
+        "big.py",
+    ]
+
+
+def test_read_order_is_deterministic_for_equal_keys():
+    """Two files of identical tier and size must not swap between runs.
+    A nondeterministic order makes the same head_sha produce different
+    reads, which would make verdicts unreproducible and quietly break the
+    idempotency pre-read's assumption that a re-run sees the same input."""
+    files = [_f("b.py", 100), _f("a.py", 100), _f("c.py", 100)]
+    once = [f.filename for f in review.read_order(files)]
+    twice = [f.filename for f in review.read_order(list(files))]
+    assert once == twice == ["b.py", "a.py", "c.py"]  # input order preserved
+
+
+def test_read_order_tolerates_files_with_no_patch():
+    """GitHub returns binaries and too-large-to-inline files with
+    patch=None. They are filtered out at the join, but read_order sees them
+    first and must not raise on len(None)."""
+    files = [_f("a.py", 100), SimpleNamespace(filename="logo.png", patch=None)]
+    assert len(review.read_order(files)) == 2
