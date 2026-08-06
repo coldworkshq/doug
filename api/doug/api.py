@@ -25,6 +25,11 @@ from .models import (
     QueueSummary,
     ReadScoreRequest,
     Reason,
+    RunCoverage,
+    RunFindingCounts,
+    RunJob,
+    RunListResponse,
+    RunSummaryItem,
     Verdict,
 )
 from .scoring import default_threshold, score
@@ -381,6 +386,83 @@ def queue(
             threshold=thr,
         ),
         items=items,
+    )
+
+
+def _run_item(row: dict) -> RunSummaryItem:
+    """One ledger row as a list item.
+
+    `changed_files` travels separately from `coverage` because it is GitHub's
+    own count on pr_meta, and it is the ONLY correct denominator for a
+    coverage percentage — `len(files)` is the paginated list actually
+    fetched and can be short on exactly the large PRs where coverage matters
+    most. None here means the console renders "denominator unknown".
+
+    `_with_url` assumes `pr_meta` is a dict — every /v1/queue row is filtered
+    on that before it ever reaches _with_url. run_history carries every
+    verdict, including rows saved with no pr_meta at all (save_review's
+    `pr_meta` kwarg is optional), so a bare `_with_url(row)` call raises
+    validating None into PRMetadata instead of degrading. This falls back
+    the same way _comparison_run does for the same shape of row.
+    """
+    pr_meta = row["pr_meta"]
+    if isinstance(pr_meta, dict):
+        meta = _with_url(row)
+        title, url, changed_files = meta.title, meta.url, meta.changed_files
+    else:
+        title = f"PR #{row['pr_number']}"
+        url = f"https://github.com/{row['repo']}/pull/{row['pr_number']}"
+        changed_files = None
+    return RunSummaryItem(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        pr_number=row["pr_number"],
+        title=title,
+        url=url,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        source=row["source"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        changed_files=changed_files,
+        finding_counts=RunFindingCounts(**row["finding_counts"]),
+        job=RunJob(**row["job"]) if row["job"] else None,
+        outcome_14=row["outcome_14"],
+    )
+
+
+@app.get("/v1/runs")
+def runs(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+    x_doug_token: str = Header(""),
+) -> RunListResponse:
+    """Verdict history for the operator console. Operator-only, permanently:
+    this crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _operator_only(x_doug_token)
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    rows = store.run_history(
+        limit=limit,
+        offset=offset,
+        repo=repo,
+        installation_id=installation_id,
+        include_untenanted=include_untenanted,
+    )
+    return RunListResponse(
+        items=[_run_item(row) for row in rows], limit=limit, offset=offset
     )
 
 

@@ -2565,3 +2565,165 @@ def test_uninstall_webhook_bulk_revokes_keys(tmp_path, monkeypatch):
     # Reinstall: state flips back to active — the key must STAY dead.
     _record_installation({"installation": {"id": 150424894, "account": {}}}, "created")
     assert tenancy.resolve(minted.token) is None
+
+
+# /v1/runs — the console's cross-installation verdict history. Same _db/AUTH/
+# VERDICT shape test_store.py's run_history tests use: a token-gated route
+# needs both a ledger and DOUG_API_TOKEN, and _db sets both because every
+# test below calls it.
+VERDICT = Verdict(
+    score=0.62,
+    band=Band.FLAGGED,
+    threshold=0.30,
+    reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded", weight=0.0)],
+)
+
+AUTH = {"X-Doug-Token": "t0ken"}
+
+
+def _db(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path}/doug.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    return url
+
+
+def test_runs_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs").status_code == 401
+
+
+def test_runs_404s_a_tenant_key(tmp_path, monkeypatch):
+    """A resolving tenant key is a real credential at the wrong door, so it
+    gets the same no-existence-leak 404 _operator_only gives everywhere."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers={"X-Doug-Token": "dg_tenant"}).status_code == 404
+
+
+def test_runs_returns_repo_and_installation_on_every_item(tmp_path, monkeypatch):
+    """The fields /v1/queue drops. Without them the console cannot group
+    per repo, which is the gap this endpoint exists to close."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["repo"] == "o/r"
+    assert item["installation_id"] == 99
+    assert item["verdict_id"] > 0
+
+
+def test_runs_serialises_a_missing_read_as_null_not_zero(tmp_path, monkeypatch):
+    """A deterministic run had no read. Zero coverage would claim Doug read
+    nothing of a diff it never opened — empty is not zero."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers=AUTH).json()["items"][0]["coverage"] is None
+
+
+def test_runs_rejects_an_out_of_range_limit(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs?limit=0", headers=AUTH).status_code == 422
+    assert client.get("/v1/runs?limit=501", headers=AUTH).status_code == 422
+
+
+def test_runs_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers=AUTH).status_code == 503
+
+
+# Beyond the brief's six: the response is the contract Task 7's console
+# reads, and none of those six touch title/url/tier/source/score/band/
+# threshold/changed_files/finding_counts/job/outcome_14/pr_number/
+# github_repo_id — a dropped or misspelled key among them would pass all
+# six anyway. This pins every key of RunSummaryItem in one row that carries
+# a real pr_meta, coverage, job and outcome.
+def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    coverage = api.reader.Coverage(
+        diff_chars=100, sent_chars=80, files_sent=2,
+        files_unseen=["b.py"], file_cut="a.py",
+    )
+    pr_meta = {
+        "number": 7, "title": "Add cache", "author": "dev", "files": ["a.py"],
+        "url": "https://github.com/o/r/pull/7", "changed_files": 12,
+    }
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        pr_meta=pr_meta, coverage=coverage,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["verdict_id"] == vid
+    assert item["repo"] == "o/r"
+    assert item["installation_id"] == 99
+    assert item["github_repo_id"] == 1
+    assert item["pr_number"] == 7
+    assert item["title"] == "Add cache"
+    assert item["url"] == "https://github.com/o/r/pull/7"
+    assert item["tier"] == "reader"
+    assert item["source"] == "app"
+    assert item["score"] == VERDICT.score
+    assert item["band"] == VERDICT.band.value
+    assert item["threshold"] == VERDICT.threshold
+    assert item["changed_files"] == 12
+    assert item["coverage"] == {
+        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
+        "files_unseen": ["b.py"], "file_cut": "a.py",
+    }
+    # VERDICT's one Reason carries no severity — total counts severity-NULL
+    # findings (the brief's own note on RunFindingCounts), so total=1 while
+    # the severity buckets stay at zero.
+    assert item["finding_counts"] == {"total": 1, "high": 0, "medium": 0, "low": 0}
+    assert item["job"]["status"] == "done" and item["job"]["attempts"] == 1
+    assert item["outcome_14"] == "clean"
+
+
+def test_runs_falls_back_to_a_synthesized_title_and_url_without_pr_meta(
+    tmp_path, monkeypatch
+):
+    """A run saved with no pr_meta at all — save_review's `pr_meta` kwarg is
+    optional — must still render, not 500. _with_url assumes pr_meta is a
+    dict (every /v1/queue row is filtered on that before it gets there);
+    run_history carries every verdict including this one, so _run_item
+    degrades the same way _comparison_run already does for a missing
+    pr_meta."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 9, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["title"] == "PR #9"
+    assert item["url"] == "https://github.com/o/r/pull/9"
+    assert item["changed_files"] is None

@@ -6,6 +6,7 @@ belong here yet — that is the thesis's phase discipline: metadata first,
 prove the parsing half is needed before building it.
 """
 
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -115,3 +116,58 @@ class QueueSummary(BaseModel):
 class QueueResponse(BaseModel):
     summary: QueueSummary
     items: list[QueueItem]
+
+
+class RunCoverage(BaseModel):
+    """What the reader was actually given. None on the whole object means no
+    read happened — never zeros, which would claim Doug read nothing of a
+    diff it never opened."""
+
+    diff_chars: int
+    sent_chars: int
+    files_sent: int
+    files_unseen: list[str]
+    file_cut: str | None
+
+
+class RunFindingCounts(BaseModel):
+    total: int
+    high: int
+    medium: int
+    low: int
+
+
+class RunJob(BaseModel):
+    status: str
+    attempts: int
+    error: str | None
+    enqueued_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class RunSummaryItem(BaseModel):
+    verdict_id: int
+    repo: str
+    installation_id: int | None
+    github_repo_id: int | None
+    pr_number: int
+    title: str
+    url: str | None
+    scored_at: datetime
+    tier: str
+    source: str | None
+    score: float
+    band: Band
+    threshold: float
+    coverage: RunCoverage | None
+    changed_files: int | None
+    finding_counts: RunFindingCounts
+    job: RunJob | None
+    outcome_14: str | None
+
+
+class RunListResponse(BaseModel):
+    items: list[RunSummaryItem]
+    limit: int
+    offset: int
