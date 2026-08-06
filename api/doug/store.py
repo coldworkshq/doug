@@ -526,7 +526,11 @@ def save_review(
                     "label": r.label,
                     "weight": r.weight,
                     "file": None,
-                    "severity": None,
+                    # The Reason itself may already carry severity (reader
+                    # tier sets it in verdict_from_reader); reader_verdict
+                    # below only adds `file` and reconfirms the same value
+                    # when a match is found.
+                    "severity": r.severity,
                 }
                 for r in verdict.reasons
             ]

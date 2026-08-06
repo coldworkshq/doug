@@ -132,6 +132,35 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         assert f["severity"] == "high" and f["file"] == "cache.py"
 
 
+def test_save_review_persists_reason_severity_without_a_reader_verdict(tmp_path, monkeypatch):
+    """reader_verdict is optional on save_review's own signature — callers
+    that build a Verdict directly (run_history's own test suite among them)
+    are a legitimate use of it, not a misuse. Severity must survive on that
+    path too, not only when a matching reader_verdict also happens to be
+    passed and label-matches each reason."""
+    url = _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.62,
+        band=Band.FLAGGED,
+        threshold=0.30,
+        reasons=[
+            Reason(
+                rule="reader:race-condition",
+                label="Cache write is not guarded",
+                weight=0.0,
+                severity="high",
+            )
+        ],
+    )
+    vid = store.save_review("o/r", 7, "reader", verdict)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        f = conn.execute(select(store.findings)).mappings().one()
+    assert f["verdict_id"] == vid
+    assert f["severity"] == "high"
+
+
 def _pr() -> PRMetadata:
     return PRMetadata.model_validate(
         dict(number=7, title="Add cache", author="dev", files=["cache.py"])
