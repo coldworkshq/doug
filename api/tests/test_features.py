@@ -133,8 +133,9 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     The accepted routing policy ranks prose and generated lockfiles after
     code and tests for that review task.
 
-    A manifest carries real dependency decisions, including requirements.txt
-    despite its suffix. Manifests stay code."""
+    A manifest carries real dependency decisions, including conventional
+    requirements/constraints variants despite their suffix. Manifests stay
+    code."""
     assert features._is_prose("docs/design/outcome-loop/ROADMAP.md")
     assert features._is_prose("README.rst")
     assert features._is_prose("notes.txt")
@@ -145,5 +146,7 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     assert not features._is_prose("web/package.json")
     assert not features._is_prose("api/pyproject.toml")
     assert not features._is_prose("api/requirements.txt")
+    assert not features._is_prose("api/requirements-dev.txt")
+    assert not features._is_prose("api/constraints.txt")
     assert not features._is_prose("api/doug/tenancy.py")
     assert not features._is_prose("api/deploy/gcp.sh")

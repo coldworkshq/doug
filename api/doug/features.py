@@ -137,6 +137,9 @@ def _is_test(path: str) -> bool:
 
 
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
+_DEPENDENCY_TEXT_RE = re.compile(
+    r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
+)
 
 
 def _is_prose(path: str) -> bool:
@@ -148,10 +151,11 @@ def _is_prose(path: str) -> bool:
 
     Lockfiles count as prose deliberately: generated, enormous, and never
     read by a human in review. Known manifests are code and stay tier 0,
-    including requirements.txt despite its otherwise-prose suffix.
+    including conventional requirements/constraints variants despite their
+    otherwise-prose suffix.
     """
     name = PurePosixPath(path).name
-    if name in MANIFESTS:
+    if name in MANIFESTS or _DEPENDENCY_TEXT_RE.fullmatch(name):
         return False
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 

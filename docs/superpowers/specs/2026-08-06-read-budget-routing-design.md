@@ -81,10 +81,11 @@ Three sort keys:
 | 3 | original path order | deterministic tiebreak |
 
 `_is_prose` covers `.md` / `.txt` / `.rst` and lockfiles, except that known
-manifests such as `requirements.txt` stay code. It lands in `features.py`
-beside `_is_test` — path classification lives in one module, so the tier rule
-and the scorer can never drift apart on what counts as a test. Everything that
-is neither prose nor test is tier 0.
+manifests and conventional dependency variants such as `requirements-dev.txt`
+and `constraints.txt` stay code. It lands in `features.py` beside `_is_test` —
+path classification lives in one module, so the tier rule and the scorer can
+never drift apart on what counts as a test. Everything that is neither prose
+nor test is tier 0.
 
 **Nothing in `reader.py` changes except the one constant in §2.** `_sent_slice`,
 `_user_text` and `coverage()` are untouched, and no new truncation logic is

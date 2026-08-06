@@ -60,8 +60,9 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     The accepted routing policy ranks prose and generated lockfiles after
     code and tests for that review task.
 
-    A manifest carries real dependency decisions, including requirements.txt
-    despite its suffix. Manifests stay code."""
+    A manifest carries real dependency decisions, including conventional
+    requirements/constraints variants despite their suffix. Manifests stay
+    code."""
     assert features._is_prose("docs/design/outcome-loop/ROADMAP.md")
     assert features._is_prose("README.rst")
     assert features._is_prose("notes.txt")
@@ -72,6 +73,8 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     assert not features._is_prose("web/package.json")
     assert not features._is_prose("api/pyproject.toml")
     assert not features._is_prose("api/requirements.txt")
+    assert not features._is_prose("api/requirements-dev.txt")
+    assert not features._is_prose("api/constraints.txt")
     assert not features._is_prose("api/doug/tenancy.py")
     assert not features._is_prose("api/deploy/gcp.sh")
 ```
@@ -87,6 +90,9 @@ In `api/doug/features.py`, immediately after `_is_test` (~line 137):
 
 ```python
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
+_DEPENDENCY_TEXT_RE = re.compile(
+    r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
+)
 
 
 def _is_prose(path: str) -> bool:
@@ -98,10 +104,11 @@ def _is_prose(path: str) -> bool:
 
     Lockfiles count as prose deliberately: generated, enormous, and never
     read by a human in review. Known manifests are code and stay tier 0,
-    including requirements.txt despite its otherwise-prose suffix.
+    including conventional requirements/constraints variants despite their
+    otherwise-prose suffix.
     """
     name = PurePosixPath(path).name
-    if name in MANIFESTS:
+    if name in MANIFESTS or _DEPENDENCY_TEXT_RE.fullmatch(name):
         return False
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 ```
