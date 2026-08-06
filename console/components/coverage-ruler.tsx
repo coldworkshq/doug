@@ -1,4 +1,4 @@
-import { coveragePercent, type RunCoverage } from "@/lib/runs";
+import { coverageLabel, coveragePercent, type RunCoverage } from "@/lib/runs";
 
 /** The console's signature element: every file the reader was given, in
  *  budget-consumption order, sized by share of the diff. Read is solid;
@@ -39,15 +39,10 @@ export function CoverageRuler({
 
   // Files, not chars, headline this ruler — changed_files gives files a
   // trustworthy denominator and a file count is what an operator acts on.
-  // Math.round alone would print 99.5% (199 of 200 files) as a false
-  // "100%", the same complete-read claim `coveragePercent` itself already
-  // refuses to invent when the true ratio is 100.0 exactly.
-  const pctLabel = (() => {
-    if (result.kind !== "known") return "—";
-    if (result.pct >= 100) return "100%";
-    const rounded = Math.round(result.pct);
-    return rounded >= 100 ? "<100%" : `${rounded}%`;
-  })();
+  // coverageLabel carries both rounding guards (see its docstring) — this
+  // used to round in place with only the "<100%" guard, which silently
+  // printed a false "0%" for a real-but-tiny read.
+  const pctLabel = coverageLabel(result);
   const low = result.kind === "known" && result.low;
 
   return (

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  coverageLabel,
   coveragePercent,
   jobDuration,
   parseTenantId,
@@ -62,11 +63,60 @@ test("coveragePercent never exceeds 100 even if files_sent overruns", () => {
   assert.equal(result.pct, 100);
 });
 
+test("coverageLabel prints '<100%' rather than a false '100%' for a near-complete read", () => {
+  // 199 of 200 files: true ratio 99.5%. Math.round alone prints "100%",
+  // the same complete-read claim coveragePercent itself already refuses to
+  // invent when the ratio isn't 100.0 exactly — the defect the Runs table
+  // had and the forensics ruler didn't.
+  const result = coveragePercent({ ...coverage, files_sent: 199 }, 200);
+  assert.equal(result.kind, "known");
+  assert.equal(coverageLabel(result), "<100%");
+});
+
+test("coverageLabel prints '<1%' rather than a false '0%' for a real but tiny read", () => {
+  // 1 of 300 files: true ratio 0.33%. Math.round alone prints "0%", the
+  // same nothing-was-read claim "no read" exists to distinguish itself
+  // from — the defect the forensics ruler had and the Runs table didn't.
+  const result = coveragePercent({ ...coverage, files_sent: 1 }, 300);
+  assert.equal(result.kind, "known");
+  assert.equal(coverageLabel(result), "<1%");
+});
+
+test("coverageLabel prints exactly '100%' and '0%' at the true boundaries", () => {
+  assert.equal(coverageLabel(coveragePercent({ ...coverage, files_sent: 23 }, 23)), "100%");
+  assert.equal(coverageLabel(coveragePercent({ ...coverage, files_sent: 0 }, 23)), "0%");
+});
+
+test("coverageLabel renders a dash for the non-known results", () => {
+  assert.equal(coverageLabel({ kind: "no-read" }), "—");
+  assert.equal(coverageLabel({ kind: "unknown-denominator" }), "—");
+});
+
 test("relativeAge renders hours, days and weeks distinctly", () => {
   const now = new Date("2026-08-06T12:00:00Z");
   assert.equal(relativeAge("2026-08-06T10:00:00Z", now), "2h");
   assert.equal(relativeAge("2026-08-04T12:00:00Z", now), "2d");
   assert.equal(relativeAge("2026-07-16T12:00:00Z", now), "3w");
+});
+
+test("relativeAge treats a zoneless timestamp as UTC, never as the server's local time", () => {
+  // The regression this test pins, for the ledger's age column specifically:
+  // run_history's scored_at crosses the wire with no zone suffix on sqlite
+  // (same store.py._utc() gap utcClock's zoneless test documents above).
+  // `new Date(iso)` on that raw string parses it as LOCAL time — on a
+  // UTC-behind server every row's "then" lands AFTER "now", the
+  // Math.max(0, ...) clamp swallows the negative, and every row in the
+  // table prints "0m" regardless of true age. Forcing a non-UTC TZ is what
+  // makes this test catch that: on a UTC-default CI machine the bug would
+  // pass by accident.
+  const originalTz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles"; // UTC-7 in August (PDT)
+  try {
+    const now = new Date("2026-08-06T12:00:00Z");
+    assert.equal(relativeAge("2026-08-06T10:00:00", now), "2h");
+  } finally {
+    process.env.TZ = originalTz;
+  }
 });
 
 test("jobDuration renders seconds and minutes the way the mockup does", () => {

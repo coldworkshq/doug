@@ -1,4 +1,4 @@
-import { coveragePercent, type RunCoverage } from "@/lib/runs";
+import { coverageLabel, coveragePercent, type RunCoverage } from "@/lib/runs";
 
 /** Coverage gets no hue. A low read is alarmed by how empty the track
  *  looks plus a dotted underline — magnitude problems are shown with
@@ -22,10 +22,10 @@ export function CoverageBar({
       </span>
     );
   }
-  // Math.round alone would print a genuine 0.3% read as "0%" — the same
-  // false claim of nothing-read that "no read" exists to avoid making.
-  // Below half a point, say so without rounding it away.
-  const pctLabel = result.pct > 0 && result.pct < 0.5 ? "<1%" : `${Math.round(result.pct)}%`;
+  // coverageLabel carries both rounding guards (see its docstring) — this
+  // used to round in place with only the "<1%" guard, which silently
+  // printed a false "100%" for a 99.5%-of-files read.
+  const pctLabel = coverageLabel(result);
   return (
     <span className="flex items-center gap-2">
       <span className="cov-track h-[7px] w-[62px] flex-none overflow-hidden rounded-[2px]">

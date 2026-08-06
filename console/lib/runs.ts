@@ -35,8 +35,39 @@ export function coveragePercent(
   return { kind: "known", pct: ratio * 100, low: ratio < LOW_COVERAGE };
 }
 
+/** The rounded percentage label for a `CoverageResult`, carrying both
+ *  guards a plain `Math.round` drops — shared so the Runs table and the
+ *  forensics ruler can never again disagree on the same run's number:
+ *
+ *  - At or above 99.5% but below 100.0 exactly, "<100%" rather than a
+ *    false "100%" — the same complete-read claim `coveragePercent` itself
+ *    already refuses to invent when the true ratio isn't exactly 100.
+ *  - Above 0% but below 0.5%, "<1%" rather than a false "0%" — the same
+ *    nothing-was-read claim `{ kind: "no-read" }` exists to distinguish
+ *    itself from.
+ *
+ *  Non-"known" results render "—": both callers show their own richer,
+ *  differently-worded text for "no read" / "denominator unknown" next to
+ *  this, so this only needs a safe placeholder for whichever caller
+ *  doesn't. */
+export function coverageLabel(result: CoverageResult): string {
+  if (result.kind !== "known") return "—";
+  if (result.pct >= 100) return "100%";
+  if (result.pct > 0 && result.pct < 0.5) return "<1%";
+  const rounded = Math.round(result.pct);
+  return rounded >= 100 ? "<100%" : `${rounded}%`;
+}
+
+/** "2h" / "3d" / "1w" since `iso`. Parsed via `parseUtc` (defined below,
+ *  hoisted): run_history's `scored_at` crosses the wire with no zone
+ *  designator on sqlite, same as every other timestamp this console
+ *  renders — see `parseUtc`'s own docstring. Getting this wrong is worse
+ *  here than elsewhere: `new Date(iso)` on a zoneless string reads it as
+ *  the server's local time, and on a UTC-behind server every row's "then"
+ *  lands after "now" — the `Math.max(0, …)` clamp below then prints "0m"
+ *  for every row regardless of true age, not just a shifted one. */
 export function relativeAge(iso: string, now: Date = new Date()): string {
-  const seconds = Math.max(0, (now.getTime() - new Date(iso).getTime()) / 1000);
+  const seconds = Math.max(0, (now.getTime() - parseUtc(iso).getTime()) / 1000);
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86_400) return `${Math.round(seconds / 3600)}h`;
   if (seconds < 604_800) return `${Math.round(seconds / 86_400)}d`;
