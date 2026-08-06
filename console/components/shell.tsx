@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { DougLogo } from "@/components/doug-logo";
+import { ScopeSwitch, ScopeSwitchStatic } from "@/components/scope-switch";
 
 export interface ShellScope {
   tenant: string | null;
@@ -26,8 +28,12 @@ export function Shell({
           </span>
         </span>
         <div className="flex items-center gap-1.5">
-          <ScopeSwitch label="tenant" value={scope.tenant ?? "all"} />
-          <ScopeSwitch label="repo" value={scope.repo ?? "all"} />
+          <Suspense fallback={<ScopeSwitchStatic label="tenant" value={scope.tenant ?? "all"} />}>
+            <ScopeSwitch paramKey="tenant" label="tenant" value={scope.tenant} />
+          </Suspense>
+          <Suspense fallback={<ScopeSwitchStatic label="repo" value={scope.repo ?? "all"} />}>
+            <ScopeSwitch paramKey="repo" label="repo" value={scope.repo} />
+          </Suspense>
         </div>
         <HealthStrip />
       </header>
@@ -51,17 +57,6 @@ export function Shell({
   );
 }
 
-function ScopeSwitch({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="mono inline-flex items-center gap-[7px] rounded-[5px] border border-border bg-card px-[9px] py-[5px] text-xs">
-      <span className="text-[10px] uppercase tracking-[.1em] text-muted-foreground">
-        {label}
-      </span>
-      {value}
-    </span>
-  );
-}
-
 // Markup only — no data source exists yet. Tasks 1-5 shipped GET /v1/runs
 // and GET /v1/runs/{verdict_id}; neither is a health/status feed. Showing
 // "0 pending" for a metric nobody measured would be exactly the fabricated
@@ -73,7 +68,11 @@ function ScopeSwitch({ label, value }: { label: string; value: string }) {
 // layout; nothing here claims a fact we don't have.
 function HealthStrip() {
   return (
-    <div className="mono ml-auto flex cursor-not-allowed items-stretch overflow-hidden rounded-[5px] border border-border bg-card text-[11.5px] text-muted-foreground/50">
+    <div
+      role="group"
+      aria-label="Fleet health — not yet wired, Phase 2"
+      className="mono ml-auto flex cursor-not-allowed items-stretch overflow-hidden rounded-[5px] border border-border bg-card text-[11.5px] text-muted-foreground/50"
+    >
       <HealthCell label="running" />
       <HealthCell label="pending" />
       <HealthCell label="failed 24h" />
