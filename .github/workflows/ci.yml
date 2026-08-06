@@ -12,7 +12,15 @@ jobs:
       run:
         working-directory: api
     steps:
+      # Full history: scripts/read_budget_gate.py pins END_SHA=135c8e5 and
+      # walks 30 first-parent commits back from it, on purpose — it is a
+      # fixed historical sample, and test_read_budget_scripts.py asserts its
+      # exact result. The default depth-1 checkout cannot resolve that SHA,
+      # so `git log ... 135c8e5` exits 128 and the test fails in CI while
+      # passing on any developer clone. That is how #56 merged red.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true

@@ -154,6 +154,29 @@ that was. Before accepting one, check whether the fix it suggests is the fix the
 actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
 was not to add a lock but to upgrade an already-planned index to a unique one.
 
+## A pinned-SHA evidence script cannot run in a default CI checkout
+
+`scripts/read_budget_gate.py` pins `END_SHA = "135c8e5"` and walks 30 first-parent
+commits back from it. That pinning is right: the range is a fixed historical sample,
+and `test_read_budget_scripts.py` asserts its exact result (24/30 at a 30k budget), so
+a range that drifted with `HEAD` would assert nothing.
+
+But `actions/checkout` defaults to `fetch-depth: 1`. The runner gets one commit, `git log
+--first-parent -30 … 135c8e5` exits 128, and the test fails in CI while passing on every
+developer clone — where the history is simply there. #56 merged with this failing, twice,
+and the next branch to fork inherited a red suite it had not caused.
+
+The general shape: **a test that reads git history has a dependency the test file never
+names.** It is invisible in review, invisible locally, and only ever fails on the runner.
+The same applies to anything reaching outside the working tree — tags, submodules,
+`git describe`, blame.
+
+When a test shells out to `git`, ask what the checkout must contain for it to pass, and
+put that in the workflow next to the job rather than in the test. And when CI fails on a
+branch, check whether the failing test even exists on that branch before debugging it:
+here the suite went 691 → 703, which said immediately that the failure arrived with a
+merge and not with the work.
+
 ## Log every finding, not only the ones that taught something
 
 "Roughly half" above is an impression, not a measurement, and this file cannot make it one:
