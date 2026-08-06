@@ -82,10 +82,12 @@ Three sort keys:
 
 `_is_prose` covers `.md` / `.txt` / `.rst` and lockfiles, except that known
 manifests and conventional dependency variants such as `requirements-dev.txt`
-and `constraints.txt` stay code. It lands in `features.py` beside `_is_test` —
-path classification lives in one module, so the tier rule and the scorer can
-never drift apart on what counts as a test. Everything that is neither prose
-nor test is tier 0.
+and `constraints.txt` stay code. Code-bearing text entry points such as
+`CMakeLists.txt` also stay code through a routing-only exception, without
+changing the scorer's manifest taxonomy. It lands in `features.py` beside
+`_is_test` — path classification lives in one module, so the tier rule and the
+scorer can never drift apart on what counts as a test. Everything that is
+neither prose nor test is tier 0.
 
 **The live read path changes only the one constant in §2.** `_user_text` keeps
 the existing linear cut: order the chunks and it admits whole files until one

@@ -67,8 +67,8 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     code and tests for that review task.
 
     A manifest carries real dependency decisions, including conventional
-    requirements/constraints variants despite their suffix. Manifests stay
-    code."""
+    requirements/constraints variants and CMake's build file despite their
+    suffix. These files stay code."""
     assert features._is_prose("docs/design/outcome-loop/ROADMAP.md")
     assert features._is_prose("README.rst")
     assert features._is_prose("notes.txt")
@@ -81,8 +81,14 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     assert not features._is_prose("api/requirements.txt")
     assert not features._is_prose("api/requirements-dev.txt")
     assert not features._is_prose("api/constraints.txt")
+    assert not features._is_prose("native/CMakeLists.txt")
     assert not features._is_prose("api/doug/tenancy.py")
     assert not features._is_prose("api/deploy/gcp.sh")
+
+    cmake = extract_features(_pr(files=["native/CMakeLists.txt"]))
+    assert not cmake.manifest
+    assert not cmake.runtime_dep
+    assert not cmake.dep_only
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -96,6 +102,7 @@ In `api/doug/features.py`, immediately after `_is_test` (~line 137):
 
 ```python
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
+_CODE_TEXT_NAMES = {"CMakeLists.txt"}
 _DEPENDENCY_TEXT_RE = re.compile(
     r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
 )
@@ -111,10 +118,15 @@ def _is_prose(path: str) -> bool:
     Lockfiles count as prose deliberately: generated, enormous, and never
     read by a human in review. Known manifests are code and stay tier 0,
     including conventional requirements/constraints variants despite their
-    otherwise-prose suffix.
+    otherwise-prose suffix. Code-bearing text entry points use routing-only
+    exceptions so this helper does not change scoring features.
     """
     name = PurePosixPath(path).name
-    if name in MANIFESTS or _DEPENDENCY_TEXT_RE.fullmatch(name):
+    if (
+        name in MANIFESTS
+        or name in _CODE_TEXT_NAMES
+        or _DEPENDENCY_TEXT_RE.fullmatch(name)
+    ):
         return False
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 ```

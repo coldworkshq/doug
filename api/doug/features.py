@@ -137,6 +137,7 @@ def _is_test(path: str) -> bool:
 
 
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
+_CODE_TEXT_NAMES = {"CMakeLists.txt"}
 _DEPENDENCY_TEXT_RE = re.compile(
     r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
 )
@@ -152,10 +153,15 @@ def _is_prose(path: str) -> bool:
     Lockfiles count as prose deliberately: generated, enormous, and never
     read by a human in review. Known manifests are code and stay tier 0,
     including conventional requirements/constraints variants despite their
-    otherwise-prose suffix.
+    otherwise-prose suffix. Code-bearing text entry points use routing-only
+    exceptions so this helper does not change scoring features.
     """
     name = PurePosixPath(path).name
-    if name in MANIFESTS or _DEPENDENCY_TEXT_RE.fullmatch(name):
+    if (
+        name in MANIFESTS
+        or name in _CODE_TEXT_NAMES
+        or _DEPENDENCY_TEXT_RE.fullmatch(name)
+    ):
         return False
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 

@@ -134,8 +134,8 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     code and tests for that review task.
 
     A manifest carries real dependency decisions, including conventional
-    requirements/constraints variants despite their suffix. Manifests stay
-    code."""
+    requirements/constraints variants and CMake's build file despite their
+    suffix. These files stay code."""
     assert features._is_prose("docs/design/outcome-loop/ROADMAP.md")
     assert features._is_prose("README.rst")
     assert features._is_prose("notes.txt")
@@ -148,5 +148,11 @@ def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     assert not features._is_prose("api/requirements.txt")
     assert not features._is_prose("api/requirements-dev.txt")
     assert not features._is_prose("api/constraints.txt")
+    assert not features._is_prose("native/CMakeLists.txt")
     assert not features._is_prose("api/doug/tenancy.py")
     assert not features._is_prose("api/deploy/gcp.sh")
+
+    cmake = extract_features(_pr(files=["native/CMakeLists.txt"]))
+    assert not cmake.manifest
+    assert not cmake.runtime_dep
+    assert not cmake.dep_only

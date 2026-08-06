@@ -20,6 +20,20 @@ When the fix is an explanation rather than a behavior change, the re-reviewer ha
 evaluate the new explanation on its merits, against the mechanism it describes. A diff that
 replaces a wrong claim with a different wrong claim reads exactly like a successful fix.
 
+## A removed line is not current behavior
+
+PR #56 removed a `try/finally` block that temporarily assigned the historical 30k
+budget to `reader.DIFF_BUDGET`. The next Doug pass reported that deleted assignment as
+a current global-mutation race even though `_probe_coverage` now passed
+`budget=PROBE_DIFF_BUDGET` directly and the module contained no assignment to
+`reader.DIFF_BUDGET` at all.
+
+A patch shows both the old and new program. Before reporting behavior from a changed
+hunk, check the line's polarity and then inspect the current file. A `-` line can explain
+what the change fixes; it cannot prove what the resulting program still does. Settle a
+claim about remaining behavior against the checked-out head, not by paraphrasing both
+sides of the diff as if they coexist.
+
 ## A finding that depends on code outside the diff must say so
 
 Doug reviews a diff, not a repository, and it reports two kinds of finding without
@@ -576,7 +590,12 @@ check run renders that receipt. "May not reach the model" can be true;
 Still verify the classifier rather than dismissing every edge case. PR #56's
 earlier passes found real dependency manifests (`requirements.txt`,
 `requirements-dev.txt`, `constraints.txt`) falling through the `.txt` suffix;
-those now stay code and have regression tests. For a new claim, provide a
-concrete behavior-bearing path, check whether it is already excepted, and then
-distinguish a bad classification from the already-visible cost of an accepted
-lower tier.
+those now stay code and have regression tests. A later pass supplied the concrete
+`CMakeLists.txt`, which was also misclassified by its `.txt` suffix even though it
+drives the build. It now has a routing-only exception: adding it to the scorer's
+global manifest set would have changed unrelated risk features.
+
+For a new claim, provide a concrete behavior-bearing path, check whether it is
+already excepted, and then distinguish a bad classification from the
+already-visible cost of an accepted lower tier. Keep a routing repair scoped to
+routing unless the scoring taxonomy is independently wrong.
