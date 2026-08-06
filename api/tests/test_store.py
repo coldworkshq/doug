@@ -1758,6 +1758,155 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
     assert store.run_history()[0]["outcome_14"] is None
 
 
+# --- run_detail (the forensic bundle for one run) ---
+
+
+def test_run_detail_carries_the_fields_the_check_run_bundle_drops(tmp_path, monkeypatch):
+    """_verdict_bundle serves the check run and omits provenance on purpose.
+    The forensic page is the opposite need: model, prompt hash and rationale
+    ARE the answer to "what did Doug do"."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        prompt_hash="a3f9e2c1",
+    )
+    detail = store.run_detail(vid)
+    assert detail["repo"] == "o/r"
+    assert detail["pr_number"] == 7
+    assert detail["model"] == "claude-opus-5"
+    assert detail["prompt_hash"] == "a3f9e2c1"
+    assert detail["risk_score"] == 62
+    assert detail["rationale"] == "Unlocked cache write."
+    assert detail["source"] == "app"
+    assert detail["head_sha"] == "a" * 40
+    # and still everything the bundle already gave
+    assert detail["reasons"][0]["rule"] == "reader:race-condition"
+
+
+def test_run_detail_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.run_detail(4242) is None
+
+
+def test_run_detail_attaches_the_job_including_its_error(tmp_path, monkeypatch):
+    """A failed run explains itself nowhere else."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="failed", attempts=3,
+            claim_generation=3, error="reader timeout after 60s",
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC), verdict_id=vid,
+        ))
+    job = store.run_detail(vid)["job"]
+    assert job["status"] == "failed"
+    assert job["attempts"] == 3
+    assert job["claim_generation"] == 3
+    assert job["error"] == "reader timeout after 60s"
+
+
+def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatch):
+    """The 14d and 60d clocks are different claims with different dates, and
+    the page shows them side by side. Collapsing them loses the censoring
+    story."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+        conn.execute(store.outcome_jobs.insert().values(
+            installation_id=99, github_repo_id=1, pr_number=7,
+            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 3, tzinfo=UTC),
+            base_ref="main", window_days=60,
+            due_at=datetime(2026, 10, 2, tzinfo=UTC), status="pending",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        ))
+    detail = store.run_detail(vid)
+    assert [o["window_days"] for o in detail["outcomes"]] == [14]
+    assert detail["outcomes"][0]["kind"] == "clean"
+    assert [j["window_days"] for j in detail["outcome_jobs"]] == [60]
+    assert detail["outcome_jobs"][0]["status"] == "pending"
+
+
+def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatch):
+    """save_deviations writes a kind="none" row to record "the read ran and
+    found nothing". It is a storage marker, never a finding. If it reached
+    the page it would render as a deviation named "none" — Doug reporting a
+    problem it explicitly did not find."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    # signature: (verdict_id, findings, intent_refs, intent_alignment)
+    store.save_deviations(vid, [], intent_refs=[], intent_alignment=100)
+    detail = store.run_detail(vid)
+    assert detail["deviations"] == []
+    # The row exists — "read happened, found nothing" stays distinguishable
+    # from "no read happened", which is why the marker is written at all.
+    assert detail["intent_alignment"] == 100
+
+
+def test_run_detail_exposes_pr_meta_for_the_coverage_denominator(tmp_path, monkeypatch):
+    """changed_files lives on pr_meta and is the only correct denominator.
+    Without it on the detail payload the page would fall back to
+    len(files_unseen) + files_sent, which is not the true file count."""
+    _db(tmp_path, monkeypatch)
+    meta = PRMetadata(
+        number=7, title="t", author="a", files=["one.py"], changed_files=23,
+        files_dropped=["uv.lock"],
+    )
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, pr_meta=meta.model_dump(),
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["pr_meta"]["changed_files"] == 23
+    assert detail["pr_meta"]["files_dropped"] == ["uv.lock"]
+
+
+def test_run_detail_carries_scored_at_and_app_identity(tmp_path, monkeypatch):
+    """The remaining passthrough columns _verdict_bundle also drops: when
+    the run happened and which installation/repo id it belongs to. Task 5
+    serialises this bundle whole, so a dropped or misspelled key here would
+    otherwise pass silently — the brief's own carries-the-fields test does
+    not touch these three."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["scored_at"] is not None
+    assert detail["installation_id"] == 99
+    assert detail["github_repo_id"] == 1
+
+
+def test_run_detail_tolerates_a_null_pr_meta(tmp_path, monkeypatch):
+    """save_review defaults pr_meta to None (CLI callers, pre-App rows). A
+    task earlier in this build crashed on exactly this column being null;
+    run_detail must pass it through as None, not assume it can be indexed."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_detail(vid)["pr_meta"] is None
+
+
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---
 
 

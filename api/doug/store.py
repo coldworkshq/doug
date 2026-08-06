@@ -1189,6 +1189,95 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
         return _verdict_bundle(conn, v)
 
 
+def run_detail(verdict_id: int) -> dict | None:
+    """Everything the console's forensic page shows for one run.
+
+    _verdict_bundle deliberately omits provenance — it renders a check run,
+    where model and prompt hash are noise. This page has the opposite need:
+    those fields ARE the answer to "what did Doug do with this PR". Rather
+    than widen the bundle and change what every check run carries, this
+    composes it with the columns it drops.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        v = conn.execute(
+            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
+        ).mappings().first()
+        if v is None:
+            return None
+        detail = _verdict_bundle(conn, v)
+        detail.update(
+            {
+                "repo": v["repo"],
+                "pr_number": v["pr_number"],
+                "scored_at": v["scored_at"],
+                "model": v["model"],
+                "prompt_hash": v["prompt_hash"],
+                "risk_score": v["risk_score"],
+                "rationale": v["rationale"],
+                "head_sha": v["head_sha"],
+                "source": v["source"],
+                "installation_id": v["installation_id"],
+                "github_repo_id": v["github_repo_id"],
+                "pr_meta": v["pr_meta"],
+            }
+        )
+        job = conn.execute(
+            select(review_jobs).where(review_jobs.c.verdict_id == verdict_id).limit(1)
+        ).mappings().first()
+        detail["job"] = (
+            {
+                "status": job["status"],
+                "attempts": job["attempts"],
+                "claim_generation": job["claim_generation"],
+                "error": job["error"],
+                "enqueued_at": job["enqueued_at"],
+                "started_at": job["started_at"],
+                "finished_at": job["finished_at"],
+            }
+            if job
+            else None
+        )
+        # Outcomes key on (repo, pr_number), not on the verdict: a PR scored
+        # three times has one merge and one set of clocks, shared by all
+        # three runs. Both windows travel separately — they are different
+        # claims with different dates, and the page shows them side by side.
+        detail["outcomes"] = [
+            {
+                "kind": row["kind"],
+                "window_days": row["window_days"],
+                "observed_at": row["observed_at"],
+                "source": row["source"],
+                "detail": row["detail"],
+            }
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.repo == v["repo"])
+                .where(outcomes.c.pr_number == v["pr_number"])
+                .order_by(outcomes.c.window_days)
+            ).mappings()
+        ]
+        detail["outcome_jobs"] = [
+            {
+                "window_days": row["window_days"],
+                "status": row["status"],
+                "due_at": row["due_at"],
+                "merged_at": row["merged_at"],
+            }
+            for row in conn.execute(
+                select(outcome_jobs)
+                .where(outcome_jobs.c.github_repo_id == v["github_repo_id"])
+                .where(outcome_jobs.c.pr_number == v["pr_number"])
+                .order_by(outcome_jobs.c.window_days)
+            ).mappings()
+        ]
+    return detail
+
+
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
     """The findings x outcomes join — step 2 of the distillation loop.
 
