@@ -114,10 +114,22 @@ The core deliverable. Eight blocks:
 3. **What the reader was given** — `files_sent` over `changed_files`,
    `sent_chars` over `diff_chars`, `file_cut` (the file where the budget
    ran out), `files_unseen`, and `files_dropped` (binary or oversize, which
-   never had a chance to be read at all). A path appearing in
-   `files_unseen` that `features._is_sensitive` classifies as sensitive is
-   flagged explicitly — the same predicate the scorer already uses, not a
-   second definition. This block is what makes the live
+   never had a chance to be read at all), each with its share of the diff.
+
+   **Unseen files are not marked "sensitive."** The obvious move is to flag
+   `files_unseen` entries that `features._is_sensitive` classifies as
+   sensitive. The read-budget-routing spec (2026-08-06) measured that
+   predicate against the exact PRs that motivated this work and found it
+   fires on **zero** of them — `tenancy.py`, `keyformat.py` and
+   `migrations.py` are all `sensitive=False`, because `_SENSITIVE_NAME_RE`
+   matches `secret|auth|authn|authz|rbac|oauth|credential|token` and none of
+   those names contain one. Marking on a predicate that is inert on the
+   motivating case would decorate the page with a signal that does not fire
+   when it matters. Once `read_order()` lands and the API can report the
+   tier it assigned each file (code / tests / prose), the ruler marks by
+   that instead — a classification the routing actually uses.
+
+   This block is what makes the live
    read-budget defect legible: three consecutive reviews of the tenancy
    work never read `tenancy.py` at 17–19% coverage, cut by file order.
 4. **The read** — tier, model, `risk_score`, rationale, and `prompt_hash`
