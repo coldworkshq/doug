@@ -22,6 +22,10 @@ export function CoverageBar({
       </span>
     );
   }
+  // Math.round alone would print a genuine 0.3% read as "0%" — the same
+  // false claim of nothing-read that "no read" exists to avoid making.
+  // Below half a point, say so without rounding it away.
+  const pctLabel = result.pct > 0 && result.pct < 0.5 ? "<1%" : `${Math.round(result.pct)}%`;
   return (
     <span className="flex items-center gap-2">
       <span className="cov-track h-[7px] w-[62px] flex-none overflow-hidden rounded-[2px]">
@@ -33,9 +37,11 @@ export function CoverageBar({
           (result.low ? "font-semibold underline decoration-dotted underline-offset-[3px]" : "")
         }
       >
-        {Math.round(result.pct)}%
+        {pctLabel}
       </span>
-      {result.low && <span className="text-[11px]" aria-label="low coverage">⚠</span>}
+      {result.low && (
+        <span className="text-[11px]" role="img" aria-label="low coverage">⚠</span>
+      )}
     </span>
   );
 }

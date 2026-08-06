@@ -70,10 +70,14 @@ export async function getRuns(params: {
   repo?: string;
   installationId?: number;
   limit?: number;
-}): Promise<{ items: RunSummary[] } | { error: string }> {
+}): Promise<{ items: RunSummary[]; limit: number; offset: number } | { error: string }> {
   const q = new URLSearchParams();
   if (params.repo) q.set("repo", params.repo);
   if (params.installationId) q.set("installation_id", String(params.installationId));
   q.set("limit", String(params.limit ?? 100));
-  return get<{ items: RunSummary[] }>(`/v1/runs?${q}`);
+  // limit/offset round-trip the request back — the only way a caller can
+  // tell "this IS every run" from "this is the first page of more", since
+  // the API returns no total count. Dropping them (as the first cut of
+  // this type did) throws away the one signal that distinguishes the two.
+  return get<{ items: RunSummary[]; limit: number; offset: number }>(`/v1/runs?${q}`);
 }

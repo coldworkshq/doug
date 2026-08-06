@@ -13,6 +13,7 @@
   --color-card-foreground: var(--card-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);

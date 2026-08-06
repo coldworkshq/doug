@@ -42,3 +42,18 @@ export function relativeAge(iso: string, now: Date = new Date()): string {
   if (seconds < 604_800) return `${Math.round(seconds / 86_400)}d`;
   return `${Math.round(seconds / 604_800)}w`;
 }
+
+/** "41s" / "1m12s" between a job's started_at and finished_at, or null when
+ *  either is missing. Null, not a dash baked into the string here — the
+ *  caller decides how an unmeasurable duration reads next to a status word,
+ *  and this never guesses one. */
+export function jobDuration(startedAt: string | null, finishedAt: string | null): string | null {
+  if (startedAt === null || finishedAt === null) return null;
+  const seconds = Math.max(
+    0,
+    Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000),
+  );
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m${s}s` : `${s}s`;
+}

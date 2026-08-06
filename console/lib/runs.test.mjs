@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { coveragePercent, relativeAge } from "./runs.ts";
+import { coveragePercent, jobDuration, relativeAge } from "./runs.ts";
 
 const coverage = {
   diff_chars: 108200,
@@ -58,4 +58,17 @@ test("relativeAge renders hours, days and weeks distinctly", () => {
   assert.equal(relativeAge("2026-08-06T10:00:00Z", now), "2h");
   assert.equal(relativeAge("2026-08-04T12:00:00Z", now), "2d");
   assert.equal(relativeAge("2026-07-16T12:00:00Z", now), "3w");
+});
+
+test("jobDuration renders seconds and minutes the way the mockup does", () => {
+  assert.equal(jobDuration("2026-08-06T12:00:00Z", "2026-08-06T12:00:41Z"), "41s");
+  assert.equal(jobDuration("2026-08-06T12:00:00Z", "2026-08-06T12:01:12Z"), "1m12s");
+});
+
+test("jobDuration refuses to guess when either timestamp is missing", () => {
+  // A running or superseded-before-finish job has no finished_at yet — null
+  // means "not measurable", never a fabricated 0s.
+  assert.equal(jobDuration(null, "2026-08-06T12:00:41Z"), null);
+  assert.equal(jobDuration("2026-08-06T12:00:00Z", null), null);
+  assert.equal(jobDuration(null, null), null);
 });
