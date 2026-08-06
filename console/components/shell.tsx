@@ -29,6 +29,7 @@ export function Shell({
           <ScopeSwitch label="tenant" value={scope.tenant ?? "all"} />
           <ScopeSwitch label="repo" value={scope.repo ?? "all"} />
         </div>
+        <HealthStrip />
       </header>
       <nav className="flex items-end gap-0.5 border-b border-border px-5">
         <Link
@@ -57,6 +58,41 @@ function ScopeSwitch({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       {value}
+    </span>
+  );
+}
+
+// Markup only — no data source exists yet. Tasks 1-5 shipped GET /v1/runs
+// and GET /v1/runs/{verdict_id}; neither is a health/status feed. Showing
+// "0 pending" for a metric nobody measured would be exactly the fabricated
+// state this console exists to refuse, so every value is an em dash, never
+// a number, and the pips carry no hue: there is no known state to assert,
+// and hue is reserved for Doug's routing decision. Ghosted with the same
+// "phase N" treatment the Repos/Evidence tabs use below for the same
+// reason — unwired, not empty. Phase 2 drops real numbers into this exact
+// layout; nothing here claims a fact we don't have.
+function HealthStrip() {
+  return (
+    <div className="mono ml-auto flex cursor-not-allowed items-stretch overflow-hidden rounded-[5px] border border-border bg-card text-[11.5px] text-muted-foreground/50">
+      <HealthCell label="running" />
+      <HealthCell label="pending" />
+      <HealthCell label="failed 24h" />
+      <HealthCell label="clocks due" />
+      <span className="flex items-center border-l border-border px-[9px] text-[9px] uppercase tracking-[.04em] text-muted-foreground/50">
+        phase 2
+      </span>
+    </div>
+  );
+}
+
+function HealthCell({ label }: { label: string }) {
+  return (
+    <span
+      className="flex items-center gap-1.5 border-r border-border/70 px-[11px] py-[5px] last:border-r-0"
+      aria-label={`${label}: not yet available`}
+    >
+      <span aria-hidden="true">—</span>
+      <span className="text-[10.5px]">{label}</span>
     </span>
   );
 }
