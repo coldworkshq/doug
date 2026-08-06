@@ -2708,15 +2708,17 @@ def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatc
     assert item["outcome_14"] == "clean"
 
 
-def test_runs_falls_back_to_a_synthesized_title_and_url_without_pr_meta(
-    tmp_path, monkeypatch
-):
-    """A run saved with no pr_meta at all — save_review's `pr_meta` kwarg is
-    optional — must still render, not 500. _with_url assumes pr_meta is a
-    dict (every /v1/queue row is filtered on that before it gets there);
-    run_history carries every verdict including this one, so _run_item
-    degrades the same way _comparison_run already does for a missing
-    pr_meta."""
+def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
+    """Null pr_meta is a real ledger state, not just a test artifact:
+    verdicts.pr_meta is a nullable JSON column (store.py) and save_review's
+    `pr_meta` kwarg defaults to None. _with_url assumes pr_meta is a dict —
+    every /v1/queue row is filtered on that before it gets there — but
+    run_history carries every verdict, including rows saved without one, so
+    a bare _with_url(row) call would raise validating None into PRMetadata
+    instead of degrading. _run_item falls back the same way _comparison_run
+    already does for a missing pr_meta: a synthesized title and URL, and
+    changed_files left None rather than invented — a row with no metadata
+    genuinely has no denominator."""
     _db(tmp_path, monkeypatch)
     store.save_review(
         "o/r", 9, "deterministic", VERDICT,
