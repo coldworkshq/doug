@@ -3,9 +3,10 @@
 SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS remain byte-identical to
 scripts/llm_probe.py as of commit 0064e6b. The probe's AUC 0.687 sentry /
 0.668 grafana and its ReDef polarity result belong to its 30k diff-budget
-configuration. The shipped DIFF_BUDGET is 100k under ADR-0012, so those AUC
-figures do not validate the larger live read. The five frozen parameters are
-load-bearing evidence — changing one is a new experiment, not a tweak.
+configuration. The shipped DIFF_BUDGET is 100k under ADR-0012 and its files
+are tier-ordered, so those AUC figures do not validate the larger, reordered
+live read. The five frozen parameters are load-bearing evidence — changing
+one is a new experiment, not a tweak.
 
 Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
 Callers fall back to the deterministic score when either is missing or a

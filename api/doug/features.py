@@ -140,16 +140,19 @@ _PROSE_SUFFIXES = (".md", ".txt", ".rst")
 
 
 def _is_prose(path: str) -> bool:
-    """Files that cannot hold the defect class the reader is asked to find.
+    """Files the accepted routing policy ranks after code and tests.
 
     Used only by the read-budget tiering (review.read_order, ADR-0012), not
     by scoring — a docs-only PR still scores normally, it just loses the
     contest for the reader's budget.
 
     Lockfiles count as prose deliberately: generated, enormous, and never
-    read by a human in review. Their manifests are code and stay tier 0.
+    read by a human in review. Known manifests are code and stay tier 0,
+    including requirements.txt despite its otherwise-prose suffix.
     """
     name = PurePosixPath(path).name
+    if name in MANIFESTS:
+        return False
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 
 

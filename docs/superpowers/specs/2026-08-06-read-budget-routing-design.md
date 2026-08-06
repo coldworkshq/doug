@@ -80,10 +80,11 @@ Three sort keys:
 | 2 | patch size ascending | `len(f.patch)` |
 | 3 | original path order | deterministic tiebreak |
 
-`_is_prose` covers `.md` / `.txt` / `.rst` and lockfiles, and lands in
-`features.py` beside `_is_test` — path classification lives in one module, so
-the tier rule and the scorer can never drift apart on what counts as a test.
-Everything that is neither prose nor test is tier 0.
+`_is_prose` covers `.md` / `.txt` / `.rst` and lockfiles, except that known
+manifests such as `requirements.txt` stay code. It lands in `features.py`
+beside `_is_test` — path classification lives in one module, so the tier rule
+and the scorer can never drift apart on what counts as a test. Everything that
+is neither prose nor test is tier 0.
 
 **Nothing in `reader.py` changes except the one constant in §2.** `_sent_slice`,
 `_user_text` and `coverage()` are untouched, and no new truncation logic is
@@ -169,8 +170,9 @@ this change, "the shipped reader is the one that scored AUC 0.687 sentry /
 configuration. We are **not** re-running the probe at 100k (Andrew,
 2026-08-06); ADR-0012 records instead that the probe evidence attaches to the
 frozen prompt/schema/model/effort and to a 30k budget, and that the shipped
-reader now reads more than the probe did. Any future citation of those AUC
-figures must say which configuration produced them.
+reader now reads more and in a different file order than the probe did. Any
+future citation of those AUC figures must say which configuration produced
+them.
 
 ---
 
@@ -180,7 +182,7 @@ TDD. Each test encodes why the behaviour matters, not just what it does.
 
 | test | encodes |
 |---|---|
-| 100k of markdown + 5k of code → all code sent whole | prose cannot contain the defect class the reader is asked to find |
+| 100k of markdown + 5k of code → all code sent whole | the accepted policy routes code before lower-signal prose |
 | `test_tenancy.py` does not displace `tenancy.py` | tests are context for the code, not competitors with it |
 | PR #50's shape reconstructed through both callers → `tenancy.py` sent whole, `file_cut` names `store.py`, and `files_unseen` names `api.py` | the motivating defect, pinned without mistaking a partial file for a whole one |
 | same input ordered twice → identical output | no set iteration; a nondeterministic order makes verdicts unreproducible |

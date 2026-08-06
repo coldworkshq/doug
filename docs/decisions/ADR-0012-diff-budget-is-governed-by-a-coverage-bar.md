@@ -81,8 +81,8 @@ records lema#643, where the mutation-verified test file that would have
 deduped two findings was never sent.
 
 **200,000.** +$0.007 per read over 100,000 for three points of docs
-coverage, on files ranked last precisely because they cannot hold the
-defect class the reader is asked for.
+coverage, on files deliberately ranked last because they are lower-signal
+for the defect class the reader is asked for.
 
 **Re-run the probe at 100,000 to keep the AUC claim attached to what
 ships.** Costs real money on the 653-PR corpus. Declined (Andrew,
@@ -97,12 +97,13 @@ ships.** Costs real money on the 653-PR corpus. Declined (Andrew,
   PR that saturates 100,000 costs about +$0.09.
 - **"The shipped reader is the one that scored AUC 0.687 sentry / 0.668
   grafana" is now false.** Those figures describe the 30,000-character
-  configuration. The prompt, schema, model and effort are unchanged, so
-  the instrument is the same in every respect except how much diff it
-  sees — but that is not nothing, and it is not measured. Any future
-  citation of those numbers must name the configuration that produced
-  them. This is the price of the decision, paid openly rather than
-  hidden.
+  configuration in its original file order. The prompt, schema, model and
+  effort are unchanged, but the live input now differs in both amount and
+  order. Neither change was measured by that probe. Historical backfill
+  receipts deliberately retain the probe's original order and 30,000-character
+  cut so they describe what actually ran. Any future citation of those AUC
+  figures must name the configuration that produced them. This is the price
+  of the decision, paid openly rather than hidden.
 - Spend caps are unaffected in shape. `_charge(scope)` still runs before
   the client is constructed and still counts reads, not tokens. The
   4,000 reads/installation/month ceiling now admits a more expensive
