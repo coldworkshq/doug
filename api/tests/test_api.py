@@ -2729,3 +2729,237 @@ def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     assert item["title"] == "PR #9"
     assert item["url"] == "https://github.com/o/r/pull/9"
     assert item["changed_files"] is None
+
+
+# /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same
+# reader output test_store.py's find_verdict_by_id tests build: its one
+# finding's description matches VERDICT's own reason label, so save_review
+# attaches file/severity to it the same way a real reader row would.
+RV = api.reader.ReaderVerdict.model_validate(
+    {
+        "risk_score": 62,
+        "rationale": "Unlocked cache write.",
+        "findings": [
+            {
+                "category_slug": "race-condition",
+                "description": "Cache write is not guarded",
+                "file": "cache.py",
+                "severity": "high",
+            }
+        ],
+    }
+)
+
+
+def client_get_detail(verdict_id: int, monkeypatch) -> dict:
+    res = TestClient(app).get(f"/v1/runs/{verdict_id}", headers=AUTH)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _parsed_utc(iso: str) -> datetime:
+    """A response-JSON timestamp, normalised like `_utc` above but for a
+    string: sqlite hands DateTime(timezone=True) columns back naive, so
+    pydantic serialises them with no offset. The stored instant is UTC
+    either way."""
+    dt = datetime.fromisoformat(iso)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def test_run_detail_404s_an_unknown_verdict(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs/4242", headers=AUTH).status_code == 404
+
+
+def test_run_detail_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs/1").status_code == 401
+
+
+def test_run_detail_404s_a_tenant_key(tmp_path, monkeypatch):
+    """A resolving tenant key is a real credential at the wrong door, so it
+    gets the gate's 404 — distinct from the route's own 404 for an unknown
+    id above. The row exists here, so only the gate can be producing this:
+    if _operator_only ran after the store lookup (or not at all), a
+    resolving token would see the row and this would 200."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    client = TestClient(app)
+    res = client.get(f"/v1/runs/{vid}", headers={"X-Doug-Token": "dg_tenant"})
+    assert res.status_code == 404
+
+
+def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatch):
+    """Historical App-path reader verdicts carry NULL because the worker
+    never stamped it (the CI endpoint did, masking the bug). Serialising
+    that as a match would assert the frozen prompt ran when nobody knows."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid, monkeypatch)
+    assert body["prompt_hash"] is None
+
+
+def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=108200, sent_chars=18400, files_sent=4,
+            files_unseen=["api/doug/tenancy.py"], file_cut="api/doug/api.py",
+        ),
+    )
+    body = client_get_detail(vid, monkeypatch)
+    assert body["coverage"]["files_unseen"] == ["api/doug/tenancy.py"]
+    assert body["coverage"]["file_cut"] == "api/doug/api.py"
+    assert body["reasons"][0]["rule"] == "reader:race-condition"
+    assert body["deviations"] == []
+
+
+def test_run_detail_reports_no_job_as_null_and_no_outcomes_as_empty(tmp_path, monkeypatch):
+    """A ledger row can predate any review_jobs claim — job is None, never
+    {} — and can have no recorded outcome yet — outcomes/outcome_jobs are
+    [], never missing. store.run_detail's docstring names both states."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid, monkeypatch)
+    assert body["job"] is None
+    assert body["outcomes"] == []
+    assert body["outcome_jobs"] == []
+
+
+def test_run_detail_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
+    """pr_meta is a nullable column and save_review defaults it to None —
+    every row in the tests above carries it. _with_url assumes pr_meta is a
+    dict (the /v1/queue and /v1/runs precedent both filter or guard on that
+    before calling it); a bare call on a null one raises validating None
+    into PRMetadata, the same crash Task 3 hit and fixed in _run_item.
+    `pr` is nulled here rather than synthesized the way _run_item
+    synthesizes a title/url: PRMetadata.author has no default, and this
+    ledger row does not know one — inventing it would be exactly the
+    guessed fact the codebase's None-means-unknown convention refuses to
+    write (PRMetadata's own docstring comments: 'never guessed')."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 9, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid, monkeypatch)
+    assert body["pr"] is None
+
+
+def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
+    """The brief's tests above never touch verdict_id/repo/pr_number/
+    installation_id/github_repo_id/pr/scored_at/tier/model/source/head_sha/
+    risk_score/rationale/score/band/threshold/intent_alignment/intent_refs/
+    job/outcomes/outcome_jobs — a dropped or misspelled key among them would
+    pass every test above anyway. This is the contract the console's
+    forensics page reads, so one row carries a real pr_meta, a deviation, a
+    review job and both outcome tables, and every key is pinned."""
+    _db(tmp_path, monkeypatch)
+    pr_meta = {
+        "number": 7, "title": "Add cache", "author": "dev", "files": ["cache.py"],
+        "url": "https://github.com/o/r/pull/7", "changed_files": 3,
+    }
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        pr_meta=pr_meta,
+        coverage=store.Coverage(
+            diff_chars=100, sent_chars=80, files_sent=2,
+            files_unseen=["b.py"], file_cut="a.py",
+        ),
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        prompt_hash="sha256:abc",
+    )
+    store.save_deviations(
+        vid,
+        [api.reader.DeviationFinding(
+            type="beyond-ticket", description="Touches billing", severity="medium",
+        )],
+        intent_refs=["TICKET-1"],
+        intent_alignment=70,
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
+            claim_generation=2,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            started_at=datetime(2026, 8, 1, 0, 0, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+        conn.execute(store.outcome_jobs.insert().values(
+            installation_id=99, github_repo_id=1, pr_number=7,
+            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 1, tzinfo=UTC),
+            base_ref="main", window_days=14,
+            due_at=datetime(2026, 8, 15, tzinfo=UTC), status="pending",
+            created_at=datetime(2026, 8, 1, tzinfo=UTC),
+        ))
+    body = client_get_detail(vid, monkeypatch)
+    assert body["verdict_id"] == vid
+    assert body["repo"] == "o/r"
+    assert body["pr_number"] == 7
+    assert body["installation_id"] == 99
+    assert body["github_repo_id"] == 1
+    assert body["pr"]["title"] == "Add cache"
+    assert body["pr"]["url"] == "https://github.com/o/r/pull/7"
+    assert body["scored_at"] is not None
+    assert body["tier"] == "reader"
+    assert body["prompt_hash"] == "sha256:abc"
+    assert body["model"] == "claude-opus-5"
+    assert body["source"] == "app"
+    assert body["head_sha"] == "a" * 40
+    assert body["risk_score"] == 62
+    assert body["rationale"] == "Unlocked cache write."
+    assert body["score"] == VERDICT.score
+    assert body["band"] == VERDICT.band.value
+    assert body["threshold"] == VERDICT.threshold
+    assert body["coverage"] == {
+        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
+        "files_unseen": ["b.py"], "file_cut": "a.py",
+    }
+    assert body["reasons"][0]["rule"] == "reader:race-condition"
+    assert body["deviations"] == [
+        {"type": "beyond-ticket", "description": "Touches billing", "severity": "medium"},
+    ]
+    assert body["intent_alignment"] == 70
+    assert body["intent_refs"] == ["TICKET-1"]
+    assert body["job"]["status"] == "done"
+    assert body["job"]["attempts"] == 1
+    assert body["job"]["claim_generation"] == 2
+    assert body["job"]["error"] is None
+    assert body["job"]["enqueued_at"] is not None
+    assert body["job"]["started_at"] is not None
+    assert body["job"]["finished_at"] is not None
+    assert len(body["outcomes"]) == 1
+    assert body["outcomes"][0]["kind"] == "clean"
+    assert body["outcomes"][0]["window_days"] == 14
+    assert body["outcomes"][0]["source"] == "git-labels"
+    assert body["outcomes"][0]["detail"] is None
+    assert _parsed_utc(body["outcomes"][0]["observed_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
+    assert len(body["outcome_jobs"]) == 1
+    assert body["outcome_jobs"][0]["window_days"] == 14
+    assert body["outcome_jobs"][0]["status"] == "pending"
+    assert _parsed_utc(body["outcome_jobs"][0]["due_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
+    assert _parsed_utc(body["outcome_jobs"][0]["merged_at"]) == datetime(2026, 8, 1, tzinfo=UTC)

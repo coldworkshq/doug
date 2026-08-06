@@ -26,9 +26,14 @@ from .models import (
     ReadScoreRequest,
     Reason,
     RunCoverage,
+    RunDetailJob,
+    RunDetailResponse,
+    RunDeviation,
     RunFindingCounts,
     RunJob,
     RunListResponse,
+    RunOutcome,
+    RunOutcomeJob,
     RunSummaryItem,
     Verdict,
 )
@@ -463,6 +468,48 @@ def runs(
     )
     return RunListResponse(
         items=[_run_item(row) for row in rows], limit=limit, offset=offset
+    )
+
+
+@app.get("/v1/runs/{verdict_id}")
+def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResponse:
+    """One run, end to end. Operator-only for the same reason /v1/runs is."""
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    row = store.run_detail(verdict_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return RunDetailResponse(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        pr_number=row["pr_number"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        # Guarded the same way _run_item guards it: run_detail's row, like
+        # run_history's, can carry pr_meta=None (nullable column,
+        # save_review's default), and _with_url assumes a dict. Nulled
+        # rather than synthesized — see RunDetailResponse.pr's docstring.
+        pr=_with_url(row) if isinstance(row["pr_meta"], dict) else None,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        prompt_hash=row["prompt_hash"],
+        model=row["model"],
+        source=row["source"],
+        head_sha=row["head_sha"],
+        risk_score=row["risk_score"],
+        rationale=row["rationale"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        reasons=[Reason(**r) for r in row["reasons"]],
+        deviations=[RunDeviation(**d) for d in row["deviations"]],
+        intent_alignment=row["intent_alignment"],
+        intent_refs=row["intent_refs"],
+        job=RunDetailJob(**row["job"]) if row["job"] else None,
+        outcomes=[RunOutcome(**o) for o in row["outcomes"]],
+        outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
     )
 
 

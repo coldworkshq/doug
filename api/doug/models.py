@@ -171,3 +171,71 @@ class RunListResponse(BaseModel):
     items: list[RunSummaryItem]
     limit: int
     offset: int
+
+
+class RunOutcome(BaseModel):
+    kind: str
+    window_days: int | None
+    observed_at: datetime
+    source: str
+    detail: str | None
+
+
+class RunOutcomeJob(BaseModel):
+    window_days: int
+    status: str
+    due_at: datetime
+    merged_at: datetime
+
+
+class RunDetailJob(BaseModel):
+    status: str
+    attempts: int
+    claim_generation: int
+    error: str | None
+    enqueued_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class RunDeviation(BaseModel):
+    type: str
+    description: str
+    severity: str
+
+
+class RunDetailResponse(BaseModel):
+    verdict_id: int
+    repo: str
+    pr_number: int
+    installation_id: int | None
+    github_repo_id: int | None
+    # None when the row carries no pr_meta (nullable column; save_review
+    # defaults it to None) — every worker-path row before pr_meta capture,
+    # and the CLI's caller, land here. Never synthesized the way
+    # RunSummaryItem's flattened title/url are: PRMetadata.author has no
+    # default and this row does not know one, so a placeholder would be a
+    # guessed fact of exactly the kind PRMetadata's own fields refuse to
+    # carry ("never guessed").
+    pr: PRMetadata | None
+    scored_at: datetime
+    tier: str
+    # None means the row predates prompt-hash stamping on the worker path.
+    # It is NOT a match against the frozen prompt and must never render as one.
+    prompt_hash: str | None
+    model: str | None
+    source: str | None
+    head_sha: str | None
+    risk_score: int | None
+    rationale: str | None
+    score: float
+    band: Band
+    threshold: float
+    coverage: RunCoverage | None
+    reasons: list[Reason]
+    deviations: list[RunDeviation]
+    intent_alignment: int | None
+    intent_refs: list[str]
+    job: RunDetailJob | None
+    outcomes: list[RunOutcome]
+    outcome_jobs: list[RunOutcomeJob]
