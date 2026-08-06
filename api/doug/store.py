@@ -1407,6 +1407,12 @@ def run_history(
             ).mappings()
         }
 
+        # Newest-attempts-last if a verdict is ever referenced by more than
+        # one job row (not enforced today — uq_review_job scopes uniqueness
+        # to (installation_id, github_repo_id, pr_number, head_sha), not to
+        # verdict_id). The dict below keeps whichever comes last in
+        # iteration order, the same last-observation-wins rule as
+        # outcome_by_pr just below.
         job_by_verdict = {
             row["verdict_id"]: {
                 "status": row["status"],
@@ -1417,12 +1423,25 @@ def run_history(
                 "finished_at": row["finished_at"],
             }
             for row in conn.execute(
-                select(review_jobs).where(review_jobs.c.verdict_id.in_(ids))
+                select(review_jobs)
+                .where(review_jobs.c.verdict_id.in_(ids))
+                .order_by(review_jobs.c.id)
             ).mappings()
         }
 
         # 14-day only. Both windows exist for a merged PR, and carrying both
-        # into a list column is what fans one run out into two.
+        # into a list column is what fans one run out into two. Filtered on
+        # both halves of the key — repo alone would fetch every 14-day
+        # outcome for every repo on the page, not just the PRs on it.
+        #
+        # `outcomes` carries no unique constraint on (repo, pr_number,
+        # window_days), so if a PR is ever re-graded the dict below keeps
+        # the highest-id (most recent) row — last-observation-wins. That is
+        # a different reduction than find_scored_prs_with_outcomes uses on
+        # this same table (store.py:1240-1241), which fans a multi-outcome
+        # PR out into several rows and leaves the reduction to its caller.
+        # The difference is deliberate: outcome_14 is a single list-column
+        # value here, so there is no caller-side reduction to defer to.
         keys = {(r["repo"], r["pr_number"]) for r in rows}
         outcome_by_pr = {
             (row["repo"], row["pr_number"]): row["kind"]
@@ -1430,6 +1449,7 @@ def run_history(
                 select(outcomes)
                 .where(outcomes.c.window_days == 14)
                 .where(outcomes.c.repo.in_({k[0] for k in keys}))
+                .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
                 .order_by(outcomes.c.id)
             ).mappings()
         }

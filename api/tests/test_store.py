@@ -1667,13 +1667,13 @@ def test_run_history_attaches_coverage_without_duplicating_runs(tmp_path, monkey
         ),
     )
     store.save_read(vid, store.Coverage(
-        diff_chars=1000, sent_chars=900, files_sent=20,
+        diff_chars=1200, sent_chars=900, files_sent=20,
         files_unseen=[], file_cut=None,
     ))
     rows = store.run_history()
     assert len(rows) == 1
-    assert rows[0]["coverage"]["files_sent"] in (4, 20)
-    assert rows[0]["coverage"]["diff_chars"] == 1000
+    assert rows[0]["coverage"]["files_sent"] == 20
+    assert rows[0]["coverage"]["diff_chars"] == 1200
 
 
 def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monkeypatch):
