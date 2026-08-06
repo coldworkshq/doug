@@ -1333,11 +1333,17 @@ def run_history(
     installation ids rather than a label — and it is what keeps backfilled
     probe corpora, CLI rows and the research quarantine out of a console
     that is meant to show tenant traffic.
+
+    Each row carries `coverage`, `finding_counts`, `job` and `outcome_14`.
+    Every child join goes through an id-picking subquery — the pattern
+    comparison_reviews uses — because a plain outerjoin duplicates the
+    verdict row whenever two children match, and a duplicated run reads as
+    a real second review rather than as a bug.
     """
     engine = _get_engine()
     if engine is None or limit < 1 or offset < 0:
         return []
-    from sqlalchemy import desc, select
+    from sqlalchemy import case, desc, func, select
 
     query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
     if not include_untenanted:
@@ -1351,8 +1357,90 @@ def run_history(
         .limit(limit)
         .offset(offset)
     )
+
     with engine.connect() as conn:
-        return [dict(row) for row in conn.execute(query).mappings()]
+        rows = [dict(row) for row in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+        ids = [r["id"] for r in rows]
+
+        # One read per verdict: newest by id. A verdict can carry more than
+        # one (a retried read writes a second row), and both are real.
+        read_ids = (
+            select(reads.c.verdict_id, func.max(reads.c.id).label("read_id"))
+            .where(reads.c.verdict_id.in_(ids))
+            .group_by(reads.c.verdict_id)
+            .subquery()
+        )
+        cov_by_verdict = {
+            row["verdict_id"]: {
+                "diff_chars": row["diff_chars"],
+                "sent_chars": row["sent_chars"],
+                "files_sent": row["files_sent"],
+                "files_unseen": row["files_unseen"],
+                "file_cut": row["file_cut"],
+            }
+            for row in conn.execute(
+                select(reads).join(read_ids, read_ids.c.read_id == reads.c.id)
+            ).mappings()
+        }
+
+        counts_by_verdict = {
+            row["verdict_id"]: {
+                "total": row["total"],
+                "high": row["high"],
+                "medium": row["medium"],
+                "low": row["low"],
+            }
+            for row in conn.execute(
+                select(
+                    findings.c.verdict_id,
+                    func.count().label("total"),
+                    func.sum(case((findings.c.severity == "high", 1), else_=0)).label("high"),
+                    func.sum(case((findings.c.severity == "medium", 1), else_=0)).label(
+                        "medium"
+                    ),
+                    func.sum(case((findings.c.severity == "low", 1), else_=0)).label("low"),
+                )
+                .where(findings.c.verdict_id.in_(ids))
+                .group_by(findings.c.verdict_id)
+            ).mappings()
+        }
+
+        job_by_verdict = {
+            row["verdict_id"]: {
+                "status": row["status"],
+                "attempts": row["attempts"],
+                "error": row["error"],
+                "enqueued_at": row["enqueued_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+            }
+            for row in conn.execute(
+                select(review_jobs).where(review_jobs.c.verdict_id.in_(ids))
+            ).mappings()
+        }
+
+        # 14-day only. Both windows exist for a merged PR, and carrying both
+        # into a list column is what fans one run out into two.
+        keys = {(r["repo"], r["pr_number"]) for r in rows}
+        outcome_by_pr = {
+            (row["repo"], row["pr_number"]): row["kind"]
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.window_days == 14)
+                .where(outcomes.c.repo.in_({k[0] for k in keys}))
+                .order_by(outcomes.c.id)
+            ).mappings()
+        }
+
+    zero = {"total": 0, "high": 0, "medium": 0, "low": 0}
+    for row in rows:
+        row["coverage"] = cov_by_verdict.get(row["id"])
+        row["finding_counts"] = counts_by_verdict.get(row["id"], dict(zero))
+        row["job"] = job_by_verdict.get(row["id"])
+        row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"]))
+    return rows
 
 
 def active_installations() -> list[int]:

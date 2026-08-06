@@ -1654,6 +1654,110 @@ def test_run_history_paginates_newest_first(tmp_path, monkeypatch):
     assert [r["pr_number"] for r in store.run_history(limit=2, offset=2)] == [2, 1]
 
 
+def test_run_history_attaches_coverage_without_duplicating_runs(tmp_path, monkeypatch):
+    """Two reads on one verdict must not become two runs. A plain outerjoin
+    fans out here, and a duplicated run reads as a real second review."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=1000, sent_chars=170, files_sent=4,
+            files_unseen=["tenancy.py"], file_cut="api.py",
+        ),
+    )
+    store.save_read(vid, store.Coverage(
+        diff_chars=1000, sent_chars=900, files_sent=20,
+        files_unseen=[], file_cut=None,
+    ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["coverage"]["files_sent"] in (4, 20)
+    assert rows[0]["coverage"]["diff_chars"] == 1000
+
+
+def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monkeypatch):
+    """No read happened, so there is no coverage. This must be None and
+    render as "no read" — never as 0%, which would read as a total miss."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["coverage"] is None
+
+
+def test_run_history_counts_findings_by_severity(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.8, band=Band.FLAGGED, threshold=0.62,
+        reasons=[
+            Reason(rule="reader:a", label="a", weight=0.0, severity="high"),
+            Reason(rule="reader:b", label="b", weight=0.0, severity="low"),
+            Reason(rule="reader:c", label="c", weight=0.0, severity="low"),
+        ],
+    )
+    store.save_review(
+        "o/r", 1, "reader", verdict,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    counts = store.run_history()[0]["finding_counts"]
+    assert counts == {"total": 3, "high": 1, "medium": 0, "low": 2}
+
+
+def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
+    """The job row is the "what did Doug do" record: attempts and error are
+    the only place a failed run explains itself."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=1, head_sha="a" * 40, status="done", attempts=2,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 41, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+    job = store.run_history()[0]["job"]
+    assert job["status"] == "done"
+    assert job["attempts"] == 2
+
+
+def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
+    """Both windows exist for a merged PR. The list column is the 14d one;
+    joining both would fan the run out into two rows."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for window, kind in ((14, "clean"), (60, "revert")):
+            conn.execute(store.outcomes.insert().values(
+                repo="o/r", pr_number=1, kind=kind, window_days=window,
+                observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+                github_repo_id=1, installation_id=99,
+            ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["outcome_14"] == "clean"
+
+
+def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypatch):
+    """Ungraded is not clean. The console must render these differently."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["outcome_14"] is None
+
+
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---
 
 
