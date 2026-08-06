@@ -87,12 +87,12 @@ path classification lives in one module, so the tier rule and the scorer can
 never drift apart on what counts as a test. Everything that is neither prose
 nor test is tier 0.
 
-**Nothing in `reader.py` changes except the one constant in §2.** `_sent_slice`,
-`_user_text` and `coverage()` are untouched, and no new truncation logic is
-written: order the chunks and the existing linear cut admits whole files until
-one does not fit. The `coverage()` invariant — a partial read cannot look like
-a complete one — holds by construction, because `coverage()` re-derives from
-the same assembled string.
+**The live read path changes only the one constant in §2.** `_user_text` keeps
+the existing linear cut: order the chunks and it admits whole files until one
+does not fit. The evidence-only `coverage()` path accepts an optional explicit
+budget so historical 30k receipts do not mutate the live 100k module global;
+its default remains the live budget. The invariant — a partial read cannot look
+like a complete one — still holds because both paths slice through `_sent_slice`.
 
 **Why smallest-first, not risk-first.** Doug's path predicates fire on zero
 files here (above), so risk-ordering would mean inventing new path vocabulary.

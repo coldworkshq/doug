@@ -14,7 +14,13 @@
 - Branch: `read-budget-routing`, already created, spec committed at `c61f842`. Off `main` @ `135c8e5`.
 - Run tests: `make test` (= `cd api && uv run pytest`). Run lint: `make lint`.
 - **Baseline is 642 passing in ~12s.** Every task ends green. If the count drops, something was deleted — stop and say so.
-- `reader.py` has exactly one **executable** change: the `DIFF_BUDGET` integer in Task 4. `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT`, `MAX_TOKENS`, `_sent_slice`, `_user_text`, `coverage`, and `truncation_reason` are **not touched**. The approved final evidence reconciliation may correct the module docstring and nearby evidence comments without changing execution. If a task seems to need another executable edit there, stop.
+- `reader.py`'s **live read path** has exactly one behavior change: the
+  `DIFF_BUDGET` integer in Task 4. `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT`,
+  `MAX_TOKENS`, `_user_text`, and `truncation_reason` are not changed. The
+  approved final evidence correction may let `_sent_slice`/`coverage` accept an
+  explicit historical budget, provided their default remains the live global
+  and a regression proves concurrent live coverage is unchanged. Any other
+  executable edit there requires a new decision.
 - `api/scripts/llm_probe.py` is **never** modified. It is the frozen instrument; its `DIFF_BUDGET = 30_000` is what the probe actually measured.
 - Do **not** add a test asserting `PROMPT_HASH` is unmoved by the budget change. `PROMPT_HASH = sha256(SYSTEM + repr(SCHEMA))` — `DIFF_BUDGET` was never an input, so such a test cannot fail and would violate the house rule that a test must be able to fail when behaviour changes. The existing `test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes` already pins the hash's inputs.
 - Commit after every task. Conventional-commit prefixes (`feat:`, `test:`, `docs:`).
@@ -29,7 +35,7 @@
 | `api/tests/test_features.py` | `_is_prose` behaviour | 1 |
 | `api/doug/review.py` | add `_read_tier` + `read_order`; call it at both join sites | 2, 3 |
 | `api/tests/test_review.py` | ordering behaviour; PR #50 regression; coverage invariant | 2, 3 |
-| `api/doug/reader.py` | `DIFF_BUDGET` executable change; approved evidence prose corrections | 4, final review |
+| `api/doug/reader.py` | live `DIFF_BUDGET` change; evidence-only explicit budget with unchanged live default | 4, final review |
 | `api/tests/test_reader.py` | split the ADR-0002 cross-pin | 4 |
 | `docs/decisions/ADR-0012-diff-budget-is-governed-by-a-coverage-bar.md` | new record | 4 |
 | `docs/decisions/ADR-0002-reader-prompt-is-frozen.md` | frontmatter → superseded | 4 |
@@ -938,14 +944,16 @@ receipts cover that separate hole."
 
 Phase-1 backfill reconstructs the exact pre-slice diff in the probe's original
 file-detail order. Both database and `--emit-sql` paths must call a shared
-`_probe_coverage(diff)` helper that temporarily applies
-`llm_probe.DIFF_BUDGET` and restores `reader.DIFF_BUDGET` in `finally`. The
+`_probe_coverage(diff)` helper that passes `llm_probe.DIFF_BUDGET` explicitly to
+`reader.coverage`. The live `reader.DIFF_BUDGET` global is never mutated. The
 constant is imported from the frozen probe, never duplicated. The regression
-uses a synthetic 68k historical file and requires `sent_chars == 30_000`,
-incomplete coverage, the expected `file_cut`, and an unchanged live budget.
+pauses coverage in another thread and requires the live budget to remain 100k
+during the historical call, plus `sent_chars == 30_000`, incomplete coverage,
+and the expected `file_cut`.
 
-`api/scripts/llm_probe.py` remains frozen. No selector, scoring, live reader,
-coverage, or read-order behavior changes in this correction.
+`api/scripts/llm_probe.py` remains frozen. No selector, scoring, live-read, or
+read-order behavior changes in this correction; the new coverage keyword is
+for evidence reconstruction and defaults to the live budget.
 
 ---
 
@@ -954,7 +962,7 @@ coverage, or read-order behavior changes in this correction.
 - [ ] `make test` green, 655 (the observed post-fix count; two focused final-review regressions added)
 - [ ] `make lint` clean
 - [ ] `uv run python scripts/read_budget_gate.py` exits 0 with strict 30/30 whole-code coverage; the real-range 30k regression exits 1 at 24/30
-- [ ] `reader.py` has no executable branch change beyond `DIFF_BUDGET`; only the approved evidence prose is additionally corrected
+- [ ] `reader.py`'s live path changes only `DIFF_BUDGET`; historical coverage may pass an explicit budget without mutating the live global
 - [ ] `git diff origin/main -- api/scripts/llm_probe.py` is empty
 - [ ] ADR-0002 status is `superseded`, ADR-0012 is `accepted`
 - [ ] No doc outside the allow-list in Task 5 Step 3 still asserts a 30,000 budget

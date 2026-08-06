@@ -502,3 +502,81 @@ with an empty table the startup sweep enqueues nothing *by construction*. That
 had been recorded in HANDOFF as "the webhook path drains jobs promptly, so at
 any boot there is nothing pending for the sweep to find" — a plausible
 explanation for the right observation and the wrong reason.
+
+## A successor ADR in the PR is invisible to the deployed intent read
+
+PR #56 proposed ADR-0012, superseding ADR-0002's six-constant freeze with a
+five-constant freeze plus a coverage-governed `DIFF_BUDGET`. Doug's unvalidated
+intent pass repeatedly said no decision sanctioned that change and reported it
+as a violation of ADR-0002. The missing mechanism was not in the prose: it was
+which Git ref the intent provider reads.
+
+`review.read_intent` calls `intent_providers.fetch(gh, owner, repo)` with no
+`ref`, so GitHub serves the default branch. While the PR is open, that branch
+still has ADR-0002 accepted and has no ADR-0012. The PR head has the opposite
+binding set: ADR-0002 superseded, ADR-0012 accepted. The deployed intent read
+therefore cannot evaluate the successor record in the change that introduces
+it; `Judged against: ADR-0004, ADR-0002` is a receipt of that limitation.
+
+Do not automatically feed a proposed ADR from the head into the same PR's
+policy check — that lets code self-authorize by adding its own decision. Treat
+the deviation as a base-policy warning for the human decision maker. Before
+calling it a defect, compare the base and head frontmatter, read the check's
+`Judged against` line, and verify whether the successor was explicitly approved.
+After merge, `intent.select`'s accepted-only filter makes the successor binding
+and excludes the superseded record.
+
+## Separate an accepted behavior change from an unmeasured regression
+
+The same PR produced repeated findings that tier ordering and a 100k ceiling
+change the model input and could reduce verdict quality. The first clause is
+true and ADR-0012 records it as the decision, including the loss of the old AUC
+claim. Restating that accepted trade as a behavior-change finding is not a new
+defect and should not be "fixed" by restoring alphabetical 30k reads.
+
+Compound performance findings need to be split at the evidence boundary. The
+input-cost increase was measured; latency and timeout frequency were not.
+`DEFAULT_READ_TIMEOUT_S` and `MAX_TOKENS` staying fixed make a regression
+plausible, not observed. Disposition the combined claim as adjacent until a
+latency distribution, timeout count, or production fallback rate establishes
+the second half.
+
+The same present-versus-future rule applies to concurrency. The historical
+backfill was a standalone synchronous script, so no concurrent live reader
+shared its process. That made the reported corruption path hypothetical, but
+the module-global mutation was still avoidable. The useful change was an
+explicit `coverage(..., budget=30_000)` argument, pinned by a test that pauses
+the historical call and observes the live global from another thread. Do not
+claim a current race without a caller; do not defend unnecessary shared state
+when a value can travel as data.
+
+## Test script imports through the entrypoint the repository supports
+
+PR #56's `reader:fragile-import` said `backfill_ledger.py` fails when run from
+another working directory because it imports sibling probe scripts by name.
+Executing the documented file path from both the repository root and `/tmp`
+got through every import and reached the expected `DATABASE_URL not set`
+guard. Python places the script's own directory on `sys.path` for that form.
+
+`python -m scripts.backfill_ledger` and `import scripts.backfill_ledger` from
+the API root do fail because `scripts` is not a supported package interface;
+no production caller uses either form. Do not turn an unsupported invocation
+into a runtime defect. If module execution becomes a contract, make the scripts
+a package, convert all sibling imports coherently, and add that exact invocation
+to the tests rather than patching one import in isolation.
+
+## Deprioritized files are not silently omitted
+
+`features._is_prose` is a routing heuristic: it sends prose after code and
+tests, but `read_order` still includes every patch. If the budget lands before
+or inside one, `Coverage.files_unseen` or `Coverage.file_cut` names it and the
+check run renders that receipt. "May not reach the model" can be true;
+"silently never reaches the reader" is false for a file GitHub supplied.
+
+Still verify the classifier rather than dismissing every edge case. PR #56's
+earlier passes found real dependency manifests (`requirements.txt`,
+`requirements-dev.txt`, `constraints.txt`) falling through the `.txt` suffix;
+those now stay code and have regression tests. For a new claim, provide a
+concrete behavior-bearing path, check whether it is already excepted, and then
+distinguish a bad classification from the already-visible cost of an accepted
+lower tier.

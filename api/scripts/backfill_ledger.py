@@ -65,12 +65,7 @@ def _rebuild_diff(pr) -> str | None:
 
 def _probe_coverage(diff: str) -> reader.Coverage:
     """Measure a historical read with the probe's own 30k instrument."""
-    live_budget = reader.DIFF_BUDGET
-    try:
-        reader.DIFF_BUDGET = PROBE_DIFF_BUDGET
-        return reader.coverage(diff)
-    finally:
-        reader.DIFF_BUDGET = live_budget
+    return reader.coverage(diff, budget=PROBE_DIFF_BUDGET)
 
 
 def _database_url_from_gcp(project: str) -> str:

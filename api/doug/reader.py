@@ -352,13 +352,15 @@ def _client():
     return anthropic.Anthropic(timeout=read_timeout())
 
 
-def _sent_slice(diff: str) -> str:
-    """The exact bytes DIFF_BUDGET admits — the one place this slice happens.
+def _sent_slice(diff: str, *, budget: int | None = None) -> str:
+    """The exact bytes the selected budget admits — the one slice point.
 
     coverage() re-derives what a read saw from this same function, so it can
-    never drift from what _user_text actually sent to the model.
+    never drift from what _user_text actually sent to the model. Historical
+    evidence callers may name their own instrument budget without mutating the
+    live module global.
     """
-    return diff[:DIFF_BUDGET]
+    return diff[: DIFF_BUDGET if budget is None else budget]
 
 
 def _user_text(pr, diff: str) -> str:
@@ -444,12 +446,16 @@ class Coverage(BaseModel):
 
 
 def coverage(
-    diff: str, *, changed_files: int | None = None, files_dropped: list[str] | None = None
+    diff: str,
+    *,
+    changed_files: int | None = None,
+    files_dropped: list[str] | None = None,
+    budget: int | None = None,
 ) -> Coverage:
-    """Observe the truncation _user_text performs. Pure over `diff`; sends
-    nothing. `changed_files`/`files_dropped` are supplied by the caller,
-    not derived here — they describe files that never reached this
-    function's input at all (fetch_pr drops files GitHub returns without a
+    """Observe the truncation _user_text performs. Pure over `diff` and the
+    selected budget; sends nothing. `changed_files`/`files_dropped` are
+    supplied by the caller, not derived here — they describe files that never
+    reached this function's input at all (fetch_pr drops files GitHub returns without a
     patch: binary, or too large to inline), which is a different hole from
     the budget truncation this function observes directly.
 
@@ -457,7 +463,7 @@ def coverage(
     rather than from a PR's file list, for the same reason: a file with no
     patch never produces a header, so it cannot appear in files_unseen.
     """
-    sent = _sent_slice(diff)
+    sent = _sent_slice(diff, budget=budget)
     matches = list(_FILE_HEADER.finditer(diff))
     all_files = [m.group(1) for m in matches]
     # A header counts as sent only if it arrived in full — a header cut
