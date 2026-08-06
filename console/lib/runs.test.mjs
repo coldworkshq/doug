@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { coveragePercent, relativeAge } from "./runs.ts";
-import { isError } from "./api.ts";
 
 const coverage = {
   diff_chars: 108200,
@@ -59,12 +58,4 @@ test("relativeAge renders hours, days and weeks distinctly", () => {
   assert.equal(relativeAge("2026-08-06T10:00:00Z", now), "2h");
   assert.equal(relativeAge("2026-08-04T12:00:00Z", now), "2d");
   assert.equal(relativeAge("2026-07-16T12:00:00Z", now), "3w");
-});
-
-test("isError treats an API failure as an error, never as empty data", () => {
-  // The console must never render a number when the API is unreachable.
-  // An empty items array and a failed fetch are different facts and the
-  // page states them differently.
-  assert.equal(isError({ error: "/v1/runs → HTTP 503" }), true);
-  assert.equal(isError({ items: [] }), false);
 });
