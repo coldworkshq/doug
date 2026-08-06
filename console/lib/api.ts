@@ -73,7 +73,11 @@ export async function getRuns(params: {
 }): Promise<{ items: RunSummary[]; limit: number; offset: number } | { error: string }> {
   const q = new URLSearchParams();
   if (params.repo) q.set("repo", params.repo);
-  if (params.installationId) q.set("installation_id", String(params.installationId));
+  // Explicit presence, not truthiness: installationId 0 is falsy but is a
+  // value the caller passed, not an absent one. `if (params.installationId)`
+  // silently dropped it — the same trap that let a malformed ?tenant= reach
+  // this function as a "valid" id of 0 and query every installation.
+  if (params.installationId !== undefined) q.set("installation_id", String(params.installationId));
   q.set("limit", String(params.limit ?? 100));
   // limit/offset round-trip the request back — the only way a caller can
   // tell "this IS every run" from "this is the first page of more", since

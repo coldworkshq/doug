@@ -28,7 +28,12 @@ export function ScopeSwitch({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  if (value === null) {
+  // A bare `?tenant=` (present, blank) is a different string than absent
+  // (null) but the same fact for this chip: there is nothing to clear. Not
+  // treating it as unset used to render a live chip with a blank label
+  // instead of the static "all" state — same empty-vs-absent confusion as
+  // the tenant-id parsing this bug sits next to.
+  if (value === null || value.trim() === "") {
     return <ScopeSwitchStatic label={label} value="all" />;
   }
 

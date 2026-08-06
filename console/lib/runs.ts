@@ -43,6 +43,27 @@ export function relativeAge(iso: string, now: Date = new Date()): string {
   return `${Math.round(seconds / 604_800)}w`;
 }
 
+export type TenantId = { kind: "absent" } | { kind: "invalid" } | { kind: "present"; id: number };
+
+/** Validate a raw `?tenant=` query value into an installation id — or into
+ *  a reason it isn't one, never a coerced guess.
+ *
+ *  `Number.isInteger(Number(x))` looks like the right check and isn't:
+ *  `Number("")`, `Number(" ")` and `Number("0")` all evaluate to `0`, which
+ *  passes `Number.isInteger`. A blank, whitespace, or zero tenant would
+ *  then read as a "valid" installation id of 0 — which is falsy, so a
+ *  naive `if (installationId)` downstream drops the filter entirely and
+ *  silently queries every installation while the scope chip still claims
+ *  one. GitHub installation ids are always positive integers with no
+ *  leading zero, so this checks the string's shape directly instead of
+ *  trusting what it coerces to. */
+export function parseTenantId(tenant: string | undefined): TenantId {
+  if (tenant === undefined) return { kind: "absent" };
+  return /^[1-9]\d*$/.test(tenant.trim())
+    ? { kind: "present", id: Number(tenant.trim()) }
+    : { kind: "invalid" };
+}
+
 /** "41s" / "1m12s" between a job's started_at and finished_at, or null when
  *  either is missing. Null, not a dash baked into the string here — the
  *  caller decides how an unmeasurable duration reads next to a status word,

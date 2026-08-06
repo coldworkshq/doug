@@ -4,7 +4,7 @@ import { BandChip } from "@/components/band-chip";
 import { CoverageBar } from "@/components/coverage-bar";
 import { Shell } from "@/components/shell";
 import { getRuns, isError } from "@/lib/api";
-import { jobDuration, relativeAge } from "@/lib/runs";
+import { jobDuration, parseTenantId, relativeAge } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
@@ -28,23 +28,21 @@ export default async function RunsPage({
   const params = await searchParams;
   const scope = { tenant: params.tenant ?? null, repo: params.repo ?? null };
 
-  // A non-numeric tenant (?tenant=abc) makes Number(tenant) NaN, which is
-  // falsy — getRuns would silently drop the installation_id filter and
-  // fetch every installation's rows while the chip above still claims one.
-  // That is a fabricated scope claim, the same error class as a rate
-  // rendered without its denominator, so it fails the same way: the
-  // explicit panel, not a table quietly showing the wrong tenant's runs.
-  // (A non-integer numeric string like "12.5" is already caught downstream
-  // — the API 422s on a non-int query param — but NaN never reaches the
-  // API at all, so it needs its own check.)
-  const tenantValid = params.tenant === undefined || Number.isInteger(Number(params.tenant));
+  // A tenant that doesn't parse to a real installation id (blank,
+  // whitespace, "0", non-numeric, fractional — see parseTenantId) must not
+  // silently fall back to "no filter": that would fetch every
+  // installation's rows while the scope chip above still claims one. Same
+  // error class as a rate rendered without its denominator, so it fails
+  // the same way — the explicit panel, never a table under a false claim.
+  const tenant = parseTenantId(params.tenant);
 
-  const result = tenantValid
-    ? await getRuns({
-        repo: params.repo,
-        installationId: params.tenant ? Number(params.tenant) : undefined,
-      })
-    : { error: `tenant=${params.tenant} is not a valid installation id` };
+  const result =
+    tenant.kind === "invalid"
+      ? { error: `tenant=${params.tenant} is not a valid installation id` }
+      : await getRuns({
+          repo: params.repo,
+          installationId: tenant.kind === "present" ? tenant.id : undefined,
+        });
 
   // limit/offset round-trip the request: items.length hitting the
   // requested limit means there may be more than what's shown, and the

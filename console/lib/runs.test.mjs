@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { coveragePercent, jobDuration, relativeAge } from "./runs.ts";
+import { coveragePercent, jobDuration, parseTenantId, relativeAge } from "./runs.ts";
 
 const coverage = {
   diff_chars: 108200,
@@ -71,4 +71,21 @@ test("jobDuration refuses to guess when either timestamp is missing", () => {
   assert.equal(jobDuration(null, "2026-08-06T12:00:41Z"), null);
   assert.equal(jobDuration("2026-08-06T12:00:00Z", null), null);
   assert.equal(jobDuration(null, null), null);
+});
+
+test("parseTenantId accepts a real installation id and is absent when there's no tenant param", () => {
+  assert.deepEqual(parseTenantId(undefined), { kind: "absent" });
+  assert.deepEqual(parseTenantId("150424894"), { kind: "present", id: 150424894 });
+});
+
+test("parseTenantId rejects everything Number() would silently coerce to 0 or NaN", () => {
+  // The coercion boundary that let a fabricated scope claim through:
+  // Number("") and Number(" ") are both 0, which passes
+  // Number.isInteger — and 0 is itself not a real installation id (never
+  // negative, never zero, never fractional, never non-numeric).
+  assert.deepEqual(parseTenantId(""), { kind: "invalid" });
+  assert.deepEqual(parseTenantId(" "), { kind: "invalid" });
+  assert.deepEqual(parseTenantId("0"), { kind: "invalid" });
+  assert.deepEqual(parseTenantId("abc"), { kind: "invalid" });
+  assert.deepEqual(parseTenantId("12.5"), { kind: "invalid" });
 });
