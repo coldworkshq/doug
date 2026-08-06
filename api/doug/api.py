@@ -262,6 +262,17 @@ def _operator_only(x_doug_token: str) -> None:
     gets 404 — the same no-existence-leak rule a cross-tenant repo gets.
     A token that resolves to nothing is 401, because nothing about it was
     ever valid.
+
+    That no-existence-leak rule is about DATA, not about the route itself:
+    this gate runs after FastAPI has already coerced the request's typed
+    query and path params, so a malformed one (e.g. `?limit=abc`, or a
+    non-integer `verdict_id`) 422s on a real operator route before this
+    function ever runs, versus 404 on a route that doesn't exist at all —
+    letting an unauthenticated caller distinguish the two. That is accepted,
+    not a gap: routes are public by ADR-0008, this gate still fails closed
+    on every credential it does see, no response body it produces ever
+    contains data, and the same 422-vs-404 split pre-exists identically on
+    `/v1/comparisons` and `/v1/patterns`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:

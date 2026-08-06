@@ -2298,7 +2298,9 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
-@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read"])
+@pytest.mark.parametrize(
+    "path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read", "/v1/runs", "/v1/runs/1"]
+)
 def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     """A valid credential pointed at an endpoint that is not theirs learns
     only that there is nothing there — same no-existence-leak rule as a
@@ -2314,7 +2316,7 @@ def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, pat
     assert r.status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons"])
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/runs", "/v1/runs/1"])
 def test_junk_token_is_still_401_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     _tenant(tmp_path, monkeypatch)
     r = client.get(path, headers={"X-Doug-Token": "doug_nope"})
