@@ -1,5 +1,5 @@
 import type { RunDetail } from "@/lib/api";
-import { jobDuration, utcClock } from "@/lib/runs";
+import { jobDuration, utcClock, utcShortDate } from "@/lib/runs";
 
 function Event({
   title,
@@ -71,15 +71,21 @@ export function RunSpine({ run }: { run: RunDetail }) {
           <Event
             key={`${o.window_days ?? "unrecorded"}-${i}`}
             title={o.window_days !== null ? `${o.window_days}d outcome` : "outcome, window unrecorded"}
-            stamp={o.observed_at.slice(5, 10)}
+            stamp={utcShortDate(o.observed_at)}
             sub={`graded ${o.kind}`}
             state="done"
           />
         ))}
         {run.outcome_jobs
+          // A null-window outcome above is deliberately never matched here.
+          // It has no recorded window to suppress a pending tile WITH — the
+          // row genuinely doesn't say which window it was, so matching it
+          // against a real one would assert a join the ledger doesn't have,
+          // and with two pending windows there'd be no non-arbitrary choice
+          // of which to suppress. Both render, as separate, honest facts.
           .filter((j) => !run.outcomes.some((o) => o.window_days === j.window_days))
           .map((j) => (
-            <Event key={j.window_days} title={`${j.window_days}d outcome`} stamp={j.due_at.slice(5, 10)} sub={j.status} state="wait" />
+            <Event key={j.window_days} title={`${j.window_days}d outcome`} stamp={utcShortDate(j.due_at)} sub={j.status} state="wait" />
           ))}
       </ol>
     </aside>

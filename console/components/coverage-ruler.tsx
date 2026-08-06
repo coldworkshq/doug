@@ -78,7 +78,15 @@ export function CoverageRuler({
         )}
       </div>
 
-      <div className="flex h-[26px] items-stretch gap-0.5">
+      {/* mb-6 clears the "budget cut ↑" label, which is absolutely
+          positioned below the bar (top: calc(100% + 4px), inside a marker
+          div stretched taller than the bar by -my-[7px] on top of that) —
+          it needs room below the bar regardless of what renders next.
+          Moving that margin onto the legend below and leaving none here
+          let the label overprint the legend's in-flow text whenever the
+          cut lands in roughly the left quarter of the track — precisely
+          the low-coverage case this page exists to explain. */}
+      <div className="mb-6 flex h-[26px] items-stretch gap-0.5">
         <div className="cov-fill min-w-0.5 rounded-[2px]" style={{ flex: `${seenShare} 1 0` }} />
         {coverage.file_cut && (
           <div className="relative -my-[7px] mx-[3px] w-px flex-none bg-foreground">
@@ -109,7 +117,7 @@ export function CoverageRuler({
         )}
       </div>
 
-      <div className="mono mb-6 flex items-center gap-4 pt-2.5 text-[10px] text-muted-foreground">
+      <div className="mono mb-4 flex items-center gap-4 text-[10px] text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="cov-fill inline-block size-2 rounded-[2px]" aria-hidden="true" /> sent to
           the reader

@@ -6,7 +6,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { RunSpine } from "@/components/run-spine";
 import { Shell } from "@/components/shell";
 import { getRunDetail, isError } from "@/lib/api";
-import { utcTimestamp } from "@/lib/runs";
+import { utcDate, utcTimestamp } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
@@ -224,11 +224,18 @@ export default async function RunDetailPage({
                     {o.kind === "clean" ? "✓ clean" : `↩ ${o.kind}`}
                   </div>
                   <div className="mono mt-1 text-[10.5px] text-muted-foreground">
-                    graded {o.observed_at.slice(0, 10)}
+                    graded {utcDate(o.observed_at)}
                   </div>
                 </div>
               ))}
               {run.outcome_jobs
+                // A null-window outcome above is deliberately never matched
+                // here. It records no window to suppress a pending tile
+                // WITH — the row genuinely doesn't say which window it was,
+                // so matching it against a real one would assert a join
+                // the ledger doesn't have, and with two pending windows
+                // there'd be no non-arbitrary choice of which to suppress.
+                // Both render, as separate, honest facts.
                 .filter((j) => !run.outcomes.some((o) => o.window_days === j.window_days))
                 .map((j) => (
                   <div key={j.window_days} className="panel flex-1 rounded-[6px] px-3.5 py-3">
@@ -238,7 +245,7 @@ export default async function RunDetailPage({
                     {/* Ungraded is not clean. */}
                     <div className="mono mt-1.5 text-sm font-medium text-muted-foreground">◷ {j.status}</div>
                     <div className="mono mt-1 text-[10.5px] text-muted-foreground">
-                      grades {j.due_at.slice(0, 10)}
+                      grades {utcDate(j.due_at)}
                     </div>
                   </div>
                 ))}

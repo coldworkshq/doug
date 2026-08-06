@@ -7,6 +7,8 @@ import {
   parseTenantId,
   relativeAge,
   utcClock,
+  utcDate,
+  utcShortDate,
   utcTimestamp,
 } from "./runs.ts";
 
@@ -97,6 +99,24 @@ test("utcClock parses and normalizes to UTC rather than slicing the source strin
   assert.equal(utcClock("not a date"), "—");
 });
 
+test("utcClock treats a zoneless string as UTC, never as the server's local time", () => {
+  // The regression this test exists to pin: run_detail's timestamps carry
+  // NO zone suffix on sqlite (store.py's own _utc() docstring — "naive
+  // means UTC, badly labelled" — is applied only to token rows, never
+  // here), so `new Date(iso)` on the raw string parses it as LOCAL time
+  // per ECMA-262 and would relabel that shifted value "UTC". Forcing a
+  // non-UTC TZ here is what makes this test actually catch that: on a
+  // UTC-default CI machine the bug would pass by accident.
+  const originalTz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles"; // UTC-7 in August (PDT)
+  try {
+    assert.equal(utcClock("2026-08-06T14:22:48"), "14:22:48 UTC");
+    assert.equal(utcTimestamp("2026-08-06T14:22:48"), "2026-08-06 14:22:48 UTC");
+  } finally {
+    process.env.TZ = originalTz;
+  }
+});
+
 test("utcTimestamp renders the full date and time, UTC-normalized", () => {
   assert.equal(utcTimestamp("2026-08-03T14:22:48Z"), "2026-08-03 14:22:48 UTC");
   assert.equal(utcTimestamp("2026-08-03T09:22:48-05:00"), "2026-08-03 14:22:48 UTC");
@@ -104,6 +124,18 @@ test("utcTimestamp renders the full date and time, UTC-normalized", () => {
   // behind a dash — this is the one place a caller has no null case to
   // fall through to (scored_at is a required field on RunDetail).
   assert.equal(utcTimestamp("not a date"), "not a date");
+});
+
+test("utcDate and utcShortDate convert to UTC before slicing, so a day boundary can't be read off the source's own digits", () => {
+  // 2026-08-07T02:00:00+05:00 is 2026-08-06T21:00:00Z — a different
+  // calendar date once actually converted. Slicing characters straight out
+  // of the source string would print "2026-08-07" / "08-07", a day early.
+  assert.equal(utcDate("2026-08-07T02:00:00+05:00"), "2026-08-06");
+  assert.equal(utcShortDate("2026-08-07T02:00:00+05:00"), "08-06");
+  assert.equal(utcDate("2026-08-17T09:00:00Z"), "2026-08-17");
+  assert.equal(utcShortDate("2026-08-17T09:00:00Z"), "08-17");
+  // Zoneless input is UTC, same regression utcClock pins above.
+  assert.equal(utcDate("2026-08-06T00:30:00"), "2026-08-06");
 });
 
 test("parseTenantId rejects everything Number() would silently coerce to 0 or NaN", () => {
