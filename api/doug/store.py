@@ -1118,6 +1118,16 @@ def _verdict_bundle(conn, v) -> dict:
     }
 
 
+def _load_verdict_row(conn, verdict_id: int):
+    """The raw `verdicts` row for one id, or None. Shared by every by-id
+    lookup so the query itself lives in exactly one place — find_verdict_by_id
+    and run_detail both start here, each still checking the None case itself,
+    before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
+    return conn.execute(
+        select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
+    ).mappings().first()
+
+
 def find_verdict_by_identity(
     installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
 ) -> dict | None:
@@ -1181,9 +1191,7 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
     if engine is None:
         return None
     with engine.connect() as conn:
-        v = conn.execute(
-            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-        ).mappings().first()
+        v = _load_verdict_row(conn, verdict_id)
         if v is None:
             return None
         return _verdict_bundle(conn, v)
@@ -1201,12 +1209,8 @@ def run_detail(verdict_id: int) -> dict | None:
     engine = _get_engine()
     if engine is None:
         return None
-    from sqlalchemy import select
-
     with engine.connect() as conn:
-        v = conn.execute(
-            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-        ).mappings().first()
+        v = _load_verdict_row(conn, verdict_id)
         if v is None:
             return None
         detail = _verdict_bundle(conn, v)

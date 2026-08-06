@@ -1209,6 +1209,42 @@ def test_an_external_review_arriving_first_does_not_suppress_dougs_review(
     assert store.find_verdict_by_identity(INSTALL, REPO_ID, 7, "a" * 40) is None
 
 
+# find_verdict_by_id itself has no direct caller in this suite — it is
+# worker.py's race-loser fallback, reached only when find_verdict_by_identity
+# misses twice in the same job (pre-read, then the post-collision re-check).
+# test_a_race_loser_replays_the_peer_and_does_not_attach_local_deviations in
+# test_worker.py exercises that branch, but the identity re-check there
+# always resolves before falling through, so find_verdict_by_id's own query
+# is never actually invoked by any existing test (confirmed empirically: a
+# call counter placed inside it stayed at zero across the whole worker and
+# store suites). The two tests below pin it directly — required by the
+# _load_verdict_row extraction, which must not change what this returns.
+
+
+def test_find_verdict_by_id_returns_the_bundle_for_a_known_id(tmp_path, monkeypatch):
+    """The durable handle worker.py falls back to when the identity re-read
+    misses. Must return the same check-run bundle find_verdict_by_identity
+    would — tier/score/reasons — and, being the check-run path, none of the
+    provenance run_detail exists to add back."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    found = store.find_verdict_by_id(vid)
+    assert found["tier"] == "reader"
+    assert found["score"] == VERDICT.score
+    assert found["reasons"][0]["rule"] == "reader:race-condition"
+    # the check-run bundle's deliberate omission — this is what run_detail
+    # exists to add back for the forensic page, not what this path returns
+    assert "model" not in found
+
+
+def test_find_verdict_by_id_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.find_verdict_by_id(4242) is None
+
+
 def test_an_external_review_does_not_take_a_pr_off_the_queue(tmp_path, monkeypatch):
     """latest_reviews groups by (repo, pr) and takes max(id). An external row
     is newer than Doug's, so filtering only the outer query would drop the PR
@@ -1876,6 +1912,26 @@ def test_run_detail_exposes_pr_meta_for_the_coverage_denominator(tmp_path, monke
     detail = store.run_detail(vid)
     assert detail["pr_meta"]["changed_files"] == 23
     assert detail["pr_meta"]["files_dropped"] == ["uv.lock"]
+
+
+def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(
+    tmp_path, monkeypatch
+):
+    """A run with no review_jobs row and no outcomes/outcome_jobs rows is the
+    common case (most PRs are still open, most jobs are pre-Task-6 CI rows).
+    "no job" must stay None and "no outcomes yet" must stay [] — 'empty is
+    not zero' is a standing constraint, and a job silently defaulting to {}
+    or an outcome list silently gaining a phantom row would both pass any
+    assertion that only checks truthiness."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["job"] is None
+    assert detail["outcomes"] == []
+    assert detail["outcome_jobs"] == []
 
 
 def test_run_detail_carries_scored_at_and_app_identity(tmp_path, monkeypatch):
