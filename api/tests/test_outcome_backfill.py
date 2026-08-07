@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select, update
@@ -533,3 +534,111 @@ def test_postgresql_insert_select_uses_exact_interval_and_conflict_target():
         "ON CONFLICT (installation_id, github_repo_id, pr_number, "
         "merge_commit_sha, window_days) DO NOTHING"
     ) in sql
+
+
+@pytest.mark.parametrize(
+    ("dialect_name", "expected_events"),
+    [
+        (
+            "postgresql",
+            ["begin", "lock", "inspect", "insert", "inspect", "manifest", "commit"],
+        ),
+        (
+            "sqlite",
+            ["begin", "inspect", "insert", "inspect", "manifest", "commit"],
+        ),
+    ],
+)
+def test_apply_fences_postgresql_population_in_its_write_transaction(
+    tmp_path, monkeypatch, dialect_name, expected_events
+):
+    """The structural audit is stale if another writer can change outcome_jobs
+    after inspection; SQLite must retain its native transaction path.
+    """
+    events = []
+    insert_statement = object()
+    clean = outcome_backfill.BackfillReport(0, 0, 0, 0, 0, (), ())
+
+    class RecordingResult:
+        def mappings(self):
+            return self
+
+        def __iter__(self):
+            return iter(())
+
+    class RecordingTransaction:
+        def __init__(self):
+            self.is_active = True
+
+        def commit(self):
+            events.append(("commit", connection, self, self.is_active))
+            self.is_active = False
+
+        def rollback(self):
+            events.append(("rollback", connection, self, self.is_active))
+            self.is_active = False
+
+    class RecordingConnection:
+        dialect = SimpleNamespace(name=dialect_name)
+
+        def __init__(self):
+            self.transaction = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def begin(self):
+            self.transaction = RecordingTransaction()
+            events.append(("begin", self, self.transaction, self.transaction.is_active))
+            return self.transaction
+
+        def execute(self, statement):
+            name = "insert" if statement is insert_statement else "lock"
+            events.append(
+                (name, self, self.transaction, self.transaction.is_active, str(statement))
+            )
+            return RecordingResult()
+
+    class RecordingEngine:
+        def connect(self):
+            return connection
+
+    connection = RecordingConnection()
+
+    def record_inspect(conn, *, now):
+        events.append(("inspect", conn, conn.transaction, conn.transaction.is_active))
+        return clean
+
+    def record_manifest(path, created_at, rows):
+        events.append(
+            (
+                "manifest",
+                connection,
+                connection.transaction,
+                connection.transaction.is_active,
+            )
+        )
+
+    monkeypatch.setattr(outcome_backfill, "inspect", record_inspect)
+    monkeypatch.setattr(
+        outcome_backfill, "_insert_statement", lambda actual_dialect: insert_statement
+    )
+    monkeypatch.setattr(outcome_backfill, "_write_manifest_new", record_manifest)
+
+    outcome_backfill.apply(
+        RecordingEngine(),
+        expected_missing=0,
+        manifest_path=tmp_path / f"{dialect_name}-lock.json",
+        now=NOW,
+    )
+
+    assert [event[0] for event in events] == expected_events
+    transaction = events[0][2]
+    assert all(event[1] is connection for event in events)
+    assert all(event[2] is transaction for event in events)
+    assert all(event[3] is True for event in events)
+    if dialect_name == "postgresql":
+        assert events[1][4] == "LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE"

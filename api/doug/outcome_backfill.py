@@ -9,7 +9,19 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, case, delete, exists, false, func, literal, literal_column, or_, select
+from sqlalchemy import (
+    and_,
+    case,
+    delete,
+    exists,
+    false,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
@@ -343,6 +355,10 @@ def apply(
     with engine.connect() as conn:
         transaction = conn.begin()
         try:
+            if conn.dialect.name == "postgresql":
+                conn.execute(
+                    text("LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE")
+                )
             effective_now = _as_utc(now) if now is not None else _db_now(conn)
             before = inspect(conn, now=effective_now)
             _require_clean_before(before, expected_missing)
