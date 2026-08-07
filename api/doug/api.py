@@ -271,8 +271,8 @@ def _operator_only(x_doug_token: str) -> None:
     letting an unauthenticated caller distinguish the two. That is accepted,
     not a gap: routes are public by ADR-0008, this gate still fails closed
     on every credential it does see, no response body it produces ever
-    contains data, and the same 422-vs-404 split pre-exists identically on
-    `/v1/comparisons` and `/v1/patterns`.
+    contains data,     and the same 422-vs-404 split pre-exists identically on
+    `/v1/patterns` and `/v1/runs`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
