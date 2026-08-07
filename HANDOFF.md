@@ -1,10 +1,12 @@
 # HANDOFF — doug
 
 State:    M3 ACTIVE. The last verified deployed production commit is `fa1e323`
-          (#65). Current main is `c985a1f` (#67), which retires `/compare` and
-          the dual-run comparison stack; that current-main runtime change is not
-          claimed deployed. Task 7 must re-verify the serving production revision
-          before either the current-main changes or the M3 branch is marked live.
+          (#65). The implementation-PR base snapshot verified on 2026-08-07 is
+          `99011b7`; it includes #67's `/compare` and dual-run comparison
+          retirement plus #68's console run forensics. This is a repository-base
+          snapshot, not a production deployment claim. Task 7 must re-verify the
+          serving production revision before either those base changes or the M3
+          branch is marked live.
           M3 item 1 (`adjudicate.py`) and the v7 draft pre-registration are merged
           (#59–#61). On implementation branch `m3-60-day-backfill`, the permanent
           atomic 14/60 merge write, guarded one-time catch-up CLI, deploy-time
