@@ -1,66 +1,50 @@
 # HANDOFF — doug
 
-State:    M3 ACTIVE. HEAD main is `4e70d90` (#63). M3 item 1
+State:    M3 ACTIVE. HEAD main is `fa1e323` (#65). M3 item 1
           (`adjudicate.py`) and the v7 pre-registration are merged (#59–#61).
-          Branch `m3-adjudicator-job` builds M3 item 2 and migration 007:
-          a daily Cloud Run Job (2Gi), repository-batched due-row claims,
-          crash leases + generation fencing, ten daily attempts, append-only
-          outcomes keyed by merge SHA, the missing persisted read-coverage
-          fields, and a separate OAuth Scheduler identity. Focused code and
-          deployment tests are green; production resources are NOT created.
+          M3 item 2 is LIVE: #64 shipped migration 007, the repository-batched
+          `doug-adjudicator` Cloud Run Job (2Gi), crash leases + generation
+          fencing, ten daily attempts, append-only merge-SHA outcomes, persisted
+          read coverage, and the separate Scheduler identity; #65 fixed the
+          first deploy's `gcloud --args` parse failure and IAM propagation wait.
+          `doug-adjudicator-daily` is enabled for 03:00 UTC with zero Scheduler
+          retry attempts. The Job uses the exact API image and the intended
+          runtime SA, one task, zero platform retries and a 3600-second timeout.
+          First execution `doug-adjudicator-nvwqn` completed successfully on
+          2026-08-07 with `repositories=0`, `done=0`, `retried=0`,
+          `failed_repositories=0`, and `reclaimed=0`. The session-independent
+          future-row audit and the done-job identity audit both returned zero
+          rows.
           The console Phase 1 and web service-account cutover are live. The
           grouping/facets/sorting slice (#63) is merged but still needs the
           manual console redeploy that service deliberately requires.
-Next:     1) BEFORE MERGE, from this branch, run the narrow privileged setup:
+Next:     1) Write the 60-day backfill runbook and lock the pre-registration
+          before the first 14-day publication. Then finish M3 in separate PRs:
+          receipts; check-run counters/meter; public Doug-on-Doug scoreboard.
+          2) Watch the first scheduled 03:00 UTC execution and the first real
+          due-row execution. The first known due clock is currently Aug 16;
+          that run, not the no-op smoke, exercises GitHub clone + adjudication.
+          3) Independently, redeploy #63 with
+          `PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh console`.
 
-             cd api
-             PROJECT=doug-prod0 REGION=us-central1 \
-               bash deploy/gcp.sh adjudicator-setup
+          Audit lesson: Cloud SQL Studio does not guarantee that consecutive
+          submissions reuse one PostgreSQL backend, so TEMP tables can vanish
+          between the pre-run snapshot and post-run query. For cross-command
+          audits, use one persistent `psql` session or export a durable
+          pre-state. The first-ever no-op was recoverably checked without the
+          lost TEMP table: its execution summary reported zero repositories
+          and zero reclaimed claims, and this session-independent query also
+          returned zero rows:
 
-          It creates `doug-adjudicator-sa` and `doug-scheduler-sa`, grants
-          only Cloud SQL + database/App-key secret access to the runtime SA,
-          and enables Cloud Scheduler. It does NOT touch SQL users or rotate
-          `doug-database-url`. Do not run the broad `gcp.sh setup`: that
-          command rotates the production SQL password unconditionally.
-          CI cannot safely create this IAM.
-          2) Merge the PR. The ordinary API deploy promotes `doug-api`, then
-          deploys `doug-adjudicator` from that exact immutable image.
-          3) AFTER the Job exists, install the daily 03:00 UTC trigger:
+             SELECT id, status, attempts, claim_generation, due_at,
+                    started_at, finished_at, error
+             FROM outcome_jobs
+             WHERE due_at > TIMESTAMPTZ '2026-08-07 13:49:46.420106+00'
+               AND (status <> 'pending' OR attempts <> 0
+                    OR claim_generation <> 0 OR started_at IS NOT NULL
+                    OR finished_at IS NOT NULL OR error IS NOT NULL);
 
-             PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh schedule
-
-          4) Run it once manually and inspect the execution. Before the first
-          due clock (currently Aug 16), the correct result is a no-op summary:
-
-             # In a psql session, preserve the pre-run state and DB clock.
-             CREATE TEMP TABLE m3_audit_clock AS
-               SELECT clock_timestamp() AS started_at;
-             CREATE TEMP TABLE m3_before AS
-               SELECT id, status, attempts, claim_generation, due_at,
-                      started_at, finished_at, error
-               FROM outcome_jobs;
-
-             # From another terminal while that psql session stays open:
-             gcloud run jobs execute doug-adjudicator --project doug-prod0 \
-               --region us-central1 --wait
-
-          Back in that same psql session, both audits below must return zero
-          rows. The first proves the execution changed no row whose due clock
-          was still in the future when the audit began:
-
-             SELECT j.id, b.due_at, c.started_at AS execution_started_at
-             FROM m3_before b
-             JOIN outcome_jobs j USING (id)
-             CROSS JOIN m3_audit_clock c
-             WHERE b.due_at > c.started_at
-               AND ROW(j.status, j.attempts, j.claim_generation, j.started_at,
-                       j.finished_at, j.error)
-                   IS DISTINCT FROM
-                   ROW(b.status, b.attempts, b.claim_generation, b.started_at,
-                       b.finished_at, b.error);
-
-          The second proves every terminal denominator row has exactly one
-          outcome under the complete merge identity:
+          The complete-identity audit also returned zero rows:
 
              SELECT j.id, count(o.id) AS matching_outcomes
              FROM outcome_jobs j
@@ -74,27 +58,18 @@ Next:     1) BEFORE MERGE, from this branch, run the narrow privileged setup:
              GROUP BY j.id
              HAVING count(o.id) <> 1;
 
-          Do not mark the roadmap item `[x]` until the Job, trigger, IAM and a
-          manual execution plus both zero-row audits are verified in production.
-          5) Finish M3 in separate PRs: 60-day backfill runbook + lock the
-          pre-registration; receipts; check-run counters/meter; public
-          Doug-on-Doug scoreboard. Independently, redeploy #63 with
-          `PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh console`.
 Rulings:  All five settled in #61. Tenant repos are in by default by name
           with prospective opt-out; the lower window bound is
           `TOLERANCE_DAYS = 1`; decidability is two-sided; quarterly cadence
           is a floor; adjudication `max_attempts = 10`. The Job cadence is
           daily, so the ceiling buys ten calendar-day opportunities. Platform
           retries are zero: one scheduled trigger spends at most one attempt.
-Blockers: Production IAM/setup is operator-only and must happen before merge,
-          because the main deploy now refreshes the Job after every API
-          promotion. The Scheduler resource itself is created only after that
-          first Job deploy. No production mutation was performed on this
-          branch.
+Blockers: Job/Scheduler has none. Publication remains blocked on the 60-day
+          backfill runbook and locking the DRAFT v7 pre-registration.
 Pointers: ROADMAP M3 · REVIEWING.md · `docs/design/outcome-loop/
           publication-preregistration.md` (DRAFT v7, all rulings landed, not
-          locked until migration 007 is deployed and the 60-day backfill
-          runbook exists) · `docs/superpowers/plans/
+          locked until the 60-day backfill runbook exists) ·
+          `docs/superpowers/plans/
           2026-08-06-m3-adjudicator-job-scheduler.md`.
 
 ---

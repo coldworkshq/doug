@@ -257,7 +257,7 @@ path, no cross-tenant read, no silent partial reads.
 
 - [x] `doug/adjudicate.py` as a pure function over (job rows, revert map) + fixtures that run
   `git_labels` cases through the **live** path (live label ≡ backtest label, pinned by test).
-  The pure core only — the Cloud Run Job that drains it is the item below, still open.
+  The pure core landed first; the Cloud Run Job that drains it is now live in the item below.
   Building it found a defect three review rounds of the pre-registration had missed: the
   window predicate had no **lower** bound, so a revert dated *before* a PR merged counted as
   a miss against it. `scripts/label_precision_delta.py` had already measured that at 6/67 on
@@ -265,12 +265,13 @@ path, no cross-tenant read, no silent partial reads.
   the adjudicator would not — so "live labels and backtest labels are the same event"
   (`design-lock.md:29`), the whole reason `git_labels.py` is the only detector, was false.
   `TOLERANCE_DAYS` now lives once in `git_labels.py` and both sides import it.
-- [~] Cloud Run Job (2Gi) + Cloud Scheduler; repository-batched claims use
+- [x] Cloud Run Job (2Gi) + Cloud Scheduler; repository-batched claims use
   `due_at <= now()` + `FOR UPDATE SKIP LOCKED`, a two-hour crash lease and a
   generation fence. Daily 03:00 UTC, one task, zero platform retries, so the
-  pre-registered ten attempts buy ten scheduled days. Built on
-  `m3-adjudicator-job`; still requires operator setup, merge deploy, schedule
-  creation and one production execution before `[x]`.
+  pre-registered ten attempts buy ten scheduled days. Shipped in #64, deploy
+  boundary corrected in #65, and verified in production on 2026-08-07:
+  `doug-adjudicator-nvwqn` succeeded with an all-zero no-op summary before the
+  first due clock; both session-independent SQL audits returned zero rows.
 - [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
   Pure fixtures and the scheduled worker path are built; production execution
   remains the live gate.
