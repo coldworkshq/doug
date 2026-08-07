@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 
-import { RunForensics, RunForensicsUnavailable } from "@/components/run-forensics";
 import { RunsTable } from "@/components/runs-table";
+import { SelectedRunPanel } from "@/components/selected-run-panel";
 import { Shell } from "@/components/shell";
 import { getRunDetail, getRuns, isError } from "@/lib/api";
 import { parseTenantId } from "@/lib/runs";
@@ -68,8 +68,9 @@ export default async function RunsPage({
   // Detail is independent of the list fetch: a deep-linked ?run= must still
   // resolve when the table path fails (bad tenant filter, unreachable list
   // endpoint). Coupling them hid forensics under "nothing is known".
+  // Subsequent clicks load via server action + pushState (no getRuns refetch).
   const selectedId = parseRunId(params.run);
-  const detail = selectedId === null ? null : await getRunDetail(selectedId);
+  const initialDetail = selectedId === null ? null : await getRunDetail(selectedId);
 
   return (
     <Shell scope={scope} active="runs">
@@ -102,24 +103,15 @@ export default async function RunsPage({
             limit={result.limit}
             tenant={scope.tenant}
             scopeLabel={scopeLabel}
-            selectedId={selectedId}
           />
         </Suspense>
       )}
-      {selectedId !== null && detail !== null && (
-        isError(detail) ? (
-          <div className="mt-6">
-            <RunForensicsUnavailable error={detail.error} />
-          </div>
-        ) : (
-          <div className="mt-6 border-t border-border">
-            <RunForensics
-              run={detail}
-              clearHref={clearRunHref(scope.tenant, scope.repo)}
-            />
-          </div>
-        )
-      )}
+      <Suspense fallback={null}>
+        <SelectedRunPanel
+          initialDetail={initialDetail}
+          clearHref={clearRunHref(scope.tenant, scope.repo)}
+        />
+      </Suspense>
     </Shell>
   );
 }

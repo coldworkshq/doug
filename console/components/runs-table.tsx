@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { BandChip } from "@/components/band-chip";
@@ -19,7 +19,12 @@ import {
 } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import { jobDuration, relativeAge, utcTimestamp } from "@/lib/runs";
-import { applyRunParam } from "@/lib/selection";
+import {
+  applyRunParam,
+  currentSearchParams,
+  parseRunId,
+  runHref,
+} from "@/lib/selection";
 import {
   type SortKey,
   type SortState,
@@ -69,17 +74,14 @@ export function RunsTable({
   limit,
   tenant,
   scopeLabel,
-  selectedId,
 }: {
   runs: RunSummary[];
   atCap: boolean;
   limit: number;
   tenant: string | null;
   scopeLabel: string;
-  selectedId: number | null;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const searchParams = useSearchParams();
   // Sort travels in the URL for the same reason the facets do: a copied
   // link should restore the table the sender was looking at. Expansion
@@ -87,6 +89,10 @@ export function RunsTable({
   // not a view worth sharing, and it changes far too often to spend a
   // history entry on.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Selection is URL-borne like facets — read it here so pushState updates
+  // highlight without a server round trip (props from the RSC stay frozen).
+  const selectedId = parseRunId(searchParams.get("run"));
 
   // The URL is the filter state, same as `repo`/`tenant` — an operator's
   // filtered view survives being copied to someone else. Writing it with
@@ -123,10 +129,14 @@ export function RunsTable({
   /** One writer for every URL-borne piece of view state. Both callers go
    *  through it so a sort can never drop the filters, or a filter the sort.
    *  `repo`/`tenant` survive untouched: they are the server's scope, and
-   *  rewriting them here would change what is fetched. */
+   *  rewriting them here would change what is fetched.
+   *
+   *  Base the write on window.location.search, not the useSearchParams
+   *  snapshot: facet and run both use pushState, and a stale snapshot can
+   *  drop the other writer's latest value. */
   function writeView(nextSelection: FacetSelection, nextSortState: SortState) {
-    const params = new URLSearchParams(searchParams);
-    // `run` survives facet/sort writes because we copy searchParams wholesale — intentional.
+    const params = currentSearchParams();
+    // `run` survives facet/sort writes because we copy the live query — intentional.
 
     const serialized = serializeFacets(nextSelection);
     // Iterate FACET_KEYS rather than a literal list — a second copy of the
@@ -147,12 +157,12 @@ export function RunsTable({
   }
 
   function selectRun(id: number | null) {
-    const params = new URLSearchParams(searchParams);
+    const params = currentSearchParams();
     applyRunParam(params, id);
     const query = params.toString();
-    // replace (not pushState): server must re-render to fetch getRunDetail.
-    // Facets keep pushState so pill clicks do not refetch the 500-run list.
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    // Same pushState path as facets: forensics loads via server action, so
+    // we must not router.replace (that re-ran getRuns for every click).
+    window.history.pushState(null, "", query ? `${pathname}?${query}` : pathname);
   }
 
   function toggleFacet(key: FacetKey, value: string) {
@@ -210,7 +220,9 @@ export function RunsTable({
         </p>
       ) : (
         <div className="max-h-[40vh] overflow-y-auto rounded-[6px] border border-border">
-          <table className="w-full table-fixed border-collapse">
+          {/* border-separate: sticky thead + border-collapse drops header
+              borders in Chromium. Spacing 0 keeps the dense look. */}
+          <table className="w-full table-fixed border-separate border-spacing-0">
             <thead className="sticky top-0 z-10 bg-background">
               <tr>
               {COLUMNS.map((column) => (
@@ -359,6 +371,7 @@ function RunRows({
     const selected = selectedId === run.verdict_id;
     return {
       "aria-selected": selected,
+      tabIndex: 0,
       className:
         (child ? "border-b border-border/40 " : "border-b border-border/50 ") +
         "cursor-pointer hover:bg-muted/40 " +
@@ -369,6 +382,12 @@ function RunRows({
             : ""),
       onClick: (e: React.MouseEvent) => {
         if ((e.target as HTMLElement).closest("a, button")) return;
+        onSelectRun(run.verdict_id);
+      },
+      onKeyDown: (e: React.KeyboardEvent) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        e.preventDefault();
         onSelectRun(run.verdict_id);
       },
     };
@@ -461,13 +480,13 @@ function RunCells({
           // this run's own forensics.
           <div className="flex min-w-0 items-center gap-2 pl-3">
             <span className="min-w-[38px] flex-none" />
-            <button
-              type="button"
-              onClick={() => onSelectRun(run.verdict_id)}
-              className="mono truncate text-left text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+            <SelectRunLink
+              id={run.verdict_id}
+              onSelectRun={onSelectRun}
+              className="mono truncate text-[11px] text-muted-foreground hover:text-foreground hover:underline"
             >
               {utcTimestamp(run.scored_at)}
-            </button>
+            </SelectRunLink>
           </div>
         ) : (
         <div className="flex min-w-0 items-center gap-2">
@@ -507,13 +526,13 @@ function RunCells({
               <b className="font-medium text-foreground">#{run.pr_number}</b>
             )}
           </span>
-          <button
-            type="button"
-            onClick={() => onSelectRun(run.verdict_id)}
-            className="min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline"
+          <SelectRunLink
+            id={run.verdict_id}
+            onSelectRun={onSelectRun}
+            className="min-w-0 flex-1 truncate text-[12.5px] hover:underline"
           >
             {run.title}
-          </button>
+          </SelectRunLink>
         </div>
         )}
       </td>
@@ -538,5 +557,37 @@ function RunCells({
         {relativeAge(run.scored_at)}
       </td>
     </>
+  );
+}
+
+/** Real href for middle-click / copy-link; plain left-click stays soft
+ *  (pushState) so selection does not refetch the 500-run list. */
+function SelectRunLink({
+  id,
+  onSelectRun,
+  className,
+  children,
+}: {
+  id: number;
+  onSelectRun: (id: number | null) => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={runHref(id)}
+      className={className}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+          e.stopPropagation();
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        onSelectRun(id);
+      }}
+    >
+      {children}
+    </a>
   );
 }
