@@ -206,6 +206,29 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE installations DROP COLUMN token_hash",
         ),
     ),
+    (
+        7,
+        (
+            # M3 adjudication identity. Existing outcomes stay NULL and are
+            # deliberately outside the partial unique index; only rows written
+            # by the live adjudicator carry a job discriminator.
+            "ALTER TABLE outcomes ADD COLUMN merge_commit_sha VARCHAR(64)",
+            # Durable claim lease and fence for the Cloud Run Job. A crashed
+            # execution is reclaimed on the next daily run without letting an
+            # old holder complete over a newer claim.
+            "ALTER TABLE outcome_jobs ADD COLUMN started_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE outcome_jobs ADD COLUMN finished_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE outcome_jobs ADD COLUMN error TEXT",
+            "ALTER TABLE outcome_jobs ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
+            # Coverage already carries these values in memory. Persist them so
+            # receipts can prove files were dropped before prompt assembly.
+            "ALTER TABLE reads ADD COLUMN changed_files INTEGER",
+            "ALTER TABLE reads ADD COLUMN files_dropped JSON",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_outcomes_job_identity "
+            "ON outcomes (installation_id, github_repo_id, pr_number, "
+            "merge_commit_sha, window_days) WHERE merge_commit_sha IS NOT NULL",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

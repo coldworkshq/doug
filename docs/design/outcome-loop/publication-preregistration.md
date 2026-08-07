@@ -1,7 +1,7 @@
 # Publication pre-registration — the outcome loop
 
 **Status:** DRAFT v7 — **ALL FIVE RULINGS LANDED** 2026-08-07. Still NOT LOCKED:
-locking additionally requires the M3 item 1 fixture gate green (§10), migration 006
+locking additionally requires the M3 item 1 fixture gate green (§10), migration 007
 (§11), and the 60-day backfill runbook. The hash must not enter a receipt before
 then. Until locked, the hash must not enter any receipt: a hash over a mutable
 document is worse than no hash, because it *looks* like a commitment.
@@ -190,7 +190,7 @@ therefore disagree about which `outcomes` row is authoritative for a job.
 `kind ∈ {revert, clean, censored}`. `hotfix` is never written by the adjudicator
 (§10).
 
-> **`outcomes` needs a job discriminator, and migration 006 must add it.** §2.2
+> **`outcomes` needs a job discriminator, and migration 007 must add it.** §2.2
 > defends against two `outcome_jobs` rows for one PR at one window — `uq_outcome_job`
 > includes `merge_commit_sha` (`store.py:293-300`), so that is schema-permitted. But
 > `outcomes` carries **no merge sha and no job id**: its columns are `id, repo,
@@ -200,7 +200,7 @@ therefore disagree about which `outcomes` row is authoritative for a job.
 > adjudicator obeying the one-row rule perfectly, job A → `revert`, job B → `clean`.
 > Then `N_done = 1` while `misses = 1` and `clean = 1`, the identity below is false,
 > and one PR publishes as both a miss and a survival.
-> **Migration 006 adds `merge_commit_sha` to `outcomes`** (§11), and it joins on it.
+> **Migration 007 adds `merge_commit_sha` to `outcomes`** (§11), and it joins on it.
 
 ```sql
 -- misses: the numerator. The one-row rule is ENFORCED here, not assumed.
@@ -408,7 +408,7 @@ publishes with the rate.
 **Partial reads are INCLUDED in the denominator.** Excluding them would be the escape
 hatch: the unread part of a diff is exactly where an unfound defect lives.
 
-**`partial_read_share` is NOT PUBLISHABLE until migration 006 lands**, and publishes
+**`partial_read_share` is NOT PUBLISHABLE until migration 007 lands**, and publishes
 as "not available" until then — the same treatment §6.3 gives the 60-day row.
 
 The reason, found in review: `Coverage.complete` is a **computed property**
@@ -422,7 +422,7 @@ that the dropped-file case is the one that "should have been reviewable and was 
 An understated partiality share, biased toward the reads most likely to hide a
 defect, is the flattering direction.
 
-**Required: migration 006 adds `files_dropped` and `changed_files` to `reads`** (§11).
+**Required: migration 007 adds `files_dropped` and `changed_files` to `reads`** (§11).
 `reads` is an existing table, so this is a migration, not a `create_all` addition —
 the reason that table exists at all (`store.py:132-140`).
 
@@ -742,9 +742,10 @@ repairing this PR" from "hotfix that merely followed it."
 
 ### The enforcement this document depends on
 
-`adjudicate.py` **does not exist** and ROADMAP M3 item 1 is unchecked, so the
-live-≡-backtest fixture test **does not exist**. v1 asserted it in the present tense,
-which was false.
+`adjudicate.py` and ROADMAP M3 item 1 shipped in #59. Its committed fixtures make
+the live-≡-backtest gate executable, including the differing-UTC-offset case and
+the detector cases named below. The scheduled database/GitHub path is built on
+`m3-adjudicator-job`; production execution remains an operational gate.
 
 **This document does not take effect until that test is green.** Nothing publishes
 under it before then. Two things are required by name, because a test that cannot run
@@ -781,10 +782,10 @@ decided, with each ruling's reasoning in its own section.
    into `git_labels.py` so live and backtest read one constant. **The only ruling
    that changes a published number**, and it lowers it.
 
-**What still blocks the lock, none of it a ruling:** the §10 fixture gate green
-(shipped in M3 item 1, #59), migration 006's three columns (§11), and the 60-day
-backfill runbook. A carried product requirement, from ruling 1: the install flow must
-disclose the default-in posture unmissably.
+**What still blocks the lock, none of it a ruling:** migration 007 is built on
+`m3-adjudicator-job` but not deployed, and the 60-day backfill runbook is unwritten.
+The §10 fixture gate shipped green in M3 item 1 (#59). A carried product requirement,
+from ruling 1: the install flow must disclose the default-in posture unmissably.
 
 **Named open rather than resolved:**
 
@@ -795,12 +796,15 @@ disclose the default-in posture unmissably.
 
 8. **`outcomes.kind` gains `censored`** — a new *value* on an existing `String(20)`
    column, not a migration.
-9. **Migration 006, two tables:**
-   - `reads` gains `files_dropped` and `changed_files` (§5). Until it lands,
+9. **Migration 007, three tables, built on `m3-adjudicator-job`:**
+   - `reads` gains `files_dropped` and `changed_files` (§5). Until it deploys,
      `partial_read_share` publishes as "not available".
    - **`outcomes` gains `merge_commit_sha`** (§2.3). Without it the numerator has no
      job discriminator and the `N_done = misses + clean + censored` identity can be
      false while every stated rule is obeyed.
+   - `outcome_jobs` gains `started_at`, `finished_at`, `error` and
+     `claim_generation`, making a crashed Job reclaimable without letting a stale
+     holder publish over a newer claim.
 10. **`prereg_hash` stored per adjudicated row** in `outcomes.detail` (§12).
 
 **Required of `adjudicate.py`:** exactly one classification row per job (§2.3);

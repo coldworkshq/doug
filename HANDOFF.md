@@ -1,88 +1,101 @@
 # HANDOFF — doug
 
-State:    M3 STARTED. HEAD main is `3fec72a` (#57, doug-console Phase 1).
-          M1 CLOSED (#54). M2 closed but for two `[~]`: the bot-author half
-          and doug-web's SA ops cutover. MT PROVEN 2026-08-05 (16/16,
-          `prove-isolation.sh`, two real installations).
-          M3 item 1 (`adjudicate.py`) is BUILT and item 7 (the publication
-          pre-registration) is DRAFTED. Both are in review as TWO PRs, split
-          because the combined diff is 121k chars against a 100k DIFF_BUDGET
-          — one PR could not have been read whole, on the very PR that
-          defines what a partial read may claim.
-            · `m3-adjudicate` — api/ only, 66k. Closes M3 item 1.
-            · `m3-publication-preregistration` — docs only, 55k. M3 item 7
-              stays `[ ]`: the document is DRAFT, unlocked, unhashed, and
-              its 60-day backfill runbook is unwritten.
-          The full development history, with every review round, is on
-          `claude/doug-console-next-steps-7oomm4`.
-Next:     1) doug-console IS NOW DEPLOYED (2026-08-06, revision
-          `doug-console-00001-cz4`, on next 16.2.12). IAM-gated as designed:
-          `--no-allow-unauthenticated`, runtime SA `doug-console-sa`, and
-          exactly one invoke binding (`user:drew.jst@gmail.com`) — a raw
-          fetch of the service URL is 403 and MUST stay that way. Reach it
-          with `gcloud run services proxy doug-console --project doug-prod0
-          --region us-central1`. `gcp.sh setup` was NOT run and must not be:
-          its lines 38-47 rotate the production SQL password unconditionally.
-          Only the `console()` block was applied.
-          CONSEQUENCE FOR THE DEPENDENCY HOLD (below): its stated release
-          condition — "HELD until the console has been deployed on 16.2.12"
-          — is now MET. The next → 16.3.0 bump is unblocked whenever Andrew
-          wants it.
-          CAUTION: console changes do NOT auto-deploy. deploy.yml's
-          `changes` job greps only `^api/` and `^web/`; there is no
-          `console` branch in that filter, so a merged console PR ships
-          nothing until `gcp.sh console` is run by hand (or the filter is
-          extended).
-          2) PR #63 (console-ux) — runs grouped by PR as an accordion, facet
-          pills, column sorting, plus the `SCOREPULL REQUEST` header bug and
-          the unrendered `RunSummary.url` from #57's review. CI green on
-          f978914; needs a redeploy after merge per the caution above.
-          3) Merge the two PRs above. 4) M3 item 2, the Cloud Run Job +
-          Scheduler that drains the adjudicator. 5) Migration 006 — it now
-          carries THREE columns, not one: `reads.files_dropped`,
-          `reads.changed_files`, and `outcomes.merge_commit_sha` (without
-          the last, the numerator has no job discriminator and the
-          `N_done = misses + clean + censored` identity can be false while
-          every stated rule is obeyed). 6) Still open from before: #44's web
-          SA cutover; the bot-author ruling; log dispositions with
-          `python -m doug.findings_log append`.
-Rulings:  2026-08-07, four of five settled — see §11 of the pre-registration
-          for each with its reasoning. The window's lower bound adopted at
-          TOLERANCE_DAYS = 1 (the only one that changes a published number,
-          and it LOWERS it); two-sided decidability; quarterly cadence as a
-          FLOOR, with publishing sooner/more often free and only lengthening
-          bounded; adjudication `max_attempts = 10`, higher than the review
-          path's 3 because an adjudication retry buys a clone, not a model
-          read. STILL OPEN: tenant consent posture — whose repos appear in a
-          public table. Deliberately not inferred; no recommendation was
-          ever put on it.
-Blockers: none for code. Everything above in (1) and (4) is operator-only.
-Decisions: DEPENDENCY BUMP HELD (Andrew, 2026-08-07). GitHub reports 13
-          Dependabot alerts on main (8 high, 5 moderate). The npm half (9:
-          web 6, console 3) was triaged and NONE is reachable from a serving
-          path — `sharp`/libvips has no reachable input (`next/image` used
-          nowhere, no `remotePatterns`, and the only assets are SVGs, which
-          Next refuses to optimize by default); `postcss` runs at build over
-          CSS we authored; `js-yaml` is web-only and reaches solely via
-          `eslint` and `shadcn`, both devDependencies, so it is never in the
-          runtime image. The fix is `next 16.2.12 → 16.3.0` across web/ and
-          console/, HELD until the console has been deployed on 16.2.12 —
-          the version #57 was reviewed, built and image-tested against.
-          Bumping first would put the console's first production deploy on
-          an untested framework version and make any breakage ambiguous
-          between console bug and framework bump. NOT reachable ≠ fixed:
-          the day someone adds an `<Image>` or a remote pattern, sharp goes
-          live silently. The Python half (~4 alerts) is UNAUDITED — no
-          pip-audit in the cloud session, and matching uv.lock against
-          advisories by hand would be guesswork. Needs the real Dependabot
-          list from the security tab.
-          Reader improved via settle/findings-log, not frozen prompt
-          (ADR-0002).
+State:    M3 ACTIVE. HEAD main is `4e70d90` (#63). M3 item 1
+          (`adjudicate.py`) and the v7 pre-registration are merged (#59–#61).
+          Branch `m3-adjudicator-job` builds M3 item 2 and migration 007:
+          a daily Cloud Run Job (2Gi), repository-batched due-row claims,
+          crash leases + generation fencing, ten daily attempts, append-only
+          outcomes keyed by merge SHA, the missing persisted read-coverage
+          fields, and a separate OAuth Scheduler identity. Focused code and
+          deployment tests are green; production resources are NOT created.
+          The console Phase 1 and web service-account cutover are live. The
+          grouping/facets/sorting slice (#63) is merged but still needs the
+          manual console redeploy that service deliberately requires.
+Next:     1) BEFORE MERGE, from this branch, run the narrow privileged setup:
+
+             cd api
+             PROJECT=doug-prod0 REGION=us-central1 \
+               bash deploy/gcp.sh adjudicator-setup
+
+          It creates `doug-adjudicator-sa` and `doug-scheduler-sa`, grants
+          only Cloud SQL + database/App-key secret access to the runtime SA,
+          and enables Cloud Scheduler. It does NOT touch SQL users or rotate
+          `doug-database-url`. Do not run the broad `gcp.sh setup`: that
+          command rotates the production SQL password unconditionally.
+          CI cannot safely create this IAM.
+          2) Merge the PR. The ordinary API deploy promotes `doug-api`, then
+          deploys `doug-adjudicator` from that exact immutable image.
+          3) AFTER the Job exists, install the daily 03:00 UTC trigger:
+
+             PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh schedule
+
+          4) Run it once manually and inspect the execution. Before the first
+          due clock (currently Aug 16), the correct result is a no-op summary:
+
+             # In a psql session, preserve the pre-run state and DB clock.
+             CREATE TEMP TABLE m3_audit_clock AS
+               SELECT clock_timestamp() AS started_at;
+             CREATE TEMP TABLE m3_before AS
+               SELECT id, status, attempts, claim_generation, due_at,
+                      started_at, finished_at, error
+               FROM outcome_jobs;
+
+             # From another terminal while that psql session stays open:
+             gcloud run jobs execute doug-adjudicator --project doug-prod0 \
+               --region us-central1 --wait
+
+          Back in that same psql session, both audits below must return zero
+          rows. The first proves the execution changed no row whose due clock
+          was still in the future when the audit began:
+
+             SELECT j.id, b.due_at, c.started_at AS execution_started_at
+             FROM m3_before b
+             JOIN outcome_jobs j USING (id)
+             CROSS JOIN m3_audit_clock c
+             WHERE b.due_at > c.started_at
+               AND ROW(j.status, j.attempts, j.claim_generation, j.started_at,
+                       j.finished_at, j.error)
+                   IS DISTINCT FROM
+                   ROW(b.status, b.attempts, b.claim_generation, b.started_at,
+                       b.finished_at, b.error);
+
+          The second proves every terminal denominator row has exactly one
+          outcome under the complete merge identity:
+
+             SELECT j.id, count(o.id) AS matching_outcomes
+             FROM outcome_jobs j
+             LEFT JOIN outcomes o
+               ON o.installation_id = j.installation_id
+              AND o.github_repo_id = j.github_repo_id
+              AND o.pr_number = j.pr_number
+              AND o.merge_commit_sha = j.merge_commit_sha
+              AND o.window_days = j.window_days
+             WHERE j.status = 'done'
+             GROUP BY j.id
+             HAVING count(o.id) <> 1;
+
+          Do not mark the roadmap item `[x]` until the Job, trigger, IAM and a
+          manual execution plus both zero-row audits are verified in production.
+          5) Finish M3 in separate PRs: 60-day backfill runbook + lock the
+          pre-registration; receipts; check-run counters/meter; public
+          Doug-on-Doug scoreboard. Independently, redeploy #63 with
+          `PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh console`.
+Rulings:  All five settled in #61. Tenant repos are in by default by name
+          with prospective opt-out; the lower window bound is
+          `TOLERANCE_DAYS = 1`; decidability is two-sided; quarterly cadence
+          is a floor; adjudication `max_attempts = 10`. The Job cadence is
+          daily, so the ceiling buys ten calendar-day opportunities. Platform
+          retries are zero: one scheduled trigger spends at most one attempt.
+Blockers: Production IAM/setup is operator-only and must happen before merge,
+          because the main deploy now refreshes the Job after every API
+          promotion. The Scheduler resource itself is created only after that
+          first Job deploy. No production mutation was performed on this
+          branch.
 Pointers: ROADMAP M3 · REVIEWING.md · `docs/design/outcome-loop/
-          publication-preregistration.md` (DRAFT v2, not locked — its hash
-          must not enter a receipt until the ⚠ rulings land) · #45
-          follow-ups (typing.TYPE_CHECKING / function-local import
-          over-drop) unfixed if we care.
+          publication-preregistration.md` (DRAFT v7, all rulings landed, not
+          locked until migration 007 is deployed and the 60-day backfill
+          runbook exists) · `docs/superpowers/plans/
+          2026-08-06-m3-adjudicator-job-scheduler.md`.
 
 ---
 

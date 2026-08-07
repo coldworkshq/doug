@@ -123,6 +123,9 @@ outcomes = Table(
     Column("github_repo_id", BigInteger),
     Column("installation_id", BigInteger),
     Column("window_days", Integer),
+    # Migration 007. NULL on historical rows; new adjudicator rows always
+    # carry the merge commit so one job identity cannot cast two votes.
+    Column("merge_commit_sha", String(64)),
     # The adjudicator's supporting detail, JSON-encoded. TEXT rather than
     # the JSON type used elsewhere in this file, for sqlite/postgres parity
     # per house style on this column specifically.
@@ -148,6 +151,10 @@ reads = Table(
     Column("files_sent", Integer, nullable=False),
     Column("files_unseen", JSON, nullable=False),
     Column("file_cut", Text),
+    # Migration 007. Coverage already computes both; persisting them is what
+    # lets a receipt distinguish prompt truncation from files GitHub omitted.
+    Column("changed_files", Integer),
+    Column("files_dropped", JSON),
 )
 
 # Intent-tier output, kept in its own table on purpose (ADR-0007). A
@@ -289,6 +296,12 @@ outcome_jobs = Table(
     # pending | running | done | failed
     Column("status", String(12), nullable=False, server_default="pending"),
     Column("attempts", Integer, nullable=False, server_default="0"),
+    # Migration 007. The outcome drain is a separate Cloud Run Job, but its
+    # crash/reclaim fence is the same proven contract as review_jobs.
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("error", Text),
+    Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint(
         "installation_id",
@@ -553,6 +566,8 @@ def save_review(
                         "files_sent": coverage.files_sent,
                         "files_unseen": coverage.files_unseen,
                         "file_cut": coverage.file_cut,
+                        "changed_files": coverage.changed_files,
+                        "files_dropped": coverage.files_dropped,
                     },
                 )
         _mark(True)
@@ -901,6 +916,8 @@ def save_read(verdict_id: int | None, cov: Coverage) -> int:
                     "files_sent": cov.files_sent,
                     "files_unseen": cov.files_unseen,
                     "file_cut": cov.file_cut,
+                    "changed_files": cov.changed_files,
+                    "files_dropped": cov.files_dropped,
                 }
             ],
         )

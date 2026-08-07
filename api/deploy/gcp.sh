@@ -5,7 +5,10 @@
 # project with billing. Secrets go to Secret Manager, never into env specs.
 #
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets, IAM
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator-setup # M3 IAM only
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator # deploy M3 Job
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh schedule # create/update daily trigger
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh web     # build + deploy the site
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh console # build + deploy the operator console
 #
@@ -23,6 +26,8 @@ INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
 CONSOLE_SERVICE=doug-console
+ADJUDICATOR_JOB=doug-adjudicator
+SCHEDULER_JOB=doug-adjudicator-daily
 CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
@@ -35,7 +40,8 @@ setup() {
   # does not exist and setup used to silently bind secrets to nobody.
   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
     secretmanager.googleapis.com cloudbuild.googleapis.com \
-    artifactregistry.googleapis.com compute.googleapis.com --project "$PROJECT"
+    artifactregistry.googleapis.com compute.googleapis.com \
+    cloudscheduler.googleapis.com --project "$PROJECT"
 
   if ! gcloud sql instances describe "$INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
     # Smallest sensible tier (~$10/mo). The ledger outlives any one service.
@@ -175,6 +181,11 @@ setup() {
   else
     echo "WARN: secret doug-api-token does not exist yet — create it and re-run setup." >&2
   fi
+
+  # Keep the broad bootstrap a superset, but production follow-ups must call
+  # adjudicator-setup directly: setup() rotates the SQL password above.
+  adjudicator_setup
+
   # Grant yourself the ability to invoke the gated console:
   #   gcloud run services add-iam-policy-binding doug-console --project "$PROJECT" \
   #     --region "$REGION" --member="user:YOUR@EMAIL" --role=roles/run.invoker
@@ -182,6 +193,53 @@ setup() {
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
   echo "setup done (check SQL instance state before first deploy)"
+}
+
+adjudicator_setup() {
+  # Narrow M3 bootstrap. Unlike setup(), this function never creates a SQL
+  # database/user, changes a password, or publishes a database secret version.
+  # It owns only API enablement and the two identities the Job boundary needs.
+  gcloud services enable run.googleapis.com sqladmin.googleapis.com \
+    secretmanager.googleapis.com iam.googleapis.com \
+    cloudscheduler.googleapis.com --project "$PROJECT"
+
+  # The adjudicator runs the same image as doug-api but under a narrower
+  # identity: database + GitHub App key, no Anthropic key and no operator
+  # token. The scheduler gets a separate identity whose only runtime power is
+  # invoking this one Job; schedule() installs that resource-level grant after
+  # the Job exists.
+  gcloud iam service-accounts create doug-adjudicator-sa \
+    --display-name "Doug adjudicator runtime" --project "$PROJECT" 2>/dev/null \
+    || echo "doug-adjudicator-sa exists; leaving it"
+  ADJUDICATOR_SA="doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com"
+  if ! gcloud iam service-accounts describe "$ADJUDICATOR_SA" \
+      --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: service account $ADJUDICATOR_SA is not visible after create." >&2
+    exit 1
+  fi
+  gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:$ADJUDICATOR_SA" \
+    --role=roles/cloudsql.client >/dev/null
+  for s in doug-database-url doug-github-app-key; do
+    if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
+      echo "ERROR: required secret $s does not exist." >&2
+      return 1
+    fi
+    gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
+      --member="serviceAccount:$ADJUDICATOR_SA" \
+      --role=roles/secretmanager.secretAccessor >/dev/null
+  done
+
+  gcloud iam service-accounts create doug-scheduler-sa \
+    --display-name "Doug adjudicator scheduler" --project "$PROJECT" 2>/dev/null \
+    || echo "doug-scheduler-sa exists; leaving it"
+  SCHEDULER_SA="doug-scheduler-sa@$PROJECT.iam.gserviceaccount.com"
+  if ! gcloud iam service-accounts describe "$SCHEDULER_SA" \
+      --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: service account $SCHEDULER_SA is not visible after create." >&2
+    return 1
+  fi
+  echo "adjudicator IAM ready (no SQL credentials changed)"
 }
 
 # Staged deploys: the new revision starts with a tag and zero traffic, gets
@@ -277,7 +335,60 @@ deploy() {
   else
     smoke "$(api_url)/openapi.json"
   fi
+  # The Job consumes the promoted service's exact immutable image. Building
+  # it separately would let the live review and outcome detector drift even
+  # when both source deploys began at the same commit.
+  adjudicator
   api_url
+}
+
+adjudicator() {
+  local api_image prereg_hash
+  api_image=$(gcloud run services describe "$SERVICE" \
+    --project "$PROJECT" --region "$REGION" \
+    --format='value(spec.template.spec.containers[0].image)')
+  if [ -z "$api_image" ]; then
+    echo "ERROR: $SERVICE has no deployed image; deploy the API first." >&2
+    return 1
+  fi
+  prereg_hash=$(python3 -c \
+    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('../docs/design/outcome-loop/publication-preregistration.md').read_bytes()).hexdigest())")
+
+  gcloud run jobs deploy "$ADJUDICATOR_JOB" \
+    --image "$api_image" \
+    --project "$PROJECT" --region "$REGION" \
+    --command python --args "-m,doug.outcome_worker" \
+    --service-account "doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com" \
+    --set-cloudsql-instances "$CONN" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
+    --set-env-vars "DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash" \
+    --memory 2Gi --cpu 1 --tasks 1 --max-retries 0 --task-timeout 3600s
+  echo "adjudicator deployed from $api_image"
+}
+
+schedule() {
+  local scheduler_sa uri action
+  scheduler_sa="doug-scheduler-sa@$PROJECT.iam.gserviceaccount.com"
+  uri="https://run.googleapis.com/v2/projects/$PROJECT/locations/$REGION/jobs/$ADJUDICATOR_JOB:run"
+
+  gcloud run jobs add-iam-policy-binding "$ADJUDICATOR_JOB" \
+    --project "$PROJECT" --region "$REGION" \
+    --member="serviceAccount:$scheduler_sa" --role=roles/run.invoker >/dev/null
+
+  if gcloud scheduler jobs describe "$SCHEDULER_JOB" \
+      --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    action=update
+  else
+    action=create
+  fi
+  gcloud scheduler jobs "$action" http "$SCHEDULER_JOB" \
+    --project "$PROJECT" --location "$REGION" \
+    --schedule "0 3 * * *" --time-zone "Etc/UTC" \
+    --uri "$uri" --http-method POST \
+    --oauth-service-account-email "$scheduler_sa" \
+    --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
+    --max-retry-attempts 0
+  echo "scheduled: $SCHEDULER_JOB -> $ADJUDICATOR_JOB daily at 03:00 UTC"
 }
 
 web() {
@@ -334,4 +445,13 @@ api_url() {
     --format="value(status.url)"
 }
 
-"${1:?setup|deploy|web|console}"
+case "${1:?setup|adjudicator-setup|deploy|adjudicator|schedule|web|console}" in
+  setup) setup ;;
+  adjudicator-setup) adjudicator_setup ;;
+  deploy) deploy ;;
+  adjudicator) adjudicator ;;
+  schedule) schedule ;;
+  web) web ;;
+  console) console ;;
+  *) echo "usage: $0 setup|adjudicator-setup|deploy|adjudicator|schedule|web|console" >&2; exit 2 ;;
+esac

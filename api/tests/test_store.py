@@ -2076,19 +2076,10 @@ def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
             "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
             "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
         )
-    # apply() always runs after create_all() in production (see this module's
-    # docstring), so by the time migration 6 runs an `installations` table
-    # always exists and migrations 1-5's target tables (verdicts, outcomes,
-    # review_jobs, ...) are already there too. This engine only ever built
-    # `installations` by hand, so migrations 1-5 are seeded as already-done
-    # here to isolate the one thing this test means to exercise: migration 6
-    # against a real legacy `installations` shape.
-    migrations.schema_migrations.create(engine, checkfirst=True)
-    with engine.begin() as conn:
-        conn.execute(
-            migrations.schema_migrations.insert(),
-            [{"version": v, "applied_at": datetime.now(UTC)} for v in range(1, 6)],
-        )
+    # Production calls create_all before migrations.apply. It leaves the
+    # legacy installations table untouched while creating every other table
+    # later migrations legitimately reference.
+    store.metadata.create_all(engine)
     migrations.apply(engine)
     assert "token_hash" not in {c["name"] for c in inspect(engine).get_columns("installations")}
 
