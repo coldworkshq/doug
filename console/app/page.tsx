@@ -65,11 +65,11 @@ export default async function RunsPage({
       ? `for tenant ${scope.tenant}`
       : "across every installation";
 
+  // Detail is independent of the list fetch: a deep-linked ?run= must still
+  // resolve when the table path fails (bad tenant filter, unreachable list
+  // endpoint). Coupling them hid forensics under "nothing is known".
   const selectedId = parseRunId(params.run);
-  const detail =
-    selectedId === null || isError(result)
-      ? null
-      : await getRunDetail(selectedId);
+  const detail = selectedId === null ? null : await getRunDetail(selectedId);
 
   return (
     <Shell scope={scope} active="runs">
@@ -80,8 +80,9 @@ export default async function RunsPage({
           <p className="font-semibold text-[var(--flag)]">The API did not answer.</p>
           <p className="mt-1 text-muted-foreground">{result.error}</p>
           <p className="mt-2 text-muted-foreground">
-            Nothing is rendered below because nothing is known. This console has no
-            fixture fallback by design.
+            {selectedId === null
+              ? "Nothing is rendered below because nothing is known. This console has no fixture fallback by design."
+              : "The runs list could not be loaded. Forensics for the selected run is attempted below."}
           </p>
         </div>
       ) : (
@@ -94,32 +95,30 @@ export default async function RunsPage({
         // own. The fallback is deliberately empty: on a dynamic route it
         // never paints, and a skeleton row would be the console showing a
         // shape of data it does not have.
-        <>
-          <Suspense fallback={null}>
-            <RunsTable
-              runs={result.items}
-              atCap={atCap}
-              limit={result.limit}
-              tenant={scope.tenant}
-              scopeLabel={scopeLabel}
-              selectedId={selectedId}
+        <Suspense fallback={null}>
+          <RunsTable
+            runs={result.items}
+            atCap={atCap}
+            limit={result.limit}
+            tenant={scope.tenant}
+            scopeLabel={scopeLabel}
+            selectedId={selectedId}
+          />
+        </Suspense>
+      )}
+      {selectedId !== null && detail !== null && (
+        isError(detail) ? (
+          <div className="mt-6">
+            <RunForensicsUnavailable error={detail.error} />
+          </div>
+        ) : (
+          <div className="mt-6 border-t border-border">
+            <RunForensics
+              run={detail}
+              clearHref={clearRunHref(scope.tenant, scope.repo)}
             />
-          </Suspense>
-          {selectedId !== null && detail !== null && (
-            isError(detail) ? (
-              <div className="mt-6">
-                <RunForensicsUnavailable error={detail.error} />
-              </div>
-            ) : (
-              <div className="mt-6 border-t border-border">
-                <RunForensics
-                  run={detail}
-                  clearHref={clearRunHref(scope.tenant, scope.repo)}
-                />
-              </div>
-            )
-          )}
-        </>
+          </div>
+        )
       )}
     </Shell>
   );
