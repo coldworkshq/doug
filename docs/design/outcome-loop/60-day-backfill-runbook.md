@@ -232,6 +232,17 @@ gcloud scheduler jobs describe "$SCHEDULER_JOB" \
 test "$(jq -er '.state' "$PRE_APPLY_SCHEDULER_PATH")" = PAUSED
 test "$(jq -er '.schedule' "$PRE_APPLY_SCHEDULER_PATH")" = '0 3 * * *'
 test "$(jq -er '.timeZone' "$PRE_APPLY_SCHEDULER_PATH")" = Etc/UTC
+```
+
+Run apply immediately after those final `PAUSED` and zero-nonterminal checks,
+in a low-traffic maintenance window; do not pause after the checks. While apply
+holds its locks, merge-webhook database writes can wait and an HTTP request that
+times out may be redelivered. Those locks fence the complete eligibility
+predicate and must not be removed or weakened. An apply error rolls back the
+database transaction; preserve its artifacts and follow the failure
+classification in §5.
+
+```bash
 
 APPLY_COMMAND_OK=0
 if uv run python scripts/backfill_outcome_jobs.py \
