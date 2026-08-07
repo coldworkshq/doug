@@ -136,6 +136,12 @@ fi
 if [ "$1 $2 $3" = "scheduler jobs describe" ]; then
   exit 1
 fi
+if [ "$1 $2 $3" = "iam service-accounts describe" ] \
+    && [ "$4" = "${GCLOUD_TRANSIENT_SA:-}" ] \
+    && [ ! -f "$GCLOUD_STATE" ]; then
+  : > "$GCLOUD_STATE"
+  exit 1
+fi
 exit 0
 """
     )
@@ -143,14 +149,18 @@ exit 0
     return fake_bin, log
 
 
-def _run_gcp(tmp_path: Path, command: str) -> list[str]:
+def _run_gcp(
+    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
+) -> list[str]:
     fake_bin, log = _fake_gcloud(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "GCLOUD_LOG": str(log),
+        "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
+        **(extra_env or {}),
     }
     result = subprocess.run(
         ["bash", str(GCP_PATH), command],
@@ -253,3 +263,21 @@ def test_adjudicator_setup_is_narrow_and_never_rotates_the_database(tmp_path):
     assert "sql users" not in emitted
     assert "sql databases" not in emitted
     assert "secrets versions add doug-database-url" not in emitted
+
+
+def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
+    """IAM creation can succeed before describe sees the account. Retrying
+    only the read avoids a false setup failure without replaying mutations."""
+    scheduler = "doug-scheduler-sa@doug-prod0.iam.gserviceaccount.com"
+    lines = _run_gcp(
+        tmp_path,
+        "adjudicator-setup",
+        extra_env={"GCLOUD_TRANSIENT_SA": scheduler},
+    )
+
+    describes = [
+        line
+        for line in lines
+        if line.startswith(f"iam service-accounts describe {scheduler}")
+    ]
+    assert len(describes) == 2
