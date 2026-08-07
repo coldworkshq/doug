@@ -1,6 +1,8 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import create_engine, inspect, select
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from doug import migrations, store
 
@@ -33,6 +35,12 @@ def _columns(engine, table: str) -> set[str]:
 
 OUTCOME_COLUMNS = {"github_repo_id", "installation_id", "window_days", "detail"}
 
+M7_COLUMNS = {
+    "outcomes": {"merge_commit_sha"},
+    "outcome_jobs": {"started_at", "finished_at", "error", "claim_generation"},
+    "reads": {"changed_files", "files_dropped"},
+}
+
 
 def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path):
     """The case create_all() cannot handle, and the only reason this module
@@ -48,7 +56,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     with engine.begin() as conn:
         conn.exec_driver_sql(_OLDER_VERDICTS_DDL)
         conn.exec_driver_sql(
-            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
+            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL, "
+            "pr_number INTEGER NOT NULL DEFAULT 0)"
         )
         # Migration 003 indexes these; production gets the tables from
         # create_all before apply. The hand-built older schema needs stubs.
@@ -78,6 +87,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
     assert "claim_generation" in _columns(engine, "review_jobs")
     assert "token_hash" not in _columns(engine, "installations")
+    for table, columns in M7_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -153,6 +164,45 @@ def test_migration_002_declares_the_same_columns_as_their_tables(tmp_path):
     assert by_table["verdicts"] == {"prompt_hash"}
     for table, cols in by_table.items():
         assert cols <= _columns(engine, table)
+
+
+def test_migration_007_declares_the_same_columns_as_their_tables(tmp_path):
+    """The adjudicator writer, its claim lease, and persisted coverage all
+    cross existing production tables. A metadata-only column would pass on a
+    fresh database and be absent from Cloud SQL."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl7.db")
+    store.metadata.create_all(engine)
+
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[7]) == M7_COLUMNS
+    for table, columns in M7_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_007_enforces_one_outcome_per_job_identity(tmp_path):
+    """A redelivered or reclaimed job must not cast two votes. Historical
+    rows have no merge SHA and stay outside the partial index."""
+    engine = create_engine(f"sqlite:///{tmp_path}/outcome-identity.db")
+    store.metadata.create_all(engine)
+    migrations.apply(engine)
+
+    names = {idx["name"] for idx in inspect(engine).get_indexes("outcomes")}
+    assert "uq_outcomes_job_identity" in names
+
+    row = {
+        "repo": "drewjst/doug",
+        "pr_number": 62,
+        "kind": "clean",
+        "observed_at": datetime.now(UTC),
+        "source": "git-labels",
+        "github_repo_id": 1,
+        "installation_id": 2,
+        "window_days": 14,
+        "merge_commit_sha": "a" * 40,
+    }
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert(), row)
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(store.outcomes.insert(), row)
 
 
 # The pre-Task-2 shape of the two migrated tables, exactly as they were at
@@ -473,11 +523,10 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
             f"10, 20, 'o/r', 7, '{sha}', 'done', 1, 1, '2026-08-01', {duplicate})"
         )
 
-    # store.metadata.create_all() above already built `installations` without
-    # `token_hash`, so migration 6 runs too (nothing else was pre-recorded
-    # past 4) and finds its DROP already satisfied — landing as version 6
-    # alongside 5, not instead of it.
-    assert migrations.apply(engine) == [5, 6]
+    # store.metadata.create_all() above already built the current table shapes,
+    # so migrations 6 and 7 both find their ALTER work satisfied and still
+    # record their versions alongside migration 5.
+    assert migrations.apply(engine) == [5, 6, 7]
     with engine.connect() as conn:
         app_ids = [
             r[0]
