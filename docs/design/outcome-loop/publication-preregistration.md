@@ -1,14 +1,11 @@
 # Publication pre-registration — the outcome loop
 
-**Status:** DRAFT v6 — **NOT YET LOCKED.** Four of five rulings landed 2026-08-07;
-**one remains** (tenant consent posture, §11 item 1). Until locked, the hash must not enter any receipt: a hash over a mutable
+**Status:** DRAFT v7 — **ALL FIVE RULINGS LANDED** 2026-08-07. Still NOT LOCKED:
+locking additionally requires the M3 item 1 fixture gate green (§10), migration 006
+(§11), and the 60-day backfill runbook. The hash must not enter a receipt before
+then. Until locked, the hash must not enter any receipt: a hash over a mutable
 document is worse than no hash, because it *looks* like a commitment.
 **Roadmap:** M3 item 7 · **Mitigation:** design-lock altitude O3 (`design-lock.md:61`)
-**Citation note:** every `git_labels.py:NNN` anchor below is against the file AS OF
-the M3-item-1 branch (`m3-adjudicate`), which hoists `TOLERANCE_DAYS` and shifts
-everything after it by 24 lines. If that branch has not merged yet, these anchors
-point 24 lines past where the symbol currently sits on `main`. They were verified
-against the post-merge blob, not arithmetic.
 **Companion, not yet written:** the 60-day backfill runbook — hard gate before the
 first 14-day publication (`design-lock.md:47`).
 
@@ -67,13 +64,39 @@ a pooled rate may not.
 
 Doug-on-Doug (`drewjst/doug`) always appears.
 
-⚠ **Tenant consent — bounded, because an unbounded consent gate is a population
-filter.** §2.4 forbids invisible exclusions at the merge level; the same rule applies
-one level up, or a tenant shown a bad row before publication simply withholds it and
-the table becomes a favourable sample. Therefore: consent is obtained **at install**,
-is **irrevocable for any window already elapsed**, and every publication carries
-`repos_withheld` as a count. Ruling needed on the posture, not on whether the
-exclusion is visible.
+**RULED (Andrew, 2026-08-07): tenant repos are IN BY DEFAULT, by name, and may opt
+out.** Not opt-in — a tenant appears unless they say otherwise.
+
+**The publication is an audit of Doug, not of its customers.** Doug-on-Doug is the
+row that discharges the commitment: the repo is public, anyone can run `git log`
+against it, and it needs nobody's permission. Tenant rows are corroboration, never
+the basis — so a quarter in which every tenant has opted out is still a valid
+publication, and the commitment is never hostage to sales.
+
+**Opt-out is PROSPECTIVE ONLY, and this is the property the whole posture rests on.**
+
+- Withdrawal removes **future** windows. It cannot retract a window already elapsed.
+- **A published row is never retracted.** A repo that leaves keeps its existing rows
+  in every subsequent publication; departure ends the series, it does not erase it.
+- `repos_withheld` publishes as a count, so an opted-out set can never pass for
+  nobody having left.
+
+Without the second bullet the posture would quietly invert into the failure §2.4
+names: tenants with bad rates leave, tenants with good ones stay, and the standing
+table drifts favourable one departure at a time while every individual decision looks
+reasonable. Keeping departed rows published is what makes the record cumulative
+rather than a snapshot of whoever is currently comfortable.
+
+**A product requirement falls out of this ruling and is stated here so it cannot be
+lost:** because the default is IN, the install flow must disclose — unmissably, not
+in a link — that the installation's cleared-band rate may be published by name on a
+public page, and how to opt out. A default that discloses is only honest if the
+disclosure actually reaches the person accepting it. Naming a tenant's defect rate
+publicly is a real disclosure about them, not only about Doug.
+
+**Anonymized rows were rejected.** At M5's 2–3 design partners "Repo B" is not
+anonymous — a partner is identifiable from merge counts alone — and it manufactures
+an impression of breadth adjacent to the cross-repo claim `product-spec.md:48` bans.
 
 ---
 
@@ -741,27 +764,27 @@ assumption the code makes survives every mutant"):
 
 ## 11. Open rulings (⚠) and required work
 
-**Needs Andrew before lock — ONE remains.**
+**All five ruled 2026-08-07** — recorded here so the list stays the index of what was
+decided, with each ruling's reasoning in its own section.
 
-1. ⚠ **Tenant consent posture** (§1) — *whose* repos appear in a public table.
-   Still open, and deliberately not inferred: the 2026-08-07 ruling pass covered
-   the other four, but no recommendation was ever put to Andrew on this one, so
-   there is nothing to have agreed with. The *timing* is already fixed by §2.4's
-   principle (consent at install, irrevocable for any elapsed window,
-   `repos_withheld` published) and is not the open part.
-
-**RULED 2026-08-07 — recorded here so the list stays the index of what was decided:**
-
+1. **Tenant consent posture** (§1) — tenant repos are **in by default, by name**, and
+   may opt out prospectively. A published row is never retracted, which is the
+   property that stops departures from drifting the table favourable.
 2. **Decidability** (§8) — two-sided rule adopted. v2's one-sided version withdrawn.
 3. **Cadence, venue, first date** (§12) — quarterly 15 Jan/Apr/Jul/Oct as a FLOOR,
    venue and provisional 15 Jan 2027 accepted. Publishing sooner or more often is
    free; off-cycle publications must carry the full table; only lengthening or
-   skipping is **prospective only**.
+   skipping is prospective-only.
 4. **The `outcome_jobs.attempts` ceiling** (§6.2) — `max_attempts = 10`, higher than
    the review path's 3 because an adjudication retry buys a clone, not a model read.
 5. **The window's lower bound** (§6.1) — adopted at `TOLERANCE_DAYS = 1`, hoisted
    into `git_labels.py` so live and backtest read one constant. **The only ruling
    that changes a published number**, and it lowers it.
+
+**What still blocks the lock, none of it a ruling:** the §10 fixture gate green
+(shipped in M3 item 1, #59), migration 006's three columns (§11), and the 60-day
+backfill runbook. A carried product requirement, from ruling 1: the install flow must
+disclose the default-in posture unmissably.
 
 **Named open rather than resolved:**
 
