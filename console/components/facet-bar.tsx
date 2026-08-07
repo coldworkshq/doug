@@ -10,16 +10,15 @@ import type { Facet, FacetKey } from "@/lib/facets";
  *  flat row under the header rather than bordered chips in the shell — is
  *  what stops an operator reading a pill as a change of scope.
  *
- *  Counts describe the runs on screen, which is a fact this component
- *  always has in full. That is why they carry no "+" qualifier even at the
- *  page cap, unlike a group's run-count badge: the badge claims something
- *  about a pull request's history (which extends past the page), a pill
- *  claims something about this table (which does not).
+ *  Counts are over the full fetched set, so they do not move as other pills
+ *  are pressed. At the page cap that set is only the newest N runs, and the
+ *  title says so rather than calling it the scope.
  */
 export function FacetBar({
   facets,
   selection,
-  totalInScope,
+  totalFetched,
+  atCap,
   onToggle,
   onClear,
 }: {
@@ -31,7 +30,12 @@ export function FacetBar({
    *  unfiltered numerator with a filtered denominator let a pill read
    *  "32 of the 37 runs shown" while zero of those 37 were cleared, and
    *  could print a count larger than the total beside it. */
-  totalInScope: number;
+  totalFetched: number;
+  /** Whether that fetched set is the whole scope or only its newest page.
+   *  Without this the title said "in scope" over a truncated page — a
+   *  scope-wide claim from a partial count, which is exactly what the
+   *  header's "latest 500" and the group badge's "8+" refuse to make. */
+  atCap: boolean;
   onToggle: (key: FacetKey, value: string) => void;
   onClear: () => void;
 }) {
@@ -75,7 +79,11 @@ export function FacetBar({
                 type="button"
                 onClick={() => onToggle(facet.key, option.value)}
                 aria-pressed={on}
-                title={`${option.count} of ${totalInScope} runs in scope`}
+                title={
+                  atCap
+                    ? `${option.count} of the newest ${totalFetched} runs fetched — the scope may hold more`
+                    : `${option.count} of ${totalFetched} runs in scope`
+                }
                 className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[11px] transition-colors ${frame} ${ink}`}
               >
                 {option.label}

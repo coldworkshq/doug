@@ -71,11 +71,13 @@ function optionLabel(key: FacetKey, value: string): string {
  *  list of bands or tiers, which would render pills for values that do not
  *  occur and counts of zero for facts nobody asserted.
  *
- *  Counts are exact over the array passed in. The caller passes the
- *  COMPLETE fetched set, and the page suppresses counts entirely once that
- *  set is a truncated page — a count computed over a page and rendered as a
- *  count over the scope is the same defect as a rate without its
- *  denominator.
+ *  Counts are exact over the array passed in, which is the full fetched set
+ *  — never the filtered one, or pressing a pill would zero out every option
+ *  it excluded. What that set REPRESENTS is the caller's to state: below the
+ *  page limit it is the whole scope, at the limit it is only the newest N,
+ *  and FacetBar words its title from `atCap` accordingly. A count computed
+ *  over a page and rendered as a count over the scope is the same defect as
+ *  a rate without its denominator.
  *
  *  A facet with fewer than two distinct values is dropped: a lone pill
  *  cannot change the result, and rendering one teaches the operator that

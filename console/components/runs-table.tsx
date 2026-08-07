@@ -9,7 +9,9 @@ import { CoverageBar } from "@/components/coverage-bar";
 import { FacetBar } from "@/components/facet-bar";
 import type { RunSummary } from "@/lib/api";
 import {
+  FACET_KEYS,
   type FacetKey,
+  type FacetSelection,
   buildFacets,
   filterRuns,
   parseFacetSelection,
@@ -17,7 +19,14 @@ import {
 } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import { jobDuration, relativeAge, utcTimestamp } from "@/lib/runs";
-import { DEFAULT_SORT, type SortKey, type SortState, nextSort, sortGroups } from "@/lib/sorting";
+import {
+  type SortKey,
+  type SortState,
+  nextSort,
+  parseSort,
+  serializeSort,
+  sortGroups,
+} from "@/lib/sorting";
 
 interface Column {
   label: string;
@@ -68,7 +77,11 @@ export function RunsTable({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  // Sort travels in the URL for the same reason the facets do: a copied
+  // link should restore the table the sender was looking at. Expansion
+  // stays local — which rows you happened to open is a reading position,
+  // not a view worth sharing, and it changes far too often to spend a
+  // history entry on.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
   // The URL is the filter state, same as `repo`/`tenant` — an operator's
@@ -81,6 +94,8 @@ export function RunsTable({
     () => parseFacetSelection((key) => searchParams.get(key)),
     [searchParams],
   );
+
+  const sort = useMemo(() => parseSort(searchParams.get("sort")), [searchParams]);
 
   const filtering = Object.values(selection).some((values) => values && values.length > 0);
 
@@ -101,14 +116,27 @@ export function RunsTable({
     [groups],
   );
 
-  function writeSelection(next: Partial<Record<FacetKey, string[]>>) {
+  /** One writer for every URL-borne piece of view state. Both callers go
+   *  through it so a sort can never drop the filters, or a filter the sort.
+   *  `repo`/`tenant` survive untouched: they are the server's scope, and
+   *  rewriting them here would change what is fetched. */
+  function writeView(nextSelection: FacetSelection, nextSortState: SortState) {
     const params = new URLSearchParams(searchParams);
-    const serialized = serializeFacets(next);
-    for (const key of ["band", "tier", "read", "outcome"] as FacetKey[]) {
+
+    const serialized = serializeFacets(nextSelection);
+    // Iterate FACET_KEYS rather than a literal list — a second copy of the
+    // key set is a copy that can drift, and a facet missing from it would
+    // silently never be cleared from the URL.
+    for (const key of FACET_KEYS) {
       const value = serialized[key];
       if (value === undefined) params.delete(key);
       else params.set(key, value);
     }
+
+    const sortParam = serializeSort(nextSortState);
+    if (sortParam === null) params.delete("sort");
+    else params.set("sort", sortParam);
+
     const query = params.toString();
     window.history.pushState(null, "", query ? `${pathname}?${query}` : pathname);
   }
@@ -118,7 +146,7 @@ export function RunsTable({
     const next = current.includes(value)
       ? current.filter((v) => v !== value)
       : [...current, value];
-    writeSelection({ ...selection, [key]: next });
+    writeView({ ...selection, [key]: next }, sort);
   }
 
   function toggleGroup(key: string) {
@@ -139,9 +167,10 @@ export function RunsTable({
         // so their denominator must be `runs.length` too. Passing the
         // filtered `shown` here paired an unfiltered numerator with a
         // filtered denominator.
-        totalInScope={runs.length}
+        totalFetched={runs.length}
+        atCap={atCap}
         onToggle={toggleFacet}
-        onClear={() => writeSelection({})}
+        onClear={() => writeView({}, sort)}
       />
 
       <p className="mono flex items-center gap-3 py-5 text-[10.5px] uppercase tracking-[.16em] text-muted-foreground">
@@ -191,7 +220,7 @@ export function RunsTable({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setSort(nextSort(sort, column.sort as SortKey))}
+                      onClick={() => writeView(selection, nextSort(sort, column.sort as SortKey))}
                       className={
                         "inline-flex items-center gap-1 uppercase tracking-[.13em] hover:text-foreground " +
                         (sort.key === column.sort ? "text-foreground" : "")

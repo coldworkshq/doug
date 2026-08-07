@@ -29,6 +29,32 @@ export function nextSort(current: SortState, key: SortKey): SortState {
   return { key, dir: current.dir === "desc" ? "asc" : "desc" };
 }
 
+/** Sort → query-string value, or null when it is the default.
+ *
+ *  Returning null for the default keeps `?sort=age:desc` out of every URL:
+ *  a param that is always present carries no information and makes two
+ *  identical views look like different ones when shared. */
+export function serializeSort(sort: SortState): string | null {
+  if (sort.key === DEFAULT_SORT.key && sort.dir === DEFAULT_SORT.dir) return null;
+  return `${sort.key}:${sort.dir}`;
+}
+
+/** Query-string value → sort, falling back to the default on anything this
+ *  module cannot honour.
+ *
+ *  Unlike a facet value, an unrecognised sort key has no honest rendering:
+ *  `?band=purple` can show an empty table under a filter that says
+ *  "purple", but there is no such thing as a table ordered by a column that
+ *  does not exist. The default is the truthful answer, and it is what the
+ *  header's caret will then show. */
+export function parseSort(raw: string | null): SortState {
+  if (raw === null) return DEFAULT_SORT;
+  const [key, dir] = raw.split(":");
+  if (!SORTABLE.includes(key as SortKey)) return DEFAULT_SORT;
+  if (dir !== "asc" && dir !== "desc") return DEFAULT_SORT;
+  return { key: key as SortKey, dir };
+}
+
 /** Sort GROUPS by their latest run. Children are never reordered.
  *
  *  Ordering children by anything but time would destroy the one thing the

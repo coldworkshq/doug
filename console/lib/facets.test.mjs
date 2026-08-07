@@ -30,9 +30,10 @@ function run(overrides) {
 const read = { diff_chars: 1000, sent_chars: 500, files_sent: 4, files_unseen: [], file_cut: null };
 
 test("a pill's count is the exact number of runs it matches", () => {
-  // The count is a claim. It is only true because the caller passes the
-  // COMPLETE fetched set — the same set the header counts — and the page
-  // refuses to render counts at all once that set is a truncated page.
+  // The count is a claim, and it is exact over whatever array it is given.
+  // Callers pass the full fetched set — the same set the header counts —
+  // and say what that set represents: FacetBar's title reads "in scope"
+  // below the page limit and "the newest N fetched" at it.
   const facets = buildFacets([
     run({ verdict_id: 1, band: "flagged" }),
     run({ verdict_id: 2, band: "flagged" }),

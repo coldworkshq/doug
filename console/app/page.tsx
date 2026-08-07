@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { RunsTable } from "@/components/runs-table";
 import { Shell } from "@/components/shell";
 import { getRuns, isError } from "@/lib/api";
@@ -67,13 +69,24 @@ export default async function RunsPage({
           </p>
         </div>
       ) : (
-        <RunsTable
-          runs={result.items}
-          atCap={atCap}
-          limit={result.limit}
-          tenant={scope.tenant}
-          scopeLabel={scopeLabel}
-        />
+        // RunsTable reads `useSearchParams`, which Next requires to sit
+        // under a Suspense boundary or be excluded from prerender. Today
+        // `dynamic = "force-dynamic"` above satisfies that — but it makes
+        // this component's correctness depend on a page-level export three
+        // dozen lines away, so deleting that line would break the BUILD,
+        // not just the rendering. The boundary makes RunsTable stand on its
+        // own. The fallback is deliberately empty: on a dynamic route it
+        // never paints, and a skeleton row would be the console showing a
+        // shape of data it does not have.
+        <Suspense fallback={null}>
+          <RunsTable
+            runs={result.items}
+            atCap={atCap}
+            limit={result.limit}
+            tenant={scope.tenant}
+            scopeLabel={scopeLabel}
+          />
+        </Suspense>
       )}
     </Shell>
   );

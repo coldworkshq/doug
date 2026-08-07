@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { groupRunsByPr } from "./grouping.ts";
-import { DEFAULT_SORT, SORTABLE, nextSort, sortGroups } from "./sorting.ts";
+import { DEFAULT_SORT, SORTABLE, nextSort, parseSort, serializeSort, sortGroups } from "./sorting.ts";
 
 function run(overrides) {
   return {
@@ -144,6 +144,32 @@ test("clicking a new column starts descending; clicking the active one flips", (
   assert.deepEqual(nextSort({ key: "age", dir: "desc" }, "score"), { key: "score", dir: "desc" });
   assert.deepEqual(nextSort({ key: "score", dir: "desc" }, "score"), { key: "score", dir: "asc" });
   assert.deepEqual(nextSort({ key: "score", dir: "asc" }, "score"), { key: "score", dir: "desc" });
+});
+
+test("sort round-trips through the URL, so a shared link restores the order it was shared in", () => {
+  // Facet selection already lives in the URL. Leaving sort in local state
+  // meant a copied link restored the filters but not the ordering, so the
+  // recipient saw a different table than the sender was looking at.
+  const sort = { key: "coverage", dir: "asc" };
+  assert.equal(serializeSort(sort), "coverage:asc");
+  assert.deepEqual(parseSort("coverage:asc"), sort);
+});
+
+test("the default sort writes no param at all", () => {
+  // A param that is always present carries no information, and it makes two
+  // identical views look like different ones when shared.
+  assert.equal(serializeSort(DEFAULT_SORT), null);
+  assert.deepEqual(parseSort(null), DEFAULT_SORT);
+});
+
+test("an unhonourable sort param falls back to the default", () => {
+  // Unlike ?band=purple — which honestly renders an empty table under a
+  // filter that says "purple" — there is no truthful way to render a table
+  // ordered by a column that does not exist.
+  assert.deepEqual(parseSort("title:desc"), DEFAULT_SORT);
+  assert.deepEqual(parseSort("score:sideways"), DEFAULT_SORT);
+  assert.deepEqual(parseSort("score"), DEFAULT_SORT);
+  assert.deepEqual(parseSort(""), DEFAULT_SORT);
 });
 
 test("only columns with a real ordering are sortable", () => {
