@@ -20,6 +20,12 @@ import {
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import { jobDuration, relativeAge, utcTimestamp } from "@/lib/runs";
 import {
+  applyRunParam,
+  currentSearchParams,
+  parseRunId,
+  runHref,
+} from "@/lib/selection";
+import {
   type SortKey,
   type SortState,
   nextSort,
@@ -84,6 +90,10 @@ export function RunsTable({
   // history entry on.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
+  // Selection is URL-borne like facets — read it here so pushState updates
+  // highlight without a server round trip (props from the RSC stay frozen).
+  const selectedId = parseRunId(searchParams.get("run"));
+
   // The URL is the filter state, same as `repo`/`tenant` — an operator's
   // filtered view survives being copied to someone else. Writing it with
   // the native history API rather than router.push keeps `useSearchParams`
@@ -119,9 +129,14 @@ export function RunsTable({
   /** One writer for every URL-borne piece of view state. Both callers go
    *  through it so a sort can never drop the filters, or a filter the sort.
    *  `repo`/`tenant` survive untouched: they are the server's scope, and
-   *  rewriting them here would change what is fetched. */
+   *  rewriting them here would change what is fetched.
+   *
+   *  Base the write on window.location.search, not the useSearchParams
+   *  snapshot: facet and run both use pushState, and a stale snapshot can
+   *  drop the other writer's latest value. */
   function writeView(nextSelection: FacetSelection, nextSortState: SortState) {
-    const params = new URLSearchParams(searchParams);
+    const params = currentSearchParams();
+    // `run` survives facet/sort writes because we copy the live query — intentional.
 
     const serialized = serializeFacets(nextSelection);
     // Iterate FACET_KEYS rather than a literal list — a second copy of the
@@ -138,6 +153,15 @@ export function RunsTable({
     else params.set("sort", sortParam);
 
     const query = params.toString();
+    window.history.pushState(null, "", query ? `${pathname}?${query}` : pathname);
+  }
+
+  function selectRun(id: number | null) {
+    const params = currentSearchParams();
+    applyRunParam(params, id);
+    const query = params.toString();
+    // Same pushState path as facets: forensics loads via server action, so
+    // we must not router.replace (that re-ran getRuns for every click).
     window.history.pushState(null, "", query ? `${pathname}?${query}` : pathname);
   }
 
@@ -195,9 +219,12 @@ export function RunsTable({
             : "No runs in this scope."}
         </p>
       ) : (
-        <table className="w-full table-fixed border-collapse">
-          <thead>
-            <tr>
+        <div className="max-h-[40vh] overflow-y-auto rounded-[6px] border border-border">
+          {/* border-separate: sticky thead + border-collapse drops header
+              borders in Chromium. Spacing 0 keeps the dense look. */}
+          <table className="w-full table-fixed border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-background">
+              <tr>
               {COLUMNS.map((column) => (
                 <th
                   key={column.label}
@@ -246,12 +273,15 @@ export function RunsTable({
                   open={open}
                   filtering={filtering}
                   tenant={tenant}
+                  selectedId={selectedId}
+                  onSelectRun={selectRun}
                   onToggle={() => toggleGroup(group.key)}
                 />
               );
             })}
           </tbody>
         </table>
+        </div>
       )}
     </>
   );
@@ -319,12 +349,16 @@ function RunRows({
   open,
   filtering,
   tenant,
+  selectedId,
+  onSelectRun,
   onToggle,
 }: {
   group: PrGroup;
   open: boolean;
   filtering: boolean;
   tenant: string | null;
+  selectedId: number | null;
+  onSelectRun: (id: number | null) => void;
   onToggle: () => void;
 }) {
   const count = runCountLabel(group, filtering);
@@ -333,17 +367,47 @@ function RunRows({
   // single-run row is noise standing in for information.
   const hasHistory = group.children.length > 0;
 
+  function rowProps(run: RunSummary, child = false) {
+    const selected = selectedId === run.verdict_id;
+    return {
+      "aria-selected": selected,
+      tabIndex: 0,
+      className:
+        (child ? "border-b border-border/40 " : "border-b border-border/50 ") +
+        "cursor-pointer hover:bg-muted/40 " +
+        (selected
+          ? "bg-[color-mix(in_srgb,var(--iridescent)_8%,transparent)]"
+          : child
+            ? "bg-muted/25"
+            : ""),
+      onClick: (e: React.MouseEvent) => {
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        onSelectRun(run.verdict_id);
+      },
+      onKeyDown: (e: React.KeyboardEvent) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        e.preventDefault();
+        onSelectRun(run.verdict_id);
+      },
+    };
+  }
+
   return (
     <>
-      <tr className="border-b border-border/50 hover:bg-muted/40">
+      <tr {...rowProps(group.latest)}>
         <RunCells
           run={group.latest}
           tenant={tenant}
+          onSelectRun={onSelectRun}
           disclosure={
             hasHistory ? (
               <button
                 type="button"
-                onClick={onToggle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggle();
+                }}
                 aria-expanded={open}
                 aria-label={`${open ? "Collapse" : "Expand"} the ${count.title} on ${group.repo} #${group.prNumber}`}
                 title={count.title}
@@ -360,8 +424,8 @@ function RunRows({
       </tr>
       {open &&
         group.children.map((child) => (
-          <tr key={child.verdict_id} className="border-b border-border/40 bg-muted/25">
-            <RunCells run={child} tenant={tenant} indented />
+          <tr key={child.verdict_id} {...rowProps(child, true)}>
+            <RunCells run={child} tenant={tenant} indented onSelectRun={onSelectRun} />
           </tr>
         ))}
     </>
@@ -376,11 +440,13 @@ function RunCells({
   tenant,
   disclosure = null,
   indented = false,
+  onSelectRun,
 }: {
   run: RunSummary;
   tenant: string | null;
   disclosure?: React.ReactNode;
   indented?: boolean;
+  onSelectRun: (id: number | null) => void;
 }) {
   // A job row only carries a verdict_id once ingest.complete() sets it,
   // and that same UPDATE sets status="done" in the same statement
@@ -410,16 +476,17 @@ function RunCells({
           // A child row's repo, number and title are its parent's, verbatim
           // — rendering them again three rows deep is repetition, not
           // information. What distinguishes one run of a PR from the next is
-          // WHEN it ran, so that is what the cell carries, still linking to
+          // WHEN it ran, so that is what the cell carries, still opening
           // this run's own forensics.
           <div className="flex min-w-0 items-center gap-2 pl-3">
             <span className="min-w-[38px] flex-none" />
-            <Link
-              href={`/runs/${run.verdict_id}`}
+            <SelectRunLink
+              id={run.verdict_id}
+              onSelectRun={onSelectRun}
               className="mono truncate text-[11px] text-muted-foreground hover:text-foreground hover:underline"
             >
               {utcTimestamp(run.scored_at)}
-            </Link>
+            </SelectRunLink>
           </div>
         ) : (
         <div className="flex min-w-0 items-center gap-2">
@@ -434,6 +501,7 @@ function RunCells({
             <Link
               href={repoFilterHref(run.repo, tenant)}
               aria-label={`Filter runs to ${run.repo}`}
+              onClick={(e) => e.stopPropagation()}
               className="hover:text-foreground hover:underline"
             >
               {run.repo}
@@ -449,6 +517,7 @@ function RunCells({
                 target="_blank"
                 rel="noreferrer"
                 aria-label={`Open ${run.repo} #${run.pr_number} on GitHub`}
+                onClick={(e) => e.stopPropagation()}
                 className="font-medium text-foreground hover:underline"
               >
                 #{run.pr_number}
@@ -457,12 +526,13 @@ function RunCells({
               <b className="font-medium text-foreground">#{run.pr_number}</b>
             )}
           </span>
-          <Link
-            href={`/runs/${run.verdict_id}`}
+          <SelectRunLink
+            id={run.verdict_id}
+            onSelectRun={onSelectRun}
             className="min-w-0 flex-1 truncate text-[12.5px] hover:underline"
           >
             {run.title}
-          </Link>
+          </SelectRunLink>
         </div>
         )}
       </td>
@@ -487,5 +557,37 @@ function RunCells({
         {relativeAge(run.scored_at)}
       </td>
     </>
+  );
+}
+
+/** Real href for middle-click / copy-link; plain left-click stays soft
+ *  (pushState) so selection does not refetch the 500-run list. */
+function SelectRunLink({
+  id,
+  onSelectRun,
+  className,
+  children,
+}: {
+  id: number;
+  onSelectRun: (id: number | null) => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={runHref(id)}
+      className={className}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+          e.stopPropagation();
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        onSelectRun(id);
+      }}
+    >
+      {children}
+    </a>
   );
 }
