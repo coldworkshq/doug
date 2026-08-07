@@ -120,8 +120,21 @@ uv run python scripts/backfill_outcome_jobs.py \
 ```
 
 Verify that the command reports `rolled_back` equal to `EXPECTED_MISSING`.
-After a verified rollback, resume and verify the Scheduler with the commands in
-§7.
+After that verified rollback, resume and verify the Scheduler directly:
+
+```bash
+gcloud scheduler jobs resume doug-adjudicator-daily \
+  --project doug-prod0 --location us-central1
+ROLLBACK_SCHEDULER_JSON=$(mktemp /tmp/doug-adjudicator-rollback-scheduler.XXXXXX)
+gcloud scheduler jobs describe doug-adjudicator-daily \
+  --project doug-prod0 --location us-central1 --format=json > "$ROLLBACK_SCHEDULER_JSON"
+test "$(jq -er '.state' "$ROLLBACK_SCHEDULER_JSON")" = ENABLED
+test "$(jq -er '.schedule' "$ROLLBACK_SCHEDULER_JSON")" = '0 3 * * *'
+test "$(jq -er '.timeZone' "$ROLLBACK_SCHEDULER_JSON")" = Etc/UTC
+```
+
+Stop here after the Scheduler checks pass. The rollback path is complete; do
+not continue into the pre-Job audit or manual-execution path.
 
 **After `gcloud run jobs execute`, rollback is forbidden.** The Job may have
 claimed or adjudicated inserted rows, so deleting them would erase clocks whose
@@ -251,9 +264,10 @@ Exit with `\q`. If any audit returns rows, keep the Scheduler paused and retain
 the dry-run report, apply report, manifest, Job execution name, and SQL output.
 Do not roll back.
 
-## 7. Final CLI audit and Scheduler resume
+## 7. Manual-execution final CLI audit and Scheduler resume
 
-Only continue after the post-Job SQL audits all returned zero rows.
+This section is only for the manual-execution path. Continue only after the
+post-Job SQL audits all returned zero rows.
 
 ```bash
 uv run python scripts/backfill_outcome_jobs.py \
