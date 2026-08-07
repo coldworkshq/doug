@@ -1,3 +1,5 @@
+> **Retired (2026-08-07):** App-vs-CI dual-run soak ended with PR #54. `/compare` and `/v1/comparisons` are deleted. This document is historical.
+
 # Dual-Run Comparison Dashboard Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
