@@ -2534,9 +2534,9 @@ def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     every /v1/queue row is filtered on that before it gets there — but
     run_history carries every verdict, including rows saved without one, so
     a bare _with_url(row) call would raise validating None into PRMetadata
-    instead of degrading. _run_item falls back the same way _comparison_run
-    already does for a missing pr_meta: a synthesized title and URL, and
-    changed_files left None rather than invented — a row with no metadata
+    instead of degrading. _run_item falls back for a missing pr_meta by
+    synthesizing a title and URL from repo/pr_number, and leaving
+    changed_files None rather than invented — a row with no metadata
     genuinely has no denominator."""
     _db(tmp_path, monkeypatch)
     store.save_review(

@@ -271,7 +271,7 @@ def _operator_only(x_doug_token: str) -> None:
     letting an unauthenticated caller distinguish the two. That is accepted,
     not a gap: routes are public by ADR-0008, this gate still fails closed
     on every credential it does see, no response body it produces ever
-    contains data,     and the same 422-vs-404 split pre-exists identically on
+    contains data, and the same 422-vs-404 split pre-exists identically on
     `/v1/patterns` and `/v1/runs`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
@@ -418,8 +418,9 @@ def _run_item(row: dict) -> RunSummaryItem:
     on that before it ever reaches _with_url. run_history carries every
     verdict, including rows saved with no pr_meta at all (save_review's
     `pr_meta` kwarg is optional), so a bare `_with_url(row)` call raises
-    validating None into PRMetadata instead of degrading. This falls back
-    the same way _comparison_run does for the same shape of row.
+    validating None into PRMetadata instead of degrading. _run_item instead
+    synthesizes a title and URL from repo/pr_number and leaves changed_files
+    None when pr_meta is missing.
     """
     pr_meta = row["pr_meta"]
     if isinstance(pr_meta, dict):
