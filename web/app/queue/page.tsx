@@ -62,12 +62,6 @@ export default async function QueuePage({
             <DougLogo /> doug
           </Link>
           <div className="flex items-center gap-2">
-            <Link
-              href="/compare"
-              className="glass rounded-full px-3 py-1.5 font-mono text-xs transition-colors hover:bg-white/10"
-            >
-              Compare
-            </Link>
             <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
               <span
                 className={

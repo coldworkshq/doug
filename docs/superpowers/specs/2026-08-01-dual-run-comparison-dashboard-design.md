@@ -1,3 +1,5 @@
+> **Retired (2026-08-07):** App-vs-CI dual-run soak ended with PR #54. `/compare` and `/v1/comparisons` are deleted. This document is historical.
+
 # Dual-Run Comparison Dashboard Design
 
 ## Goal

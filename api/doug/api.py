@@ -272,7 +272,7 @@ def _operator_only(x_doug_token: str) -> None:
     not a gap: routes are public by ADR-0008, this gate still fails closed
     on every credential it does see, no response body it produces ever
     contains data, and the same 422-vs-404 split pre-exists identically on
-    `/v1/comparisons` and `/v1/patterns`.
+    `/v1/patterns` and `/v1/runs`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
@@ -418,8 +418,9 @@ def _run_item(row: dict) -> RunSummaryItem:
     on that before it ever reaches _with_url. run_history carries every
     verdict, including rows saved with no pr_meta at all (save_review's
     `pr_meta` kwarg is optional), so a bare `_with_url(row)` call raises
-    validating None into PRMetadata instead of degrading. This falls back
-    the same way _comparison_run does for the same shape of row.
+    validating None into PRMetadata instead of degrading. _run_item instead
+    synthesizes a title and URL from repo/pr_number and leaves changed_files
+    None when pr_meta is missing.
     """
     pr_meta = row["pr_meta"]
     if isinstance(pr_meta, dict):
@@ -1327,58 +1328,3 @@ async def github_webhook(
         await run_in_threadpool(_record_external_review, payload)
 
     return Response(status_code=202)
-
-
-def _comparison_path(row: dict) -> str:
-    app_identity = (row["installation_id"], row["github_repo_id"])
-    return "app" if all(value is not None for value in app_identity) else "ci"
-
-
-def _comparison_run(row: dict) -> dict:
-    path = _comparison_path(row)
-    meta = row.get("pr_meta") if isinstance(row.get("pr_meta"), dict) else {}
-    coverage = row.get("coverage")
-    return {
-        "id": row["id"],
-        "repo": row["repo"],
-        "pr_number": row["pr_number"],
-        "title": meta.get("title") or f"PR #{row['pr_number']}",
-        "url": meta.get("url") or f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
-        "head_sha": (
-            row["head_sha"] if row["head_sha"] is not None else meta.get("head_sha")
-        ),
-        "path": path,
-        "scored_at": row["scored_at"],
-        "score": row["score"],
-        "band": row["band"],
-        "threshold": row["threshold"],
-        "tier": row["tier"],
-        "coverage": (
-            {key: coverage[key] for key in (
-                "diff_chars", "sent_chars", "files_sent", "files_unseen", "file_cut"
-            )}
-            if coverage else None
-        ),
-    }
-
-
-@app.get("/v1/comparisons")
-def comparisons(
-    repo: str | None = None,
-    limit: int = 50,
-    x_doug_token: str = Header(""),
-) -> dict:
-    _operator_only(x_doug_token)
-    if not 1 <= limit <= 200:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
-    if not store.enabled():
-        raise HTTPException(status_code=503, detail="no ledger configured")
-    try:
-        rows = store.comparison_reviews(
-            limit,
-            repo,
-            max_rows=store.COMPARISON_RUN_LIMIT,
-        )
-    except store.ComparisonResultTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    return {"runs": [_comparison_run(row) for row in rows]}
