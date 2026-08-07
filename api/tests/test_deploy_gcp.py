@@ -275,10 +275,7 @@ def test_unlocked_preregistration_refuses_full_deploy_before_any_external_call(t
         "ERROR: publication pre-registration is not LOCKED; "
         "refusing adjudicator deploy.\n"
     )
-    assert not [line for line in lines if line.startswith("run services describe doug-api")]
-    assert not [line for line in lines if line.startswith("run deploy doug-api")]
-    assert not [line for line in lines if line.startswith("run services update-traffic")]
-    assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
+    assert lines == []
     assert (tmp_path / "curl.log").read_text() == ""
 
 
