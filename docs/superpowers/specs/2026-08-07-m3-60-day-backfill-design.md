@@ -1,6 +1,6 @@
 # M3 60-day outcome backfill design
 
-**Status:** Design approved; written spec awaiting Andrew's review  
+**Status:** Approved by Andrew on 2026-08-07
 **Branch:** `m3-60-day-backfill`  
 **Governing contract:** `docs/design/outcome-loop/design-lock.md:47` and
 `docs/design/outcome-loop/publication-preregistration.md`
