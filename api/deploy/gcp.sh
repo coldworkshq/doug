@@ -381,7 +381,8 @@ adjudicator() {
   local api_image prereg_hash
   preregistration_preflight
   prereg_hash=$(python3 -c \
-    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('$PREREG_DOC').read_bytes()).hexdigest())")
+    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "$PREREG_DOC")
   api_image=$(gcloud run services describe "$SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.spec.containers[0].image)')

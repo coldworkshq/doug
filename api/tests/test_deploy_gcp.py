@@ -308,6 +308,52 @@ def test_relative_script_symlink_resolves_the_lock_and_api_working_directory(tmp
     }
 
 
+def test_full_deploy_hashes_the_lock_from_an_apostrophe_checkout_path(tmp_path):
+    """A valid checkout path is data, never Python source used to hash the lock."""
+    checkout = tmp_path / "doug's-copy"
+    gcp_path = checkout / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    source_prereg = (
+        GCP_PATH.parents[2]
+        / "docs/design/outcome-loop/publication-preregistration.md"
+    )
+    prereg = checkout / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    shutil.copy2(source_prereg, prereg)
+    caller_cwd = tmp_path / "unrelated-caller"
+    caller_cwd.mkdir()
+    case = tmp_path / "apostrophe-case"
+    case.mkdir()
+
+    result, lines = _invoke_gcp(
+        case, "deploy", gcp_path=gcp_path, cwd=caller_cwd
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    api_deploy = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run deploy doug-api --source .")
+    )
+    api_promotion = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run services update-traffic doug-api")
+    )
+    job_deploy = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run jobs deploy doug-adjudicator")
+    )
+    assert api_deploy < api_promotion < job_deploy
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    assert f"DOUG_PREREG_HASH={expected_hash}" in lines[job_deploy]
+    assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {
+        str((checkout / "api").resolve())
+    }
+
+
 def test_missing_preregistration_refuses_deploy_with_a_read_error(tmp_path):
     """A missing lock is an operator path failure, not an unlocked contract."""
     gcp_path = tmp_path / "api/deploy/gcp.sh"
