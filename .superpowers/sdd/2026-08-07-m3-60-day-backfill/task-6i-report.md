@@ -25,3 +25,14 @@ recovery boundary.
 
 Committed the runbook change as `f157643` (`docs: explain apply write stall`).
 No production, command, PR, push, or external-system action occurred.
+
+## Round 1: recovery-boundary correction
+
+The apply paragraph now says that an exception while the guarded database
+transaction is active rolls it back, while a failed or unverifiable apply may
+nevertheless have committed. It preserves artifacts and directs the operator
+to §5, which already distinguishes no-commit from committed-untouched states.
+The apply command is unchanged.
+
+`git diff --check` completed without output before committing the correction as
+`013f339` (`docs: clarify apply recovery outcomes`).
