@@ -1,18 +1,72 @@
 # HANDOFF — doug
 
-State:    building — late M2. HEAD main includes Migration 005 (#43),
-          findings-log + missing-import settlement (#45), doug-web SA code
-          (#44, `5b06214`). App path live; CI dual-run still on for soak /
-          Task 9 park.
-Next:     1) Finish #44 ops: deploy web as `doug-web-sa`, then revoke default
-          compute SA accessor on `doug-api-token` (merge alone does not
-          redeploy web). 2) Token dispense + scoped queue/receipt reads.
-          3) Bot-author ruling before build. 4) Log dispositions with
+State:    M3 STARTED. HEAD main is `3fec72a` (#57, doug-console Phase 1).
+          M1 CLOSED (#54). M2 closed but for two `[~]`: the bot-author half
+          and doug-web's SA ops cutover. MT PROVEN 2026-08-05 (16/16,
+          `prove-isolation.sh`, two real installations).
+          M3 item 1 (`adjudicate.py`) is BUILT and item 7 (the publication
+          pre-registration) is DRAFTED. Both are in review as TWO PRs, split
+          because the combined diff is 121k chars against a 100k DIFF_BUDGET
+          — one PR could not have been read whole, on the very PR that
+          defines what a partial read may claim.
+            · `m3-adjudicate` — api/ only, 66k. Closes M3 item 1.
+            · `m3-publication-preregistration` — docs only, 55k. M3 item 7
+              stays `[ ]`: the document is DRAFT, unlocked, unhashed, and
+              its 60-day backfill runbook is unwritten.
+          The full development history, with every review round, is on
+          `claude/doug-console-next-steps-7oomm4`.
+Next:     1) OPS, and nobody else can do it: doug-console is MERGED BUT NOT
+          DEPLOYED. `gcp.sh console` is deliberately out of CD (gcp.sh:16 —
+          it is IAM-gated, so a stray grant belongs to a human running
+          `setup`). Needs `gcp.sh setup`, `gcp.sh console`, then an invoke
+          binding; reach it via `gcloud run services proxy doug-console`.
+          Until then the console exists only in source.
+          2) Merge the two PRs above. 3) M3 item 2, the Cloud Run Job +
+          Scheduler that drains the adjudicator. 4) Migration 006 — it now
+          carries THREE columns, not one: `reads.files_dropped`,
+          `reads.changed_files`, and `outcomes.merge_commit_sha` (without
+          the last, the numerator has no job discriminator and the
+          `N_done = misses + clean + censored` identity can be false while
+          every stated rule is obeyed). 5) Still open from before: #44's web
+          SA cutover; the bot-author ruling; log dispositions with
           `python -m doug.findings_log append`.
-Blockers: none for code. Web SA cutover may still need the web deploy + revoke.
-Decisions: reader improved via settle/findings-log, not frozen prompt (ADR-0002).
-Pointers: ROADMAP M2 · REVIEWING.md · #45 follow-ups (typing.TYPE_CHECKING /
-          function-local import over-drop) unfixed if we care.
+Rulings:  2026-08-07, four of five settled — see §11 of the pre-registration
+          for each with its reasoning. The window's lower bound adopted at
+          TOLERANCE_DAYS = 1 (the only one that changes a published number,
+          and it LOWERS it); two-sided decidability; quarterly cadence as a
+          FLOOR, with publishing sooner/more often free and only lengthening
+          bounded; adjudication `max_attempts = 10`, higher than the review
+          path's 3 because an adjudication retry buys a clone, not a model
+          read. STILL OPEN: tenant consent posture — whose repos appear in a
+          public table. Deliberately not inferred; no recommendation was
+          ever put on it.
+Blockers: none for code. Everything above in (1) and (4) is operator-only.
+Decisions: DEPENDENCY BUMP HELD (Andrew, 2026-08-07). GitHub reports 13
+          Dependabot alerts on main (8 high, 5 moderate). The npm half (9:
+          web 6, console 3) was triaged and NONE is reachable from a serving
+          path — `sharp`/libvips has no reachable input (`next/image` used
+          nowhere, no `remotePatterns`, and the only assets are SVGs, which
+          Next refuses to optimize by default); `postcss` runs at build over
+          CSS we authored; `js-yaml` is web-only and reaches solely via
+          `eslint` and `shadcn`, both devDependencies, so it is never in the
+          runtime image. The fix is `next 16.2.12 → 16.3.0` across web/ and
+          console/, HELD until the console has been deployed on 16.2.12 —
+          the version #57 was reviewed, built and image-tested against.
+          Bumping first would put the console's first production deploy on
+          an untested framework version and make any breakage ambiguous
+          between console bug and framework bump. NOT reachable ≠ fixed:
+          the day someone adds an `<Image>` or a remote pattern, sharp goes
+          live silently. The Python half (~4 alerts) is UNAUDITED — no
+          pip-audit in the cloud session, and matching uv.lock against
+          advisories by hand would be guesswork. Needs the real Dependabot
+          list from the security tab.
+          Reader improved via settle/findings-log, not frozen prompt
+          (ADR-0002).
+Pointers: ROADMAP M3 · REVIEWING.md · `docs/design/outcome-loop/
+          publication-preregistration.md` (DRAFT v2, not locked — its hash
+          must not enter a receipt until the ⚠ rulings land) · #45
+          follow-ups (typing.TYPE_CHECKING / function-local import
+          over-drop) unfixed if we care.
 
 ---
 
