@@ -20,7 +20,7 @@ on adjudicated data · `[later]` has a named trigger, not a date.
         sha256-pinned) [live] │                         │   one neutral check run "Doug":
           pull_request        │                         │   verdict + receipt content
           pull_request_review │ [v1]                    │   N adjudicated · M pending
-          closed && merged ───┼── 14 + 60 [built]   │   deep reads: 143/200
+          closed && merged ───┼── 14 + 60 [built]       │   deep reads: 143/200
           installation ───────┼── mints tenant token    │   (never blocks, never comments)
                               ▼                         │
                     ┌─────────────────────────────────────────────────┐
