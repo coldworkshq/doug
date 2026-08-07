@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.from_gcp:
         os.environ["DATABASE_URL"] = _database_url_from_gcp(args.from_gcp)
-    engine = store._get_engine()
+    engine = store._get_existing_schema_engine()
     if engine is None:
         print("DATABASE_URL not set", file=sys.stderr)
         return 1

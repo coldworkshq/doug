@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.exc import OperationalError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -66,7 +68,9 @@ def test_dry_run_delegates_to_inspect_and_prints_sorted_report(monkeypatch, caps
     engine = _Engine(connection)
     report = _JsonResult({"missing": 3, "eligible_14": 4})
     calls = []
-    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_engine", lambda: engine)
+    monkeypatch.setattr(
+        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
+    )
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         "inspect",
@@ -79,6 +83,18 @@ def test_dry_run_delegates_to_inspect_and_prints_sorted_report(monkeypatch, caps
     assert capsys.readouterr().out == json.dumps(report.to_dict(), sort_keys=True) + "\n"
 
 
+def test_dry_run_does_not_initialize_a_missing_schema(tmp_path, monkeypatch, capsys):
+    """A wrong empty target must fail, not become a valid zero-row Doug database."""
+    url = f"sqlite:///{tmp_path}/wrong.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    with pytest.raises(OperationalError, match="no such table: outcome_jobs"):
+        backfill_outcome_jobs.main(["--dry-run"])
+
+    assert inspect(create_engine(url)).get_table_names() == []
+    assert capsys.readouterr().out == ""
+
+
 def test_apply_delegates_typed_guards_and_prints_result(monkeypatch, capsys):
     """Apply must pass the operator's count and absolute manifest unchanged to the engine."""
     connection = _Connection()
@@ -86,7 +102,9 @@ def test_apply_delegates_typed_guards_and_prints_result(monkeypatch, capsys):
     manifest = Path("/tmp/doug-60-day-test.json")
     result = _JsonResult({"inserted": 3, "manifest_path": str(manifest)})
     calls = []
-    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_engine", lambda: engine)
+    monkeypatch.setattr(
+        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
+    )
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         "apply",
@@ -116,7 +134,9 @@ def test_manifest_modes_delegate_typed_guards_and_print_receipts(
     engine = _Engine(connection)
     manifest = Path("/tmp/doug-60-day-test.json")
     calls = []
-    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_engine", lambda: engine)
+    monkeypatch.setattr(
+        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
+    )
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         function_name,
@@ -136,7 +156,9 @@ def test_manifest_modes_delegate_typed_guards_and_print_receipts(
 def test_main_reports_missing_database_url_to_stderr(monkeypatch, capsys):
     """An operator sees the opt-in store guard instead of a misleading empty report."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_engine", lambda: None)
+    monkeypatch.setattr(
+        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None
+    )
 
     assert backfill_outcome_jobs.main(["--dry-run"]) == 1
 
@@ -156,7 +178,9 @@ def test_from_gcp_rewrites_the_secret_for_an_already_running_local_proxy(monkeyp
         return SimpleNamespace(stdout="postgresql://user:pass@/doug?host=/cloudsql/prod\n")
 
     monkeypatch.setattr(backfill_outcome_jobs.subprocess, "run", read_secret)
-    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_engine", lambda: None)
+    monkeypatch.setattr(
+        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None
+    )
 
     assert backfill_outcome_jobs.main(["--from-gcp", "doug-prod0", "--dry-run"]) == 1
 

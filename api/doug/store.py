@@ -359,6 +359,14 @@ _engine_url = None
 _engine_lock = threading.Lock()
 
 
+def _get_existing_schema_engine():
+    """Build an engine without creating or migrating the target schema."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None
+    return create_engine(url, pool_pre_ping=True)
+
+
 def _get_engine():
     global _engine, _engine_url
     url = os.environ.get("DATABASE_URL")
