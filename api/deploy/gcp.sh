@@ -32,6 +32,7 @@ CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
 QUEUE_REPO=${QUEUE_REPO:-drewjst/doug}
+PREREG_DOC=../docs/design/outcome-loop/publication-preregistration.md
 
 setup() {
   # compute.googleapis.com is not used directly, but enabling it is what
@@ -298,7 +299,15 @@ promote_if_healthy() { # $1 service, $2 smoke path
   echo "promoted: 100% of $1 -> latest revision"
 }
 
+preregistration_preflight() {
+  if ! grep -q '^\*\*Status:\*\* LOCKED ' "$PREREG_DOC"; then
+    echo "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy." >&2
+    return 1
+  fi
+}
+
 deploy() {
+  preregistration_preflight
   local traffic_flags=""
   service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # Both tiers are configured here on purpose: --set-env-vars replaces the
@@ -351,14 +360,10 @@ deploy() {
 }
 
 adjudicator() {
-  local api_image prereg_hash prereg_doc
-  prereg_doc=../docs/design/outcome-loop/publication-preregistration.md
-  if ! grep -q '^\*\*Status:\*\* LOCKED ' "$prereg_doc"; then
-    echo "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy." >&2
-    return 1
-  fi
+  local api_image prereg_hash
+  preregistration_preflight
   prereg_hash=$(python3 -c \
-    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('$prereg_doc').read_bytes()).hexdigest())")
+    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('$PREREG_DOC').read_bytes()).hexdigest())")
   api_image=$(gcloud run services describe "$SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.spec.containers[0].image)')

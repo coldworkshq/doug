@@ -113,7 +113,7 @@ def test_web_deploy_is_still_the_only_public_service():
 
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
-    """A deterministic gcloud boundary: record argv, return an API image,
+    """Deterministic external boundaries: record argv, fake Cloud Run state,
     and report that the Scheduler resource does not exist yet."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -124,15 +124,26 @@ def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$GCLOUD_LOG"
 previous=
+format=
 for argument in "$@"; do
   if [ "$previous" = "--args" ] && [ "${argument#-}" != "$argument" ]; then
     printf '%s\\n' 'ERROR: argument --args: expected one argument' >&2
     exit 2
   fi
+  case "$argument" in
+    --format=*) format=${argument#--format=} ;;
+  esac
   previous=$argument
 done
 if [ "$1 $2 $3 $4" = "run services describe doug-api" ]; then
-  printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
+  case "$format" in
+    json)
+      printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]}}'
+      ;;
+    'value(spec.template.spec.containers[0].image)')
+      printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
+      ;;
+  esac
   exit 0
 fi
 if [ "$1 $2 $3" = "scheduler jobs describe" ]; then
@@ -148,6 +159,17 @@ exit 0
 """
     )
     gcloud.chmod(0o755)
+
+    curl_log = tmp_path / "curl.log"
+    curl_log.touch()
+    curl = fake_bin / "curl"
+    curl.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+printf '%s' '200'
+"""
+    )
+    curl.chmod(0o755)
     return fake_bin, log
 
 
@@ -163,6 +185,7 @@ def _invoke_gcp(
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "GCLOUD_LOG": str(log),
+        "CURL_LOG": str(tmp_path / "curl.log"),
         "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
@@ -226,11 +249,37 @@ def test_unlocked_preregistration_refuses_adjudicator_deploy(tmp_path):
     result, lines = _invoke_gcp(tmp_path, "adjudicator", gcp_path=gcp_path)
 
     assert result.returncode != 0
-    assert (
+    assert result.stderr == (
         "ERROR: publication pre-registration is not LOCKED; "
-        "refusing adjudicator deploy."
-    ) in result.stderr
+        "refusing adjudicator deploy.\n"
+    )
     assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
+
+
+def test_unlocked_preregistration_refuses_full_deploy_before_any_external_call(tmp_path):
+    """An unlocked contract must not leave the API and Job on different images."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    prereg.write_text(
+        "# Publication pre-registration — the outcome loop\n\n"
+        "**Status:** DRAFT test fixture\n"
+    )
+
+    result, lines = _invoke_gcp(tmp_path, "deploy", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert result.stderr == (
+        "ERROR: publication pre-registration is not LOCKED; "
+        "refusing adjudicator deploy.\n"
+    )
+    assert not [line for line in lines if line.startswith("run services describe doug-api")]
+    assert not [line for line in lines if line.startswith("run deploy doug-api")]
+    assert not [line for line in lines if line.startswith("run services update-traffic")]
+    assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
+    assert (tmp_path / "curl.log").read_text() == ""
 
 
 def test_schedule_creates_one_daily_utc_trigger_with_a_scheduler_identity(tmp_path):
