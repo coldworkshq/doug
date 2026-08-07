@@ -650,3 +650,32 @@ pill title, and the summary line was correct — "37 of 68 runs" pairs a
 filtered count with an unfiltered total and says so. Chase the described
 failure to whichever code actually exhibits it before disproving a finding
 because the named location is clean.
+
+## A comment claiming a safeguard is a claim the code must be checked against
+
+`facets.ts` documented that "the page suppresses counts entirely once that set
+is a truncated page." `FacetBar` never referenced `atCap` and always rendered
+counts. The comment described a design that was considered and then not built,
+and a test repeated the same sentence — so the claim was asserted twice and
+implemented zero times.
+
+This is the "comment that outlives its truth" class, with a sharper edge: the
+comment did not describe stale *behaviour*, it described a *safeguard*. A stale
+comment about how something works wastes a reader's time. A stale comment about
+a protection that does not exist tells the next reviewer the hazard is already
+handled, so they stop looking. It also survives review more easily, because a
+reviewer who reads the comment and agrees with it has no reason to go find the
+enforcement.
+
+Two habits catch it. When a comment says the code refuses, suppresses, rejects
+or guards, grep for the mechanism before believing it — the enforcement is a
+line of code with a name, and if you cannot find it, it is not there. And when
+a safeguard's condition already exists as a named flag, the flag should reach
+every component whose output the claim covers; here `atCap` reached the header
+and the group badge but not the pill bar, which is precisely where the untrue
+sentence was written.
+
+Related: the fix reworded a title from "N runs in scope" to "the newest N runs
+fetched". Both the numerator and the denominator had been correct throughout;
+what was wrong was the noun naming the population. Statistics get their truth
+from their label as much as their arithmetic.
