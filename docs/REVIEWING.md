@@ -622,3 +622,31 @@ For a new claim, provide a concrete behavior-bearing path, check whether it is
 already excepted, and then distinguish a bad classification from the
 already-visible cost of an accepted lower tier. Keep a routing repair scoped to
 routing unless the scoring taxonomy is independently wrong.
+
+## A count and its denominator must come from the same population
+
+PR #63's facet pills counted runs over the full fetched set, then rendered
+that count against a denominator that had already been filtered:
+`${option.count} of the ${totalShown} runs shown`. With `?band=flagged`
+active the "cleared" pill read "32 of the 37 runs shown" — while every one
+of those 37 was flagged, so zero cleared runs were on screen. Filter hard
+enough and the numerator exceeds the total printed beside it.
+
+Both numbers were individually correct. Neither was computed wrong. The
+defect lives only in their pairing, which is why it survived a green build,
+a clean typecheck and 55 passing unit tests: no single function is at fault,
+and the types are both `number`.
+
+The generalizable check is to name the population for every rendered
+statistic and compare the names, not the values. Here the numerator's
+population was "runs in scope" and the denominator's was "runs matching the
+current filter"; the labels were the tell, not the arithmetic. When a
+component takes a total as a prop, that prop's contract is the population,
+so say which one in its type — a bare `total: number` invites the caller to
+pass whichever count is nearest.
+
+Doug found this one. Its wording pointed at the summary line rather than the
+pill title, and the summary line was correct — "37 of 68 runs" pairs a
+filtered count with an unfiltered total and says so. Chase the described
+failure to whichever code actually exhibits it before disproving a finding
+because the named location is clean.

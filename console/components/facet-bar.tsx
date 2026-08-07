@@ -19,13 +19,19 @@ import type { Facet, FacetKey } from "@/lib/facets";
 export function FacetBar({
   facets,
   selection,
-  totalShown,
+  totalInScope,
   onToggle,
   onClear,
 }: {
   facets: Facet[];
   selection: Partial<Record<FacetKey, string[]>>;
-  totalShown: number;
+  /** The size of the population the option counts were computed over —
+   *  the full fetched set, NOT what survives the current filter. A count
+   *  and its denominator must come from the same population; pairing an
+   *  unfiltered numerator with a filtered denominator let a pill read
+   *  "32 of the 37 runs shown" while zero of those 37 were cleared, and
+   *  could print a count larger than the total beside it. */
+  totalInScope: number;
   onToggle: (key: FacetKey, value: string) => void;
   onClear: () => void;
 }) {
@@ -69,7 +75,7 @@ export function FacetBar({
                 type="button"
                 onClick={() => onToggle(facet.key, option.value)}
                 aria-pressed={on}
-                title={`${option.count} of the ${totalShown} runs shown`}
+                title={`${option.count} of ${totalInScope} runs in scope`}
                 className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[11px] transition-colors ${frame} ${ink}`}
               >
                 {option.label}

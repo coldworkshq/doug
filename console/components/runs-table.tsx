@@ -135,7 +135,11 @@ export function RunsTable({
       <FacetBar
         facets={facets}
         selection={selection}
-        totalShown={shown}
+        // The counts on those pills were computed over `runs` (unfiltered),
+        // so their denominator must be `runs.length` too. Passing the
+        // filtered `shown` here paired an unfiltered numerator with a
+        // filtered denominator.
+        totalInScope={runs.length}
         onToggle={toggleFacet}
         onClear={() => writeSelection({})}
       />
