@@ -526,7 +526,11 @@ def save_review(
                     "label": r.label,
                     "weight": r.weight,
                     "file": None,
-                    "severity": None,
+                    # The Reason itself may already carry severity (reader
+                    # tier sets it in verdict_from_reader); reader_verdict
+                    # below only adds `file` and reconfirms the same value
+                    # when a match is found.
+                    "severity": r.severity,
                 }
                 for r in verdict.reasons
             ]
@@ -1114,6 +1118,16 @@ def _verdict_bundle(conn, v) -> dict:
     }
 
 
+def _load_verdict_row(conn, verdict_id: int):
+    """The raw `verdicts` row for one id, or None. Shared by every by-id
+    lookup so the query itself lives in exactly one place — find_verdict_by_id
+    and run_detail both start here, each still checking the None case itself,
+    before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
+    return conn.execute(
+        select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
+    ).mappings().first()
+
+
 def find_verdict_by_identity(
     installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
 ) -> dict | None:
@@ -1177,12 +1191,95 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
     if engine is None:
         return None
     with engine.connect() as conn:
-        v = conn.execute(
-            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-        ).mappings().first()
+        v = _load_verdict_row(conn, verdict_id)
         if v is None:
             return None
         return _verdict_bundle(conn, v)
+
+
+def run_detail(verdict_id: int) -> dict | None:
+    """Everything the console's forensic page shows for one run.
+
+    _verdict_bundle deliberately omits provenance — it renders a check run,
+    where model and prompt hash are noise. This page has the opposite need:
+    those fields ARE the answer to "what did Doug do with this PR". Rather
+    than widen the bundle and change what every check run carries, this
+    composes it with the columns it drops.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        v = _load_verdict_row(conn, verdict_id)
+        if v is None:
+            return None
+        detail = _verdict_bundle(conn, v)
+        detail.update(
+            {
+                "repo": v["repo"],
+                "pr_number": v["pr_number"],
+                "scored_at": v["scored_at"],
+                "model": v["model"],
+                "prompt_hash": v["prompt_hash"],
+                "risk_score": v["risk_score"],
+                "rationale": v["rationale"],
+                "head_sha": v["head_sha"],
+                "source": v["source"],
+                "installation_id": v["installation_id"],
+                "github_repo_id": v["github_repo_id"],
+                "pr_meta": v["pr_meta"],
+            }
+        )
+        job = conn.execute(
+            select(review_jobs).where(review_jobs.c.verdict_id == verdict_id).limit(1)
+        ).mappings().first()
+        detail["job"] = (
+            {
+                "status": job["status"],
+                "attempts": job["attempts"],
+                "claim_generation": job["claim_generation"],
+                "error": job["error"],
+                "enqueued_at": job["enqueued_at"],
+                "started_at": job["started_at"],
+                "finished_at": job["finished_at"],
+            }
+            if job
+            else None
+        )
+        # Outcomes key on (repo, pr_number), not on the verdict: a PR scored
+        # three times has one merge and one set of clocks, shared by all
+        # three runs. Both windows travel separately — they are different
+        # claims with different dates, and the page shows them side by side.
+        detail["outcomes"] = [
+            {
+                "kind": row["kind"],
+                "window_days": row["window_days"],
+                "observed_at": row["observed_at"],
+                "source": row["source"],
+                "detail": row["detail"],
+            }
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.repo == v["repo"])
+                .where(outcomes.c.pr_number == v["pr_number"])
+                .order_by(outcomes.c.window_days)
+            ).mappings()
+        ]
+        detail["outcome_jobs"] = [
+            {
+                "window_days": row["window_days"],
+                "status": row["status"],
+                "due_at": row["due_at"],
+                "merged_at": row["merged_at"],
+            }
+            for row in conn.execute(
+                select(outcome_jobs)
+                .where(outcome_jobs.c.github_repo_id == v["github_repo_id"])
+                .where(outcome_jobs.c.pr_number == v["pr_number"])
+                .order_by(outcome_jobs.c.window_days)
+            ).mappings()
+        ]
+    return detail
 
 
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
@@ -1308,6 +1405,155 @@ def latest_reviews(
             if len(out) >= limit:
                 break
     return out
+
+
+def run_history(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+) -> list[dict]:
+    """Verdict HISTORY, newest first — every run, not one row per PR.
+
+    `latest_reviews` answers "what is the current state of the queue".
+    This answers "what has Doug done", which is a different question: a PR
+    pushed three times is three runs, and collapsing them hides exactly the
+    comparison an operator opens the console to make.
+
+    Untenanted rows (installation_id IS NULL) are excluded by default. That
+    is the filter migrations.py:211 names as the correct one — real
+    installation ids rather than a label — and it is what keeps backfilled
+    probe corpora, CLI rows and the research quarantine out of a console
+    that is meant to show tenant traffic.
+
+    Each row carries `coverage`, `finding_counts`, `job` and `outcome_14`.
+    Every child join goes through an id-picking subquery — the pattern
+    comparison_reviews uses — because a plain outerjoin duplicates the
+    verdict row whenever two children match, and a duplicated run reads as
+    a real second review rather than as a bug.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0:
+        return []
+    from sqlalchemy import case, desc, func, select
+
+    query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
+    if not include_untenanted:
+        query = query.where(verdicts.c.installation_id.is_not(None))
+    if repo:
+        query = query.where(verdicts.c.repo == repo)
+    if installation_id is not None:
+        query = query.where(verdicts.c.installation_id == installation_id)
+    query = (
+        query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
+        .limit(limit)
+        .offset(offset)
+    )
+
+    with engine.connect() as conn:
+        rows = [dict(row) for row in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+        ids = [r["id"] for r in rows]
+
+        # One read per verdict: newest by id. A verdict can carry more than
+        # one (a retried read writes a second row), and both are real.
+        read_ids = (
+            select(reads.c.verdict_id, func.max(reads.c.id).label("read_id"))
+            .where(reads.c.verdict_id.in_(ids))
+            .group_by(reads.c.verdict_id)
+            .subquery()
+        )
+        cov_by_verdict = {
+            row["verdict_id"]: {
+                "diff_chars": row["diff_chars"],
+                "sent_chars": row["sent_chars"],
+                "files_sent": row["files_sent"],
+                "files_unseen": row["files_unseen"],
+                "file_cut": row["file_cut"],
+            }
+            for row in conn.execute(
+                select(reads).join(read_ids, read_ids.c.read_id == reads.c.id)
+            ).mappings()
+        }
+
+        counts_by_verdict = {
+            row["verdict_id"]: {
+                "total": row["total"],
+                "high": row["high"],
+                "medium": row["medium"],
+                "low": row["low"],
+            }
+            for row in conn.execute(
+                select(
+                    findings.c.verdict_id,
+                    func.count().label("total"),
+                    func.sum(case((findings.c.severity == "high", 1), else_=0)).label("high"),
+                    func.sum(case((findings.c.severity == "medium", 1), else_=0)).label(
+                        "medium"
+                    ),
+                    func.sum(case((findings.c.severity == "low", 1), else_=0)).label("low"),
+                )
+                .where(findings.c.verdict_id.in_(ids))
+                .group_by(findings.c.verdict_id)
+            ).mappings()
+        }
+
+        # Newest-attempts-last if a verdict is ever referenced by more than
+        # one job row (not enforced today — uq_review_job scopes uniqueness
+        # to (installation_id, github_repo_id, pr_number, head_sha), not to
+        # verdict_id). The dict below keeps whichever comes last in
+        # iteration order, the same last-observation-wins rule as
+        # outcome_by_pr just below.
+        job_by_verdict = {
+            row["verdict_id"]: {
+                "status": row["status"],
+                "attempts": row["attempts"],
+                "error": row["error"],
+                "enqueued_at": row["enqueued_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+            }
+            for row in conn.execute(
+                select(review_jobs)
+                .where(review_jobs.c.verdict_id.in_(ids))
+                .order_by(review_jobs.c.id)
+            ).mappings()
+        }
+
+        # 14-day only. Both windows exist for a merged PR, and carrying both
+        # into a list column is what fans one run out into two. Filtered on
+        # both halves of the key — repo alone would fetch every 14-day
+        # outcome for every repo on the page, not just the PRs on it.
+        #
+        # `outcomes` carries no unique constraint on (repo, pr_number,
+        # window_days), so if a PR is ever re-graded the dict below keeps
+        # the highest-id (most recent) row — last-observation-wins. That is
+        # a different reduction than find_scored_prs_with_outcomes uses on
+        # this same table (store.py:1240-1241), which fans a multi-outcome
+        # PR out into several rows and leaves the reduction to its caller.
+        # The difference is deliberate: outcome_14 is a single list-column
+        # value here, so there is no caller-side reduction to defer to.
+        keys = {(r["repo"], r["pr_number"]) for r in rows}
+        outcome_by_pr = {
+            (row["repo"], row["pr_number"]): row["kind"]
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.window_days == 14)
+                .where(outcomes.c.repo.in_({k[0] for k in keys}))
+                .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
+                .order_by(outcomes.c.id)
+            ).mappings()
+        }
+
+    zero = {"total": 0, "high": 0, "medium": 0, "low": 0}
+    for row in rows:
+        row["coverage"] = cov_by_verdict.get(row["id"])
+        row["finding_counts"] = counts_by_verdict.get(row["id"], dict(zero))
+        row["job"] = job_by_verdict.get(row["id"])
+        row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"]))
+    return rows
 
 
 def active_installations() -> list[int]:

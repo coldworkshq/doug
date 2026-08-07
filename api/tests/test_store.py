@@ -132,6 +132,35 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         assert f["severity"] == "high" and f["file"] == "cache.py"
 
 
+def test_save_review_persists_reason_severity_without_a_reader_verdict(tmp_path, monkeypatch):
+    """reader_verdict is optional on save_review's own signature — callers
+    that build a Verdict directly (run_history's own test suite among them)
+    are a legitimate use of it, not a misuse. Severity must survive on that
+    path too, not only when a matching reader_verdict also happens to be
+    passed and label-matches each reason."""
+    url = _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.62,
+        band=Band.FLAGGED,
+        threshold=0.30,
+        reasons=[
+            Reason(
+                rule="reader:race-condition",
+                label="Cache write is not guarded",
+                weight=0.0,
+                severity="high",
+            )
+        ],
+    )
+    vid = store.save_review("o/r", 7, "reader", verdict)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        f = conn.execute(select(store.findings)).mappings().one()
+    assert f["verdict_id"] == vid
+    assert f["severity"] == "high"
+
+
 def _pr() -> PRMetadata:
     return PRMetadata.model_validate(
         dict(number=7, title="Add cache", author="dev", files=["cache.py"])
@@ -1180,6 +1209,42 @@ def test_an_external_review_arriving_first_does_not_suppress_dougs_review(
     assert store.find_verdict_by_identity(INSTALL, REPO_ID, 7, "a" * 40) is None
 
 
+# find_verdict_by_id itself has no direct caller in this suite — it is
+# worker.py's race-loser fallback, reached only when find_verdict_by_identity
+# misses twice in the same job (pre-read, then the post-collision re-check).
+# test_a_race_loser_replays_the_peer_and_does_not_attach_local_deviations in
+# test_worker.py exercises that branch, but the identity re-check there
+# always resolves before falling through, so find_verdict_by_id's own query
+# is never actually invoked by any existing test (confirmed empirically: a
+# call counter placed inside it stayed at zero across the whole worker and
+# store suites). The two tests below pin it directly — required by the
+# _load_verdict_row extraction, which must not change what this returns.
+
+
+def test_find_verdict_by_id_returns_the_bundle_for_a_known_id(tmp_path, monkeypatch):
+    """The durable handle worker.py falls back to when the identity re-read
+    misses. Must return the same check-run bundle find_verdict_by_identity
+    would — tier/score/reasons — and, being the check-run path, none of the
+    provenance run_detail exists to add back."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    found = store.find_verdict_by_id(vid)
+    assert found["tier"] == "reader"
+    assert found["score"] == VERDICT.score
+    assert found["reasons"][0]["rule"] == "reader:race-condition"
+    # the check-run bundle's deliberate omission — this is what run_detail
+    # exists to add back for the forensic page, not what this path returns
+    assert "model" not in found
+
+
+def test_find_verdict_by_id_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.find_verdict_by_id(4242) is None
+
+
 def test_an_external_review_does_not_take_a_pr_off_the_queue(tmp_path, monkeypatch):
     """latest_reviews groups by (repo, pr) and takes max(id). An external row
     is newer than Doug's, so filtering only the outer query would drop the PR
@@ -1535,6 +1600,367 @@ def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path,
     assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
     assert rows[0]["id"] == in_scope_id
     assert rows[0]["score"] == 0.61
+
+
+def test_run_history_returns_every_run_for_a_pr_not_just_the_latest(tmp_path, monkeypatch):
+    """The defining difference from latest_reviews. A PR pushed three times
+    is three runs; a console that collapses them cannot answer "what did
+    Doug do on this push" — which is the whole point of the page."""
+    _db(tmp_path, monkeypatch)
+    for sha in ("a" * 40, "b" * 40, "c" * 40):
+        store.save_review(
+            "o/r", 7, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+        )
+    rows = store.run_history()
+    assert len(rows) == 3
+    assert {r["head_sha"] for r in rows} == {"a" * 40, "b" * 40, "c" * 40}
+    assert store.latest_reviews() and len(store.latest_reviews()) == 1
+
+
+def test_run_history_carries_repo_and_installation(tmp_path, monkeypatch):
+    """The field latest_reviews drops. Without it the console cannot group
+    per repo, which is the reported gap."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    row = store.run_history()[0]
+    assert row["repo"] == "o/r"
+    assert row["installation_id"] == 99
+    assert row["github_repo_id"] == 1
+
+
+def test_run_history_excludes_untenanted_rows_by_default(tmp_path, monkeypatch):
+    """Backfilled probe corpora, CLI rows and the research quarantine all
+    carry no installation_id. Including them would flood the console with
+    thousands of rows that are not tenant traffic — the exact failure
+    DOUG_QUEUE_REPO exists to paper over on doug-web."""
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 1, "reader", VERDICT)  # no installation — CLI/backfill
+    store.save_review(
+        "o/r", 2, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert [r["pr_number"] for r in store.run_history()] == [2]
+    assert {r["pr_number"] for r in store.run_history(include_untenanted=True)} == {1, 2}
+
+
+def test_run_history_excludes_external_tier(tmp_path, monkeypatch):
+    """External rows are other reviewers' verdicts, not Doug's runs."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, store.EXTERNAL_TIER, VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40,
+    )
+    assert store.run_history() == []
+
+
+def test_run_history_scopes_by_repo_and_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/one", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=11, head_sha="a" * 40, source="app",
+    )
+    store.save_review(
+        "o/two", 2, "reader", VERDICT,
+        github_repo_id=2, installation_id=22, head_sha="b" * 40, source="app",
+    )
+    assert [r["repo"] for r in store.run_history(repo="o/one")] == ["o/one"]
+    assert [r["installation_id"] for r in store.run_history(installation_id=22)] == [22]
+
+
+def test_run_history_paginates_newest_first(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    for n in range(5):
+        vid = store.save_review(
+            "o/r", n, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=str(n) * 40, source="app",
+        )
+        engine = store._get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                store.verdicts.update()
+                .where(store.verdicts.c.id == vid)
+                .values(scored_at=base + timedelta(hours=n))
+            )
+    assert [r["pr_number"] for r in store.run_history(limit=2)] == [4, 3]
+    assert [r["pr_number"] for r in store.run_history(limit=2, offset=2)] == [2, 1]
+
+
+def test_run_history_attaches_coverage_without_duplicating_runs(tmp_path, monkeypatch):
+    """Two reads on one verdict must not become two runs. A plain outerjoin
+    fans out here, and a duplicated run reads as a real second review."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=1000, sent_chars=170, files_sent=4,
+            files_unseen=["tenancy.py"], file_cut="api.py",
+        ),
+    )
+    store.save_read(vid, store.Coverage(
+        diff_chars=1200, sent_chars=900, files_sent=20,
+        files_unseen=[], file_cut=None,
+    ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["coverage"]["files_sent"] == 20
+    assert rows[0]["coverage"]["diff_chars"] == 1200
+
+
+def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monkeypatch):
+    """No read happened, so there is no coverage. This must be None and
+    render as "no read" — never as 0%, which would read as a total miss."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["coverage"] is None
+
+
+def test_run_history_counts_findings_by_severity(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.8, band=Band.FLAGGED, threshold=0.62,
+        reasons=[
+            Reason(rule="reader:a", label="a", weight=0.0, severity="high"),
+            Reason(rule="reader:b", label="b", weight=0.0, severity="low"),
+            Reason(rule="reader:c", label="c", weight=0.0, severity="low"),
+        ],
+    )
+    store.save_review(
+        "o/r", 1, "reader", verdict,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    counts = store.run_history()[0]["finding_counts"]
+    assert counts == {"total": 3, "high": 1, "medium": 0, "low": 2}
+
+
+def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
+    """The job row is the "what did Doug do" record: attempts and error are
+    the only place a failed run explains itself."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=1, head_sha="a" * 40, status="done", attempts=2,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 41, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+    job = store.run_history()[0]["job"]
+    assert job["status"] == "done"
+    assert job["attempts"] == 2
+
+
+def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
+    """Both windows exist for a merged PR. The list column is the 14d one;
+    joining both would fan the run out into two rows."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for window, kind in ((14, "clean"), (60, "revert")):
+            conn.execute(store.outcomes.insert().values(
+                repo="o/r", pr_number=1, kind=kind, window_days=window,
+                observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+                github_repo_id=1, installation_id=99,
+            ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["outcome_14"] == "clean"
+
+
+def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypatch):
+    """Ungraded is not clean. The console must render these differently."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["outcome_14"] is None
+
+
+# --- run_detail (the forensic bundle for one run) ---
+
+
+def test_run_detail_carries_the_fields_the_check_run_bundle_drops(tmp_path, monkeypatch):
+    """_verdict_bundle serves the check run and omits provenance on purpose.
+    The forensic page is the opposite need: model, prompt hash and rationale
+    ARE the answer to "what did Doug do"."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        prompt_hash="a3f9e2c1",
+    )
+    detail = store.run_detail(vid)
+    assert detail["repo"] == "o/r"
+    assert detail["pr_number"] == 7
+    assert detail["model"] == "claude-opus-5"
+    assert detail["prompt_hash"] == "a3f9e2c1"
+    assert detail["risk_score"] == 62
+    assert detail["rationale"] == "Unlocked cache write."
+    assert detail["source"] == "app"
+    assert detail["head_sha"] == "a" * 40
+    # and still everything the bundle already gave
+    assert detail["reasons"][0]["rule"] == "reader:race-condition"
+
+
+def test_run_detail_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.run_detail(4242) is None
+
+
+def test_run_detail_attaches_the_job_including_its_error(tmp_path, monkeypatch):
+    """A failed run explains itself nowhere else."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="failed", attempts=3,
+            claim_generation=3, error="reader timeout after 60s",
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC), verdict_id=vid,
+        ))
+    job = store.run_detail(vid)["job"]
+    assert job["status"] == "failed"
+    assert job["attempts"] == 3
+    assert job["claim_generation"] == 3
+    assert job["error"] == "reader timeout after 60s"
+
+
+def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatch):
+    """The 14d and 60d clocks are different claims with different dates, and
+    the page shows them side by side. Collapsing them loses the censoring
+    story."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+        conn.execute(store.outcome_jobs.insert().values(
+            installation_id=99, github_repo_id=1, pr_number=7,
+            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 3, tzinfo=UTC),
+            base_ref="main", window_days=60,
+            due_at=datetime(2026, 10, 2, tzinfo=UTC), status="pending",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        ))
+    detail = store.run_detail(vid)
+    assert [o["window_days"] for o in detail["outcomes"]] == [14]
+    assert detail["outcomes"][0]["kind"] == "clean"
+    assert [j["window_days"] for j in detail["outcome_jobs"]] == [60]
+    assert detail["outcome_jobs"][0]["status"] == "pending"
+
+
+def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatch):
+    """save_deviations writes a kind="none" row to record "the read ran and
+    found nothing". It is a storage marker, never a finding. If it reached
+    the page it would render as a deviation named "none" — Doug reporting a
+    problem it explicitly did not find."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    # signature: (verdict_id, findings, intent_refs, intent_alignment)
+    store.save_deviations(vid, [], intent_refs=[], intent_alignment=100)
+    detail = store.run_detail(vid)
+    assert detail["deviations"] == []
+    # The row exists — "read happened, found nothing" stays distinguishable
+    # from "no read happened", which is why the marker is written at all.
+    assert detail["intent_alignment"] == 100
+
+
+def test_run_detail_exposes_pr_meta_for_the_coverage_denominator(tmp_path, monkeypatch):
+    """changed_files lives on pr_meta and is the only correct denominator.
+    Without it on the detail payload the page would fall back to
+    len(files_unseen) + files_sent, which is not the true file count."""
+    _db(tmp_path, monkeypatch)
+    meta = PRMetadata(
+        number=7, title="t", author="a", files=["one.py"], changed_files=23,
+        files_dropped=["uv.lock"],
+    )
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, pr_meta=meta.model_dump(),
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["pr_meta"]["changed_files"] == 23
+    assert detail["pr_meta"]["files_dropped"] == ["uv.lock"]
+
+
+def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(
+    tmp_path, monkeypatch
+):
+    """A run with no review_jobs row and no outcomes/outcome_jobs rows is the
+    common case (most PRs are still open, most jobs are pre-Task-6 CI rows).
+    "no job" must stay None and "no outcomes yet" must stay [] — 'empty is
+    not zero' is a standing constraint, and a job silently defaulting to {}
+    or an outcome list silently gaining a phantom row would both pass any
+    assertion that only checks truthiness."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["job"] is None
+    assert detail["outcomes"] == []
+    assert detail["outcome_jobs"] == []
+
+
+def test_run_detail_carries_scored_at_and_app_identity(tmp_path, monkeypatch):
+    """The remaining passthrough columns _verdict_bundle also drops: when
+    the run happened and which installation/repo id it belongs to. Task 5
+    serialises this bundle whole, so a dropped or misspelled key here would
+    otherwise pass silently — the brief's own carries-the-fields test does
+    not touch these three."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["scored_at"] is not None
+    assert detail["installation_id"] == 99
+    assert detail["github_repo_id"] == 1
+
+
+def test_run_detail_tolerates_a_null_pr_meta(tmp_path, monkeypatch):
+    """save_review defaults pr_meta to None (CLI callers, pre-App rows). A
+    task earlier in this build crashed on exactly this column being null;
+    run_detail must pass it through as None, not assume it can be indexed."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_detail(vid)["pr_meta"] is None
 
 
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---

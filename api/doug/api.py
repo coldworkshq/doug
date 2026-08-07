@@ -25,6 +25,16 @@ from .models import (
     QueueSummary,
     ReadScoreRequest,
     Reason,
+    RunCoverage,
+    RunDetailJob,
+    RunDetailResponse,
+    RunDeviation,
+    RunFindingCounts,
+    RunJob,
+    RunListResponse,
+    RunOutcome,
+    RunOutcomeJob,
+    RunSummaryItem,
     Verdict,
 )
 from .scoring import default_threshold, score
@@ -252,6 +262,17 @@ def _operator_only(x_doug_token: str) -> None:
     gets 404 — the same no-existence-leak rule a cross-tenant repo gets.
     A token that resolves to nothing is 401, because nothing about it was
     ever valid.
+
+    That no-existence-leak rule is about DATA, not about the route itself:
+    this gate runs after FastAPI has already coerced the request's typed
+    query and path params, so a malformed one (e.g. `?limit=abc`, or a
+    non-integer `verdict_id`) 422s on a real operator route before this
+    function ever runs, versus 404 on a route that doesn't exist at all —
+    letting an unauthenticated caller distinguish the two. That is accepted,
+    not a gap: routes are public by ADR-0008, this gate still fails closed
+    on every credential it does see, no response body it produces ever
+    contains data, and the same 422-vs-404 split pre-exists identically on
+    `/v1/comparisons` and `/v1/patterns`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
@@ -381,6 +402,125 @@ def queue(
             threshold=thr,
         ),
         items=items,
+    )
+
+
+def _run_item(row: dict) -> RunSummaryItem:
+    """One ledger row as a list item.
+
+    `changed_files` travels separately from `coverage` because it is GitHub's
+    own count on pr_meta, and it is the ONLY correct denominator for a
+    coverage percentage — `len(files)` is the paginated list actually
+    fetched and can be short on exactly the large PRs where coverage matters
+    most. None here means the console renders "denominator unknown".
+
+    `_with_url` assumes `pr_meta` is a dict — every /v1/queue row is filtered
+    on that before it ever reaches _with_url. run_history carries every
+    verdict, including rows saved with no pr_meta at all (save_review's
+    `pr_meta` kwarg is optional), so a bare `_with_url(row)` call raises
+    validating None into PRMetadata instead of degrading. This falls back
+    the same way _comparison_run does for the same shape of row.
+    """
+    pr_meta = row["pr_meta"]
+    if isinstance(pr_meta, dict):
+        meta = _with_url(row)
+        title, url, changed_files = meta.title, meta.url, meta.changed_files
+    else:
+        title = f"PR #{row['pr_number']}"
+        url = f"https://github.com/{row['repo']}/pull/{row['pr_number']}"
+        changed_files = None
+    return RunSummaryItem(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        pr_number=row["pr_number"],
+        title=title,
+        url=url,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        source=row["source"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        changed_files=changed_files,
+        finding_counts=RunFindingCounts(**row["finding_counts"]),
+        job=RunJob(**row["job"]) if row["job"] else None,
+        outcome_14=row["outcome_14"],
+    )
+
+
+@app.get("/v1/runs")
+def runs(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+    x_doug_token: str = Header(""),
+) -> RunListResponse:
+    """Verdict history for the operator console. Operator-only, permanently:
+    this crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _operator_only(x_doug_token)
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    rows = store.run_history(
+        limit=limit,
+        offset=offset,
+        repo=repo,
+        installation_id=installation_id,
+        include_untenanted=include_untenanted,
+    )
+    return RunListResponse(
+        items=[_run_item(row) for row in rows], limit=limit, offset=offset
+    )
+
+
+@app.get("/v1/runs/{verdict_id}")
+def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResponse:
+    """One run, end to end. Operator-only for the same reason /v1/runs is."""
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    row = store.run_detail(verdict_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return RunDetailResponse(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        pr_number=row["pr_number"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        # Guarded the same way _run_item guards it: run_detail's row, like
+        # run_history's, can carry pr_meta=None (nullable column,
+        # save_review's default), and _with_url assumes a dict. Nulled
+        # rather than synthesized — see RunDetailResponse.pr's docstring.
+        pr=_with_url(row) if isinstance(row["pr_meta"], dict) else None,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        prompt_hash=row["prompt_hash"],
+        model=row["model"],
+        source=row["source"],
+        head_sha=row["head_sha"],
+        risk_score=row["risk_score"],
+        rationale=row["rationale"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        reasons=[Reason(**r) for r in row["reasons"]],
+        deviations=[RunDeviation(**d) for d in row["deviations"]],
+        intent_alignment=row["intent_alignment"],
+        intent_refs=row["intent_refs"],
+        job=RunDetailJob(**row["job"]) if row["job"] else None,
+        outcomes=[RunOutcome(**o) for o in row["outcomes"]],
+        outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
     )
 
 

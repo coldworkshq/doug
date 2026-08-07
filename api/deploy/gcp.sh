@@ -7,11 +7,14 @@
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets, IAM
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh web     # build + deploy the site
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh console # build + deploy the operator console
 #
 # `deploy` and `web` are what CI runs on every merge to main
 # (.github/workflows/deploy.yml), so they are pure deploys — no IAM, no
 # resource creation, nothing that needs admin rights. That is what lets the
 # CI principal stay narrow. Anything privileged belongs in `setup`.
+# `console` is deliberately not wired into CI: it is IAM-gated, so a stray
+# grant belongs to a human running `setup`, not to the merge-to-main path.
 set -euo pipefail
 
 PROJECT=${PROJECT:?set PROJECT}
@@ -19,6 +22,7 @@ REGION=${REGION:-us-central1}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
+CONSOLE_SERVICE=doug-console
 CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
@@ -152,6 +156,29 @@ setup() {
   #     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   #     --role=roles/secretmanager.secretAccessor
 
+  # doug-console is the operator surface. It crosses every installation, so
+  # it is IAM-gated rather than token-gated, and it gets its own identity
+  # for the same reason doug-web did: a service must not inherit the
+  # default compute SA's roles/editor.
+  gcloud iam service-accounts create doug-console-sa \
+    --display-name "doug-console runtime" --project "$PROJECT" 2>/dev/null \
+    || echo "doug-console-sa exists; leaving it"
+  CONSOLE_SA="doug-console-sa@$PROJECT.iam.gserviceaccount.com"
+  if ! gcloud iam service-accounts describe "$CONSOLE_SA" --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: service account $CONSOLE_SA is not visible after create." >&2
+    exit 1
+  fi
+  if gcloud secrets describe doug-api-token --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets add-iam-policy-binding doug-api-token --project "$PROJECT" \
+      --member="serviceAccount:$CONSOLE_SA" \
+      --role=roles/secretmanager.secretAccessor >/dev/null
+  else
+    echo "WARN: secret doug-api-token does not exist yet — create it and re-run setup." >&2
+  fi
+  # Grant yourself the ability to invoke the gated console:
+  #   gcloud run services add-iam-policy-binding doug-console --project "$PROJECT" \
+  #     --region "$REGION" --member="user:YOUR@EMAIL" --role=roles/run.invoker
+
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
   echo "setup done (check SQL instance state before first deploy)"
@@ -280,6 +307,23 @@ web() {
   web_url
 }
 
+console() {
+  # NO staged-traffic dance and NO smoke test: the service is
+  # --no-allow-unauthenticated, so an unauthenticated curl from this script
+  # gets 403 no matter how healthy the revision is. A failing console is an
+  # operator inconvenience, not an outage — the tradeoff web() cannot make.
+  gcloud run deploy "$CONSOLE_SERVICE" \
+    --source ../console \
+    --project "$PROJECT" --region "$REGION" \
+    --no-allow-unauthenticated \
+    --service-account "doug-console-sa@$PROJECT.iam.gserviceaccount.com" \
+    --set-env-vars "DOUG_API_URL=$(api_url)" \
+    --set-secrets "DOUG_API_TOKEN=doug-api-token:latest" \
+    --memory 512Mi --cpu 1 --max-instances 2 --timeout 60
+  echo "console deployed. Reach it with:"
+  echo "  gcloud run services proxy $CONSOLE_SERVICE --project $PROJECT --region $REGION"
+}
+
 web_url() {
   gcloud run services describe "$WEB_SERVICE" --project "$PROJECT" --region "$REGION" \
     --format="value(status.url)"
@@ -290,4 +334,4 @@ api_url() {
     --format="value(status.url)"
 }
 
-"${1:?setup|deploy|web}"
+"${1:?setup|deploy|web|console}"
