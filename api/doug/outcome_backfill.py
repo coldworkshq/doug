@@ -357,6 +357,9 @@ def apply(
         try:
             if conn.dialect.name == "postgresql":
                 conn.execute(
+                    text("LOCK TABLE installations IN SHARE ROW EXCLUSIVE MODE")
+                )
+                conn.execute(
                     text("LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE")
                 )
             effective_now = _as_utc(now) if now is not None else _db_now(conn)

@@ -541,7 +541,16 @@ def test_postgresql_insert_select_uses_exact_interval_and_conflict_target():
     [
         (
             "postgresql",
-            ["begin", "lock", "inspect", "insert", "inspect", "manifest", "commit"],
+            [
+                "begin",
+                "lock",
+                "lock",
+                "inspect",
+                "insert",
+                "inspect",
+                "manifest",
+                "commit",
+            ],
         ),
         (
             "sqlite",
@@ -552,8 +561,8 @@ def test_postgresql_insert_select_uses_exact_interval_and_conflict_target():
 def test_apply_fences_postgresql_population_in_its_write_transaction(
     tmp_path, monkeypatch, dialect_name, expected_events
 ):
-    """The structural audit is stale if another writer can change outcome_jobs
-    after inspection; SQLite must retain its native transaction path.
+    """The structural audit is stale if another writer can change either table
+    in its population after inspection; SQLite must retain its native transaction path.
     """
     events = []
     insert_statement = object()
@@ -640,5 +649,11 @@ def test_apply_fences_postgresql_population_in_its_write_transaction(
     assert all(event[1] is connection for event in events)
     assert all(event[2] is transaction for event in events)
     assert all(event[3] is True for event in events)
+    lock_events = [event for event in events if event[0] == "lock"]
     if dialect_name == "postgresql":
-        assert events[1][4] == "LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE"
+        assert [event[4] for event in lock_events] == [
+            "LOCK TABLE installations IN SHARE ROW EXCLUSIVE MODE",
+            "LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE",
+        ]
+    else:
+        assert lock_events == []
