@@ -195,6 +195,22 @@ setup() {
   echo "setup done (check SQL instance state before first deploy)"
 }
 
+wait_for_service_account() {
+  local service_account="$1" attempt=1
+  while [ "$attempt" -le 10 ]; do
+    if gcloud iam service-accounts describe "$service_account" \
+        --project "$PROJECT" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [ "$attempt" -lt 10 ]; then
+      sleep 1
+    fi
+    attempt=$((attempt + 1))
+  done
+  echo "ERROR: service account $service_account is not visible after create." >&2
+  return 1
+}
+
 adjudicator_setup() {
   # Narrow M3 bootstrap. Unlike setup(), this function never creates a SQL
   # database/user, changes a password, or publishes a database secret version.
@@ -212,11 +228,7 @@ adjudicator_setup() {
     --display-name "Doug adjudicator runtime" --project "$PROJECT" 2>/dev/null \
     || echo "doug-adjudicator-sa exists; leaving it"
   ADJUDICATOR_SA="doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com"
-  if ! gcloud iam service-accounts describe "$ADJUDICATOR_SA" \
-      --project "$PROJECT" >/dev/null 2>&1; then
-    echo "ERROR: service account $ADJUDICATOR_SA is not visible after create." >&2
-    exit 1
-  fi
+  wait_for_service_account "$ADJUDICATOR_SA"
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$ADJUDICATOR_SA" \
     --role=roles/cloudsql.client >/dev/null
@@ -234,11 +246,7 @@ adjudicator_setup() {
     --display-name "Doug adjudicator scheduler" --project "$PROJECT" 2>/dev/null \
     || echo "doug-scheduler-sa exists; leaving it"
   SCHEDULER_SA="doug-scheduler-sa@$PROJECT.iam.gserviceaccount.com"
-  if ! gcloud iam service-accounts describe "$SCHEDULER_SA" \
-      --project "$PROJECT" >/dev/null 2>&1; then
-    echo "ERROR: service account $SCHEDULER_SA is not visible after create." >&2
-    return 1
-  fi
+  wait_for_service_account "$SCHEDULER_SA"
   echo "adjudicator IAM ready (no SQL credentials changed)"
 }
 
@@ -357,7 +365,7 @@ adjudicator() {
   gcloud run jobs deploy "$ADJUDICATOR_JOB" \
     --image "$api_image" \
     --project "$PROJECT" --region "$REGION" \
-    --command python --args "-m,doug.outcome_worker" \
+    --command python --args=-m,doug.outcome_worker \
     --service-account "doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com" \
     --set-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
