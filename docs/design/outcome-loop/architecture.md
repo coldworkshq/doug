@@ -18,7 +18,7 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
         sha256-pinned) [live] │                         │   one neutral check run "Doug":
           pull_request        │                         │   verdict + receipt content
           pull_request_review │ [v1]                    │   N adjudicated · M pending
-          closed && merged ───┼── starts the clock [v1] │   deep reads: 143/200
+          closed && merged ───┼── stores 14 + 60 [v1] │   deep reads: 143/200
           installation ───────┼── mints tenant token    │   (never blocks, never comments)
                               ▼                         │
                     ┌─────────────────────────────────────────────────┐
@@ -48,7 +48,9 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
                     │  Vertex is a │   │    verdicts ⋈ outcomes              │
                     │  procurement │   │  keyed on installation/repo IDs,    │
                     │  option      │   │  repo strings display-only    [v1]  │
-                    └──────────────┘   │  due_at = the ONLY 14/60-day clock  │
+                    └──────────────┘   │  merge ingest = both window rows    │
+                                       │  (one atomic write)           [v1]  │
+                                       │  due_at = the ONLY clock authority  │
                                        │  denominator = outcome_jobs done    │
                                        └────────▲───────────────┬────────────┘
                                                 │               │
@@ -96,10 +98,10 @@ the bottleneck): AlloyDB, BigQuery, Pub/Sub, Cloud Tasks, Agent Runtime, A2A, a 
 ```
   opened ─► scored ────────────► merged ──────────► due ─────────────► adjudicated
             │                    │                  │                  │
-            verdict row +        outcome_jobs row   day 14 (and 60):   reverted (sha in
-            receipt (dated,      per window;        adjudicator        receipt) · survived
-            immutable, prompt-   due_at = clock     claims the job     the window ·
-            hash + prereg-hash)  starts             (SKIP LOCKED)      censored (honest)
+            verdict row +        outcome_jobs rows  day 14 (and 60):   reverted (sha in
+            receipt (dated,      14 + 60 atomic;    adjudicator        receipt) · survived
+            immutable, prompt-   due_at = ONLY      claims the job     the window ·
+            hash + prereg-hash)  clock authority    (SKIP LOCKED)      censored (honest)
             │                                                          │
             third-party reviews on the same PR ─► verdict rows ────────┤ same clock
                                                                        ▼

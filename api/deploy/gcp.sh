@@ -351,7 +351,14 @@ deploy() {
 }
 
 adjudicator() {
-  local api_image prereg_hash
+  local api_image prereg_hash prereg_doc
+  prereg_doc=../docs/design/outcome-loop/publication-preregistration.md
+  if ! grep -q '^\*\*Status:\*\* LOCKED ' "$prereg_doc"; then
+    echo "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy." >&2
+    return 1
+  fi
+  prereg_hash=$(python3 -c \
+    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('$prereg_doc').read_bytes()).hexdigest())")
   api_image=$(gcloud run services describe "$SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.spec.containers[0].image)')
@@ -359,8 +366,6 @@ adjudicator() {
     echo "ERROR: $SERVICE has no deployed image; deploy the API first." >&2
     return 1
   fi
-  prereg_hash=$(python3 -c \
-    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('../docs/design/outcome-loop/publication-preregistration.md').read_bytes()).hexdigest())")
 
   gcloud run jobs deploy "$ADJUDICATOR_JOB" \
     --image "$api_image" \

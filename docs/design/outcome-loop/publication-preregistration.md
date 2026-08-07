@@ -1,13 +1,11 @@
 # Publication pre-registration — the outcome loop
 
-**Status:** DRAFT v7 — **ALL FIVE RULINGS LANDED** 2026-08-07. Still NOT LOCKED:
-locking additionally requires the M3 item 1 fixture gate green (§10), migration 007
-(§11), and the 60-day backfill runbook. The hash must not enter a receipt before
-then. Until locked, the hash must not enter any receipt: a hash over a mutable
-document is worse than no hash, because it *looks* like a commitment.
+**Status:** LOCKED v8 — 2026-08-07
 **Roadmap:** M3 item 7 · **Mitigation:** design-lock altitude O3 (`design-lock.md:61`)
-**Companion, not yet written:** the 60-day backfill runbook — hard gate before the
-first 14-day publication (`design-lock.md:47`).
+**Companion:** `60-day-backfill-runbook.md` — the production catch-up is a hard
+operational gate before the first 14-day publication (`design-lock.md:47`). The
+runbook and this lock are built on `m3-60-day-backfill`; neither the catch-up nor
+the v8 hash deployment has occurred in production.
 
 **Changelog.** v1 failed review: the miss rate was not computable, the censoring
 arithmetic ran opposite to its own stated direction, "within the window" had no
@@ -25,7 +23,11 @@ revision driven by building against the document rather than reading it** — §
 window predicate turned out to have no lower bound, a defect three review rounds
 missed. The house template is `survival-probe-1-preregistration.md`: exact formulas,
 exact floors. **v6 records the 2026-08-07 rulings** — the window lower bound, the
-two-sided decidability rule, the cadence, and the attempts ceiling.
+two-sided decidability rule, the cadence, and the attempts ceiling. **v8 changes
+the mechanism, not the published metric:** future merges permanently receive the
+14- and 60-day rows in one atomic write, and one guarded historical
+`INSERT ... SELECT` fills only missing 60-day siblings. The metric, windows,
+censoring, cadence, and denominator are unchanged.
 
 ---
 
@@ -148,13 +150,13 @@ WITH ranked AS (
   WHERE v.tier = 'reader'
     AND v.scored_at <= j.merged_at
     -- Same filters as the outer query, so the CTE is self-evidently correct
-    -- rather than correct-by-argument. Today the 14- and 60-day rows of one
-    -- merge share a merged_at, so omitting these changes nothing — but the
-    -- 60-day rows come from a SECOND writer (the backfill, design-lock.md:47),
-    -- and if it ever derives merged_at differently, the 14-day publication's
-    -- governing verdict could be admitted by the 60-day row's merged_at.
+    -- rather than correct-by-argument. Future 14- and 60-day rows are one
+    -- atomic write; the historical insert-select copies the 14-day facts.
     AND j.window_days = :window
-    AND j.installation_id <> :RESEARCH_SENTINEL
+    AND EXISTS (
+      SELECT 1 FROM installations i
+      WHERE i.installation_id = j.installation_id
+    )
 ),
 governing AS (SELECT * FROM ranked WHERE rn = 1)
 SELECT count(DISTINCT j.pr_number)
@@ -166,7 +168,10 @@ JOIN governing g
 WHERE j.status        = 'done'
   AND j.window_days   = :window
   AND j.github_repo_id = :repo_id
-  AND j.installation_id <> :RESEARCH_SENTINEL
+  AND EXISTS (
+    SELECT 1 FROM installations i
+    WHERE i.installation_id = j.installation_id
+  )
   AND g.band          = 'cleared';
 ```
 
@@ -294,7 +299,7 @@ rather than sell it.
 
 | Excluded | Executable predicate | Status |
 |---|---|---|
-| Research corpus | `installation_id <> :RESEARCH_SENTINEL` | Sound — a reserved installation id (`migrations.py:211-217`) is a real column here. |
+| Research/CLI rows | `EXISTS (SELECT 1 FROM installations i WHERE i.installation_id = outcome_jobs.installation_id)` | Structural — prospective App merges belong to the installation registry; research and un-tenanted CLI rows do not. |
 | Other tenants | `github_repo_id = :repo_id` | Sound. |
 | Non-merged PRs | none needed — `_record_merge` returns before writing (`api.py:1041-1045`) | Structural. |
 | 90-day replay | **⚠ UNRESOLVED** | `outcome_jobs` has **no `source` column**. v1 specified `source='replay'`; it is unexecutable. The replay path does not appear to write `outcome_jobs` today. M4 must keep it that way and say so in code, or add a discriminator. §11. |
@@ -578,11 +583,15 @@ failures — flaky-bug median detection is 34 days (arxiv.org/pdf/2103.11518).
 Independent rows, independent denominators, **never summed** (`uq_outcome_job`
 includes `window_days`).
 
-**The 60-day denominator lags.** `store.enqueue_outcome_job` defaults
-`window_days=14` and `_record_merge` (`api.py:1073-1080`) passes no override, so the
-live path writes only the 14-day row. Until the backfill runs (`design-lock.md:47`)
-the publication carries an explicit **"60-day: not yet available"** line — it does not
-silently become a 14-day-only report.
+**Future merges receive both rows atomically.** `_record_merge`
+(`api.py:1073-1080`) calls `store.enqueue_outcome_jobs`, which prepares the 14- and
+60-day rows from the same stored merge facts and commits them in one multi-value
+statement. A redelivery may fill a missing sibling but cannot add a second row at
+either window. The one-time historical backfill (`design-lock.md:47`) is narrower:
+it copies stored facts only from registered 14-day rows whose 60-day sibling is
+missing. Until that production catch-up runs, the publication carries an explicit
+**"60-day: not yet available"** line — it does not silently become a 14-day-only
+report.
 
 ---
 
@@ -782,30 +791,34 @@ decided, with each ruling's reasoning in its own section.
    into `git_labels.py` so live and backtest read one constant. **The only ruling
    that changes a published number**, and it lowers it.
 
-**What still blocks the lock, none of it a ruling:** migration 007 is built on
-`m3-adjudicator-job` but not deployed, and the 60-day backfill runbook is unwritten.
-The §10 fixture gate shipped green in M3 item 1 (#59). A carried product requirement,
-from ruling 1: the install flow must disclose the default-in posture unmissably.
+**The lock prerequisites are complete:** the §10 fixture gate shipped green in M3
+item 1 (#59), migration 007 and the bounded Cloud Run Job/Scheduler are live, and
+`60-day-backfill-runbook.md` now records the guarded repair. **Only the production
+catch-up remains an operational gate** before the first 14-day publication; it has
+not run on this implementation branch. A carried product requirement, from ruling
+1: the install flow must disclose the default-in posture unmissably.
 
 **Named open rather than resolved:**
 
 6. **Replay exclusion** (§2.6) — no `source` column on `outcome_jobs`.
 7. **PR head sha at merge** (§2.1) — not stored.
 
-**Required schema work:**
+**Implemented schema and runtime work:**
 
 8. **`outcomes.kind` gains `censored`** — a new *value* on an existing `String(20)`
    column, not a migration.
-9. **Migration 007, three tables, built on `m3-adjudicator-job`:**
-   - `reads` gains `files_dropped` and `changed_files` (§5). Until it deploys,
-     `partial_read_share` publishes as "not available".
+9. **Migration 007, three tables, live in production:**
+   - `reads` gains `files_dropped` and `changed_files` (§5), making
+     `partial_read_share` reconstructible from the ledger.
    - **`outcomes` gains `merge_commit_sha`** (§2.3). Without it the numerator has no
      job discriminator and the `N_done = misses + clean + censored` identity can be
      false while every stated rule is obeyed.
    - `outcome_jobs` gains `started_at`, `finished_at`, `error` and
      `claim_generation`, making a crashed Job reclaimable without letting a stale
      holder publish over a newer claim.
-10. **`prereg_hash` stored per adjudicated row** in `outcomes.detail` (§12).
+10. **`prereg_hash` stored per adjudicated row** in `outcomes.detail` (§12). The
+    deploy guard for this v8 lock is built on `m3-60-day-backfill`; its hash is not
+    live until the Task 7 deploy.
 
 **Required of `adjudicate.py`:** exactly one classification row per job (§2.3);
 **every row writes `installation_id`, `github_repo_id`, `window_days` and
@@ -876,7 +889,7 @@ void. A skipped quarter with no notice is indistinguishable from a hidden bad nu
 
 ```sh
 git rev-parse HEAD
-sha256sum docs/design/outcome-loop/publication-preregistration.md
+python3 -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('docs/design/outcome-loop/publication-preregistration.md').read_bytes()).hexdigest())"
 ```
 
 Over the file's bytes as committed, LF newlines, at the named ref — ref and digest

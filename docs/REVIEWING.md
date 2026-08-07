@@ -569,6 +569,34 @@ into a runtime defect. If module execution becomes a contract, make the scripts
 a package, convert all sibling imports coherently, and add that exact invocation
 to the tests rather than patching one import in isolation.
 
+## Keep prospective clock catch-up separate from research backfill
+
+`scripts/backfill_ledger.py` imports research-corpus evidence. The production
+`scripts/backfill_outcome_jobs.py` catch-up does something narrower: for a stored
+14-day clock belonging to an installation present in the `installations`
+registry, it inserts only the missing 60-day sibling from the same merge facts.
+Do not transfer the research script's sentinel assumptions or broad write shape
+into this prospective denominator repair.
+
+A production clock catch-up is reviewable only when all of these controls travel
+together:
+
+- eligibility is structural registry membership, not a guessed installation-id
+  range or a research sentinel comparison;
+- the anti-join targets the complete outcome identity, and existing pairs are
+  rejected when `merged_at`, `base_ref`, or the 60-day `due_at` conflicts;
+- a read-only dry-run records the exact missing count, and apply refuses a
+  different count;
+- an exclusive manifest records the exact inserted identities and verifies that
+  every row is still untouched before rollback; and
+- the daily Scheduler is proven enabled, paused before apply, and resumed only
+  after either verified rollback or audited manual adjudication.
+
+Cloud SQL Studio temporary tables are not a cross-command audit mechanism: its
+submissions may use different sessions. Use session-independent violation
+queries and the durable manifest in
+`docs/design/outcome-loop/60-day-backfill-runbook.md`.
+
 ## Deprioritized files are not silently omitted
 
 `features._is_prose` is a routing heuristic: it sends prose after code and

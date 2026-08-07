@@ -8,6 +8,7 @@ allowlist pin in test_deviations.py.
 
 import hashlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -117,6 +118,7 @@ def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "gcloud.log"
+    log.touch()
     gcloud = fake_bin / "gcloud"
     gcloud.write_text(
         """#!/bin/sh
@@ -149,9 +151,13 @@ exit 0
     return fake_bin, log
 
 
-def _run_gcp(
-    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
-) -> list[str]:
+def _invoke_gcp(
+    tmp_path: Path,
+    command: str,
+    extra_env: dict[str, str] | None = None,
+    *,
+    gcp_path: Path = GCP_PATH,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     fake_bin, log = _fake_gcloud(tmp_path)
     env = {
         **os.environ,
@@ -163,14 +169,21 @@ def _run_gcp(
         **(extra_env or {}),
     }
     result = subprocess.run(
-        ["bash", str(GCP_PATH), command],
-        cwd=GCP_PATH.parent.parent,
+        ["bash", str(gcp_path), command],
+        cwd=gcp_path.parent.parent,
         env=env,
         capture_output=True,
         text=True,
     )
+    return result, log.read_text().splitlines()
+
+
+def _run_gcp(
+    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
+) -> list[str]:
+    result, lines = _invoke_gcp(tmp_path, command, extra_env)
     assert result.returncode == 0, result.stdout + result.stderr
-    return log.read_text().splitlines()
+    return lines
 
 
 def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tmp_path):
@@ -196,6 +209,28 @@ def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tm
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
+
+
+def test_unlocked_preregistration_refuses_adjudicator_deploy(tmp_path):
+    """A mutable publication contract must never be stamped onto a runnable Job."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    prereg.write_text(
+        "# Publication pre-registration — the outcome loop\n\n"
+        "**Status:** DRAFT test fixture\n"
+    )
+
+    result, lines = _invoke_gcp(tmp_path, "adjudicator", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert (
+        "ERROR: publication pre-registration is not LOCKED; "
+        "refusing adjudicator deploy."
+    ) in result.stderr
+    assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
 
 
 def test_schedule_creates_one_daily_utc_trigger_with_a_scheduler_identity(tmp_path):

@@ -1,27 +1,35 @@
 # HANDOFF — doug
 
-State:    M3 ACTIVE. HEAD main is `fa1e323` (#65). M3 item 1
-          (`adjudicate.py`) and the v7 pre-registration are merged (#59–#61).
-          M3 item 2 is LIVE: #64 shipped migration 007, the repository-batched
-          `doug-adjudicator` Cloud Run Job (2Gi), crash leases + generation
-          fencing, ten daily attempts, append-only merge-SHA outcomes, persisted
-          read coverage, and the separate Scheduler identity; #65 fixed the
-          first deploy's `gcloud --args` parse failure and IAM propagation wait.
-          `doug-adjudicator-daily` is enabled for 03:00 UTC with zero Scheduler
-          retry attempts. The Job uses the exact API image and the intended
-          runtime SA, one task, zero platform retries and a 3600-second timeout.
-          First execution `doug-adjudicator-nvwqn` completed successfully on
-          2026-08-07 with `repositories=0`, `done=0`, `retried=0`,
-          `failed_repositories=0`, and `reclaimed=0`. The session-independent
-          future-row audit and the done-job identity audit both returned zero
-          rows.
+State:    M3 ACTIVE. Production remains on HEAD main `fa1e323` (#65). M3 item 1
+          (`adjudicate.py`) and the v7 draft pre-registration are merged
+          (#59–#61). On implementation branch `m3-60-day-backfill`, the permanent
+          atomic 14/60 merge write, guarded one-time catch-up CLI, deploy-time
+          lock guard, exact production runbook, and `LOCKED v8` document are
+          built. None of those branch changes has been deployed or run; the
+          production catch-up and v8 lock hash are not live.
+          M3 item 2 remains LIVE: #64 shipped migration 007, the
+          repository-batched `doug-adjudicator` Cloud Run Job (2Gi), crash leases
+          + generation fencing, ten daily attempts, append-only merge-SHA
+          outcomes, persisted read coverage, and the separate Scheduler identity;
+          #65 fixed the first deploy's `gcloud --args` parse failure and IAM
+          propagation wait. `doug-adjudicator-daily` is enabled for 03:00 UTC
+          with zero Scheduler retry attempts. The Job uses the exact API image
+          and the intended runtime SA, one task, zero platform retries and a
+          3600-second timeout. First execution `doug-adjudicator-nvwqn` completed
+          successfully on 2026-08-07 with `repositories=0`, `done=0`,
+          `retried=0`, `failed_repositories=0`, and `reclaimed=0`. The
+          session-independent future-row audit and the done-job identity audit
+          both returned zero rows.
           The console Phase 1 and web service-account cutover are live. The
           grouping/facets/sorting slice (#63) is merged but still needs the
           manual console redeploy that service deliberately requires.
-Next:     1) Write the 60-day backfill runbook and lock the pre-registration
-          before the first 14-day publication. Then finish M3 in separate PRs:
-          receipts; check-run counters/meter; public Doug-on-Doug scoreboard.
-          2) Watch the first scheduled 03:00 UTC execution and the first real
+Next:     1) Merge `m3-60-day-backfill`, then execute Task 7 exactly from
+          `docs/design/outcome-loop/60-day-backfill-runbook.md`: deploy and pin
+          the v8 hash, dry-run, pause, apply + verify the manifest, audit, execute
+          one manual Job, audit again, and resume. Do not mark the production
+          catch-up complete without that receipt. Then finish M3 in separate
+          PRs: receipts; check-run counters/meter; public Doug-on-Doug scoreboard.
+          2) Watch the next scheduled 03:00 UTC execution and the first real
           due-row execution. The first known due clock is currently Aug 16;
           that run, not the no-op smoke, exercises GitHub clone + adjudication.
           3) Independently, redeploy #63 with
@@ -64,13 +72,14 @@ Rulings:  All five settled in #61. Tenant repos are in by default by name
           is a floor; adjudication `max_attempts = 10`. The Job cadence is
           daily, so the ceiling buys ten calendar-day opportunities. Platform
           retries are zero: one scheduled trigger spends at most one attempt.
-Blockers: Job/Scheduler has none. Publication remains blocked on the 60-day
-          backfill runbook and locking the DRAFT v7 pre-registration.
+Blockers: Job/Scheduler has none. Code, runbook, and lock are built on the
+          implementation branch; publication remains blocked on merge plus the
+          Task 7 production catch-up. Neither catch-up nor the v8 lock hash is
+          live.
 Pointers: ROADMAP M3 · REVIEWING.md · `docs/design/outcome-loop/
-          publication-preregistration.md` (DRAFT v7, all rulings landed, not
-          locked until the 60-day backfill runbook exists) ·
-          `docs/superpowers/plans/
-          2026-08-06-m3-adjudicator-job-scheduler.md`.
+          publication-preregistration.md` (`LOCKED v8` on the implementation
+          branch) · `docs/design/outcome-loop/60-day-backfill-runbook.md` ·
+          `docs/superpowers/plans/2026-08-06-m3-adjudicator-job-scheduler.md`.
 
 ---
 
