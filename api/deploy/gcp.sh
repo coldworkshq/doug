@@ -357,7 +357,7 @@ adjudicator() {
   gcloud run jobs deploy "$ADJUDICATOR_JOB" \
     --image "$api_image" \
     --project "$PROJECT" --region "$REGION" \
-    --command python --args "-m,doug.outcome_worker" \
+    --command python --args=-m,doug.outcome_worker \
     --service-account "doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com" \
     --set-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \

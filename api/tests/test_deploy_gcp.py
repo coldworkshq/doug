@@ -121,6 +121,14 @@ def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
     gcloud.write_text(
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$GCLOUD_LOG"
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--args" ] && [ "${argument#-}" != "$argument" ]; then
+    printf '%s\\n' 'ERROR: argument --args: expected one argument' >&2
+    exit 2
+  fi
+  previous=$argument
+done
 if [ "$1 $2 $3 $4" = "run services describe doug-api" ]; then
   printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
   exit 0
@@ -170,7 +178,7 @@ def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tm
     assert "--max-retries 0" in deploy
     assert "--task-timeout 3600s" in deploy
     assert "--command python" in deploy
-    assert "--args -m,doug.outcome_worker" in deploy
+    assert "--args=-m,doug.outcome_worker" in deploy
     assert "--service-account doug-adjudicator-sa@doug-prod0.iam.gserviceaccount.com" in deploy
     assert "DATABASE_URL=doug-database-url:latest" in deploy
     assert "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" in deploy
