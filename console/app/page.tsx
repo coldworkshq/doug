@@ -1,9 +1,19 @@
 import { Suspense } from "react";
 
+import { RunForensics, RunForensicsUnavailable } from "@/components/run-forensics";
 import { RunsTable } from "@/components/runs-table";
 import { Shell } from "@/components/shell";
-import { getRuns, isError } from "@/lib/api";
+import { getRunDetail, getRuns, isError } from "@/lib/api";
 import { parseTenantId } from "@/lib/runs";
+import { parseRunId } from "@/lib/selection";
+
+function clearRunHref(tenant: string | null, repo: string | null): string {
+  const p = new URLSearchParams();
+  if (tenant) p.set("tenant", tenant);
+  if (repo) p.set("repo", repo);
+  const q = p.toString();
+  return q ? `/?${q}` : "/";
+}
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +28,7 @@ const PAGE_LIMIT = 500;
 export default async function RunsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ repo?: string; tenant?: string }>;
+  searchParams: Promise<{ repo?: string; tenant?: string; run?: string }>;
 }) {
   const params = await searchParams;
   const scope = { tenant: params.tenant ?? null, repo: params.repo ?? null };
@@ -55,6 +65,12 @@ export default async function RunsPage({
       ? `for tenant ${scope.tenant}`
       : "across every installation";
 
+  const selectedId = parseRunId(params.run);
+  const detail =
+    selectedId === null || isError(result)
+      ? null
+      : await getRunDetail(selectedId);
+
   return (
     <Shell scope={scope} active="runs">
       {isError(result) ? (
@@ -78,15 +94,32 @@ export default async function RunsPage({
         // own. The fallback is deliberately empty: on a dynamic route it
         // never paints, and a skeleton row would be the console showing a
         // shape of data it does not have.
-        <Suspense fallback={null}>
-          <RunsTable
-            runs={result.items}
-            atCap={atCap}
-            limit={result.limit}
-            tenant={scope.tenant}
-            scopeLabel={scopeLabel}
-          />
-        </Suspense>
+        <>
+          <Suspense fallback={null}>
+            <RunsTable
+              runs={result.items}
+              atCap={atCap}
+              limit={result.limit}
+              tenant={scope.tenant}
+              scopeLabel={scopeLabel}
+              selectedId={selectedId}
+            />
+          </Suspense>
+          {selectedId !== null && detail !== null && (
+            isError(detail) ? (
+              <div className="mt-6">
+                <RunForensicsUnavailable error={detail.error} />
+              </div>
+            ) : (
+              <div className="mt-6 border-t border-border">
+                <RunForensics
+                  run={detail}
+                  clearHref={clearRunHref(scope.tenant, scope.repo)}
+                />
+              </div>
+            )
+          )}
+        </>
       )}
     </Shell>
   );
