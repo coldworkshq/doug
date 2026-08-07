@@ -584,7 +584,7 @@ def test_the_count_of_labels_the_lower_bound_dropped_travels_with_the_batch():
         OutcomeKind.CLEAN,
         OutcomeKind.CENSORED,
     ]
-    assert result.predated_reverts == 2
+    assert result.predated_reverts == {14: 2}
 
 
 def test_a_batch_that_dropped_nothing_reports_no_drops():
@@ -594,7 +594,7 @@ def test_a_batch_that_dropped_nothing_reports_no_drops():
     jobs = [_job(440), _job(441), _job(442)]
     reverts = _revert_map(440, _REVERT_DATE) | _revert_map(441, late)
 
-    assert adjudicate(jobs, reverts, default_branch="main").predated_reverts == 0
+    assert adjudicate(jobs, reverts, default_branch="main").predated_reverts == {}
 
 
 def test_one_tolerance_constant_is_defined_and_the_scripts_do_not_redefine_it():
@@ -773,3 +773,51 @@ def test_no_disposition_reads_a_clock(monkeypatch):
     monkeypatch.setattr(adjudicate_module, "datetime", _NoClock)
 
     assert adjudicate(jobs, revert_map, default_branch="main") == expected
+
+
+def test_the_drop_count_is_keyed_by_window_so_one_label_is_not_counted_twice():
+    # §1 fixes the published unit at (repo, window) and forbids a pooled rate.
+    # One merge is enqueued at BOTH windows (§6.3), so a flat tally reports 2
+    # for a single dropped label and belongs to neither published row. This is
+    # the case the original counter got wrong: it summed rows, not labels.
+    jobs = [_job(450, window_days=14), _job(450, window_days=60)]
+    reverts = _revert_map(450, _PREDATED)
+
+    result = adjudicate(jobs, reverts, default_branch="main")
+
+    assert [o.kind for o in result.outcomes] == [OutcomeKind.CLEAN, OutcomeKind.CLEAN]
+    # One label, dropped once in each window's row — not "2" pooled.
+    assert result.predated_reverts == {14: 1, 60: 1}
+
+
+def test_the_live_bound_and_the_backtest_filter_agree_across_the_boundary():
+    # §6.1's whole purpose is that live and backtest label the SAME event
+    # (design-lock.md:29). Sharing TOLERANCE_DAYS makes both sides read one
+    # number; it does not by itself make them one predicate. The backtest
+    # filters with integer-day arithmetic — `(revert - merged).days >=
+    # -TOLERANCE_DAYS` in screen_features.py and rf_kamei.py — while the
+    # adjudicator compares aware instants against a timedelta. `timedelta.days`
+    # floors toward -inf, so the two agree only because TOLERANCE_DAYS is an
+    # integer. Nothing else in the suite compares the two forms.
+    lags = [
+        timedelta(days=-TOLERANCE_DAYS),  # exactly the bound
+        timedelta(days=-TOLERANCE_DAYS, seconds=-1),  # one second outside
+        timedelta(days=-TOLERANCE_DAYS, seconds=1),  # one second inside
+        timedelta(days=-TOLERANCE_DAYS, microseconds=-1),
+        timedelta(hours=-6),
+        timedelta(days=-2),
+        timedelta(0),
+        timedelta(days=14),
+    ]
+    for lag in lags:
+        revert_at = _MERGED_AT + lag
+        live_keeps = (
+            _MERGED_AT - timedelta(days=TOLERANCE_DAYS) <= revert_at
+        ) and revert_at <= _MERGED_AT + timedelta(days=14)
+        backtest_keeps = (revert_at - _MERGED_AT).days >= -TOLERANCE_DAYS and lag <= (
+            timedelta(days=14)
+        )
+        assert live_keeps == backtest_keeps, f"diverged at lag={lag}"
+
+    # And the integrality precondition the agreement rests on.
+    assert isinstance(TOLERANCE_DAYS, int)

@@ -71,7 +71,7 @@ class CensorReason(StrEnum):
     """Why a job left the risk set — the two disjuncts of §6.2's rule 2."""
 
     # The PR merged somewhere the clone cannot see. `clone_treeless` is
-    # `--single-branch` (git_labels.py:73), so a revert on `release-2.4`
+    # `--single-branch` (git_labels.py:97), so a revert on `release-2.4`
     # never enters `git log --all` and its absence is blindness, not survival.
     BASE_REF = "base_ref"
     # No clone at all: uninstalled, deleted, permanently 404. NOT a transient
@@ -101,9 +101,11 @@ class OutcomeDetail(BaseModel):
     revert_instant: datetime | None = None
     # §6.1's two sides, recorded so an auditor can check the comparison
     # instead of recomputing it from a window length, a merge time and a
-    # tolerance. The left-hand one is also the only thing that distinguishes
-    # a label the lower bound dropped from an ordinary survival, and §6.1
-    # requires those be distinguishable.
+    # tolerance. Together with a non-null `revert_instant` they make §6.1's
+    # three clean cases readable straight off the row — nothing attributed,
+    # attributed but past `window_ends_at`, attributed but before
+    # `window_starts_at` — and §6.1 requires the last be distinguishable from
+    # the other two, since only it was dropped by the bound.
     window_starts_at: datetime
     window_ends_at: datetime
     base_ref: str
@@ -163,25 +165,35 @@ class Adjudication(NamedTuple):
     unadjudicable: list[Unadjudicable]
 
     @property
-    def predated_reverts(self) -> int:
-        """How many attributed reverts §6.1's lower bound refused.
+    def predated_reverts(self) -> dict[int, int]:
+        """Per `window_days`, how many attributed reverts §6.1's bound refused.
 
         §6.1 adopts that bound knowing it can only *lower* a published miss
         rate — it removes misses from the numerator — and pays for that by
         requiring the count travel with the rate rather than be absorbed into
-        the survivals. This is where the batch's share of it comes from.
+        the survivals.
+
+        KEYED BY WINDOW, not a single integer, because the rate it has to sit
+        beside is not a single integer either: §1 fixes the published unit at
+        `(repo, window)` and forbids a pooled rate outright. One merge is
+        enqueued at both 14 and 60 days (§6.3), so a flat tally counts one
+        dropped label twice and belongs to neither published row. One call
+        covers one repository (see `adjudicate`), so keying on `window_days`
+        yields exactly `(repo, window)`.
 
         Derived from the rows instead of tallied beside them: a counter can
         drift from the ledger it claims to describe, and this is the same
         comparison a publication runs over `outcomes.detail`, so the number
         Doug reports and the number a stranger recomputes cannot disagree.
         """
-        return sum(
-            1
-            for outcome in self.outcomes
-            if outcome.detail.revert_instant is not None
-            and outcome.detail.revert_instant < outcome.detail.window_starts_at
-        )
+        dropped: dict[int, int] = {}
+        for outcome in self.outcomes:
+            if (
+                outcome.detail.revert_instant is not None
+                and outcome.detail.revert_instant < outcome.detail.window_starts_at
+            ):
+                dropped[outcome.window_days] = dropped.get(outcome.window_days, 0) + 1
+        return dropped
 
 
 def adjudicate(
@@ -266,7 +278,7 @@ def _classify(
     # Attribution FIRST, ahead of censoring, per §6.2. A PR merged to
     # release-2.4 whose revert was cherry-picked onto the default branch
     # matches both rules — attribution reads only the revert commit's subject
-    # and body (git_labels.py:255-266) and never checks where the original
+    # and body (git_labels.py:301-316) and never checks where the original
     # landed.
     # Checking base_ref first would take a revert we demonstrably *saw* out of
     # the risk set and lower the published rate, which is the flattering
@@ -274,9 +286,19 @@ def _classify(
     #
     # `<=` is §6.1's inclusive boundary on BOTH sides: a revert landing
     # exactly one window after the merge is inside the window, and so is one
-    # landing exactly `TOLERANCE_DAYS` before it — which is what keeps this
-    # predicate equal to the backtest's `lag_days >= -TOLERANCE_DAYS`, the
-    # whole point of reading one constant (design-lock.md:29).
+    # landing exactly `TOLERANCE_DAYS` before it.
+    #
+    # Inclusivity on the LOWER side is what keeps this equal to the label
+    # filter the backtest actually runs, which is integer-day and spelled
+    # `(revert - merged).days >= -TOLERANCE_DAYS` in `screen_features.py` and
+    # `rf_kamei.py` (`label_precision_delta.py` writes the same test inverted,
+    # as a drop). `timedelta.days` floors toward -inf, and `floor(x) >= -T`
+    # agrees with `x >= -T` ONLY BECAUSE `T` IS AN INTEGER — at a fractional
+    # tolerance a -0.2-day lag would be kept here and dropped there. Sharing
+    # one constant (design-lock.md:29) makes the two sides read the same
+    # NUMBER; it does not by itself make them the same PREDICATE, and
+    # test_the_live_bound_and_the_backtest_filter_agree_across_the_boundary
+    # is what pins that they are.
     if revert_instant is not None and window_starts_at <= revert_instant <= window_ends_at:
         kind = OutcomeKind.REVERT
     elif default_branch is None:
