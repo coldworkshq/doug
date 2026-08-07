@@ -241,7 +241,9 @@ def _insert_statement(dialect_name: str):
         due_at = job_14.c.merged_at + literal_column("INTERVAL '60 days'")
         statement = postgresql_insert(store.outcome_jobs)
     elif dialect_name == "sqlite":
-        due_at = func.datetime(job_14.c.merged_at, "+60 days")
+        due_at = func.date(job_14.c.merged_at, "+60 days").op("||")(
+            func.substr(job_14.c.merged_at, 11)
+        )
         statement = sqlite_insert(store.outcome_jobs)
     else:
         raise RuntimeError(f"unsupported outcome_jobs dialect: {dialect_name}")

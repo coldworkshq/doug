@@ -256,6 +256,60 @@ def test_apply_inserts_only_missing_siblings_and_is_idempotent(tmp_path, monkeyp
     assert repeated == after
 
 
+def test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary(
+    tmp_path, monkeypatch
+):
+    """SQLite must add calendar days without truncating the source instant."""
+    merged_at = datetime(2024, 1, 31, 23, 59, 58, 123456, tzinfo=UTC)
+    expected_due_at = datetime(2024, 3, 31, 23, 59, 58, 123456, tzinfo=UTC)
+    url = _db(tmp_path, monkeypatch)
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": ACTIVE_INSTALL,
+                "account_login": "active",
+                "account_type": "Organization",
+                "state": "active",
+                "updated_at": NOW,
+            },
+        )
+        conn.execute(
+            store.outcome_jobs.insert(),
+            _job(ACTIVE_INSTALL, 1001, 31, merged_at=merged_at),
+        )
+    manifest = tmp_path / "microseconds.json"
+
+    result = outcome_backfill.apply(
+        engine, expected_missing=1, manifest_path=manifest, now=NOW
+    )
+
+    with engine.connect() as conn:
+        rows = _rows(conn)
+        clean = outcome_backfill.inspect(conn, now=NOW)
+    assert result.inserted == 1
+    assert result.report == clean
+    assert clean.missing == 0
+    assert clean.mismatches == ()
+    assert expected_due_at == merged_at + timedelta(days=60)
+    assert rows[1]["merged_at"] == merged_at.replace(tzinfo=None)
+    assert rows[1]["due_at"] == expected_due_at.replace(tzinfo=None)
+    assert _manifest_rows(manifest) == [
+        {
+            "github_repo_id": 1001,
+            "id": rows[1]["id"],
+            "installation_id": ACTIVE_INSTALL,
+            "merge_commit_sha": f"{31:040d}",
+            "pr_number": 31,
+            "window_days": 60,
+        }
+    ]
+    assert outcome_backfill.verify_manifest(
+        engine, manifest_path=manifest, expected_count=1
+    ) == 1
+
+
 def test_apply_refuses_a_stale_count_without_creating_a_manifest(tmp_path, monkeypatch):
     """A count captured before the write transaction must fence population drift."""
     url = _db(tmp_path, monkeypatch)
