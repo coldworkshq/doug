@@ -8,7 +8,9 @@ over the REST API. The API is then reserved for feature harvest only.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -69,24 +71,43 @@ _REVERTS_COMMIT = re.compile(r"This reverts commit ([0-9a-f]{7,40})", re.IGNOREC
 _SHORT_SHA = 7
 
 
+def _git_auth_env(token: str | None) -> dict[str, str]:
+    """Authenticate to GitHub without putting a credential in argv or config.
+
+    Git's environment-backed config exists only for the child process. The
+    repository keeps its public origin URL, and ``CalledProcessError`` can
+    safely render the command that failed without rendering the token.
+    """
+    env = os.environ.copy()
+    if token:
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        env.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
+            }
+        )
+    return env
+
+
 def clone_treeless(owner: str, repo: str, dest: Path, token: str | None = None) -> Path:
-    """Bare treeless clone. Reuses dest if it already looks healthy."""
+    """Bare treeless clone. A reused clone must refresh successfully."""
+    auth_env = _git_auth_env(token)
     if (dest / "HEAD").exists():
         subprocess.run(
             ["git", "-C", str(dest), "fetch", "--prune", "--filter=tree:0", "origin"],
-            check=False,
+            check=True,
             capture_output=True,
+            text=True,
             timeout=300,
+            env=auth_env,
         )
         return dest
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         shutil.rmtree(dest)
-
-    url = f"https://github.com/{owner}/{repo}.git"
-    if token:
-        url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
 
     subprocess.run(
         [
@@ -95,26 +116,14 @@ def clone_treeless(owner: str, repo: str, dest: Path, token: str | None = None) 
             "--bare",
             "--filter=tree:0",
             "--single-branch",
-            url,
+            f"https://github.com/{owner}/{repo}.git",
             str(dest),
         ],
         check=True,
         capture_output=True,
         text=True,
         timeout=600,
-    )
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(dest),
-            "remote",
-            "set-url",
-            "origin",
-            f"https://github.com/{owner}/{repo}.git",
-        ],
-        check=False,
-        capture_output=True,
+        env=auth_env,
     )
     return dest
 

@@ -290,3 +290,22 @@ def test_removed_repo_is_permanent_but_missing_registry_is_not(tmp_path, monkeyp
     )
     assert missing.permanently_unreachable is False
     assert missing.repo_full_name is None
+
+
+def test_suspended_installation_retries_instead_of_censoring(tmp_path, monkeypatch):
+    """GitHub can unsuspend an installation. Calling that permanent blindness
+    would remove its jobs from the risk set in the flattering direction."""
+    url = _db(tmp_path, monkeypatch)
+    _seed(url, _job(pr_number=9))
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == INSTALLATION_ID)
+            .values(state="suspended")
+        )
+
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+
+    assert batch.permanently_unreachable is False

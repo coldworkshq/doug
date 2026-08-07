@@ -125,7 +125,7 @@ def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool]:
 
     # Durable ledger state is the only evidence strong enough to censor.
     # Missing registry rows are the known MT0/backfill shape and must retry.
-    permanent = installation_state not in (None, "active") or (
+    permanent = installation_state == "deleted" or (
         repo is not None and repo.state != "active"
     )
     if repo is not None:
