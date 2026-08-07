@@ -12,6 +12,8 @@ import json
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -23,6 +25,30 @@ class Commit(NamedTuple):
     date: str = ""
     subject: str = ""
     body: str = ""
+
+
+# The slack on the *lower* end of a revert window: a revert dated up to this
+# many days before the merge is still that merge's revert. It lives here, in
+# the only detector (design-lock.md:29), because the backtest scripts and the
+# live adjudicator have to drop the same labels or "live labels and backtest
+# labels are the same event" is a promise instead of a property.
+#
+# Why a lower bound exists at all: a revert cannot land before the PR it
+# reverts, yet some do in our label set — 6/67 on sentry, 6/54 on grafana —
+# because `pr_titles_from_subjects` is newest-wins, so a revert of an *older*
+# PR with a reused squash title ("Fix typo", a dependency bump) is attributed
+# to a newer one. Those labels are impossible, not merely surprising.
+#
+# Why it is not zero: sub-day negatives are committer-date vs `merged_at`
+# clock skew on same-day reverts, not mislabels — so a strict `>= merged_at`
+# would throw away real misses, and would diverge from the corpora that
+# validated the detector, which is the opposite of the error this constant
+# fixes. `scripts/label_precision_delta.py` is where that was measured.
+#
+# The ruling and its cost — dropping impossible labels can only *lower* a
+# published miss rate — are recorded in
+# `docs/design/outcome-loop/publication-preregistration.md` §6.1.
+TOLERANCE_DAYS = 1
 
 _PR_PAREN = re.compile(r"\(#(\d+)\)")
 _PR_HASH = re.compile(r"(?:^|[\s:])#(\d+)\b")
@@ -171,10 +197,74 @@ def pr_titles_from_subjects(subjects: list[str]) -> dict[str, int]:
     return titles
 
 
-def parse_revert_targets_dated(
-    commits: list[Commit], titles: dict[str, int] | None = None
-) -> dict[int, str]:
-    """PR number → the date its defect label first became knowable.
+def commit_instant(date: str) -> datetime:
+    """A `%cI` committer date → the aware UTC instant it names.
+
+    Raises `ValueError` on anything it cannot turn into an aware instant, in
+    two ways that are worth telling apart:
+
+    * **An offset outside ±24h**, which `_log_records` really does emit. git
+      records whatever offset the committing environment declared and prints
+      it back verbatim, so `GIT_COMMITTER_DATE="@1772000000 +2400"` reaches
+      `%cI` as `2026-02-26T06:13:20+24:00`, and `fromisoformat` rejects it —
+      before the naive check below ever runs. Rare, but a real corpus is
+      allowed to contain one and nothing upstream filters it.
+    * **No offset at all**, i.e. a date that parses and comes back naive
+      (`"2026-03-01T00:00:00"`). `%cI` always writes an offset, so this one
+      arrives from a hand-built `Commit` rather than from a clone. Refused
+      rather than guessed at: `astimezone(UTC)` on a naive datetime reads it
+      as *local* time, which is right by accident on a UTC container and
+      silently wrong by hours anywhere else.
+
+    The guess is the dangerous branch, which is why neither case gets one: a
+    wrong instant does not raise, it moves a revert across a window boundary
+    and changes a published label. `adjudicate.adjudicate` catches this
+    `ValueError` once per job, so a commit git wrote strangely fails the jobs
+    that actually depend on it instead of the whole batch.
+    """
+    try:
+        instant = datetime.fromisoformat(date)
+    except ValueError as exc:
+        # `fromisoformat`'s own message names the offset it rejected but never
+        # the string it came from, and the string is the only thing that leads
+        # back to the commit.
+        raise ValueError(f"unparseable commit date {date!r}: {exc}") from exc
+    if instant.tzinfo is None:
+        raise ValueError(f"commit date carries no UTC offset: {date!r}")
+    return instant.astimezone(UTC)
+
+
+def _earlier_by_string(candidate: Commit, incumbent: Commit) -> bool:
+    """The backtest's original rule: raw `%cI` string order, ties keep the
+    incumbent — and on a tie the two dates are equal, so which commit that is
+    comes from `git log`'s ordering rather than from anything chronological."""
+    return candidate.date < incumbent.date
+
+
+def _earlier_by_instant(candidate: Commit, incumbent: Commit) -> bool:
+    """The adjudicator's rule — publication-preregistration.md §6.1's declared
+    amendment, and §10's tie-break.
+
+    Across differing UTC offsets, string order is not chronological order:
+    `2026-03-01T02:00:00-05:00` sorts before `2026-03-01T09:00:00+09:00` and
+    happens seven hours after it. Ties on the instant break to the
+    lexicographically smallest sha, so a re-revert cannot leave two
+    implementations publishing different shas for the same event.
+    """
+    return (commit_instant(candidate.date), candidate.sha) < (
+        commit_instant(incumbent.date),
+        incumbent.sha,
+    )
+
+
+def _attribute_reverts(
+    commits: list[Commit],
+    titles: dict[str, int] | None,
+    *,
+    earlier: Callable[[Commit, Commit], bool],
+) -> dict[int, Commit]:
+    """PR number → the reverting commit that first made its defect label
+    knowable, under whichever "first" rule `earlier` implements.
 
     On squash-merge repos, `Revert "Add x" (#99)` uses (#99) for the
     *revert* PR. The original is recovered three ways, in descending order of
@@ -190,36 +280,90 @@ def parse_revert_targets_dated(
 
     The date is the reverting commit's, not the reverted PR's: nobody —
     including a live Doug — could have known the PR was bad until the
-    revert landed. On a re-revert the *earliest* date wins.
+    revert landed. On a re-revert the *earliest* revert wins.
+
+    `earlier` is the only thing the two public parsers differ by, which is
+    what makes "same detector both sides" (design-lock.md:15) a structural
+    fact rather than a promise: attribution — which PRs are marked at all —
+    is this one function for both.
     """
     if titles is None:
         titles = pr_titles_from_subjects([c.subject for c in commits])
     by_sha = pr_numbers_by_sha(commits)
-    dated: dict[int, str] = {}
+    marked: dict[int, Commit] = {}
 
-    def mark(number: int, date: str) -> None:
-        if number not in dated or date < dated[number]:
-            dated[number] = date
+    def mark(number: int, commit: Commit) -> None:
+        incumbent = marked.get(number)
+        if incumbent is None or earlier(commit, incumbent):
+            marked[number] = commit
 
     for c in commits:
         if _QUOTED_REVERT.search(c.subject):
             for q in _QUOTED.findall(c.subject):
                 for m in _PR_PAREN.finditer(q):
-                    mark(int(m.group(1)), c.date)
+                    mark(int(m.group(1)), c)
                 for m in _PR_HASH.finditer(q):
-                    mark(int(m.group(1)), c.date)
+                    mark(int(m.group(1)), c)
                 key = _normalize_title(q)
                 if key in titles:
-                    mark(titles[key], c.date)
+                    mark(titles[key], c)
             for m in _REVERTS_COMMIT.finditer(c.body):
                 if (pr := _resolve_sha(m.group(1).lower(), by_sha)) is not None:
-                    mark(pr, c.date)
+                    mark(pr, c)
             continue
 
         if m := _BARE_TARGET.match(c.subject):
-            mark(int(m.group(1)), c.date)
+            mark(int(m.group(1)), c)
 
-    return dated
+    return marked
+
+
+def parse_revert_targets_dated(
+    commits: list[Commit], titles: dict[str, int] | None = None
+) -> dict[int, str]:
+    """PR number → the date its defect label first became knowable.
+
+    The backtest's view, and deliberately unchanged: it compares raw `%cI`
+    strings, and the cached corpora under `.backtest-cache/` were computed
+    that way. Callers that need a chronologically-correct "earliest" — or
+    the reverting commit's sha — want `parse_revert_targets_evidenced`.
+    """
+    return {
+        number: c.date
+        for number, c in _attribute_reverts(
+            commits, titles, earlier=_earlier_by_string
+        ).items()
+    }
+
+
+def parse_revert_targets_evidenced(
+    commits: list[Commit], titles: dict[str, int] | None = None
+) -> dict[int, Commit]:
+    """PR number → the whole reverting commit, not just its date.
+
+    `parse_revert_targets_dated` discards the sha, and the receipt is
+    promised one (`product-spec.md:39`, design-lock.md:15's "anchor sha,
+    revert sha"). Same attribution — literally the same pass — with two
+    declared differences, both from publication-preregistration.md:
+
+    * the winning commit survives whole, so `detail` can name it;
+    * "earliest" is decided on parsed instants and not on raw strings (§6.1),
+      with ties broken by the lexicographically smallest sha (§10).
+
+    Dates are parsed lazily and only where they decide something: `mark`
+    consults `earlier` only once a PR already has an incumbent, so a corpus
+    that attributes every PR exactly once never calls `commit_instant` at all
+    and hands its dates back exactly as git wrote them. This function
+    therefore does **not** guarantee that every commit it returns carries a
+    parseable date, and it deliberately does not validate them to make the
+    guarantee true — a raise here would fail the whole repository's map over
+    one strange commit, where `adjudicate.adjudicate` parses the winner's date
+    per job and fails only the jobs that depend on it.
+
+    The subject-only `parse_revert_targets` still routes through the dated
+    form for the older reason: its `Commit`s carry no date at all.
+    """
+    return _attribute_reverts(commits, titles, earlier=_earlier_by_instant)
 
 
 def parse_revert_targets(
