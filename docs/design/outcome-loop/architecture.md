@@ -57,7 +57,7 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
                                        only     │               ▼
                                        events)  │  ┌─────────────────────────────────┐
                     Cloud Scheduler ────────────┴─►│ doug-adjudicator ·              │
-                    (daily) [v1]                   │ Cloud Run Job, 2Gi        [v1]  │
+                    (daily 03:00 UTC) [v1]         │ Cloud Run Job, 2Gi        [v1]  │
                                                    │                                 │
                                                    │ treeless clone → git_labels     │
                                                    │ revert map (the SAME detector   │

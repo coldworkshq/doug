@@ -265,8 +265,15 @@ path, no cross-tenant read, no silent partial reads.
   the adjudicator would not — so "live labels and backtest labels are the same event"
   (`design-lock.md:29`), the whole reason `git_labels.py` is the only detector, was false.
   `TOLERANCE_DAYS` now lives once in `git_labels.py` and both sides import it.
-- [ ] Cloud Run Job (2Gi) + Cloud Scheduler; claim `due_at <= now()` FOR UPDATE SKIP LOCKED
-- [ ] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`
+- [~] Cloud Run Job (2Gi) + Cloud Scheduler; repository-batched claims use
+  `due_at <= now()` + `FOR UPDATE SKIP LOCKED`, a two-hour crash lease and a
+  generation fence. Daily 03:00 UTC, one task, zero platform retries, so the
+  pre-registered ten attempts buy ten scheduled days. Built on
+  `m3-adjudicator-job`; still requires operator setup, merge deploy, schedule
+  creation and one production execution before `[x]`.
+- [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
+  Pure fixtures and the scheduled worker path are built; production execution
+  remains the live gate.
 - [ ] Receipts: `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring + findings + inputs-seen + adjudication block + hashes)
 - [ ] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
 - [ ] Public Doug-on-Doug scoreboard page (dogfood proof, no auth)
