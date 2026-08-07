@@ -131,8 +131,14 @@ function hasZoneDesignator(iso: string): boolean {
  *  'new Date("2026-08-06T14:22:48").toISOString()'` prints
  *  `2026-08-06T21:22:48.000Z`, a 7-hour shift) — appending "Z" first is
  *  what makes this actually UTC instead of whatever zone the Next.js
- *  server process happens to be running in. */
-function parseUtc(iso: string): Date {
+ *  server process happens to be running in.
+ *
+ *  Exported because grouping and sorting order rows by the same timestamps
+ *  this module renders as ages. A second parser — `new Date(iso)` inside a
+ *  comparator — would order rows by local time while the age column labels
+ *  them in UTC, so a row reading "2h" could sort above one reading "1h" and
+ *  the table would contradict itself with no error anywhere. */
+export function parseUtc(iso: string): Date {
   return new Date(hasZoneDesignator(iso) ? iso : `${iso}Z`);
 }
 
