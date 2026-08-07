@@ -25,10 +25,15 @@ State:    M3 ACTIVE. Production remains on HEAD main `fa1e323` (#65). M3 item 1
           manual console redeploy that service deliberately requires.
 Next:     1) Merge `m3-60-day-backfill`, then execute Task 7 exactly from
           `docs/design/outcome-loop/60-day-backfill-runbook.md`: deploy and pin
-          the v8 hash, dry-run, pause, apply + verify the manifest, audit, execute
-          one manual Job, audit again, and resume. Do not mark the production
-          catch-up complete without that receipt. Then finish M3 in separate
-          PRs: receipts; check-run counters/meter; public Doug-on-Doug scoreboard.
+          the v8 hash, dry-run, pause, prove execution quiescence, apply + verify
+          the manifest, spool the pre-Job SQL audit, execute one manual Job,
+          capture its execution resource, execution-scoped logs and DrainSummary,
+          spool the post-Job SQL audit, run the final CLI audit, and resume. Keep
+          the named dry-run, apply, manifest, quiescence, SQL, execution, log,
+          summary, and Scheduler paths for the closure PR. Do not mark the
+          production catch-up complete without that receipt. Then finish M3 in
+          separate PRs: receipts; check-run counters/meter; public Doug-on-Doug
+          scoreboard.
           2) Watch the next scheduled 03:00 UTC execution and the first real
           due-row execution. The first known due clock is currently Aug 16;
           that run, not the no-op smoke, exercises GitHub clone + adjudication.

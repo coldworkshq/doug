@@ -50,6 +50,10 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
                     │  option      │   │  repo strings display-only    [v1]  │
                     └──────────────┘   │  merge ingest = both window rows    │
                                        │  (one atomic write)           [v1]  │
+                                       │  outcome_jobs unique identity:      │
+                                       │    installation_id, github_repo_id, │
+                                       │    pr_number, merge_commit_sha,     │
+                                       │    window_days                [v1]  │
                                        │  due_at = the ONLY clock authority  │
                                        │  denominator = outcome_jobs done    │
                                        └────────▲───────────────┬────────────┘
