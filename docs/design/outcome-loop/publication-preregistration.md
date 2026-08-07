@@ -4,6 +4,11 @@
 **one remains** (tenant consent posture, §11 item 1). Until locked, the hash must not enter any receipt: a hash over a mutable
 document is worse than no hash, because it *looks* like a commitment.
 **Roadmap:** M3 item 7 · **Mitigation:** design-lock altitude O3 (`design-lock.md:61`)
+**Citation note:** every `git_labels.py:NNN` anchor below is against the file AS OF
+the M3-item-1 branch (`m3-adjudicate`), which hoists `TOLERANCE_DAYS` and shifts
+everything after it by 24 lines. If that branch has not merged yet, these anchors
+point 24 lines past where the symbol currently sits on `main`. They were verified
+against the post-merge blob, not arithmetic.
 **Companion, not yet written:** the 60-day backfill runbook — hard gate before the
 first 14-day publication (`design-lock.md:47`).
 
@@ -333,11 +338,11 @@ precision alone (ADR-0005 requires CORPUS + POP together); per-author-type rates
 base_denominator = distinct PR numbers whose squash merge commit carries a committer
                    date inside the 12 months ending at
                    (publication_date - window_days), enumerated from `_log_records`
-                   (git_labels.py:103-124) keeping Commit.date and parsed with the
+                   (git_labels.py:127-148) keeping Commit.date and parsed with the
                    same \(#\d+\) subject rule. The default-branch restriction comes
                    from the clone, not this function: `_log_records` runs
-                   `git log --all` (git_labels.py:107-109), and it is
-                   `--single-branch` in `clone_treeless` (git_labels.py:73) that
+                   `git log --all` (git_labels.py:131-133), and it is
+                   `--single-branch` in `clone_treeless` (git_labels.py:97) that
                    makes "all refs" mean the default branch.
 base_numerator   = those PRs reverted within THE SAME WINDOW of their own merge
 base_rate        = base_numerator / base_denominator
@@ -346,7 +351,7 @@ base_rate        = base_numerator / base_denominator
 Resolutions, each in the direction that does **not** flatter:
 
 1. **The function v2 cited could not do the job.** `pr_numbers_by_sha`
-   (`git_labels.py:127-135`) returns `dict[str, int]` and **discards `c.date`** — it
+   (`git_labels.py:151-159`) returns `dict[str, int]` and **discards `c.date`** — it
    cannot support a 12-month filter or a per-PR window. `_log_records` carries
    `Commit.date` and is the correct source.
 2. **Distinct PR numbers**, not commits. `len(dict)` and `len(set(values))` differ.
@@ -442,7 +447,7 @@ Inclusive at the boundary. **Both sides are timezone-aware instants parsed from
 > number both ways. **It decides nothing.**"* The repo deliberately left the
 > question open, and the adjudicator is what forces it. Two live considerations:
 > the script's tolerance exists because *"sub-day negatives are committer-date vs
-> `merged_at` skew on same-day reverts, not mislabels"* (`:32-34`), so a strict
+> `merged_at` skew on same-day reverts, not mislabels"* (`:75-77`), so a strict
 > `>= merged_at` would itself diverge from the backtest; and the detector is
 > **partial** — it catches only collisions with an *older* PR, because *"a collision
 > with a newer one produces positive lag and stays invisible"* (`:9-10`).
@@ -451,7 +456,7 @@ Inclusive at the boundary. **Both sides are timezone-aware instants parsed from
 > `git_labels.py`, so the live path and the backtest read ONE constant and
 > `design-lock.md:29`'s "same detector both sides" becomes true again rather than
 > aspirational. Not zero: sub-day negatives are committer-date vs `merged_at` skew
-> on same-day reverts, not mislabels (`label_precision_delta.py:74-76`), so a strict
+> on same-day reverts, not mislabels (`label_precision_delta.py:75-77`), so a strict
 > `>= merged_at` would itself diverge from the backtest — the opposite error.
 >
 > **What this ruling costs, stated because it is the unflattering half.** Dropping
@@ -465,12 +470,12 @@ Inclusive at the boundary. **Both sides are timezone-aware instants parsed from
 
 > **A declared amendment to the detector, not a reuse of it.** The backtest keeps
 > raw `%cI` **string** comparison — `candidate.date < incumbent.date`, in
-> `_earlier_by_string` (`git_labels.py:213-217`). Across differing UTC offsets,
+> `_earlier_by_string` (`git_labels.py:237-241`). Across differing UTC offsets,
 > string order is not chronological order, so "earliest wins" is not guaranteed to
 > pick the earliest *instant*. The adjudicator's parser passes `_earlier_by_instant`
-> instead (`git_labels.py:219-232`), which compares parsed instants and breaks ties
+> instead (`git_labels.py:243-256`), which compares parsed instants and breaks ties
 > on sha. Both predicates feed one shared attribution pass (`_attribute_reverts`,
-> `git_labels.py:236-294`), so the two paths differ in exactly that argument rather
+> `git_labels.py:260-318`), so the two paths differ in exactly that argument rather
 > than in two hand-maintained copies — "same detector both sides" is a property of
 > the code, not a promise. §10 states how the amendment is pinned.
 >
@@ -487,8 +492,8 @@ a label. The cost of finality is a false-negative class, disclosed in §9.
 **Precedence is stated because v2's dispositions were not mutually exclusive.** A PR
 merged to `release-2.4` whose revert is cherry-picked to the default branch matches
 both `revert` and `censored`: attribution reads only the revert commit's subject
-(`git_labels.py:277-283`) and never checks where the original landed, while the clone
-is `--single-branch` on the default branch (`git_labels.py:73`) — so this is exactly
+(`git_labels.py:301-307`) and never checks where the original landed, while the clone
+is `--single-branch` on the default branch (`git_labels.py:97`) — so this is exactly
 the case the detector *can* see. `design-lock.md:15` forbids `clean` there; it does
 not arbitrate between `censored` and `revert`.
 
@@ -639,8 +644,8 @@ revert in the window, classified defect / not-defect.
 - The detector is conditioned on a **squash-merge convention** (`git_labels.py:3-6`);
   on a merge-commit repo, attribution degrades.
 - Attribution recall is below 100% even on a validated repo — on grafana the title
-  fallback alone resolved **64%** of reverts (`git_labels.py:249-251`).
-- Every ambiguous short sha resolves to nothing (`git_labels.py:138-147`).
+  fallback alone resolved **64%** of reverts (`git_labels.py:273-275`).
+- Every ambiguous short sha resolves to nothing (`git_labels.py:162-171`).
 - **Title-collision attribution is one-sided.** `pr_titles_from_subjects` is
   newest-wins, so a revert of an older PR with a reused title is attributed to a
   newer one. §6.1's proposed lower bound catches the half that lands *before* the
@@ -676,7 +681,7 @@ satisfies §6.1, and its sha is recorded in `outcomes.detail` and the receipt.
 
 > **The sha requires a detector amendment.** `parse_revert_targets_dated` returns
 > `dict[int, str]` — PR → date; **the reverting commit's sha is discarded**
-> (`git_labels.py:236-294`). But `design-lock.md:15` requires `detail` carry "anchor
+> (`git_labels.py:260-318`). But `design-lock.md:15` requires `detail` carry "anchor
 > sha, revert sha" and `product-spec.md:39` requires "a revert commit we can point
 > to (sha in the receipt)". The adjudicator uses a **sha-retaining variant**: same
 > predicate, same dates, sha kept. "Verbatim" was the wrong word and v1 used it.
@@ -690,16 +695,16 @@ Detector semantics, stated because "reverted" sounds more self-evident than it i
 
 - **The commit subject gates.** A `This reverts commit <sha>` body marker alone is
   not enough — "Reland X" carries one and is the opposite of a revert
-  (`git_labels.py:153-154`, `:187-190`).
+  (`git_labels.py:177-178`, `:277-279`).
 - **All three attribution paths apply — this is not a precedence chain.** Nested
   `#N`, body-sha pointer and quoted-title lookup each call `mark()` unconditionally,
   with no `elif` and no early return *between the three paths*
-  (`git_labels.py:277-294`; the `continue` at `:289` separates the two subject forms,
+  (`git_labels.py:301-318`; the `continue` at `:313` separates the two subject forms,
   not the paths). **One revert commit may attribute to several PRs**, and a quoted
   title colliding with an unrelated squash title marks both. Accepted for corpus
   comparability; the collision rate is measured by §9's audit. When one commit marks
   two PRs, both receipts carry the same sha — correct, and stated.
-- A short sha resolves only on an **unambiguous** prefix (`git_labels.py:138-147`).
+- A short sha resolves only on an **unambiguous** prefix (`git_labels.py:162-171`).
 - **The date is the reverting commit's** — nobody, including a live Doug, could have
   known the PR was bad before the revert landed.
 - On a re-revert the earliest instant wins (subject to §6.1's amendment).
