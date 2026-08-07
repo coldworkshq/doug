@@ -148,6 +148,7 @@ def test_main_reports_missing_database_url_to_stderr(monkeypatch, capsys):
 def test_from_gcp_rewrites_the_secret_for_an_already_running_local_proxy(monkeypatch, capsys):
     """The CLI must use the operator-managed proxy, never manage one itself."""
     command = []
+    monkeypatch.setenv("DATABASE_URL", "postgresql://original")
 
     def read_secret(args, **kwargs):
         command.extend(args)
