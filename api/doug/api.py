@@ -1071,7 +1071,7 @@ def _record_merge(payload: dict) -> None:
             file=sys.stderr,
         )
         return
-    store.enqueue_outcome_job(
+    store.enqueue_outcome_jobs(
         payload["installation"]["id"],
         repo_id,
         number,

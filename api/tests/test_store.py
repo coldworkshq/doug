@@ -900,6 +900,52 @@ def test_enqueue_outcome_job_reads_a_redelivery_as_already_queued(tmp_path, monk
         assert len(conn.execute(select(store.outcome_jobs)).mappings().all()) == 1
 
 
+def test_enqueue_outcome_jobs_heals_a_legacy_one_window_gap(tmp_path, monkeypatch):
+    """A duplicate 14-day identity must not suppress the missing 60-day
+    identity. Treating the merge as a single all-or-nothing collision would
+    leave the M3 catch-up cohort permanently incomplete on redelivery."""
+    url = _db(tmp_path, monkeypatch)
+    assert _enqueue_outcome() is not None
+
+    inserted = store.enqueue_outcome_jobs(
+        INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main"
+    )
+
+    assert set(inserted) == {60}
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(
+            select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days)
+        ).mappings().all()
+    assert [row["window_days"] for row in rows] == [14, 60]
+
+
+def test_enqueue_outcome_jobs_rolls_back_both_windows_when_one_insert_fails(
+    tmp_path, monkeypatch
+):
+    """A 60-day failure must roll back the 14-day insert too; independently
+    committed single-row helpers would leave a half-cohort in the ledger."""
+    url = _db(tmp_path, monkeypatch)
+    store.enabled()
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TRIGGER reject_sixty_day_job
+            BEFORE INSERT ON outcome_jobs
+            WHEN NEW.window_days = 60
+            BEGIN
+              SELECT RAISE(ABORT, 'reject 60-day row');
+            END
+            """
+        )
+
+    with pytest.raises(IntegrityError, match="reject 60-day row"):
+        store.enqueue_outcome_jobs(INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main")
+
+    with engine.connect() as conn:
+        assert conn.execute(select(store.outcome_jobs)).all() == []
+
+
 def test_enqueue_outcome_job_re_raises_an_integrity_error_it_did_not_cause(
     tmp_path, monkeypatch
 ):
