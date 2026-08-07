@@ -1646,193 +1646,12 @@ def test_ping_answers_even_without_a_ledger(monkeypatch):
     assert _webhook("ping", {"zen": "Speak like a human."}).status_code == 202
 
 
-def _comparison_db(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/comparison.db")
+def test_comparisons_route_is_gone(monkeypatch):
+    """Dual-run soak instrument retired with the CI path (PR #54)."""
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    assert store.enabled()
-
-
-def _comparison_api_review(
-    *,
-    app: bool,
-    legacy_ci: bool = False,
-    coverage=None,
-    pr_meta=None,
-    head_sha: str | None = None,
-) -> int:
-    sha = head_sha or "a" * 40
-    verdict = api.Verdict(
-        score=0.2,
-        band=api.Band.CLEARED,
-        threshold=0.3,
-        reasons=[],
-    )
-    identity = (
-        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app
-        else {} if legacy_ci else {"head_sha": sha}
-    )
-    verdict_id = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        verdict,
-        pr_meta=(
-            {"number": 33, "title": "Compare paths", "author": "dev", "files": [],
-             "head_sha": sha}
-            if pr_meta is None else pr_meta
-        ),
-        coverage=coverage,
-        **identity,
-    )
-    assert verdict_id is not None
-    return verdict_id
-
-
-def test_comparisons_requires_the_shared_token(monkeypatch):
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    assert client.get("/v1/comparisons").status_code == 401
-
-
-def test_comparisons_refuses_when_the_token_is_unconfigured(monkeypatch):
-    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "anything"}
-    )
-    assert response.status_code == 503
-
-
-def test_comparisons_refuses_when_the_ledger_is_unconfigured(monkeypatch):
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    response = client.get(
+    assert client.get(
         "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-    assert response.status_code == 503
-
-
-def test_comparisons_rejects_a_limit_outside_one_through_two_hundred(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    for limit in (0, 201):
-        response = client.get(
-            "/v1/comparisons",
-            params={"limit": limit},
-            headers={"X-Doug-Token": "secret"},
-        )
-        assert response.status_code == 422
-
-
-def test_comparisons_serializes_both_paths_duplicates_and_coverage(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    coverage = api.reader.Coverage(
-        diff_chars=20,
-        sent_chars=10,
-        files_sent=1,
-        files_unseen=["second.py"],
-        file_cut="first.py",
-    )
-    app_one = _comparison_api_review(app=True, coverage=coverage)
-    # Migration 005: a second App save for the same SHA is idempotent.
-    assert _comparison_api_review(app=True) == app_one
-    current_ci = _comparison_api_review(
-        app=False,
-        pr_meta={"number": 33, "title": "Current CI", "author": "dev", "files": []},
-    )
-    legacy_ci = _comparison_api_review(app=False, legacy_ci=True)
-    one_app_id = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        installation_id=10,
-        pr_meta={"head_sha": "a" * 40},
-    )
-    github_repo_id_only = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        github_repo_id=20,
-        pr_meta={"head_sha": "a" * 40},
-    )
-    app_without_head = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        installation_id=10,
-        github_repo_id=20,
-        pr_meta={"head_sha": "a" * 40},
-    )
-
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-    assert response.status_code == 200
-    runs = response.json()["runs"]
-    assert {run["id"] for run in runs} == {app_one, current_ci, legacy_ci}
-    assert one_app_id not in {run["id"] for run in runs}
-    assert github_repo_id_only not in {run["id"] for run in runs}
-    assert app_without_head not in {run["id"] for run in runs}
-    assert [run["path"] for run in runs].count("app") == 1
-    assert [run["path"] for run in runs].count("ci") == 2
-    assert next(run for run in runs if run["id"] == current_ci)["head_sha"] == "a" * 40
-    assert {run["head_sha"] for run in runs} == {"a" * 40}
-    covered = next(run for run in runs if run["id"] == app_one)
-    assert covered["coverage"]["sent_chars"] == 10
-    assert covered["coverage"]["diff_chars"] == 20
-
-
-def test_comparisons_refuses_to_return_partial_evidence_when_run_cap_is_exceeded(
-    tmp_path, monkeypatch
-):
-    """A safety bound must fail loud, never cut a comparison group.
-
-    Returning the first N runs would let the web layer infer a missing path
-    or score delta from an incomplete ledger slice. Cap is exercised with
-    distinct App SHAs plus CI — App-path identity is unique per SHA
-    (migration 005), so a second save of the same App identity no longer
-    inflates the count.
-    """
-    _comparison_db(tmp_path, monkeypatch)
-    monkeypatch.setattr(store, "COMPARISON_RUN_LIMIT", 2)
-    _comparison_api_review(app=True)
-    _comparison_api_review(app=False)
-    # Third qualifying run: a later App commit (distinct SHA under migration 005).
-    _comparison_api_review(app=True, head_sha="b" * 40)
-
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-
-    assert response.status_code == 413
-    assert response.json() == {
-        "detail": "comparison contains more than 2 runs; narrow the repo or PR limit"
-    }
-
-
-def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    verdict = api.Verdict(
-        score=0.2,
-        band=api.Band.CLEARED,
-        threshold=0.3,
-        reasons=[],
-    )
-    store.save_review("o/r", 9, "deterministic", verdict, pr_meta=None)
-
-    run = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    ).json()["runs"][0]
-    assert run["title"] == "PR #9"
-    assert run["url"] == "https://github.com/o/r/pull/9"
-    assert run["head_sha"] is None
+    ).status_code == 404
 
 
 def _api_db(tmp_path, monkeypatch) -> None:
@@ -2298,9 +2117,7 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
-@pytest.mark.parametrize(
-    "path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read", "/v1/runs", "/v1/runs/1"]
-)
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/score/read"])
 def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     """A valid credential pointed at an endpoint that is not theirs learns
     only that there is nothing there — same no-existence-leak rule as a
@@ -2316,7 +2133,7 @@ def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, pat
     assert r.status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/runs", "/v1/runs/1"])
+@pytest.mark.parametrize("path", ["/v1/patterns"])
 def test_junk_token_is_still_401_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     _tenant(tmp_path, monkeypatch)
     r = client.get(path, headers={"X-Doug-Token": "doug_nope"})
