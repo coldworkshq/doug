@@ -1,8 +1,12 @@
-"""Read-only structural audit for legacy 14-day outcome rows."""
+"""Structural audit and guarded repair for legacy 14-day outcome rows."""
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from sqlalchemy import create_engine, select
+import pytest
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.dialects import postgresql
 
 from doug import outcome_backfill, store
 
@@ -103,6 +107,21 @@ def _rows(conn) -> list[dict]:
     ]
 
 
+def _manifest_rows(path: Path) -> list[dict]:
+    return json.loads(path.read_text())["rows"]
+
+
+def _untouched(row: dict) -> bool:
+    return (
+        row["status"] == "pending"
+        and row["attempts"] == 0
+        and row["claim_generation"] == 0
+        and row["started_at"] is None
+        and row["finished_at"] is None
+        and row["error"] is None
+    )
+
+
 def test_inspect_counts_registered_history_without_mutating_jobs(tmp_path, monkeypatch):
     """Filtering inactive registry rows would erase historical denominator votes."""
     url = _db(tmp_path, monkeypatch)
@@ -167,3 +186,350 @@ def test_inspect_counts_only_registered_60_day_orphans(tmp_path, monkeypatch):
         report = outcome_backfill.inspect(conn, now=NOW)
 
     assert report.orphan_60 == 1
+
+
+def test_apply_inserts_only_missing_siblings_and_is_idempotent(tmp_path, monkeypatch):
+    """A repair that rewrites sources, includes unregistered history, or resets
+    an existing sibling would change the preregistered denominator.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / "apply.json"
+
+    with engine.connect() as conn:
+        before = _rows(conn)
+    result = outcome_backfill.apply(
+        engine, expected_missing=3, manifest_path=manifest, now=NOW
+    )
+    with engine.connect() as conn:
+        after = _rows(conn)
+
+    assert result.inserted == 3
+    assert result.manifest_path == str(manifest)
+    assert result.report.missing == 0
+    assert result.to_dict()["report"] == result.report.to_dict()
+    assert json.loads(manifest.read_text())["version"] == 1
+    inserted_ids = {row["id"] for row in _manifest_rows(manifest)}
+    inserted = [row for row in after if row["id"] in inserted_ids]
+    sources = {
+        (
+            row["installation_id"],
+            row["github_repo_id"],
+            row["pr_number"],
+            row["merge_commit_sha"],
+        ): row
+        for row in before
+        if row["window_days"] == 14
+    }
+    assert len(inserted) == 3
+    assert {row["installation_id"] for row in inserted} == {
+        ACTIVE_INSTALL,
+        SUSPENDED_INSTALL,
+        DELETED_INSTALL,
+    }
+    for row in inserted:
+        source = sources[
+            (
+                row["installation_id"],
+                row["github_repo_id"],
+                row["pr_number"],
+                row["merge_commit_sha"],
+            )
+        ]
+        assert row["merged_at"] == source["merged_at"]
+        assert row["base_ref"] == source["base_ref"]
+        assert row["created_at"] == source["created_at"]
+        assert row["window_days"] == 60
+        assert row["due_at"] == source["merged_at"] + timedelta(days=60)
+        assert _untouched(row)
+
+    second_manifest = tmp_path / "apply-again.json"
+    second = outcome_backfill.apply(
+        engine, expected_missing=0, manifest_path=second_manifest, now=NOW
+    )
+    with engine.connect() as conn:
+        repeated = _rows(conn)
+    assert second.inserted == 0
+    assert _manifest_rows(second_manifest) == []
+    assert repeated == after
+
+
+def test_apply_refuses_a_stale_count_without_creating_a_manifest(tmp_path, monkeypatch):
+    """A count captured before the write transaction must fence population drift."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / "stale.json"
+
+    with pytest.raises(
+        outcome_backfill.BackfillInvariantError,
+        match="expected 2 missing 60-day jobs; found 3",
+    ):
+        outcome_backfill.apply(
+            engine, expected_missing=2, manifest_path=manifest, now=NOW
+        )
+
+    assert not manifest.exists()
+    with engine.connect() as conn:
+        assert len(_rows(conn)) == 6
+
+
+def test_apply_rejects_a_relative_manifest_before_connecting():
+    """A working-directory-relative audit artifact cannot safely name a repair."""
+
+    class NoConnect:
+        def connect(self):
+            raise AssertionError("database connection opened")
+
+    with pytest.raises(ValueError, match="manifest path must be absolute"):
+        outcome_backfill.apply(
+            NoConnect(),
+            expected_missing=0,
+            manifest_path=Path("relative-manifest.json"),
+            now=NOW,
+        )
+
+
+def test_apply_refuses_mismatches_and_registered_orphans(tmp_path, monkeypatch):
+    """Repair must expose existing corruption, not hide it behind conflict handling."""
+    mismatch_url = _db(tmp_path, monkeypatch)
+    _, job_60_id = _seed_population(mismatch_url)
+    mismatch_engine = create_engine(mismatch_url)
+    with mismatch_engine.begin() as conn:
+        conn.execute(
+            update(store.outcome_jobs)
+            .where(store.outcome_jobs.c.id == job_60_id)
+            .values(base_ref="release")
+        )
+    mismatch_manifest = tmp_path / "mismatch.json"
+
+    with pytest.raises(outcome_backfill.BackfillInvariantError, match="mismatched"):
+        outcome_backfill.apply(
+            mismatch_engine,
+            expected_missing=3,
+            manifest_path=mismatch_manifest,
+            now=NOW,
+        )
+    assert not mismatch_manifest.exists()
+    with mismatch_engine.connect() as conn:
+        assert len(_rows(conn)) == 6
+
+    orphan_url = f"sqlite:///{tmp_path}/orphan.db"
+    monkeypatch.setenv("DATABASE_URL", orphan_url)
+    assert store.enabled()
+    _seed_population(orphan_url)
+    orphan_engine = create_engine(orphan_url)
+    with orphan_engine.begin() as conn:
+        conn.execute(
+            store.outcome_jobs.insert(),
+            _job(ACTIVE_INSTALL, 1001, 99, merged_at=OLD_MERGE, window_days=60),
+        )
+        assert outcome_backfill.inspect(conn, now=NOW).orphan_60 == 1
+    orphan_manifest = tmp_path / "orphan.json"
+
+    with pytest.raises(outcome_backfill.BackfillInvariantError, match="orphan"):
+        outcome_backfill.apply(
+            orphan_engine,
+            expected_missing=3,
+            manifest_path=orphan_manifest,
+            now=NOW,
+        )
+    assert not orphan_manifest.exists()
+    with orphan_engine.connect() as conn:
+        assert len(_rows(conn)) == 7
+
+
+def test_manifest_creation_failures_roll_back_the_insert(tmp_path, monkeypatch):
+    """The database cannot commit unless its exclusive audit artifact is durable."""
+    url = _db(tmp_path, monkeypatch)
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": ACTIVE_INSTALL,
+                "account_login": "active",
+                "account_type": "Organization",
+                "state": "active",
+                "updated_at": NOW,
+            },
+        )
+        conn.execute(
+            store.outcome_jobs.insert(),
+            _job(ACTIVE_INSTALL, 1001, 1, merged_at=OLD_MERGE),
+        )
+    with engine.connect() as conn:
+        before = _rows(conn)
+    manifest = tmp_path / "disk-full.json"
+
+    def fail_manifest(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(outcome_backfill, "_write_manifest_new", fail_manifest)
+    with pytest.raises(OSError, match="disk full"):
+        outcome_backfill.apply(
+            engine, expected_missing=1, manifest_path=manifest, now=NOW
+        )
+    with engine.connect() as conn:
+        after = _rows(conn)
+    assert after == before
+    assert [row["window_days"] for row in after] == [14]
+
+
+def test_manifest_directory_sync_failure_rolls_back_the_insert(tmp_path, monkeypatch):
+    """A durable file without its new directory entry is not a durable manifest."""
+    url = _db(tmp_path, monkeypatch)
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": ACTIVE_INSTALL,
+                "account_login": "active",
+                "account_type": "Organization",
+                "state": "active",
+                "updated_at": NOW,
+            },
+        )
+        conn.execute(
+            store.outcome_jobs.insert(),
+            _job(ACTIVE_INSTALL, 1001, 1, merged_at=OLD_MERGE),
+        )
+    real_fsync = outcome_backfill.os.fsync
+    calls = 0
+
+    def fail_directory_sync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory sync failed")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(outcome_backfill.os, "fsync", fail_directory_sync)
+    with pytest.raises(OSError, match="directory sync failed"):
+        outcome_backfill.apply(
+            engine,
+            expected_missing=1,
+            manifest_path=tmp_path / "directory-sync.json",
+            now=NOW,
+        )
+    with engine.connect() as conn:
+        rows = _rows(conn)
+    assert calls == 2
+    assert [row["window_days"] for row in rows] == [14]
+
+
+def test_apply_refuses_an_existing_manifest_before_mutation(tmp_path, monkeypatch):
+    """Exclusive creation prevents an older audit artifact from being overwritten."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / "existing.json"
+    manifest.write_text("preserve me")
+
+    with pytest.raises(FileExistsError):
+        outcome_backfill.apply(
+            engine, expected_missing=3, manifest_path=manifest, now=NOW
+        )
+
+    assert manifest.read_text() == "preserve me"
+    with engine.connect() as conn:
+        assert len(_rows(conn)) == 6
+
+
+def test_verify_manifest_independently_requires_exact_untouched_rows(
+    tmp_path, monkeypatch
+):
+    """An identity list is not verified while a row is missing, started, or extra."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / "verify.json"
+    outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
+
+    assert outcome_backfill.verify_manifest(
+        engine, manifest_path=manifest, expected_count=3
+    ) == 3
+    with pytest.raises(outcome_backfill.BackfillInvariantError, match="expected 2"):
+        outcome_backfill.verify_manifest(
+            engine, manifest_path=manifest, expected_count=2
+        )
+
+    changed_id = _manifest_rows(manifest)[0]["id"]
+    with engine.begin() as conn:
+        conn.execute(
+            update(store.outcome_jobs)
+            .where(store.outcome_jobs.c.id == changed_id)
+            .values(status="running", claim_generation=1, started_at=NOW)
+        )
+    with pytest.raises(outcome_backfill.BackfillInvariantError, match="untouched"):
+        outcome_backfill.verify_manifest(
+            engine, manifest_path=manifest, expected_count=3
+        )
+    with engine.connect() as conn:
+        assert conn.execute(
+            select(store.outcome_jobs.c.status).where(store.outcome_jobs.c.id == changed_id)
+        ).scalar_one() == "running"
+
+
+def test_rollback_deletes_every_exact_manifest_row_or_none(tmp_path, monkeypatch):
+    """Rollback may remove only the inserted siblings and never their 14-day sources."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / "rollback.json"
+    outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
+    manifest_ids = {row["id"] for row in _manifest_rows(manifest)}
+
+    assert outcome_backfill.rollback(
+        engine, manifest_path=manifest, expected_count=3
+    ) == 3
+    with engine.connect() as conn:
+        remaining = _rows(conn)
+    assert not manifest_ids & {row["id"] for row in remaining}
+    assert [row["window_days"] for row in remaining].count(14) == 5
+    assert [row["window_days"] for row in remaining].count(60) == 1
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_rollback_refuses_wrong_counts_or_touched_rows(tmp_path, monkeypatch, changed):
+    """A failed guard must leave every manifest sibling in place as one set."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_population(url)
+    engine = create_engine(url)
+    manifest = tmp_path / f"rollback-refused-{changed}.json"
+    outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
+    manifest_ids = {row["id"] for row in _manifest_rows(manifest)}
+    if changed:
+        changed_id = next(iter(manifest_ids))
+        with engine.begin() as conn:
+            conn.execute(
+                update(store.outcome_jobs)
+                .where(store.outcome_jobs.c.id == changed_id)
+                .values(status="running", claim_generation=1, started_at=NOW)
+            )
+
+    with pytest.raises(outcome_backfill.BackfillInvariantError):
+        outcome_backfill.rollback(
+            engine,
+            manifest_path=manifest,
+            expected_count=3 if changed else 2,
+        )
+    with engine.connect() as conn:
+        assert manifest_ids <= {row["id"] for row in _rows(conn)}
+
+
+def test_postgresql_insert_select_uses_exact_interval_and_conflict_target():
+    """PostgreSQL must dedupe only the published identity and derive from merge time."""
+    sql = str(
+        outcome_backfill._insert_statement("postgresql").compile(
+            dialect=postgresql.dialect()
+        )
+    )
+
+    assert "INTERVAL '60 days'" in sql
+    assert (
+        "ON CONFLICT (installation_id, github_repo_id, pr_number, "
+        "merge_commit_sha, window_days) DO NOTHING"
+    ) in sql
