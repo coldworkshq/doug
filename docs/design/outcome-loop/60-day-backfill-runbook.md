@@ -238,9 +238,10 @@ Run apply immediately after those final `PAUSED` and zero-nonterminal checks,
 in a low-traffic maintenance window; do not pause after the checks. While apply
 holds its locks, merge-webhook database writes can wait and an HTTP request that
 times out may be redelivered. Those locks fence the complete eligibility
-predicate and must not be removed or weakened. An apply error rolls back the
-database transaction; preserve its artifacts and follow the failure
-classification in §5.
+predicate and must not be removed or weakened. An exception while the guarded
+database transaction is active rolls it back, but a failed or unverifiable
+apply may nevertheless have committed; preserve its artifacts and follow the
+failure classification in §5.
 
 ```bash
 
