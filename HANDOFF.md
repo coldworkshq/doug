@@ -1,7 +1,11 @@
 # HANDOFF — doug
 
-State:    M3 ACTIVE. Production remains on HEAD main `fa1e323` (#65). M3 item 1
-          (`adjudicate.py`) and the v7 draft pre-registration are merged
+State:    M3 ACTIVE. The last verified deployed production commit is `fa1e323`
+          (#65). Current main is `c985a1f` (#67), which retires `/compare` and
+          the dual-run comparison stack; that current-main runtime change is not
+          claimed deployed. Task 7 must re-verify the serving production revision
+          before either the current-main changes or the M3 branch is marked live.
+          M3 item 1 (`adjudicate.py`) and the v7 draft pre-registration are merged
           (#59–#61). On implementation branch `m3-60-day-backfill`, the permanent
           atomic 14/60 merge write, guarded one-time catch-up CLI, deploy-time
           lock guard, exact production runbook, and `LOCKED v8` document are

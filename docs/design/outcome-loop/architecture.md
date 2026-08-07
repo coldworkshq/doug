@@ -3,7 +3,9 @@
 **Companion to:** `design-lock.md` (why each box won), `build-plan.md` (the file:line seams). This is the shape.
 
 Legend — every box is labeled with its state, and the labels are load-bearing:
-`[live]` deployed today · `[v1]` this build · `[v1.5]` gated on adjudicated data · `[later]` has a named trigger, not a date.
+`[live]` deployed today · `[built]` implemented on `m3-60-day-backfill`, pending
+Task 7 production deployment verification · `[v1]` this build · `[v1.5]` gated
+on adjudicated data · `[later]` has a named trigger, not a date.
 
 ## System
 
@@ -18,7 +20,7 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
         sha256-pinned) [live] │                         │   one neutral check run "Doug":
           pull_request        │                         │   verdict + receipt content
           pull_request_review │ [v1]                    │   N adjudicated · M pending
-          closed && merged ───┼── stores 14 + 60 [v1] │   deep reads: 143/200
+          closed && merged ───┼── 14 + 60 [built]   │   deep reads: 143/200
           installation ───────┼── mints tenant token    │   (never blocks, never comments)
                               ▼                         │
                     ┌─────────────────────────────────────────────────┐
@@ -49,7 +51,7 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
                     │  procurement │   │  keyed on installation/repo IDs,    │
                     │  option      │   │  repo strings display-only    [v1]  │
                     └──────────────┘   │  merge ingest = both window rows    │
-                                       │  (one atomic write)           [v1]  │
+                                       │  (one atomic write)        [built]  │
                                        │  outcome_jobs unique identity:      │
                                        │    installation_id, github_repo_id, │
                                        │    pr_number, merge_commit_sha,     │
