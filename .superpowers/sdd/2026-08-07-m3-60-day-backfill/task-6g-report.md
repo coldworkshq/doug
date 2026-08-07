@@ -45,3 +45,34 @@ Only `api/deploy/gcp.sh`, `api/tests/test_deploy_gcp.py`, and this required
 task report are included. No real `gcloud` or `curl` call ran: all exercised
 external boundaries were temporary fake binaries. No production, ledger, plan,
 PR, push, or remote state was changed. Concerns: none.
+
+## Round 1: symlink launcher follow-up
+
+The initial `BASH_SOURCE` directory resolution did not follow a symlinked
+launcher: a relative `/tmp/.../gcp.sh` link to the real script derived the
+temporary directory as the repository root. The new regression first failed
+with `ERROR: cannot read publication pre-registration:` naming that temporary
+root. It invokes a real, relative-target symlink from an unrelated CWD through
+the existing fake `gcloud` and `curl` boundary, then asserts the real locked
+document hash reaches the adjudicator and every fake `gcloud` call observes the
+real `api/` directory.
+
+`gcp.sh` now resolves `BASH_SOURCE` with a portable loop: plain `readlink`
+(rather than GNU-only `readlink -f`) reads each link, and relative targets are
+made absolute relative to the directory containing that link before continuing.
+Copied-script fixtures remain unchanged.
+
+Verification from `api/`:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 uv run pytest tests/test_deploy_gcp.py -q -p no:cacheprovider -k 'relative_script_symlink'
+# 1 passed, 19 deselected
+PYTHONDONTWRITEBYTECODE=1 uv run pytest tests/test_deploy_gcp.py -q -p no:cacheprovider
+# 20 passed
+bash -n deploy/gcp.sh
+uv run ruff check tests/test_deploy_gcp.py --no-cache
+git diff --check
+```
+
+The syntax and diff checks were silent; Ruff reported `All checks passed!`.
+No production, remote, PR, plan, or ledger action occurred. Concerns: none.

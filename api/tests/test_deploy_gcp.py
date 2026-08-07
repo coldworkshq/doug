@@ -280,6 +280,34 @@ def test_full_deploy_normalizes_to_api_before_the_fake_cloud_boundary(tmp_path):
         assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {expected_cwd}
 
 
+def test_relative_script_symlink_resolves_the_lock_and_api_working_directory(tmp_path):
+    """A portable launcher can link to gcp.sh without changing its deployment root."""
+    link_dir = tmp_path / "launchers"
+    link_dir.mkdir()
+    script_link = link_dir / "gcp.sh"
+    script_link.symlink_to(os.path.relpath(GCP_PATH, link_dir))
+    caller_cwd = tmp_path / "unrelated-caller"
+    caller_cwd.mkdir()
+    case = tmp_path / "symlink-case"
+    case.mkdir()
+
+    result, lines = _invoke_gcp(
+        case, "deploy", gcp_path=script_link, cwd=caller_cwd
+    )
+
+    prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    assert result.returncode == 0, result.stdout + result.stderr
+    [adjudicator] = [
+        line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
+    ]
+    assert f"DOUG_PREREG_HASH={expected_hash}" in adjudicator
+    assert any(line.startswith("run deploy doug-api --source .") for line in lines)
+    assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {
+        str(GCP_PATH.parent.parent.resolve())
+    }
+
+
 def test_missing_preregistration_refuses_deploy_with_a_read_error(tmp_path):
     """A missing lock is an operator path failure, not an unlocked contract."""
     gcp_path = tmp_path / "api/deploy/gcp.sh"

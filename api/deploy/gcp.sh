@@ -20,7 +20,16 @@
 # grant belongs to a human running `setup`, not to the merge-to-main path.
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+SCRIPT_SOURCE=${BASH_SOURCE[0]}
+while [ -h "$SCRIPT_SOURCE" ]; do
+  SCRIPT_DIR=$(cd -P -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
+  SCRIPT_SOURCE=$(readlink "$SCRIPT_SOURCE")
+  case "$SCRIPT_SOURCE" in
+    /*) ;;
+    *) SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE" ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
 API_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
 REPO_ROOT=$(cd -- "$API_DIR/.." && pwd -P)
 cd "$API_DIR"
