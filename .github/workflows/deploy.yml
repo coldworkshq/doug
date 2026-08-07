@@ -83,7 +83,17 @@ jobs:
       run:
         working-directory: api
     steps:
+      # Full history, same reason the changes job above needs it:
+      # scripts/read_budget_gate.py pins END_SHA=135c8e5 and walks 30
+      # first-parent commits back from it, and test_read_budget_scripts.py
+      # asserts that sample's exact result. A depth-1 checkout cannot resolve
+      # that SHA, so `git log ... 135c8e5` exits 128 and the suite fails here
+      # while passing on every developer clone. This gate is what ships the
+      # API, so the failure blocked deploys entirely rather than just going
+      # red — doug-api stayed on the pre-merge revision after #57 landed.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
