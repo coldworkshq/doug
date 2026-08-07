@@ -15,19 +15,35 @@ State:    M3 STARTED. HEAD main is `3fec72a` (#57, doug-console Phase 1).
               its 60-day backfill runbook is unwritten.
           The full development history, with every review round, is on
           `claude/doug-console-next-steps-7oomm4`.
-Next:     1) OPS, and nobody else can do it: doug-console is MERGED BUT NOT
-          DEPLOYED. `gcp.sh console` is deliberately out of CD (gcp.sh:16 —
-          it is IAM-gated, so a stray grant belongs to a human running
-          `setup`). Needs `gcp.sh setup`, `gcp.sh console`, then an invoke
-          binding; reach it via `gcloud run services proxy doug-console`.
-          Until then the console exists only in source.
-          2) Merge the two PRs above. 3) M3 item 2, the Cloud Run Job +
-          Scheduler that drains the adjudicator. 4) Migration 006 — it now
+Next:     1) doug-console IS NOW DEPLOYED (2026-08-06, revision
+          `doug-console-00001-cz4`, on next 16.2.12). IAM-gated as designed:
+          `--no-allow-unauthenticated`, runtime SA `doug-console-sa`, and
+          exactly one invoke binding (`user:drew.jst@gmail.com`) — a raw
+          fetch of the service URL is 403 and MUST stay that way. Reach it
+          with `gcloud run services proxy doug-console --project doug-prod0
+          --region us-central1`. `gcp.sh setup` was NOT run and must not be:
+          its lines 38-47 rotate the production SQL password unconditionally.
+          Only the `console()` block was applied.
+          CONSEQUENCE FOR THE DEPENDENCY HOLD (below): its stated release
+          condition — "HELD until the console has been deployed on 16.2.12"
+          — is now MET. The next → 16.3.0 bump is unblocked whenever Andrew
+          wants it.
+          CAUTION: console changes do NOT auto-deploy. deploy.yml's
+          `changes` job greps only `^api/` and `^web/`; there is no
+          `console` branch in that filter, so a merged console PR ships
+          nothing until `gcp.sh console` is run by hand (or the filter is
+          extended).
+          2) PR #63 (console-ux) — runs grouped by PR as an accordion, facet
+          pills, column sorting, plus the `SCOREPULL REQUEST` header bug and
+          the unrendered `RunSummary.url` from #57's review. CI green on
+          f978914; needs a redeploy after merge per the caution above.
+          3) Merge the two PRs above. 4) M3 item 2, the Cloud Run Job +
+          Scheduler that drains the adjudicator. 5) Migration 006 — it now
           carries THREE columns, not one: `reads.files_dropped`,
           `reads.changed_files`, and `outcomes.merge_commit_sha` (without
           the last, the numerator has no job discriminator and the
           `N_done = misses + clean + censored` identity can be false while
-          every stated rule is obeyed). 5) Still open from before: #44's web
+          every stated rule is obeyed). 6) Still open from before: #44's web
           SA cutover; the bot-author ruling; log dispositions with
           `python -m doug.findings_log append`.
 Rulings:  2026-08-07, four of five settled — see §11 of the pre-registration

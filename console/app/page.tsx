@@ -1,24 +1,19 @@
-import Link from "next/link";
+import { Suspense } from "react";
 
-import { BandChip } from "@/components/band-chip";
-import { CoverageBar } from "@/components/coverage-bar";
+import { RunsTable } from "@/components/runs-table";
 import { Shell } from "@/components/shell";
 import { getRuns, isError } from "@/lib/api";
-import { jobDuration, parseTenantId, relativeAge } from "@/lib/runs";
+import { parseTenantId } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
-// The rows are the one place real repo values exist (they come off the
-// ledger, not a guess), so setting the filter belongs here rather than in
-// ScopeSwitch — see ScopeSwitch's own comment for why it only clears.
-// Preserves `tenant` (the only other scope param this page reads) and
-// drops any existing `repo` in favour of the row's own.
-function repoFilterHref(repo: string, tenant: string | null): string {
-  const params = new URLSearchParams();
-  if (tenant) params.set("tenant", tenant);
-  params.set("repo", repo);
-  return `/?${params}`;
-}
+/** The API's own ceiling. Grouping, sorting and facet counts are all
+ *  computed in the browser over whatever this returns, and every one of
+ *  them is exactly true only while that IS the complete set for the scope —
+ *  so the honest move is to fetch as much of it as the API will give,
+ *  and to degrade visibly (see `atCap`) rather than silently when it is
+ *  still not all of it. */
+const PAGE_LIMIT = 500;
 
 export default async function RunsPage({
   searchParams,
@@ -42,13 +37,16 @@ export default async function RunsPage({
       : await getRuns({
           repo: params.repo,
           installationId: tenant.kind === "present" ? tenant.id : undefined,
+          limit: PAGE_LIMIT,
         });
 
   // limit/offset round-trip the request: items.length hitting the
   // requested limit means there may be more than what's shown, and the
   // header must not claim that number IS the total run count when it
   // might only be the page size. Below the cap, items.length is the exact
-  // and complete count (offset is always 0 here).
+  // and complete count (offset is always 0 here) — which is also what
+  // makes the client-side grouping, sorting and facet counts true rather
+  // than merely plausible.
   const atCap = !isError(result) && result.items.length >= result.limit;
 
   const scopeLabel = scope.repo
@@ -71,113 +69,24 @@ export default async function RunsPage({
           </p>
         </div>
       ) : (
-        <>
-          <p className="mono flex items-center gap-3 py-5 text-[10.5px] uppercase tracking-[.16em] text-muted-foreground">
-            Runs — verdict history {scopeLabel}
-            <span className="h-px flex-1 bg-border" />
-            {atCap ? (
-              <>
-                latest <b className="text-foreground">{result.limit}</b> runs
-              </>
-            ) : (
-              <>
-                <b className="text-foreground">{result.items.length}</b> runs
-              </>
-            )}
-          </p>
-          <table className="w-full table-fixed border-collapse">
-            <thead>
-              <tr>
-                {[
-                  ["score", "w-[66px] text-right"],
-                  ["pull request", ""],
-                  ["band", "w-[96px]"],
-                  ["tier", "w-[88px]"],
-                  ["read", "w-[176px]"],
-                  ["outcome", "w-[104px]"],
-                  ["job", "w-[118px]"],
-                  ["age", "w-[46px] text-right"],
-                ].map(([label, cls]) => (
-                  <th
-                    key={label}
-                    className={`mono border-b border-border pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground ${cls}`}
-                  >
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {result.items.map((run) => {
-                // A job row only carries a verdict_id once ingest.complete()
-                // sets it, and that same UPDATE sets status="done" in the
-                // same statement (api/doug/ingest.py:508-509); fail() only
-                // ever touches a row still status="running" and a revive
-                // nulls verdict_id back out. So run.job, when present here,
-                // is always "done" — there is no reachable "failed" state
-                // to render on a verdict-keyed row. A failed attempt has no
-                // verdict at all, and surfacing those needs a query keyed
-                // on jobs instead of verdicts (Phase 2).
-                const duration = run.job ? jobDuration(run.job.started_at, run.job.finished_at) : null;
-                const jobLabel = run.job ? (duration ? `${run.job.status} · ${duration}` : run.job.status) : "—";
-                return (
-                  <tr key={run.verdict_id} className="border-b border-border/50 hover:bg-muted/40">
-                    <td className="h-[34px] px-2.5 text-right">
-                      <span
-                        className={
-                          "mono text-[14.5px] font-semibold " +
-                          (run.band === "flagged" ? "data-flag" : "data-clear")
-                        }
-                      >
-                        {run.score.toFixed(2)}
-                      </span>
-                    </td>
-                    <td className="h-[34px] min-w-0 px-2.5">
-                      <div className="flex min-w-0 items-baseline gap-2">
-                        <span className="mono flex-none whitespace-nowrap text-[11px] text-muted-foreground">
-                          <Link
-                            href={repoFilterHref(run.repo, scope.tenant)}
-                            aria-label={`Filter runs to ${run.repo}`}
-                            className="hover:text-foreground hover:underline"
-                          >
-                            {run.repo}
-                          </Link>{" "}
-                          <b className="font-medium text-foreground">#{run.pr_number}</b>
-                        </span>
-                        <Link
-                          href={`/runs/${run.verdict_id}`}
-                          className="min-w-0 flex-1 truncate text-[12.5px] hover:underline"
-                        >
-                          {run.title}
-                        </Link>
-                      </div>
-                    </td>
-                    <td className="h-[34px] px-2.5">
-                      <BandChip band={run.band} />
-                    </td>
-                    <td className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">{run.tier}</td>
-                    <td className="h-[34px] px-2.5">
-                      <CoverageBar coverage={run.coverage} changedFiles={run.changed_files} />
-                    </td>
-                    <td className="mono h-[34px] px-2.5 text-xs">
-                      {run.outcome_14 === null ? (
-                        <span className="text-muted-foreground">◷ pending</span>
-                      ) : run.outcome_14 === "clean" ? (
-                        <span className="data-clear">✓ clean</span>
-                      ) : (
-                        <span className="data-flag font-semibold">↩ {run.outcome_14}</span>
-                      )}
-                    </td>
-                    <td className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">{jobLabel}</td>
-                    <td className="mono h-[34px] px-2.5 text-right text-[11px] text-muted-foreground">
-                      {relativeAge(run.scored_at)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </>
+        // RunsTable reads `useSearchParams`, which Next requires to sit
+        // under a Suspense boundary or be excluded from prerender. Today
+        // `dynamic = "force-dynamic"` above satisfies that — but it makes
+        // this component's correctness depend on a page-level export three
+        // dozen lines away, so deleting that line would break the BUILD,
+        // not just the rendering. The boundary makes RunsTable stand on its
+        // own. The fallback is deliberately empty: on a dynamic route it
+        // never paints, and a skeleton row would be the console showing a
+        // shape of data it does not have.
+        <Suspense fallback={null}>
+          <RunsTable
+            runs={result.items}
+            atCap={atCap}
+            limit={result.limit}
+            tenant={scope.tenant}
+            scopeLabel={scopeLabel}
+          />
+        </Suspense>
       )}
     </Shell>
   );
