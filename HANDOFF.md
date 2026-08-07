@@ -32,11 +32,50 @@ Next:     1) BEFORE MERGE, from this branch, run the narrow privileged setup:
           4) Run it once manually and inspect the execution. Before the first
           due clock (currently Aug 16), the correct result is a no-op summary:
 
+             # In a psql session, preserve the pre-run state and DB clock.
+             CREATE TEMP TABLE m3_audit_clock AS
+               SELECT clock_timestamp() AS started_at;
+             CREATE TEMP TABLE m3_before AS
+               SELECT id, status, attempts, claim_generation, due_at,
+                      started_at, finished_at, error
+               FROM outcome_jobs;
+
+             # From another terminal while that psql session stays open:
              gcloud run jobs execute doug-adjudicator --project doug-prod0 \
                --region us-central1 --wait
 
+          Back in that same psql session, both audits below must return zero
+          rows. The first proves the execution changed no row whose due clock
+          was still in the future when the audit began:
+
+             SELECT j.id, b.due_at, c.started_at AS execution_started_at
+             FROM m3_before b
+             JOIN outcome_jobs j USING (id)
+             CROSS JOIN m3_audit_clock c
+             WHERE b.due_at > c.started_at
+               AND ROW(j.status, j.attempts, j.claim_generation, j.started_at,
+                       j.finished_at, j.error)
+                   IS DISTINCT FROM
+                   ROW(b.status, b.attempts, b.claim_generation, b.started_at,
+                       b.finished_at, b.error);
+
+          The second proves every terminal denominator row has exactly one
+          outcome under the complete merge identity:
+
+             SELECT j.id, count(o.id) AS matching_outcomes
+             FROM outcome_jobs j
+             LEFT JOIN outcomes o
+               ON o.installation_id = j.installation_id
+              AND o.github_repo_id = j.github_repo_id
+              AND o.pr_number = j.pr_number
+              AND o.merge_commit_sha = j.merge_commit_sha
+              AND o.window_days = j.window_days
+             WHERE j.status = 'done'
+             GROUP BY j.id
+             HAVING count(o.id) <> 1;
+
           Do not mark the roadmap item `[x]` until the Job, trigger, IAM and a
-          manual execution are verified in production.
+          manual execution plus both zero-row audits are verified in production.
           5) Finish M3 in separate PRs: 60-day backfill runbook + lock the
           pre-registration; receipts; check-run counters/meter; public
           Doug-on-Doug scoreboard. Independently, redeploy #63 with

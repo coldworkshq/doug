@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from doug import migrations, store
@@ -176,6 +177,19 @@ def test_migration_007_declares_the_same_columns_as_their_tables(tmp_path):
     assert _statements_by_table(dict(migrations.MIGRATIONS)[7]) == M7_COLUMNS
     for table, columns in M7_COLUMNS.items():
         assert columns <= _columns(engine, table)
+
+
+def test_migration_007_lease_timestamps_match_postgres_metadata_types():
+    """Lease comparisons use aware UTC instants. Production reaches these
+    columns through ALTER while fresh databases use metadata; both paths must
+    retain the same timezone semantics or reclaim timing depends on origin."""
+    statements = dict(migrations.MIGRATIONS)[7]
+    for column in ("started_at", "finished_at"):
+        ddl = next(stmt for stmt in statements if f"ADD COLUMN {column}" in stmt)
+        assert ddl.endswith("TIMESTAMP WITH TIME ZONE")
+        assert store.outcome_jobs.c[column].type.compile(
+            dialect=postgresql.dialect()
+        ) == "TIMESTAMP WITH TIME ZONE"
 
 
 def test_migration_007_enforces_one_outcome_per_job_identity(tmp_path):

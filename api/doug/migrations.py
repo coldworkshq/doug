@@ -216,8 +216,8 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # Durable claim lease and fence for the Cloud Run Job. A crashed
             # execution is reclaimed on the next daily run without letting an
             # old holder complete over a newer claim.
-            "ALTER TABLE outcome_jobs ADD COLUMN started_at TIMESTAMP",
-            "ALTER TABLE outcome_jobs ADD COLUMN finished_at TIMESTAMP",
+            "ALTER TABLE outcome_jobs ADD COLUMN started_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE outcome_jobs ADD COLUMN finished_at TIMESTAMP WITH TIME ZONE",
             "ALTER TABLE outcome_jobs ADD COLUMN error TEXT",
             "ALTER TABLE outcome_jobs ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
             # Coverage already carries these values in memory. Persist them so

@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select
+from githubkit.exception import RequestError
+from sqlalchemy import create_engine, delete, select, update
 
 from doug import app_auth, outcome_worker, store
 from doug.backtest import git_labels
@@ -222,6 +223,26 @@ def test_clone_failure_records_one_retry_without_storing_the_token(tmp_path, mon
     assert job["error"] == "repository evidence failed (CalledProcessError)"
 
 
+def test_github_request_failure_is_a_repository_retry(tmp_path, monkeypatch):
+    """An installation-scoped API outage belongs to this repository attempt,
+    not to the deterministic detector or ledger failure boundary."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1, "drewjst/doug", [12])
+    monkeypatch.setattr(app_auth, "enabled", lambda: True)
+    monkeypatch.setattr(
+        outcome_worker,
+        "_github_context",
+        lambda *a, **k: (_ for _ in ()).throw(RequestError(RuntimeError("network"))),
+    )
+
+    summary = outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    assert (summary.done, summary.retried, summary.failed_repositories) == (0, 1, 1)
+    [job] = _rows(url, store.outcome_jobs)
+    assert (job["status"], job["attempts"]) == ("pending", 1)
+    assert job["error"] == "repository evidence failed (RequestError)"
+
+
 def test_one_repository_failure_does_not_block_the_next_repository(tmp_path, monkeypatch):
     """Raising out of the first repository would leave unrelated due rows
     untouched until tomorrow."""
@@ -232,10 +253,59 @@ def test_one_repository_failure_does_not_block_the_next_repository(tmp_path, mon
 
     def evidence(owner, repo, cache_dir, token=None):
         if repo == "broken":
-            raise RuntimeError("boom")
+            raise subprocess.CalledProcessError(128, ["git", "fetch"])
         return {}
 
     monkeypatch.setattr(git_labels, "find_reverted_prs_evidenced", evidence)
+
+    summary = outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    assert (summary.repositories, summary.done, summary.retried) == (2, 1, 1)
+    assert [(row["github_repo_id"], row["status"]) for row in _rows(url, store.outcome_jobs)] == [
+        (1, "pending"),
+        (2, "done"),
+    ]
+
+
+def test_detector_programming_failure_fails_the_execution_loudly(tmp_path, monkeypatch):
+    """Repository/network failures are retryable; a defect in the shared
+    deterministic detector is systemic and must make the Cloud Run Job red."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1, "drewjst/doug", [9])
+    _github_ready(monkeypatch)
+    monkeypatch.setattr(
+        git_labels,
+        "find_reverted_prs_evidenced",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("detector defect")),
+    )
+
+    with pytest.raises(RuntimeError, match="detector defect"):
+        outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    [job] = _rows(url, store.outcome_jobs)
+    assert (job["status"], job["attempts"]) == ("running", 0)
+
+
+def test_missing_identity_retries_without_blocking_later_repositories(tmp_path, monkeypatch):
+    """A deleted installation can outlive its registry rows. With no durable
+    display identity Doug cannot publish a censoring receipt, but that one
+    row must not strand the rest of the daily repository snapshot."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1, "drewjst/gone", [10])
+    _seed_repo(url, 2, "drewjst/healthy", [11])
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == INSTALLATION_ID)
+            .values(state="deleted")
+        )
+        conn.execute(
+            delete(store.installation_repos).where(
+                store.installation_repos.c.github_repo_id == 1
+            )
+        )
+    _github_ready(monkeypatch)
+    monkeypatch.setattr(git_labels, "find_reverted_prs_evidenced", lambda *a, **k: {})
 
     summary = outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
 

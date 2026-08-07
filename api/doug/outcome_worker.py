@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from githubkit.exception import RequestError
 
 from . import app_auth, outcome_queue
 from .adjudicate import adjudicate
@@ -81,14 +84,25 @@ def drain(*, prereg_hash: str | None, clone_root: Path) -> DrainSummary:
         if batch is None:
             continue
         repositories += 1
+        if batch.repo_full_name is None:
+            # Missing MT0/backfill registry state is not enough evidence to
+            # invent a display identity. Even a deleted installation cannot
+            # produce an auditable censoring row without one, but it also must
+            # not block the rest of today's repository snapshot.
+            outcome_queue.fail_batch(batch, "repository identity unavailable")
+            retried += len(batch.jobs)
+            failed_repositories += 1
+            continue
         if batch.permanently_unreachable:
-            if batch.repo_full_name is None:
-                raise RuntimeError("removed repository has no durable display identity")
             revert_map, default_branch = {}, None
         else:
             try:
                 revert_map, default_branch = _repository_evidence(batch, clone_root)
-            except Exception as exc:  # noqa: BLE001 - external repo isolation boundary
+            except (
+                RequestError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as exc:
                 outcome_queue.fail_batch(batch, _safe_repository_error(exc))
                 retried += len(batch.jobs)
                 failed_repositories += 1

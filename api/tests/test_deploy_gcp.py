@@ -13,6 +13,7 @@ from pathlib import Path
 
 GCP_PATH = Path(__file__).resolve().parents[1] / "deploy" / "gcp.sh"
 GCP = GCP_PATH.read_text()
+DEPLOY_WORKFLOW = GCP_PATH.parents[2] / ".github" / "workflows" / "deploy.yml"
 
 
 def _active_lines() -> list[str]:
@@ -203,6 +204,16 @@ def test_api_deploy_also_refreshes_the_adjudicator_from_its_promoted_image():
     """A later detector change must not deploy to the API while the outcome
     worker keeps running an older image."""
     assert "adjudicator" in _function_body("deploy")
+
+
+def test_preregistration_change_refreshes_the_adjudicator_hash():
+    """The Job receives the document hash at deploy time. A docs-only change
+    must therefore enter the API deploy path even when no Python changed."""
+    workflow = DEPLOY_WORKFLOW.read_text()
+    change_filter = workflow.split('files=$(git diff --name-only', 1)[1].split(
+        'echo "api=$api"', 1
+    )[0]
+    assert "docs/design/outcome-loop/publication-preregistration.md" in change_filter
 
 
 def test_setup_owns_scheduler_and_adjudicator_identities():
