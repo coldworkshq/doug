@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 from doug.backtest.curve import capture_curve
-from doug.backtest.git_labels import find_reverted_prs_dated
+from doug.backtest.git_labels import TOLERANCE_DAYS, find_reverted_prs_dated
 from doug.backtest.harvest import harvest
 from doug.backtest.replay import to_metadata
 from doug.features import extract_features
@@ -49,7 +49,6 @@ REPOS = [
     ("getsentry", "sentry", 5000, "2026-06-15"),
     ("grafana", "grafana", 12000, "2026-06-15"),
 ]
-TOLERANCE_DAYS = 1  # drop impossible labels; see label_precision_delta.py
 
 _FIX_WORDS = ("fix", "bug", "hotfix", "patch", "repair", "correct")
 

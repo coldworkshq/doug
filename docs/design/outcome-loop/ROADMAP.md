@@ -255,8 +255,16 @@ path, no cross-tenant read, no silent partial reads.
 
 ## M3 — The loop itself *(~5–7d build + 14d calendar)*
 
-- [ ] `doug/adjudicate.py` as a pure function over (job rows, revert map) + fixtures that run
-  `git_labels` cases through the **live** path (live label ≡ backtest label, pinned by test)
+- [x] `doug/adjudicate.py` as a pure function over (job rows, revert map) + fixtures that run
+  `git_labels` cases through the **live** path (live label ≡ backtest label, pinned by test).
+  The pure core only — the Cloud Run Job that drains it is the item below, still open.
+  Building it found a defect three review rounds of the pre-registration had missed: the
+  window predicate had no **lower** bound, so a revert dated *before* a PR merged counted as
+  a miss against it. `scripts/label_precision_delta.py` had already measured that at 6/67 on
+  sentry and 6/54 on grafana, and `screen_features.py`/`rf_kamei.py` already filtered it while
+  the adjudicator would not — so "live labels and backtest labels are the same event"
+  (`design-lock.md:29`), the whole reason `git_labels.py` is the only detector, was false.
+  `TOLERANCE_DAYS` now lives once in `git_labels.py` and both sides import it.
 - [ ] Cloud Run Job (2Gi) + Cloud Scheduler; claim `due_at <= now()` FOR UPDATE SKIP LOCKED
 - [ ] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`
 - [ ] Receipts: `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring + findings + inputs-seen + adjudication block + hashes)

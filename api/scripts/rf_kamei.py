@@ -26,11 +26,11 @@ import functools
 from datetime import datetime
 
 import numpy as np
-from screen_features import CACHE, FEATURES, TOLERANCE_DAYS, history_index
+from screen_features import CACHE, FEATURES, history_index
 from sklearn.ensemble import RandomForestClassifier
 
 from doug.backtest.curve import capture_curve, cleared_band
-from doug.backtest.git_labels import find_reverted_prs_dated
+from doug.backtest.git_labels import TOLERANCE_DAYS, find_reverted_prs_dated
 from doug.backtest.harvest import harvest
 from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay

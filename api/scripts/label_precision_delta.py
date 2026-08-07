@@ -12,6 +12,12 @@ So before making the filter a default, measure whether it changes anything.
 
 This prints every headline number both ways. It decides nothing.
 
+It did, however, settle it: on this evidence the filter was adopted for the
+live path too (`publication-preregistration.md` §6.1), so `TOLERANCE_DAYS` is
+now `git_labels`' and this script measures the cost of a decision rather than
+informing an open one. The "AS-IS" column is what the published rate would
+have been without the bound, which is what §6.1 requires stay visible.
+
     cd repo/api && uv run python scripts/label_precision_delta.py
 """
 
@@ -20,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from doug.backtest.curve import capture_curve, cleared_band
-from doug.backtest.git_labels import find_reverted_prs_dated
+from doug.backtest.git_labels import TOLERANCE_DAYS, find_reverted_prs_dated
 from doug.backtest.harvest import harvest
 from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
@@ -29,11 +35,6 @@ print = functools.partial(print, flush=True)  # noqa: A001
 
 CACHE = Path(".backtest-cache")
 RATES = [0.05, 0.10, 0.20, 0.30]
-# Sub-day negatives are committer-date vs merged_at skew on same-day reverts,
-# not mislabels. Only a revert dated a clear day or more before the merge is
-# impossible.
-TOLERANCE_DAYS = 1
-
 REPOS = [
     ("getsentry", "sentry", 5000, "2026-06-15"),
     ("grafana", "grafana", 12000, "2026-06-15"),
@@ -71,6 +72,12 @@ def main() -> int:
         by = {p.number: p for p in prs}
         dated = {n: d for n, d in find_reverted_prs_dated(owner, repo, CACHE).items() if n in by}
 
+        # Sub-day negatives are committer-date vs merged_at skew on same-day
+        # reverts, not mislabels, so only a revert dated a clear day or more
+        # before the merge is impossible. `TOLERANCE_DAYS` is `git_labels`'
+        # since the adjudicator adopted the same bound — this script measures
+        # what that bound costs, so it has to read the adjudicator's number
+        # rather than keep one of its own.
         dropped = {
             n: lag_days(d, by[n].merged_at)
             for n, d in dated.items()
