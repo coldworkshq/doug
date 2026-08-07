@@ -5,6 +5,7 @@
 # project with billing. Secrets go to Secret Manager, never into env specs.
 #
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets, IAM
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator-setup # M3 IAM only
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator # deploy M3 Job
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh schedule # create/update daily trigger
@@ -181,6 +182,27 @@ setup() {
     echo "WARN: secret doug-api-token does not exist yet — create it and re-run setup." >&2
   fi
 
+  # Keep the broad bootstrap a superset, but production follow-ups must call
+  # adjudicator-setup directly: setup() rotates the SQL password above.
+  adjudicator_setup
+
+  # Grant yourself the ability to invoke the gated console:
+  #   gcloud run services add-iam-policy-binding doug-console --project "$PROJECT" \
+  #     --region "$REGION" --member="user:YOUR@EMAIL" --role=roles/run.invoker
+
+  # ANTHROPIC key: create manually so it never sits in shell history:
+  #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
+  echo "setup done (check SQL instance state before first deploy)"
+}
+
+adjudicator_setup() {
+  # Narrow M3 bootstrap. Unlike setup(), this function never creates a SQL
+  # database/user, changes a password, or publishes a database secret version.
+  # It owns only API enablement and the two identities the Job boundary needs.
+  gcloud services enable run.googleapis.com sqladmin.googleapis.com \
+    secretmanager.googleapis.com iam.googleapis.com \
+    cloudscheduler.googleapis.com --project "$PROJECT"
+
   # The adjudicator runs the same image as doug-api but under a narrower
   # identity: database + GitHub App key, no Anthropic key and no operator
   # token. The scheduler gets a separate identity whose only runtime power is
@@ -200,8 +222,8 @@ setup() {
     --role=roles/cloudsql.client >/dev/null
   for s in doug-database-url doug-github-app-key; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
-      echo "WARN: secret $s does not exist yet — create it and re-run setup." >&2
-      continue
+      echo "ERROR: required secret $s does not exist." >&2
+      return 1
     fi
     gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
       --member="serviceAccount:$ADJUDICATOR_SA" \
@@ -215,15 +237,9 @@ setup() {
   if ! gcloud iam service-accounts describe "$SCHEDULER_SA" \
       --project "$PROJECT" >/dev/null 2>&1; then
     echo "ERROR: service account $SCHEDULER_SA is not visible after create." >&2
-    exit 1
+    return 1
   fi
-  # Grant yourself the ability to invoke the gated console:
-  #   gcloud run services add-iam-policy-binding doug-console --project "$PROJECT" \
-  #     --region "$REGION" --member="user:YOUR@EMAIL" --role=roles/run.invoker
-
-  # ANTHROPIC key: create manually so it never sits in shell history:
-  #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
-  echo "setup done (check SQL instance state before first deploy)"
+  echo "adjudicator IAM ready (no SQL credentials changed)"
 }
 
 # Staged deploys: the new revision starts with a tag and zero traffic, gets
@@ -429,4 +445,13 @@ api_url() {
     --format="value(status.url)"
 }
 
-"${1:?setup|deploy|adjudicator|schedule|web|console}"
+case "${1:?setup|adjudicator-setup|deploy|adjudicator|schedule|web|console}" in
+  setup) setup ;;
+  adjudicator-setup) adjudicator_setup ;;
+  deploy) deploy ;;
+  adjudicator) adjudicator ;;
+  schedule) schedule ;;
+  web) web ;;
+  console) console ;;
+  *) echo "usage: $0 setup|adjudicator-setup|deploy|adjudicator|schedule|web|console" >&2; exit 2 ;;
+esac

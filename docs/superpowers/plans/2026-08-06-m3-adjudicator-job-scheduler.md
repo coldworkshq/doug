@@ -241,7 +241,8 @@ git commit -m "feat: run due adjudications by repository"
 **Interfaces:**
 - Produces: `gcp.sh adjudicator`, deploying `doug-adjudicator` from the exact image serving `doug-api`.
 - Produces: `gcp.sh schedule`, idempotently creating/updating `doug-adjudicator-daily`.
-- Extends: `gcp.sh setup` with `cloudscheduler.googleapis.com`, `doug-adjudicator-sa`, and `doug-scheduler-sa`.
+- Produces: narrow `gcp.sh adjudicator-setup` for `cloudscheduler.googleapis.com`,
+  `doug-adjudicator-sa`, and `doug-scheduler-sa`; it must not rotate SQL credentials.
 - Extends: API deployment workflow so a changed API deploys the worker image too.
 
 - [ ] **Step 1: Write failing executable deployment tests**
@@ -320,7 +321,7 @@ Mark the Job/Scheduler roadmap item built in source but not production-verified.
 
 ```bash
 cd api
-PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh setup
+PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh adjudicator-setup
 # merge deploys API + Job from one image
 PROJECT=doug-prod0 REGION=us-central1 bash deploy/gcp.sh schedule
 gcloud run jobs execute doug-adjudicator --project doug-prod0 --region us-central1 --wait

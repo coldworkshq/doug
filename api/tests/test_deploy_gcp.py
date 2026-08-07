@@ -207,10 +207,30 @@ def test_api_deploy_also_refreshes_the_adjudicator_from_its_promoted_image():
 
 def test_setup_owns_scheduler_and_adjudicator_identities():
     setup = _function_body("setup")
-    assert "cloudscheduler.googleapis.com" in setup
-    assert "service-accounts create doug-adjudicator-sa" in setup
-    assert "service-accounts create doug-scheduler-sa" in setup
-    after = setup.split("service-accounts create doug-adjudicator-sa", 1)[1]
-    assert "doug-database-url" in after
-    assert "doug-github-app-key" in after
-    assert "doug-anthropic-key" not in after
+    assert "adjudicator_setup" in setup
+    adjudicator = _function_body("adjudicator_setup")
+    assert "cloudscheduler.googleapis.com" in adjudicator
+    assert "service-accounts create doug-adjudicator-sa" in adjudicator
+    assert "service-accounts create doug-scheduler-sa" in adjudicator
+    assert "doug-database-url" in adjudicator
+    assert "doug-github-app-key" in adjudicator
+    assert "doug-anthropic-key" not in adjudicator
+
+
+def test_adjudicator_setup_is_narrow_and_never_rotates_the_database(tmp_path):
+    """The broad setup command resets the production SQL password. M3 needs
+    IAM and APIs only, so its operator command must be structurally unable to
+    touch a SQL user or publish a new database-secret version."""
+    lines = _run_gcp(tmp_path, "adjudicator-setup")
+    emitted = "\n".join(lines)
+
+    assert "services enable" in emitted
+    assert "cloudscheduler.googleapis.com" in emitted
+    assert "iam service-accounts create doug-adjudicator-sa" in emitted
+    assert "iam service-accounts create doug-scheduler-sa" in emitted
+    assert "roles/cloudsql.client" in emitted
+    assert "doug-database-url" in emitted
+    assert "doug-github-app-key" in emitted
+    assert "sql users" not in emitted
+    assert "sql databases" not in emitted
+    assert "secrets versions add doug-database-url" not in emitted
