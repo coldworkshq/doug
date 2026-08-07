@@ -401,6 +401,26 @@ def find_reverted_prs_dated(
     return dated
 
 
+def find_reverted_prs_evidenced(
+    owner: str,
+    repo: str,
+    cache_dir: Path,
+    token: str | None = None,
+) -> dict[int, Commit]:
+    """Clone (or refresh) and retain the evidence commit for every revert.
+
+    The scheduled adjudicator needs the revert SHA and parsed instant for its
+    receipt. This is intentionally a thin public adapter over the same log
+    reader and ``parse_revert_targets_evidenced`` attribution pass the pure
+    adjudicator fixtures exercise; there is no live-only matcher to drift.
+    """
+    clone_dir = cache_dir / "clones" / f"{owner}-{repo}.git"
+    clone_treeless(owner, repo, clone_dir, token=token)
+    commits = _log_records(clone_dir)
+    titles = pr_titles_from_subjects([commit.subject for commit in commits])
+    return parse_revert_targets_evidenced(commits, titles)
+
+
 def find_reverted_prs(
     owner: str,
     repo: str,

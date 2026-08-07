@@ -24,6 +24,7 @@ dev = [
 
 [project.scripts]
 doug-backtest = "doug.backtest.cli:main"
+doug-adjudicate = "doug.outcome_worker:main"
 doug-review = "doug.review:main"
 
 [build-system]
