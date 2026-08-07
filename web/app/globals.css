@@ -220,7 +220,7 @@
   }
   /* Bento-style panel: solid card + hairline border, matching the
      GitHub Pages site's .cell. Used by the landing page (app/page.tsx).
-     /queue, /compare, and the shared loading skeleton still use .glass
+     /queue and the shared loading skeleton still use .glass
      below — they're forced dark regardless of the site theme, so the
      frosted look it was tuned for still applies unchanged. */
   .panel {

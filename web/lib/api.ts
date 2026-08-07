@@ -1,16 +1,4 @@
 import fixture from "./queue-fixture.json";
-import { isComparisonResponse, type ComparisonResponse } from "./comparison";
-
-export { isComparisonResponse } from "./comparison";
-export type {
-  ComparisonCoverage,
-  ComparisonGroup,
-  ComparisonPresence,
-  ComparisonResponse,
-  ComparisonRun,
-  ComparisonSummary,
-  ComparisonView,
-} from "./comparison";
 
 export type Band = "cleared" | "flagged";
 
@@ -60,11 +48,6 @@ export const API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 const QUEUE_REPO = process.env.DOUG_QUEUE_REPO;
 
 type QueueResult = { queue: QueueResponse; source: "live" | "fixture" };
-
-export type ComparisonResult = {
-  comparison: ComparisonResponse | null;
-  source: "live" | "unavailable";
-};
 
 /** Structural check on exactly the fields the pages dereference. A 200
  *  with a drifted body used to be cast straight through and threw deep in
@@ -150,24 +133,6 @@ export async function getQueue(
     });
   }
   return inflight;
-}
-
-export async function getComparisons(): Promise<ComparisonResult> {
-  try {
-    const repoParam = QUEUE_REPO ? `?repo=${encodeURIComponent(QUEUE_REPO)}` : "";
-    const res = await fetch(`${API_URL}/v1/comparisons${repoParam}`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(5000),
-      headers: { "X-Doug-Token": process.env.DOUG_API_TOKEN ?? "" },
-    });
-    if (res.ok) {
-      const body: unknown = await res.json();
-      if (isComparisonResponse(body)) return { comparison: body, source: "live" };
-    }
-  } catch {
-    // The caller renders unavailable; comparison evidence is never fabricated.
-  }
-  return { comparison: null, source: "unavailable" };
 }
 
 /** Re-band scored items against a caller-chosen threshold. Scores come from the
