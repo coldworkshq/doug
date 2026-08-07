@@ -20,6 +20,11 @@
 # grant belongs to a human running `setup`, not to the merge-to-main path.
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+API_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
+REPO_ROOT=$(cd -- "$API_DIR/.." && pwd -P)
+cd "$API_DIR"
+
 PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
 INSTANCE=doug-ledger
@@ -32,7 +37,7 @@ CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
 QUEUE_REPO=${QUEUE_REPO:-drewjst/doug}
-PREREG_DOC=../docs/design/outcome-loop/publication-preregistration.md
+PREREG_DOC="$REPO_ROOT/docs/design/outcome-loop/publication-preregistration.md"
 
 setup() {
   # compute.googleapis.com is not used directly, but enabling it is what
@@ -300,6 +305,10 @@ promote_if_healthy() { # $1 service, $2 smoke path
 }
 
 preregistration_preflight() {
+  if [ ! -f "$PREREG_DOC" ] || [ ! -r "$PREREG_DOC" ]; then
+    echo "ERROR: cannot read publication pre-registration: $PREREG_DOC" >&2
+    return 1
+  fi
   if ! grep -q '^\*\*Status:\*\* LOCKED ' "$PREREG_DOC"; then
     echo "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy." >&2
     return 1

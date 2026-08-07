@@ -119,10 +119,13 @@ def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
     fake_bin.mkdir()
     log = tmp_path / "gcloud.log"
     log.touch()
+    cwd_log = tmp_path / "gcloud.cwd.log"
+    cwd_log.touch()
     gcloud = fake_bin / "gcloud"
     gcloud.write_text(
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$GCLOUD_LOG"
+printf '%s\\n' "$PWD" >> "$GCLOUD_CWD_LOG"
 previous=
 format=
 for argument in "$@"; do
@@ -179,12 +182,14 @@ def _invoke_gcp(
     extra_env: dict[str, str] | None = None,
     *,
     gcp_path: Path = GCP_PATH,
+    cwd: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     fake_bin, log = _fake_gcloud(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "GCLOUD_LOG": str(log),
+        "GCLOUD_CWD_LOG": str(tmp_path / "gcloud.cwd.log"),
         "CURL_LOG": str(tmp_path / "curl.log"),
         "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
@@ -193,7 +198,7 @@ def _invoke_gcp(
     }
     result = subprocess.run(
         ["bash", str(gcp_path), command],
-        cwd=gcp_path.parent.parent,
+        cwd=cwd or gcp_path.parent.parent,
         env=env,
         capture_output=True,
         text=True,
@@ -232,6 +237,62 @@ def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tm
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
+
+
+def test_adjudicator_resolves_the_locked_preregistration_from_its_own_location(tmp_path):
+    """An absolute script invocation must hash the lock, not caller-relative text."""
+    prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    callers = {
+        "repo-root": GCP_PATH.parents[2],
+        "unrelated": tmp_path / "unrelated-caller",
+    }
+
+    for name, caller_cwd in callers.items():
+        caller_cwd.mkdir(exist_ok=True)
+        case = tmp_path / name
+        case.mkdir()
+        result, lines = _invoke_gcp(case, "adjudicator", cwd=caller_cwd)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        [deploy] = [
+            line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
+        ]
+        assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
+
+
+def test_full_deploy_normalizes_to_api_before_the_fake_cloud_boundary(tmp_path):
+    """Relative --source paths must keep naming api/ from every caller CWD."""
+    callers = {
+        "repo-root": GCP_PATH.parents[2],
+        "unrelated": tmp_path / "unrelated-caller",
+    }
+    expected_cwd = str(GCP_PATH.parent.parent.resolve())
+
+    for name, caller_cwd in callers.items():
+        caller_cwd.mkdir(exist_ok=True)
+        case = tmp_path / name
+        case.mkdir()
+        result, lines = _invoke_gcp(case, "deploy", cwd=caller_cwd)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert any(line.startswith("run deploy doug-api --source .") for line in lines)
+        assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {expected_cwd}
+
+
+def test_missing_preregistration_refuses_deploy_with_a_read_error(tmp_path):
+    """A missing lock is an operator path failure, not an unlocked contract."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+
+    result, lines = _invoke_gcp(tmp_path, "deploy", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert "ERROR: cannot read publication pre-registration:" in result.stderr
+    assert "not LOCKED" not in result.stderr
+    assert lines == []
+    assert (tmp_path / "curl.log").read_text() == ""
 
 
 def test_unlocked_preregistration_refuses_adjudicator_deploy(tmp_path):
