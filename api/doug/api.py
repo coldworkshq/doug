@@ -493,6 +493,14 @@ class ReceiptWindow(BaseModel):
     observed_at: datetime | None
     source: str | None
     detail: dict | None
+    # The pre-registration hash `settle_batch` stamped into `detail` at
+    # adjudication time — read from THAT stamp, never from the environment.
+    # None on a pending window: no adjudication has happened yet, so nothing
+    # has been stamped. Render the receipt's top-level `preregistration`
+    # block for what will govern it. A receipt must never substitute today's
+    # env value here — that would claim a document governed a judgment it
+    # never actually saw.
+    prereg_hash: str | None
 
 
 class ReceiptMerge(BaseModel):
@@ -511,6 +519,27 @@ class ReceiptMerge(BaseModel):
     adjudication: list[ReceiptWindow]
 
 
+class ReceiptPreregistration(BaseModel):
+    """The methodology document currently in force — not necessarily what
+    governed any adjudicated window already on this receipt.
+
+    Each ReceiptWindow carries its own `prereg_hash`, stamped at adjudication
+    time, and that stamp is authoritative for that window forever. This block
+    is for the windows that have none yet: a pending window has no stamp, and
+    `in_force` names the document that WILL govern it once it closes.
+    Reprinting this hash over an already-adjudicated window would manufacture
+    a confident-but-derived claim about which document actually governed it —
+    the one thing this design exists to prevent.
+
+    `hash` is None and `in_force` is False whenever DOUG_PREREG_HASH is
+    unset — local dev and the test suite never set it — rather than a crash
+    or a fabricated value.
+    """
+
+    hash: str | None
+    in_force: bool
+
+
 class ReceiptResponse(BaseModel):
     """One PR's evidentiary record.
 
@@ -524,6 +553,7 @@ class ReceiptResponse(BaseModel):
 
     repo: str
     pr_number: int
+    preregistration: ReceiptPreregistration
     latest_verdict: ReceiptVerdict | None
     merges: list[ReceiptMerge]
 
@@ -565,14 +595,21 @@ def _receipt_verdict(row: dict | None) -> ReceiptVerdict | None:
 def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
     """store.receipt()'s document as the response contract.
 
-    The one thing this layer adds rather than passes through is the
-    publication note. store.receipt() sets the boolean; a boolean is a fact
-    the ledger knows and a sentence is what makes it readable, so the words
-    live here with the rest of the presentation.
+    Two things this layer adds rather than passes through. The publication
+    note: store.receipt() sets the boolean; a boolean is a fact the ledger
+    knows and a sentence is what makes it readable, so the words live here
+    with the rest of the presentation. And the preregistration block: it
+    reads the CURRENT deploy's DOUG_PREREG_HASH, which is what the top-level
+    `in_force` value means and is why it is assembled here rather than in
+    store.receipt() — that function reads the ledger, not the environment.
     """
+    prereg_hash = os.environ.get("DOUG_PREREG_HASH")
     return ReceiptResponse(
         repo=repo,
         pr_number=pr_number,
+        preregistration=ReceiptPreregistration(
+            hash=prereg_hash, in_force=prereg_hash is not None
+        ),
         latest_verdict=_receipt_verdict(data["latest_verdict"]),
         merges=[
             ReceiptMerge(
@@ -587,7 +624,12 @@ def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
                     if m["publication_governing"]
                     else NOT_PUBLICATION_GOVERNING_NOTE
                 ),
-                adjudication=[ReceiptWindow(**a) for a in m["adjudication"]],
+                adjudication=[
+                    # prereg_hash comes from the stamp inside `detail`, never
+                    # from the environment — see ReceiptWindow's docstring.
+                    ReceiptWindow(**a, prereg_hash=(a["detail"] or {}).get("prereg_hash"))
+                    for a in m["adjudication"]
+                ],
             )
             for m in data["merges"]
         ],

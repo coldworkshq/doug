@@ -904,6 +904,7 @@ def _seed_full_pr(
     diff_budget: int | None = 60_000,
     read_order: str | None = "risk-first",
     outcome_kind: str | None = None,
+    detail: dict | None = None,
 ) -> int:
     """One merged PR end to end: installation, repo, reader verdict, merge.
 
@@ -942,6 +943,7 @@ def _seed_full_pr(
             github_repo_id=github_repo_id,
             pr_number=pr_number,
             repo=full_name,
+            detail=detail,
         )
     return verdict_id
 
@@ -1272,3 +1274,39 @@ def test_the_governing_verdict_is_not_silently_the_latest_one(tmp_path, monkeypa
     body = _get(OPERATOR).json()
     assert body["latest_verdict"]["verdict_id"] == later
     assert body["merges"][0]["governing_verdict"]["verdict_id"] == governing
+
+
+def test_pending_adjudication_reports_the_in_force_hash(tmp_path, monkeypatch):
+    """A window with no stamped hash is governed by whatever document is
+    currently in force — the receipt says so, labelled as such, because that
+    is the document that will govern it once the window closes."""
+    url = _http_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_PREREG_HASH", "f" * 64)
+    _seed_full_pr(url)  # outcome_kind=None: the window is still pending.
+    body = _get(OPERATOR).json()
+    assert body["preregistration"] == {"hash": "f" * 64, "in_force": True}
+    assert body["merges"][0]["adjudication"][0]["prereg_hash"] is None
+
+
+def test_adjudicated_entry_keeps_the_hash_it_was_judged_under(tmp_path, monkeypatch):
+    """A receipt must not reprint today's hash over an older adjudication —
+    that would manufacture a confident-but-derived claim about which document
+    actually governed it."""
+    url = _http_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_PREREG_HASH", "f" * 64)
+    _seed_full_pr(url, outcome_kind="clean", detail={"prereg_hash": "a" * 64})
+    body = _get(OPERATOR).json()
+    entry = body["merges"][0]["adjudication"][0]
+    assert entry["prereg_hash"] == "a" * 64
+    assert body["preregistration"]["hash"] == "f" * 64
+
+
+def test_missing_prereg_hash_env_var_renders_as_not_in_force(tmp_path, monkeypatch):
+    """Local dev and the test suite never set DOUG_PREREG_HASH. Absence must
+    render as a plain fact — False and None — never a crash or a fabricated
+    value."""
+    url = _http_db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_PREREG_HASH", raising=False)
+    _seed_full_pr(url)
+    body = _get(OPERATOR).json()
+    assert body["preregistration"] == {"hash": None, "in_force": False}

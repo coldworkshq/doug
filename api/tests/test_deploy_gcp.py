@@ -214,6 +214,26 @@ def _run_gcp(
     return lines
 
 
+def test_prereg_hash_is_computed_in_exactly_one_place():
+    """Two copies of the sha256 one-liner could compute two different answers
+    for 'which document is in force' if ever edited independently — exactly
+    the failure the hash exists to prevent."""
+    assert GCP.count("hashlib.sha256") == 1
+
+
+def test_api_deploy_carries_the_prereg_hash_env_var(tmp_path):
+    """gcp.sh stamped DOUG_PREREG_HASH onto the adjudicator Job only (Task 3).
+    Receipts (Task 8) need the api service to report the hash currently in
+    force too, so it must see the same env var."""
+    lines = _run_gcp(tmp_path, "deploy")
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    assert f"DOUG_PREREG_HASH={expected_hash}" in api_deploy
+
+
 def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tmp_path):
     """Building a second source image could fork the live detector; platform
     retries would spend several of the ten attempts on one calendar day."""
