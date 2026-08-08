@@ -276,15 +276,23 @@ path, no cross-tenant read, no silent partial reads.
   Pure fixtures and the scheduled worker path are built; production execution
   remains the live gate.
 - [~] **Receipts:** `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring +
-  findings + inputs-seen + adjudication block + hashes) — the endpoint ships,
-  operator- and tenant-scoped behind the new `receipt:read` scope, and so
-  does every honesty state the design named: absent read configuration
-  renders as "not recorded" rather than a number, a merged PR with no
-  governing verdict says so instead of silently falling back to
+  findings + read coverage + adjudication block + hashes) — the endpoint
+  ships, reachable by the operator token (unscoped, no `receipt:read` check
+  on that path) or by a dispensed token carrying the new `receipt:read`
+  scope, and so does every honesty state the design named: absent read
+  configuration renders as "not recorded" rather than a number, a merged PR
+  with no governing verdict says so instead of silently falling back to
   `latest_verdict`, a PR merged more than once names which merge is
   `publication_governing`, a fallback-tier merge is labelled rather than
   scored as if it were a reader read, and a stamped-vs-in-force
   pre-registration hash mismatch shows both hashes rather than one.
+  **Narrower than the design spec:** no top-level `url`, no per-merge
+  `governing_rule` string, and "read coverage" shipped as the pre-existing
+  5-field `RunCoverage` (`diff_chars`, `sent_chars`, `files_sent`,
+  `files_unseen`, `file_cut`) rather than the spec's `inputs_seen` shape
+  (`changed_files`, `files_dropped`, `complete` among them) — see the spec's
+  "Response shape" section, now marked aspirational there. Follow-up, not
+  done here.
   **What's not landed:** zero adjudications exist anywhere before the first
   due clock (2026-08-16), so the adjudicated half of the exit gate's "one
   receipt correct end-to-end" — a real adjudication block on a real merge —

@@ -1,10 +1,10 @@
-# magpie-api
+# doug-api
 
 Deterministic routing service. No model reads a diff unless the score says it should.
 
 ```sh
 uv sync                 # install (pins Python 3.14 via uv)
-uv run uvicorn magpie.api:app --reload   # http://localhost:8000
+uv run uvicorn doug.api:app --reload   # http://localhost:8000
 uv run pytest           # tests
 uv run ruff check .     # lint
 ```
@@ -28,16 +28,16 @@ uv run ruff check .     # lint
 
 ## Layout
 
-- `magpie/features.py` — PR metadata → feature vector. Pure, no I/O. The backtest CLI and the webhook both call this; keep it that way.
-- `magpie/scoring.py` — features → verdict, as legible weighted rules.
-- `magpie/fixtures/queue.json` — demo queue used by `/v1/queue` until the Live Gate exists.
+- `doug/features.py` — PR metadata → feature vector. Pure, no I/O. The backtest CLI and the webhook both call this; keep it that way.
+- `doug/scoring.py` — features → verdict, as legible weighted rules.
+- `doug/fixtures/queue.json` — demo queue used by `/v1/queue` until the Live Gate exists.
 
-Env: `MAGPIE_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `MAGPIE_CORS_ORIGINS`.
+Env: `DOUG_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `DOUG_CORS_ORIGINS`.
 
 ## Backtest (Phase 0)
 
 ```sh
-uv run magpie-backtest owner/repo --limit 500 --before 2026-06-15
+uv run doug-backtest owner/repo --limit 500 --before 2026-06-15
 ```
 
 **Labels (default: `--labels git`)** come from a treeless clone

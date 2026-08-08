@@ -236,6 +236,25 @@ yours" from "does not exist".
 
 ## Response shape
 
+**This block is the original design intent, not the shipped contract.** What
+actually shipped (`ReceiptResponse` in `api/doug/models.py`) diverges from it
+in three ways, each deliberately deferred rather than silently dropped:
+
+- `inputs_seen` (with `changed_files`, `files_dropped`, `complete`) does not
+  exist. What shipped is a `coverage` field on the verdict — the
+  pre-existing 5-field `RunCoverage` (`diff_chars`, `sent_chars`,
+  `files_sent`, `files_unseen`, `file_cut`) — which carries none of those
+  three.
+- There is no top-level `url`.
+- There is no per-merge `governing_rule` string naming §2.1. `publication_note`
+  shipped instead, and answers a different question — whether this merge's
+  governing verdict is the one the published quarterly number uses, not which
+  rule governed it.
+
+The block below is kept as the record of what was intended; treat the three
+points above as the current, accurate delta against it. Closing that delta is
+a follow-up, not done in this slice.
+
 Adjudication nests **under a merge identity**, and both are lists, because the
 schema permits several merges per PR and `outcome_jobs` carries one row per
 `(merge identity, window_days)`. Nesting is what lets the receipt produce
