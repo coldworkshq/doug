@@ -37,6 +37,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    exists,
+    func,
     inspect,
     select,
     update,
@@ -1272,6 +1274,126 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
         if v is None:
             return None
         return _verdict_bundle(conn, v)
+
+
+def governing_verdict(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merged_at: datetime,
+) -> dict | None:
+    """The verdict that was standing when a human chose to merge.
+
+    THIS IMPLEMENTS A PRE-REGISTERED METRIC RULE, NOT A DISPLAY CHOICE.
+    `docs/design/outcome-loop/publication-preregistration.md` is LOCKED v8;
+    §2.1 defines this selection and §2.2 holds the SQL the published quarterly
+    miss rate runs. **Editing this function changes a published number.** The
+    receipt endpoint and the future publication query must both call it, so
+    that a customer's receipt cannot contradict the public table — which is
+    the most expensive failure available to this product, because the whole
+    claim is that both come from the same ledger.
+
+    Three details come from §2.2's SQL rather than §2.1's prose, and a
+    paraphrase of the prose gets each of them wrong:
+
+      * `tier='reader'` filters BEFORE the ranking (it is inside the CTE, not
+        the outer query), so a later deterministic fallback cannot displace an
+        earlier real read. §2.5 gives the fallback tier its own published row
+        precisely so it is never counted as the primary instrument.
+      * band is NOT part of selection — §2.2 puts `g.band = 'cleared'` in the
+        OUTER query, where it qualifies the published denominator. A flagged
+        PR has a governing verdict and gets a receipt; this function neither
+        takes band nor filters on it.
+      * the installation must still exist (§2.6's structural exclusion), so a
+        receipt cannot outlive the ledger row that scopes it, and research /
+        un-tenanted CLI rows never reach either artifact.
+
+    `row_number()`, never `DISTINCT ON`: the latter is Postgres-only and every
+    test here runs sqlite (`docs/REVIEWING.md:141-143` records that exact
+    trap), while production is Postgres. The most load-bearing rule in the
+    document has to be exercisable by the suite that guards it.
+
+    Scope, stated in full because it is the ONE place this is narrower than
+    §2.2's set query and a silent difference here is the whole risk:
+
+    §2.2 resolves the entire population in one pass, taking `merged_at` from
+    the joined `outcome_jobs` row; this takes `merged_at` as an argument and
+    answers for one merge identity. `uq_outcome_job` includes
+    `merge_commit_sha`, so a PR may carry more than one merge — which is why
+    §2.2 counts with `count(DISTINCT j.pr_number)`. On such a PR the two are
+    not equivalent: §2.2's `PARTITION BY` does not include the job, so its
+    single governing row is the verdict standing at the LATEST `merged_at`,
+    while this answers per merge and so reports, for an earlier merge, the
+    advice that was actually standing when THAT merge happened. Both name the
+    same verdict for the PR's latest merge, which is the one the published
+    denominator qualifies on; the receipt additionally shows the earlier
+    merge, which is a receipt's job. Pinned by
+    test_a_twice_merged_pr_resolves_per_merge_identity, and by the design
+    spec's §"One PR can have more than one merge identity".
+
+    Window selection is likewise the caller's: §2.2's `j.window_days = :window`
+    picks which JOBS are in scope, not which verdict governs, and the 14- and
+    60-day rows of one merge are written atomically from the same merge facts
+    (§6.3) — same `merged_at`, therefore necessarily the same governing
+    verdict, so the two published rows can never disagree about what Doug said.
+
+    Returns the full verdicts row merged with `_verdict_bundle`'s findings,
+    deviations and coverage, or None when no reader verdict was scored at or
+    before `merged_at` (§2.4's `fallback_only` / `merged_before_verdict`
+    buckets — excluded from the published rate, published as a count).
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    # §2.2's `ranked` CTE, narrowed to one PR. The window function is
+    # evaluated after WHERE, so every predicate here filters *before* the
+    # ranking exactly as the document's CTE does — that ordering is the whole
+    # point of the first bullet above and is why this cannot be flattened into
+    # an ORDER BY ... LIMIT 1 with the tier test bolted on afterwards.
+    #
+    # The PARTITION BY is redundant under that narrowing (the WHERE already
+    # pins all three of its columns) and is kept anyway, so the correspondence
+    # to the document is literal rather than argued. It is also what makes the
+    # narrowing safe to remove if the publication query ever wants this
+    # expression over the whole population.
+    ranked = (
+        select(
+            verdicts,
+            func.row_number()
+            .over(
+                partition_by=(
+                    verdicts.c.installation_id,
+                    verdicts.c.github_repo_id,
+                    verdicts.c.pr_number,
+                ),
+                order_by=(verdicts.c.scored_at.desc(), verdicts.c.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(
+            verdicts.c.installation_id == installation_id,
+            verdicts.c.github_repo_id == github_repo_id,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.tier == "reader",
+            verdicts.c.scored_at <= merged_at,
+            exists(select(1).where(installations.c.installation_id == installation_id)),
+        )
+        .subquery()
+    )
+    with engine.connect() as conn:
+        # one_or_none(), not first(): the partition is pinned to a single PR,
+        # so `rn = 1` names exactly one row or none. first() would silently
+        # return an arbitrary one if that ever stopped being true, and "the
+        # governing verdict was picked arbitrarily" is precisely the failure
+        # this rule is written down to prevent. Raising is the correct
+        # behaviour here — a receipt and a published number must not be
+        # served from a coin flip.
+        row = conn.execute(select(ranked).where(ranked.c.rn == 1)).mappings().one_or_none()
+        if row is None:
+            return None
+        # `rn` is the ranking scaffold, not a fact about the verdict; dropped
+        # so it cannot travel into a customer-facing receipt as if it were one.
+        return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
 
 
 def run_detail(verdict_id: int) -> dict | None:
