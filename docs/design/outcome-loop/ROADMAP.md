@@ -378,6 +378,7 @@ would bite a real tenant.
   per cold start, on a scale-to-zero service where cold starts are frequent —
   and the loop is **serial across installations**, so one large tenant delays
   every tenant behind it. Fixing MT0 exposes this rather than causing it.
+  (Next free migration: **9** — migration 8 is consumed by M3's receipts slice.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as
