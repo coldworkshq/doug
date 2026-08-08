@@ -55,9 +55,16 @@ export default async function JobsPage({
         ]);
 
   // The caps come from the health payload, not from a literal here: the two
-  // lanes differ (3 vs 10) and the console must never hardcode either.
+  // lanes differ (3 vs 10) and the console must never hardcode either. When
+  // health itself is unreachable the cap is null, not 0 — getHealth() here
+  // and in Shell are two independent round-trips with independent 8s
+  // timeouts (get<T>'s AbortSignal.timeout opts fetches out of Next's
+  // request memoization), so one can time out while the other and the job
+  // fetches succeed. A 0 fallback would render as a real-looking "2/0" cap
+  // on rows that are otherwise true; null lets JobsTable say the cap is
+  // unknown instead of implying one.
   const caps = isError(health)
-    ? { review: 0, outcome: 0 }
+    ? { review: null, outcome: null }
     : { review: health.review.max_attempts, outcome: health.outcome.max_attempts };
 
   return (

@@ -25,7 +25,14 @@ export function JobsTable({
   jobs: JobItem[];
   atCap: boolean;
   limit: number;
-  maxAttempts: number;
+  // Null, not a literal 0, when the health payload that carries this
+  // lane's cap couldn't be read. getHealth() is fetched independently
+  // here and in Shell (two round-trips, two 8s timeouts), so one can fail
+  // while the job rows themselves load fine — the rows are still true and
+  // worth showing, only the denominator is unknown. A 0 fallback would
+  // render as a real-looking "2/0" cap; see the attempts cell below for
+  // how null renders instead.
+  maxAttempts: number | null;
 }) {
   return (
     <section className="mt-8">
@@ -77,7 +84,19 @@ export function JobsTable({
                 </td>
                 <td className="py-2 pr-3">{reason(job)}</td>
                 <td className="py-2 pr-3 tabular-nums">
-                  {job.attempts}/{maxAttempts}
+                  {maxAttempts === null ? (
+                    // Never a fraction over an absent denominator — "2/0" and
+                    // "2/—" both read as a real cap. Say plainly that the cap
+                    // itself is unknown, so this can't be mistaken for one.
+                    <>
+                      {job.attempts}{" "}
+                      <span className="text-muted-foreground normal-case tracking-normal">
+                        cap unknown
+                      </span>
+                    </>
+                  ) : (
+                    `${job.attempts}/${maxAttempts}`
+                  )}
                 </td>
                 <td className="py-2 whitespace-pre-wrap break-all text-muted-foreground">
                   {/* Rendered in full, untruncated: an operator needs the whole
