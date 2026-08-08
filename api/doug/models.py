@@ -173,6 +173,40 @@ class RunListResponse(BaseModel):
     offset: int
 
 
+class ReviewLaneHealth(BaseModel):
+    pending: int
+    oldest_pending_at: datetime | None
+    retrying: int
+    oldest_retry_at: datetime | None
+    running: int
+    stalled: int
+    failed: int
+    failed_24h: int
+    stall_lease_seconds: int
+    max_attempts: int
+
+
+class OutcomeLaneHealth(BaseModel):
+    pending: int
+    overdue: int
+    next_due_at: datetime | None
+    oldest_overdue_due_at: datetime | None
+    running: int
+    stalled: int
+    failed: int
+    stall_lease_seconds: int
+    max_attempts: int
+
+
+class HealthResponse(BaseModel):
+    """Fixed-size aggregates, no rows. The strip renders on every page, so
+    this response's cost must not grow with the queue."""
+
+    review: ReviewLaneHealth
+    outcome: OutcomeLaneHealth
+    as_of: datetime
+
+
 class RunOutcome(BaseModel):
     kind: str
     window_days: int | None

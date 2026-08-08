@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, ingest, store, tenancy, worker
+from doug import api, app_auth, ingest, outcome_queue, store, tenancy, worker
 from doug.api import app
 from doug.models import Band, Reason, Verdict
 
@@ -2578,6 +2578,53 @@ def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     assert item["title"] == "PR #9"
     assert item["url"] == "https://github.com/o/r/pull/9"
     assert item["changed_files"] is None
+
+
+# /v1/health — the strip's only data source. Same _db/AUTH shape as /v1/runs.
+
+
+def test_health_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/health").status_code == 401
+
+
+def test_health_404s_a_tenant_key(tmp_path, monkeypatch):
+    """Health crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    res = TestClient(app).get("/v1/health", headers={"X-Doug-Token": "dg_tenant"})
+    assert res.status_code == 404
+
+
+def test_health_503s_without_a_ledger(tmp_path, monkeypatch):
+    """503, never a zeroed payload. Zeros would render as 'nothing is wrong'
+    on a deployment that cannot answer the question at all."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    assert TestClient(app).get("/v1/health", headers=AUTH).status_code == 503
+
+
+def test_health_reports_both_lanes_constants(tmp_path, monkeypatch):
+    """The console must never hardcode 900, 7200, 3 or 10."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["review"]["stall_lease_seconds"] == ingest.STALL_LEASE_SECONDS
+    assert body["review"]["max_attempts"] == ingest.MAX_ATTEMPTS
+    assert body["outcome"]["stall_lease_seconds"] == outcome_queue.STALL_LEASE_SECONDS
+    assert body["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
+
+
+def test_health_carries_the_server_clock_as_of(tmp_path, monkeypatch):
+    """Every age the console renders is as_of minus a timestamp. Without it
+    the UI would subtract a server-written timestamp from a browser clock,
+    which is the timestamp defect Phase 1 already paid for, with an alarm
+    attached."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["as_of"] is not None
 
 
 # /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same

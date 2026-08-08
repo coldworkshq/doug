@@ -16,9 +16,20 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, store, tenancy, worker
+from . import (
+    __version__,
+    app_auth,
+    ingest,
+    outcome_queue,
+    precision,
+    reader,
+    store,
+    tenancy,
+    worker,
+)
 from .models import (
     Band,
+    HealthResponse,
     PRMetadata,
     QueueItem,
     QueueResponse,
@@ -523,6 +534,35 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
         outcomes=[RunOutcome(**o) for o in row["outcomes"]],
         outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
     )
+
+
+@app.get("/v1/health")
+def health(
+    repo: str | None = None,
+    installation_id: int | None = None,
+    x_doug_token: str = Header(""),
+) -> HealthResponse:
+    """Both job lanes' health. Operator-only for the same reason /v1/runs is:
+    it crosses every installation by design.
+
+    The lane constants are passed in from the modules that enforce them, so
+    the response reports what was actually measured with rather than a
+    literal duplicated here.
+    """
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    data = store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+        repo=repo,
+        installation_id=installation_id,
+    )
+    if data is None:
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    return HealthResponse(**data)
 
 
 MAX_REPOS_PER_MINT = 20   # bounds PAT-side GitHub calls per request
