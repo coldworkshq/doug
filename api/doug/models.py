@@ -207,6 +207,46 @@ class HealthResponse(BaseModel):
     as_of: datetime
 
 
+class JobItem(BaseModel):
+    """One job from either lane. Lane-specific fields are None on the other
+    lane rather than absent, so the console has one row type to render.
+
+    `repo` is nullable because outcome_jobs carries only github_repo_id and
+    installation_repos can be stale or missing entirely — the console renders
+    the bare id in that case rather than guessing a name.
+    """
+
+    id: int
+    lane: str
+    repo: str | None
+    github_repo_id: int
+    installation_id: int
+    pr_number: int
+    status: str
+    attempts: int
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    stalled: bool
+    # Review lane only.
+    head_sha: str | None = None
+    enqueued_at: datetime | None = None
+    verdict_id: int | None = None
+    retrying: bool = False
+    # Outcome lane only.
+    merge_commit_sha: str | None = None
+    window_days: int | None = None
+    due_at: datetime | None = None
+    merged_at: datetime | None = None
+    overdue: bool = False
+
+
+class JobListResponse(BaseModel):
+    items: list[JobItem]
+    limit: int
+    offset: int
+
+
 class RunOutcome(BaseModel):
     kind: str
     window_days: int | None
