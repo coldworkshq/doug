@@ -561,3 +561,14 @@ def test_resolve_runs_a_dummy_hmac_on_lookup_miss(tmp_path, monkeypatch):
     ghost = keyformat.generate()  # never inserted → guaranteed lookup miss
     assert tenancy.resolve(ghost.token) is None
     assert calls, "lookup miss must still burn one HMAC"
+
+
+def test_new_keys_mint_both_scopes(tmp_path, monkeypatch):
+    """Capabilities are granted explicitly, never inherited.
+
+    /v1/queue's own comment says the scopes column exists so a receipts-only
+    key cannot silently pick up queue access; the discipline runs both ways.
+    """
+    minted = _minted_all(monkeypatch, tmp_path)
+    ctx = tenancy.resolve(minted.token)
+    assert set(ctx.scopes) == {"queue:read", "receipt:read"}

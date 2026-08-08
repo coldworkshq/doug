@@ -324,10 +324,22 @@ preregistration_preflight() {
   fi
 }
 
+# The one place this hash is computed. Both doug-api and the adjudicator Job
+# stamp it into their env, and a second copy of this one-liner could drift
+# from this one if ever edited independently — silently answering "which
+# document is in force" two different ways from the same deploy. Callers run
+# preregistration_preflight first; this does not repeat that check.
+compute_prereg_hash() {
+  python3 -c \
+    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "$PREREG_DOC"
+}
+
 deploy() {
   preregistration_preflight
-  local traffic_flags=""
+  local traffic_flags="" prereg_hash
   service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
+  prereg_hash=$(compute_prereg_hash)
   # Both tiers are configured here on purpose: --set-env-vars replaces the
   # whole env block, so anything set out-of-band is wiped by the next deploy.
   # That cuts both ways for the intent allowlist below — an installation
@@ -352,6 +364,11 @@ deploy() {
   # larger of the two paid reads. 150424894 is the dogfood installation on
   # drewjst. Adding an id here opts a real tenant into an experiment and
   # charges them for it, so it is a deliberate act, not a default.
+  #
+  # DOUG_PREREG_HASH: same value the adjudicator Job below carries, from the
+  # same compute_prereg_hash call site. The receipt endpoint reports this as
+  # the methodology document currently in force — never a value it reads
+  # from anywhere else.
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
@@ -359,7 +376,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
@@ -380,9 +397,7 @@ deploy() {
 adjudicator() {
   local api_image prereg_hash
   preregistration_preflight
-  prereg_hash=$(python3 -c \
-    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
-    "$PREREG_DOC")
+  prereg_hash=$(compute_prereg_hash)
   api_image=$(gcloud run services describe "$SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.spec.containers[0].image)')

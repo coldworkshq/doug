@@ -275,7 +275,39 @@ path, no cross-tenant read, no silent partial reads.
 - [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
   Pure fixtures and the scheduled worker path are built; production execution
   remains the live gate.
-- [ ] Receipts: `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring + findings + inputs-seen + adjudication block + hashes)
+- [~] **Receipts:** `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring +
+  findings + read coverage + adjudication block + hashes) — the endpoint
+  ships, reachable by the operator token (unscoped, no `receipt:read` check
+  on that path) or by a dispensed token carrying the new `receipt:read`
+  scope, and so does every honesty state the design named: absent read
+  configuration renders as "not recorded" rather than a number, a merged PR
+  with no governing verdict says so instead of silently falling back to
+  `latest_verdict`, a PR merged more than once names which merge is
+  `publication_governing`, a fallback-tier merge is labelled rather than
+  scored as if it were a reader read, and a stamped-vs-in-force
+  pre-registration hash mismatch shows both hashes rather than one.
+  **Narrower than the design spec:** no top-level `url`, no per-merge
+  `governing_rule` string, and "read coverage" shipped as the pre-existing
+  5-field `RunCoverage` (`diff_chars`, `sent_chars`, `files_sent`,
+  `files_unseen`, `file_cut`) rather than the spec's `inputs_seen` shape
+  (`changed_files`, `files_dropped`, `complete` among them) — see the spec's
+  "Response shape" section, now marked aspirational there. Follow-up, not
+  done here.
+  **What's not landed:** zero adjudications exist anywhere before the first
+  due clock (2026-08-16), so the adjudicated half of the exit gate's "one
+  receipt correct end-to-end" — a real adjudication block on a real merge —
+  is carried today by `governing_verdict()`'s fixture pin against §2.2's SQL
+  and by the honesty-state tests, not by a production receipt. Nothing
+  further needs to ship for that gap to close: it closes itself the first
+  time a real merge clears its 60-day window.
+  Migration **8** is consumed by this slice (`verdicts.diff_budget`,
+  `verdicts.read_order`, `outcome_jobs.merged_head_sha`, plus a one-time
+  `verdicts.prompt_hash` backfill over historical reader rows) —
+  **MT3's `installations.reconciled_at` is migration 9.**
+  `merged_head_sha`, captured at merge, closes pre-registration §11 item 7
+  ("PR head sha at merge — not stored") **forward only**: rows written before
+  this slice stay NULL, and it does not touch the locked §2.1 timestamp-match
+  rule.
 - [ ] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
 - [ ] Public Doug-on-Doug scoreboard page (dogfood proof, no auth)
 - [~] **Pre-registration document published + hashed** (metrics, denominator, both windows,
@@ -354,6 +386,7 @@ would bite a real tenant.
   per cold start, on a scale-to-zero service where cold starts are frequent —
   and the loop is **serial across installations**, so one large tenant delays
   every tenant behind it. Fixing MT0 exposes this rather than causing it.
+  (Next free migration: **9** — migration 8 is consumed by M3's receipts slice.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as

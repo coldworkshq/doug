@@ -840,22 +840,30 @@ def _closed_payload(
     number=7,
     base_ref="main",
     base_repo_id=987,
+    head_sha="a" * 40,
 ):
     """A `closed` delivery. `merged` varies independently of the other two
     fields on purpose — see test_a_closed_but_unmerged_pull_request_writes_nothing.
+
+    `head_sha=None` omits `pull_request.head` entirely rather than sending a
+    null sha inside it — that is the shape GitHub itself sends when the head
+    branch (usually a fork) is gone by the time the close event is built, and
+    it is what test_missing_head_sha_does_not_suppress_the_clock exercises.
     """
+    pr = {
+        "number": number,
+        "draft": False,
+        "merged": merged,
+        "merged_at": merged_at,
+        "merge_commit_sha": merge_sha,
+        "base": {"ref": base_ref, "repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
+    }
+    if head_sha is not None:
+        pr["head"] = {"sha": head_sha, "repo": {"id": 987}}
     return {
         "action": "closed",
         "installation": INSTALLATION,
-        "pull_request": {
-            "number": number,
-            "draft": False,
-            "merged": merged,
-            "merged_at": merged_at,
-            "merge_commit_sha": merge_sha,
-            "head": {"sha": "a" * 40, "repo": {"id": 987}},
-            "base": {"ref": base_ref, "repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
-        },
+        "pull_request": pr,
     }
 
 
@@ -936,6 +944,32 @@ def test_a_redelivered_merge_heals_a_missing_outcome_window(tmp_path, monkeypatc
 
     jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
     assert [job["window_days"] for job in jobs] == [14, 60]
+
+
+def test_merge_records_the_head_sha_that_merged(tmp_path, monkeypatch):
+    """Pre-registration §11 item 7: a receipt claims a verdict about the
+    code that actually merged, and that claim needs the merge commit's own
+    head sha recorded going forward, not just the merge timestamp."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload(head_sha="abc123")).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert jobs, "the clock must start"
+    assert {job["merged_head_sha"] for job in jobs} == {"abc123"}
+
+
+def test_missing_head_sha_does_not_suppress_the_clock(tmp_path, monkeypatch):
+    """merged_head_sha is evidence, not one of the five load-bearing facts
+    test_a_merge_missing_the_facts_the_row_is_built_from_is_ignored guards.
+    _record_merge drops the whole row when base_ref or github_repo_id is
+    missing, because those drive censoring and tenancy. This one drives
+    neither, so its absence must cost nothing — both windows still start."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload(head_sha=None)).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert len(jobs) == 2, "both windows still start"
+    assert all(job["merged_head_sha"] is None for job in jobs)
 
 
 def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch):

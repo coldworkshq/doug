@@ -339,7 +339,7 @@ def mint_key(
         last4=minted.last4,
         label=label,
         repo_selection=repo_selection,
-        scopes=["queue:read"],
+        scopes=["queue:read", "receipt:read"],
         minted_by=minted_by,
         expires_at=expires_at,
     )

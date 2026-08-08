@@ -90,6 +90,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     assert "token_hash" not in _columns(engine, "installations")
     for table, columns in M7_COLUMNS.items():
         assert columns <= _columns(engine, table)
+    for table, columns in M8_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -165,6 +167,87 @@ def test_migration_002_declares_the_same_columns_as_their_tables(tmp_path):
     assert by_table["verdicts"] == {"prompt_hash"}
     for table, cols in by_table.items():
         assert cols <= _columns(engine, table)
+
+
+M8_COLUMNS = {
+    "verdicts": {"diff_budget", "read_order"},
+    "outcome_jobs": {"merged_head_sha"},
+}
+
+
+def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard migrations 002 and 007 carry: a metadata-only column
+    passes on a fresh database and is absent from Cloud SQL."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl8.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[8]) == M8_COLUMNS
+    for table, columns in M8_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_008_backfills_reader_prompt_hash(tmp_path):
+    """The one prompt era is recorded, and only on reader rows."""
+    engine = create_engine(f"sqlite:///{tmp_path}/m8.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts (repo, pr_number, tier, score, band, "
+            "threshold, scored_at, prompt_hash) VALUES "
+            "('o/r', 1, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', NULL),"
+            "('o/r', 2, 'deterministic', 0.5, 'flagged', 0.3, '2026-08-01', NULL),"
+            "('o/r', 3, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', 'already')"
+        )
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        rows = dict(
+            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
+        )
+    assert rows[1] == "8bd26c677a0e087a0b8c14933203cc85e15b65e32b432c10a3ae78009a951cdf"
+    assert rows[2] is None, "deterministic verdicts have no prompt"
+    assert rows[3] == "already", "an existing hash is never overwritten"
+
+
+def test_migration_008_backfill_is_idempotent(tmp_path):
+    """A second REAL run of migration 8's UPDATE — not a second bare
+    apply() — must not disturb a prompt_hash already present.
+
+    apply()'s `done` ledger (migrations.py:316) skips a migration entirely
+    once its version is recorded, so calling apply() twice in a row never
+    re-executes migration 8's statements the second time; it only proves the
+    first run worked. Deleting the schema_migrations row for version 8
+    between the two calls is what forces the UPDATE to run again for real.
+    Without that, this test cannot fail no matter what the UPDATE's WHERE
+    clause says — confirmed by removing `AND prompt_hash IS NULL` from the
+    migration and watching this test still pass before this fix.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/m8b.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts (repo, pr_number, tier, score, band, "
+            "threshold, scored_at, prompt_hash) VALUES "
+            "('o/r', 1, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', NULL)"
+        )
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        # Stand in for a hash set by anything other than this backfill
+        # between the two runs (a hand correction, a verdict scored under a
+        # later prompt era). A genuinely idempotent rerun must leave it
+        # alone; only the `AND prompt_hash IS NULL` guard makes that true.
+        conn.exec_driver_sql(
+            "UPDATE verdicts SET prompt_hash = 'do-not-touch' WHERE pr_number = 1"
+        )
+        conn.exec_driver_sql("DELETE FROM schema_migrations WHERE version = 8")
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        rows = dict(
+            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
+        )
+        count = conn.exec_driver_sql(
+            "SELECT count(*) FROM verdicts WHERE prompt_hash IS NULL"
+        ).scalar()
+    assert count == 0
+    assert rows[1] == "do-not-touch", "a rerun must never overwrite an existing hash"
 
 
 def test_migration_007_declares_the_same_columns_as_their_tables(tmp_path):
@@ -538,9 +621,9 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
 
     # store.metadata.create_all() above already built the current table shapes,
-    # so migrations 6 and 7 both find their ALTER work satisfied and still
+    # so migrations 6, 7, and 8 all find their ALTER work satisfied and still
     # record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7]
+    assert migrations.apply(engine) == [5, 6, 7, 8]
     with engine.connect() as conn:
         app_ids = [
             r[0]

@@ -18,6 +18,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 """
 
+import json
 import os
 import sys
 import threading
@@ -37,6 +38,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    exists,
+    func,
     inspect,
     select,
     update,
@@ -83,6 +86,12 @@ verdicts = Table(
     Column("source", String(64)),
     # Migration 002, alongside outcomes' new columns below.
     Column("prompt_hash", String(64)),
+    # Migration 008. Instrument identity alongside prompt_hash: what budget
+    # and tiering this read ran under, so a receipt can distinguish "the
+    # prompt changed" from "the same prompt saw a different slice of the
+    # diff". Forward-only — NULL on every row scored before this migration.
+    Column("diff_budget", Integer),
+    Column("read_order", String(16)),
 )
 
 findings = Table(
@@ -294,6 +303,9 @@ outcome_jobs = Table(
     Column("error", Text),
     Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # Migration 008, pre-registration §11 item 7. Does NOT change the locked
+    # §2.1 rule, which stays timestamp-matched.
+    Column("merged_head_sha", String(64)),
     UniqueConstraint(
         "installation_id",
         "github_repo_id",
@@ -473,6 +485,8 @@ def save_review(
     head_sha: str | None = None,
     source: str | None = None,
     prompt_hash: str | None = None,
+    diff_budget: int | None = None,
+    read_order: str | None = None,
     *,
     created: list[bool] | None = None,
 ) -> int | None:
@@ -529,6 +543,8 @@ def save_review(
                     "head_sha": head_sha,
                     "source": source,
                     "prompt_hash": prompt_hash,
+                    "diff_budget": diff_budget,
+                    "read_order": read_order,
                 },
             ).scalar_one()
             rows = [
@@ -817,6 +833,7 @@ def enqueue_outcome_jobs(
     base_ref: str,
     *,
     window_days: tuple[int, ...] = (14, 60),
+    merged_head_sha: str | None = None,
 ) -> dict[int, int]:
     """Start the requested outcome-observation windows for one merged PR.
 
@@ -827,6 +844,11 @@ def enqueue_outcome_jobs(
     Both rows are prepared from the same merge facts and committed by one
     multi-value statement in one transaction: a failure creating either
     window must leave neither new row in the ledger.
+
+    `merged_head_sha` defaults to None and is not part of any caller's
+    required-facts check (see _record_merge) — it names the commit a
+    receipt can later claim a verdict about, nothing this table's own
+    windows or dedup depend on.
     """
     engine = _get_engine()
     if engine is None:
@@ -843,6 +865,7 @@ def enqueue_outcome_jobs(
             "window_days": days,
             "due_at": merged_at + timedelta(days=days),
             "created_at": created_at,
+            "merged_head_sha": merged_head_sha,
         }
         for days in window_days
     ]
@@ -1254,6 +1277,324 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
         return _verdict_bundle(conn, v)
 
 
+def governing_verdict(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merged_at: datetime,
+    *,
+    conn=None,
+) -> dict | None:
+    """The verdict that was standing when a human chose to merge.
+
+    THIS IMPLEMENTS A PRE-REGISTERED METRIC RULE, NOT A DISPLAY CHOICE.
+    `docs/design/outcome-loop/publication-preregistration.md` is LOCKED v8;
+    §2.1 defines this selection and §2.2 holds the SQL the published quarterly
+    miss rate runs. **Editing this function changes a published number.** The
+    receipt endpoint and the future publication query must both call it, so
+    that a customer's receipt cannot contradict the public table — which is
+    the most expensive failure available to this product, because the whole
+    claim is that both come from the same ledger.
+
+    Three details come from §2.2's SQL rather than §2.1's prose, and a
+    paraphrase of the prose gets each of them wrong:
+
+      * `tier='reader'` filters BEFORE the ranking (it is inside the CTE, not
+        the outer query), so a later deterministic fallback cannot displace an
+        earlier real read. §2.5 gives the fallback tier its own published row
+        precisely so it is never counted as the primary instrument.
+      * band is NOT part of selection — §2.2 puts `g.band = 'cleared'` in the
+        OUTER query, where it qualifies the published denominator. A flagged
+        PR has a governing verdict and gets a receipt; this function neither
+        takes band nor filters on it.
+      * the installation must still exist (§2.6's structural exclusion), so a
+        receipt cannot outlive the ledger row that scopes it, and research /
+        un-tenanted CLI rows never reach either artifact.
+
+    `row_number()`, never `DISTINCT ON`: the latter is Postgres-only and every
+    test here runs sqlite (`docs/REVIEWING.md:141-143` records that exact
+    trap), while production is Postgres. The most load-bearing rule in the
+    document has to be exercisable by the suite that guards it.
+
+    Scope, stated in full because it is the ONE place this is narrower than
+    §2.2's set query and a silent difference here is the whole risk:
+
+    §2.2 resolves the entire population in one pass, taking `merged_at` from
+    the joined `outcome_jobs` row; this takes `merged_at` as an argument and
+    answers for one merge identity. `uq_outcome_job` includes
+    `merge_commit_sha`, so a PR may carry more than one merge — which is why
+    §2.2 counts with `count(DISTINCT j.pr_number)`. On such a PR the two are
+    not equivalent: §2.2's `PARTITION BY` does not include the job, so its
+    single governing row is the verdict standing at the LATEST `merged_at`,
+    while this answers per merge and so reports, for an earlier merge, the
+    advice that was actually standing when THAT merge happened. Both name the
+    same verdict for the PR's latest merge, which is the one the published
+    denominator qualifies on; the receipt additionally shows the earlier
+    merge, which is a receipt's job. Pinned by
+    test_a_twice_merged_pr_resolves_per_merge_identity, and by the design
+    spec's §"One PR can have more than one merge identity".
+
+    Window selection is likewise the caller's: §2.2's `j.window_days = :window`
+    picks which JOBS are in scope, not which verdict governs, and the 14- and
+    60-day rows of one merge are written atomically from the same merge facts
+    (§6.3) — same `merged_at`, therefore necessarily the same governing
+    verdict, so the two published rows can never disagree about what Doug said.
+
+    Returns the full verdicts row merged with `_verdict_bundle`'s findings,
+    deviations and coverage, or None when no reader verdict was scored at or
+    before `merged_at` (§2.4's `fallback_only` / `merged_before_verdict`
+    buckets — excluded from the published rate, published as a count).
+
+    `conn`, keyword-only: pass an already-open connection to run on it
+    instead of opening one here. `receipt()` passes its own so a merge's
+    governing-verdict read shares that call's transaction and pool checkout
+    rather than opening a second one per merge. Every other caller omits it
+    and gets a connection opened and closed here, as before.
+    """
+    if conn is not None:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
+
+
+def _select_governing_verdict(
+    conn, installation_id: int, github_repo_id: int, pr_number: int, merged_at: datetime
+) -> dict | None:
+    """`governing_verdict`'s §2.2 ranked-CTE query, run on an open connection.
+
+    Split out so `governing_verdict` can run this on a connection it opened
+    itself or one a caller already holds (see its `conn` parameter) without
+    duplicating the query between the two paths.
+    """
+    # §2.2's `ranked` CTE, narrowed to one PR. The window function is
+    # evaluated after WHERE, so every predicate here filters *before* the
+    # ranking exactly as the document's CTE does — that ordering is the whole
+    # point of the first bullet above and is why this cannot be flattened into
+    # an ORDER BY ... LIMIT 1 with the tier test bolted on afterwards.
+    #
+    # The PARTITION BY is redundant under that narrowing (the WHERE already
+    # pins all three of its columns) and is kept anyway, so the correspondence
+    # to the document is literal rather than argued. It is also what makes the
+    # narrowing safe to remove if the publication query ever wants this
+    # expression over the whole population.
+    ranked = (
+        select(
+            verdicts,
+            func.row_number()
+            .over(
+                partition_by=(
+                    verdicts.c.installation_id,
+                    verdicts.c.github_repo_id,
+                    verdicts.c.pr_number,
+                ),
+                order_by=(verdicts.c.scored_at.desc(), verdicts.c.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(
+            verdicts.c.installation_id == installation_id,
+            verdicts.c.github_repo_id == github_repo_id,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.tier == "reader",
+            verdicts.c.scored_at <= merged_at,
+            exists(select(1).where(installations.c.installation_id == installation_id)),
+        )
+        .subquery()
+    )
+    # one_or_none(), not first(): the partition is pinned to a single PR,
+    # so `rn = 1` names exactly one row or none. first() would silently
+    # return an arbitrary one if that ever stopped being true, and "the
+    # governing verdict was picked arbitrarily" is precisely the failure
+    # this rule is written down to prevent. Raising is the correct
+    # behaviour here — a receipt and a published number must not be
+    # served from a coin flip.
+    row = conn.execute(select(ranked).where(ranked.c.rn == 1)).mappings().one_or_none()
+    if row is None:
+        return None
+    # `rn` is the ranking scaffold, not a fact about the verdict; dropped
+    # so it cannot travel into a customer-facing receipt as if it were one.
+    return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
+
+
+def _obj_or_none(value: str | None) -> object | None:
+    """Decode one JSON-as-TEXT column, or None when the row carries none.
+
+    outcomes.detail is declared Text, not the JSON column type this module
+    uses elsewhere (see that column's declaration comment — deliberate, for
+    sqlite/postgres parity on that column specifically), so SQLAlchemy hands
+    back a raw string here instead of an already-parsed value. This is the
+    one place that string becomes the object a caller can actually use.
+    """
+    return json.loads(value) if value is not None else None
+
+
+def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict | None:
+    """Everything one PR's receipt states, assembled from the ledger.
+
+    `merges` is a LIST, not a single record, because `uq_outcome_job`
+    includes `merge_commit_sha`: the schema itself permits one PR to carry
+    more than one merge identity (a revert-and-reland is the ordinary case),
+    which is exactly why §2.2 counts with `count(DISTINCT j.pr_number)`
+    rather than assuming one row per PR. Each merge's adjudication windows
+    nest under it, so the document always names which merge it is talking
+    about rather than pooling two merges' windows into one ambiguous list.
+
+    `latest_verdict` and `governing_verdict` are two separate fields on each
+    merge, not one field with an "is_latest" flag, because they answer
+    different questions. `latest_verdict` is "what is the newest thing Doug
+    has said about this PR" — it exists even with zero merges, for a PR still
+    open. `governing_verdict` is per merge: "what was standing when a human
+    chose to merge THIS commit" (see `governing_verdict`'s own docstring for
+    why that answer can differ merge to merge). When the two differ, work
+    landed — or the PR was rescored — after the advice a merge actually
+    happened on, and that gap is precisely what a reader of an incident
+    review needs to see; collapsing it into one field would erase the fact
+    this document exists to preserve.
+
+    `publication_governing` is set on exactly one merge: the one with the
+    greatest `merged_at`. Pre-registration §2.2's ranking window is
+    `PARTITION BY (installation_id, github_repo_id, pr_number)` with NO job
+    term, so the published quarterly number designates exactly one governing
+    verdict per PR — at that PR's latest merge — not one per merge. A receipt
+    with no such marker would let an earlier merge's own `governing_verdict`
+    read as though it were the number that got published; it was not. (This
+    field was added after the original task spec was written, once that
+    mismatch between per-merge and per-PR resolution was found — see this
+    task's brief for the history.)
+
+    Returns None only when nothing at all exists for this PR — no verdict
+    ever scored and no merge ever recorded — so a caller can tell "genuinely
+    nothing happened here" apart from "happened, but Doug had nothing to say"
+    (a real receipt with `latest_verdict: null` and/or an empty `merges`).
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    # engine.begin() buys a rollback if a statement in this block raises, not
+    # a consistent snapshot of the ledger. It covers `latest`, `jobs`,
+    # `outcome_rows`, latest_verdict's own _verdict_bundle call below, AND
+    # each merge's governing_verdict() call in the loop further down — that
+    # call is passed this same `conn`, so every read in this function shares
+    # one transaction and one pool checkout rather than governing_verdict()
+    # opening a fresh connection per merge. Even so, Postgres at READ
+    # COMMITTED (this deploy's isolation level) gives no cross-statement
+    # snapshot: each statement sees whatever was committed by the time it
+    # ran, not one point-in-time view of the ledger.
+    with engine.begin() as conn:
+        latest = (
+            conn.execute(
+                select(verdicts)
+                .where(
+                    verdicts.c.installation_id == installation_id,
+                    verdicts.c.github_repo_id == github_repo_id,
+                    verdicts.c.pr_number == pr_number,
+                    # Same exclusion as this query's five siblings, and the
+                    # ordinary case for it here: api.py's webhook handler
+                    # calls save_external_review on every pull_request_review
+                    # event, writing an external row into this identical
+                    # identity tuple with scored_at set to the human
+                    # reviewer's submitted_at. On a PR a human approved after
+                    # Doug's last score, that row is newest and would win
+                    # ORDER BY scored_at DESC — surfacing save_external_review's
+                    # 0.0/0.0 score/threshold placeholders, written because no
+                    # model ran and no diff was read, as "the newest thing
+                    # Doug has said about this PR".
+                    verdicts.c.tier != EXTERNAL_TIER,
+                )
+                .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        jobs = (
+            conn.execute(
+                select(outcome_jobs)
+                .where(
+                    outcome_jobs.c.installation_id == installation_id,
+                    outcome_jobs.c.github_repo_id == github_repo_id,
+                    outcome_jobs.c.pr_number == pr_number,
+                )
+                # Ascending merged_at groups each merge's job rows together in
+                # merge order, which is what lets the loop below build `merges`
+                # in merge order with a single pass and no separate sort step.
+                .order_by(outcome_jobs.c.merged_at, outcome_jobs.c.window_days)
+            )
+            .mappings()
+            .all()
+        )
+        if latest is None and not jobs:
+            return None
+
+        outcome_rows = (
+            conn.execute(
+                select(outcomes).where(
+                    outcomes.c.installation_id == installation_id,
+                    outcomes.c.github_repo_id == github_repo_id,
+                    outcomes.c.pr_number == pr_number,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        latest_verdict = (
+            dict(latest) | _verdict_bundle(conn, latest) if latest is not None else None
+        )
+
+        by_outcome = {(o["merge_commit_sha"], o["window_days"]): o for o in outcome_rows}
+        merges: list[dict] = []
+        by_sha: dict[str, dict] = {}
+        for job in jobs:
+            sha = job["merge_commit_sha"]
+            merge = by_sha.get(sha)
+            if merge is None:
+                merge = {
+                    "merge_commit_sha": sha,
+                    "merged_at": job["merged_at"],
+                    "base_ref": job["base_ref"],
+                    "merged_head_sha": job["merged_head_sha"],
+                    # Resolved per THIS merge's own merged_at, per
+                    # governing_verdict's contract — not the PR-wide answer,
+                    # which is why an earlier merge can carry a different
+                    # governing_verdict than the one that got published.
+                    "governing_verdict": governing_verdict(
+                        installation_id, github_repo_id, pr_number, job["merged_at"], conn=conn
+                    ),
+                    "adjudication": [],
+                }
+                by_sha[sha] = merge
+                merges.append(merge)
+            outcome = by_outcome.get((sha, job["window_days"]))
+            merge["adjudication"].append(
+                {
+                    "window_days": job["window_days"],
+                    "status": job["status"],
+                    "due_at": job["due_at"],
+                    "kind": outcome["kind"] if outcome else None,
+                    "observed_at": outcome["observed_at"] if outcome else None,
+                    "source": outcome["source"] if outcome else None,
+                    "detail": _obj_or_none(outcome["detail"]) if outcome else None,
+                }
+            )
+
+    # Flag by object identity, not by comparing merged_at values: max() over
+    # an empty list would raise, and identity guarantees exactly one True
+    # even in the unreached case of two merges tied on merged_at, which
+    # equality-based comparison would not.
+    governing_merge = max(merges, key=lambda m: m["merged_at"]) if merges else None
+    for merge in merges:
+        merge["publication_governing"] = merge is governing_merge
+
+    return {"latest_verdict": latest_verdict, "merges": merges}
+
+
 def run_detail(verdict_id: int) -> dict | None:
     """Everything the console's forensic page shows for one run.
 
@@ -1278,6 +1619,8 @@ def run_detail(verdict_id: int) -> dict | None:
                 "scored_at": v["scored_at"],
                 "model": v["model"],
                 "prompt_hash": v["prompt_hash"],
+                "diff_budget": v["diff_budget"],
+                "read_order": v["read_order"],
                 "risk_score": v["risk_score"],
                 "rationale": v["rationale"],
                 "head_sha": v["head_sha"],
@@ -1656,6 +1999,87 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def repo_id_for(full_name: str) -> tuple[int, int] | None:
+    """Resolve a display name to the ids that scope every read.
+
+    OPERATOR PATH ONLY, and the restriction is why this is written down
+    separately rather than folded into a shared resolver. It searches
+    installation_repos across EVERY installation and intersects against no
+    caller's scope at all, so reaching it with a dispensed tenant token would
+    resolve a name the caller may have no relationship with — and then hand
+    the resulting (installation_id, github_repo_id) pair to a read that
+    trusts it. Tenant callers resolve through active_repos(installation_id),
+    which IS that intersection: the key's frozen selection against the live
+    ledger. Pinned from the route's side by
+    test_the_tenant_path_never_resolves_through_repo_id_for.
+
+    Scoped to state='active', so a repo removed from its installation stops
+    resolving. Rows are never deleted (set_installation_repos' docstring says
+    why: a removed repo's verdicts still have to resolve to the repo they
+    describe), so without that filter a name would keep resolving forever
+    after the uninstall. `verdicts.repo` is display text and is NOT the
+    source of truth for tenancy (MT4) — this reads the junction table that
+    is, which is also why a ledger holding verdicts for a repo with no
+    installation_repos row resolves to nothing here rather than to whatever
+    those verdicts happen to say.
+
+    One full_name can carry more than one active row: a transfer mid-flight,
+    a repositories_removed delivery that never arrived leaving the previous
+    owner's row stale-active, or one installation holding two rows for a repo
+    deleted and recreated under the same name (uq_installation_repo is keyed
+    on the github_repo_id, not the name). No correct answer is available from
+    this table alone, so the newest registration wins — deterministic rather
+    than whichever row the planner returned first, because a receipt that
+    changes identity between two identical requests is worthless as evidence.
+
+    ANSWERING IS NOT ACCEPTING. That state is itself a ledger bug, so it is
+    logged every time it is resolved. Same posture as reconcile's open-PR cap
+    (worker.py): do the bounded thing, and say that you did — a fallback
+    nobody can see is indistinguishable from correct behaviour, and this one
+    silently decides which installation an operator's receipt is served from.
+    Loud here and not merely at startup because the drift checks in
+    _startup_reconcile cannot see this shape: both rows have an installation
+    and both have verdicts, so neither counter fires.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        # Not .limit(1): the extra rows are what the log line below is made
+        # of, and a query that could not see them could not report them.
+        # Bounded by how many installations registered this exact name, which
+        # is 1 in every healthy ledger.
+        rows = conn.execute(
+            select(
+                installation_repos.c.installation_id,
+                installation_repos.c.github_repo_id,
+            )
+            .where(
+                installation_repos.c.full_name == full_name,
+                installation_repos.c.state == "active",
+            )
+            .order_by(installation_repos.c.updated_at.desc(), installation_repos.c.id.desc())
+        ).all()
+    if not rows:
+        return None
+    chosen = (int(rows[0].installation_id), int(rows[0].github_repo_id))
+    if len(rows) > 1:
+        competing = ", ".join(
+            f"installation {int(r.installation_id)} repo {int(r.github_repo_id)}" for r in rows
+        )
+        # !r on the name: it arrives as a caller-supplied query parameter on a
+        # public endpoint, and a bare newline in it would otherwise forge a
+        # second log line (same guard _record_external_review uses).
+        print(
+            f"doug: DRIFT — {full_name!r} has {len(rows)} active installation_repos rows "
+            f"({competing}); resolving to installation {chosen[0]} repo {chosen[1]}, the most "
+            "recently registered. All but one of these rows is stale; redeliver the "
+            "installation_repositories webhook (ROADMAP MT4-class).",
+            file=sys.stderr,
+        )
+    return chosen
 
 
 def count_installations_referenced_by_verdicts() -> int:

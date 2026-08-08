@@ -450,9 +450,36 @@ forced the revisit.
 endpoint, and is what `doug-web` sends server-side (`web/lib/api.ts`). Reviews
 that assume "the token" is tenant-scoped are reading the wrong class.
 
-A **tenant** token is dispensed by `POST /v1/installations/token`, stored only
-as `sha256` in `installations.token_hash`, and resolves to exactly one
-`installation_id`. It reaches `/v1/queue` and nothing else.
+A **tenant** token is dispensed by `POST /v1/installations/token`. Only a
+peppered HMAC-SHA256 of its secret half is persisted, in
+`installation_tokens.token_hash` — its own table, not a column on
+`installations`, because mint appends and one installation can hold several
+live keys (MT5). The pepper lives outside the database (`DOUG_TOKEN_PEPPER`)
+and is versioned per row, so a DB-only breach yields unusable hashes and
+pepper rotation is rolling rather than a flag-day. The row is found by
+`token_lookup` — a plaintext key id, safe in logs — never by the hash; the
+secret itself is returned once by `mint_key` and is unrecoverable after that.
+A key resolves to exactly one `installation_id`, and to a repo selection
+re-intersected against the LIVE ledger on every call, so an uninstall or a
+removed repo ends access next request (`tenancy.resolve`).
+
+It reaches **two** endpoints, and they are gated by **different** scopes:
+`GET /v1/queue` requires `queue:read`, and `GET /v1/prs/{n}/receipt` requires
+`receipt:read`. No other endpoint honours a dispensed key at all — the
+operator-only routes answer a resolving tenant key with `404` (`_operator_only`),
+and key management refuses `X-Doug-Token` outright, because keys cannot manage
+keys.
+
+"Tenant-reachable" is therefore not one permission, and a reviewer sizing up
+the blast radius of a dispensed key has to read the scope, not the class. A
+key holding `queue:read` alone gets `401` from the receipt route — which is
+the state every key minted before `8bb0622` is in, and re-minting is what
+grants the new scope (append-only, so the existing key is undisturbed).
+
+A route becoming tenant-reachable is a change to that list, and it needs its
+own scope checked explicitly rather than an existing one reused: the `scopes`
+column exists precisely so a receipts key cannot silently inherit queue
+access it was never granted, or the reverse.
 
 Three things a reviewer should check, because each has a failure that looks
 fine in passing tests:
