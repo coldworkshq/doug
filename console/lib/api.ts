@@ -1,3 +1,4 @@
+import type { HealthPayload } from "./health";
 import type { RunCoverage } from "./runs";
 
 export type Band = "cleared" | "flagged";
@@ -164,4 +165,12 @@ export async function getRuns(params: {
 
 export async function getRunDetail(id: number): Promise<RunDetail | { error: string }> {
   return get<RunDetail>(`/v1/runs/${id}`);
+}
+
+/** Global, never scoped. "Is Doug failing on anything" is a global question,
+ *  and a scope filter that can hide a fire in another tenant is an
+ *  anti-feature on this surface specifically — so this deliberately takes no
+ *  repo or installation argument even though /v1/health accepts them. */
+export async function getHealth(): Promise<HealthPayload | { error: string }> {
+  return get<HealthPayload>("/v1/health");
 }
