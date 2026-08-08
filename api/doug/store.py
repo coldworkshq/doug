@@ -1282,6 +1282,8 @@ def governing_verdict(
     github_repo_id: int,
     pr_number: int,
     merged_at: datetime,
+    *,
+    conn=None,
 ) -> dict | None:
     """The verdict that was standing when a human chose to merge.
 
@@ -1342,10 +1344,35 @@ def governing_verdict(
     deviations and coverage, or None when no reader verdict was scored at or
     before `merged_at` (§2.4's `fallback_only` / `merged_before_verdict`
     buckets — excluded from the published rate, published as a count).
+
+    `conn`, keyword-only: pass an already-open connection to run on it
+    instead of opening one here. `receipt()` passes its own so a merge's
+    governing-verdict read shares that call's transaction and pool checkout
+    rather than opening a second one per merge. Every other caller omits it
+    and gets a connection opened and closed here, as before.
     """
+    if conn is not None:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
     engine = _get_engine()
     if engine is None:
         return None
+    with engine.connect() as conn:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
+
+
+def _select_governing_verdict(
+    conn, installation_id: int, github_repo_id: int, pr_number: int, merged_at: datetime
+) -> dict | None:
+    """`governing_verdict`'s §2.2 ranked-CTE query, run on an open connection.
+
+    Split out so `governing_verdict` can run this on a connection it opened
+    itself or one a caller already holds (see its `conn` parameter) without
+    duplicating the query between the two paths.
+    """
     # §2.2's `ranked` CTE, narrowed to one PR. The window function is
     # evaluated after WHERE, so every predicate here filters *before* the
     # ranking exactly as the document's CTE does — that ordering is the whole
@@ -1381,20 +1408,19 @@ def governing_verdict(
         )
         .subquery()
     )
-    with engine.connect() as conn:
-        # one_or_none(), not first(): the partition is pinned to a single PR,
-        # so `rn = 1` names exactly one row or none. first() would silently
-        # return an arbitrary one if that ever stopped being true, and "the
-        # governing verdict was picked arbitrarily" is precisely the failure
-        # this rule is written down to prevent. Raising is the correct
-        # behaviour here — a receipt and a published number must not be
-        # served from a coin flip.
-        row = conn.execute(select(ranked).where(ranked.c.rn == 1)).mappings().one_or_none()
-        if row is None:
-            return None
-        # `rn` is the ranking scaffold, not a fact about the verdict; dropped
-        # so it cannot travel into a customer-facing receipt as if it were one.
-        return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
+    # one_or_none(), not first(): the partition is pinned to a single PR,
+    # so `rn = 1` names exactly one row or none. first() would silently
+    # return an arbitrary one if that ever stopped being true, and "the
+    # governing verdict was picked arbitrarily" is precisely the failure
+    # this rule is written down to prevent. Raising is the correct
+    # behaviour here — a receipt and a published number must not be
+    # served from a coin flip.
+    row = conn.execute(select(ranked).where(ranked.c.rn == 1)).mappings().one_or_none()
+    if row is None:
+        return None
+    # `rn` is the ranking scaffold, not a fact about the verdict; dropped
+    # so it cannot travel into a customer-facing receipt as if it were one.
+    return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
 
 
 def _obj_or_none(value: str | None) -> object | None:
@@ -1453,13 +1479,14 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
         return None
     # engine.begin() buys a rollback if a statement in this block raises, not
     # a consistent snapshot of the ledger. It covers `latest`, `jobs`,
-    # `outcome_rows` and latest_verdict's own _verdict_bundle call below — it
-    # does NOT extend to each merge's governing_verdict() call in the loop
-    # further down, which opens its own connection and reads outside this
-    # transaction entirely. And even for the statements it does cover,
-    # Postgres at READ COMMITTED (this deploy's isolation level) gives no
-    # cross-statement snapshot either: each one sees whatever was committed
-    # by the time it ran, not one point-in-time view of the ledger.
+    # `outcome_rows`, latest_verdict's own _verdict_bundle call below, AND
+    # each merge's governing_verdict() call in the loop further down — that
+    # call is passed this same `conn`, so every read in this function shares
+    # one transaction and one pool checkout rather than governing_verdict()
+    # opening a fresh connection per merge. Even so, Postgres at READ
+    # COMMITTED (this deploy's isolation level) gives no cross-statement
+    # snapshot: each statement sees whatever was committed by the time it
+    # ran, not one point-in-time view of the ledger.
     with engine.begin() as conn:
         latest = (
             conn.execute(
@@ -1538,7 +1565,7 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
                     # which is why an earlier merge can carry a different
                     # governing_verdict than the one that got published.
                     "governing_verdict": governing_verdict(
-                        installation_id, github_repo_id, pr_number, job["merged_at"]
+                        installation_id, github_repo_id, pr_number, job["merged_at"], conn=conn
                     ),
                     "adjudication": [],
                 }

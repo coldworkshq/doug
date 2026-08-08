@@ -676,6 +676,52 @@ def test_receipt_lists_every_merge_identity(tmp_path, monkeypatch):
     assert [m["merge_commit_sha"] for m in got["merges"]] == ["aaa", "bbb"]
 
 
+def test_receipt_does_not_open_a_connection_per_merge(tmp_path, monkeypatch):
+    """reader:nested-connection-in-transaction: `receipt()`'s merge loop used
+    to call `governing_verdict()` positionally, which opened its OWN
+    `engine.connect()` per merge — a pool checkout per merge, outside
+    `receipt()`'s own transaction. `receipt()` now passes its open `conn`
+    through, so `governing_verdict()` opens nothing.
+
+    Proven by instrumenting the cached engine's `connect()` — `engine.begin()`
+    is itself implemented on top of one `self.connect()` call, so patching
+    `connect` alone counts every checkout `receipt()` makes, direct or via
+    `begin()` — and showing a 2-merge PR costs the same single checkout as a
+    1-merge PR. Before the fix this was 1 for one merge and 2 for two: this
+    starts failing the moment `governing_verdict()` goes back to opening its
+    own connection per merge.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    engine = store._get_engine()
+    counts = {"connect": 0}
+    real_connect = engine.connect
+
+    def counting_connect(*args, **kwargs):
+        counts["connect"] += 1
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "connect", counting_connect)
+
+    first = datetime(2026, 8, 1, tzinfo=UTC)
+    second = datetime(2026, 8, 4, tzinfo=UTC)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=first - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=first, window_days=14, merge_sha="aaa")
+
+    counts["connect"] = 0
+    one_merge = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert len(one_merge["merges"]) == 1
+    one_merge_checkouts = counts["connect"]
+
+    _seed_outcome_job(url, merged_at=second, window_days=14, merge_sha="bbb")
+    counts["connect"] = 0
+    two_merges = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert len(two_merges["merges"]) == 2
+    two_merge_checkouts = counts["connect"]
+
+    assert one_merge_checkouts == two_merge_checkouts == 1
+
+
 def test_merged_pr_without_a_reader_verdict_reports_null_governing(tmp_path, monkeypatch):
     """Never substituted with the latest verdict."""
     url = _db(tmp_path, monkeypatch)
