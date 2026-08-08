@@ -1953,6 +1953,57 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
         ]
 
 
+def repo_id_for(full_name: str) -> tuple[int, int] | None:
+    """Resolve a display name to the ids that scope every read.
+
+    OPERATOR PATH ONLY, and the restriction is why this is written down
+    separately rather than folded into a shared resolver. It searches
+    installation_repos across EVERY installation and intersects against no
+    caller's scope at all, so reaching it with a dispensed tenant token would
+    resolve a name the caller may have no relationship with — and then hand
+    the resulting (installation_id, github_repo_id) pair to a read that
+    trusts it. Tenant callers resolve through active_repos(installation_id),
+    which IS that intersection: the key's frozen selection against the live
+    ledger. Pinned from the route's side by
+    test_the_tenant_path_never_resolves_through_repo_id_for.
+
+    Scoped to state='active', so a repo removed from its installation stops
+    resolving. Rows are never deleted (set_installation_repos' docstring says
+    why: a removed repo's verdicts still have to resolve to the repo they
+    describe), so without that filter a name would keep resolving forever
+    after the uninstall. `verdicts.repo` is display text and is NOT the
+    source of truth for tenancy (MT4) — this reads the junction table that
+    is, which is also why a ledger holding verdicts for a repo with no
+    installation_repos row resolves to nothing here rather than to whatever
+    those verdicts happen to say.
+
+    One full_name can be active under two installations: a transfer
+    mid-flight, or a repositories_removed delivery that never arrived leaving
+    the previous owner's row stale-active. No correct answer is available
+    from this table alone, so the newest registration wins and the choice is
+    at least deterministic rather than whichever row the planner returned
+    first — a receipt that changes identity between two identical requests
+    would be worthless as evidence.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(
+                installation_repos.c.installation_id,
+                installation_repos.c.github_repo_id,
+            )
+            .where(
+                installation_repos.c.full_name == full_name,
+                installation_repos.c.state == "active",
+            )
+            .order_by(installation_repos.c.updated_at.desc(), installation_repos.c.id.desc())
+            .limit(1)
+        ).first()
+    return (int(row.installation_id), int(row.github_repo_id)) if row is not None else None
+
+
 def count_installations_referenced_by_verdicts() -> int:
     """How many distinct installations the verdicts ledger names. Compared
     against active_installations() at startup: verdicts referencing tenants

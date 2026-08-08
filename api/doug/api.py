@@ -405,6 +405,275 @@ def queue(
     )
 
 
+# Rendered in words on EVERY merge, not only the one that governed.
+#
+# Exactly one merge of a PR carries publication_governing=True — the greatest
+# merged_at — because pre-registration §2.2's ranking window has no job term:
+# the published quarterly number designates one governing verdict per PULL
+# REQUEST, not one per merge. A receipt shows every merge, each with its own
+# governing verdict resolved at its own merged_at, so a bare boolean is not
+# enough. A person reading the earlier merge after an incident sees a real
+# verdict sitting beside a `false` and nothing at all connecting the two
+# facts; the natural reading is that the verdict shown is the number that got
+# published. It is not. These sentences are what say so.
+PUBLICATION_GOVERNING_NOTE = (
+    "This is the merge whose governing verdict the published quarterly "
+    "statistic uses for this pull request."
+)
+NOT_PUBLICATION_GOVERNING_NOTE = (
+    "This merge did not govern publication. The pull request merged again "
+    "later, and the published quarterly statistic uses the verdict standing "
+    "at that later merge. The verdict shown here is historical context — what "
+    "was standing when THIS commit merged — and is not the published number."
+)
+
+
+class ReceiptRead(BaseModel):
+    """What the reader was configured to see, as recorded on the verdict row.
+
+    `recorded` is False whenever EITHER column is NULL, and that is the whole
+    point of the field. Migration 008 started stamping these; every verdict
+    scored before it legitimately has neither. A half-stamped pair describes
+    no instrument either — a budget with no ordering does not say which part
+    of the diff the model was given, an ordering with no budget does not say
+    how much of it — so one boolean carries "these numbers mean something"
+    and absence can never be read as a value.
+    """
+
+    diff_budget: int | None
+    read_order: str | None
+    recorded: bool
+
+
+class ReceiptVerdict(BaseModel):
+    """One verdict as evidence: what Doug said, and what instrument said it.
+
+    `raw` is deliberately not here. It is the reader's full output kept for
+    reprocessing, not a statement Doug made, and a receipt is the set of
+    statements — see design-lock.md:15 on evidence versus judgment.
+    """
+
+    verdict_id: int
+    scored_at: datetime
+    tier: str
+    source: str | None
+    head_sha: str | None
+    model: str | None
+    # None means the row predates prompt-hash stamping on the worker path. It
+    # is NOT a match against the frozen prompt and must never render as one —
+    # same rule RunDetailResponse.prompt_hash carries.
+    prompt_hash: str | None
+    read: ReceiptRead
+    score: float
+    band: Band
+    threshold: float
+    risk_score: int | None
+    rationale: str | None
+    reasons: list[Reason]
+    deviations: list[RunDeviation]
+    intent_alignment: int | None
+    intent_refs: list[str]
+    coverage: RunCoverage | None
+
+
+class ReceiptWindow(BaseModel):
+    """One observation window of one merge.
+
+    `status` is the JOB's (pending | running | done | failed) and `kind` is
+    the ADJUDICATION's (revert | clean | censored). §6.2 keeps those two
+    vocabularies apart on purpose, and this model does too: `kind` is None
+    while the window is still open or the job never completed, which is not a
+    clean result and is never substituted with one.
+    """
+
+    window_days: int
+    status: str
+    due_at: datetime
+    kind: str | None
+    observed_at: datetime | None
+    source: str | None
+    detail: dict | None
+
+
+class ReceiptMerge(BaseModel):
+    """One merge identity of this PR. A PR can carry several — uq_outcome_job
+    includes merge_commit_sha, and a revert-and-reland is the ordinary case."""
+
+    merge_commit_sha: str
+    merged_at: datetime
+    base_ref: str
+    # NULL on merges recorded before migration 008, and on any payload that
+    # carried no pull_request.head (a deleted fork branch) — see _record_merge.
+    merged_head_sha: str | None
+    governing_verdict: ReceiptVerdict | None
+    publication_governing: bool
+    publication_note: str
+    adjudication: list[ReceiptWindow]
+
+
+class ReceiptResponse(BaseModel):
+    """One PR's evidentiary record.
+
+    `latest_verdict` and each merge's `governing_verdict` answer different
+    questions and are never collapsed: the newest thing Doug has said about
+    this PR, versus what was standing when a human chose to merge a
+    particular commit. When they differ, work landed or the PR was rescored
+    after the advice the merge actually happened on, and that gap is exactly
+    what a reader of an incident review came for.
+    """
+
+    repo: str
+    pr_number: int
+    latest_verdict: ReceiptVerdict | None
+    merges: list[ReceiptMerge]
+
+
+def _receipt_verdict(row: dict | None) -> ReceiptVerdict | None:
+    """One store verdict dict as the wire model, honesty states rendered."""
+    if row is None:
+        return None
+    budget, order = row["diff_budget"], row["read_order"]
+    return ReceiptVerdict(
+        verdict_id=row["id"],
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        source=row["source"],
+        head_sha=row["head_sha"],
+        model=row["model"],
+        prompt_hash=row["prompt_hash"],
+        read=ReceiptRead(
+            diff_budget=budget,
+            read_order=order,
+            # AND, not OR: see ReceiptRead's docstring — half a pair is not a
+            # described read, and rendering it as one would let a consumer
+            # quote a budget nothing was actually read under.
+            recorded=budget is not None and order is not None,
+        ),
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        risk_score=row["risk_score"],
+        rationale=row["rationale"],
+        reasons=[Reason(**r) for r in row["reasons"]],
+        deviations=[RunDeviation(**d) for d in row["deviations"]],
+        intent_alignment=row["intent_alignment"],
+        intent_refs=row["intent_refs"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+    )
+
+
+def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
+    """store.receipt()'s document as the response contract.
+
+    The one thing this layer adds rather than passes through is the
+    publication note. store.receipt() sets the boolean; a boolean is a fact
+    the ledger knows and a sentence is what makes it readable, so the words
+    live here with the rest of the presentation.
+    """
+    return ReceiptResponse(
+        repo=repo,
+        pr_number=pr_number,
+        latest_verdict=_receipt_verdict(data["latest_verdict"]),
+        merges=[
+            ReceiptMerge(
+                merge_commit_sha=m["merge_commit_sha"],
+                merged_at=m["merged_at"],
+                base_ref=m["base_ref"],
+                merged_head_sha=m["merged_head_sha"],
+                governing_verdict=_receipt_verdict(m["governing_verdict"]),
+                publication_governing=m["publication_governing"],
+                publication_note=(
+                    PUBLICATION_GOVERNING_NOTE
+                    if m["publication_governing"]
+                    else NOT_PUBLICATION_GOVERNING_NOTE
+                ),
+                adjudication=[ReceiptWindow(**a) for a in m["adjudication"]],
+            )
+            for m in data["merges"]
+        ],
+    )
+
+
+@app.get("/v1/prs/{pr_number}/receipt")
+def pr_receipt(
+    pr_number: int,
+    repo: str,
+    x_doug_token: str = Header(""),
+) -> ReceiptResponse:
+    """One PR's evidentiary record.
+
+    `repo` is required: a PR number alone is ambiguous across repositories.
+    Scoping mirrors /v1/queue exactly — the operator token is unscoped, a
+    dispensed token must carry receipt:read AND the repo must be inside its
+    live-intersected selection.
+
+    THE STATUS CODES ARE THE SECURITY CONTRACT, not error handling:
+
+      503  no operator secret, or no ledger. Both are deployment faults and
+           both are checked BEFORE the token, deliberately: without a ledger
+           tenancy.resolve can read no key at all, so every dispensed token
+           would come back 401 "bad token" and a customer would be told their
+           credential is broken when what is broken is the deployment. A
+           misconfiguration must not be reported as a credential failure.
+      401  the token resolves to nothing, or resolves without receipt:read.
+           Not 403 for the missing scope, matching /v1/queue: a scope a key
+           does not hold is not a door it may knock on.
+      404  everything else that refuses — a repo outside the caller's scope,
+           a repo nobody has, a PR with no verdict and no merge.
+
+    That last line is the one that matters. Out-of-scope and absent share a
+    code AND a body, so a caller cannot tell "not yours" from "not there". A
+    403 would confirm the repo exists; so would a distinct message; so would
+    a 200 carrying an empty document, which is why the refusal is raised
+    rather than returned. That would hand one customer a probe for another
+    customer's private repository names — the same no-existence-leak rule
+    /v1/queue's ?repo= filter, _operator_only and dispense_token all run.
+
+    The two token paths resolve the repo through DIFFERENT functions and that
+    asymmetry is the point: a tenant resolves via active_repos, which is
+    scoped to their installation, and the id it returns is checked against
+    the key's effective selection before any read happens. store.repo_id_for
+    searches every installation and is unreachable from this branch.
+    """
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+
+    installation_id: int | None = None
+    if not hmac.compare_digest(x_doug_token, expected):
+        try:
+            ctx = tenancy.resolve(x_doug_token)
+        except tenancy.KeysNotConfigured as e:
+            raise HTTPException(
+                status_code=503, detail="token verification not configured"
+            ) from e
+        if ctx is None or "receipt:read" not in ctx.scopes:
+            raise HTTPException(status_code=401, detail="bad token")
+        installation_id = ctx.installation_id
+        live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        rid = live.get(repo)
+        # The key's effective scope, in ids: its frozen selection (already
+        # live-intersected by resolve) or, for 'all', everything live NOW.
+        # installation_repos is the ONE source of truth — verdicts.repo and
+        # full_name are display everywhere (MT4).
+        effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())
+        if rid is None or rid not in effective:
+            raise _not_found()
+        repo_id = rid
+    else:
+        resolved = store.repo_id_for(repo)
+        if resolved is None:
+            raise _not_found()
+        installation_id, repo_id = resolved
+
+    data = store.receipt(installation_id, repo_id, pr_number)
+    if data is None:
+        raise _not_found()
+    return _receipt_response(repo, pr_number, data)
+
+
 def _run_item(row: dict) -> RunSummaryItem:
     """One ledger row as a list item.
 

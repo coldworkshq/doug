@@ -5,15 +5,28 @@ the published quarterly miss rate run. The whole claim of the outcome loop is
 that those two numbers come from the same ledger under the same definition,
 so a divergence here is not a bug in a helper, it is the product's central
 claim failing quietly.
+
+The file grew outward from that rule and now covers all three layers built on
+it, in order: `governing_verdict` (the rule itself, differential-tested
+against §2.2's own SQL), `receipt()` (the document assembled around it), and
+GET /v1/prs/{n}/receipt (the document served, under two token classes). The
+last section carries a second concern the first two do not — that no request
+can be answered from another installation's ledger rows — and its comment
+header says how that is established.
 """
 
+import base64
 import itertools
+import json
 import pathlib
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, text
 
-from doug import store
+from doug import api, store, tenancy
+from doug.api import app
 
 PREREGISTRATION = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -708,3 +721,513 @@ def test_exactly_one_merge_is_publication_governing(tmp_path, monkeypatch):
     assert flags.count(True) == 1
     latest = max(got["merges"], key=lambda m: m["merged_at"])
     assert latest["publication_governing"] is True
+
+
+# --- store.repo_id_for — the operator path's name resolution ----------------
+#
+# The tenant path never reaches this function (see the endpoint section
+# below). These tests pin what it resolves THROUGH: installation_repos in an
+# active state, never verdicts.repo, which is display text (MT4).
+
+
+def test_repo_id_for_resolves_an_active_repo(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    assert store.repo_id_for(REPO) == (INSTALLATION_ID, REPO_ID)
+
+
+def test_repo_id_for_ignores_a_removed_repo(tmp_path, monkeypatch):
+    """A repo removed from its installation keeps its row — its verdicts still
+    have to resolve to something — but must stop being reachable by name."""
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False, state="removed")
+    assert store.repo_id_for(REPO) is None
+
+
+def test_repo_id_for_does_not_resolve_through_verdicts_repo(tmp_path, monkeypatch):
+    """MT4: `verdicts.repo` is display text and is not the tenancy record.
+
+    A ledger with verdicts for a repo that has no installation_repos row is
+    not hypothetical — it is exactly the drift
+    count_verdict_repos_missing_from_ledger() exists to shout about. Resolving
+    a name through it would hand out ids nothing authorises.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=NOW)
+    assert store.repo_id_for(REPO) is None
+
+
+def test_repo_id_for_returns_none_for_an_unknown_name(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    assert store.repo_id_for("nobody/nothing") is None
+
+
+def test_repo_id_for_returns_none_without_a_database(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.repo_id_for(REPO) is None
+
+
+def test_repo_id_for_breaks_a_name_collision_deterministically(tmp_path, monkeypatch):
+    """One full_name can be active under two installations — a transfer
+    mid-flight, or a repositories_removed delivery that never arrived. There
+    is no right answer available here, so the answer must at least be the
+    same one every time rather than whichever row the planner returns first.
+    """
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    store.set_installation_repos(999, [(_SIBLING_REPO_ID, REPO)], replace=False)
+    assert store.repo_id_for(REPO) == (999, _SIBLING_REPO_ID)
+    assert [store.repo_id_for(REPO) for _ in range(5)].count((999, _SIBLING_REPO_ID)) == 5
+
+
+# --- GET /v1/prs/{n}/receipt — the endpoint ---------------------------------
+#
+# One evidentiary record, served under two token classes, on a service
+# deployed --allow-unauthenticated. The property this section exists to pin is
+# not "the route works": it is that no request carrying a dispensed key can be
+# answered from another installation's ledger rows, and that a caller who asks
+# for a repo they may not see learns nothing at all — not even that it exists.
+#
+# Dispensed keys here are REAL, minted through tenancy.mint_key rather than
+# simulated by monkeypatching tenancy.resolve. The subject is the whole chain
+# — a key's frozen selection intersected against the live ledger — and a
+# stubbed resolve would only prove that the route trusts whatever context it
+# is handed, which is the half of the chain that was never in doubt.
+
+OPERATOR = "t0ken"
+AUTH = {"X-Doug-Token": OPERATOR}
+_SIBLING_REPO_ID = 300
+_SIBLING_REPO = "drewjst/sidecar"
+_OTHER_INSTALLATION_ID = 999
+MERGE_SHA = "a" * 40
+SECOND_MERGE_SHA = "b" * 40
+
+
+def _http_db(tmp_path, monkeypatch) -> str:
+    """A ledger, the operator secret, and a pepper — what these routes need.
+
+    The pepper is what makes tenancy.resolve able to verify a real key at
+    all; without it every dispensed token raises KeysNotConfigured and the
+    tenancy tests below would pass on a 503 that proves nothing.
+    """
+    monkeypatch.setenv("DOUG_API_TOKEN", OPERATOR)
+    monkeypatch.setenv("DOUG_TOKEN_PEPPER", base64.b64encode(b"p" * 32).decode())
+    return _db(tmp_path, monkeypatch)
+
+
+def _seed_outcome(
+    url: str,
+    *,
+    kind: str,
+    merge_sha: str,
+    window_days: int = WINDOW_DAYS,
+    installation_id: int = INSTALLATION_ID,
+    github_repo_id: int = REPO_ID,
+    pr_number: int = PR_NUMBER,
+    repo: str = REPO,
+    detail: dict | None = None,
+) -> None:
+    """One adjudicated window, written the way the adjudicator writes it —
+    identity columns populated and `detail` JSON-encoded into a TEXT column."""
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.outcomes.insert(),
+            {
+                "repo": repo,
+                "pr_number": pr_number,
+                "kind": kind,
+                "observed_at": NOW,
+                "source": "git-labels",
+                "github_repo_id": github_repo_id,
+                "installation_id": installation_id,
+                "window_days": window_days,
+                "merge_commit_sha": merge_sha,
+                "detail": json.dumps(detail) if detail is not None else None,
+            },
+        )
+
+
+def _seed_full_pr(
+    url: str,
+    *,
+    installation_id: int = INSTALLATION_ID,
+    github_repo_id: int = REPO_ID,
+    full_name: str = REPO,
+    pr_number: int = PR_NUMBER,
+    merged_at: datetime = NOW,
+    merge_sha: str = MERGE_SHA,
+    base_ref: str = "main",
+    diff_budget: int | None = 60_000,
+    read_order: str | None = "risk-first",
+    outcome_kind: str | None = None,
+) -> int:
+    """One merged PR end to end: installation, repo, reader verdict, merge.
+
+    The installation_repos row is not decoration — it is the ONLY thing that
+    makes the repo resolvable by name, on either token path.
+    """
+    _seed_installation(url, installation_id)
+    store.set_installation_repos(installation_id, [(github_repo_id, full_name)], replace=False)
+    verdict_id = _seed_verdict(
+        url,
+        tier="reader",
+        band="flagged",
+        scored_at=merged_at - timedelta(hours=1),
+        installation_id=installation_id,
+        github_repo_id=github_repo_id,
+        pr_number=pr_number,
+        repo=full_name,
+        diff_budget=diff_budget,
+        read_order=read_order,
+    )
+    _seed_outcome_job(
+        url,
+        merged_at=merged_at,
+        installation_id=installation_id,
+        github_repo_id=github_repo_id,
+        pr_number=pr_number,
+        merge_sha=merge_sha,
+        base_ref=base_ref,
+    )
+    if outcome_kind is not None:
+        _seed_outcome(
+            url,
+            kind=outcome_kind,
+            merge_sha=merge_sha,
+            installation_id=installation_id,
+            github_repo_id=github_repo_id,
+            pr_number=pr_number,
+            repo=full_name,
+        )
+    return verdict_id
+
+
+def _mint_for(
+    url: str,
+    installation_id: int,
+    *,
+    repo_ids: list[int] | None = None,
+    scopes: list[str] | None = None,
+) -> str:
+    """A real dispensed key. `scopes=None` keeps whatever mint_key grants."""
+    minted = tenancy.mint_key(
+        installation_id,
+        repo_selection="selected" if repo_ids else "all",
+        repo_ids=list(repo_ids or []),
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
+    )
+    if scopes is not None:
+        with create_engine(url).begin() as conn:
+            conn.execute(
+                store.installation_tokens.update()
+                .where(store.installation_tokens.c.id == minted.token_id)
+                .values(scopes=scopes)
+            )
+    return minted.token
+
+
+def _get(token: str, pr_number: int = PR_NUMBER, repo: str = REPO):
+    return TestClient(app).get(
+        f"/v1/prs/{pr_number}/receipt",
+        params={"repo": repo},
+        headers={"X-Doug-Token": token},
+    )
+
+
+def test_operator_token_reads_any_receipt(tmp_path, monkeypatch):
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    r = _get(OPERATOR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pr_number"] == PR_NUMBER
+    assert body["repo"] == REPO
+    assert body["latest_verdict"]["band"] == "flagged"
+    assert body["merges"][0]["merge_commit_sha"] == MERGE_SHA
+
+
+def test_tenant_key_reads_its_own_receipt(tmp_path, monkeypatch):
+    """The pass side, and it is load-bearing: every 404 below would also be
+    satisfied by a route that simply refused every dispensed key."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    r = _get(_mint_for(url, INSTALLATION_ID))
+    assert r.status_code == 200
+    assert r.json()["pr_number"] == PR_NUMBER
+
+
+def test_cross_tenant_token_gets_404_not_403(tmp_path, monkeypatch):
+    """The same code — and the same BODY — a nonexistent repo gets.
+
+    A 403 would confirm the repo exists. So would a distinct message, and so
+    would a 200 carrying an empty document. This is the one failure in the
+    receipts stack that cannot be walked back: it hands one customer a probe
+    for another customer's private repository names.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, installation_id=INSTALLATION_ID)
+    _seed_installation(url, _OTHER_INSTALLATION_ID)
+    store.set_installation_repos(
+        _OTHER_INSTALLATION_ID, [(_SIBLING_REPO_ID, "someone/else")], replace=False
+    )
+    other = _mint_for(url, _OTHER_INSTALLATION_ID)
+
+    refused = _get(other, repo=REPO)
+    ghost = _get(other, repo="nobody/nothing")
+    assert refused.status_code == 404
+    assert ghost.status_code == 404
+    assert refused.json() == ghost.json(), "the two answers must be indistinguishable"
+
+
+def test_selected_key_cannot_read_a_sibling_repos_receipt(tmp_path, monkeypatch):
+    """MT1 at the receipt surface: repo scope binds INSIDE one installation
+    too. Same installation, same tenant, a repo the key was not cut for."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    store.set_installation_repos(
+        INSTALLATION_ID, [(_SIBLING_REPO_ID, _SIBLING_REPO)], replace=False
+    )
+    token = _mint_for(url, INSTALLATION_ID, repo_ids=[_SIBLING_REPO_ID])
+    assert _get(token, repo=REPO).status_code == 404
+
+
+def test_the_tenant_path_never_resolves_through_repo_id_for(tmp_path, monkeypatch):
+    """repo_id_for searches every installation and intersects against nothing.
+
+    Reaching it with a dispensed key would resolve a name the caller may have
+    no relationship with at all — the 404s above would still be 404s, but the
+    IN-SCOPE answer would be served from ids nobody checked against the key.
+    Both branches are exercised so a route that only avoided it on the refusal
+    path is still caught.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    token = _mint_for(url, INSTALLATION_ID)
+
+    def _boom(full_name):
+        raise AssertionError(f"repo_id_for reached with a dispensed key: {full_name!r}")
+
+    monkeypatch.setattr(store, "repo_id_for", _boom)
+    assert _get(token, repo=REPO).status_code == 200
+    assert _get(token, repo="someone/else").status_code == 404
+
+
+def test_queue_only_key_is_refused(tmp_path, monkeypatch):
+    """The scopes column is the gate, not the fact that a key resolves. 401
+    rather than 403, matching /v1/queue: a scope it does not hold is not a
+    door it may knock on."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    token = _mint_for(url, INSTALLATION_ID, scopes=["queue:read"])
+    assert _get(token).status_code == 401
+
+
+def test_unresolvable_token_is_401(tmp_path, monkeypatch):
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    assert _get("doug_nope").status_code == 401
+
+
+def test_unknown_repo_is_404(tmp_path, monkeypatch):
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    assert _get(OPERATOR, repo="nobody/nothing").status_code == 404
+
+
+def test_unknown_pr_is_404(tmp_path, monkeypatch):
+    """The repo resolves and the caller is the operator — the PR simply is not
+    there. Same code a repo outside a caller's scope gets, on purpose."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    assert _get(OPERATOR, pr_number=999).status_code == 404
+
+
+def test_a_removed_repo_stops_resolving(tmp_path, monkeypatch):
+    """installation_repos.state is the authority, and the verdicts left behind
+    are not a second way in. Rows are never deleted, so without the state
+    filter the name would keep resolving forever after the uninstall."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url)
+    assert _get(OPERATOR).status_code == 200
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=True, state="removed")
+    assert _get(OPERATOR).status_code == 404
+
+
+def test_receipt_503s_without_the_operator_token_configured(tmp_path, monkeypatch):
+    """A missing operator secret is a broken deployment, not a bad request —
+    and tenant traffic must not paper over it (same posture as /v1/queue)."""
+    url = _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    _seed_full_pr(url)
+    assert _get("anything").status_code == 503
+
+
+def test_receipt_503s_without_a_ledger(monkeypatch):
+    """Checked BEFORE the token, deliberately: with no ledger tenancy.resolve
+    can read no key at all, so a dispensed token would come back 401 'bad
+    token' and tell a customer their key is broken when the deployment is."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", OPERATOR)
+    assert _get(OPERATOR).status_code == 503
+
+
+def test_read_configuration_absent_renders_as_not_recorded(tmp_path, monkeypatch):
+    """Never a number the ledger cannot support. Every verdict scored before
+    migration 008 has neither column, and `recorded` is the one boolean that
+    stops a consumer reading absence as a value."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, diff_budget=None, read_order=None)
+    read = _get(OPERATOR).json()["latest_verdict"]["read"]
+    assert read["diff_budget"] is None and read["read_order"] is None
+    assert read["recorded"] is False
+
+
+@pytest.mark.parametrize(
+    "diff_budget,read_order",
+    [(60_000, None), (None, "risk-first")],
+)
+def test_a_half_stamped_read_is_not_recorded(tmp_path, monkeypatch, diff_budget, read_order):
+    """EITHER column NULL means no configuration was recorded. A budget with
+    no ordering does not say which part of the diff the model was given, and
+    an ordering with no budget does not say how much of it — half a pair
+    describes no instrument, so it must not read as a described one."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, diff_budget=diff_budget, read_order=read_order)
+    read = _get(OPERATOR).json()["latest_verdict"]["read"]
+    assert read["recorded"] is False
+
+
+def test_a_fully_stamped_read_is_recorded(tmp_path, monkeypatch):
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, diff_budget=60_000, read_order="risk-first")
+    read = _get(OPERATOR).json()["latest_verdict"]["read"]
+    assert read == {"diff_budget": 60_000, "read_order": "risk-first", "recorded": True}
+
+
+def test_only_the_latest_merge_is_publication_governing(tmp_path, monkeypatch):
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, merged_at=NOW - timedelta(days=3), merge_sha=MERGE_SHA)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=NOW - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=NOW, merge_sha=SECOND_MERGE_SHA)
+    merges = _get(OPERATOR).json()["merges"]
+    assert [m["publication_governing"] for m in merges] == [False, True]
+
+
+def test_a_non_governing_merge_says_so_in_words(tmp_path, monkeypatch):
+    """A bare `false` is not enough, and the reason is what sits beside it.
+
+    The earlier merge carries its own real governing_verdict in the same
+    document — the advice that was standing when THAT commit landed. To a
+    person reading the receipt after an incident, that verdict looks exactly
+    like the one the published quarterly number used. It is not: §2.2
+    designates one governing verdict per PR, at the latest merge. The
+    sentence is what closes that gap; a flag alone leaves the reader to
+    infer it.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, merged_at=NOW - timedelta(days=3), merge_sha=MERGE_SHA)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=NOW - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=NOW, merge_sha=SECOND_MERGE_SHA)
+
+    earlier, latest = _get(OPERATOR).json()["merges"]
+    assert earlier["governing_verdict"] is not None, "the misreading needs something to misread"
+    assert earlier["publication_note"] == api.NOT_PUBLICATION_GOVERNING_NOTE
+    assert latest["publication_note"] == api.PUBLICATION_GOVERNING_NOTE
+    assert earlier["publication_note"] != latest["publication_note"]
+    # The flag and the words must not be able to drift apart.
+    assert "did not govern" in api.NOT_PUBLICATION_GOVERNING_NOTE.lower()
+
+
+def test_a_real_outcome_lands_under_its_own_merge_and_window(tmp_path, monkeypatch):
+    """receipt()'s outcomes join, exercised with rows actually in it.
+
+    Every other test in this file leaves `outcomes` empty, so that join has
+    only ever run its no-rows branch and the keys it joins on —
+    (merge_commit_sha, window_days) — were never proved by anything that
+    could fail. Two merges x two windows, three distinct adjudications and
+    one deliberately absent: a join that dropped either key would pool them,
+    and a receipt that attributed one merge's revert to another merge is a
+    false statement about which commit broke production.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    first, second = NOW - timedelta(days=3), NOW
+    _seed_full_pr(url, merged_at=first, merge_sha=MERGE_SHA)
+    _seed_outcome_job(url, merged_at=first, window_days=60, merge_sha=MERGE_SHA)
+    _seed_outcome_job(url, merged_at=second, window_days=14, merge_sha=SECOND_MERGE_SHA)
+    _seed_outcome_job(url, merged_at=second, window_days=60, merge_sha=SECOND_MERGE_SHA)
+    _seed_outcome(url, kind="clean", merge_sha=MERGE_SHA, window_days=14)
+    _seed_outcome(
+        url,
+        kind="revert",
+        merge_sha=MERGE_SHA,
+        window_days=60,
+        detail={"anchor_sha": MERGE_SHA, "revert_sha": "c" * 40},
+    )
+    _seed_outcome(url, kind="censored", merge_sha=SECOND_MERGE_SHA, window_days=14)
+    # (SECOND_MERGE_SHA, 60) is left unadjudicated on purpose: an open window
+    # must stay null rather than inherit a sibling's answer.
+
+    merges = _get(OPERATOR).json()["merges"]
+    got = {
+        (m["merge_commit_sha"], a["window_days"]): a["kind"]
+        for m in merges
+        for a in m["adjudication"]
+    }
+    assert got == {
+        (MERGE_SHA, 14): "clean",
+        (MERGE_SHA, 60): "revert",
+        (SECOND_MERGE_SHA, 14): "censored",
+        (SECOND_MERGE_SHA, 60): None,
+    }
+    revert = next(a for a in merges[0]["adjudication"] if a["window_days"] == 60)
+    # Decoded, not handed back as the JSON string the TEXT column holds.
+    assert revert["detail"]["revert_sha"] == "c" * 40
+    assert revert["observed_at"] is not None and revert["source"] == "git-labels"
+
+
+def test_censored_merge_never_reads_clean(tmp_path, monkeypatch):
+    """§6.2: censored is not survival — it is a window nobody could observe.
+
+    Rendering it as clean would publish evidence that was never gathered, on
+    the artifact a customer opens precisely because they do not trust the
+    summary number.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(url, base_ref="release/1.x", outcome_kind="censored")
+    merge = _get(OPERATOR).json()["merges"][0]
+    kinds = [a["kind"] for a in merge["adjudication"]]
+    assert "clean" not in kinds
+    assert "censored" in kinds
+    assert merge["base_ref"] == "release/1.x"
+
+
+def test_an_open_pr_serves_a_receipt_with_no_merges(tmp_path, monkeypatch):
+    """A PR Doug has scored but nobody has merged is a real receipt, not a
+    404: "what has Doug said about this" is answerable before the merge."""
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    _seed_verdict(url, tier="reader", band="flagged", scored_at=NOW)
+    body = _get(OPERATOR).json()
+    assert body["merges"] == []
+    assert body["latest_verdict"]["band"] == "flagged"
+
+
+def test_the_governing_verdict_is_not_silently_the_latest_one(tmp_path, monkeypatch):
+    """The gap the whole document exists to preserve: the PR was rescored
+    after it merged, so the newest thing Doug has said is NOT the advice the
+    merger acted on. Collapsing the two would erase the fact a reader of an
+    incident review came for."""
+    url = _http_db(tmp_path, monkeypatch)
+    governing = _seed_full_pr(url)
+    later = _seed_verdict(
+        url, tier="reader", band="cleared", scored_at=NOW + timedelta(hours=2)
+    )
+    body = _get(OPERATOR).json()
+    assert body["latest_verdict"]["verdict_id"] == later
+    assert body["merges"][0]["governing_verdict"]["verdict_id"] == governing
