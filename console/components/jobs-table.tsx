@@ -1,14 +1,56 @@
 import Link from "next/link";
 
 import type { JobItem } from "@/lib/api";
+import { ADJUDICATOR_GRACE_HOURS } from "@/lib/health";
+import { parseUtc } from "@/lib/runs";
+
+/** The store marks a row overdue with NO grace — `job_rows`'s predicate is
+ *  `status='pending' AND due_at < now`, the same query the health strip
+ *  applies `ADJUDICATOR_GRACE_HOURS` on top of before calling anything
+ *  "failing" (`lib/health.ts`). The API can't own that grace itself: the
+ *  adjudicator's schedule lives in Cloud Scheduler, not in Python. So every
+ *  row the adjudicator hasn't reached yet TODAY lands here labelled overdue
+ *  right alongside rows a pass has genuinely missed for days — and this page
+ *  rendered no timestamp at all, so an operator could not tell "came due
+ *  this morning, fine" from "three days past a pass that never ran".
+ *
+ *  The bare, alarming "clock overdue" wording (this strip's language for a
+ *  row past grace) is reserved for exactly that: past-grace rows only.
+ *  Within grace it reads the neutral "overdue 2h" — armed, not failing,
+ *  same as the strip beside it.
+ *
+ *  Ages go through `parseUtc`, never `Date.parse` / `new Date(iso)` — see
+ *  `lib/runs.ts:141` for why a second parser is the specific hazard, and
+ *  `health-strip.tsx`'s own `age()` for the twin of this ladder rendering
+ *  the strip's backward-looking cells. Not imported from there: that
+ *  helper is module-private and this page has no other need of it, so a
+ *  small local copy beats a new export whose only caller is this string.
+ *
+ *  `asOf` can be null: the health payload that carries it is fetched
+ *  independently of these job rows (see the `maxAttempts` comment below),
+ *  so one fetch can fail while the rows load fine. Degrade honestly rather
+ *  than fabricate an age or a grace verdict with no clock to check it
+ *  against — the same discipline the attempts-cap cell already applies. */
+function overdueReason(dueAt: string | null, asOf: string | null): string {
+  if (dueAt === null || asOf === null) return "overdue";
+  const ms = parseUtc(asOf).getTime() - parseUtc(dueAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "overdue";
+  const mins = Math.floor(ms / 60_000);
+  const hours = Math.floor(mins / 60);
+  const age = mins < 60 ? `${mins}m` : hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+  return ms > ADJUDICATOR_GRACE_HOURS * 3_600_000 ? `clock overdue ${age}` : `overdue ${age}`;
+}
 
 /** The reason a row is here, in words. Derived server-side against each
  *  lane's own lease and carried on the row, so this component never
- *  recomputes it — that is what keeps this page and the strip agreeing. */
-function reason(job: JobItem): string {
+ *  recomputes it — that is what keeps this page and the strip agreeing.
+ *  The one exception is `overdue`: the server's predicate deliberately has
+ *  no grace (see `overdueReason` above), so the wording — not the row's
+ *  membership in the list — is what this component still owns. */
+function reason(job: JobItem, asOf: string | null): string {
   if (job.status === "failed") return `failed after ${job.attempts}`;
   if (job.stalled) return "lease expired";
-  if (job.overdue) return "clock overdue";
+  if (job.overdue) return overdueReason(job.due_at, asOf);
   if (job.retrying) return `retrying, attempt ${job.attempts}`;
   if (job.status === "done" && job.verdict_id === null) return "skipped, no verdict";
   return job.status;
@@ -20,6 +62,7 @@ export function JobsTable({
   atCap,
   limit,
   maxAttempts,
+  asOf,
 }: {
   title: string;
   jobs: JobItem[];
@@ -33,6 +76,13 @@ export function JobsTable({
   // render as a real-looking "2/0" cap; see the attempts cell below for
   // how null renders instead.
   maxAttempts: number | null;
+  // Same independent-fetch caveat as maxAttempts, and the same reason: the
+  // health payload that carries the server's clock can fail on its own.
+  // Threaded through to overdueReason so this table's "clock overdue"
+  // grace boundary can never drift from the strip's — see that function's
+  // own comment for why null degrades to neutral wording rather than a
+  // fabricated age.
+  asOf: string | null;
 }) {
   return (
     <section className="mt-8">
@@ -82,7 +132,7 @@ export function JobsTable({
                     </Link>
                   ) : null}
                 </td>
-                <td className="py-2 pr-3">{reason(job)}</td>
+                <td className="py-2 pr-3">{reason(job, asOf)}</td>
                 <td className="py-2 pr-3 tabular-nums">
                   {maxAttempts === null ? (
                     // Never a fraction over an absent denominator — "2/0" and

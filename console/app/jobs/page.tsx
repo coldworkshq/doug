@@ -67,6 +67,12 @@ export default async function JobsPage({
     ? { review: null, outcome: null }
     : { review: health.review.max_attempts, outcome: health.outcome.max_attempts };
 
+  // Same independent-fetch caveat as caps above, threaded to JobsTable so
+  // its overdue wording is measured against the server's clock, never the
+  // browser's — and so it can apply the same ADJUDICATOR_GRACE_HOURS
+  // boundary the health strip beside it already applies to the same rows.
+  const asOf = isError(health) ? null : health.as_of;
+
   return (
     <Shell scope={scope} active="jobs">
       <div className="mono mt-6 flex items-center gap-3 text-xs">
@@ -111,6 +117,7 @@ export default async function JobsPage({
             atCap={result.items.length >= result.limit}
             limit={result.limit}
             maxAttempts={cap}
+            asOf={asOf}
           />
         ),
       )}

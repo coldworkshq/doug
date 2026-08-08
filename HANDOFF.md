@@ -1,19 +1,28 @@
 # HANDOFF — doug
 
-State:    spec — console Phase 2a (health strip + failure surface) design is
-          written and committed. Not yet planned, no code.
-          Worktree `.claude/worktrees/console-next`, branch
-          `worktree-console-next`, based on main `91b5e8b` (= origin/main,
-          #69). No open PRs at branch time. Console baseline verified green:
-          58/58 `node --test` in console/.
+State:    console Phase 2a (health strip + failure surface) is BUILT. All
+          seven plan tasks are complete, plus a whole-branch review fix wave
+          (three Important + several Minor findings the cross-task view
+          surfaced, applied together — see Decisions below). Worktree
+          `.claude/worktrees/console-next`, branch `worktree-console-next`,
+          16 commits over main `91b5e8b` (= origin/main, #69). No open PR
+          yet.
+          Ships two endpoints (`GET /v1/health`, `GET /v1/jobs`), the health
+          strip (`components/health-strip.tsx` + `lib/health.ts`'s pure
+          classifier) wired into `shell.tsx` on every page, and the `/jobs`
+          failure list (`app/jobs/page.tsx` + `components/jobs-table.tsx`),
+          scoped like Runs with an unhealthy/all toggle.
+          Verified green: api `uv run pytest` 853 passing, `ruff check .`
+          clean; console `npm test` 70 passing (69 plus one test added in
+          the fix wave, pinning `getJobs`'s `installationId=0` guard),
+          `npm run lint` clean, `npm run build` green.
           THIS FILE COVERS THE CONSOLE LANE ONLY. The authoritative M3
           tracker is repo/HANDOFF.md + docs/design/outcome-loop/ROADMAP.md.
           M3 Task 7 (production 60-day catch-up) is untouched by this lane
           and remains the critical path there.
 
-Next:     Invoke writing-plans against
-          docs/superpowers/specs/2026-08-07-console-health-failure-surface-design.md
-          and produce the TDD task plan. Andrew is reviewing the spec first.
+Next:     Open the PR for `worktree-console-next` against main. Nothing else
+          is planned or blocked on this lane.
 
 Blockers: none.
 
