@@ -1977,19 +1977,33 @@ def repo_id_for(full_name: str) -> tuple[int, int] | None:
     installation_repos row resolves to nothing here rather than to whatever
     those verdicts happen to say.
 
-    One full_name can be active under two installations: a transfer
-    mid-flight, or a repositories_removed delivery that never arrived leaving
-    the previous owner's row stale-active. No correct answer is available
-    from this table alone, so the newest registration wins and the choice is
-    at least deterministic rather than whichever row the planner returned
-    first — a receipt that changes identity between two identical requests
-    would be worthless as evidence.
+    One full_name can carry more than one active row: a transfer mid-flight,
+    a repositories_removed delivery that never arrived leaving the previous
+    owner's row stale-active, or one installation holding two rows for a repo
+    deleted and recreated under the same name (uq_installation_repo is keyed
+    on the github_repo_id, not the name). No correct answer is available from
+    this table alone, so the newest registration wins — deterministic rather
+    than whichever row the planner returned first, because a receipt that
+    changes identity between two identical requests is worthless as evidence.
+
+    ANSWERING IS NOT ACCEPTING. That state is itself a ledger bug, so it is
+    logged every time it is resolved. Same posture as reconcile's open-PR cap
+    (worker.py): do the bounded thing, and say that you did — a fallback
+    nobody can see is indistinguishable from correct behaviour, and this one
+    silently decides which installation an operator's receipt is served from.
+    Loud here and not merely at startup because the drift checks in
+    _startup_reconcile cannot see this shape: both rows have an installation
+    and both have verdicts, so neither counter fires.
     """
     engine = _get_engine()
     if engine is None:
         return None
     with engine.connect() as conn:
-        row = conn.execute(
+        # Not .limit(1): the extra rows are what the log line below is made
+        # of, and a query that could not see them could not report them.
+        # Bounded by how many installations registered this exact name, which
+        # is 1 in every healthy ledger.
+        rows = conn.execute(
             select(
                 installation_repos.c.installation_id,
                 installation_repos.c.github_repo_id,
@@ -1999,9 +2013,25 @@ def repo_id_for(full_name: str) -> tuple[int, int] | None:
                 installation_repos.c.state == "active",
             )
             .order_by(installation_repos.c.updated_at.desc(), installation_repos.c.id.desc())
-            .limit(1)
-        ).first()
-    return (int(row.installation_id), int(row.github_repo_id)) if row is not None else None
+        ).all()
+    if not rows:
+        return None
+    chosen = (int(rows[0].installation_id), int(rows[0].github_repo_id))
+    if len(rows) > 1:
+        competing = ", ".join(
+            f"installation {int(r.installation_id)} repo {int(r.github_repo_id)}" for r in rows
+        )
+        # !r on the name: it arrives as a caller-supplied query parameter on a
+        # public endpoint, and a bare newline in it would otherwise forge a
+        # second log line (same guard _record_external_review uses).
+        print(
+            f"doug: DRIFT — {full_name!r} has {len(rows)} active installation_repos rows "
+            f"({competing}); resolving to installation {chosen[0]} repo {chosen[1]}, the most "
+            "recently registered. All but one of these rows is stale; redeliver the "
+            "installation_repositories webhook (ROADMAP MT4-class).",
+            file=sys.stderr,
+        )
+    return chosen
 
 
 def count_installations_referenced_by_verdicts() -> int:

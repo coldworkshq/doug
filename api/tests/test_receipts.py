@@ -778,9 +778,50 @@ def test_repo_id_for_breaks_a_name_collision_deterministically(tmp_path, monkeyp
     """
     _db(tmp_path, monkeypatch)
     store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
-    store.set_installation_repos(999, [(_SIBLING_REPO_ID, REPO)], replace=False)
-    assert store.repo_id_for(REPO) == (999, _SIBLING_REPO_ID)
-    assert [store.repo_id_for(REPO) for _ in range(5)].count((999, _SIBLING_REPO_ID)) == 5
+    store.set_installation_repos(_OTHER_INSTALLATION_ID, [(_SIBLING_REPO_ID, REPO)], replace=False)
+    newest = (_OTHER_INSTALLATION_ID, _SIBLING_REPO_ID)
+    assert store.repo_id_for(REPO) == newest
+    assert [store.repo_id_for(REPO) for _ in range(5)].count(newest) == 5
+
+
+def test_repo_id_for_shouts_about_a_name_collision(tmp_path, monkeypatch, capsys):
+    """Answering is not the same as accepting. Two active registrations for
+    one name is itself a ledger bug — a transfer that half-landed, or a
+    repositories_removed delivery that never arrived — and the operator is
+    exactly who should learn about it.
+
+    Newest-wins keeps the endpoint answering rather than 500ing on an anomaly
+    it did not cause; the log is what stops that anomaly being invisible. Same
+    posture as reconcile's open-PR cap (worker.py:454), which does the bounded
+    thing AND says it did.
+    """
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    store.set_installation_repos(_OTHER_INSTALLATION_ID, [(_SIBLING_REPO_ID, REPO)], replace=False)
+    capsys.readouterr()  # discard whatever the seeding wrote
+    assert store.repo_id_for(REPO) == (_OTHER_INSTALLATION_ID, _SIBLING_REPO_ID)
+
+    err = capsys.readouterr().err
+    assert "DRIFT" in err
+    assert REPO in err
+    # BOTH sides named, and the ids too: the operator's next move is to go
+    # look at a specific installation_repos row, and a line that says only
+    # "there was a collision" does not tell them which one.
+    assert str(INSTALLATION_ID) in err and str(_OTHER_INSTALLATION_ID) in err
+    assert str(REPO_ID) in err and str(_SIBLING_REPO_ID) in err
+
+
+def test_repo_id_for_is_quiet_on_the_ordinary_case(tmp_path, monkeypatch, capsys):
+    """A line that fires on the normal case is one an operator learns to
+    scroll past — which costs exactly the signal the line exists to carry.
+    Same reason REVIEW_STATES_WITHOUT_A_STANCE is written down and NOT
+    logged (api.py): only the thing nobody chose gets to be loud.
+    """
+    _db(tmp_path, monkeypatch)
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, REPO)], replace=False)
+    capsys.readouterr()
+    assert store.repo_id_for(REPO) == (INSTALLATION_ID, REPO_ID)
+    assert capsys.readouterr().err == ""
 
 
 # --- GET /v1/prs/{n}/receipt — the endpoint ---------------------------------
