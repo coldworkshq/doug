@@ -5,6 +5,8 @@ import {
   ADJUDICATOR_GRACE_HOURS,
   PENDING_THRESHOLD_MINUTES,
   classify,
+  overdueReason,
+  pendingReason,
 } from "./health.ts";
 
 const AS_OF = "2026-08-07T12:00:00Z";
@@ -179,6 +181,70 @@ test("a zoneless lane timestamp is treated as UTC, matching parseUtc's conventio
       },
     });
     assert.equal(classify(zoneless).level, "degraded");
+  } finally {
+    process.env.TZ = originalTz;
+  }
+});
+
+// Row labels. These live here, beside the two thresholds they compare
+// against, rather than in jobs-table.tsx — that component has no test
+// infrastructure, and the defect they close is precisely the /jobs table and
+// the health strip disagreeing about the same row. Co-locating each labeller
+// with its threshold is what stops the two drifting apart again.
+
+test("a freshly enqueued job is not labelled as undrained", () => {
+  // store.job_rows' unhealthy predicate has no threshold — it returns every
+  // pending row, including one enqueued a second ago. The strip waits
+  // PENDING_THRESHOLD_MINUTES before calling that degraded. Without this
+  // split the table shouts about a job the strip calls clear.
+  const at = new Date(Date.parse(AS_OF) - (PENDING_THRESHOLD_MINUTES - 1) * 60_000).toISOString();
+  assert.equal(pendingReason(at, AS_OF), `pending ${PENDING_THRESHOLD_MINUTES - 1}m`);
+});
+
+test("a job pending past the threshold says the drain did not take it", () => {
+  const at = new Date(Date.parse(AS_OF) - (PENDING_THRESHOLD_MINUTES + 1) * 60_000).toISOString();
+  assert.equal(pendingReason(at, AS_OF), `not drained ${PENDING_THRESHOLD_MINUTES + 1}m`);
+});
+
+test("the pending threshold bites in both directions", () => {
+  // A label whose wording never changes is decoration. Same row, two clocks.
+  const at = new Date(Date.parse(AS_OF) - (PENDING_THRESHOLD_MINUTES - 1) * 60_000).toISOString();
+  const later = new Date(Date.parse(AS_OF) + 2 * 60_000).toISOString();
+  assert.ok(pendingReason(at, AS_OF).startsWith("pending"));
+  assert.ok(pendingReason(at, later).startsWith("not drained"));
+});
+
+test("an overdue clock inside the grace reads neutral, past it reads alarming", () => {
+  // The same boundary the strip applies, so the two cannot disagree.
+  const inside = new Date(
+    Date.parse(AS_OF) - (ADJUDICATOR_GRACE_HOURS - 1) * 3_600_000,
+  ).toISOString();
+  const outside = new Date(
+    Date.parse(AS_OF) - (ADJUDICATOR_GRACE_HOURS + 1) * 3_600_000,
+  ).toISOString();
+  assert.ok(overdueReason(inside, AS_OF).startsWith("overdue"));
+  assert.ok(overdueReason(outside, AS_OF).startsWith("clock overdue"));
+});
+
+test("no clock means no age and no verdict, never a fabricated one", () => {
+  // asOf comes from the health payload, fetched independently of the rows,
+  // so it can be absent while the rows load fine. Same discipline as the
+  // attempts cap: degrade to the bare word rather than invent a duration.
+  assert.equal(pendingReason("2026-08-07T11:00:00Z", null), "pending");
+  assert.equal(overdueReason("2026-08-07T11:00:00Z", null), "overdue");
+  assert.equal(pendingReason(null, AS_OF), "pending");
+  assert.equal(overdueReason(null, AS_OF), "overdue");
+});
+
+test("row labels parse zoneless timestamps as UTC, like everything else here", () => {
+  // job_rows' enqueued_at and due_at reach the client the same way the
+  // health payload's lane timestamps do. A second parser here would let a
+  // row's label disagree with the strip's verdict about the same instant.
+  const originalTz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles"; // UTC-7 in August (PDT)
+  try {
+    const zoneless = "2026-08-07T11:40:00"; // 20 minutes before AS_OF
+    assert.equal(pendingReason(zoneless, AS_OF), "not drained 20m");
   } finally {
     process.env.TZ = originalTz;
   }

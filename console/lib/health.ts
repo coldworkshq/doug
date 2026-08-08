@@ -69,6 +69,60 @@ export const PENDING_THRESHOLD_MINUTES = 15;
  *  quietly wrong. */
 export const ADJUDICATOR_GRACE_HOURS = 26;
 
+/** How long ago `at` was, against the server's `asOf`. Null when either is
+ *  missing, or when `at` is in the future — a backward-looking label with a
+ *  forward timestamp is nonsense and must produce no duration rather than a
+ *  negative one. */
+function elapsedMs(at: string | null, asOf: string | null): number | null {
+  if (at === null || asOf === null) return null;
+  const ms = parseUtc(asOf).getTime() - parseUtc(at).getTime();
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+function ladder(ms: number): string {
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
+/** How a `/jobs` row explains itself, for the two states where the server's
+ *  row membership and the strip's verdict deliberately disagree.
+ *
+ *  `store.job_rows` applies no threshold and no grace: its unhealthy
+ *  predicate returns every pending review job and every past-due outcome
+ *  clock. It cannot do otherwise — both thresholds describe things the
+ *  ledger does not store (how often the drain is kicked; a Cloud Scheduler
+ *  cron), which is why they live here. So a job enqueued one second ago and
+ *  a clock the adjudicator simply hasn't reached today both land in the
+ *  "unhealthy only" list while the strip beside them reads clear.
+ *
+ *  That is not a row-membership bug — those rows genuinely belong on a page
+ *  whose question is "what is Doug waiting on". It is a *wording* problem,
+ *  and the wording is what these own: the alarming phrasing is reserved for
+ *  rows past the same threshold the strip grades against, so the two
+ *  surfaces can never contradict each other about the same row.
+ *
+ *  Both degrade to the bare word when there is no clock to check against —
+ *  `asOf` rides the health payload, which is fetched independently of the
+ *  rows and can fail on its own. Same discipline as the attempts cap:
+ *  say less, never invent a duration. */
+export function pendingReason(enqueuedAt: string | null, asOf: string | null): string {
+  const ms = elapsedMs(enqueuedAt, asOf);
+  if (ms === null) return "pending";
+  return ms > PENDING_THRESHOLD_MINUTES * 60_000
+    ? `not drained ${ladder(ms)}`
+    : `pending ${ladder(ms)}`;
+}
+
+export function overdueReason(dueAt: string | null, asOf: string | null): string {
+  const ms = elapsedMs(dueAt, asOf);
+  if (ms === null) return "overdue";
+  return ms > ADJUDICATOR_GRACE_HOURS * 3_600_000
+    ? `clock overdue ${ladder(ms)}`
+    : `overdue ${ladder(ms)}`;
+}
+
 function isError(v: unknown): v is { error: string } {
   return typeof v === "object" && v !== null && "error" in v;
 }
