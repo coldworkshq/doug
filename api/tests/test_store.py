@@ -1,3 +1,4 @@
+import datetime as _dt
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -5,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 
-from doug import reader, store
+from doug import ingest, outcome_queue, reader, store
 from doug.api import app
 from doug.models import Band, PRMetadata, Reason, Verdict
 
@@ -2037,3 +2038,156 @@ def test_missing_from_ledger_treats_a_removed_row_as_covered(tmp_path, monkeypat
     )
     _scored("drewjst/a", 1, 150424894, github_repo_id=111)
     assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+# --- store.job_health — the console strip's only data source. Every test here
+# pins a way the aggregate could claim something the ledger does not say.
+
+
+def _health(url, **kw):
+    """Call job_health with the real lane constants, the way api.py does."""
+    return store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+        **kw,
+    )
+
+
+def test_job_health_excludes_superseded_from_every_count(tmp_path, monkeypatch):
+    """A superseded job is neither done nor failed and nothing went wrong —
+    ingest.supersede() lands it revivable on purpose. Counting it is the
+    single easiest way to make the strip cry wolf, so it must appear in no
+    count at all."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    health = _health(None)
+
+    assert health["review"]["pending"] == 0
+    assert health["review"]["running"] == 0
+    assert health["review"]["failed"] == 0
+    assert health["review"]["retrying"] == 0
+
+
+def test_job_health_does_not_report_a_retried_job_as_freshly_pending(
+    tmp_path, monkeypatch
+):
+    """ingest.fail() below the cap sets enqueued_at = now, deliberately, so
+    the retry goes to the BACK of the queue instead of burning every attempt
+    in one pass. A naive MIN(enqueued_at) over all pending rows therefore
+    reports a twice-failed job as brand new — blind to exactly the jobs most
+    likely to be in trouble. oldest_pending_at must see attempts = 0 only."""
+    _db(tmp_path, monkeypatch)
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
+
+    health = _health(None)
+
+    # It is pending, and it is retrying, and those are different facts.
+    assert health["review"]["pending"] == 1
+    assert health["review"]["retrying"] == 1
+    # No fresh-pending row exists, so there is no fresh-pending age to report.
+    assert health["review"]["oldest_pending_at"] is None
+    # The retry has its own age, which means "when the last attempt gave up".
+    assert health["review"]["oldest_retry_at"] is not None
+
+
+def test_job_health_measures_each_lane_against_its_own_lease(
+    tmp_path, monkeypatch
+):
+    """ingest's lease is 900s; outcome_queue's is 7200s. A claim 20 minutes
+    old is stalled in the review lane and perfectly healthy in the outcome
+    lane. One shared lease constant would alarm on the healthy one."""
+    _db(tmp_path, monkeypatch)
+    twenty_min_ago = _dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=20)
+
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    _force_started_at(store.review_jobs, claimed["id"], twenty_min_ago)
+
+    outcome_id = store.enqueue_outcome_jobs(
+        99, 1, 7, "b" * 40, twenty_min_ago, "main", window_days=(14,)
+    )[14]
+    _force_running(store.outcome_jobs, outcome_id, twenty_min_ago)
+
+    health = _health(None)
+
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["stalled"] == 0
+
+
+def test_job_health_reports_the_lane_constants_it_measured_with(
+    tmp_path, monkeypatch
+):
+    """The console renders 'attempts 4/10' and computes nothing against a
+    lease it holds locally. If a constant moves, the UI must follow rather
+    than silently disagree with the sweep that enforces it."""
+    _db(tmp_path, monkeypatch)
+
+    health = _health(None)
+
+    assert health["review"]["stall_lease_seconds"] == ingest.STALL_LEASE_SECONDS
+    assert health["review"]["max_attempts"] == ingest.MAX_ATTEMPTS
+    assert health["outcome"]["stall_lease_seconds"] == outcome_queue.STALL_LEASE_SECONDS
+    assert health["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
+
+
+def test_job_health_separates_overdue_from_next_due(tmp_path, monkeypatch):
+    """next_due_at is the earliest clock still in the future;
+    oldest_overdue_due_at is the earliest already past. Blending them would
+    make 'the next clock' read as an alarm or an alarm read as a schedule."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    # Merged 20 days ago: its 14-day clock is 6 days overdue, its 60-day
+    # clock is still 40 days out.
+    store.enqueue_outcome_jobs(
+        99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main"
+    )
+
+    health = _health(None)
+
+    assert health["outcome"]["overdue"] == 1
+    assert health["outcome"]["oldest_overdue_due_at"] is not None
+    assert health["outcome"]["next_due_at"] is not None
+    assert health["outcome"]["next_due_at"] > health["outcome"]["oldest_overdue_due_at"]
+
+
+def test_job_health_returns_none_without_a_ledger(tmp_path, monkeypatch):
+    """None, never a dict of zeros. A zeroed health payload would render as
+    'nothing is wrong' on a deployment that cannot answer the question.
+
+    store._get_engine() re-reads DATABASE_URL on every call and returns None
+    when it is unset, so unsetting the variable is the whole fixture — there
+    is no engine-reset helper in this codebase and none is needed."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _health(None) is None
+
+
+def _force_started_at(table, job_id, when):
+    """Age a claim's lease without waiting for one. reclaim_stalled compares
+    started_at to the DB clock, so this is the only way to test the stalled
+    branch in under 900 seconds."""
+    from sqlalchemy import update as _update
+
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            _update(table).where(table.c.id == job_id).values(started_at=when)
+        )
+
+
+def _force_running(table, job_id, when):
+    from sqlalchemy import update as _update
+
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            _update(table)
+            .where(table.c.id == job_id)
+            .values(status="running", started_at=when)
+        )

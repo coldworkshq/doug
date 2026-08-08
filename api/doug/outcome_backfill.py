@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import (
@@ -27,6 +27,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
 from . import store
+from .store import _as_utc, _db_now
 
 
 @dataclass(frozen=True)
@@ -107,21 +108,6 @@ _MANIFEST_COLUMNS = (
     *_OUTCOME_IDENTITY,
 )
 _MANIFEST_ROW_KEYS = tuple(column.name for column in _MANIFEST_COLUMNS)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _db_now(conn: Connection) -> datetime:
-    if conn.dialect.name == "sqlite":
-        return datetime.now(UTC)
-    value = conn.execute(select(func.clock_timestamp())).scalar_one()
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    return _as_utc(value)
 
 
 def _structural_population():

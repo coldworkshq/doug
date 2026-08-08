@@ -22,10 +22,11 @@ paying for the same read twice.
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import store
+from .store import _db_now
 
 # The two states a collision may revive. Both mean "this SHA was queued and
 # never reviewed"; every other state means the work is queued, in flight, or
@@ -67,6 +68,12 @@ FAILED_REVIVE_COOLOFF_SECONDS = 3600
 # forever.
 STALL_LEASE_SECONDS = 900
 
+# The review lane's attempt cap. A module constant rather than only fail()'s
+# default because the health endpoint reports it to the console, which must
+# render "attempts 2/3" against the value the queue actually enforces —
+# outcome_queue.MAX_ATTEMPTS is the same contract for the other lane.
+MAX_ATTEMPTS = 3
+
 # Postgres names the violated constraint in the error text; sqlite instead
 # lists the table and columns. Checking for either identifies exactly the
 # review_jobs unique violation this path exists to handle — anything else
@@ -85,40 +92,6 @@ def _engine():
     if engine is None:
         raise RuntimeError("review_jobs requires DATABASE_URL")
     return engine
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Normalise a DB timestamp to aware UTC.
-
-    sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
-    Claim holders compare the started_at they were handed against the row,
-    so both sides of that equality have to share a timezone convention.
-    """
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _db_now(conn) -> datetime:
-    """The database's clock, not the caller's wall clock.
-
-    Claim started_at and reclaim cutoffs must share one clock across Cloud
-    Run instances; comparing one instance's datetime.now() to another's
-    written started_at is how a skewed host reclaims a live worker.
-
-    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision —
-    wall clock keeps microsecond resolution there. Postgres uses
-    clock_timestamp() (statement time), not now()/transaction_timestamp(),
-    so two claims in quick succession cannot collapse onto one tx start time.
-    Claim-holder fencing itself uses claim_generation (integer), not this
-    timestamp; started_at is only the lease clock for reclaim_stalled.
-    """
-    if conn.dialect.name == "sqlite":
-        return datetime.now(UTC)
-    value = conn.execute(select(func.clock_timestamp())).scalar_one()
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    return _as_utc(value)
 
 
 def _job_filter(installation_id: int, github_repo_id: int, pr_number: int):
@@ -535,7 +508,9 @@ def supersede(job_id: int, *, claim_generation: int) -> bool:
         return applied is not None
 
 
-def fail(job_id: int, error: str, *, claim_generation: int, max_attempts: int = 3) -> bool:
+def fail(
+    job_id: int, error: str, *, claim_generation: int, max_attempts: int = MAX_ATTEMPTS
+) -> bool:
     """Record a failed attempt: back to pending below the cap, failed at it.
 
     started_at is cleared on the retry so a re-pended row is not reported as
