@@ -612,3 +612,99 @@ def test_a_twice_merged_pr_resolves_per_merge_identity(tmp_path, monkeypatch):
         store.governing_verdict(INSTALLATION_ID, REPO_ID, PR_NUMBER, first_merge)["id"]
         == before_first
     )
+
+
+# --- receipt() — the full document assembled on top of governing_verdict ----
+
+
+def test_receipt_returns_none_without_a_database(monkeypatch):
+    """Same no-op posture as every other helper in store.py — no DATABASE_URL
+    means no ledger, and a receipt asserts nothing rather than crashing."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER) is None
+
+
+def test_unknown_pr_returns_none(tmp_path, monkeypatch):
+    """None means 'nothing at all exists for this PR' — not 'PR has no
+    merges yet' (that case still returns a document; see the open-PR test
+    below) and not an empty dict a caller could mistake for a real receipt."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    assert store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER) is None
+
+
+def test_open_pr_has_no_merges_and_no_governing_verdict(tmp_path, monkeypatch):
+    """§2.1's rule needs a merged_at that does not exist yet."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    latest = _seed_verdict(
+        url, tier="reader", band="flagged", scored_at=datetime(2026, 8, 5, tzinfo=UTC)
+    )
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert got["merges"] == []
+    assert got["latest_verdict"]["id"] == latest
+
+
+def test_receipt_lists_every_merge_identity(tmp_path, monkeypatch):
+    """uq_outcome_job includes merge_commit_sha, so one PR can merge twice.
+
+    §2.2 counts with count(DISTINCT pr_number) for exactly this reason. A
+    receipt that silently picked one merge would hide the other.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    first = datetime(2026, 8, 1, tzinfo=UTC)
+    second = datetime(2026, 8, 4, tzinfo=UTC)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=first - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=first, window_days=14, merge_sha="aaa")
+    _seed_outcome_job(url, merged_at=second, window_days=14, merge_sha="bbb")
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert [m["merge_commit_sha"] for m in got["merges"]] == ["aaa", "bbb"]
+
+
+def test_merged_pr_without_a_reader_verdict_reports_null_governing(tmp_path, monkeypatch):
+    """Never substituted with the latest verdict."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    merged_at = datetime(2026, 8, 5, tzinfo=UTC)
+    _seed_verdict(
+        url, tier="deterministic", band="flagged", scored_at=merged_at - timedelta(hours=1)
+    )
+    _seed_outcome_job(url, merged_at=merged_at, window_days=14)
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert got["merges"][0]["governing_verdict"] is None
+    assert got["latest_verdict"] is not None
+
+
+def test_both_windows_appear_under_their_merge(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    merged_at = datetime(2026, 8, 5, tzinfo=UTC)
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=merged_at - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=merged_at, window_days=14, merge_sha="aaa")
+    _seed_outcome_job(url, merged_at=merged_at, window_days=60, merge_sha="aaa")
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert len(got["merges"]) == 1
+    assert sorted(a["window_days"] for a in got["merges"][0]["adjudication"]) == [14, 60]
+
+
+def test_exactly_one_merge_is_publication_governing(tmp_path, monkeypatch):
+    """§2.2 designates ONE governing verdict per PR, at the latest merge.
+
+    The receipt shows every merge, so without this flag an earlier merge's
+    standing verdict reads as though it governed publication. It did not.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    first_merge = NOW - timedelta(days=3)
+    second_merge = NOW
+    _seed_verdict(url, tier="reader", band="flagged", scored_at=first_merge - timedelta(hours=1))
+    _seed_verdict(url, tier="reader", band="cleared", scored_at=second_merge - timedelta(hours=1))
+    _seed_outcome_job(url, merged_at=first_merge, merge_sha="a" * 40)
+    _seed_outcome_job(url, merged_at=second_merge, merge_sha="b" * 40)
+
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    flags = [m["publication_governing"] for m in got["merges"]]
+    assert flags.count(True) == 1
+    latest = max(got["merges"], key=lambda m: m["merged_at"])
+    assert latest["publication_governing"] is True

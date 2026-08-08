@@ -18,6 +18,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 """
 
+import json
 import os
 import sys
 import threading
@@ -1394,6 +1395,156 @@ def governing_verdict(
         # `rn` is the ranking scaffold, not a fact about the verdict; dropped
         # so it cannot travel into a customer-facing receipt as if it were one.
         return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
+
+
+def _obj_or_none(value: str | None) -> object | None:
+    """Decode one JSON-as-TEXT column, or None when the row carries none.
+
+    outcomes.detail is declared Text, not the JSON column type this module
+    uses elsewhere (see that column's declaration comment — deliberate, for
+    sqlite/postgres parity on that column specifically), so SQLAlchemy hands
+    back a raw string here instead of an already-parsed value. This is the
+    one place that string becomes the object a caller can actually use.
+    """
+    return json.loads(value) if value is not None else None
+
+
+def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict | None:
+    """Everything one PR's receipt states, assembled from the ledger.
+
+    `merges` is a LIST, not a single record, because `uq_outcome_job`
+    includes `merge_commit_sha`: the schema itself permits one PR to carry
+    more than one merge identity (a revert-and-reland is the ordinary case),
+    which is exactly why §2.2 counts with `count(DISTINCT j.pr_number)`
+    rather than assuming one row per PR. Each merge's adjudication windows
+    nest under it, so the document always names which merge it is talking
+    about rather than pooling two merges' windows into one ambiguous list.
+
+    `latest_verdict` and `governing_verdict` are two separate fields on each
+    merge, not one field with an "is_latest" flag, because they answer
+    different questions. `latest_verdict` is "what is the newest thing Doug
+    has said about this PR" — it exists even with zero merges, for a PR still
+    open. `governing_verdict` is per merge: "what was standing when a human
+    chose to merge THIS commit" (see `governing_verdict`'s own docstring for
+    why that answer can differ merge to merge). When the two differ, work
+    landed — or the PR was rescored — after the advice a merge actually
+    happened on, and that gap is precisely what a reader of an incident
+    review needs to see; collapsing it into one field would erase the fact
+    this document exists to preserve.
+
+    `publication_governing` is set on exactly one merge: the one with the
+    greatest `merged_at`. Pre-registration §2.2's ranking window is
+    `PARTITION BY (installation_id, github_repo_id, pr_number)` with NO job
+    term, so the published quarterly number designates exactly one governing
+    verdict per PR — at that PR's latest merge — not one per merge. A receipt
+    with no such marker would let an earlier merge's own `governing_verdict`
+    read as though it were the number that got published; it was not. (This
+    field was added after the original task spec was written, once that
+    mismatch between per-merge and per-PR resolution was found — see this
+    task's brief for the history.)
+
+    Returns None only when nothing at all exists for this PR — no verdict
+    ever scored and no merge ever recorded — so a caller can tell "genuinely
+    nothing happened here" apart from "happened, but Doug had nothing to say"
+    (a real receipt with `latest_verdict: null` and/or an empty `merges`).
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.begin() as conn:
+        latest = (
+            conn.execute(
+                select(verdicts)
+                .where(
+                    verdicts.c.installation_id == installation_id,
+                    verdicts.c.github_repo_id == github_repo_id,
+                    verdicts.c.pr_number == pr_number,
+                )
+                .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        jobs = (
+            conn.execute(
+                select(outcome_jobs)
+                .where(
+                    outcome_jobs.c.installation_id == installation_id,
+                    outcome_jobs.c.github_repo_id == github_repo_id,
+                    outcome_jobs.c.pr_number == pr_number,
+                )
+                # Ascending merged_at groups each merge's job rows together in
+                # merge order, which is what lets the loop below build `merges`
+                # in merge order with a single pass and no separate sort step.
+                .order_by(outcome_jobs.c.merged_at, outcome_jobs.c.window_days)
+            )
+            .mappings()
+            .all()
+        )
+        if latest is None and not jobs:
+            return None
+
+        outcome_rows = (
+            conn.execute(
+                select(outcomes).where(
+                    outcomes.c.installation_id == installation_id,
+                    outcomes.c.github_repo_id == github_repo_id,
+                    outcomes.c.pr_number == pr_number,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        latest_verdict = (
+            dict(latest) | _verdict_bundle(conn, latest) if latest is not None else None
+        )
+
+        by_outcome = {(o["merge_commit_sha"], o["window_days"]): o for o in outcome_rows}
+        merges: list[dict] = []
+        by_sha: dict[str, dict] = {}
+        for job in jobs:
+            sha = job["merge_commit_sha"]
+            merge = by_sha.get(sha)
+            if merge is None:
+                merge = {
+                    "merge_commit_sha": sha,
+                    "merged_at": job["merged_at"],
+                    "base_ref": job["base_ref"],
+                    "merged_head_sha": job["merged_head_sha"],
+                    # Resolved per THIS merge's own merged_at, per
+                    # governing_verdict's contract — not the PR-wide answer,
+                    # which is why an earlier merge can carry a different
+                    # governing_verdict than the one that got published.
+                    "governing_verdict": governing_verdict(
+                        installation_id, github_repo_id, pr_number, job["merged_at"]
+                    ),
+                    "adjudication": [],
+                }
+                by_sha[sha] = merge
+                merges.append(merge)
+            outcome = by_outcome.get((sha, job["window_days"]))
+            merge["adjudication"].append(
+                {
+                    "window_days": job["window_days"],
+                    "status": job["status"],
+                    "due_at": job["due_at"],
+                    "kind": outcome["kind"] if outcome else None,
+                    "observed_at": outcome["observed_at"] if outcome else None,
+                    "source": outcome["source"] if outcome else None,
+                    "detail": _obj_or_none(outcome["detail"]) if outcome else None,
+                }
+            )
+
+    # Flag by object identity, not by comparing merged_at values: max() over
+    # an empty list would raise, and identity guarantees exactly one True
+    # even in the unreached case of two merges tied on merged_at, which
+    # equality-based comparison would not.
+    governing_merge = max(merges, key=lambda m: m["merged_at"]) if merges else None
+    for merge in merges:
+        merge["publication_governing"] = merge is governing_merge
+
+    return {"latest_verdict": latest_verdict, "merges": merges}
 
 
 def run_detail(verdict_id: int) -> dict | None:
