@@ -248,7 +248,12 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # The prompt hash IS backfillable and this is not an inference:
             # git log -L 45,92:api/doug/reader.py returns exactly one commit
             # (293c19d, 2026-07-29), so SYSTEM+SCHEMA have never changed and
-            # there is one era. The value is a LITERAL on purpose — a runtime
+            # there is one era. Checked a second, stronger way that does not
+            # depend on line-range tracking catching every edit: SYSTEM+SCHEMA
+            # extracted from 293c19d and from HEAD hash identically to each
+            # other and to the literal below (verified 2026-08-08) — content
+            # equality at both ends of history, not a trace of the lines
+            # between. The value is a LITERAL on purpose — a runtime
             # reference to reader.PROMPT_HASH would, after any future prompt
             # change, stamp historical rows with the NEW hash on a fresh
             # replay, relabelling verdicts as the product of a prompt they
