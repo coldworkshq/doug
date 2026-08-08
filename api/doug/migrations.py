@@ -229,6 +229,35 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "merge_commit_sha, window_days) WHERE merge_commit_sha IS NOT NULL",
         ),
     ),
+    (
+        8,
+        (
+            # Instrument identity. prompt_hash covers SYSTEM + repr(SCHEMA)
+            # only, so two verdicts can share it and still have been read at
+            # different budgets — DIFF_BUDGET moved 30k->100k and read_order()
+            # tiering shipped in #56, neither of which is in the hash. These
+            # columns are stamped FORWARD ONLY: merge time is not serving
+            # time, so a dated backfill would mislabel every verdict scored in
+            # the deploy-lag window. NULL means "not recorded", and the
+            # receipt renders it as exactly that.
+            "ALTER TABLE verdicts ADD COLUMN diff_budget INTEGER",
+            "ALTER TABLE verdicts ADD COLUMN read_order VARCHAR(16)",
+            # Pre-registration §11 item 7, closed forward only. Does NOT change
+            # the locked §2.1 rule, which stays timestamp-matched.
+            "ALTER TABLE outcome_jobs ADD COLUMN merged_head_sha VARCHAR(64)",
+            # The prompt hash IS backfillable and this is not an inference:
+            # git log -L 45,92:api/doug/reader.py returns exactly one commit
+            # (293c19d, 2026-07-29), so SYSTEM+SCHEMA have never changed and
+            # there is one era. The value is a LITERAL on purpose — a runtime
+            # reference to reader.PROMPT_HASH would, after any future prompt
+            # change, stamp historical rows with the NEW hash on a fresh
+            # replay, relabelling verdicts as the product of a prompt they
+            # never saw. IS NULL keeps it idempotent.
+            "UPDATE verdicts SET prompt_hash = "
+            "'8bd26c677a0e087a0b8c14933203cc85e15b65e32b432c10a3ae78009a951cdf' "
+            "WHERE tier = 'reader' AND prompt_hash IS NULL",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

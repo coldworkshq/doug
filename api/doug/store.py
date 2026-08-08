@@ -83,6 +83,12 @@ verdicts = Table(
     Column("source", String(64)),
     # Migration 002, alongside outcomes' new columns below.
     Column("prompt_hash", String(64)),
+    # Migration 008. Instrument identity alongside prompt_hash: what budget
+    # and tiering this read ran under, so a receipt can distinguish "the
+    # prompt changed" from "the same prompt saw a different slice of the
+    # diff". Forward-only — NULL on every row scored before this migration.
+    Column("diff_budget", Integer),
+    Column("read_order", String(16)),
 )
 
 findings = Table(
@@ -294,6 +300,9 @@ outcome_jobs = Table(
     Column("error", Text),
     Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # Migration 008, pre-registration §11 item 7. Does NOT change the locked
+    # §2.1 rule, which stays timestamp-matched.
+    Column("merged_head_sha", String(64)),
     UniqueConstraint(
         "installation_id",
         "github_repo_id",
