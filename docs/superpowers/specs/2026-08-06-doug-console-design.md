@@ -181,7 +181,7 @@ Operator-token only, behind the existing `_operator_only` gate that
 | `GET /v1/runs` | Paginated verdict history with `repo`, `installation_id`, `tier`, coverage summary, finding counts, outcome state. New query — `latest_reviews` is the wrong shape and drops `repo`. |
 | `GET /v1/runs/{verdict_id}` | `find_verdict_by_id` + `_verdict_bundle`, plus the fields that bundle currently omits: `model`, `prompt_hash`, `risk_score`, `rationale`, `scored_at`, `source`, `head_sha`, `repo`, `installation_id`. Plus the `review_jobs` row and the `outcome_jobs` / `outcomes` rows. |
 | `GET /v1/repos` | `installations` ⋈ `installation_repos` ⋈ per-repo verdict rollups. |
-| `GET /v1/health` | Job counts by status, oldest pending age, 24-hour failures, outcome clocks due, per-installation `reconciled_at`. |
+| `GET /v1/health` | Job counts by status, oldest pending age, 24-hour failures, outcome clocks due. (AMENDED 2026-08-07: the original row also listed per-installation `reconciled_at`. That column does not exist — it is MT3 / migration 8, unstarted — so it was never buildable as written. See `2026-08-07-console-health-failure-surface-design.md`.) |
 | `GET /v1/evidence/findings-log` | `findings_log.rates()` over the JSONL, served rather than imported at build time because it changes with every PR. |
 | `GET /v1/evidence/coverage` | Read-percentage distribution, unseen-path frequency, `file_cut` frequency. |
 
@@ -248,7 +248,8 @@ all four; it is not scoped as a single plan.
 | Phase | Ships | Closes |
 |---|---|---|
 | 1 | `/v1/runs`, `/v1/runs/{id}`, console shell, Runs list, run forensics | "I can't understand the run" |
-| 2 | `/v1/repos`, Repos page, health strip | "per repos", "is it healthy" |
+| 2a | `/v1/health`, `/v1/jobs`, health strip, Jobs page | "is it healthy", "is Doug failing on anything" |
+| 2b | `/v1/repos`, Repos page | "per repos" |
 | 3 | `/v1/evidence/*`, Evidence page | "see improvements", all four tracks |
 | 4 | `/v1/showcase/queue`, doug-web token removal, light-theme the public queue, delete `/compare` | the public-service token exposure |
 
