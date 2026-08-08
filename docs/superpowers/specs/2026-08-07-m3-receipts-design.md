@@ -68,11 +68,34 @@ paraphrase gets wrong:
 are schema-permitted. A receipt keyed on `(repo, pr_number)` therefore cannot
 assume a single merge.
 
-The CTE joins each `outcome_jobs` row and compares `scored_at <= j.merged_at`, so
-strictly the governing verdict is resolved *per merge identity*.
-`governing_verdict()` accordingly takes `merged_at` as a parameter and is called
-once per merge identity. In the ordinary single-merge case it is called once, and
-the response shape below is a one-element list.
+**Correction, 2026-08-07 — this section previously claimed §2.2's CTE "resolves
+strictly per merge identity". That was false**, caught by Task 4's implementer
+and verified against the document. §2.2's window is:
+
+```sql
+PARTITION BY v.installation_id, v.github_repo_id, v.pr_number
+```
+
+There is **no job term in the partition**. So §2.2 designates exactly **one**
+governing verdict per PR per window: the latest reader verdict scored at or
+before the **latest** `merged_at`. It does not resolve per merge.
+
+The per-merge signature is kept anyway, because a receipt that could not show
+what Doug had said at an earlier merge would be less truthful, not more. But it
+creates a hazard the false justification had hidden: an earlier merge's standing
+verdict is *not* the verdict §2.2 designates, and a reader looking only at that
+line could believe it governed.
+
+**Resolution (Andrew, 2026-08-07):** `governing_verdict()` takes `merged_at` and
+is called once per merge identity, and the merge with the greatest `merged_at`
+is flagged `publication_governing: true` — exactly one per receipt, and it is by
+construction the verdict §2.2 selects. Every other merge is labelled historical
+context and the receipt says in words that it did not govern publication. In the
+ordinary single-merge case there is one merge, flagged true.
+
+Rejected: resolving once per PR to mirror §2.2 one-to-one (loses the earlier
+merge's verdict, which is real evidence); rejected: leaving the code as built and
+correcting only this prose (the hazard survives, undistinguished on the page).
 
 Rejected alternatives:
 
@@ -222,6 +245,10 @@ pending)"* — while still naming which merge it is talking about.
 ```
 repo, pr_number, url
 latest_verdict:                            # always present
+                                           # (merges[] entries carry
+                                           #  publication_governing: bool —
+                                           #  exactly one true, the greatest
+                                           #  merged_at; see the correction above)
   verdict_id, scored_at, tier, band, score, threshold
   head_sha, model, prompt_hash, rationale, findings[]
   read: { diff_budget, read_order }        # nulls mean "not recorded"
@@ -282,8 +309,12 @@ document could imply more than the ledger knows.
    that merge. Stated as its own fact, never backfilled with the latest verdict.
 3. **`latest_verdict` differs from `governing_verdict`** — pushes landed after
    the advice the merge was made on. Both shown, with the distinction named.
-4. **More than one merge identity** — every merge listed. The receipt never
-   silently picks one.
+4. **More than one merge identity** — every merge listed, and exactly one
+   carries `publication_governing: true` (the greatest `merged_at`, which is the
+   verdict §2.2 designates). The others are labelled historical context, in
+   words, so no reader can mistake an earlier merge's standing verdict for the
+   one the published table used. The receipt never silently picks one, and never
+   lets two of them look equally authoritative.
 5. **Read configuration absent** — "not recorded", never a number.
 6. **`prompt_hash` present without read configuration** — the receipt does not
    claim instrument identity on the strength of the hash alone.
