@@ -2742,6 +2742,18 @@ def test_jobs_accepts_running_status_under_the_unhealthy_view(tmp_path, monkeypa
     assert res.status_code == 200
 
 
+def test_jobs_accepts_pending_status_under_the_unhealthy_view(tmp_path, monkeypatch):
+    """status=pending with view=unhealthy is the other composition the
+    amendment names as legitimate — a fresh, unattempted job is still
+    'unhealthy' by store.job_rows' definition. Must not be caught by the
+    never-unhealthy rejection, which names only done/superseded."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get(
+        "/v1/jobs?lane=review&status=pending&view=unhealthy", headers=AUTH
+    )
+    assert res.status_code == 200
+
+
 # /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same
 # reader output test_store.py's find_verdict_by_id tests build: its one
 # finding's description matches VERDICT's own reason label, so save_review
