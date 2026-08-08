@@ -1,3 +1,5 @@
+import { parseUtc } from "./runs.ts";
+
 export type HealthLevel = "failing" | "degraded" | "clear" | "unknown";
 
 export interface ReviewLaneHealth {
@@ -72,10 +74,20 @@ function isError(v: unknown): v is { error: string } {
 }
 
 /** Age in milliseconds against the SERVER's clock, never the browser's.
- *  Returns null when there is no timestamp — absent is not zero. */
+ *  Returns null when there is no timestamp — absent is not zero.
+ *
+ *  Both sides go through `parseUtc`, not raw `Date.parse`: job_health's lane
+ *  timestamps (oldest_pending_at, oldest_retry_at, oldest_overdue_due_at,
+ *  next_due_at) come from raw MIN() queries in store.py that skip
+ *  `_as_utc`, so on sqlite they cross the wire with no zone suffix at all —
+ *  the same gap `parseUtc` exists to close for every other timestamp this
+ *  console renders. `as_of` itself is always server-tz-aware and so always
+ *  carries an explicit offset, but parsing it through the same function
+ *  keeps this module honouring one UTC convention rather than two parsers
+ *  that could disagree with no error anywhere. */
 function ageMs(at: string | null, asOf: string): number | null {
   if (at === null) return null;
-  return Date.parse(asOf) - Date.parse(at);
+  return parseUtc(asOf).getTime() - parseUtc(at).getTime();
 }
 
 const UNKNOWN_CELLS = ["verdict", "failed", "stalled", "waiting", "retrying", "clocks"];

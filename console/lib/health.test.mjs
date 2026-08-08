@@ -149,3 +149,37 @@ test("every cell carries a word, so colour is never the only carrier", () => {
     assert.ok(cell.word.length > 0, `cell ${cell.key} has no word`);
   }
 });
+
+test("a zoneless lane timestamp is treated as UTC, matching parseUtc's convention elsewhere", () => {
+  // job_health's lane timestamps (oldest_pending_at, oldest_retry_at,
+  // oldest_overdue_due_at, next_due_at) come from raw MIN() queries in
+  // store.py that skip _as_utc, so on sqlite they cross the wire with no
+  // zone suffix at all -- the same gap runs.ts's parseUtc exists to close
+  // (see its own docstring's repro: `TZ=America/Los_Angeles node -e
+  // 'new Date("2026-08-06T14:22:48").toISOString()'` -> a 7-hour shift).
+  //
+  // as_of itself is always server-tz-aware (store._db_now()), so the
+  // realistic mismatch this pins is a ZONELESS `at` measured against a
+  // Z-suffixed `as_of` -- pairing two zoneless values together would let
+  // the same local-offset shift cancel out of the subtraction and pass
+  // even under the bug (verified: raw Date.parse on two zoneless
+  // timestamps 16 minutes apart still reports a 16-minute gap under
+  // TZ=America/Los_Angeles). Forcing a non-UTC TZ here, on the mismatched
+  // pair, is what makes this test actually catch it: on a UTC-default CI
+  // machine, or on a matched-zoneless pair, the bug would pass by accident.
+  const originalTz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles"; // UTC-7 in August (PDT)
+  try {
+    const zoneless = payload({
+      review: {
+        pending: 1,
+        // 16 minutes before AS_OF (PENDING_THRESHOLD_MINUTES + 1), with no
+        // trailing "Z" -- exactly what sqlite hands back for this field.
+        oldest_pending_at: "2026-08-07T11:44:00",
+      },
+    });
+    assert.equal(classify(zoneless).level, "degraded");
+  } finally {
+    process.env.TZ = originalTz;
+  }
+});
