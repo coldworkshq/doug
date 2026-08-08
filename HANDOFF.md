@@ -54,6 +54,50 @@ Decisions this session:
   schedules/kick frequency, not about stored values. The strip states each
   assumption in words so it stays falsifiable.
 
+FIVE DEFECTS IN THE PLAN, found DURING execution, all fixed. Recorded because
+          each one is a trap the next plan in this repo could repeat:
+- Brief's `_db_now` would have been a FOURTH identical copy (ingest,
+  outcome_queue, outcome_backfill already had one each). All three already
+  import store, so store was the only home with no cycle. Consolidated
+  instead; proven a pure move (those three suites unchanged at 66).
+- Brief's job_rows compared Python-side naive sqlite timestamps against aware
+  now/cutoff -> TypeError. Fixed with the house `_as_utc`. Every other
+  lease comparison in the repo does it in SQL, which is why nothing hit it
+  before.
+- Brief's `ageMs` used raw `Date.parse`. `console/lib/runs.ts:141` exports
+  `parseUtc` precisely because zoneless timestamps parse as LOCAL per
+  ECMA-262 (7-hour shift; its docstring carries a repro). The decisive
+  argument is NOT sqlite-vs-Postgres — it is that a SECOND parser makes
+  rendered ages and computed verdicts disagree with no error anywhere.
+- Brief built the /jobs view-toggle links by spreading optional searchParams
+  into URLSearchParams, which stringifies undefined:
+  `?repo=undefined&view=all`. That filters to a repo literally named
+  "undefined" and renders an empty list reading as "nothing is wrong".
+- Brief's caps fell back to literal 0 when getHealth() failed, rendering
+  attempts as "2/0" — a real-looking cap. Reachable WITHOUT the page
+  failing, because getHealth() runs twice per /jobs load and AbortSignal
+  opts both out of Next fetch memoization. Now `number | null` + explicit
+  "cap unknown".
+- A SIXTH was caught only by the whole-branch review, because it lived in the
+  interaction between two tasks' files and neither task's review could see
+  it: `next_due_at` could never render. It is defined server-side as
+  MIN(due_at) WHERE due_at >= now, so it is always in the future, and the
+  strip's `age()` helper discarded negative deltas. The clocks cell showed
+  its count and nothing else, permanently. Fixed with a forward-looking
+  `dueIn()`; the negative guard stays for the backward-looking cells.
+
+DELIBERATELY NOT DONE (triaged ship-as-is at final review):
+- Console has NO component/render test infrastructure. This plan routed
+  around it by keeping all lying-risk in the pure, tested lib/health.ts
+  rather than closing it. The spec's testing section is NOT fully satisfied:
+  "attempts never render against the wrong lane's cap" has no test, only a
+  construction that makes it hard to get wrong. Render-test infra remains
+  its own Phase 2 item and this is the first assertion to add.
+- /v1/health is fetched twice per /jobs load and every page awaits it
+  sequentially (Shell renders after the page's own await). Latency only, no
+  wrong data. React.cache + a Suspense boundary with a GHOSTED (never
+  "clear") fallback is the fix.
+
 VERIFICATION FINDINGS (Andrew asked for a check before committing; these
           five came out of reading ingest.py / outcome_queue.py / worker.py
           and TWO were defects in the design as presented — do not re-derive):
