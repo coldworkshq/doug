@@ -1,58 +1,32 @@
 import Link from "next/link";
 
 import type { JobItem } from "@/lib/api";
-import { ADJUDICATOR_GRACE_HOURS } from "@/lib/health";
-import { parseUtc } from "@/lib/runs";
+import { overdueReason, pendingReason } from "@/lib/health";
 
-/** The store marks a row overdue with NO grace — `job_rows`'s predicate is
- *  `status='pending' AND due_at < now`, the same query the health strip
- *  applies `ADJUDICATOR_GRACE_HOURS` on top of before calling anything
- *  "failing" (`lib/health.ts`). The API can't own that grace itself: the
- *  adjudicator's schedule lives in Cloud Scheduler, not in Python. So every
- *  row the adjudicator hasn't reached yet TODAY lands here labelled overdue
- *  right alongside rows a pass has genuinely missed for days — and this page
- *  rendered no timestamp at all, so an operator could not tell "came due
- *  this morning, fine" from "three days past a pass that never ran".
+/** The reason a row is here, in words. Mostly derived server-side against
+ *  each lane's own lease and carried on the row, so this component does not
+ *  recompute it — that is what keeps this page and the strip agreeing.
  *
- *  The bare, alarming "clock overdue" wording (this strip's language for a
- *  row past grace) is reserved for exactly that: past-grace rows only.
- *  Within grace it reads the neutral "overdue 2h" — armed, not failing,
- *  same as the strip beside it.
+ *  The two exceptions are `overdue` and fresh `pending`, and they are the
+ *  same exception twice: `store.job_rows` applies no grace and no threshold,
+ *  because both describe things the ledger does not store (a Cloud Scheduler
+ *  cron; how often the drain is kicked). So a clock the adjudicator simply
+ *  has not reached today, and a job enqueued one second ago, both arrive in
+ *  the "unhealthy only" list while the strip beside them reads clear.
  *
- *  Ages go through `parseUtc`, never `Date.parse` / `new Date(iso)` — see
- *  `lib/runs.ts:141` for why a second parser is the specific hazard, and
- *  `health-strip.tsx`'s own `age()` for the twin of this ladder rendering
- *  the strip's backward-looking cells. Not imported from there: that
- *  helper is module-private and this page has no other need of it, so a
- *  small local copy beats a new export whose only caller is this string.
- *
- *  `asOf` can be null: the health payload that carries it is fetched
- *  independently of these job rows (see the `maxAttempts` comment below),
- *  so one fetch can fail while the rows load fine. Degrade honestly rather
- *  than fabricate an age or a grace verdict with no clock to check it
- *  against — the same discipline the attempts-cap cell already applies. */
-function overdueReason(dueAt: string | null, asOf: string | null): string {
-  if (dueAt === null || asOf === null) return "overdue";
-  const ms = parseUtc(asOf).getTime() - parseUtc(dueAt).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "overdue";
-  const mins = Math.floor(ms / 60_000);
-  const hours = Math.floor(mins / 60);
-  const age = mins < 60 ? `${mins}m` : hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-  return ms > ADJUDICATOR_GRACE_HOURS * 3_600_000 ? `clock overdue ${age}` : `overdue ${age}`;
-}
-
-/** The reason a row is here, in words. Derived server-side against each
- *  lane's own lease and carried on the row, so this component never
- *  recomputes it — that is what keeps this page and the strip agreeing.
- *  The one exception is `overdue`: the server's predicate deliberately has
- *  no grace (see `overdueReason` above), so the wording — not the row's
- *  membership in the list — is what this component still owns. */
+ *  Those rows do belong on a page whose question is "what is Doug waiting
+ *  on" — it is the WORDING that must not overstate. Both labellers live in
+ *  `lib/health.ts` beside the thresholds they compare against, so the table
+ *  and the strip grade against one definition and cannot contradict each
+ *  other about the same row. They are also the only logic here that a test
+ *  can reach: this component has no render-test infrastructure. */
 function reason(job: JobItem, asOf: string | null): string {
   if (job.status === "failed") return `failed after ${job.attempts}`;
   if (job.stalled) return "lease expired";
   if (job.overdue) return overdueReason(job.due_at, asOf);
   if (job.retrying) return `retrying, attempt ${job.attempts}`;
   if (job.status === "done" && job.verdict_id === null) return "skipped, no verdict";
+  if (job.status === "pending") return pendingReason(job.enqueued_at, asOf);
   return job.status;
 }
 

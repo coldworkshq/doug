@@ -2157,6 +2157,52 @@ def test_job_health_separates_overdue_from_next_due(tmp_path, monkeypatch):
     assert health["outcome"]["next_due_at"] > health["outcome"]["oldest_overdue_due_at"]
 
 
+def test_job_health_timestamps_are_all_timezone_aware(tmp_path, monkeypatch):
+    """Every timestamp this endpoint emits must carry a zone, including the
+    four MIN()-derived ones.
+
+    `as_of` comes from `_db_now` and is always aware, but the MIN() results
+    are read straight back off the column — naive on sqlite, where
+    DateTime(timezone=True) round-trips without a designator. Serialised, an
+    aware `as_of` and a naive `oldest_pending_at` cross the wire in different
+    formats, and a client subtracting one from the other is off by its own
+    local offset (7h in this repo's timezone). The console happens to be safe
+    because `lib/runs.ts`'s parseUtc appends the Z, but that makes the
+    endpoint's correctness a property of one caller's discipline rather than
+    of the endpoint. Any second consumer mis-renders every age.
+
+    All four are asserted, not a sample: they come from four separate
+    queries and a fix that normalised only the two obvious ones would leave
+    the other two wrong with nothing to catch it."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+
+    # A fresh pending job (oldest_pending_at) and a retried one
+    # (oldest_retry_at) in the review lane.
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    claimed = ingest.claim()
+    ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
+
+    # Merged 20 days ago: the 14-day clock is overdue
+    # (oldest_overdue_due_at), the 60-day one is still ahead (next_due_at).
+    store.enqueue_outcome_jobs(99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main")
+
+    health = _health(None)
+
+    for lane, field in (
+        ("review", "oldest_pending_at"),
+        ("review", "oldest_retry_at"),
+        ("outcome", "next_due_at"),
+        ("outcome", "oldest_overdue_due_at"),
+    ):
+        value = health[lane][field]
+        assert value is not None, f"{lane}.{field} not seeded by this fixture"
+        assert value.tzinfo is not None, f"{lane}.{field} crossed the wire naive"
+
+    assert health["as_of"].tzinfo is not None
+
+
 def test_job_health_returns_none_without_a_ledger(tmp_path, monkeypatch):
     """None, never a dict of zeros. A zeroed health payload would render as
     'nothing is wrong' on a deployment that cannot answer the question.

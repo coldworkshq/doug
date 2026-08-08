@@ -2055,6 +2055,22 @@ def job_health(
         def _one(q):
             return conn.execute(q).scalar()
 
+        def _ts(q):
+            """A MIN()-derived timestamp, normalised to aware UTC.
+
+            `as_of` comes from `_db_now` and is always aware, but these come
+            straight back off the column and are naive on sqlite, where
+            DateTime(timezone=True) round-trips with no designator. Emitting
+            an aware `as_of` beside a naive `oldest_pending_at` makes this
+            endpoint's correctness a property of the caller's parser rather
+            than of the response: a client subtracting one from the other is
+            off by its own local offset. The console is safe only because
+            `lib/runs.ts`'s parseUtc appends the Z; a second consumer would
+            not be.
+            """
+            value = _one(q)
+            return None if value is None else _as_utc(value)
+
         def _count_review(*where):
             return _one(_scope_review(select(func.count()).select_from(rj).where(*where))) or 0
 
@@ -2067,7 +2083,7 @@ def job_health(
             # retry, so a MIN over all pending rows reports a twice-failed
             # job as freshly enqueued. These are two different quantities and
             # must never be blended back into one MIN.
-            "oldest_pending_at": _one(
+            "oldest_pending_at": _ts(
                 _scope_review(
                     select(func.min(rj.c.enqueued_at)).where(
                         rj.c.status == "pending", rj.c.attempts == 0
@@ -2075,7 +2091,7 @@ def job_health(
                 )
             ),
             "retrying": _count_review(rj.c.status == "pending", rj.c.attempts > 0),
-            "oldest_retry_at": _one(
+            "oldest_retry_at": _ts(
                 _scope_review(
                     select(func.min(rj.c.enqueued_at)).where(
                         rj.c.status == "pending", rj.c.attempts > 0
@@ -2100,14 +2116,14 @@ def job_health(
             # The earliest clock still in the FUTURE — a schedule, not an
             # alarm. oldest_overdue_due_at is the earliest already past.
             # They never overlap.
-            "next_due_at": _one(
+            "next_due_at": _ts(
                 _scope_outcome(
                     select(func.min(oj.c.due_at)).where(
                         oj.c.status == "pending", oj.c.due_at >= now
                     )
                 )
             ),
-            "oldest_overdue_due_at": _one(
+            "oldest_overdue_due_at": _ts(
                 _scope_outcome(
                     select(func.min(oj.c.due_at)).where(
                         oj.c.status == "pending", oj.c.due_at < now
