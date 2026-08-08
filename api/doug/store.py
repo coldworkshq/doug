@@ -1451,6 +1451,15 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
     engine = _get_engine()
     if engine is None:
         return None
+    # engine.begin() buys a rollback if a statement in this block raises, not
+    # a consistent snapshot of the ledger. It covers `latest`, `jobs`,
+    # `outcome_rows` and latest_verdict's own _verdict_bundle call below — it
+    # does NOT extend to each merge's governing_verdict() call in the loop
+    # further down, which opens its own connection and reads outside this
+    # transaction entirely. And even for the statements it does cover,
+    # Postgres at READ COMMITTED (this deploy's isolation level) gives no
+    # cross-statement snapshot either: each one sees whatever was committed
+    # by the time it ran, not one point-in-time view of the ledger.
     with engine.begin() as conn:
         latest = (
             conn.execute(
@@ -1459,6 +1468,18 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
                     verdicts.c.installation_id == installation_id,
                     verdicts.c.github_repo_id == github_repo_id,
                     verdicts.c.pr_number == pr_number,
+                    # Same exclusion as this query's five siblings, and the
+                    # ordinary case for it here: api.py's webhook handler
+                    # calls save_external_review on every pull_request_review
+                    # event, writing an external row into this identical
+                    # identity tuple with scored_at set to the human
+                    # reviewer's submitted_at. On a PR a human approved after
+                    # Doug's last score, that row is newest and would win
+                    # ORDER BY scored_at DESC — surfacing save_external_review's
+                    # 0.0/0.0 score/threshold placeholders, written because no
+                    # model ran and no diff was read, as "the newest thing
+                    # Doug has said about this PR".
+                    verdicts.c.tier != EXTERNAL_TIER,
                 )
                 .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
                 .limit(1)

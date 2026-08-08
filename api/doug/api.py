@@ -608,7 +608,11 @@ def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
         repo=repo,
         pr_number=pr_number,
         preregistration=ReceiptPreregistration(
-            hash=prereg_hash, in_force=prereg_hash is not None
+            # Truthiness, not `is not None`: DOUG_PREREG_HASH="" must not
+            # render as an in-force document with an empty hash. Not
+            # reachable via gcp.sh (it runs `set -euo pipefail`), but a
+            # local/manual deploy can still set an empty value.
+            hash=prereg_hash, in_force=bool(prereg_hash)
         ),
         latest_verdict=_receipt_verdict(data["latest_verdict"]),
         merges=[

@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, select, text
 
 from doug import api, store, tenancy
 from doug.api import app
+from doug.models import Band
 
 PREREGISTRATION = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -721,6 +722,40 @@ def test_exactly_one_merge_is_publication_governing(tmp_path, monkeypatch):
     assert flags.count(True) == 1
     latest = max(got["merges"], key=lambda m: m["merged_at"])
     assert latest["publication_governing"] is True
+
+
+def test_a_later_external_review_never_becomes_latest_verdict(tmp_path, monkeypatch):
+    """save_external_review writes an external-tier row into the SAME
+    identity tuple as a reader verdict — api.py's pull_request_review webhook
+    handler calls it on every human review, with scored_at set to the
+    reviewer's own submitted_at. On any PR a human approves after Doug's
+    last score — the ordinary case — that row is newest by scored_at and
+    would win `latest`'s plain ORDER BY scored_at DESC without the same
+    tier exclusion its five sibling queries all carry.
+
+    Without that exclusion this surfaces save_external_review's 0.0/0.0
+    score/threshold placeholders — written because no model ran and no diff
+    was read — as though they were the newest thing Doug had said about
+    this PR.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_installation(url)
+    reader_id = _seed_verdict(
+        url, tier="reader", band="cleared", scored_at=NOW - timedelta(hours=1)
+    )
+    store.save_external_review(
+        INSTALLATION_ID,
+        REPO_ID,
+        REPO,
+        PR_NUMBER,
+        f"{next(_shas):040d}",
+        "review:alice",
+        Band.CLEARED,
+        NOW,
+    )
+    got = store.receipt(INSTALLATION_ID, REPO_ID, PR_NUMBER)
+    assert got["latest_verdict"]["id"] == reader_id
+    assert got["latest_verdict"]["tier"] == "reader"
 
 
 # --- store.repo_id_for — the operator path's name resolution ----------------
