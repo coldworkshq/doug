@@ -340,7 +340,7 @@ def _as_utc(value: datetime) -> datetime:
     fixture built from a round-tripped row would raise on the very comparison
     §6.1 requires. Everything written to that column is UTC, so reattaching
     the zone reads the row rather than guessing at it. Same convention and
-    same reason as `ingest._as_utc`.
+    same reason as `store._as_utc`.
     """
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)

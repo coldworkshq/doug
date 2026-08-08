@@ -24,3 +24,8 @@ venv/
 !.env.example
 .backtest-cache/
 backtest-*.json
+
+# Subagent-driven-development scratch: per-plan ledgers, task briefs,
+# implementer reports and review packages. Recovery state for an in-flight
+# plan execution, never part of the history the plan produces.
+.superpowers/

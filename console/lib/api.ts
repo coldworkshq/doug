@@ -1,3 +1,4 @@
+import type { HealthPayload } from "./health";
 import type { RunCoverage } from "./runs";
 
 export type Band = "cleared" | "flagged";
@@ -164,4 +165,66 @@ export async function getRuns(params: {
 
 export async function getRunDetail(id: number): Promise<RunDetail | { error: string }> {
   return get<RunDetail>(`/v1/runs/${id}`);
+}
+
+/** Global, never scoped. "Is Doug failing on anything" is a global question,
+ *  and a scope filter that can hide a fire in another tenant is an
+ *  anti-feature on this surface specifically — so this deliberately takes no
+ *  repo or installation argument even though /v1/health accepts them. */
+export async function getHealth(): Promise<HealthPayload | { error: string }> {
+  return get<HealthPayload>("/v1/health");
+}
+
+/** Mirrors JobItem in api/doug/models.py field-by-field.
+ *
+ *  `repo` is nullable because outcome_jobs carries only github_repo_id and
+ *  installation_repos can be stale or absent entirely — the page renders the
+ *  bare id in that case rather than guessing a name.
+ *
+ *  `stalled`, `retrying` and `overdue` are computed by the API against each
+ *  lane's own lease and travel on the row, so this client never re-derives
+ *  them against a constant it holds locally. */
+export interface JobItem {
+  id: number;
+  lane: string;
+  repo: string | null;
+  github_repo_id: number;
+  installation_id: number;
+  pr_number: number;
+  status: string;
+  attempts: number;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  stalled: boolean;
+  head_sha: string | null;
+  enqueued_at: string | null;
+  verdict_id: number | null;
+  retrying: boolean;
+  merge_commit_sha: string | null;
+  window_days: number | null;
+  due_at: string | null;
+  merged_at: string | null;
+  overdue: boolean;
+}
+
+export async function getJobs(params: {
+  lane: "review" | "outcome";
+  view: "unhealthy" | "all";
+  repo?: string;
+  installationId?: number;
+  limit?: number;
+}): Promise<{ items: JobItem[]; limit: number; offset: number } | { error: string }> {
+  const q = new URLSearchParams();
+  q.set("lane", params.lane);
+  q.set("view", params.view);
+  if (params.repo) q.set("repo", params.repo);
+  // Explicit presence, not truthiness: installation id 0 is falsy but is a
+  // value the caller passed, not an absent one — the same trap parseTenantId
+  // exists to close on the Runs page.
+  if (params.installationId !== undefined) {
+    q.set("installation_id", String(params.installationId));
+  }
+  q.set("limit", String(params.limit ?? 100));
+  return get<{ items: JobItem[]; limit: number; offset: number }>(`/v1/jobs?${q}`);
 }

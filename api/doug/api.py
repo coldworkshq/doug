@@ -16,9 +16,22 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, store, tenancy, worker
+from . import (
+    __version__,
+    app_auth,
+    ingest,
+    outcome_queue,
+    precision,
+    reader,
+    store,
+    tenancy,
+    worker,
+)
 from .models import (
     Band,
+    HealthResponse,
+    JobItem,
+    JobListResponse,
     PRMetadata,
     QueueItem,
     QueueResponse,
@@ -837,6 +850,113 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
         job=RunDetailJob(**row["job"]) if row["job"] else None,
         outcomes=[RunOutcome(**o) for o in row["outcomes"]],
         outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
+    )
+
+
+@app.get("/v1/health")
+def health(
+    repo: str | None = None,
+    installation_id: int | None = None,
+    x_doug_token: str = Header(""),
+) -> HealthResponse:
+    """Both job lanes' health. Operator-only for the same reason /v1/runs is:
+    it crosses every installation by design.
+
+    The lane constants are passed in from the modules that enforce them, so
+    the response reports what was actually measured with rather than a
+    literal duplicated here.
+    """
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    data = store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+        repo=repo,
+        installation_id=installation_id,
+    )
+    if data is None:
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    return HealthResponse(**data)
+
+
+# The stored statuses each lane's queue actually writes. 'stalled',
+# 'retrying' and 'overdue' are deliberately absent: they are derived from
+# started_at / attempts / due_at, and accepting them as a status would put
+# the derivation somewhere /v1/health cannot see.
+_REVIEW_STATUSES = frozenset({"pending", "running", "done", "failed", "superseded"})
+_OUTCOME_STATUSES = frozenset({"pending", "running", "done", "failed"})
+
+# Statuses that can never be unhealthy: nothing went wrong when a review job
+# finishes ('done') or is superseded, and the same is true of a finished
+# outcome job. status=<one of these> composed with the default view=unhealthy
+# is empty by construction — store.job_rows' unhealthy_only clause excludes
+# every row in this status regardless of what else is asked for — so it 422s
+# instead of returning a silent empty list indistinguishable from "there are
+# none".
+_NEVER_UNHEALTHY = {
+    "review": frozenset({"done", "superseded"}),
+    "outcome": frozenset({"done"}),
+}
+
+
+@app.get("/v1/jobs")
+def jobs(
+    lane: str = "review",
+    view: str = "unhealthy",
+    status: str | None = None,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    x_doug_token: str = Header(""),
+) -> JobListResponse:
+    """Job rows for one lane. Operator-only for the same reason /v1/runs is.
+
+    Read-only: nothing here requeues, retries or clears a job.
+    """
+    _operator_only(x_doug_token)
+    if lane not in ("review", "outcome"):
+        raise HTTPException(status_code=422, detail="lane must be review or outcome")
+    if view not in ("unhealthy", "all"):
+        raise HTTPException(status_code=422, detail="view must be unhealthy or all")
+    allowed = _REVIEW_STATUSES if lane == "review" else _OUTCOME_STATUSES
+    if status is not None and status not in allowed:
+        raise HTTPException(
+            status_code=422, detail=f"status must be one of {sorted(allowed)}"
+        )
+    if status is not None and view == "unhealthy" and status in _NEVER_UNHEALTHY[lane]:
+        # Not silently forced to view=all: that would hide the caller's
+        # contradiction instead of reporting it.
+        raise HTTPException(
+            status_code=422,
+            detail=f"status={status} is never unhealthy; pass view=all",
+        )
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    lease = (
+        ingest.STALL_LEASE_SECONDS
+        if lane == "review"
+        else outcome_queue.STALL_LEASE_SECONDS
+    )
+    rows = store.job_rows(
+        lane=lane,
+        lease_seconds=lease,
+        unhealthy_only=view == "unhealthy",
+        status=status,
+        repo=repo,
+        installation_id=installation_id,
+        limit=limit,
+        offset=offset,
+    )
+    return JobListResponse(
+        items=[JobItem(**row) for row in rows], limit=limit, offset=offset
     )
 
 

@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, ingest, store, tenancy, worker
+from doug import api, app_auth, ingest, outcome_queue, store, tenancy, worker
 from doug.api import app
-from doug.models import Band, Reason, Verdict
+from doug.models import Band, JobItem, Reason, Verdict
 
 client = TestClient(app)
 
@@ -2612,6 +2612,180 @@ def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     assert item["title"] == "PR #9"
     assert item["url"] == "https://github.com/o/r/pull/9"
     assert item["changed_files"] is None
+
+
+# /v1/health — the strip's only data source. Same _db/AUTH shape as /v1/runs.
+
+
+def test_health_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/health").status_code == 401
+
+
+def test_health_404s_a_tenant_key(tmp_path, monkeypatch):
+    """Health crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    res = TestClient(app).get("/v1/health", headers={"X-Doug-Token": "dg_tenant"})
+    assert res.status_code == 404
+
+
+def test_health_503s_without_a_ledger(tmp_path, monkeypatch):
+    """503, never a zeroed payload. Zeros would render as 'nothing is wrong'
+    on a deployment that cannot answer the question at all."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    assert TestClient(app).get("/v1/health", headers=AUTH).status_code == 503
+
+
+def test_health_reports_both_lanes_constants(tmp_path, monkeypatch):
+    """The console must never hardcode 900, 7200, 3 or 10."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["review"]["stall_lease_seconds"] == ingest.STALL_LEASE_SECONDS
+    assert body["review"]["max_attempts"] == ingest.MAX_ATTEMPTS
+    assert body["outcome"]["stall_lease_seconds"] == outcome_queue.STALL_LEASE_SECONDS
+    assert body["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
+
+
+def test_health_carries_the_server_clock_as_of(tmp_path, monkeypatch):
+    """Every age the console renders is as_of minus a timestamp. Without it
+    the UI would subtract a server-written timestamp from a browser clock,
+    which is the timestamp defect Phase 1 already paid for, with an alarm
+    attached."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["as_of"] is not None
+
+
+# /v1/jobs — the failure list. Same gate and envelope as /v1/runs.
+
+
+def test_jobs_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/jobs?lane=review").status_code == 401
+
+
+def test_jobs_rejects_a_derived_state_as_a_status(tmp_path, monkeypatch):
+    """'stalled' and 'retrying' are derived from started_at and attempts,
+    not stored. Accepting them here would put the derivation somewhere the
+    strip cannot see, and the two surfaces would drift."""
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/jobs?lane=review&status=stalled", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=review&status=retrying", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=outcome&status=overdue", headers=AUTH).status_code == 422
+
+
+def test_jobs_accepts_a_stored_status(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=failed", headers=AUTH)
+    assert res.status_code == 200
+
+
+def test_jobs_rejects_an_unknown_lane(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/jobs?lane=nope", headers=AUTH).status_code == 422
+
+
+def test_jobs_rejects_an_out_of_range_limit(tmp_path, monkeypatch):
+    """Same 1..500 bound as /v1/runs, so the console's atCap logic carries
+    over unchanged."""
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/jobs?lane=review&limit=0", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=review&limit=501", headers=AUTH).status_code == 422
+
+
+def test_jobs_round_trips_limit_and_offset(tmp_path, monkeypatch):
+    """The only way a caller can tell 'this IS every unhealthy job' from
+    'this is the first page of more'."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/jobs?lane=review&limit=7", headers=AUTH).json()
+    assert body["limit"] == 7
+    assert body["offset"] == 0
+
+
+def test_jobs_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    assert TestClient(app).get("/v1/jobs?lane=review", headers=AUTH).status_code == 503
+
+
+def test_jobs_does_not_leak_undocumented_columns(tmp_path, monkeypatch):
+    """select(t) on outcome_jobs returns base_ref, claim_generation and
+    created_at too, and JobItem does not declare them. Pydantic v2's default
+    extra='ignore' silently drops them today, which is the behaviour we
+    want — but nothing pinned it, so a future model_config change could
+    start leaking ledger columns into an API response without any test
+    noticing. Assert the response carries exactly JobItem's declared
+    fields."""
+    _db(tmp_path, monkeypatch)
+    now = datetime.now(UTC)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - timedelta(days=20), "main", window_days=(14,)
+    )
+    body = TestClient(app).get("/v1/jobs?lane=outcome", headers=AUTH).json()
+    assert len(body["items"]) == 1
+    assert set(body["items"][0].keys()) == set(JobItem.model_fields)
+
+
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_review(
+    tmp_path, monkeypatch
+):
+    """A done review job can never be unhealthy, so status=done composed
+    with the default view=unhealthy is empty by construction. 422 names the
+    fix rather than returning a list indistinguishable from 'there are
+    none'."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=done", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_rejects_superseded_under_the_default_unhealthy_view(
+    tmp_path, monkeypatch
+):
+    """Same reason as done: a superseded job means nothing went wrong."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=superseded", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_outcome(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=outcome&status=done", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_accepts_running_status_under_the_unhealthy_view(tmp_path, monkeypatch):
+    """status=running with view=unhealthy means 'running AND stalled' — a
+    real, non-empty composition — and must not be caught by the
+    never-unhealthy rejection."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get(
+        "/v1/jobs?lane=review&status=running&view=unhealthy", headers=AUTH
+    )
+    assert res.status_code == 200
+
+
+def test_jobs_accepts_pending_status_under_the_unhealthy_view(tmp_path, monkeypatch):
+    """status=pending with view=unhealthy is the other composition the
+    amendment names as legitimate — a fresh, unattempted job is still
+    'unhealthy' by store.job_rows' definition. Must not be caught by the
+    never-unhealthy rejection, which names only done/superseded."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get(
+        "/v1/jobs?lane=review&status=pending&view=unhealthy", headers=AUTH
+    )
+    assert res.status_code == 200
 
 
 # /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same

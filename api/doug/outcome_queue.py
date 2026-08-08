@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import case, func, or_, select, update
 
 from . import store
 from .adjudicate import Adjudication
+from .store import _db_now
 
 MAX_ATTEMPTS = 10
 STALL_LEASE_SECONDS = 7200
@@ -46,22 +47,6 @@ def _engine():
     if engine is None:
         raise RuntimeError("outcome_jobs requires DATABASE_URL")
     return engine
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _db_now(conn) -> datetime:
-    """Use the ledger clock shared by every Job execution."""
-    if conn.dialect.name == "sqlite":
-        return datetime.now(UTC)
-    value = conn.execute(select(func.clock_timestamp())).scalar_one()
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    return _as_utc(value)
 
 
 def due_repositories() -> list[RepositoryKey]:

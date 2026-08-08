@@ -2,22 +2,30 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { DougLogo } from "@/components/doug-logo";
+import { HealthStrip } from "@/components/health-strip";
 import { ScopeSwitch, ScopeSwitchStatic } from "@/components/scope-switch";
+import { getHealth } from "@/lib/api";
 
 export interface ShellScope {
   tenant: string | null;
   repo: string | null;
 }
 
-export function Shell({
+export async function Shell({
   scope,
   active,
   children,
 }: {
   scope: ShellScope;
-  active: "runs";
+  active: "runs" | "jobs";
   children: React.ReactNode;
 }) {
+  // Server-rendered per page load. No polling: the pages are already
+  // force-dynamic so a refresh is a fresh read, and a polling client
+  // component would need its own stale and error states — one more thing
+  // that can render "clear" while being wrong.
+  const health = await getHealth();
+
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-20 flex h-[52px] items-center gap-[18px] border-b border-border bg-background/[.86] px-5 backdrop-blur-[10px]">
@@ -35,7 +43,7 @@ export function Shell({
             <ScopeSwitch paramKey="repo" label="repo" value={scope.repo} />
           </Suspense>
         </div>
-        <HealthStrip />
+        <HealthStrip health={health} />
       </header>
       <nav className="flex items-end gap-0.5 border-b border-border px-5">
         <Link
@@ -44,6 +52,13 @@ export function Shell({
           className="mono -mb-px border-b-2 border-transparent px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground aria-[current]:border-b-[var(--iridescent)] aria-[current]:font-semibold aria-[current]:text-foreground"
         >
           Runs
+        </Link>
+        <Link
+          href="/jobs"
+          aria-current={active === "jobs" ? "page" : undefined}
+          className="mono -mb-px border-b-2 border-transparent px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground aria-[current]:border-b-[var(--iridescent)] aria-[current]:font-semibold aria-[current]:text-foreground"
+        >
+          Jobs
         </Link>
         <span className="mono -mb-px cursor-not-allowed px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground/50">
           Repos <span className="text-[9px]">phase 2</span>
@@ -54,44 +69,5 @@ export function Shell({
       </nav>
       <main className="mx-auto max-w-[1440px] px-5">{children}</main>
     </div>
-  );
-}
-
-// Markup only — no data source exists yet. Tasks 1-5 shipped GET /v1/runs
-// and GET /v1/runs/{verdict_id}; neither is a health/status feed. Showing
-// "0 pending" for a metric nobody measured would be exactly the fabricated
-// state this console exists to refuse, so every value is an em dash, never
-// a number, and the pips carry no hue: there is no known state to assert,
-// and hue is reserved for Doug's routing decision. Ghosted with the same
-// "phase N" treatment the Repos/Evidence tabs use below for the same
-// reason — unwired, not empty. Phase 2 drops real numbers into this exact
-// layout; nothing here claims a fact we don't have.
-function HealthStrip() {
-  return (
-    <div
-      role="group"
-      aria-label="Fleet health — not yet wired, Phase 2"
-      className="mono ml-auto flex cursor-not-allowed items-stretch overflow-hidden rounded-[5px] border border-border bg-card text-[11.5px] text-muted-foreground/50"
-    >
-      <HealthCell label="running" />
-      <HealthCell label="pending" />
-      <HealthCell label="failed 24h" />
-      <HealthCell label="clocks due" />
-      <span className="flex items-center border-l border-border px-[9px] text-[9px] uppercase tracking-[.04em] text-muted-foreground/50">
-        phase 2
-      </span>
-    </div>
-  );
-}
-
-function HealthCell({ label }: { label: string }) {
-  return (
-    <span
-      className="flex items-center gap-1.5 border-r border-border/70 px-[11px] py-[5px] last:border-r-0"
-      aria-label={`${label}: not yet available`}
-    >
-      <span aria-hidden="true">—</span>
-      <span className="text-[10.5px]">{label}</span>
-    </span>
   );
 }

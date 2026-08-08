@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getRuns, isError } from "./api.ts";
+import { getJobs, getRuns, isError } from "./api.ts";
 
 test("isError treats an API failure as an error, never as empty data", () => {
   // The console must never render a number when the API is unreachable.
@@ -62,3 +62,24 @@ test("getRuns reports a 200 with an unparseable body as an error, not a crash", 
       assert.notDeepEqual(result, { items: [] });
     },
   ));
+
+test("getJobs sends installationId 0 as a real filter, never drops it as falsy", () => {
+  // installation id 0 is falsy but is a value the caller passed, not an
+  // absent one — the same trap `parseTenantId` exists to close on the Runs
+  // page (lib/runs.ts). getJobs reproduces getRuns's `installationId !==
+  // undefined` guard verbatim; a naive `if (params.installationId)` would
+  // silently drop 0 and query every installation while the caller still
+  // believes it asked for one.
+  let requestedUrl;
+  return withFetch(
+    async (url) => {
+      requestedUrl = String(url);
+      return new Response(JSON.stringify({ items: [], limit: 100, offset: 0 }), { status: 200 });
+    },
+    async () => {
+      const result = await getJobs({ lane: "review", view: "unhealthy", installationId: 0 });
+      assert.equal(isError(result), false);
+      assert.match(requestedUrl, /(?:\?|&)installation_id=0(?:&|$)/);
+    },
+  );
+});

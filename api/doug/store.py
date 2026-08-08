@@ -406,6 +406,45 @@ def enabled() -> bool:
     return _get_engine() is not None
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalise a DB timestamp to aware UTC.
+
+    sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
+    Claim holders compare the started_at they were handed against the row,
+    so both sides of that equality have to share a timezone convention.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _db_now(conn) -> datetime:
+    """The database's clock, not the caller's wall clock.
+
+    Claim started_at and reclaim cutoffs must share one clock across Cloud
+    Run instances; comparing one instance's datetime.now() to another's
+    written started_at is how a skewed host reclaims a live worker.
+
+    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision —
+    wall clock keeps microsecond resolution there. Postgres uses
+    clock_timestamp() (statement time), not now()/transaction_timestamp(),
+    so two claims in quick succession cannot collapse onto one tx start time.
+
+    This is the single definition. ingest, outcome_queue and outcome_backfill
+    each carried an identical private copy; they now import from here. It
+    lives in store rather than in one of them because all three already
+    import store, so this is the only direction with no cycle.
+    """
+    if conn.dialect.name == "sqlite":
+        return datetime.now(UTC)
+    from sqlalchemy import func
+
+    value = conn.execute(select(func.clock_timestamp())).scalar_one()
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    return _as_utc(value)
+
+
 def columns_of(table: str) -> frozenset[str] | None:
     """Column names actually present on `table` in the connected database.
 
@@ -1953,6 +1992,251 @@ def run_history(
         row["job"] = job_by_verdict.get(row["id"])
         row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"]))
     return rows
+
+
+def job_health(
+    *,
+    review_lease_seconds: int,
+    review_max_attempts: int,
+    outcome_lease_seconds: int,
+    outcome_max_attempts: int,
+    repo: str | None = None,
+    installation_id: int | None = None,
+) -> dict | None:
+    """Fixed-size health aggregates for both job lanes.
+
+    Returns None when no ledger is configured — never a dict of zeros, which
+    would render as "nothing is wrong" on a deployment that cannot answer.
+
+    The lane constants are arguments rather than imports because both ingest
+    and outcome_queue import this module; taking them in keeps one source of
+    truth without a cycle, and lets the response report the values actually
+    measured with.
+
+    'superseded' appears in no count. It is neither done (no verdict) nor
+    failed (nothing went wrong), and counting it is the fastest way to make
+    the strip cry wolf.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import func, select
+
+    rj, oj = review_jobs, outcome_jobs
+
+    def _scope_review(q):
+        if repo:
+            q = q.where(rj.c.repo_full_name == repo)
+        if installation_id is not None:
+            q = q.where(rj.c.installation_id == installation_id)
+        return q
+
+    def _scope_outcome(q):
+        # outcome_jobs carries no repo name — only github_repo_id — so a repo
+        # filter has to go through the ledger that maps the two.
+        if repo:
+            q = q.where(
+                oj.c.github_repo_id.in_(
+                    select(installation_repos.c.github_repo_id).where(
+                        installation_repos.c.full_name == repo
+                    )
+                )
+            )
+        if installation_id is not None:
+            q = q.where(oj.c.installation_id == installation_id)
+        return q
+
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        review_cutoff = now - timedelta(seconds=review_lease_seconds)
+        outcome_cutoff = now - timedelta(seconds=outcome_lease_seconds)
+        day_ago = now - timedelta(hours=24)
+
+        def _one(q):
+            return conn.execute(q).scalar()
+
+        def _count_review(*where):
+            return _one(_scope_review(select(func.count()).select_from(rj).where(*where))) or 0
+
+        def _count_outcome(*where):
+            return _one(_scope_outcome(select(func.count()).select_from(oj).where(*where))) or 0
+
+        review = {
+            "pending": _count_review(rj.c.status == "pending"),
+            # attempts = 0 ONLY. ingest.fail() resets enqueued_at on every
+            # retry, so a MIN over all pending rows reports a twice-failed
+            # job as freshly enqueued. These are two different quantities and
+            # must never be blended back into one MIN.
+            "oldest_pending_at": _one(
+                _scope_review(
+                    select(func.min(rj.c.enqueued_at)).where(
+                        rj.c.status == "pending", rj.c.attempts == 0
+                    )
+                )
+            ),
+            "retrying": _count_review(rj.c.status == "pending", rj.c.attempts > 0),
+            "oldest_retry_at": _one(
+                _scope_review(
+                    select(func.min(rj.c.enqueued_at)).where(
+                        rj.c.status == "pending", rj.c.attempts > 0
+                    )
+                )
+            ),
+            "running": _count_review(rj.c.status == "running"),
+            "stalled": _count_review(
+                rj.c.status == "running", rj.c.started_at < review_cutoff
+            ),
+            "failed": _count_review(rj.c.status == "failed"),
+            "failed_24h": _count_review(
+                rj.c.status == "failed", rj.c.finished_at >= day_ago
+            ),
+            "stall_lease_seconds": review_lease_seconds,
+            "max_attempts": review_max_attempts,
+        }
+
+        outcome = {
+            "pending": _count_outcome(oj.c.status == "pending"),
+            "overdue": _count_outcome(oj.c.status == "pending", oj.c.due_at < now),
+            # The earliest clock still in the FUTURE — a schedule, not an
+            # alarm. oldest_overdue_due_at is the earliest already past.
+            # They never overlap.
+            "next_due_at": _one(
+                _scope_outcome(
+                    select(func.min(oj.c.due_at)).where(
+                        oj.c.status == "pending", oj.c.due_at >= now
+                    )
+                )
+            ),
+            "oldest_overdue_due_at": _one(
+                _scope_outcome(
+                    select(func.min(oj.c.due_at)).where(
+                        oj.c.status == "pending", oj.c.due_at < now
+                    )
+                )
+            ),
+            "running": _count_outcome(oj.c.status == "running"),
+            "stalled": _count_outcome(
+                oj.c.status == "running", oj.c.started_at < outcome_cutoff
+            ),
+            "failed": _count_outcome(oj.c.status == "failed"),
+            "stall_lease_seconds": outcome_lease_seconds,
+            "max_attempts": outcome_max_attempts,
+        }
+
+        return {"review": review, "outcome": outcome, "as_of": now}
+
+
+def job_rows(
+    *,
+    lane: str,
+    lease_seconds: int,
+    unhealthy_only: bool = True,
+    status: str | None = None,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Job rows for one lane, newest first.
+
+    `status` accepts STORED statuses only. 'stalled', 'retrying' and
+    'overdue' are derived from started_at / attempts / due_at and are not
+    stored anywhere; they are reachable through unhealthy_only, and each
+    returned row carries the flags it was selected by so the caller renders
+    the reason without recomputing it against a lease it holds locally. That
+    is what keeps this list and the health strip from drifting apart.
+
+    'superseded' is never unhealthy — nothing went wrong — so it appears only
+    when unhealthy_only is False.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0 or lane not in ("review", "outcome"):
+        return []
+    from sqlalchemy import desc, or_, select
+
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        cutoff = now - timedelta(seconds=lease_seconds)
+
+        if lane == "review":
+            t = review_jobs
+            query = select(t)
+            if repo:
+                query = query.where(t.c.repo_full_name == repo)
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.attempts > 0),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                        (t.c.status == "pending") & (t.c.attempts == 0),
+                    )
+                )
+        else:
+            t = outcome_jobs
+            query = select(t)
+            if repo:
+                query = query.where(
+                    t.c.github_repo_id.in_(
+                        select(installation_repos.c.github_repo_id).where(
+                            installation_repos.c.full_name == repo
+                        )
+                    )
+                )
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.due_at < now),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                    )
+                )
+
+        if status:
+            query = query.where(t.c.status == status)
+        if installation_id is not None:
+            query = query.where(t.c.installation_id == installation_id)
+        query = query.order_by(desc(t.c.id)).limit(limit).offset(offset)
+
+        rows = [dict(r) for r in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+
+        names = {}
+        if lane == "outcome":
+            # Display only, and genuinely nullable: a repo can be absent from
+            # installation_repos entirely. A miss stays None so the caller
+            # renders the bare github_repo_id rather than a guess.
+            ids = {r["github_repo_id"] for r in rows}
+            names = {
+                row["github_repo_id"]: row["full_name"]
+                for row in conn.execute(
+                    select(
+                        installation_repos.c.github_repo_id,
+                        installation_repos.c.full_name,
+                    ).where(installation_repos.c.github_repo_id.in_(ids))
+                ).mappings()
+            }
+
+        for r in rows:
+            r["lane"] = lane
+            # sqlite hands DateTime(timezone=True) columns back naive; `now`
+            # and `cutoff` are always aware (_db_now's contract). Comparing
+            # them raw is the same trap _as_utc exists to close for the
+            # claim-holder comparisons in ingest/outcome_queue — this is that
+            # same comparison, just done in Python instead of in SQL.
+            started = r.get("started_at")
+            started = _as_utc(started) if started is not None else None
+            r["stalled"] = bool(
+                r["status"] == "running" and started is not None and started < cutoff
+            )
+            if lane == "review":
+                r["repo"] = r.pop("repo_full_name")
+                r["retrying"] = bool(r["status"] == "pending" and r["attempts"] > 0)
+            else:
+                r["repo"] = names.get(r["github_repo_id"])
+                r["overdue"] = bool(r["status"] == "pending" and _as_utc(r["due_at"]) < now)
+        return rows
 
 
 def active_installations() -> list[int]:
