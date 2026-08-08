@@ -1071,6 +1071,13 @@ def _record_merge(payload: dict) -> None:
             file=sys.stderr,
         )
         return
+    # Pre-registration §11 item 7, forward only. Deliberately read AFTER the
+    # five-fact guard above and left out of it: merged_head_sha drives
+    # neither censoring (base_ref) nor tenancy (github_repo_id), the two
+    # things that guard protects. A payload missing pull_request.head — a
+    # deleted fork branch, an older payload shape — must still start both
+    # clocks; only this one column goes in NULL.
+    merged_head_sha = _text(_obj(pr.get("head")).get("sha"), store.outcome_jobs.c.merged_head_sha)
     store.enqueue_outcome_jobs(
         payload["installation"]["id"],
         repo_id,
@@ -1078,6 +1085,7 @@ def _record_merge(payload: dict) -> None:
         merge_sha,
         merged_at,
         base_ref,
+        merged_head_sha=merged_head_sha,
     )
 
 

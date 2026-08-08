@@ -830,6 +830,7 @@ def enqueue_outcome_jobs(
     base_ref: str,
     *,
     window_days: tuple[int, ...] = (14, 60),
+    merged_head_sha: str | None = None,
 ) -> dict[int, int]:
     """Start the requested outcome-observation windows for one merged PR.
 
@@ -840,6 +841,11 @@ def enqueue_outcome_jobs(
     Both rows are prepared from the same merge facts and committed by one
     multi-value statement in one transaction: a failure creating either
     window must leave neither new row in the ledger.
+
+    `merged_head_sha` defaults to None and is not part of any caller's
+    required-facts check (see _record_merge) — it names the commit a
+    receipt can later claim a verdict about, nothing this table's own
+    windows or dedup depend on.
     """
     engine = _get_engine()
     if engine is None:
@@ -856,6 +862,7 @@ def enqueue_outcome_jobs(
             "window_days": days,
             "due_at": merged_at + timedelta(days=days),
             "created_at": created_at,
+            "merged_head_sha": merged_head_sha,
         }
         for days in window_days
     ]
