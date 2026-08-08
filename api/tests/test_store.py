@@ -2168,6 +2168,75 @@ def test_job_health_returns_none_without_a_ledger(tmp_path, monkeypatch):
     assert _health(None) is None
 
 
+def test_job_health_scopes_by_repo(tmp_path, monkeypatch):
+    """An operator curling /v1/health?repo=o/a must see only o/a's jobs.
+
+    outcome_jobs carries no repo name column — only github_repo_id — so
+    _scope_outcome resolves the name through installation_repos. A test that
+    only seeded the review lane would miss that join entirely and still pass
+    even if the outcome scope silently matched every repo; both lanes get
+    an unhealthy row here for exactly that reason, and both must exclude the
+    other repo's."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    twenty_min_ago = now - _dt.timedelta(minutes=20)
+    store.set_installation_repos(99, [(1, "o/a"), (2, "o/b")], replace=True)
+
+    # Repo A: one stalled review claim, one overdue outcome window.
+    ingest.enqueue(99, 1, "o/a", 7, "a" * 40)
+    claimed_a = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    # Repo B: the same unhealthy shapes. Must not leak into o/a's scoped view.
+    ingest.enqueue(99, 2, "o/b", 8, "b" * 40)
+    claimed_b = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        99, 2, 8, "d" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    health = _health(None, repo="o/a")
+
+    assert health["review"]["running"] == 1
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["pending"] == 1
+    assert health["outcome"]["overdue"] == 1
+
+
+def test_job_health_scopes_by_installation(tmp_path, monkeypatch):
+    """Two tenants' unhealthy jobs must not blur into one installation's
+    count — an operator debugging installation 11 must not see installation
+    22's stalled claims or overdue windows counted against it, in either
+    lane."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    twenty_min_ago = now - _dt.timedelta(minutes=20)
+
+    ingest.enqueue(11, 1, "o/a", 7, "a" * 40)
+    claimed_a = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        11, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    ingest.enqueue(22, 2, "o/b", 8, "b" * 40)
+    claimed_b = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        22, 2, 8, "d" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    health = _health(None, installation_id=11)
+
+    assert health["review"]["running"] == 1
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["pending"] == 1
+    assert health["outcome"]["overdue"] == 1
+
+
 def _force_started_at(table, job_id, when):
     """Age a claim's lease without waiting for one. reclaim_stalled compares
     started_at to the DB clock, so this is the only way to test the stalled
