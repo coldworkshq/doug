@@ -208,6 +208,18 @@ def test_migration_008_backfills_reader_prompt_hash(tmp_path):
 
 
 def test_migration_008_backfill_is_idempotent(tmp_path):
+    """A second REAL run of migration 8's UPDATE — not a second bare
+    apply() — must not disturb a prompt_hash already present.
+
+    apply()'s `done` ledger (migrations.py:316) skips a migration entirely
+    once its version is recorded, so calling apply() twice in a row never
+    re-executes migration 8's statements the second time; it only proves the
+    first run worked. Deleting the schema_migrations row for version 8
+    between the two calls is what forces the UPDATE to run again for real.
+    Without that, this test cannot fail no matter what the UPDATE's WHERE
+    clause says — confirmed by removing `AND prompt_hash IS NULL` from the
+    migration and watching this test still pass before this fix.
+    """
     engine = create_engine(f"sqlite:///{tmp_path}/m8b.db")
     store.metadata.create_all(engine)
     with engine.begin() as conn:
@@ -217,12 +229,25 @@ def test_migration_008_backfill_is_idempotent(tmp_path):
             "('o/r', 1, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', NULL)"
         )
     migrations.apply(engine)
+    with engine.begin() as conn:
+        # Stand in for a hash set by anything other than this backfill
+        # between the two runs (a hand correction, a verdict scored under a
+        # later prompt era). A genuinely idempotent rerun must leave it
+        # alone; only the `AND prompt_hash IS NULL` guard makes that true.
+        conn.exec_driver_sql(
+            "UPDATE verdicts SET prompt_hash = 'do-not-touch' WHERE pr_number = 1"
+        )
+        conn.exec_driver_sql("DELETE FROM schema_migrations WHERE version = 8")
     migrations.apply(engine)
     with engine.begin() as conn:
+        rows = dict(
+            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
+        )
         count = conn.exec_driver_sql(
             "SELECT count(*) FROM verdicts WHERE prompt_hash IS NULL"
         ).scalar()
     assert count == 0
+    assert rows[1] == "do-not-touch", "a rerun must never overwrite an existing hash"
 
 
 def test_migration_007_declares_the_same_columns_as_their_tables(tmp_path):
