@@ -18,6 +18,10 @@ venv/
 /out/
 /reports/
 
+# Node
+node_modules/
+.next/
+
 # Secrets
 .env
 .env.*
