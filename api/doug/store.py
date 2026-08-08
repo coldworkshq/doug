@@ -1783,6 +1783,119 @@ def job_health(
         return {"review": review, "outcome": outcome, "as_of": now}
 
 
+def job_rows(
+    *,
+    lane: str,
+    lease_seconds: int,
+    unhealthy_only: bool = True,
+    status: str | None = None,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Job rows for one lane, newest first.
+
+    `status` accepts STORED statuses only. 'stalled', 'retrying' and
+    'overdue' are derived from started_at / attempts / due_at and are not
+    stored anywhere; they are reachable through unhealthy_only, and each
+    returned row carries the flags it was selected by so the caller renders
+    the reason without recomputing it against a lease it holds locally. That
+    is what keeps this list and the health strip from drifting apart.
+
+    'superseded' is never unhealthy — nothing went wrong — so it appears only
+    when unhealthy_only is False.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0 or lane not in ("review", "outcome"):
+        return []
+    from sqlalchemy import desc, or_, select
+
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        cutoff = now - timedelta(seconds=lease_seconds)
+
+        if lane == "review":
+            t = review_jobs
+            query = select(t)
+            if repo:
+                query = query.where(t.c.repo_full_name == repo)
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.attempts > 0),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                        (t.c.status == "pending") & (t.c.attempts == 0),
+                    )
+                )
+        else:
+            t = outcome_jobs
+            query = select(t)
+            if repo:
+                query = query.where(
+                    t.c.github_repo_id.in_(
+                        select(installation_repos.c.github_repo_id).where(
+                            installation_repos.c.full_name == repo
+                        )
+                    )
+                )
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.due_at < now),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                    )
+                )
+
+        if status:
+            query = query.where(t.c.status == status)
+        if installation_id is not None:
+            query = query.where(t.c.installation_id == installation_id)
+        query = query.order_by(desc(t.c.id)).limit(limit).offset(offset)
+
+        rows = [dict(r) for r in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+
+        names = {}
+        if lane == "outcome":
+            # Display only, and genuinely nullable: a repo can be absent from
+            # installation_repos entirely. A miss stays None so the caller
+            # renders the bare github_repo_id rather than a guess.
+            ids = {r["github_repo_id"] for r in rows}
+            names = {
+                row["github_repo_id"]: row["full_name"]
+                for row in conn.execute(
+                    select(
+                        installation_repos.c.github_repo_id,
+                        installation_repos.c.full_name,
+                    ).where(installation_repos.c.github_repo_id.in_(ids))
+                ).mappings()
+            }
+
+        for r in rows:
+            r["lane"] = lane
+            # sqlite hands DateTime(timezone=True) columns back naive; `now`
+            # and `cutoff` are always aware (_db_now's contract). Comparing
+            # them raw is the same trap _as_utc exists to close for the
+            # claim-holder comparisons in ingest/outcome_queue — this is that
+            # same comparison, just done in Python instead of in SQL.
+            started = r.get("started_at")
+            started = _as_utc(started) if started is not None else None
+            r["stalled"] = bool(
+                r["status"] == "running" and started is not None and started < cutoff
+            )
+            if lane == "review":
+                r["repo"] = r.pop("repo_full_name")
+                r["retrying"] = bool(r["status"] == "pending" and r["attempts"] > 0)
+            else:
+                r["repo"] = names.get(r["github_repo_id"])
+                r["overdue"] = bool(r["status"] == "pending" and _as_utc(r["due_at"]) < now)
+        return rows
+
+
 def active_installations() -> list[int]:
     """Installation ids in state 'active'. [] when storage is disabled."""
     engine = _get_engine()

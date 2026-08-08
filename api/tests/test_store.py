@@ -2237,6 +2237,153 @@ def test_job_health_scopes_by_installation(tmp_path, monkeypatch):
     assert health["outcome"]["overdue"] == 1
 
 
+# --- store.job_rows — the failure list backing the /jobs page. Every test
+# here pins a way the row-level query could disagree with job_health's count.
+
+
+def test_job_rows_defaults_to_unhealthy_only(tmp_path, monkeypatch):
+    """The page exists to answer 'what is wrong'. A raw job list is
+    overwhelmingly done and superseded, so the default filter is the RED and
+    AMBER states and nothing else."""
+    _db(tmp_path, monkeypatch)
+    # One healthy done job.
+    done_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.complete(done_id, None, claim_generation=claimed["claim_generation"])
+    # One failed job: three attempts exhausts ingest.MAX_ATTEMPTS.
+    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    for _ in range(ingest.MAX_ATTEMPTS):
+        c = ingest.claim()
+        ingest.fail(c["id"], "boom", claim_generation=c["claim_generation"])
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert [r["pr_number"] for r in rows] == [8]
+    assert rows[0]["status"] == "failed"
+
+
+def test_job_rows_never_returns_superseded_as_unhealthy(tmp_path, monkeypatch):
+    """Same reason job_health excludes it: nothing went wrong."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert rows == []
+
+
+def test_job_rows_shows_everything_when_unhealthy_only_is_off(
+    tmp_path, monkeypatch
+):
+    """'The job I expected does not exist at all' is a real diagnosis, and
+    only a complete list reaches it."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    rows = store.job_rows(
+        lane="review",
+        lease_seconds=ingest.STALL_LEASE_SECONDS,
+        unhealthy_only=False,
+    )
+
+    assert [r["status"] for r in rows] == ["superseded"]
+
+
+def test_job_rows_carries_the_derived_flag_it_was_selected_by(
+    tmp_path, monkeypatch
+):
+    """The page renders the REASON a row is unhealthy without recomputing it
+    against a lease constant it would have to hold locally — which is how the
+    list and the strip drift apart."""
+    _db(tmp_path, monkeypatch)
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    _force_started_at(
+        store.review_jobs,
+        claimed["id"],
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=1000),
+    )
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert rows[0]["stalled"] is True
+    assert rows[0]["retrying"] is False
+
+
+def test_job_rows_renders_no_repo_name_when_the_ledger_has_none(
+    tmp_path, monkeypatch
+):
+    """outcome_jobs carries only github_repo_id. The display name comes from
+    installation_repos, which worker.py documents as able to go stale and
+    which count_verdict_repos_missing_from_ledger proves can be absent. A
+    miss must return None so the caller renders the bare id — never a guess,
+    never a blank."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        window_days=(14,),
+    )
+
+    rows = store.job_rows(
+        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
+    )
+
+    assert rows[0]["repo"] is None
+    assert rows[0]["github_repo_id"] == 4242
+    assert rows[0]["overdue"] is True
+
+
+def test_job_rows_resolves_the_outcome_repo_name_when_the_ledger_has_it(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    # set_installation_repos takes (github_repo_id, full_name) tuples — the
+    # same call the installation_repositories webhook tests already use.
+    store.set_installation_repos(99, [(4242, "o/r")], replace=True)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        window_days=(14,),
+    )
+
+    rows = store.job_rows(
+        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
+    )
+
+    assert rows[0]["repo"] == "o/r"
+
+
+def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(
+    tmp_path, monkeypatch
+):
+    """ingest.complete() takes verdict_id: int | None — 'a skipped PR is
+    finished, not failed'. A healthy done job can carry a NULL verdict, so
+    unlinkable does not mean unhealthy. Surfacing it as a failure would
+    invent an incident out of Doug correctly declining to review."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
+
+    unhealthy = store.job_rows(
+        lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS
+    )
+    everything = store.job_rows(
+        lane="review",
+        lease_seconds=ingest.STALL_LEASE_SECONDS,
+        unhealthy_only=False,
+    )
+
+    assert unhealthy == []
+    assert everything[0]["status"] == "done"
+    assert everything[0]["verdict_id"] is None
+
+
 def _force_started_at(table, job_id, when):
     """Age a claim's lease without waiting for one. reclaim_stalled compares
     started_at to the DB clock, so this is the only way to test the stalled
