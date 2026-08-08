@@ -237,7 +237,7 @@ yours" from "does not exist".
 ## Response shape
 
 **This block is the original design intent, not the shipped contract.** What
-actually shipped (`ReceiptResponse` in `api/doug/models.py`) diverges from it
+actually shipped (`ReceiptResponse` in `api/doug/api.py:543`) diverges from it
 in three ways, each deliberately deferred rather than silently dropped:
 
 - `inputs_seen` (with `changed_files`, `files_dropped`, `complete`) does not
