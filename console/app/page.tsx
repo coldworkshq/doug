@@ -1,19 +1,9 @@
 import { Suspense } from "react";
 
 import { RunsTable } from "@/components/runs-table";
-import { SelectedRunPanel } from "@/components/selected-run-panel";
 import { Shell } from "@/components/shell";
-import { getRunDetail, getRuns, isError } from "@/lib/api";
+import { getRuns, isError } from "@/lib/api";
 import { parseTenantId } from "@/lib/runs";
-import { parseRunId } from "@/lib/selection";
-
-function clearRunHref(tenant: string | null, repo: string | null): string {
-  const p = new URLSearchParams();
-  if (tenant) p.set("tenant", tenant);
-  if (repo) p.set("repo", repo);
-  const q = p.toString();
-  return q ? `/?${q}` : "/";
-}
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +18,7 @@ const PAGE_LIMIT = 500;
 export default async function RunsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ repo?: string; tenant?: string; run?: string }>;
+  searchParams: Promise<{ repo?: string; tenant?: string }>;
 }) {
   const params = await searchParams;
   const scope = { tenant: params.tenant ?? null, repo: params.repo ?? null };
@@ -65,13 +55,6 @@ export default async function RunsPage({
       ? `for tenant ${scope.tenant}`
       : "across every installation";
 
-  // Detail is independent of the list fetch: a deep-linked ?run= must still
-  // resolve when the table path fails (bad tenant filter, unreachable list
-  // endpoint). Coupling them hid forensics under "nothing is known".
-  // Subsequent clicks load via server action + pushState (no getRuns refetch).
-  const selectedId = parseRunId(params.run);
-  const initialDetail = selectedId === null ? null : await getRunDetail(selectedId);
-
   return (
     <Shell scope={scope} active="runs">
       {isError(result) ? (
@@ -81,9 +64,8 @@ export default async function RunsPage({
           <p className="font-semibold text-[var(--flag)]">The API did not answer.</p>
           <p className="mt-1 text-muted-foreground">{result.error}</p>
           <p className="mt-2 text-muted-foreground">
-            {selectedId === null
-              ? "Nothing is rendered below because nothing is known. This console has no fixture fallback by design."
-              : "The runs list could not be loaded. Forensics for the selected run is attempted below."}
+            Nothing is rendered below because nothing is known. This console has no
+            fixture fallback by design.
           </p>
         </div>
       ) : (
@@ -106,12 +88,6 @@ export default async function RunsPage({
           />
         </Suspense>
       )}
-      <Suspense fallback={null}>
-        <SelectedRunPanel
-          initialDetail={initialDetail}
-          clearHref={clearRunHref(scope.tenant, scope.repo)}
-        />
-      </Suspense>
     </Shell>
   );
 }
