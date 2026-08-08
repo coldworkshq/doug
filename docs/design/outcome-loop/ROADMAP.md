@@ -278,9 +278,14 @@ path, no cross-tenant read, no silent partial reads.
 - [ ] Receipts: `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring + findings + inputs-seen + adjudication block + hashes)
 - [ ] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
 - [ ] Public Doug-on-Doug scoreboard page (dogfood proof, no auth)
-- [ ] **Pre-registration document published + hashed** (metrics, denominator, both windows,
-  right-censoring, cadence) — hash lands in receipts; 60-day-backfill runbook written
-  (must run before the first 14-day publication)
+- [~] **Pre-registration document published + hashed** (metrics, denominator, both windows,
+  right-censoring, cadence). `LOCKED v8`, the atomic dual-write, guarded catch-up CLI,
+  deploy lock, and production runbook are built on `m3-60-day-backfill`; production is
+  unchanged until the branch merges and Task 7 runs.
+  - [ ] **Task 7 production catch-up:** deploy the merged lock hash, capture the dry-run
+    count, pause the Scheduler, apply and verify the manifest, execute one manual Job,
+    pass the SQL/CLI audits, then resume the Scheduler. This remains a hard gate before
+    the first 14-day publication.
 
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real
@@ -401,7 +406,7 @@ GC'd mid-call-chain (#52) — an executable gate earns its keep.
 - [ ] App visibility → "Any account" *(gated on MT above)*
 - [ ] Onboard 2–3 design partners: $99/installation hand-invoiced, allowance rows, meter visible day 1
 - [ ] 30 days of fill: prospective counters ticking on a real tenant, zero cross-tenant reads
-- [ ] 60-day backfill run; **first pre-committed publication ships on its date, good or bad**
+- [ ] 60-day clocks mature; **first pre-committed publication ships on its date, good or bad**
 
 **Exit gate:** the first published number exists with N + CI + censoring rate, on schedule.
 

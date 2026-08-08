@@ -872,40 +872,70 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     kicks = _hook_env(tmp_path, monkeypatch)
     assert _webhook("pull_request", _closed_payload()).status_code == 202
 
-    (job,) = _table(tmp_path, store.outcome_jobs)
-    assert job["installation_id"] == 150424894
-    assert job["github_repo_id"] == 987
-    assert job["pr_number"] == 7
-    assert job["merge_commit_sha"] == "c" * 40
-    assert job["base_ref"] == "main"
-    assert job["window_days"] == 14
-    assert job["status"] == "pending"
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [job["window_days"] for job in jobs] == [14, 60]
+    assert {job["installation_id"] for job in jobs} == {150424894}
+    assert {job["github_repo_id"] for job in jobs} == {987}
+    assert {job["pr_number"] for job in jobs} == {7}
+    assert {job["merge_commit_sha"] for job in jobs} == {"c" * 40}
+    assert {job["base_ref"] for job in jobs} == {"main"}
+    assert [_utc(job["due_at"]) for job in jobs] == [
+        datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2020, 4, 30, 12, 0, tzinfo=UTC),
+    ]
+    assert all(job["status"] == "pending" for job in jobs)
     # No read bought, and nothing queued that would buy one.
     assert _table(tmp_path, store.review_jobs) == []
     assert kicks == []
 
 
-def test_the_outcome_window_is_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
-    """due_at is merged_at + 14 days, computed from the payload's own
+def test_the_outcome_windows_are_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
+    """due_at is merged_at + each window, computed from the payload's own
     timestamp. Deriving it from the wall clock would silently re-date every
     row a redelivery or a backfill ever touched, and the window is what the
     published defect-rate denominator means."""
     _hook_env(tmp_path, monkeypatch)
     _webhook("pull_request", _closed_payload())
 
-    (job,) = _table(tmp_path, store.outcome_jobs)
-    assert _utc(job["merged_at"]) == datetime(2020, 3, 1, 12, 0, tzinfo=UTC)
-    assert _utc(job["due_at"]) == datetime(2020, 3, 15, 12, 0, tzinfo=UTC)
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [_utc(job["merged_at"]) for job in jobs] == [
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+    ]
+    assert [_utc(job["due_at"]) for job in jobs] == [
+        datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2020, 4, 30, 12, 0, tzinfo=UTC),
+    ]
 
 
 def test_a_redelivered_merge_does_not_start_a_second_clock(tmp_path, monkeypatch):
     """GitHub redelivers on its own schedule. Two 'closed' deliveries for one
-    merge must be one observation window, not two — a second row would be a
-    second vote in the denominator for a single merge."""
+    merge must be one pair of observation windows, not a second pair — a
+    second row would be a second vote in the denominator for a single merge."""
     _hook_env(tmp_path, monkeypatch)
     assert _webhook("pull_request", _closed_payload()).status_code == 202
     assert _webhook("pull_request", _closed_payload()).status_code == 202
-    assert len(_table(tmp_path, store.outcome_jobs)) == 1
+    assert len(_table(tmp_path, store.outcome_jobs)) == 2
+
+
+def test_a_redelivered_merge_heals_a_missing_outcome_window(tmp_path, monkeypatch):
+    """A pre-M3 row can carry only the legacy 14-day identity. Redelivery
+    must fill its missing 60-day partner rather than treating the whole merge
+    as already queued, which proves the webhook uses the plural writer."""
+    _hook_env(tmp_path, monkeypatch)
+    assert store.enqueue_outcome_job(
+        150424894,
+        987,
+        7,
+        "c" * 40,
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+        "main",
+    ) is not None
+
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [job["window_days"] for job in jobs] == [14, 60]
 
 
 def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch):

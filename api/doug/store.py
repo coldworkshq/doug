@@ -41,6 +41,8 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from . import migrations
@@ -355,6 +357,14 @@ _engine = None
 # DATABASE_URL — and rebuilt the engine, pool and all, on every call.
 _engine_url = None
 _engine_lock = threading.Lock()
+
+
+def _get_existing_schema_engine():
+    """Build an engine without creating or migrating the target schema."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None
+    return create_engine(url, pool_pre_ping=True)
 
 
 def _get_engine():
@@ -779,12 +789,70 @@ def set_installation_repos(
                 known[repo_id] = result.inserted_primary_key[0]
 
 
-# outcome_jobs' unique key, named the two ways the two backends report it:
-# Postgres names the constraint, sqlite lists the table and its columns. Same
-# shape as ingest._DEDUPE_COLLISION and for the same reason — anything else is
-# a real integrity problem this code did not cause, and reading it as "already
-# queued" would drop a merge out of the denominator silently.
-_OUTCOME_COLLISION = ("uq_outcome_job", "unique constraint failed: outcome_jobs.")
+_OUTCOME_IDENTITY = (
+    outcome_jobs.c.installation_id,
+    outcome_jobs.c.github_repo_id,
+    outcome_jobs.c.pr_number,
+    outcome_jobs.c.merge_commit_sha,
+    outcome_jobs.c.window_days,
+)
+
+
+def _outcome_insert(conn):
+    if conn.dialect.name == "postgresql":
+        statement = postgresql_insert(outcome_jobs)
+    elif conn.dialect.name == "sqlite":
+        statement = sqlite_insert(outcome_jobs)
+    else:
+        raise RuntimeError(f"unsupported outcome_jobs dialect: {conn.dialect.name}")
+    return statement.on_conflict_do_nothing(index_elements=_OUTCOME_IDENTITY)
+
+
+def enqueue_outcome_jobs(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merge_commit_sha: str,
+    merged_at: datetime,
+    base_ref: str,
+    *,
+    window_days: tuple[int, ...] = (14, 60),
+) -> dict[int, int]:
+    """Start the requested outcome-observation windows for one merged PR.
+
+    Returns ``{window_days: inserted_id}``. Windows already present in the
+    outcome ledger are absent, so a redelivery can fill a legacy one-window
+    gap without creating a second denominator vote for an existing window.
+
+    Both rows are prepared from the same merge facts and committed by one
+    multi-value statement in one transaction: a failure creating either
+    window must leave neither new row in the ledger.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return {}
+    created_at = datetime.now(UTC)
+    rows = [
+        {
+            "installation_id": installation_id,
+            "github_repo_id": github_repo_id,
+            "pr_number": pr_number,
+            "merge_commit_sha": merge_commit_sha,
+            "merged_at": merged_at,
+            "base_ref": base_ref,
+            "window_days": days,
+            "due_at": merged_at + timedelta(days=days),
+            "created_at": created_at,
+        }
+        for days in window_days
+    ]
+    with engine.begin() as conn:
+        result = conn.execute(
+            _outcome_insert(conn)
+            .values(rows)
+            .returning(outcome_jobs.c.id, outcome_jobs.c.window_days)
+        )
+        return {days: job_id for job_id, days in result}
 
 
 def enqueue_outcome_job(
@@ -797,7 +865,7 @@ def enqueue_outcome_job(
     *,
     window_days: int = 14,
 ) -> int | None:
-    """Start the outcome-observation window for one merged PR.
+    """Start one outcome-observation window for one merged PR.
 
     Returns the new row's id, or None when this merge is already queued at
     this window — which is the ordinary case for a webhook redelivery.
@@ -809,36 +877,19 @@ def enqueue_outcome_job(
     rather than derived at query time because window_days is part of the
     unique key and may differ per row.
 
-    Dedup is the unique index, not a check-then-insert: GitHub redelivers,
-    and two deliveries racing a SELECT would both miss it and both insert,
-    giving one merge two independent due dates and two votes in a published
-    denominator.
+    This is a compatibility wrapper around ``enqueue_outcome_jobs`` for
+    callers that intentionally schedule a non-default single window.
     """
-    engine = _get_engine()
-    if engine is None:
-        return None
-    try:
-        with engine.begin() as conn:
-            return int(
-                conn.execute(
-                    outcome_jobs.insert().returning(outcome_jobs.c.id),
-                    {
-                        "installation_id": installation_id,
-                        "github_repo_id": github_repo_id,
-                        "pr_number": pr_number,
-                        "merge_commit_sha": merge_commit_sha,
-                        "merged_at": merged_at,
-                        "base_ref": base_ref,
-                        "window_days": window_days,
-                        "due_at": merged_at + timedelta(days=window_days),
-                        "created_at": datetime.now(UTC),
-                    },
-                ).scalar_one()
-            )
-    except IntegrityError as e:
-        if not any(m in str(e.orig).lower() for m in _OUTCOME_COLLISION):
-            raise
-        return None
+    inserted = enqueue_outcome_jobs(
+        installation_id,
+        github_repo_id,
+        pr_number,
+        merge_commit_sha,
+        merged_at,
+        base_ref,
+        window_days=(window_days,),
+    )
+    return inserted.get(window_days)
 
 
 def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bool:

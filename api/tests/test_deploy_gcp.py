@@ -8,6 +8,7 @@ allowlist pin in test_deviations.py.
 
 import hashlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -112,25 +113,40 @@ def test_web_deploy_is_still_the_only_public_service():
 
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
-    """A deterministic gcloud boundary: record argv, return an API image,
+    """Deterministic external boundaries: record argv, fake Cloud Run state,
     and report that the Scheduler resource does not exist yet."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "gcloud.log"
+    log.touch()
+    cwd_log = tmp_path / "gcloud.cwd.log"
+    cwd_log.touch()
     gcloud = fake_bin / "gcloud"
     gcloud.write_text(
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$GCLOUD_LOG"
+printf '%s\\n' "$PWD" >> "$GCLOUD_CWD_LOG"
 previous=
+format=
 for argument in "$@"; do
   if [ "$previous" = "--args" ] && [ "${argument#-}" != "$argument" ]; then
     printf '%s\\n' 'ERROR: argument --args: expected one argument' >&2
     exit 2
   fi
+  case "$argument" in
+    --format=*) format=${argument#--format=} ;;
+  esac
   previous=$argument
 done
 if [ "$1 $2 $3 $4" = "run services describe doug-api" ]; then
-  printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
+  case "$format" in
+    json)
+      printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]}}'
+      ;;
+    'value(spec.template.spec.containers[0].image)')
+      printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
+      ;;
+  esac
   exit 0
 fi
 if [ "$1 $2 $3" = "scheduler jobs describe" ]; then
@@ -146,31 +162,56 @@ exit 0
 """
     )
     gcloud.chmod(0o755)
+
+    curl_log = tmp_path / "curl.log"
+    curl_log.touch()
+    curl = fake_bin / "curl"
+    curl.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+printf '%s' '200'
+"""
+    )
+    curl.chmod(0o755)
     return fake_bin, log
 
 
-def _run_gcp(
-    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
-) -> list[str]:
+def _invoke_gcp(
+    tmp_path: Path,
+    command: str,
+    extra_env: dict[str, str] | None = None,
+    *,
+    gcp_path: Path = GCP_PATH,
+    cwd: Path | None = None,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     fake_bin, log = _fake_gcloud(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "GCLOUD_LOG": str(log),
+        "GCLOUD_CWD_LOG": str(tmp_path / "gcloud.cwd.log"),
+        "CURL_LOG": str(tmp_path / "curl.log"),
         "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
         **(extra_env or {}),
     }
     result = subprocess.run(
-        ["bash", str(GCP_PATH), command],
-        cwd=GCP_PATH.parent.parent,
+        ["bash", str(gcp_path), command],
+        cwd=cwd or gcp_path.parent.parent,
         env=env,
         capture_output=True,
         text=True,
     )
+    return result, log.read_text().splitlines()
+
+
+def _run_gcp(
+    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
+) -> list[str]:
+    result, lines = _invoke_gcp(tmp_path, command, extra_env)
     assert result.returncode == 0, result.stdout + result.stderr
-    return log.read_text().splitlines()
+    return lines
 
 
 def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tmp_path):
@@ -196,6 +237,181 @@ def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tm
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
+
+
+def test_adjudicator_resolves_the_locked_preregistration_from_its_own_location(tmp_path):
+    """An absolute script invocation must hash the lock, not caller-relative text."""
+    prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    callers = {
+        "repo-root": GCP_PATH.parents[2],
+        "unrelated": tmp_path / "unrelated-caller",
+    }
+
+    for name, caller_cwd in callers.items():
+        caller_cwd.mkdir(exist_ok=True)
+        case = tmp_path / name
+        case.mkdir()
+        result, lines = _invoke_gcp(case, "adjudicator", cwd=caller_cwd)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        [deploy] = [
+            line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
+        ]
+        assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
+
+
+def test_full_deploy_normalizes_to_api_before_the_fake_cloud_boundary(tmp_path):
+    """Relative --source paths must keep naming api/ from every caller CWD."""
+    callers = {
+        "repo-root": GCP_PATH.parents[2],
+        "unrelated": tmp_path / "unrelated-caller",
+    }
+    expected_cwd = str(GCP_PATH.parent.parent.resolve())
+
+    for name, caller_cwd in callers.items():
+        caller_cwd.mkdir(exist_ok=True)
+        case = tmp_path / name
+        case.mkdir()
+        result, lines = _invoke_gcp(case, "deploy", cwd=caller_cwd)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert any(line.startswith("run deploy doug-api --source .") for line in lines)
+        assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {expected_cwd}
+
+
+def test_relative_script_symlink_resolves_the_lock_and_api_working_directory(tmp_path):
+    """A portable launcher can link to gcp.sh without changing its deployment root."""
+    link_dir = tmp_path / "launchers"
+    link_dir.mkdir()
+    script_link = link_dir / "gcp.sh"
+    script_link.symlink_to(os.path.relpath(GCP_PATH, link_dir))
+    caller_cwd = tmp_path / "unrelated-caller"
+    caller_cwd.mkdir()
+    case = tmp_path / "symlink-case"
+    case.mkdir()
+
+    result, lines = _invoke_gcp(
+        case, "deploy", gcp_path=script_link, cwd=caller_cwd
+    )
+
+    prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    assert result.returncode == 0, result.stdout + result.stderr
+    [adjudicator] = [
+        line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
+    ]
+    assert f"DOUG_PREREG_HASH={expected_hash}" in adjudicator
+    assert any(line.startswith("run deploy doug-api --source .") for line in lines)
+    assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {
+        str(GCP_PATH.parent.parent.resolve())
+    }
+
+
+def test_full_deploy_hashes_the_lock_from_an_apostrophe_checkout_path(tmp_path):
+    """A valid checkout path is data, never Python source used to hash the lock."""
+    checkout = tmp_path / "doug's-copy"
+    gcp_path = checkout / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    source_prereg = (
+        GCP_PATH.parents[2]
+        / "docs/design/outcome-loop/publication-preregistration.md"
+    )
+    prereg = checkout / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    shutil.copy2(source_prereg, prereg)
+    caller_cwd = tmp_path / "unrelated-caller"
+    caller_cwd.mkdir()
+    case = tmp_path / "apostrophe-case"
+    case.mkdir()
+
+    result, lines = _invoke_gcp(
+        case, "deploy", gcp_path=gcp_path, cwd=caller_cwd
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    api_deploy = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run deploy doug-api --source .")
+    )
+    api_promotion = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run services update-traffic doug-api")
+    )
+    job_deploy = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("run jobs deploy doug-adjudicator")
+    )
+    assert api_deploy < api_promotion < job_deploy
+    expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
+    assert f"DOUG_PREREG_HASH={expected_hash}" in lines[job_deploy]
+    assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {
+        str((checkout / "api").resolve())
+    }
+
+
+def test_missing_preregistration_refuses_deploy_with_a_read_error(tmp_path):
+    """A missing lock is an operator path failure, not an unlocked contract."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+
+    result, lines = _invoke_gcp(tmp_path, "deploy", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert "ERROR: cannot read publication pre-registration:" in result.stderr
+    assert "not LOCKED" not in result.stderr
+    assert lines == []
+    assert (tmp_path / "curl.log").read_text() == ""
+
+
+def test_unlocked_preregistration_refuses_adjudicator_deploy(tmp_path):
+    """A mutable publication contract must never be stamped onto a runnable Job."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    prereg.write_text(
+        "# Publication pre-registration — the outcome loop\n\n"
+        "**Status:** DRAFT test fixture\n"
+    )
+
+    result, lines = _invoke_gcp(tmp_path, "adjudicator", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert result.stderr == (
+        "ERROR: publication pre-registration is not LOCKED; "
+        "refusing adjudicator deploy.\n"
+    )
+    assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
+
+
+def test_unlocked_preregistration_refuses_full_deploy_before_any_external_call(tmp_path):
+    """An unlocked contract must not leave the API and Job on different images."""
+    gcp_path = tmp_path / "api/deploy/gcp.sh"
+    gcp_path.parent.mkdir(parents=True)
+    shutil.copy2(GCP_PATH, gcp_path)
+    prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
+    prereg.parent.mkdir(parents=True)
+    prereg.write_text(
+        "# Publication pre-registration — the outcome loop\n\n"
+        "**Status:** DRAFT test fixture\n"
+    )
+
+    result, lines = _invoke_gcp(tmp_path, "deploy", gcp_path=gcp_path)
+
+    assert result.returncode != 0
+    assert result.stderr == (
+        "ERROR: publication pre-registration is not LOCKED; "
+        "refusing adjudicator deploy.\n"
+    )
+    assert lines == []
+    assert (tmp_path / "curl.log").read_text() == ""
 
 
 def test_schedule_creates_one_daily_utc_trigger_with_a_scheduler_identity(tmp_path):

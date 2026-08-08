@@ -3,7 +3,9 @@
 **Companion to:** `design-lock.md` (why each box won), `build-plan.md` (the file:line seams). This is the shape.
 
 Legend — every box is labeled with its state, and the labels are load-bearing:
-`[live]` deployed today · `[v1]` this build · `[v1.5]` gated on adjudicated data · `[later]` has a named trigger, not a date.
+`[live]` deployed today · `[built]` implemented on `m3-60-day-backfill`, pending
+Task 7 production deployment verification · `[v1]` this build · `[v1.5]` gated
+on adjudicated data · `[later]` has a named trigger, not a date.
 
 ## System
 
@@ -18,7 +20,7 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
         sha256-pinned) [live] │                         │   one neutral check run "Doug":
           pull_request        │                         │   verdict + receipt content
           pull_request_review │ [v1]                    │   N adjudicated · M pending
-          closed && merged ───┼── starts the clock [v1] │   deep reads: 143/200
+          closed && merged ───┼── 14 + 60 [built]       │   deep reads: 143/200
           installation ───────┼── mints tenant token    │   (never blocks, never comments)
                               ▼                         │
                     ┌─────────────────────────────────────────────────┐
@@ -48,7 +50,13 @@ Legend — every box is labeled with its state, and the labels are load-bearing:
                     │  Vertex is a │   │    verdicts ⋈ outcomes              │
                     │  procurement │   │  keyed on installation/repo IDs,    │
                     │  option      │   │  repo strings display-only    [v1]  │
-                    └──────────────┘   │  due_at = the ONLY 14/60-day clock  │
+                    └──────────────┘   │  merge ingest = both window rows    │
+                                       │  (one atomic write)        [built]  │
+                                       │  outcome_jobs unique identity:      │
+                                       │    installation_id, github_repo_id, │
+                                       │    pr_number, merge_commit_sha,     │
+                                       │    window_days                [v1]  │
+                                       │  due_at = the ONLY clock authority  │
                                        │  denominator = outcome_jobs done    │
                                        └────────▲───────────────┬────────────┘
                                                 │               │
@@ -96,10 +104,10 @@ the bottleneck): AlloyDB, BigQuery, Pub/Sub, Cloud Tasks, Agent Runtime, A2A, a 
 ```
   opened ─► scored ────────────► merged ──────────► due ─────────────► adjudicated
             │                    │                  │                  │
-            verdict row +        outcome_jobs row   day 14 (and 60):   reverted (sha in
-            receipt (dated,      per window;        adjudicator        receipt) · survived
-            immutable, prompt-   due_at = clock     claims the job     the window ·
-            hash + prereg-hash)  starts             (SKIP LOCKED)      censored (honest)
+            verdict row +        outcome_jobs rows  day 14 (and 60):   reverted (sha in
+            receipt (dated,      14 + 60 atomic;    adjudicator        receipt) · survived
+            immutable, prompt-   due_at = ONLY      claims the job     the window ·
+            hash + prereg-hash)  clock authority    (SKIP LOCKED)      censored (honest)
             │                                                          │
             third-party reviews on the same PR ─► verdict rows ────────┤ same clock
                                                                        ▼

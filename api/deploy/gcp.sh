@@ -20,6 +20,20 @@
 # grant belongs to a human running `setup`, not to the merge-to-main path.
 set -euo pipefail
 
+SCRIPT_SOURCE=${BASH_SOURCE[0]}
+while [ -h "$SCRIPT_SOURCE" ]; do
+  SCRIPT_DIR=$(cd -P -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
+  SCRIPT_SOURCE=$(readlink "$SCRIPT_SOURCE")
+  case "$SCRIPT_SOURCE" in
+    /*) ;;
+    *) SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE" ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
+API_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
+REPO_ROOT=$(cd -- "$API_DIR/.." && pwd -P)
+cd "$API_DIR"
+
 PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
 INSTANCE=doug-ledger
@@ -32,6 +46,7 @@ CONN="$PROJECT:$REGION:$INSTANCE"
 # The dashboard shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
 QUEUE_REPO=${QUEUE_REPO:-drewjst/doug}
+PREREG_DOC="$REPO_ROOT/docs/design/outcome-loop/publication-preregistration.md"
 
 setup() {
   # compute.googleapis.com is not used directly, but enabling it is what
@@ -298,7 +313,19 @@ promote_if_healthy() { # $1 service, $2 smoke path
   echo "promoted: 100% of $1 -> latest revision"
 }
 
+preregistration_preflight() {
+  if [ ! -f "$PREREG_DOC" ] || [ ! -r "$PREREG_DOC" ]; then
+    echo "ERROR: cannot read publication pre-registration: $PREREG_DOC" >&2
+    return 1
+  fi
+  if ! grep -q '^\*\*Status:\*\* LOCKED ' "$PREREG_DOC"; then
+    echo "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy." >&2
+    return 1
+  fi
+}
+
 deploy() {
+  preregistration_preflight
   local traffic_flags=""
   service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # Both tiers are configured here on purpose: --set-env-vars replaces the
@@ -352,6 +379,10 @@ deploy() {
 
 adjudicator() {
   local api_image prereg_hash
+  preregistration_preflight
+  prereg_hash=$(python3 -c \
+    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "$PREREG_DOC")
   api_image=$(gcloud run services describe "$SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.spec.containers[0].image)')
@@ -359,8 +390,6 @@ adjudicator() {
     echo "ERROR: $SERVICE has no deployed image; deploy the API first." >&2
     return 1
   fi
-  prereg_hash=$(python3 -c \
-    "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('../docs/design/outcome-loop/publication-preregistration.md').read_bytes()).hexdigest())")
 
   gcloud run jobs deploy "$ADJUDICATOR_JOB" \
     --image "$api_image" \

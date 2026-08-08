@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.dialects import postgresql
 
-from doug import outcome_queue, store
+from doug import outcome_backfill, outcome_queue, store
 from doug.adjudicate import adjudicate
 from doug.backtest.git_labels import Commit
 
@@ -112,6 +112,82 @@ def test_claim_repository_marks_all_due_rows_for_one_repo_running(tmp_path, monk
     assert all(job["claim_generation"] == 1 for job in batch.jobs)
     rows = _rows(url, store.outcome_jobs)
     assert [row["status"] for row in rows] == ["running", "running", "pending"]
+
+
+def test_backfilled_overdue_job_is_claimed_and_settled_with_its_window_identity(
+    tmp_path, monkeypatch
+):
+    """The repair is useful only if an overdue 60-day sibling joins the real
+    repository batch and produces its own exact published outcome.
+    """
+    old_pr = 41
+    young_pr = 42
+    effective_now = datetime(2026, 8, 7, 18, 0, tzinfo=UTC)
+    old_merge = datetime(2026, 5, 9, 18, 0, tzinfo=UTC)
+    young_merge = datetime(2026, 7, 18, 18, 0, tzinfo=UTC)
+    monkeypatch.setattr(outcome_queue, "_db_now", lambda conn: effective_now)
+    url = _db(tmp_path, monkeypatch)
+    _seed(
+        url,
+        _job(
+            pr_number=old_pr,
+            merged_at=old_merge,
+            due_at=old_merge + timedelta(days=14),
+            created_at=old_merge,
+        ),
+        _job(
+            pr_number=young_pr,
+            merged_at=young_merge,
+            due_at=young_merge + timedelta(days=14),
+            created_at=young_merge,
+        ),
+    )
+    engine = create_engine(url)
+    outcome_backfill.apply(
+        engine,
+        expected_missing=2,
+        manifest_path=tmp_path / "claimable.json",
+        now=effective_now,
+    )
+
+    assert outcome_queue.due_repositories() == [
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    ]
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+    assert [(job["pr_number"], job["window_days"]) for job in batch.jobs] == [
+        (old_pr, 14),
+        (old_pr, 60),
+        (young_pr, 14),
+    ]
+
+    result = adjudicate(batch.jobs, {}, default_branch="main")
+    assert outcome_queue.settle_batch(
+        batch,
+        result,
+        repo_full_name=REPO,
+        observed_at=NOW,
+        prereg_hash="f" * 64,
+    ) == (3, 0)
+
+    jobs = _rows(url, store.outcome_jobs)
+    outcomes = _rows(url, store.outcomes)
+    assert [row["status"] for row in jobs] == ["done", "done", "done", "pending"]
+    assert len(outcomes) == 3
+    for job in jobs:
+        if job["status"] != "done":
+            continue
+        matches = [
+            row
+            for row in outcomes
+            if row["installation_id"] == job["installation_id"]
+            and row["github_repo_id"] == job["github_repo_id"]
+            and row["pr_number"] == job["pr_number"]
+            and row["merge_commit_sha"] == job["merge_commit_sha"]
+            and row["window_days"] == job["window_days"]
+        ]
+        assert len(matches) == 1
 
 
 def test_claim_query_compiles_to_for_update_skip_locked():
