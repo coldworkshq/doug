@@ -482,6 +482,8 @@ def save_review(
     head_sha: str | None = None,
     source: str | None = None,
     prompt_hash: str | None = None,
+    diff_budget: int | None = None,
+    read_order: str | None = None,
     *,
     created: list[bool] | None = None,
 ) -> int | None:
@@ -538,6 +540,8 @@ def save_review(
                     "head_sha": head_sha,
                     "source": source,
                     "prompt_hash": prompt_hash,
+                    "diff_budget": diff_budget,
+                    "read_order": read_order,
                 },
             ).scalar_one()
             rows = [
@@ -1287,6 +1291,8 @@ def run_detail(verdict_id: int) -> dict | None:
                 "scored_at": v["scored_at"],
                 "model": v["model"],
                 "prompt_hash": v["prompt_hash"],
+                "diff_budget": v["diff_budget"],
+                "read_order": v["read_order"],
                 "risk_score": v["risk_score"],
                 "rationale": v["rationale"],
                 "head_sha": v["head_sha"],

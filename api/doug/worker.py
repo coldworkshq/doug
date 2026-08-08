@@ -189,6 +189,8 @@ def process_job(job: dict) -> int | None:
         rv,
         model=reader.MODEL if tier == "reader" else None,
         prompt_hash=reader.PROMPT_HASH if tier == "reader" else None,
+        diff_budget=reader.DIFF_BUDGET if tier == "reader" else None,
+        read_order=review.READ_ORDER if tier == "reader" else None,
         pr_meta=meta.model_dump(mode="json"),
         coverage=cov,
         github_repo_id=job["github_repo_id"],
