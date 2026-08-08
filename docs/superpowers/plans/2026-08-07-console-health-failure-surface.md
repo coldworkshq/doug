@@ -66,18 +66,26 @@ drift from the value the queue actually enforces. Promoting it is a
 behaviour-preserving one-line change that gives both callers one source of
 truth, matching `outcome_queue.MAX_ATTEMPTS = 10`, which already is one.
 
-`store.py` also has no database-clock helper. It needs one, and it cannot
-import `ingest`'s: `ingest` imports `store`, so the reverse is a cycle.
+`store.py` also has no database-clock helper, and it needs one.
+`_db_now`/`_as_utc` are currently defined **three times** — `ingest.py:102`,
+`outcome_queue.py:57`, `outcome_backfill.py:118` — with identical bodies. A
+fourth copy in `store.py` is the wrong fix. All three of those modules
+already import `store`, so `store` is the natural single home and no cycle
+exists in that direction. This task consolidates them (Andrew's call,
+2026-08-07, before execution).
 
 **Files:**
-- Modify: `api/doug/ingest.py` (add `MAX_ATTEMPTS`, change `fail()`'s default)
-- Modify: `api/doug/store.py` (add `_db_now`, `job_health`)
+- Modify: `api/doug/ingest.py` (add `MAX_ATTEMPTS`, change `fail()`'s default, drop the local clock helpers)
+- Modify: `api/doug/outcome_queue.py` (drop the local clock helpers)
+- Modify: `api/doug/outcome_backfill.py` (drop the local clock helpers)
+- Modify: `api/doug/store.py` (add `_as_utc`, `_db_now`, `job_health`)
 - Test: `api/tests/test_store.py`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
 - Produces:
   - `ingest.MAX_ATTEMPTS: int` (= 3)
+  - `store._db_now(conn) -> datetime` and `store._as_utc(value) -> datetime`, now the single definitions; `ingest`, `outcome_queue` and `outcome_backfill` import them from `store`.
   - `store.job_health(*, review_lease_seconds: int, review_max_attempts: int, outcome_lease_seconds: int, outcome_max_attempts: int, repo: str | None = None, installation_id: int | None = None) -> dict | None` — returns `None` when no ledger is configured, otherwise a dict with keys `review`, `outcome`, `as_of`. `review` holds `pending, oldest_pending_at, retrying, oldest_retry_at, running, stalled, failed, failed_24h, stall_lease_seconds, max_attempts`. `outcome` holds `pending, overdue, next_due_at, oldest_overdue_due_at, running, stalled, failed, stall_lease_seconds, max_attempts`. All counts are `int`; all `*_at` values are `datetime | None`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -276,29 +284,71 @@ def fail(
 ) -> bool:
 ```
 
-- [ ] **Step 4: Add the DB clock helper to store.py**
+- [ ] **Step 4: Consolidate the DB clock helpers into store.py**
+
+Add to `api/doug/store.py` (the docstrings are `ingest`'s, which are the
+fullest of the three copies — keep them, they explain the sqlite/Postgres
+split that the bodies alone do not):
 
 ```python
-def _db_now(conn) -> datetime:
-    """The database's clock, not this process's.
+def _as_utc(value: datetime) -> datetime:
+    """Normalise a DB timestamp to aware UTC.
 
-    Deliberately duplicated from ingest._db_now rather than imported: ingest
-    imports store, so store importing ingest would be a cycle. The semantics
-    must stay identical, because every timestamp compared here was written by
-    that function's clock and comparing them to a different one is how a
-    skewed host reports a live worker as stalled.
+    sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
+    Claim holders compare the started_at they were handed against the row,
+    so both sides of that equality have to share a timezone convention.
     """
-    from sqlalchemy import func, select
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
+
+def _db_now(conn) -> datetime:
+    """The database's clock, not the caller's wall clock.
+
+    Claim started_at and reclaim cutoffs must share one clock across Cloud
+    Run instances; comparing one instance's datetime.now() to another's
+    written started_at is how a skewed host reclaims a live worker.
+
+    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision —
+    wall clock keeps microsecond resolution there. Postgres uses
+    clock_timestamp() (statement time), not now()/transaction_timestamp(),
+    so two claims in quick succession cannot collapse onto one tx start time.
+
+    This is the single definition. ingest, outcome_queue and outcome_backfill
+    each carried an identical private copy; they now import from here. It
+    lives in store rather than in one of them because all three already
+    import store, so this is the only direction with no cycle.
+    """
     if conn.dialect.name == "sqlite":
         return datetime.now(UTC)
     value = conn.execute(select(func.clock_timestamp())).scalar_one()
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return _as_utc(value)
 ```
+
+`store.py` already imports `select` and `func` from sqlalchemy at module
+level and `UTC, datetime` from `datetime` — confirm both before adding, and
+do not add a redundant local import.
+
+Then, in each of `api/doug/ingest.py`, `api/doug/outcome_queue.py` and
+`api/doug/outcome_backfill.py`: **delete** the local `_as_utc` and `_db_now`
+definitions and import them from store instead. Each file already has
+`from . import store`, so add alongside it:
+
+```python
+from .store import _as_utc, _db_now
+```
+
+Leave every call site untouched — the names are unchanged, so this is a pure
+move. Do not "improve" any of the three modules while you are in them; this
+task's diff outside `store.py` and `ingest.MAX_ATTEMPTS` should be deletions
+and one import line per file, nothing else.
+
+If `outcome_backfill.py` annotates its parameter as `Connection` and that
+import becomes unused after the deletion, remove the now-unused import —
+ruff will flag it otherwise.
 
 - [ ] **Step 5: Implement `job_health`**
 
@@ -440,26 +490,40 @@ def job_health(
 Run from `api/`: `uv run pytest tests/test_store.py -k job_health -v`
 Expected: PASS, 6 tests.
 
-Then confirm nothing regressed and the promoted constant did not change behaviour:
-`uv run pytest tests/test_ingest.py -v` — expected PASS, unchanged count.
+Then prove the consolidation was a pure move and the promoted constant
+changed no behaviour — these three suites cover the modules whose helpers
+moved, and they must pass with **unchanged counts**:
+
+```bash
+uv run pytest tests/test_ingest.py tests/test_outcome_queue.py tests/test_outcome_backfill.py -v
+```
+
+Then the whole suite: `uv run pytest`. If any of these fail, the move was not
+pure — fix the move, do not adjust the tests.
 
 - [ ] **Step 7: Lint and commit**
 
 ```bash
 cd api && uv run ruff check .
-git add api/doug/ingest.py api/doug/store.py api/tests/test_store.py
-git commit -m "Add job_health aggregates and promote the review attempt cap
+git add api/doug/ingest.py api/doug/outcome_queue.py api/doug/outcome_backfill.py api/doug/store.py api/tests/test_store.py
+git commit -m "Add job_health aggregates, consolidate the DB clock, promote the review cap
 
 The review lane's cap of 3 existed only as fail()'s default parameter, so
 the health endpoint would have had to hardcode a literal that could drift
 from what the queue enforces. It is now ingest.MAX_ATTEMPTS, matching
 outcome_queue.MAX_ATTEMPTS.
 
+_db_now and _as_utc were defined three times with identical bodies, in
+ingest, outcome_queue and outcome_backfill. store.py needed one too, and a
+fourth copy is the wrong fix: all three already import store, so store is
+the only home with no cycle. They now import from there. Pure move -- no
+call site changed, and the three suites pass with unchanged counts.
+
 job_health takes the lane constants as arguments rather than importing
-them: ingest and outcome_queue both import store, so the reverse is a
-cycle. Taking them in keeps one source of truth and lets the response
-report the values it actually measured with -- the two lanes differ
-(900s/3 vs 7200s/10) and one shared constant would report a healthy
+them: ingest and outcome_queue both import store, so the reverse IS a
+cycle for those. Taking them in keeps one source of truth and lets the
+response report the values it actually measured with -- the two lanes
+differ (900s/3 vs 7200s/10) and one shared constant would report a healthy
 twenty-minute-old outcome claim as stalled.
 
 oldest_pending_at counts attempts = 0 only, because ingest.fail() resets
