@@ -14,9 +14,17 @@ uv run ruff check .     # lint
 | Route | What |
 |---|---|
 | `GET /healthz` | liveness |
-| `POST /v1/score` | PR metadata in, verdict out (score, band, reasons) |
-| `GET /v1/queue` | scored demo queue from fixtures, riskiest first; `?threshold=` to move the line |
-| `POST /webhooks/github` | HMAC-verified receiver; parses nothing yet (Phase 2) |
+| `POST /v1/score` | PR metadata in, verdict out (score, band, reasons); pure, no read |
+| `POST /v1/score/read` | reader-tier scoring (LLM diff-read when enabled, deterministic fallback otherwise); token-gated, spends money |
+| `GET /v1/queue` | review queue — operator token sees everything, a dispensed tenant token sees only its installation |
+| `GET /v1/prs/{pr_number}/receipt` | one PR's evidentiary record (verdict + governing verdict per merge + findings + adjudication, when it exists); operator-unscoped or tenant token carrying `receipt:read` |
+| `GET /v1/runs` | verdict history for the operator console; operator-only |
+| `GET /v1/runs/{verdict_id}` | one run end to end; operator-only |
+| `POST /v1/installations/token` | mint a tenant API key, proving authority through the caller's own GitHub credential; public, append-only |
+| `GET /v1/installations/tokens` | masked key inventory for an installation; org-admin/account-owner GitHub proof required |
+| `DELETE /v1/installations/token/{token_id}` | soft-revoke one key; GitHub proof must cover the key's selection |
+| `GET /v1/patterns` | per-pattern precision from the findings × outcomes join; operator-only |
+| `POST /webhooks/github` | HMAC-verified GitHub webhook receiver; verifies, records and enqueues a review job, then 202s — never reviews inline |
 
 ## Layout
 
