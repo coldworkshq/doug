@@ -1,5 +1,33 @@
 # HANDOFF — doug
 
+*** NEW LANE — FRONT DOOR (2026-08-08/09). Separate from the console work
+    described below, which is unchanged and still accurate.
+    Design: docs/superpowers/specs/2026-08-08-front-door-design.md
+    Roadmap: docs/design/outcome-loop/ROADMAP.md § M6 (tenant dashboard, pulled
+    forward ahead of its trigger — the note under the table explains why).
+    PHASE 0 IS BUILT AND IN REVIEW: PR #75, branch `front-door-design`,
+    worktree repo/.worktrees/front-door. It takes DOUG_API_TOKEN off doug-web
+    by BOTH routes (deploy flag + Secret Manager binding) and gives the public
+    pages an unauthenticated GET /v1/showcase/queue pinned by a new
+    DOUG_SHOWCASE_REPO. 925 pytest · ruff clean · bash -n clean · web 4/4.
+    THREE THINGS TO KNOW BEFORE MERGING #75:
+    1. deploy.yml's `web` job is `needs: changes` ONLY, not `needs: api`
+       (:82-83 vs :147-148), so api and web deploy IN PARALLEL. This PR changes
+       both. If web wins, the public pages hit a showcase route the live api
+       does not serve yet and fall back to the labelled fixture until api lands.
+       Transient and self-healing; one-line fix is `needs: [changes, api]`.
+    2. The endpoint filters on `verdicts.repo`, a DISPLAY-ONLY string, on an
+       unauthenticated surface. MT4 says authorization keys on github_repo_id.
+       The PR did not introduce string-keying (/v1/queue?repo= already did) but
+       it moves it onto a public surface. Follow-up, not a blocker.
+    3. Nothing smoke-tests /v1/showcase/queue; promote_if_healthy smokes `/`
+       which returns 200 whether the page rendered live rows or the fixture.
+    STILL OWED TO ANDREW, needs prod gcloud: the compute-SA revocation now
+    written up at docs/OPERATIONS.md § "Service identities". Removing the token
+    from doug-web did NOT close it.
+    NEXT: Phase 1, gated on proving that WorkOS's GitHub-App token is a
+    user-to-server token GET /user/installations answers for. One live call. ***
+
 State:    console Phase 2a (health strip + failure surface) is BUILT. All
           seven plan tasks are complete, plus a whole-branch review fix wave
           (three Important + several Minor findings the cross-task view

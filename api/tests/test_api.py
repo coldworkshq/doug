@@ -3035,3 +3035,183 @@ def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monk
     assert body["outcome_jobs"][0]["status"] == "pending"
     assert _parsed_utc(body["outcome_jobs"][0]["due_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
     assert _parsed_utc(body["outcome_jobs"][0]["merged_at"]) == datetime(2026, 8, 1, tzinfo=UTC)
+
+
+def test_showcase_queue_404s_when_the_repo_is_unset(tmp_path, monkeypatch):
+    """Unset means 'this deployment has no showcase', not 'show everything'."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_SHOWCASE_REPO", raising=False)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 404
+
+
+def test_showcase_queue_serves_without_any_token(tmp_path, monkeypatch):
+    """The whole point: doug-web must be able to call this holding no
+    credential at all."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+
+
+def test_showcase_queue_does_not_depend_on_the_operator_token(tmp_path, monkeypatch):
+    """/v1/queue 503s when DOUG_API_TOKEN is unset (api.py:317-322). If this
+    endpoint inherited that, removing the secret from doug-web would take the
+    public pages down — the exact failure this endpoint exists to prevent."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+
+
+def test_showcase_queue_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
+    """It is pinned by deployment, never selected by the caller. A ?repo=
+    that changed the answer would make a public endpoint a cross-tenant
+    selector."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    # A row under the pinned repo, so a ?repo= that actually scoped the
+    # query would return a DIFFERENT (empty) result for "someone/private"
+    # rather than coincidentally matching an equally-empty ledger.
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT,
+        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+    )
+    client = TestClient(app)
+    # Reset immediately before EACH request: the route is backed by a
+    # single-slot cache (api._showcase_cache), so a stale reset only
+    # before the first request would let the second one — the one
+    # carrying the attempted override — serve straight from the cache
+    # the first request warmed, never touching the handler's own
+    # (non-)handling of `repo` at all.
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    pinned = client.get("/v1/showcase/queue").json()
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    attempted = client.get("/v1/showcase/queue?repo=someone/private").json()
+    assert pinned == attempted
+
+
+def test_showcase_queue_serves_only_the_pinned_repos_rows(tmp_path, monkeypatch):
+    """Two repos in the ledger, one pinned: the other must not appear."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    # A prior test in this module may have warmed the cache for this
+    # response within the last 30s of monotonic time — a cache HIT would
+    # never call store.latest_reviews at all and this spy would see
+    # nothing. Start from a clean cache so this test's call-count
+    # assertion reflects this test's own request, not whatever ran before
+    # it.
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+    assert calls == [{"repo": "drewjst/doug"}]
+
+
+def test_showcase_queue_sets_a_public_cache_control_header(tmp_path, monkeypatch):
+    """Downstream infrastructure (a CDN, the browser) should be able to
+    cache this deliberately-public payload too, not just this process."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    client = TestClient(app)
+    r = client.get("/v1/showcase/queue")
+    assert r.headers["cache-control"] == "public, max-age=30"
+
+
+def test_showcase_queue_does_not_recompute_within_the_cache_ttl(tmp_path, monkeypatch):
+    """store.latest_reviews runs one findings query per row, up to
+    limit=200 (store.py:1838) — up to 201 queries per request against a
+    scale-to-zero service, with no auth to throttle callers. A short cache
+    is the backstop; this proves a second identical request within the TTL
+    does not touch the ledger again, and that a request after the TTL
+    expires does."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    now = [1_000.0]
+    monkeypatch.setattr(api.time, "monotonic", lambda: now[0])
+    client = TestClient(app)
+
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 1
+
+    now[0] += 10  # well within the 30s TTL
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 1  # cache hit — no second query
+
+    now[0] += 30  # TTL now expired
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 2  # recomputed
+
+
+def test_showcase_queue_ignores_a_caller_supplied_threshold(tmp_path, monkeypatch):
+    """The route takes no caller input, period: `repo` is already ignored
+    (test_showcase_queue_ignores_a_caller_supplied_repo above) and
+    `threshold` is too. The one real consumer — web/lib/api.ts's
+    getQueue() — never sends it and re-bands client-side via
+    applyThreshold, so accepting it server-side was pure attack surface: a
+    caller-controlled value with no bound, sitting on a public,
+    unauthenticated endpoint backed by a process-lifetime cache."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT,
+        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+    )
+    client = TestClient(app)
+    # Reset immediately before EACH request: the route is backed by a
+    # single-slot cache (api._showcase_cache), so a stale reset only
+    # before the first request would let the second one — the one
+    # carrying the attempted override — serve straight from the cache
+    # the first request warmed, never touching the handler's own
+    # (non-)handling of `threshold` at all.
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    default = client.get("/v1/showcase/queue").json()
+    # 0.99 sits well above the seeded score (0.62) — if threshold were
+    # honoured this would flip the row's band and the summary counts.
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    attempted = client.get("/v1/showcase/queue?threshold=0.99").json()
+    assert attempted == default
+
+
+def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
+    tmp_path, monkeypatch
+):
+    """A cache dict keyed on a caller-supplied value would let
+    ?threshold=0.0001, 0.0002, ... grow without bound on a public,
+    unauthenticated, scale-to-zero service — trading the DB-load
+    amplifier this cache exists to fix for a memory-exhaustion one.
+    Because the route ignores threshold entirely, every request lands on
+    the same single cache slot no matter how many distinct values a
+    caller sends."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    client = TestClient(app)
+
+    bodies = [
+        client.get(f"/v1/showcase/queue?threshold=0.{i:04d}").json()
+        for i in range(50)
+    ]
+    assert all(b == bodies[0] for b in bodies)
+    # Not just "same content" — structurally one slot, not a dict a
+    # caller-controlled key could have grown to 50 entries.
+    assert isinstance(api._showcase_cache, tuple)
+    assert len(api._showcase_cache) == 2

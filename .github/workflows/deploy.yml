@@ -145,8 +145,17 @@ jobs:
           echo "api + adjudicator deployed: $url" >> "$GITHUB_STEP_SUMMARY"
 
   web:
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
+    # needs api, but must NOT inherit its skip. web/ now fetches
+    # /v1/showcase/queue, so a web revision that goes live before the api
+    # revision serving that route falls back to the bundled fixture on BOTH
+    # public pages — and promote_if_healthy smokes `/`, which returns 200
+    # either way, so nothing would catch it.
+    # The `!cancelled()` guard is load-bearing: on a web-only change the api
+    # job is skipped by its own `if`, and a job whose dependency skipped is
+    # skipped too. Without it, web-only changes would silently stop deploying.
+    # `!failure()` still blocks web when api ran and failed.
+    needs: [changes, api]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:

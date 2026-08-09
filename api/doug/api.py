@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
@@ -300,6 +301,74 @@ def _operator_only(x_doug_token: str) -> None:
     raise HTTPException(status_code=401, detail="bad token")
 
 
+def _rows_to_items(rows: list[dict]) -> list[QueueItem]:
+    """Ledger rows -> queue items. Rows without pr_meta are dropped: the
+    queue renders PR titles and authors, and a row that has none would
+    render as a blank card rather than a missing one."""
+    return [
+        QueueItem(
+            pr=_with_url(row),
+            verdict=Verdict(
+                score=row["score"],
+                band=Band(row["band"]),
+                threshold=row["threshold"],
+                reasons=[
+                    Reason(
+                        rule=f["rule"],
+                        label=f["label"],
+                        weight=f["weight"],
+                        severity=f["severity"],
+                    )
+                    for f in row["findings"]
+                ],
+            ),
+        )
+        for row in rows
+        if row["pr_meta"]
+    ]
+
+
+def _queue_response(
+    items: list[QueueItem], threshold: float | None
+) -> QueueResponse:
+    """Band, sort and summarise. Shared by /v1/queue and
+    /v1/showcase/queue so the two cannot drift on the banding rule —
+    which is the one place this surface has already been wrong once
+    (reporting 0.62 while showing rows flagged at 0.30)."""
+    thr = default_threshold() if threshold is None else threshold
+    if threshold is None:
+        # Report the line the rows were actually banded at, not the
+        # deterministic default.
+        thr = _banding_threshold(items, thr)
+    else:
+        # An explicit threshold has to re-band, or the parameter changes
+        # the summary while the rows keep contradicting it.
+        items = [
+            QueueItem(
+                pr=i.pr,
+                verdict=i.verdict.model_copy(
+                    update={
+                        "threshold": thr,
+                        "band": Band.FLAGGED if i.verdict.score >= thr else Band.CLEARED,
+                    }
+                ),
+            )
+            for i in items
+        ]
+
+    items.sort(key=lambda i: i.verdict.score, reverse=True)
+    flagged = sum(1 for i in items if i.verdict.band is Band.FLAGGED)
+    return QueueResponse(
+        summary=QueueSummary(
+            open=len(items),
+            flagged=flagged,
+            cleared=len(items) - flagged,
+            threshold=thr,
+        ),
+        items=items,
+    )
+
+
 @app.get("/v1/queue")
 def queue(
     threshold: float | None = None,
@@ -354,68 +423,83 @@ def queue(
         repo_ids = effective
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
-        items = [
-            QueueItem(
-                pr=_with_url(row),
-                verdict=Verdict(
-                    score=row["score"],
-                    band=Band(row["band"]),
-                    threshold=row["threshold"],
-                    reasons=[
-                        Reason(
-                            rule=f["rule"],
-                            label=f["label"],
-                            weight=f["weight"],
-                            severity=f["severity"],
-                        )
-                        for f in row["findings"]
-                    ],
-                ),
-            )
-            for row in store.latest_reviews(
+        items = _rows_to_items(
+            store.latest_reviews(
                 repo=repo if ctx is None else None,  # operator keeps the display filter
                 installation_id=installation_id,
                 repo_ids=repo_ids,
             )
-            if row["pr_meta"]
-        ]
+        )
     else:
         # No ledger configured — the fixture keeps the demo path alive.
         items = [QueueItem(pr=pr, verdict=score(pr, thr)) for pr in _load_fixture()]
 
-    if threshold is None:
-        # Report the line the rows were actually banded at, not the
-        # deterministic default. Ledger rows carry the reader's threshold
-        # (0.30); reporting 0.62 made the dashboard draw its cut line above
-        # PRs it was simultaneously showing as flagged.
-        thr = _banding_threshold(items, thr)
-    else:
-        # An explicit threshold has to re-band, or the parameter changes the
-        # number in the summary while the rows keep contradicting it.
-        items = [
-            QueueItem(
-                pr=i.pr,
-                verdict=i.verdict.model_copy(
-                    update={
-                        "threshold": thr,
-                        "band": Band.FLAGGED if i.verdict.score >= thr else Band.CLEARED,
-                    }
-                ),
-            )
-            for i in items
-        ]
+    return _queue_response(items, threshold)
 
-    items.sort(key=lambda i: i.verdict.score, reverse=True)
-    flagged = sum(1 for i in items if i.verdict.band is Band.FLAGGED)
-    return QueueResponse(
-        summary=QueueSummary(
-            open=len(items),
-            flagged=flagged,
-            cleared=len(items) - flagged,
-            threshold=thr,
-        ),
-        items=items,
-    )
+
+# In-process TTL cache for the showcase route ONLY. store.latest_reviews
+# runs one findings query per row, up to limit=200 (store.py:1838) — and
+# this route is public and unauthenticated, so a single caller can drive up
+# to 201 queries per request against a scale-to-zero service. web/'s own
+# micro-cache (web/lib/api.ts) does not help: anyone can call this API
+# directly, bypassing doug-web entirely.
+#
+# A single slot, deliberately not a dict keyed on caller input: the route
+# below takes NO caller input at all (see its docstring), so exactly one
+# response can ever exist to cache. A dict keyed on anything a caller
+# controls — threshold used to be exactly that — would let
+# ?threshold=0.0001, 0.0002, ... grow this cache without bound on a public,
+# scale-to-zero service: trading the DB-load amplifier this cache exists to
+# fix for a memory-exhaustion one, which is a worse trade.
+#
+# 30s matches web/lib/api.ts's own cache of `/` — an established number,
+# not a new one. time.monotonic() so a wall-clock step never falsely
+# expires or extends the entry. A concurrent miss may recompute redundantly
+# with another in-flight one; that race is cheap (one extra query burst,
+# not unbounded) and benign, so there is deliberately no lock here.
+_SHOWCASE_CACHE_TTL_S = 30.0
+_showcase_cache: tuple[float, QueueResponse] | None = None
+
+
+@app.get("/v1/showcase/queue")
+def showcase_queue(response: Response) -> QueueResponse:
+    """The public Doug-on-Doug queue, pinned to one repo by deployment.
+
+    Unauthenticated by design (ADR-0008) and therefore NOT a selector: the
+    repo comes from DOUG_SHOWCASE_REPO and never from the caller, so no
+    request can widen it. It deliberately does NOT read DOUG_API_TOKEN —
+    that independence is the whole reason this route exists, so doug-web
+    can serve the public pages while holding no operator credential.
+
+    Takes no caller input at all: `repo` is ignored (see
+    test_showcase_queue_ignores_a_caller_supplied_repo) and so, deliberately,
+    is `threshold` — the one real consumer, web/lib/api.ts's getQueue(),
+    never sends it and re-bands client-side via applyThreshold instead. A
+    server-side `threshold` param would only be attack surface here: a
+    caller-controlled value with nothing to bound it, backed by the
+    process-lifetime cache below. `?threshold=...` is simply ignored, same
+    as `?repo=...` already is.
+
+    Unset variable and no ledger both 404 rather than falling back to the
+    bundled fixture: serving invented PRs from a PUBLIC url would be a
+    confident false claim, and web/ already has its own labelled fixture
+    fallback for the unreachable-API case.
+
+    Cached briefly per `_showcase_cache` above, and marked cacheable by
+    downstream infrastructure (CDN, browser) at the same TTL — the payload
+    is deliberately public.
+    """
+    global _showcase_cache
+    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
+    if not showcase or not store.enabled():
+        raise _not_found()
+    response.headers["Cache-Control"] = "public, max-age=30"
+    now = time.monotonic()
+    if _showcase_cache is not None and now - _showcase_cache[0] < _SHOWCASE_CACHE_TTL_S:
+        return _showcase_cache[1]
+    body = _queue_response(_rows_to_items(store.latest_reviews(repo=showcase)), None)
+    _showcase_cache = (now, body)
+    return body
 
 
 # Rendered in words on EVERY merge, not only the one that governed.

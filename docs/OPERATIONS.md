@@ -84,3 +84,29 @@ new installation_id and orphans every verdict.
   row...`: the `installation_repositories` webhook never fired for those
   repos, so their tenant cannot see those verdicts. Redeliver
   `installation_repositories`.
+
+## Service identities
+
+### Revoke the default compute SA's access to `doug-api-token` (one-off, NOT YET RUN)
+
+Legacy from the Task-10 era: the default compute service account may still
+hold `secretmanager.secretAccessor` on `doug-api-token`. `doug-api` and
+`doug-console` run as their own service accounts and `doug-web` now holds no
+secret at all, so nothing should depend on this binding — but it has never
+been verified or removed.
+
+Check first, and only remove if it is present:
+
+    PROJECT=doug-prod0
+    PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+    gcloud secrets get-iam-policy doug-api-token --project "$PROJECT" \
+      --format=json | grep -A3 "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+If it appears:
+
+    gcloud secrets remove-iam-policy-binding doug-api-token --project "$PROJECT" \
+      --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+      --role=roles/secretmanager.secretAccessor
+
+Then redeploy nothing — no service uses that identity. Confirm `doug-api`
+and `doug-console` still serve, since they are the only readers left.

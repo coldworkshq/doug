@@ -46,20 +46,49 @@ def test_web_deploy_runs_as_doug_web_sa():
     assert "compute@developer.gserviceaccount.com" not in body
 
 
-def test_setup_creates_doug_web_sa_and_binds_the_api_token():
-    """web needs doug-api-token only — no Cloud SQL client, no App key."""
+def test_setup_creates_doug_web_sa_and_binds_it_no_secrets():
+    """doug-web serves only the unauthenticated showcase queue, so it needs
+    NO secret at all. This pin is what stops the operator token being
+    quietly reintroduced to a --allow-unauthenticated service."""
     setup = _function_body("setup")
     assert "service-accounts create doug-web-sa" in setup
-    assert "doug-web-sa@$PROJECT.iam.gserviceaccount.com" in setup
-    # After the web-sa create, the only secret binding is doug-api-token.
     after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
         "service-accounts create doug-console-sa", 1
     )[0]
-    assert "doug-api-token" in after_web
+    assert "doug-api-token" not in after_web
+    assert "secretAccessor" not in after_web
     assert "doug-database-url" not in after_web
     assert "doug-github-app-key" not in after_web
     assert "doug-anthropic-key" not in after_web
     assert "roles/cloudsql.client" not in after_web
+
+
+def test_web_deploy_carries_no_secrets():
+    """The deploy flag is a second, independent way the credential could
+    return — setup()'s binding and web()'s --set-secrets must BOTH stay
+    clean or the service holds a token again."""
+    body = _function_body("web")
+    assert "--set-secrets" not in body
+    assert "DOUG_API_TOKEN" not in body
+
+
+def test_api_deploy_carries_the_showcase_repo():
+    """The public pages 404 without it, so it belongs on doug-api and
+    nowhere else."""
+    assert "DOUG_SHOWCASE_REPO=" in _function_body("deploy")
+
+
+def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy():
+    """DOUG_SHOWCASE_REPO reaches the service only through this deploy. If
+    it is wrong, /v1/showcase/queue 404s while /openapi.json and / both
+    still return 200 regardless — nothing else in the pipeline catches a
+    bad pin. Smoked on the candidate before promote_if_healthy takes it to
+    100% traffic, and on the live URL on a service's first deploy (which
+    has no candidate to stage against — see promote_if_healthy's own
+    comment above it)."""
+    body = _function_body("deploy")
+    assert 'promote_if_healthy "$SERVICE" /openapi.json /v1/showcase/queue' in body
+    assert 'smoke "$(api_url)/v1/showcase/queue"' in body
 
 
 def test_api_deploy_still_runs_as_doug_api_sa():
@@ -232,6 +261,51 @@ def test_api_deploy_carries_the_prereg_hash_env_var(tmp_path):
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert f"DOUG_PREREG_HASH={expected_hash}" in api_deploy
+
+
+def test_showcase_smoke_failure_blocks_promotion(tmp_path):
+    """/openapi.json returns 200 regardless of DOUG_SHOWCASE_REPO, so it
+    alone would happily promote a candidate whose showcase route is
+    broken. This makes the fake curl 404 ONLY on /v1/showcase/queue and
+    proves that: (1) the deploy fails, and (2) update-traffic — which
+    would move real traffic onto the bad candidate — never runs. A smoke
+    that runs after traffic already moved would protect nothing."""
+    fake_bin, log = _fake_gcloud(tmp_path)
+    curl = fake_bin / "curl"
+    curl.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+case "$*" in
+  *v1/showcase/queue*) printf '%s' '404' ;;
+  *) printf '%s' '200' ;;
+esac
+"""
+    )
+    curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GCLOUD_LOG": str(log),
+        "GCLOUD_CWD_LOG": str(tmp_path / "gcloud.cwd.log"),
+        "CURL_LOG": str(tmp_path / "curl.log"),
+        "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
+        "PROJECT": "doug-prod0",
+        "REGION": "us-central1",
+    }
+    result = subprocess.run(
+        ["bash", str(GCP_PATH), "deploy"],
+        cwd=GCP_PATH.parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    lines = log.read_text().splitlines()
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "v1/showcase/queue" in (tmp_path / "curl.log").read_text()
+    assert not [
+        line for line in lines if line.startswith("run services update-traffic doug-api")
+    ]
 
 
 def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tmp_path):
