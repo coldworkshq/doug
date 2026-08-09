@@ -444,23 +444,25 @@ def queue(
 # micro-cache (web/lib/api.ts) does not help: anyone can call this API
 # directly, bypassing doug-web entirely.
 #
-# Keyed on `threshold`, including the `None` default. `threshold` changes
-# the response body — _queue_response re-bands every row AND the summary
-# against it — so caching on any other key would let one ?threshold=
-# request poison the cached response served to every default caller. That
-# would be a correctness bug far worse than the load this cache fixes.
+# A single slot, deliberately not a dict keyed on caller input: the route
+# below takes NO caller input at all (see its docstring), so exactly one
+# response can ever exist to cache. A dict keyed on anything a caller
+# controls — threshold used to be exactly that — would let
+# ?threshold=0.0001, 0.0002, ... grow this cache without bound on a public,
+# scale-to-zero service: trading the DB-load amplifier this cache exists to
+# fix for a memory-exhaustion one, which is a worse trade.
 #
 # 30s matches web/lib/api.ts's own cache of `/` — an established number,
 # not a new one. time.monotonic() so a wall-clock step never falsely
-# expires or extends an entry. Concurrent misses may both recompute; that
-# race is cheap (one extra query burst, not unbounded) and benign, so
-# there is deliberately no lock here.
+# expires or extends the entry. A concurrent miss may recompute redundantly
+# with another in-flight one; that race is cheap (one extra query burst,
+# not unbounded) and benign, so there is deliberately no lock here.
 _SHOWCASE_CACHE_TTL_S = 30.0
-_showcase_cache: dict[float | None, tuple[float, QueueResponse]] = {}
+_showcase_cache: tuple[float, QueueResponse] | None = None
 
 
 @app.get("/v1/showcase/queue")
-def showcase_queue(response: Response, threshold: float | None = None) -> QueueResponse:
+def showcase_queue(response: Response) -> QueueResponse:
     """The public Doug-on-Doug queue, pinned to one repo by deployment.
 
     Unauthenticated by design (ADR-0008) and therefore NOT a selector: the
@@ -468,6 +470,15 @@ def showcase_queue(response: Response, threshold: float | None = None) -> QueueR
     request can widen it. It deliberately does NOT read DOUG_API_TOKEN —
     that independence is the whole reason this route exists, so doug-web
     can serve the public pages while holding no operator credential.
+
+    Takes no caller input at all: `repo` is ignored (see
+    test_showcase_queue_ignores_a_caller_supplied_repo) and so, deliberately,
+    is `threshold` — the one real consumer, web/lib/api.ts's getQueue(),
+    never sends it and re-bands client-side via applyThreshold instead. A
+    server-side `threshold` param would only be attack surface here: a
+    caller-controlled value with nothing to bound it, backed by the
+    process-lifetime cache below. `?threshold=...` is simply ignored, same
+    as `?repo=...` already is.
 
     Unset variable and no ledger both 404 rather than falling back to the
     bundled fixture: serving invented PRs from a PUBLIC url would be a
@@ -478,18 +489,16 @@ def showcase_queue(response: Response, threshold: float | None = None) -> QueueR
     downstream infrastructure (CDN, browser) at the same TTL — the payload
     is deliberately public.
     """
+    global _showcase_cache
     showcase = os.environ.get("DOUG_SHOWCASE_REPO")
     if not showcase or not store.enabled():
         raise _not_found()
     response.headers["Cache-Control"] = "public, max-age=30"
     now = time.monotonic()
-    cached = _showcase_cache.get(threshold)
-    if cached is not None and now - cached[0] < _SHOWCASE_CACHE_TTL_S:
-        return cached[1]
-    body = _queue_response(
-        _rows_to_items(store.latest_reviews(repo=showcase)), threshold
-    )
-    _showcase_cache[threshold] = (now, body)
+    if _showcase_cache is not None and now - _showcase_cache[0] < _SHOWCASE_CACHE_TTL_S:
+        return _showcase_cache[1]
+    body = _queue_response(_rows_to_items(store.latest_reviews(repo=showcase)), None)
+    _showcase_cache = (now, body)
     return body
 
 

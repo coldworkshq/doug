@@ -3081,13 +3081,13 @@ def test_showcase_queue_serves_only_the_pinned_repos_rows(tmp_path, monkeypatch)
     """Two repos in the ledger, one pinned: the other must not appear."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
-    # A prior test in this module may have warmed the cache for this exact
-    # (repo, threshold=None) response within the last 30s of monotonic
-    # time — a cache HIT would never call store.latest_reviews at all and
-    # this spy would see nothing. Start from a clean cache so this test's
-    # call-count assertion reflects this test's own request, not whatever
-    # ran before it.
-    monkeypatch.setattr(api, "_showcase_cache", {})
+    # A prior test in this module may have warmed the cache for this
+    # response within the last 30s of monotonic time — a cache HIT would
+    # never call store.latest_reviews at all and this spy would see
+    # nothing. Start from a clean cache so this test's call-count
+    # assertion reflects this test's own request, not whatever ran before
+    # it.
+    monkeypatch.setattr(api, "_showcase_cache", None)
     calls: list[dict] = []
     real = store.latest_reviews
 
@@ -3106,7 +3106,7 @@ def test_showcase_queue_sets_a_public_cache_control_header(tmp_path, monkeypatch
     cache this deliberately-public payload too, not just this process."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
-    monkeypatch.setattr(api, "_showcase_cache", {})
+    monkeypatch.setattr(api, "_showcase_cache", None)
     client = TestClient(app)
     r = client.get("/v1/showcase/queue")
     assert r.headers["cache-control"] == "public, max-age=30"
@@ -3121,7 +3121,7 @@ def test_showcase_queue_does_not_recompute_within_the_cache_ttl(tmp_path, monkey
     expires does."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
-    monkeypatch.setattr(api, "_showcase_cache", {})
+    monkeypatch.setattr(api, "_showcase_cache", None)
     calls: list[dict] = []
     real = store.latest_reviews
 
@@ -3146,28 +3146,50 @@ def test_showcase_queue_does_not_recompute_within_the_cache_ttl(tmp_path, monkey
     assert len(calls) == 2  # recomputed
 
 
-def test_showcase_queue_cache_key_includes_threshold_so_it_cannot_poison_the_default(
-    tmp_path, monkeypatch
-):
-    """`threshold` changes the response body: _queue_response re-bands every
-    row AND the summary against it. A cache that ignored threshold in its
-    key would let one ?threshold= request serve its band cut to every
-    caller of the default (unthrottled) response — a correctness bug worse
-    than the load this cache exists to fix."""
+def test_showcase_queue_ignores_a_caller_supplied_threshold(tmp_path, monkeypatch):
+    """The route takes no caller input, period: `repo` is already ignored
+    (test_showcase_queue_ignores_a_caller_supplied_repo above) and
+    `threshold` is too. The one real consumer — web/lib/api.ts's
+    getQueue() — never sends it and re-bands client-side via
+    applyThreshold, so accepting it server-side was pure attack surface: a
+    caller-controlled value with no bound, sitting on a public,
+    unauthenticated endpoint backed by a process-lifetime cache."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
-    monkeypatch.setattr(api, "_showcase_cache", {})
+    monkeypatch.setattr(api, "_showcase_cache", None)
     store.save_review(
         "drewjst/doug", 1, "reader", VERDICT,
         pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
     )
     client = TestClient(app)
+    default = client.get("/v1/showcase/queue").json()
+    # 0.99 sits well above the seeded score (0.62) — if threshold were
+    # honoured this would flip the row's band and the summary counts.
+    attempted = client.get("/v1/showcase/queue?threshold=0.99").json()
+    assert attempted == default
 
-    default_first = client.get("/v1/showcase/queue").json()
-    # A threshold far above the seeded score (0.62) flips its band and the
-    # summary's flagged/cleared counts — proof this really changes the body.
-    skewed = client.get("/v1/showcase/queue?threshold=0.99").json()
-    assert skewed != default_first
 
-    default_second = client.get("/v1/showcase/queue").json()
-    assert default_second == default_first
+def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
+    tmp_path, monkeypatch
+):
+    """A cache dict keyed on a caller-supplied value would let
+    ?threshold=0.0001, 0.0002, ... grow without bound on a public,
+    unauthenticated, scale-to-zero service — trading the DB-load
+    amplifier this cache exists to fix for a memory-exhaustion one.
+    Because the route ignores threshold entirely, every request lands on
+    the same single cache slot no matter how many distinct values a
+    caller sends."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", None)
+    client = TestClient(app)
+
+    bodies = [
+        client.get(f"/v1/showcase/queue?threshold=0.{i:04d}").json()
+        for i in range(50)
+    ]
+    assert all(b == bodies[0] for b in bodies)
+    # Not just "same content" — structurally one slot, not a dict a
+    # caller-controlled key could have grown to 50 entries.
+    assert isinstance(api._showcase_cache, tuple)
+    assert len(api._showcase_cache) == 2
