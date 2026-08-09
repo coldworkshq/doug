@@ -3081,6 +3081,13 @@ def test_showcase_queue_serves_only_the_pinned_repos_rows(tmp_path, monkeypatch)
     """Two repos in the ledger, one pinned: the other must not appear."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    # A prior test in this module may have warmed the cache for this exact
+    # (repo, threshold=None) response within the last 30s of monotonic
+    # time — a cache HIT would never call store.latest_reviews at all and
+    # this spy would see nothing. Start from a clean cache so this test's
+    # call-count assertion reflects this test's own request, not whatever
+    # ran before it.
+    monkeypatch.setattr(api, "_showcase_cache", {})
     calls: list[dict] = []
     real = store.latest_reviews
 
@@ -3092,3 +3099,75 @@ def test_showcase_queue_serves_only_the_pinned_repos_rows(tmp_path, monkeypatch)
     client = TestClient(app)
     assert client.get("/v1/showcase/queue").status_code == 200
     assert calls == [{"repo": "drewjst/doug"}]
+
+
+def test_showcase_queue_sets_a_public_cache_control_header(tmp_path, monkeypatch):
+    """Downstream infrastructure (a CDN, the browser) should be able to
+    cache this deliberately-public payload too, not just this process."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", {})
+    client = TestClient(app)
+    r = client.get("/v1/showcase/queue")
+    assert r.headers["cache-control"] == "public, max-age=30"
+
+
+def test_showcase_queue_does_not_recompute_within_the_cache_ttl(tmp_path, monkeypatch):
+    """store.latest_reviews runs one findings query per row, up to
+    limit=200 (store.py:1838) — up to 201 queries per request against a
+    scale-to-zero service, with no auth to throttle callers. A short cache
+    is the backstop; this proves a second identical request within the TTL
+    does not touch the ledger again, and that a request after the TTL
+    expires does."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", {})
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    now = [1_000.0]
+    monkeypatch.setattr(api.time, "monotonic", lambda: now[0])
+    client = TestClient(app)
+
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 1
+
+    now[0] += 10  # well within the 30s TTL
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 1  # cache hit — no second query
+
+    now[0] += 30  # TTL now expired
+    client.get("/v1/showcase/queue")
+    assert len(calls) == 2  # recomputed
+
+
+def test_showcase_queue_cache_key_includes_threshold_so_it_cannot_poison_the_default(
+    tmp_path, monkeypatch
+):
+    """`threshold` changes the response body: _queue_response re-bands every
+    row AND the summary against it. A cache that ignored threshold in its
+    key would let one ?threshold= request serve its band cut to every
+    caller of the default (unthrottled) response — a correctness bug worse
+    than the load this cache exists to fix."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_showcase_cache", {})
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT,
+        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+    )
+    client = TestClient(app)
+
+    default_first = client.get("/v1/showcase/queue").json()
+    # A threshold far above the seeded score (0.62) flips its band and the
+    # summary's flagged/cleared counts — proof this really changes the body.
+    skewed = client.get("/v1/showcase/queue?threshold=0.99").json()
+    assert skewed != default_first
+
+    default_second = client.get("/v1/showcase/queue").json()
+    assert default_second == default_first

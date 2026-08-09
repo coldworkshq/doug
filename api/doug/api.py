@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
@@ -436,8 +437,30 @@ def queue(
     return _queue_response(items, threshold)
 
 
+# In-process TTL cache for the showcase route ONLY. store.latest_reviews
+# runs one findings query per row, up to limit=200 (store.py:1838) — and
+# this route is public and unauthenticated, so a single caller can drive up
+# to 201 queries per request against a scale-to-zero service. web/'s own
+# micro-cache (web/lib/api.ts) does not help: anyone can call this API
+# directly, bypassing doug-web entirely.
+#
+# Keyed on `threshold`, including the `None` default. `threshold` changes
+# the response body — _queue_response re-bands every row AND the summary
+# against it — so caching on any other key would let one ?threshold=
+# request poison the cached response served to every default caller. That
+# would be a correctness bug far worse than the load this cache fixes.
+#
+# 30s matches web/lib/api.ts's own cache of `/` — an established number,
+# not a new one. time.monotonic() so a wall-clock step never falsely
+# expires or extends an entry. Concurrent misses may both recompute; that
+# race is cheap (one extra query burst, not unbounded) and benign, so
+# there is deliberately no lock here.
+_SHOWCASE_CACHE_TTL_S = 30.0
+_showcase_cache: dict[float | None, tuple[float, QueueResponse]] = {}
+
+
 @app.get("/v1/showcase/queue")
-def showcase_queue(threshold: float | None = None) -> QueueResponse:
+def showcase_queue(response: Response, threshold: float | None = None) -> QueueResponse:
     """The public Doug-on-Doug queue, pinned to one repo by deployment.
 
     Unauthenticated by design (ADR-0008) and therefore NOT a selector: the
@@ -450,13 +473,24 @@ def showcase_queue(threshold: float | None = None) -> QueueResponse:
     bundled fixture: serving invented PRs from a PUBLIC url would be a
     confident false claim, and web/ already has its own labelled fixture
     fallback for the unreachable-API case.
+
+    Cached briefly per `_showcase_cache` above, and marked cacheable by
+    downstream infrastructure (CDN, browser) at the same TTL — the payload
+    is deliberately public.
     """
     showcase = os.environ.get("DOUG_SHOWCASE_REPO")
     if not showcase or not store.enabled():
         raise _not_found()
-    return _queue_response(
+    response.headers["Cache-Control"] = "public, max-age=30"
+    now = time.monotonic()
+    cached = _showcase_cache.get(threshold)
+    if cached is not None and now - cached[0] < _SHOWCASE_CACHE_TTL_S:
+        return cached[1]
+    body = _queue_response(
         _rows_to_items(store.latest_reviews(repo=showcase)), threshold
     )
+    _showcase_cache[threshold] = (now, body)
+    return body
 
 
 # Rendered in words on EVERY merge, not only the one that governed.
