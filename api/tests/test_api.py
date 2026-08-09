@@ -3035,3 +3035,60 @@ def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monk
     assert body["outcome_jobs"][0]["status"] == "pending"
     assert _parsed_utc(body["outcome_jobs"][0]["due_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
     assert _parsed_utc(body["outcome_jobs"][0]["merged_at"]) == datetime(2026, 8, 1, tzinfo=UTC)
+
+
+def test_showcase_queue_404s_when_the_repo_is_unset(tmp_path, monkeypatch):
+    """Unset means 'this deployment has no showcase', not 'show everything'."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_SHOWCASE_REPO", raising=False)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 404
+
+
+def test_showcase_queue_serves_without_any_token(tmp_path, monkeypatch):
+    """The whole point: doug-web must be able to call this holding no
+    credential at all."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+
+
+def test_showcase_queue_does_not_depend_on_the_operator_token(tmp_path, monkeypatch):
+    """/v1/queue 503s when DOUG_API_TOKEN is unset (api.py:317-322). If this
+    endpoint inherited that, removing the secret from doug-web would take the
+    public pages down — the exact failure this endpoint exists to prevent."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+
+
+def test_showcase_queue_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
+    """It is pinned by deployment, never selected by the caller. A ?repo=
+    that changed the answer would make a public endpoint a cross-tenant
+    selector."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    pinned = client.get("/v1/showcase/queue").json()
+    attempted = client.get("/v1/showcase/queue?repo=someone/private").json()
+    assert pinned == attempted
+
+
+def test_showcase_queue_serves_only_the_pinned_repos_rows(tmp_path, monkeypatch):
+    """Two repos in the ledger, one pinned: the other must not appear."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/queue").status_code == 200
+    assert calls == [{"repo": "drewjst/doug"}]

@@ -436,6 +436,29 @@ def queue(
     return _queue_response(items, threshold)
 
 
+@app.get("/v1/showcase/queue")
+def showcase_queue(threshold: float | None = None) -> QueueResponse:
+    """The public Doug-on-Doug queue, pinned to one repo by deployment.
+
+    Unauthenticated by design (ADR-0008) and therefore NOT a selector: the
+    repo comes from DOUG_SHOWCASE_REPO and never from the caller, so no
+    request can widen it. It deliberately does NOT read DOUG_API_TOKEN —
+    that independence is the whole reason this route exists, so doug-web
+    can serve the public pages while holding no operator credential.
+
+    Unset variable and no ledger both 404 rather than falling back to the
+    bundled fixture: serving invented PRs from a PUBLIC url would be a
+    confident false claim, and web/ already has its own labelled fixture
+    fallback for the unreachable-API case.
+    """
+    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
+    if not showcase or not store.enabled():
+        raise _not_found()
+    return _queue_response(
+        _rows_to_items(store.latest_reviews(repo=showcase)), threshold
+    )
+
+
 # Rendered in words on EVERY merge, not only the one that governed.
 #
 # Exactly one merge of a PR carries publication_governing=True — the greatest
