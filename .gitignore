@@ -18,12 +18,16 @@ venv/
 /out/
 /reports/
 
+# Node
+node_modules/
+.next/
+
 # Secrets
 .env
 .env.*
 !.env.example
 .backtest-cache/
-backtest-*.json
+.worktrees/
 
 # Subagent-driven-development scratch: per-plan ledgers, task briefs,
 # implementer reports and review packages. Recovery state for an in-flight

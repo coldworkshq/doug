@@ -150,8 +150,6 @@ def read_order(files: list) -> list:
 # the same commit as any change to how the diff is ordered — a receipt that
 # says "tiered" about a linear read is worse than one that says nothing.
 READ_ORDER = "tiered"
-
-
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",
