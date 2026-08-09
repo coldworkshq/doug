@@ -290,21 +290,24 @@ smoke() { # $1 url — 200 or die
   [ "$code" = "200" ]
 }
 
-promote_if_healthy() { # $1 service, $2 smoke path
-  local url
-  url=$(candidate_url "$1")
+promote_if_healthy() { # $1 service, $2... one or more smoke paths
+  local service="$1" url path
+  shift
+  url=$(candidate_url "$service")
   if [ -z "$url" ]; then
-    echo "ERROR: no candidate-tagged revision found on $1 to promote" >&2
+    echo "ERROR: no candidate-tagged revision found on $service to promote" >&2
     return 1
   fi
-  if ! smoke "$url$2"; then
-    echo "ERROR: candidate revision of $1 failed its smoke test." >&2
-    echo "Traffic stays on the previous revision. Inspect $url, fix, redeploy." >&2
-    return 1
-  fi
-  gcloud run services update-traffic "$1" --to-latest \
+  for path in "$@"; do
+    if ! smoke "$url$path"; then
+      echo "ERROR: candidate revision of $service failed its smoke test." >&2
+      echo "Traffic stays on the previous revision. Inspect $url, fix, redeploy." >&2
+      return 1
+    fi
+  done
+  gcloud run services update-traffic "$service" --to-latest \
     --project "$PROJECT" --region "$REGION" >/dev/null
-  echo "promoted: 100% of $1 -> latest revision"
+  echo "promoted: 100% of $service -> latest revision"
 }
 
 preregistration_preflight() {
@@ -376,10 +379,16 @@ deploy() {
     $traffic_flags
   if [ -n "$traffic_flags" ]; then
     # /healthz is intercepted by the Google frontend; openapi.json is a
-    # real route through the app.
-    promote_if_healthy "$SERVICE" /openapi.json
+    # real route through the app. /v1/showcase/queue is smoked here too:
+    # it 404s if DOUG_SHOWCASE_REPO is wrong or unset, but /openapi.json
+    # returns 200 either way, so that check alone would happily promote a
+    # candidate whose public pages are broken. Gated BEFORE
+    # update-traffic — a check that runs after traffic moves protects
+    # nothing.
+    promote_if_healthy "$SERVICE" /openapi.json /v1/showcase/queue
   else
     smoke "$(api_url)/openapi.json"
+    smoke "$(api_url)/v1/showcase/queue"
   fi
   # The Job consumes the promoted service's exact immutable image. Building
   # it separately would let the live review and outcome detector drift even
