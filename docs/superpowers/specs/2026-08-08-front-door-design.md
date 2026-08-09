@@ -55,27 +55,37 @@ only service with staged traffic and `promote_if_healthy` on `/`
 could take down the marketing homepage — a failure a separate service could not
 produce. Mitigated by excluding `/` and `/queue` from the auth matcher (§1).
 
-## 0. The gate before any code
+## 0. The gate — PASSED 2026-08-09
 
-**Prove the token assumption with one live call.** Nothing in WorkOS's or
-GitHub's documentation states end-to-end that the access token a WorkOS GitHub
-**App** connection returns is a GitHub *user-to-server* token that
-`GET /user/installations` will answer for. The evidence is circumstantial but
-strong: WorkOS documents that for GitHub Apps the response also carries "a
-refresh token and expiration when available"
-(<https://workos.com/docs/integrations/github-oauth>), and only user-to-server
-tokens expire and refresh
-(<https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app>).
+This section opened as the design's one unproven assumption: nothing in
+WorkOS's or GitHub's documentation states end-to-end that the access token a
+WorkOS GitHub **App** connection returns is a *user-to-server* token that
+`GET /user/installations` answers for. It was probed against WorkOS
+**production** with Doug's real App. **It holds**, and the proof is stronger
+than a 200:
 
-The whole entitlement model rests on that inference. Configure the connection,
-sign in once, call `GET /user/installations`, confirm it answers. **If it does
-not, stop — the entitlement model needs rework before anything is built on it.**
+- `oauth_tokens.access_token` carries the prefix **`ghu_`** — GitHub's
+  documented prefix for a user-to-server token. The inference is now a measured
+  fact.
+- `refresh_token` present, `expires_at` present — the user-to-server lifecycle.
+- `GET /user/installations` → **HTTP 200**, returning two installations, both
+  `app_id=4450932`.
 
-Observed (not documented) supporting behaviour: calling that endpoint with a
-token not issued by a GitHub App returns HTTP 403 — *"You must authenticate
-with an access token authorized to a GitHub App in order to list
-installations."* Recorded here as an empirical observation from a live `gh api`
-call on 2026-08-08, not as a documented contract.
+Four results from that probe are requirements, not trivia, and each is carried
+into the sections below:
+
+1. **Email verification interrupts the first sign-in** (§3).
+2. **The GitHub token lives ~8 hours** — measured, so the residual-revocation
+   window is bounded rather than hand-waved (§2).
+3. **`repository_selection` differs across real installations** — `drewjst` is
+   `selected`, `lemahq` is `all` (§2).
+4. **`org_id` was absent on the first sign-in**, so the fail-closed path is
+   reachable on day one, not hypothetically (§2).
+
+Supporting observation, empirical rather than documented: that endpoint returns
+HTTP 403 — *"You must authenticate with an access token authorized to a GitHub
+App in order to list installations"* — for a token not issued by a GitHub App.
+Observed from a live `gh api` call, recorded as behaviour, not contract.
 
 ## 1. Surfaces
 
@@ -191,10 +201,29 @@ removes. So this design must include teardown:
 - Uninstall/reinstall mints a *new* `installation_id`, so `gh-inst-<old>` must
   be torn down or it lingers with live members.
 
-Residual gap, stated not closed: a user who loses repo access without any
-installation-level event keeps it until their next refresh. That window is the
-refresh interval, and it is bounded — which is the claim the earlier draft
-could not make.
+Residual gap, now stated with a number: a user who loses repo access without any
+installation-level event keeps it until their next refresh. The probe measured
+the GitHub token's lifetime at **~8 hours**, so that window is bounded at ~8h
+rather than "until next sign-in" (false) or indefinite (also false, once
+refresh-time re-derivation exists). **Re-derive repo scope on refresh, not only
+at sign-in** — that is what makes the bound real.
+
+### Per-user repo scope is not uniform
+
+The probe found `repository_selection` differing across the two real
+installations: `drewjst` is **`selected`**, `lemahq` is **`all`**. So
+`GET /user/installations/{id}/repositories` returns a *subset* for a `selected`
+install, and the session's `repo_ids` must come from that call intersected with
+`store.active_repos` — never assumed to be everything the installation covers.
+
+### A tenant you may not want to show
+
+The probe confirmed **`lemahq` (installation 151500529) is visible to the
+operator's GitHub user**, so a signed-in dashboard will list it as one of their
+tenants. That is *correct* under this entitlement model — they do administer it
+— but it collides with the standing decision that Doug and lema are separate
+products and lema is never Doug's tenant. Decide deliberately whether the
+dashboard shows it, hides it, or labels it. It must not appear by accident.
 
 ## 3. Install and bind
 
@@ -233,6 +262,23 @@ could not make.
 
 **Cold arrival** (no session): stash `installation_id` in the same signed
 cookie, bounce to sign-in, resume at step 5.
+
+### The first sign-in is interrupted, and the flow must survive it
+
+The probe hit this and every first-time Doug user will: WorkOS refuses to
+complete a first authentication until email ownership is proven. It returns
+HTTP 403 `email_verification_required` with a `pending_authentication_token`,
+emails a one-time code, and completion requires a second call with
+`grant_type: urn:workos:oauth:grant-type:email-verification:code` plus
+`{code, pending_authentication_token}`.
+
+That puts an **inbox round-trip** between "signed in with GitHub" and "a session
+exists" — the user leaves the browser and comes back, possibly minutes later,
+possibly in a new tab. **The signed bind cookie from step 3 must outlive that
+gap**, or first-time self-serve installs break at exactly the moment the whole
+design exists to make seamless. Its TTL is sized for a human checking email, not
+for a redirect. AuthKit's hosted UI handles the verification screens; what this
+design owns is not losing the pending installation across them.
 
 **`setup_action` handling.** `update` fires whenever anyone edits repo
 selection and is a second uninvited bind trigger — treat it as re-derive-scope,
