@@ -45,7 +45,9 @@ From the 2026-08-09 production probe (spec §0):
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `installations.workos_org_id` — `String(255)`, nullable, **unique**. Tasks 5–8 depend on it.
+- Produces, in ONE migration (see Task 5 for why the second column exists):
+  - `installations.workos_org_id` — `String(255)`, nullable, **unique**. Tasks 4–8 depend on it.
+  - `installations.installed_by_github_user_id` — `BigInteger`, nullable. Task 5 depends on it. Populated from the `installation` webhook's `sender.id`, which nothing records today (`grep sender api/doug/api.py` → nothing; `store.upsert_installation`, `store.py:736`, takes only four fields). Widening that writer is part of this task.
 
 - [ ] **Step 1: Read the real migration number — do not trust this plan**
 
@@ -416,7 +418,43 @@ git commit -m "feat: resolve a WorkOS session to a live tenant scope"
 - Consumes: Tasks 1, 3, 4.
 - Produces: `POST /v1/installations/bind` taking `{installation_id, workos_org_id}` under a verified session, returning 204 on success.
 
-**The attack this must refuse.** Setup-URL parameters are attacker-supplied and no GitHub redirect need ever occur. An attacker with `:read` on one repo sees a victim's `installation_id` in their own `GET /user/installations`, then posts it here. A membership check alone **passes** — the installation genuinely is in their list. Binding must therefore require **org-admin proof**, via `tenancy.verify_org_admin` (`tenancy.py:245`), which already exists.
+**The attack this must refuse.** Setup-URL parameters are attacker-supplied and no GitHub redirect need ever occur. An attacker with `:read` on one repo sees a victim's `installation_id` in their own `GET /user/installations`, then posts it here. A membership check alone **passes** — the installation genuinely is in their list. Binding must therefore require proof of **authority**, not visibility.
+
+> **CORRECTION, 2026-08-09 — an earlier draft of this plan said to use
+> `tenancy.verify_org_admin` (`tenancy.py:245`). That does not work here, and
+> the reason matters.**
+>
+> `verify_org_admin(pat, owner)` takes a **PAT**. Its authority hop is
+> `orgs.get_membership_for_authenticated_user`, which for a GitHub App
+> *user-to-server* token requires the App to hold the organization
+> **Members: read** permission. Doug is a code-review app and does not have it.
+> Adding it would make GitHub require **every existing installation to
+> re-accept permissions**, interrupting live tenants — a real cost, to ask for
+> org membership data a code reviewer has no other use for.
+>
+> The obvious fallback is not available either: nothing records who performed
+> an installation. `grep sender api/doug/api.py` returns nothing, and
+> `store.upsert_installation` (`store.py:736`) takes only
+> `(installation_id, account_login, account_type, state)`.
+
+**Use the installer identity instead.** Capture `sender.id` from the
+`installation` webhook into a new `installations.installed_by_github_user_id`
+column (fold it into Task 1's migration — one migration, two columns), and
+require the session's GitHub user id to equal it before binding.
+
+This proves something **narrower and more relevant** than org-admin: you are
+the person who actually installed Doug here. It needs no new App permission and
+disrupts no existing tenant. Its limit is honest and must be stated in the
+code: it only works for installations created **after** this ships. Pre-existing
+ones — notably the operator's own `150424894`, populated by webhook redelivery
+under MT0 — have no recorded installer and cannot self-bind. They need a
+deliberate operator bind or a one-off backfill, which is acceptable because the
+target of this phase, `coldworkshq/coldworks`, is a **fresh** install that fires
+a fresh webhook carrying its sender.
+
+Get the session's GitHub user id from the identity WorkOS already holds for the
+user — do not call GitHub again for it, and do not trust any id supplied in the
+request body.
 
 - [ ] **Step 1: Write the failing tests — the first is the security test**
 
@@ -528,6 +566,28 @@ A sibling to `prove-isolation.sh`, executable against prod — that script earne
 - [ ] The orgless path exercised for real: the operator holds two installations, so the first sign-in has no `org_id`.
 - [ ] `prove-session-isolation.sh` 9/9 against prod.
 - [ ] A first-time user completing email verification still lands bound — the inbox round-trip did not lose the pending installation.
+
+## Honest status of this plan — read before executing
+
+**Tasks 1–5 are execution-ready**: exact files, real code, runnable verification
+commands. **Tasks 6–10 are specified but not stepped** — they state the
+requirements, the traps, and the exit conditions, but they do not yet carry
+task-by-task code the way Tasks 1–5 do.
+
+That is a real gap against this repo's own standard, and it is recorded rather
+than disguised: a plan that *looks* complete but is half outline produces bad
+execution, and the executing session would discover it at Task 6 instead of
+now. **The first job of whoever executes this is to expand Tasks 6–10 to the
+same standard as 1–5**, ideally one at a time, just before executing each —
+their content depends on decisions Tasks 1–5 will settle (the exact
+`SessionContext` shape, whether the WorkOS Python SDK is a dependency, what
+`store.installation_id_for_workos_org` ends up looking like).
+
+Also un-run: an independent review of this plan was dispatched and never
+delivered. The Task 5 correction above was found by the controller reading
+`verify_org_admin` directly, *after* the first draft was committed — which is
+itself evidence that the parts of this plan not yet verified against real code
+deserve suspicion, not trust.
 
 ## Deliberately out of scope
 
