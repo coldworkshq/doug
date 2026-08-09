@@ -166,6 +166,11 @@ setup() {
   # --allow-unauthenticated service holding an operator credential was the
   # hole this closed; test_deploy_gcp.py pins it shut.
 
+  # The default compute SA may still hold a leftover secretAccessor on
+  # doug-api-token from before doug-web had its own identity. That is a
+  # one-off operator action, not a setup step — see docs/OPERATIONS.md,
+  # "Revoke the default compute SA's access to doug-api-token".
+
   # doug-console is the operator surface. It crosses every installation, so
   # it is IAM-gated rather than token-gated, and it gets its own identity
   # for the same reason doug-web did: a service must not inherit the
