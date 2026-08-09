@@ -450,7 +450,7 @@ GC'd mid-call-chain (#52) — an executable gate earns its keep.
 | Track | Trigger | Ref |
 |---|---|---|
 | MCP garden service (`doug.check`, AGENTS.md fragment export) | adjudicated rows ≥ min-n on ≥1 tenant | design-lock T4, addendum A3 |
-| Tenant dashboard (WorkOS, tenancy steps 3–4) | >3 tenants or first tenant ask | tenancy spec |
+| Tenant dashboard (WorkOS, tenancy steps 3–4) | **PULLED FORWARD 2026-08-08 ahead of its trigger** — see note below | `2026-08-08-front-door-design.md` |
 | Evidence refinery (offline council) | enough adjudicated data to mine; becomes the panel-experiment harness | addendum A1 |
 | Live specialist panel — **pre-registered experiment** | refinery harness ready; bar: beats single-read on flagged-band outcome capture | addendum G1 |
 | Champion–challenger shadow models | model price/retirement event, or matured outcome set | addendum A2 |
@@ -458,6 +458,41 @@ GC'd mid-call-chain (#52) — an executable gate earns its keep.
 | Derangement **positive control** (decision records) | pre-registered before any further intent investment; passes → deviations believed, fails → pull the stream | HANDOFF 2026-07-31 |
 | Underwriter shadow probe (loss-ratio SQL) | ≥2 quarters adjudicated data on real tenants | IDEAS.md 2026-07-31 |
 | Public cross-repo garden | its own design pass; never before the private garden earns "pattern" | design-lock non-goals |
+
+**The tenant-dashboard track started early, deliberately (Andrew, 2026-08-08).**
+Neither trigger had fired — there are two tenants, and no tenant has asked —
+and this reverses the 2026-08-06 ruling that "WorkOS auth is a detour from the
+dogfooding pain." Recorded as an override rather than drifted into. What
+changed: the existing dogfood installation *cannot* test self-serve onboarding,
+because installation 150424894 was populated operationally (MT0, by redelivering
+a webhook) and carries no WorkOS identity, so the bind step is precisely the
+thing it cannot exercise. The first real tenant is `coldworkshq/coldworks` — an
+**org** install on a **private** repo, which also exercises what a User install
+structurally cannot (MT1 hid for a year because repo-admin and installation-wide
+scope are indistinguishable on a User install).
+
+Design: `docs/superpowers/specs/2026-08-08-front-door-design.md`. Three phases.
+
+- [x] **Phase 0 — take the operator credential off `doug-web`.** Plan:
+  `docs/superpowers/plans/2026-08-08-front-door-phase-0.md`. Public
+  `GET /v1/showcase/queue` pinned by `DOUG_SHOWCASE_REPO`; both public pages
+  repointed; `DOUG_API_TOKEN` removed from the deploy flag *and* the Secret
+  Manager binding; `web/`'s first tests plus a guard against reporting zero
+  tests as a pass, wired into CI.
+- [ ] **Phase 1 — auth, install, bind, tenant surface.** HARD GATE FIRST: no
+  documentation states end-to-end that the token a WorkOS GitHub-**App**
+  connection returns is a *user-to-server* token that `GET /user/installations`
+  answers for. The entire entitlement model rests on that inference. Prove it
+  with one live call before writing a line.
+- [ ] **Phase 2 — marketing and custom domain.** Deliberately last; everything
+  before it is built against `*.run.app`.
+
+Two corrections this design already forced on prior thinking, both load-bearing:
+`GET /user/installations` answers on **`:read`**, not admin, so it reports what a
+user may *see*, never what they may *control* — a session must carry per-user
+`repo_ids`, never installation-wide. And GitHub does **not** document propagating
+`state` to a GitHub App's Setup URL, so the bind flow uses a signed HttpOnly
+cookie instead.
 
 ---
 
