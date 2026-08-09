@@ -43,9 +43,9 @@ CONSOLE_SERVICE=doug-console
 ADJUDICATOR_JOB=doug-adjudicator
 SCHEDULER_JOB=doug-adjudicator-daily
 CONN="$PROJECT:$REGION:$INSTANCE"
-# The dashboard shows one repo's queue; unset would mix the backfilled
+# The showcase queue shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
-QUEUE_REPO=${QUEUE_REPO:-drewjst/doug}
+SHOWCASE_REPO=${SHOWCASE_REPO:-drewjst/doug}
 PREREG_DOC="$REPO_ROOT/docs/design/outcome-loop/publication-preregistration.md"
 
 setup() {
@@ -146,12 +146,11 @@ setup() {
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
 
-  # doug-web gets its own identity too. It only needs doug-api-token (the
-  # dashboard's server component calls the token-gated API). It must not
-  # share the default compute SA: that principal holds roles/editor on
-  # doug-prod0, and a browser-facing service running as editor is the
-  # blast radius Task 10 held doug-web back from. Same create/describe
-  # guard as doug-api-sa above — never a display-name filter.
+  # doug-web gets its own identity too. It must not share the default
+  # compute SA: that principal holds roles/editor on doug-prod0, and a
+  # browser-facing service running as editor is the blast radius Task 10
+  # held doug-web back from. Same create/describe guard as doug-api-sa
+  # above — never a display-name filter.
   gcloud iam service-accounts create doug-web-sa \
     --display-name "doug-web runtime" --project "$PROJECT" 2>/dev/null \
     || echo "doug-web-sa exists; leaving it"
@@ -162,20 +161,10 @@ setup() {
     echo "not propagated yet — wait a minute and re-run setup." >&2
     exit 1
   fi
-  if gcloud secrets describe doug-api-token --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud secrets add-iam-policy-binding doug-api-token --project "$PROJECT" \
-      --member="serviceAccount:$WEB_SA" \
-      --role=roles/secretmanager.secretAccessor >/dev/null
-  else
-    echo "WARN: secret doug-api-token does not exist yet — create it and re-run setup to bind access." >&2
-  fi
-  # setup does not revoke the default compute SA's leftover accessor on
-  # doug-api-token (that binding may still be live from the Task-10 era).
-  # After the first web deploy as doug-web-sa succeeds, remove it by hand:
-  #   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-  #   gcloud secrets remove-iam-policy-binding doug-api-token --project "$PROJECT" \
-  #     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  #     --role=roles/secretmanager.secretAccessor
+  # doug-web binds NO secret. It serves only /v1/showcase/queue, which is
+  # unauthenticated and pinned by the API's own DOUG_SHOWCASE_REPO. A
+  # --allow-unauthenticated service holding an operator credential was the
+  # hole this closed; test_deploy_gcp.py pins it shut.
 
   # doug-console is the operator surface. It crosses every installation, so
   # it is IAM-gated rather than token-gated, and it gets its own identity
@@ -376,7 +365,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
@@ -447,16 +436,16 @@ web() {
   local traffic_flags=""
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # Built from ../web, so this runs from api/ like every other command here.
-  # DOUG_API_URL is read at request time by the dashboard's server component.
-  # --service-account: see setup()'s doug-web-sa block. Deploying without it
-  # silently falls back to the default compute SA (roles/editor).
+  # DOUG_API_URL is read at request time by the public pages' server
+  # components. No secrets: see setup()'s doug-web-sa block.
+  # --service-account: deploying without it silently falls back to the
+  # default compute SA (roles/editor).
   gcloud run deploy "$WEB_SERVICE" \
     --source ../web \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
-    --set-env-vars "DOUG_API_URL=$(api_url),DOUG_QUEUE_REPO=$QUEUE_REPO" \
-    --set-secrets "DOUG_API_TOKEN=doug-api-token:latest" \
+    --set-env-vars "DOUG_API_URL=$(api_url)" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
     $traffic_flags
   # The web deploy had no verification at all: Cloud Run's readiness probe

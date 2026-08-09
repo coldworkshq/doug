@@ -46,20 +46,36 @@ def test_web_deploy_runs_as_doug_web_sa():
     assert "compute@developer.gserviceaccount.com" not in body
 
 
-def test_setup_creates_doug_web_sa_and_binds_the_api_token():
-    """web needs doug-api-token only — no Cloud SQL client, no App key."""
+def test_setup_creates_doug_web_sa_and_binds_it_no_secrets():
+    """doug-web serves only the unauthenticated showcase queue, so it needs
+    NO secret at all. This pin is what stops the operator token being
+    quietly reintroduced to a --allow-unauthenticated service."""
     setup = _function_body("setup")
     assert "service-accounts create doug-web-sa" in setup
-    assert "doug-web-sa@$PROJECT.iam.gserviceaccount.com" in setup
-    # After the web-sa create, the only secret binding is doug-api-token.
     after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
         "service-accounts create doug-console-sa", 1
     )[0]
-    assert "doug-api-token" in after_web
+    assert "doug-api-token" not in after_web
+    assert "secretAccessor" not in after_web
     assert "doug-database-url" not in after_web
     assert "doug-github-app-key" not in after_web
     assert "doug-anthropic-key" not in after_web
     assert "roles/cloudsql.client" not in after_web
+
+
+def test_web_deploy_carries_no_secrets():
+    """The deploy flag is a second, independent way the credential could
+    return — setup()'s binding and web()'s --set-secrets must BOTH stay
+    clean or the service holds a token again."""
+    body = _function_body("web")
+    assert "--set-secrets" not in body
+    assert "DOUG_API_TOKEN" not in body
+
+
+def test_api_deploy_carries_the_showcase_repo():
+    """The public pages 404 without it, so it belongs on doug-api and
+    nowhere else."""
+    assert "DOUG_SHOWCASE_REPO=" in _function_body("deploy")
 
 
 def test_api_deploy_still_runs_as_doug_api_sa():
