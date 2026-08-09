@@ -446,16 +446,45 @@ schedule() {
   echo "scheduled: $SCHEDULER_JOB -> $ADJUDICATOR_JOB daily at 03:00 UTC"
 }
 
+# Node apps live in an npm workspaces monorepo. Cloud Run `--source ../web`
+# can only see the app directory, so it cannot `npm ci` against the root
+# lockfile. Build the image from REPO_ROOT via Cloud Build, then deploy
+# that image. The Dockerfile path is relative to the monorepo root.
+ensure_node_artifact_repo() {
+  gcloud artifacts repositories describe doug \
+    --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
+    || gcloud artifacts repositories create doug \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT" \
+      --description="Doug Node service images"
+}
+
+build_node_image() {
+  # $1 = Dockerfile relative to REPO_ROOT (web/Dockerfile | console/Dockerfile)
+  # $2 = image name under the doug Artifact Registry repo (doug-web | doug-console)
+  local dockerfile=$1 name=$2 image tag
+  ensure_node_artifact_repo
+  tag=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+  image="${REGION}-docker.pkg.dev/${PROJECT}/doug/${name}:${tag}"
+  gcloud builds submit "$REPO_ROOT" \
+    --project "$PROJECT" \
+    --config="$SCRIPT_DIR/cloudbuild-node.yaml" \
+    --substitutions="_IMAGE=${image},_DOCKERFILE=${dockerfile}" \
+    --timeout=1200s
+  printf '%s\n' "$image"
+}
+
 web() {
-  local traffic_flags=""
+  local traffic_flags="" image
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
-  # Built from ../web, so this runs from api/ like every other command here.
   # DOUG_API_URL is read at request time by the public pages' server
   # components. No secrets: see setup()'s doug-web-sa block.
   # --service-account: deploying without it silently falls back to the
   # default compute SA (roles/editor).
+  image=$(build_node_image web/Dockerfile doug-web)
   gcloud run deploy "$WEB_SERVICE" \
-    --source ../web \
+    --image "$image" \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
@@ -478,8 +507,10 @@ console() {
   # --no-allow-unauthenticated, so an unauthenticated curl from this script
   # gets 403 no matter how healthy the revision is. A failing console is an
   # operator inconvenience, not an outage — the tradeoff web() cannot make.
+  local image
+  image=$(build_node_image console/Dockerfile doug-console)
   gcloud run deploy "$CONSOLE_SERVICE" \
-    --source ../console \
+    --image "$image" \
     --project "$PROJECT" --region "$REGION" \
     --no-allow-unauthenticated \
     --service-account "doug-console-sa@$PROJECT.iam.gserviceaccount.com" \

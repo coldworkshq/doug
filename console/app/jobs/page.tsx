@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { JobsTable } from "@/components/jobs-table";
 import { Shell } from "@/components/shell";
 import { getHealth, getJobs, isError } from "@/lib/api";
@@ -110,15 +112,17 @@ export default async function JobsPage({
             <p className="mt-1 text-muted-foreground">{result.error}</p>
           </div>
         ) : (
-          <JobsTable
-            key={key}
-            title={title}
-            jobs={result.items}
-            atCap={result.items.length >= result.limit}
-            limit={result.limit}
-            maxAttempts={cap}
-            asOf={asOf}
-          />
+          <Suspense key={key} fallback={null}>
+            <JobsTable
+              title={title}
+              jobs={result.items}
+              atCap={result.items.length >= result.limit}
+              limit={result.limit}
+              maxAttempts={cap}
+              asOf={asOf}
+              urlKey={key as "review" | "outcome"}
+            />
+          </Suspense>
         ),
       )}
     </Shell>

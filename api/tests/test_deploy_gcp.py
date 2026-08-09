@@ -141,6 +141,23 @@ def test_web_deploy_is_still_the_only_public_service():
     assert "--source ../console" not in _function_body("web")
 
 
+def test_node_deploys_build_images_from_the_monorepo_root():
+    """npm workspaces put the lockfile at the repo root; Cloud Run
+    `--source ../web` cannot see it. Both Node deploys must build via
+    Cloud Build from REPO_ROOT, then `gcloud run deploy --image`."""
+    web = _function_body("web")
+    console = _function_body("console")
+    assert "build_node_image web/Dockerfile doug-web" in web
+    assert "build_node_image console/Dockerfile doug-console" in console
+    assert "--source ../web" not in web
+    assert "--source ../console" not in console
+    assert "--image \"$image\"" in web
+    assert "--image \"$image\"" in console
+    build = _function_body("build_node_image")
+    assert "cloudbuild-node.yaml" in build
+    assert 'gcloud builds submit "$REPO_ROOT"' in build
+
+
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
     """Deterministic external boundaries: record argv, fake Cloud Run state,
     and report that the Scheduler resource does not exist yet."""

@@ -2,26 +2,31 @@
 
 /* Token-to-utility plumbing Tailwind v4 needs to turn the custom properties
    below into usable classes (bg-background, border-border, font-heading,
-   …). Scoped to what this shell and its near-term siblings (Tasks 7-9)
-   actually reference — the shadcn-only tokens carried into :root/.dark
-   below (sidebar-*, chart-*, popover, secondary, destructive, input) stay
-   unmapped: nothing in this app uses shadcn components. */
+   …). Mapped for the shell plus the thin shadcn table/input footprint;
+   sidebar-* / chart-* stay unmapped until something reads them. */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
   --color-flag: var(--flag);
   --color-clear: var(--clear);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-bricolage);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
 }
 
 /* Brand tokens, copied verbatim from web/app/globals.css:54-164 so the
