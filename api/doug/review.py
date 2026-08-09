@@ -145,6 +145,11 @@ def read_order(files: list) -> list:
     return sorted(files, key=lambda f: (_read_tier(f.filename), len(f.patch or "")))
 
 
+# Names the ordering read_order() actually applies, so the value recorded on a
+# verdict cannot drift from the behaviour that produced it. Bump this string in
+# the same commit as any change to how the diff is ordered — a receipt that
+# says "tiered" about a linear read is worse than one that says nothing.
+READ_ORDER = "tiered"
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
         owner=owner, repo=repo, state="open", sort="created", direction="desc",

@@ -1,6 +1,9 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import create_engine, inspect, select
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from doug import migrations, store
 
@@ -33,6 +36,12 @@ def _columns(engine, table: str) -> set[str]:
 
 OUTCOME_COLUMNS = {"github_repo_id", "installation_id", "window_days", "detail"}
 
+M7_COLUMNS = {
+    "outcomes": {"merge_commit_sha"},
+    "outcome_jobs": {"started_at", "finished_at", "error", "claim_generation"},
+    "reads": {"changed_files", "files_dropped"},
+}
+
 
 def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path):
     """The case create_all() cannot handle, and the only reason this module
@@ -48,7 +57,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     with engine.begin() as conn:
         conn.exec_driver_sql(_OLDER_VERDICTS_DDL)
         conn.exec_driver_sql(
-            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
+            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL, "
+            "pr_number INTEGER NOT NULL DEFAULT 0)"
         )
         # Migration 003 indexes these; production gets the tables from
         # create_all before apply. The hand-built older schema needs stubs.
@@ -78,6 +88,10 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     assert OUTCOME_COLUMNS <= _columns(engine, "outcomes")
     assert "claim_generation" in _columns(engine, "review_jobs")
     assert "token_hash" not in _columns(engine, "installations")
+    for table, columns in M7_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+    for table, columns in M8_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -153,6 +167,139 @@ def test_migration_002_declares_the_same_columns_as_their_tables(tmp_path):
     assert by_table["verdicts"] == {"prompt_hash"}
     for table, cols in by_table.items():
         assert cols <= _columns(engine, table)
+
+
+M8_COLUMNS = {
+    "verdicts": {"diff_budget", "read_order"},
+    "outcome_jobs": {"merged_head_sha"},
+}
+
+
+def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard migrations 002 and 007 carry: a metadata-only column
+    passes on a fresh database and is absent from Cloud SQL."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl8.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[8]) == M8_COLUMNS
+    for table, columns in M8_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_008_backfills_reader_prompt_hash(tmp_path):
+    """The one prompt era is recorded, and only on reader rows."""
+    engine = create_engine(f"sqlite:///{tmp_path}/m8.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts (repo, pr_number, tier, score, band, "
+            "threshold, scored_at, prompt_hash) VALUES "
+            "('o/r', 1, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', NULL),"
+            "('o/r', 2, 'deterministic', 0.5, 'flagged', 0.3, '2026-08-01', NULL),"
+            "('o/r', 3, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', 'already')"
+        )
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        rows = dict(
+            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
+        )
+    assert rows[1] == "8bd26c677a0e087a0b8c14933203cc85e15b65e32b432c10a3ae78009a951cdf"
+    assert rows[2] is None, "deterministic verdicts have no prompt"
+    assert rows[3] == "already", "an existing hash is never overwritten"
+
+
+def test_migration_008_backfill_is_idempotent(tmp_path):
+    """A second REAL run of migration 8's UPDATE — not a second bare
+    apply() — must not disturb a prompt_hash already present.
+
+    apply()'s `done` ledger (migrations.py:316) skips a migration entirely
+    once its version is recorded, so calling apply() twice in a row never
+    re-executes migration 8's statements the second time; it only proves the
+    first run worked. Deleting the schema_migrations row for version 8
+    between the two calls is what forces the UPDATE to run again for real.
+    Without that, this test cannot fail no matter what the UPDATE's WHERE
+    clause says — confirmed by removing `AND prompt_hash IS NULL` from the
+    migration and watching this test still pass before this fix.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/m8b.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts (repo, pr_number, tier, score, band, "
+            "threshold, scored_at, prompt_hash) VALUES "
+            "('o/r', 1, 'reader', 0.5, 'flagged', 0.3, '2026-08-01', NULL)"
+        )
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        # Stand in for a hash set by anything other than this backfill
+        # between the two runs (a hand correction, a verdict scored under a
+        # later prompt era). A genuinely idempotent rerun must leave it
+        # alone; only the `AND prompt_hash IS NULL` guard makes that true.
+        conn.exec_driver_sql(
+            "UPDATE verdicts SET prompt_hash = 'do-not-touch' WHERE pr_number = 1"
+        )
+        conn.exec_driver_sql("DELETE FROM schema_migrations WHERE version = 8")
+    migrations.apply(engine)
+    with engine.begin() as conn:
+        rows = dict(
+            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
+        )
+        count = conn.exec_driver_sql(
+            "SELECT count(*) FROM verdicts WHERE prompt_hash IS NULL"
+        ).scalar()
+    assert count == 0
+    assert rows[1] == "do-not-touch", "a rerun must never overwrite an existing hash"
+
+
+def test_migration_007_declares_the_same_columns_as_their_tables(tmp_path):
+    """The adjudicator writer, its claim lease, and persisted coverage all
+    cross existing production tables. A metadata-only column would pass on a
+    fresh database and be absent from Cloud SQL."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl7.db")
+    store.metadata.create_all(engine)
+
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[7]) == M7_COLUMNS
+    for table, columns in M7_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_007_lease_timestamps_match_postgres_metadata_types():
+    """Lease comparisons use aware UTC instants. Production reaches these
+    columns through ALTER while fresh databases use metadata; both paths must
+    retain the same timezone semantics or reclaim timing depends on origin."""
+    statements = dict(migrations.MIGRATIONS)[7]
+    for column in ("started_at", "finished_at"):
+        ddl = next(stmt for stmt in statements if f"ADD COLUMN {column}" in stmt)
+        assert ddl.endswith("TIMESTAMP WITH TIME ZONE")
+        assert store.outcome_jobs.c[column].type.compile(
+            dialect=postgresql.dialect()
+        ) == "TIMESTAMP WITH TIME ZONE"
+
+
+def test_migration_007_enforces_one_outcome_per_job_identity(tmp_path):
+    """A redelivered or reclaimed job must not cast two votes. Historical
+    rows have no merge SHA and stay outside the partial index."""
+    engine = create_engine(f"sqlite:///{tmp_path}/outcome-identity.db")
+    store.metadata.create_all(engine)
+    migrations.apply(engine)
+
+    names = {idx["name"] for idx in inspect(engine).get_indexes("outcomes")}
+    assert "uq_outcomes_job_identity" in names
+
+    row = {
+        "repo": "drewjst/doug",
+        "pr_number": 62,
+        "kind": "clean",
+        "observed_at": datetime.now(UTC),
+        "source": "git-labels",
+        "github_repo_id": 1,
+        "installation_id": 2,
+        "window_days": 14,
+        "merge_commit_sha": "a" * 40,
+    }
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert(), row)
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(store.outcomes.insert(), row)
 
 
 # The pre-Task-2 shape of the two migrated tables, exactly as they were at
@@ -473,11 +620,10 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
             f"10, 20, 'o/r', 7, '{sha}', 'done', 1, 1, '2026-08-01', {duplicate})"
         )
 
-    # store.metadata.create_all() above already built `installations` without
-    # `token_hash`, so migration 6 runs too (nothing else was pre-recorded
-    # past 4) and finds its DROP already satisfied — landing as version 6
-    # alongside 5, not instead of it.
-    assert migrations.apply(engine) == [5, 6]
+    # store.metadata.create_all() above already built the current table shapes,
+    # so migrations 6, 7, and 8 all find their ALTER work satisfied and still
+    # record their versions alongside migration 5.
+    assert migrations.apply(engine) == [5, 6, 7, 8]
     with engine.connect() as conn:
         app_ids = [
             r[0]

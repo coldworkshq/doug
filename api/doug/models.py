@@ -6,6 +6,7 @@ belong here yet — that is the thesis's phase discipline: metadata first,
 prove the parsing half is needed before building it.
 """
 
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -115,3 +116,200 @@ class QueueSummary(BaseModel):
 class QueueResponse(BaseModel):
     summary: QueueSummary
     items: list[QueueItem]
+
+
+class RunCoverage(BaseModel):
+    """What the reader was actually given. None on the whole object means no
+    read happened — never zeros, which would claim Doug read nothing of a
+    diff it never opened."""
+
+    diff_chars: int
+    sent_chars: int
+    files_sent: int
+    files_unseen: list[str]
+    file_cut: str | None
+
+
+class RunFindingCounts(BaseModel):
+    total: int
+    high: int
+    medium: int
+    low: int
+
+
+class RunJob(BaseModel):
+    status: str
+    attempts: int
+    error: str | None
+    enqueued_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class RunSummaryItem(BaseModel):
+    verdict_id: int
+    repo: str
+    installation_id: int | None
+    github_repo_id: int | None
+    pr_number: int
+    title: str
+    url: str | None
+    scored_at: datetime
+    tier: str
+    source: str | None
+    score: float
+    band: Band
+    threshold: float
+    coverage: RunCoverage | None
+    changed_files: int | None
+    finding_counts: RunFindingCounts
+    job: RunJob | None
+    outcome_14: str | None
+
+
+class RunListResponse(BaseModel):
+    items: list[RunSummaryItem]
+    limit: int
+    offset: int
+
+
+class ReviewLaneHealth(BaseModel):
+    pending: int
+    oldest_pending_at: datetime | None
+    retrying: int
+    oldest_retry_at: datetime | None
+    running: int
+    stalled: int
+    failed: int
+    failed_24h: int
+    stall_lease_seconds: int
+    max_attempts: int
+
+
+class OutcomeLaneHealth(BaseModel):
+    pending: int
+    overdue: int
+    next_due_at: datetime | None
+    oldest_overdue_due_at: datetime | None
+    running: int
+    stalled: int
+    failed: int
+    stall_lease_seconds: int
+    max_attempts: int
+
+
+class HealthResponse(BaseModel):
+    """Fixed-size aggregates, no rows. The strip renders on every page, so
+    this response's cost must not grow with the queue."""
+
+    review: ReviewLaneHealth
+    outcome: OutcomeLaneHealth
+    as_of: datetime
+
+
+class JobItem(BaseModel):
+    """One job from either lane. Lane-specific fields are None on the other
+    lane rather than absent, so the console has one row type to render.
+
+    `repo` is nullable because outcome_jobs carries only github_repo_id and
+    installation_repos can be stale or missing entirely — the console renders
+    the bare id in that case rather than guessing a name.
+    """
+
+    id: int
+    lane: str
+    repo: str | None
+    github_repo_id: int
+    installation_id: int
+    pr_number: int
+    status: str
+    attempts: int
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    stalled: bool
+    # Review lane only.
+    head_sha: str | None = None
+    enqueued_at: datetime | None = None
+    verdict_id: int | None = None
+    retrying: bool = False
+    # Outcome lane only.
+    merge_commit_sha: str | None = None
+    window_days: int | None = None
+    due_at: datetime | None = None
+    merged_at: datetime | None = None
+    overdue: bool = False
+
+
+class JobListResponse(BaseModel):
+    items: list[JobItem]
+    limit: int
+    offset: int
+
+
+class RunOutcome(BaseModel):
+    kind: str
+    window_days: int | None
+    observed_at: datetime
+    source: str
+    detail: str | None
+
+
+class RunOutcomeJob(BaseModel):
+    window_days: int
+    status: str
+    due_at: datetime
+    merged_at: datetime
+
+
+class RunDetailJob(BaseModel):
+    status: str
+    attempts: int
+    claim_generation: int
+    error: str | None
+    enqueued_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class RunDeviation(BaseModel):
+    type: str
+    description: str
+    severity: str
+
+
+class RunDetailResponse(BaseModel):
+    verdict_id: int
+    repo: str
+    pr_number: int
+    installation_id: int | None
+    github_repo_id: int | None
+    # None when the row carries no pr_meta (nullable column; save_review
+    # defaults it to None) — every worker-path row before pr_meta capture,
+    # and the CLI's caller, land here. Never synthesized the way
+    # RunSummaryItem's flattened title/url are: PRMetadata.author has no
+    # default and this row does not know one, so a placeholder would be a
+    # guessed fact of exactly the kind PRMetadata's own fields refuse to
+    # carry ("never guessed").
+    pr: PRMetadata | None
+    scored_at: datetime
+    tier: str
+    # None means the row predates prompt-hash stamping on the worker path.
+    # It is NOT a match against the frozen prompt and must never render as one.
+    prompt_hash: str | None
+    model: str | None
+    source: str | None
+    head_sha: str | None
+    risk_score: int | None
+    rationale: str | None
+    score: float
+    band: Band
+    threshold: float
+    coverage: RunCoverage | None
+    reasons: list[Reason]
+    deviations: list[RunDeviation]
+    intent_alignment: int | None
+    intent_refs: list[str]
+    job: RunDetailJob | None
+    outcomes: list[RunOutcome]
+    outcome_jobs: list[RunOutcomeJob]

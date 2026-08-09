@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, ingest, store, tenancy, worker
+from doug import api, app_auth, ingest, outcome_queue, store, tenancy, worker
 from doug.api import app
-from doug.models import Band, Reason, Verdict
+from doug.models import Band, JobItem, Reason, Verdict
 
 client = TestClient(app)
 
@@ -840,22 +840,30 @@ def _closed_payload(
     number=7,
     base_ref="main",
     base_repo_id=987,
+    head_sha="a" * 40,
 ):
     """A `closed` delivery. `merged` varies independently of the other two
     fields on purpose — see test_a_closed_but_unmerged_pull_request_writes_nothing.
+
+    `head_sha=None` omits `pull_request.head` entirely rather than sending a
+    null sha inside it — that is the shape GitHub itself sends when the head
+    branch (usually a fork) is gone by the time the close event is built, and
+    it is what test_missing_head_sha_does_not_suppress_the_clock exercises.
     """
+    pr = {
+        "number": number,
+        "draft": False,
+        "merged": merged,
+        "merged_at": merged_at,
+        "merge_commit_sha": merge_sha,
+        "base": {"ref": base_ref, "repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
+    }
+    if head_sha is not None:
+        pr["head"] = {"sha": head_sha, "repo": {"id": 987}}
     return {
         "action": "closed",
         "installation": INSTALLATION,
-        "pull_request": {
-            "number": number,
-            "draft": False,
-            "merged": merged,
-            "merged_at": merged_at,
-            "merge_commit_sha": merge_sha,
-            "head": {"sha": "a" * 40, "repo": {"id": 987}},
-            "base": {"ref": base_ref, "repo": {"id": base_repo_id, "full_name": "drewjst/doug"}},
-        },
+        "pull_request": pr,
     }
 
 
@@ -872,40 +880,96 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     kicks = _hook_env(tmp_path, monkeypatch)
     assert _webhook("pull_request", _closed_payload()).status_code == 202
 
-    (job,) = _table(tmp_path, store.outcome_jobs)
-    assert job["installation_id"] == 150424894
-    assert job["github_repo_id"] == 987
-    assert job["pr_number"] == 7
-    assert job["merge_commit_sha"] == "c" * 40
-    assert job["base_ref"] == "main"
-    assert job["window_days"] == 14
-    assert job["status"] == "pending"
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [job["window_days"] for job in jobs] == [14, 60]
+    assert {job["installation_id"] for job in jobs} == {150424894}
+    assert {job["github_repo_id"] for job in jobs} == {987}
+    assert {job["pr_number"] for job in jobs} == {7}
+    assert {job["merge_commit_sha"] for job in jobs} == {"c" * 40}
+    assert {job["base_ref"] for job in jobs} == {"main"}
+    assert [_utc(job["due_at"]) for job in jobs] == [
+        datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2020, 4, 30, 12, 0, tzinfo=UTC),
+    ]
+    assert all(job["status"] == "pending" for job in jobs)
     # No read bought, and nothing queued that would buy one.
     assert _table(tmp_path, store.review_jobs) == []
     assert kicks == []
 
 
-def test_the_outcome_window_is_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
-    """due_at is merged_at + 14 days, computed from the payload's own
+def test_the_outcome_windows_are_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
+    """due_at is merged_at + each window, computed from the payload's own
     timestamp. Deriving it from the wall clock would silently re-date every
     row a redelivery or a backfill ever touched, and the window is what the
     published defect-rate denominator means."""
     _hook_env(tmp_path, monkeypatch)
     _webhook("pull_request", _closed_payload())
 
-    (job,) = _table(tmp_path, store.outcome_jobs)
-    assert _utc(job["merged_at"]) == datetime(2020, 3, 1, 12, 0, tzinfo=UTC)
-    assert _utc(job["due_at"]) == datetime(2020, 3, 15, 12, 0, tzinfo=UTC)
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [_utc(job["merged_at"]) for job in jobs] == [
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+    ]
+    assert [_utc(job["due_at"]) for job in jobs] == [
+        datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2020, 4, 30, 12, 0, tzinfo=UTC),
+    ]
 
 
 def test_a_redelivered_merge_does_not_start_a_second_clock(tmp_path, monkeypatch):
     """GitHub redelivers on its own schedule. Two 'closed' deliveries for one
-    merge must be one observation window, not two — a second row would be a
-    second vote in the denominator for a single merge."""
+    merge must be one pair of observation windows, not a second pair — a
+    second row would be a second vote in the denominator for a single merge."""
     _hook_env(tmp_path, monkeypatch)
     assert _webhook("pull_request", _closed_payload()).status_code == 202
     assert _webhook("pull_request", _closed_payload()).status_code == 202
-    assert len(_table(tmp_path, store.outcome_jobs)) == 1
+    assert len(_table(tmp_path, store.outcome_jobs)) == 2
+
+
+def test_a_redelivered_merge_heals_a_missing_outcome_window(tmp_path, monkeypatch):
+    """A pre-M3 row can carry only the legacy 14-day identity. Redelivery
+    must fill its missing 60-day partner rather than treating the whole merge
+    as already queued, which proves the webhook uses the plural writer."""
+    _hook_env(tmp_path, monkeypatch)
+    assert store.enqueue_outcome_job(
+        150424894,
+        987,
+        7,
+        "c" * 40,
+        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+        "main",
+    ) is not None
+
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+
+    jobs = sorted(_table(tmp_path, store.outcome_jobs), key=lambda row: row["window_days"])
+    assert [job["window_days"] for job in jobs] == [14, 60]
+
+
+def test_merge_records_the_head_sha_that_merged(tmp_path, monkeypatch):
+    """Pre-registration §11 item 7: a receipt claims a verdict about the
+    code that actually merged, and that claim needs the merge commit's own
+    head sha recorded going forward, not just the merge timestamp."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload(head_sha="abc123")).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert jobs, "the clock must start"
+    assert {job["merged_head_sha"] for job in jobs} == {"abc123"}
+
+
+def test_missing_head_sha_does_not_suppress_the_clock(tmp_path, monkeypatch):
+    """merged_head_sha is evidence, not one of the five load-bearing facts
+    test_a_merge_missing_the_facts_the_row_is_built_from_is_ignored guards.
+    _record_merge drops the whole row when base_ref or github_repo_id is
+    missing, because those drive censoring and tenancy. This one drives
+    neither, so its absence must cost nothing — both windows still start."""
+    _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _closed_payload(head_sha=None)).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert len(jobs) == 2, "both windows still start"
+    assert all(job["merged_head_sha"] is None for job in jobs)
 
 
 def test_a_closed_but_unmerged_pull_request_writes_nothing(tmp_path, monkeypatch):
@@ -1646,193 +1710,12 @@ def test_ping_answers_even_without_a_ledger(monkeypatch):
     assert _webhook("ping", {"zen": "Speak like a human."}).status_code == 202
 
 
-def _comparison_db(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/comparison.db")
+def test_comparisons_route_is_gone(monkeypatch):
+    """Dual-run soak instrument retired with the CI path (PR #54)."""
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    assert store.enabled()
-
-
-def _comparison_api_review(
-    *,
-    app: bool,
-    legacy_ci: bool = False,
-    coverage=None,
-    pr_meta=None,
-    head_sha: str | None = None,
-) -> int:
-    sha = head_sha or "a" * 40
-    verdict = api.Verdict(
-        score=0.2,
-        band=api.Band.CLEARED,
-        threshold=0.3,
-        reasons=[],
-    )
-    identity = (
-        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app
-        else {} if legacy_ci else {"head_sha": sha}
-    )
-    verdict_id = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        verdict,
-        pr_meta=(
-            {"number": 33, "title": "Compare paths", "author": "dev", "files": [],
-             "head_sha": sha}
-            if pr_meta is None else pr_meta
-        ),
-        coverage=coverage,
-        **identity,
-    )
-    assert verdict_id is not None
-    return verdict_id
-
-
-def test_comparisons_requires_the_shared_token(monkeypatch):
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    assert client.get("/v1/comparisons").status_code == 401
-
-
-def test_comparisons_refuses_when_the_token_is_unconfigured(monkeypatch):
-    monkeypatch.delenv("DOUG_API_TOKEN", raising=False)
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "anything"}
-    )
-    assert response.status_code == 503
-
-
-def test_comparisons_refuses_when_the_ledger_is_unconfigured(monkeypatch):
-    monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    response = client.get(
+    assert client.get(
         "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-    assert response.status_code == 503
-
-
-def test_comparisons_rejects_a_limit_outside_one_through_two_hundred(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    for limit in (0, 201):
-        response = client.get(
-            "/v1/comparisons",
-            params={"limit": limit},
-            headers={"X-Doug-Token": "secret"},
-        )
-        assert response.status_code == 422
-
-
-def test_comparisons_serializes_both_paths_duplicates_and_coverage(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    coverage = api.reader.Coverage(
-        diff_chars=20,
-        sent_chars=10,
-        files_sent=1,
-        files_unseen=["second.py"],
-        file_cut="first.py",
-    )
-    app_one = _comparison_api_review(app=True, coverage=coverage)
-    # Migration 005: a second App save for the same SHA is idempotent.
-    assert _comparison_api_review(app=True) == app_one
-    current_ci = _comparison_api_review(
-        app=False,
-        pr_meta={"number": 33, "title": "Current CI", "author": "dev", "files": []},
-    )
-    legacy_ci = _comparison_api_review(app=False, legacy_ci=True)
-    one_app_id = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        installation_id=10,
-        pr_meta={"head_sha": "a" * 40},
-    )
-    github_repo_id_only = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        github_repo_id=20,
-        pr_meta={"head_sha": "a" * 40},
-    )
-    app_without_head = store.save_review(
-        "o/r",
-        33,
-        "reader",
-        api.Verdict(score=0.2, band=api.Band.CLEARED, threshold=0.3, reasons=[]),
-        installation_id=10,
-        github_repo_id=20,
-        pr_meta={"head_sha": "a" * 40},
-    )
-
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-    assert response.status_code == 200
-    runs = response.json()["runs"]
-    assert {run["id"] for run in runs} == {app_one, current_ci, legacy_ci}
-    assert one_app_id not in {run["id"] for run in runs}
-    assert github_repo_id_only not in {run["id"] for run in runs}
-    assert app_without_head not in {run["id"] for run in runs}
-    assert [run["path"] for run in runs].count("app") == 1
-    assert [run["path"] for run in runs].count("ci") == 2
-    assert next(run for run in runs if run["id"] == current_ci)["head_sha"] == "a" * 40
-    assert {run["head_sha"] for run in runs} == {"a" * 40}
-    covered = next(run for run in runs if run["id"] == app_one)
-    assert covered["coverage"]["sent_chars"] == 10
-    assert covered["coverage"]["diff_chars"] == 20
-
-
-def test_comparisons_refuses_to_return_partial_evidence_when_run_cap_is_exceeded(
-    tmp_path, monkeypatch
-):
-    """A safety bound must fail loud, never cut a comparison group.
-
-    Returning the first N runs would let the web layer infer a missing path
-    or score delta from an incomplete ledger slice. Cap is exercised with
-    distinct App SHAs plus CI — App-path identity is unique per SHA
-    (migration 005), so a second save of the same App identity no longer
-    inflates the count.
-    """
-    _comparison_db(tmp_path, monkeypatch)
-    monkeypatch.setattr(store, "COMPARISON_RUN_LIMIT", 2)
-    _comparison_api_review(app=True)
-    _comparison_api_review(app=False)
-    # Third qualifying run: a later App commit (distinct SHA under migration 005).
-    _comparison_api_review(app=True, head_sha="b" * 40)
-
-    response = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    )
-
-    assert response.status_code == 413
-    assert response.json() == {
-        "detail": "comparison contains more than 2 runs; narrow the repo or PR limit"
-    }
-
-
-def test_comparisons_keeps_a_run_whose_display_metadata_is_missing(
-    tmp_path, monkeypatch
-):
-    _comparison_db(tmp_path, monkeypatch)
-    verdict = api.Verdict(
-        score=0.2,
-        band=api.Band.CLEARED,
-        threshold=0.3,
-        reasons=[],
-    )
-    store.save_review("o/r", 9, "deterministic", verdict, pr_meta=None)
-
-    run = client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    ).json()["runs"][0]
-    assert run["title"] == "PR #9"
-    assert run["url"] == "https://github.com/o/r/pull/9"
-    assert run["head_sha"] is None
+    ).status_code == 404
 
 
 def _api_db(tmp_path, monkeypatch) -> None:
@@ -2298,7 +2181,7 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
-@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons", "/v1/score/read"])
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/score/read", "/v1/runs", "/v1/runs/1"])
 def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     """A valid credential pointed at an endpoint that is not theirs learns
     only that there is nothing there — same no-existence-leak rule as a
@@ -2314,7 +2197,7 @@ def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, pat
     assert r.status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/comparisons"])
+@pytest.mark.parametrize("path", ["/v1/patterns", "/v1/runs", "/v1/runs/1"])
 def test_junk_token_is_still_401_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     _tenant(tmp_path, monkeypatch)
     r = client.get(path, headers={"X-Doug-Token": "doug_nope"})
@@ -2565,3 +2448,590 @@ def test_uninstall_webhook_bulk_revokes_keys(tmp_path, monkeypatch):
     # Reinstall: state flips back to active — the key must STAY dead.
     _record_installation({"installation": {"id": 150424894, "account": {}}}, "created")
     assert tenancy.resolve(minted.token) is None
+
+
+# /v1/runs — the console's cross-installation verdict history. Same _db/AUTH/
+# VERDICT shape test_store.py's run_history tests use: a token-gated route
+# needs both a ledger and DOUG_API_TOKEN, and _db sets both because every
+# test below calls it.
+VERDICT = Verdict(
+    score=0.62,
+    band=Band.FLAGGED,
+    threshold=0.30,
+    reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded", weight=0.0)],
+)
+
+AUTH = {"X-Doug-Token": "t0ken"}
+
+
+def _db(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path}/doug.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    return url
+
+
+def test_runs_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs").status_code == 401
+
+
+def test_runs_404s_a_tenant_key(tmp_path, monkeypatch):
+    """A resolving tenant key is a real credential at the wrong door, so it
+    gets the same no-existence-leak 404 _operator_only gives everywhere."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers={"X-Doug-Token": "dg_tenant"}).status_code == 404
+
+
+def test_runs_returns_repo_and_installation_on_every_item(tmp_path, monkeypatch):
+    """The fields /v1/queue drops. Without them the console cannot group
+    per repo, which is the gap this endpoint exists to close."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["repo"] == "o/r"
+    assert item["installation_id"] == 99
+    assert item["verdict_id"] > 0
+
+
+def test_runs_serialises_a_missing_read_as_null_not_zero(tmp_path, monkeypatch):
+    """A deterministic run had no read. Zero coverage would claim Doug read
+    nothing of a diff it never opened — empty is not zero."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers=AUTH).json()["items"][0]["coverage"] is None
+
+
+def test_runs_rejects_an_out_of_range_limit(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs?limit=0", headers=AUTH).status_code == 422
+    assert client.get("/v1/runs?limit=501", headers=AUTH).status_code == 422
+
+
+def test_runs_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    client = TestClient(app)
+    assert client.get("/v1/runs", headers=AUTH).status_code == 503
+
+
+# Beyond the brief's six: the response is the contract Task 7's console
+# reads, and none of those six touch title/url/tier/source/score/band/
+# threshold/changed_files/finding_counts/job/outcome_14/pr_number/
+# github_repo_id — a dropped or misspelled key among them would pass all
+# six anyway. This pins every key of RunSummaryItem in one row that carries
+# a real pr_meta, coverage, job and outcome.
+def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    coverage = api.reader.Coverage(
+        diff_chars=100, sent_chars=80, files_sent=2,
+        files_unseen=["b.py"], file_cut="a.py",
+    )
+    pr_meta = {
+        "number": 7, "title": "Add cache", "author": "dev", "files": ["a.py"],
+        "url": "https://github.com/o/r/pull/7", "changed_files": 12,
+    }
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        pr_meta=pr_meta, coverage=coverage,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["verdict_id"] == vid
+    assert item["repo"] == "o/r"
+    assert item["installation_id"] == 99
+    assert item["github_repo_id"] == 1
+    assert item["pr_number"] == 7
+    assert item["title"] == "Add cache"
+    assert item["url"] == "https://github.com/o/r/pull/7"
+    assert item["tier"] == "reader"
+    assert item["source"] == "app"
+    assert item["score"] == VERDICT.score
+    assert item["band"] == VERDICT.band.value
+    assert item["threshold"] == VERDICT.threshold
+    assert item["changed_files"] == 12
+    assert item["coverage"] == {
+        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
+        "files_unseen": ["b.py"], "file_cut": "a.py",
+    }
+    # VERDICT's one Reason carries no severity — total counts severity-NULL
+    # findings (the brief's own note on RunFindingCounts), so total=1 while
+    # the severity buckets stay at zero.
+    assert item["finding_counts"] == {"total": 1, "high": 0, "medium": 0, "low": 0}
+    assert item["job"]["status"] == "done" and item["job"]["attempts"] == 1
+    assert item["outcome_14"] == "clean"
+
+
+def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
+    """Null pr_meta is a real ledger state, not just a test artifact:
+    verdicts.pr_meta is a nullable JSON column (store.py) and save_review's
+    `pr_meta` kwarg defaults to None. _with_url assumes pr_meta is a dict —
+    every /v1/queue row is filtered on that before it gets there — but
+    run_history carries every verdict, including rows saved without one, so
+    a bare _with_url(row) call would raise validating None into PRMetadata
+    instead of degrading. _run_item falls back for a missing pr_meta by
+    synthesizing a title and URL from repo/pr_number, and leaving
+    changed_files None rather than invented — a row with no metadata
+    genuinely has no denominator."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 9, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    client = TestClient(app)
+    item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
+    assert item["title"] == "PR #9"
+    assert item["url"] == "https://github.com/o/r/pull/9"
+    assert item["changed_files"] is None
+
+
+# /v1/health — the strip's only data source. Same _db/AUTH shape as /v1/runs.
+
+
+def test_health_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/health").status_code == 401
+
+
+def test_health_404s_a_tenant_key(tmp_path, monkeypatch):
+    """Health crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    res = TestClient(app).get("/v1/health", headers={"X-Doug-Token": "dg_tenant"})
+    assert res.status_code == 404
+
+
+def test_health_503s_without_a_ledger(tmp_path, monkeypatch):
+    """503, never a zeroed payload. Zeros would render as 'nothing is wrong'
+    on a deployment that cannot answer the question at all."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    assert TestClient(app).get("/v1/health", headers=AUTH).status_code == 503
+
+
+def test_health_reports_both_lanes_constants(tmp_path, monkeypatch):
+    """The console must never hardcode 900, 7200, 3 or 10."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["review"]["stall_lease_seconds"] == ingest.STALL_LEASE_SECONDS
+    assert body["review"]["max_attempts"] == ingest.MAX_ATTEMPTS
+    assert body["outcome"]["stall_lease_seconds"] == outcome_queue.STALL_LEASE_SECONDS
+    assert body["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
+
+
+def test_health_carries_the_server_clock_as_of(tmp_path, monkeypatch):
+    """Every age the console renders is as_of minus a timestamp. Without it
+    the UI would subtract a server-written timestamp from a browser clock,
+    which is the timestamp defect Phase 1 already paid for, with an alarm
+    attached."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    assert body["as_of"] is not None
+
+
+# /v1/jobs — the failure list. Same gate and envelope as /v1/runs.
+
+
+def test_jobs_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/jobs?lane=review").status_code == 401
+
+
+def test_jobs_rejects_a_derived_state_as_a_status(tmp_path, monkeypatch):
+    """'stalled' and 'retrying' are derived from started_at and attempts,
+    not stored. Accepting them here would put the derivation somewhere the
+    strip cannot see, and the two surfaces would drift."""
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/jobs?lane=review&status=stalled", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=review&status=retrying", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=outcome&status=overdue", headers=AUTH).status_code == 422
+
+
+def test_jobs_accepts_a_stored_status(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=failed", headers=AUTH)
+    assert res.status_code == 200
+
+
+def test_jobs_rejects_an_unknown_lane(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert TestClient(app).get("/v1/jobs?lane=nope", headers=AUTH).status_code == 422
+
+
+def test_jobs_rejects_an_out_of_range_limit(tmp_path, monkeypatch):
+    """Same 1..500 bound as /v1/runs, so the console's atCap logic carries
+    over unchanged."""
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/jobs?lane=review&limit=0", headers=AUTH).status_code == 422
+    assert client.get("/v1/jobs?lane=review&limit=501", headers=AUTH).status_code == 422
+
+
+def test_jobs_round_trips_limit_and_offset(tmp_path, monkeypatch):
+    """The only way a caller can tell 'this IS every unhealthy job' from
+    'this is the first page of more'."""
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/jobs?lane=review&limit=7", headers=AUTH).json()
+    assert body["limit"] == 7
+    assert body["offset"] == 0
+
+
+def test_jobs_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    assert TestClient(app).get("/v1/jobs?lane=review", headers=AUTH).status_code == 503
+
+
+def test_jobs_does_not_leak_undocumented_columns(tmp_path, monkeypatch):
+    """select(t) on outcome_jobs returns base_ref, claim_generation and
+    created_at too, and JobItem does not declare them. Pydantic v2's default
+    extra='ignore' silently drops them today, which is the behaviour we
+    want — but nothing pinned it, so a future model_config change could
+    start leaking ledger columns into an API response without any test
+    noticing. Assert the response carries exactly JobItem's declared
+    fields."""
+    _db(tmp_path, monkeypatch)
+    now = datetime.now(UTC)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - timedelta(days=20), "main", window_days=(14,)
+    )
+    body = TestClient(app).get("/v1/jobs?lane=outcome", headers=AUTH).json()
+    assert len(body["items"]) == 1
+    assert set(body["items"][0].keys()) == set(JobItem.model_fields)
+
+
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_review(
+    tmp_path, monkeypatch
+):
+    """A done review job can never be unhealthy, so status=done composed
+    with the default view=unhealthy is empty by construction. 422 names the
+    fix rather than returning a list indistinguishable from 'there are
+    none'."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=done", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_rejects_superseded_under_the_default_unhealthy_view(
+    tmp_path, monkeypatch
+):
+    """Same reason as done: a superseded job means nothing went wrong."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=review&status=superseded", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_outcome(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get("/v1/jobs?lane=outcome&status=done", headers=AUTH)
+    assert res.status_code == 422
+    assert "view=all" in res.json()["detail"]
+
+
+def test_jobs_accepts_running_status_under_the_unhealthy_view(tmp_path, monkeypatch):
+    """status=running with view=unhealthy means 'running AND stalled' — a
+    real, non-empty composition — and must not be caught by the
+    never-unhealthy rejection."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get(
+        "/v1/jobs?lane=review&status=running&view=unhealthy", headers=AUTH
+    )
+    assert res.status_code == 200
+
+
+def test_jobs_accepts_pending_status_under_the_unhealthy_view(tmp_path, monkeypatch):
+    """status=pending with view=unhealthy is the other composition the
+    amendment names as legitimate — a fresh, unattempted job is still
+    'unhealthy' by store.job_rows' definition. Must not be caught by the
+    never-unhealthy rejection, which names only done/superseded."""
+    _db(tmp_path, monkeypatch)
+    res = TestClient(app).get(
+        "/v1/jobs?lane=review&status=pending&view=unhealthy", headers=AUTH
+    )
+    assert res.status_code == 200
+
+
+# /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same
+# reader output test_store.py's find_verdict_by_id tests build: its one
+# finding's description matches VERDICT's own reason label, so save_review
+# attaches file/severity to it the same way a real reader row would.
+RV = api.reader.ReaderVerdict.model_validate(
+    {
+        "risk_score": 62,
+        "rationale": "Unlocked cache write.",
+        "findings": [
+            {
+                "category_slug": "race-condition",
+                "description": "Cache write is not guarded",
+                "file": "cache.py",
+                "severity": "high",
+            }
+        ],
+    }
+)
+
+
+def client_get_detail(verdict_id: int) -> dict:
+    res = TestClient(app).get(f"/v1/runs/{verdict_id}", headers=AUTH)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _parsed_utc(iso: str) -> datetime:
+    """A response-JSON timestamp, normalised like `_utc` above but for a
+    string: sqlite hands DateTime(timezone=True) columns back naive, so
+    pydantic serialises them with no offset. The stored instant is UTC
+    either way."""
+    dt = datetime.fromisoformat(iso)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def test_run_detail_404s_an_unknown_verdict(tmp_path, monkeypatch):
+    """FastAPI's own missing-route 404 is indistinguishable from this one by
+    status code alone — the body pins it to the route's not-found branch
+    rather than a route that does not exist."""
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    res = client.get("/v1/runs/4242", headers=AUTH)
+    assert res.status_code == 404
+    assert res.json()["detail"] == "not found"
+
+
+def test_run_detail_refuses_without_the_operator_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/v1/runs/1").status_code == 401
+
+
+def test_run_detail_404s_a_tenant_key(tmp_path, monkeypatch):
+    """A resolving tenant key is a real credential at the wrong door, so it
+    gets the gate's 404 — distinct from the route's own 404 for an unknown
+    id above. The row exists here, so only the gate can be producing this:
+    if _operator_only ran after the store lookup (or not at all), a
+    resolving token would see the row and this would 200."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
+        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
+    ))
+    client = TestClient(app)
+    res = client.get(f"/v1/runs/{vid}", headers={"X-Doug-Token": "dg_tenant"})
+    assert res.status_code == 404
+
+
+def test_run_detail_503s_without_a_ledger(tmp_path, monkeypatch):
+    """Mirrors test_runs_503s_without_a_ledger for the same route family:
+    an operator token that checks out fine (DOUG_API_TOKEN is set and
+    matches) still refuses when there is nothing to query."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DOUG_API_TOKEN", "t0ken")
+    client = TestClient(app)
+    assert client.get("/v1/runs/1", headers=AUTH).status_code == 503
+
+
+def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatch):
+    """Historical App-path reader verdicts carry NULL because the worker
+    never stamped it (the CI endpoint did, masking the bug). Serialising
+    that as a match would assert the frozen prompt ran when nobody knows."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid)
+    assert body["prompt_hash"] is None
+
+
+def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=108200, sent_chars=18400, files_sent=4,
+            files_unseen=["api/doug/tenancy.py"], file_cut="api/doug/api.py",
+        ),
+    )
+    body = client_get_detail(vid)
+    assert body["coverage"]["files_unseen"] == ["api/doug/tenancy.py"]
+    assert body["coverage"]["file_cut"] == "api/doug/api.py"
+    assert body["reasons"][0]["rule"] == "reader:race-condition"
+    assert body["deviations"] == []
+
+
+def test_run_detail_reports_no_job_as_null_and_no_outcomes_as_empty(tmp_path, monkeypatch):
+    """A ledger row can predate any review_jobs claim — job is None, never
+    {} — and can have no recorded outcome yet — outcomes/outcome_jobs are
+    [], never missing. store.run_detail's docstring names both states."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid)
+    assert body["job"] is None
+    assert body["outcomes"] == []
+    assert body["outcome_jobs"] == []
+
+
+def test_run_detail_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
+    """pr_meta is a nullable column and save_review defaults it to None —
+    every row in the tests above carries it. _with_url assumes pr_meta is a
+    dict (the /v1/queue and /v1/runs precedent both filter or guard on that
+    before calling it); a bare call on a null one raises validating None
+    into PRMetadata, the same crash Task 3 hit and fixed in _run_item.
+    `pr` is nulled here rather than synthesized the way _run_item
+    synthesizes a title/url: PRMetadata.author has no default, and this
+    ledger row does not know one — inventing it would be exactly the
+    guessed fact the codebase's None-means-unknown convention refuses to
+    write (PRMetadata's own docstring comments: 'never guessed')."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 9, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid)
+    assert body["pr"] is None
+
+
+def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
+    """The brief's tests above never touch verdict_id/repo/pr_number/
+    installation_id/github_repo_id/pr/scored_at/tier/model/source/head_sha/
+    risk_score/rationale/score/band/threshold/intent_alignment/intent_refs/
+    job/outcomes/outcome_jobs — a dropped or misspelled key among them would
+    pass every test above anyway. This is the contract the console's
+    forensics page reads, so one row carries a real pr_meta, a deviation, a
+    review job and both outcome tables, and every key is pinned."""
+    _db(tmp_path, monkeypatch)
+    pr_meta = {
+        "number": 7, "title": "Add cache", "author": "dev", "files": ["cache.py"],
+        "url": "https://github.com/o/r/pull/7", "changed_files": 3,
+    }
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        pr_meta=pr_meta,
+        coverage=store.Coverage(
+            diff_chars=100, sent_chars=80, files_sent=2,
+            files_unseen=["b.py"], file_cut="a.py",
+        ),
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        prompt_hash="sha256:abc",
+    )
+    store.save_deviations(
+        vid,
+        [api.reader.DeviationFinding(
+            type="beyond-ticket", description="Touches billing", severity="medium",
+        )],
+        intent_refs=["TICKET-1"],
+        intent_alignment=70,
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
+            claim_generation=2,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            started_at=datetime(2026, 8, 1, 0, 0, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+        conn.execute(store.outcome_jobs.insert().values(
+            installation_id=99, github_repo_id=1, pr_number=7,
+            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 1, tzinfo=UTC),
+            base_ref="main", window_days=14,
+            due_at=datetime(2026, 8, 15, tzinfo=UTC), status="pending",
+            created_at=datetime(2026, 8, 1, tzinfo=UTC),
+        ))
+    body = client_get_detail(vid)
+    assert body["verdict_id"] == vid
+    assert body["repo"] == "o/r"
+    assert body["pr_number"] == 7
+    assert body["installation_id"] == 99
+    assert body["github_repo_id"] == 1
+    assert body["pr"]["title"] == "Add cache"
+    assert body["pr"]["url"] == "https://github.com/o/r/pull/7"
+    assert body["scored_at"] is not None
+    assert body["tier"] == "reader"
+    assert body["prompt_hash"] == "sha256:abc"
+    assert body["model"] == "claude-opus-5"
+    assert body["source"] == "app"
+    assert body["head_sha"] == "a" * 40
+    assert body["risk_score"] == 62
+    assert body["rationale"] == "Unlocked cache write."
+    assert body["score"] == VERDICT.score
+    assert body["band"] == VERDICT.band.value
+    assert body["threshold"] == VERDICT.threshold
+    assert body["coverage"] == {
+        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
+        "files_unseen": ["b.py"], "file_cut": "a.py",
+    }
+    assert body["reasons"][0]["rule"] == "reader:race-condition"
+    assert body["deviations"] == [
+        {"type": "beyond-ticket", "description": "Touches billing", "severity": "medium"},
+    ]
+    assert body["intent_alignment"] == 70
+    assert body["intent_refs"] == ["TICKET-1"]
+    assert body["job"]["status"] == "done"
+    assert body["job"]["attempts"] == 1
+    assert body["job"]["claim_generation"] == 2
+    assert body["job"]["error"] is None
+    assert body["job"]["enqueued_at"] is not None
+    assert body["job"]["started_at"] is not None
+    assert body["job"]["finished_at"] is not None
+    assert len(body["outcomes"]) == 1
+    assert body["outcomes"][0]["kind"] == "clean"
+    assert body["outcomes"][0]["window_days"] == 14
+    assert body["outcomes"][0]["source"] == "git-labels"
+    assert body["outcomes"][0]["detail"] is None
+    assert _parsed_utc(body["outcomes"][0]["observed_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
+    assert len(body["outcome_jobs"]) == 1
+    assert body["outcome_jobs"][0]["window_days"] == 14
+    assert body["outcome_jobs"][0]["status"] == "pending"
+    assert _parsed_utc(body["outcome_jobs"][0]["due_at"]) == datetime(2026, 8, 15, tzinfo=UTC)
+    assert _parsed_utc(body["outcome_jobs"][0]["merged_at"]) == datetime(2026, 8, 1, tzinfo=UTC)

@@ -168,6 +168,29 @@ that was. Before accepting one, check whether the fix it suggests is the fix the
 actually needs — Doug flagged the idempotency pre-read as advisory, and the useful response
 was not to add a lock but to upgrade an already-planned index to a unique one.
 
+## A pinned-SHA evidence script cannot run in a default CI checkout
+
+`scripts/read_budget_gate.py` pins `END_SHA = "135c8e5"` and walks 30 first-parent
+commits back from it. That pinning is right: the range is a fixed historical sample,
+and `test_read_budget_scripts.py` asserts its exact result (24/30 at a 30k budget), so
+a range that drifted with `HEAD` would assert nothing.
+
+But `actions/checkout` defaults to `fetch-depth: 1`. The runner gets one commit, `git log
+--first-parent -30 … 135c8e5` exits 128, and the test fails in CI while passing on every
+developer clone — where the history is simply there. #56 merged with this failing, twice,
+and the next branch to fork inherited a red suite it had not caused.
+
+The general shape: **a test that reads git history has a dependency the test file never
+names.** It is invisible in review, invisible locally, and only ever fails on the runner.
+The same applies to anything reaching outside the working tree — tags, submodules,
+`git describe`, blame.
+
+When a test shells out to `git`, ask what the checkout must contain for it to pass, and
+put that in the workflow next to the job rather than in the test. And when CI fails on a
+branch, check whether the failing test even exists on that branch before debugging it:
+here the suite went 691 → 703, which said immediately that the failure arrived with a
+merge and not with the work.
+
 ## Log every finding, not only the ones that taught something
 
 "Roughly half" above is an impression, not a measurement, and this file cannot make it one:
@@ -265,61 +288,28 @@ two tables for it. Whether a finding is *true* is a different quantity from whet
 *predicted a defect* — a finding can be true and worthless, or false and load-bearing. Never
 report a rate from this log as precision, and never put the two in the same table.
 
-## A shared commit SHA does not make App and CI the same idempotency domain
+## A shared commit SHA does not make two delivery paths the same idempotency domain
 
-PR #38's medium finding said making `find_review` require NULL App ids intentionally
-doubled spend and could break an App webhook redelivery routed through `/v1/review`.
-The extra verdict was real; the claimed dedupe regression was not. The two verdicts are
-the two independent soak instruments that `/compare` exists to measure. `api.py` is the
-only production caller of `find_review`, for the CI-only `/v1/review` route. App webhook
-deliveries enqueue a job, and `worker.py` deduplicates those with
-`find_verdict_by_identity(installation_id, github_repo_id, pr_number, head_sha)` instead.
-The same-path CI replay still pays once, while an App result cannot erase the independent
-CI observation. `test_review_repeat_for_same_commit_replays_without_a_second_row` and
-`test_review_after_app_for_same_commit_scores_a_distinct_ci_verdict` pin both directions.
+During App-vs-CI dual-run soak (retired with PR #54), a shared head SHA did not
+mean the two paths shared an idempotency domain. The CI `/v1/review` route
+deduped with `find_review` (NULL App ids); App webhook deliveries enqueue a job
+and `worker.py` deduplicates with
+`find_verdict_by_identity(installation_id, github_repo_id, pr_number, head_sha)`.
+Cross-instrument dedupe would have destroyed the soak evidence rather than
+saving a duplicate read. The dual-run comparison dashboard (`/compare`,
+`/v1/comparisons`) that measured that evidence is also gone.
 
-Before treating a dedupe helper as global, enumerate its production callers and identify
-the event identity each caller owns. A hypothetical route from one delivery mechanism
-through another route is not a current regression. If the product explicitly runs two
-instruments on one commit, cross-instrument dedupe destroys the evidence rather than
-saving a duplicate read.
+Lasting lesson: before treating a dedupe helper as global, enumerate its
+production callers and identify the event identity each caller owns. A
+hypothetical route from one delivery mechanism through another is not a current
+regression.
 
-The same review said `_comparison_run` could raise when a legacy `reads` row omitted one
-of its projected coverage keys. That legacy shape has never existed: merged commit
-`3983030` introduced `reads` with `diff_chars`, `sent_chars`, `files_sent`, `files_unseen`,
-and `file_cut` together, and none were added later. The reviewed implementation obtained
-coverage from `select(reads)`, whose mapping contained every declared column even when
-nullable `file_cut` was NULL. The fixed implementation explicitly projects those same
-columns from a `latest_read` alias. A database physically missing a declared column fails
-the SQL SELECT before response projection; changing `coverage[key]` to
-`coverage.get(key)` would not degrade that schema mismatch. Check table history and the
-producer contract before adding fallbacks for a row shape only a partial diff makes
-plausible.
-
-Two adjacent findings were valid. The per-verdict coverage SELECT was an N+1 and became a
-single outer join. The PR-group limit also did not bound duplicate rows; silently slicing
-them would corrupt pairing and missing-path metrics, so successful comparison responses
-remain lossless while results above the run ceiling fail with an explicit 413.
-
-The replacement review called that 413 a hard failure with no graceful degradation, but
-it did not read the web client. `web/lib/api.ts` converts every non-OK comparison response
-to the explicit `unavailable` source, and `/compare` renders that state without summary
-zeroes or partial runs. Pagination could improve availability later; returning a bounded
-but incomplete group now would be a correctness regression. Trace an error through its
+The same PR #38 review pass also taught coverage-read lessons that outlive the
+dashboard: do not invent `.get()` fallbacks for column shapes the producer has
+never emitted; prefer set-based joins over per-verdict SELECTs; and when a
+safety bound would cut evidence, fail loud rather than return a partial slice
+that a client could misread as a missing path. Trace an error through its
 consumer before claiming the user sees a crash or fabricated state.
-
-It also called a both-App-ids-NULL row with no head SHA a classification heuristic. That
-is the accepted legacy CI identity, not a guess introduced by `_comparison_path`; rows
-with one App id are excluded in SQL. The web model assigns a null-head run its own
-`head-unknown` group, counts no missing path, and computes no delta. Check the producer-era
-contract and downstream neutral state before relabeling an intentionally unpairable row as
-malformed.
-
-The replacement pass's remaining query-cost warning is plausible but unproven: one
-set-based query can still become slow as the ledger grows. Require a production-scale
-execution plan or measured latency before replacing it again; SQL shape alone does not
-establish a regression, and speculative query rewrites can reintroduce the N+1 or cut
-duplicate evidence.
 
 ## New tables never need a migration — only new columns on an existing one do
 
@@ -460,9 +450,36 @@ forced the revisit.
 endpoint, and is what `doug-web` sends server-side (`web/lib/api.ts`). Reviews
 that assume "the token" is tenant-scoped are reading the wrong class.
 
-A **tenant** token is dispensed by `POST /v1/installations/token`, stored only
-as `sha256` in `installations.token_hash`, and resolves to exactly one
-`installation_id`. It reaches `/v1/queue` and nothing else.
+A **tenant** token is dispensed by `POST /v1/installations/token`. Only a
+peppered HMAC-SHA256 of its secret half is persisted, in
+`installation_tokens.token_hash` — its own table, not a column on
+`installations`, because mint appends and one installation can hold several
+live keys (MT5). The pepper lives outside the database (`DOUG_TOKEN_PEPPER`)
+and is versioned per row, so a DB-only breach yields unusable hashes and
+pepper rotation is rolling rather than a flag-day. The row is found by
+`token_lookup` — a plaintext key id, safe in logs — never by the hash; the
+secret itself is returned once by `mint_key` and is unrecoverable after that.
+A key resolves to exactly one `installation_id`, and to a repo selection
+re-intersected against the LIVE ledger on every call, so an uninstall or a
+removed repo ends access next request (`tenancy.resolve`).
+
+It reaches **two** endpoints, and they are gated by **different** scopes:
+`GET /v1/queue` requires `queue:read`, and `GET /v1/prs/{n}/receipt` requires
+`receipt:read`. No other endpoint honours a dispensed key at all — the
+operator-only routes answer a resolving tenant key with `404` (`_operator_only`),
+and key management refuses `X-Doug-Token` outright, because keys cannot manage
+keys.
+
+"Tenant-reachable" is therefore not one permission, and a reviewer sizing up
+the blast radius of a dispensed key has to read the scope, not the class. A
+key holding `queue:read` alone gets `401` from the receipt route — which is
+the state every key minted before `8bb0622` is in, and re-minting is what
+grants the new scope (append-only, so the existing key is undisturbed).
+
+A route becoming tenant-reachable is a change to that list, and it needs its
+own scope checked explicitly rather than an existing one reused: the `scopes`
+column exists precisely so a receipts key cannot silently inherit queue
+access it was never granted, or the reverse.
 
 Three things a reviewer should check, because each has a failure that looks
 fine in passing tests:
@@ -579,6 +596,34 @@ into a runtime defect. If module execution becomes a contract, make the scripts
 a package, convert all sibling imports coherently, and add that exact invocation
 to the tests rather than patching one import in isolation.
 
+## Keep prospective clock catch-up separate from research backfill
+
+`scripts/backfill_ledger.py` imports research-corpus evidence. The production
+`scripts/backfill_outcome_jobs.py` catch-up does something narrower: for a stored
+14-day clock belonging to an installation present in the `installations`
+registry, it inserts only the missing 60-day sibling from the same merge facts.
+Do not transfer the research script's sentinel assumptions or broad write shape
+into this prospective denominator repair.
+
+A production clock catch-up is reviewable only when all of these controls travel
+together:
+
+- eligibility is structural registry membership, not a guessed installation-id
+  range or a research sentinel comparison;
+- the anti-join targets the complete outcome identity, and existing pairs are
+  rejected when `merged_at`, `base_ref`, or the 60-day `due_at` conflicts;
+- a read-only dry-run records the exact missing count, and apply refuses a
+  different count;
+- an exclusive manifest records the exact inserted identities and verifies that
+  every row is still untouched before rollback; and
+- the daily Scheduler is proven enabled, paused before apply, and resumed only
+  after either verified rollback or audited manual adjudication.
+
+Cloud SQL Studio temporary tables are not a cross-command audit mechanism: its
+submissions may use different sessions. Use session-independent violation
+queries and the durable manifest in
+`docs/design/outcome-loop/60-day-backfill-runbook.md`.
+
 ## Deprioritized files are not silently omitted
 
 `features._is_prose` is a routing heuristic: it sends prose after code and
@@ -599,3 +644,61 @@ For a new claim, provide a concrete behavior-bearing path, check whether it is
 already excepted, and then distinguish a bad classification from the
 already-visible cost of an accepted lower tier. Keep a routing repair scoped to
 routing unless the scoring taxonomy is independently wrong.
+
+## A count and its denominator must come from the same population
+
+PR #63's facet pills counted runs over the full fetched set, then rendered
+that count against a denominator that had already been filtered:
+`${option.count} of the ${totalShown} runs shown`. With `?band=flagged`
+active the "cleared" pill read "32 of the 37 runs shown" — while every one
+of those 37 was flagged, so zero cleared runs were on screen. Filter hard
+enough and the numerator exceeds the total printed beside it.
+
+Both numbers were individually correct. Neither was computed wrong. The
+defect lives only in their pairing, which is why it survived a green build,
+a clean typecheck and 55 passing unit tests: no single function is at fault,
+and the types are both `number`.
+
+The generalizable check is to name the population for every rendered
+statistic and compare the names, not the values. Here the numerator's
+population was "runs in scope" and the denominator's was "runs matching the
+current filter"; the labels were the tell, not the arithmetic. When a
+component takes a total as a prop, that prop's contract is the population,
+so say which one in its type — a bare `total: number` invites the caller to
+pass whichever count is nearest.
+
+Doug found this one. Its wording pointed at the summary line rather than the
+pill title, and the summary line was correct — "37 of 68 runs" pairs a
+filtered count with an unfiltered total and says so. Chase the described
+failure to whichever code actually exhibits it before disproving a finding
+because the named location is clean.
+
+## A comment claiming a safeguard is a claim the code must be checked against
+
+`facets.ts` documented that "the page suppresses counts entirely once that set
+is a truncated page." `FacetBar` never referenced `atCap` and always rendered
+counts. The comment described a design that was considered and then not built,
+and a test repeated the same sentence — so the claim was asserted twice and
+implemented zero times.
+
+This is the "comment that outlives its truth" class, with a sharper edge: the
+comment did not describe stale *behaviour*, it described a *safeguard*. A stale
+comment about how something works wastes a reader's time. A stale comment about
+a protection that does not exist tells the next reviewer the hazard is already
+handled, so they stop looking. It also survives review more easily, because a
+reviewer who reads the comment and agrees with it has no reason to go find the
+enforcement.
+
+Two habits catch it. When a comment says the code refuses, suppresses, rejects
+or guards, grep for the mechanism before believing it — the enforcement is a
+line of code with a name, and if you cannot find it, it is not there. And when
+a safeguard's condition already exists as a named flag, the flag should reach
+every component whose output the claim covers; here `atCap` reached the header
+and the group badge but not the pill bar, which is precisely where the untrue
+sentence was written.
+
+Related: the fix reworded a title from "N runs in scope" to "the newest N runs
+fetched". Both the numerator and the denominator had been correct throughout;
+what was wrong was the noun naming the population. Statistics get their truth
+from their label as much as their arithmetic.
+>>>>>>> origin/main

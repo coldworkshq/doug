@@ -18,6 +18,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 """
 
+import json
 import os
 import sys
 import threading
@@ -37,10 +38,14 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    exists,
+    func,
     inspect,
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from . import migrations
@@ -48,17 +53,6 @@ from .models import Band, Verdict
 from .reader import Coverage, ReaderVerdict
 
 metadata = MetaData()
-
-COMPARISON_RUN_LIMIT = 500
-
-
-class ComparisonResultTooLarge(RuntimeError):
-    """The comparison cannot be returned without cutting ledger evidence."""
-
-    def __init__(self, limit: int):
-        super().__init__(
-            f"comparison contains more than {limit} runs; narrow the repo or PR limit"
-        )
 
 verdicts = Table(
     "verdicts",
@@ -92,6 +86,12 @@ verdicts = Table(
     Column("source", String(64)),
     # Migration 002, alongside outcomes' new columns below.
     Column("prompt_hash", String(64)),
+    # Migration 008. Instrument identity alongside prompt_hash: what budget
+    # and tiering this read ran under, so a receipt can distinguish "the
+    # prompt changed" from "the same prompt saw a different slice of the
+    # diff". Forward-only — NULL on every row scored before this migration.
+    Column("diff_budget", Integer),
+    Column("read_order", String(16)),
 )
 
 findings = Table(
@@ -123,6 +123,9 @@ outcomes = Table(
     Column("github_repo_id", BigInteger),
     Column("installation_id", BigInteger),
     Column("window_days", Integer),
+    # Migration 007. NULL on historical rows; new adjudicator rows always
+    # carry the merge commit so one job identity cannot cast two votes.
+    Column("merge_commit_sha", String(64)),
     # The adjudicator's supporting detail, JSON-encoded. TEXT rather than
     # the JSON type used elsewhere in this file, for sqlite/postgres parity
     # per house style on this column specifically.
@@ -148,6 +151,10 @@ reads = Table(
     Column("files_sent", Integer, nullable=False),
     Column("files_unseen", JSON, nullable=False),
     Column("file_cut", Text),
+    # Migration 007. Coverage already computes both; persisting them is what
+    # lets a receipt distinguish prompt truncation from files GitHub omitted.
+    Column("changed_files", Integer),
+    Column("files_dropped", JSON),
 )
 
 # Intent-tier output, kept in its own table on purpose (ADR-0007). A
@@ -289,7 +296,16 @@ outcome_jobs = Table(
     # pending | running | done | failed
     Column("status", String(12), nullable=False, server_default="pending"),
     Column("attempts", Integer, nullable=False, server_default="0"),
+    # Migration 007. The outcome drain is a separate Cloud Run Job, but its
+    # crash/reclaim fence is the same proven contract as review_jobs.
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("error", Text),
+    Column("claim_generation", Integer, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # Migration 008, pre-registration §11 item 7. Does NOT change the locked
+    # §2.1 rule, which stays timestamp-matched.
+    Column("merged_head_sha", String(64)),
     UniqueConstraint(
         "installation_id",
         "github_repo_id",
@@ -355,6 +371,14 @@ _engine_url = None
 _engine_lock = threading.Lock()
 
 
+def _get_existing_schema_engine():
+    """Build an engine without creating or migrating the target schema."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None
+    return create_engine(url, pool_pre_ping=True)
+
+
 def _get_engine():
     global _engine, _engine_url
     url = os.environ.get("DATABASE_URL")
@@ -380,6 +404,45 @@ def _get_engine():
 
 def enabled() -> bool:
     return _get_engine() is not None
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalise a DB timestamp to aware UTC.
+
+    sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
+    Claim holders compare the started_at they were handed against the row,
+    so both sides of that equality have to share a timezone convention.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _db_now(conn) -> datetime:
+    """The database's clock, not the caller's wall clock.
+
+    Claim started_at and reclaim cutoffs must share one clock across Cloud
+    Run instances; comparing one instance's datetime.now() to another's
+    written started_at is how a skewed host reclaims a live worker.
+
+    sqlite is the test path only and CURRENT_TIMESTAMP is second-precision —
+    wall clock keeps microsecond resolution there. Postgres uses
+    clock_timestamp() (statement time), not now()/transaction_timestamp(),
+    so two claims in quick succession cannot collapse onto one tx start time.
+
+    This is the single definition. ingest, outcome_queue and outcome_backfill
+    each carried an identical private copy; they now import from here. It
+    lives in store rather than in one of them because all three already
+    import store, so this is the only direction with no cycle.
+    """
+    if conn.dialect.name == "sqlite":
+        return datetime.now(UTC)
+    from sqlalchemy import func
+
+    value = conn.execute(select(func.clock_timestamp())).scalar_one()
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    return _as_utc(value)
 
 
 def columns_of(table: str) -> frozenset[str] | None:
@@ -461,6 +524,8 @@ def save_review(
     head_sha: str | None = None,
     source: str | None = None,
     prompt_hash: str | None = None,
+    diff_budget: int | None = None,
+    read_order: str | None = None,
     *,
     created: list[bool] | None = None,
 ) -> int | None:
@@ -517,6 +582,8 @@ def save_review(
                     "head_sha": head_sha,
                     "source": source,
                     "prompt_hash": prompt_hash,
+                    "diff_budget": diff_budget,
+                    "read_order": read_order,
                 },
             ).scalar_one()
             rows = [
@@ -526,7 +593,11 @@ def save_review(
                     "label": r.label,
                     "weight": r.weight,
                     "file": None,
-                    "severity": None,
+                    # The Reason itself may already carry severity (reader
+                    # tier sets it in verdict_from_reader); reader_verdict
+                    # below only adds `file` and reconfirms the same value
+                    # when a match is found.
+                    "severity": r.severity,
                 }
                 for r in verdict.reasons
             ]
@@ -549,6 +620,8 @@ def save_review(
                         "files_sent": coverage.files_sent,
                         "files_unseen": coverage.files_unseen,
                         "file_cut": coverage.file_cut,
+                        "changed_files": coverage.changed_files,
+                        "files_dropped": coverage.files_dropped,
                     },
                 )
         _mark(True)
@@ -771,12 +844,77 @@ def set_installation_repos(
                 known[repo_id] = result.inserted_primary_key[0]
 
 
-# outcome_jobs' unique key, named the two ways the two backends report it:
-# Postgres names the constraint, sqlite lists the table and its columns. Same
-# shape as ingest._DEDUPE_COLLISION and for the same reason — anything else is
-# a real integrity problem this code did not cause, and reading it as "already
-# queued" would drop a merge out of the denominator silently.
-_OUTCOME_COLLISION = ("uq_outcome_job", "unique constraint failed: outcome_jobs.")
+_OUTCOME_IDENTITY = (
+    outcome_jobs.c.installation_id,
+    outcome_jobs.c.github_repo_id,
+    outcome_jobs.c.pr_number,
+    outcome_jobs.c.merge_commit_sha,
+    outcome_jobs.c.window_days,
+)
+
+
+def _outcome_insert(conn):
+    if conn.dialect.name == "postgresql":
+        statement = postgresql_insert(outcome_jobs)
+    elif conn.dialect.name == "sqlite":
+        statement = sqlite_insert(outcome_jobs)
+    else:
+        raise RuntimeError(f"unsupported outcome_jobs dialect: {conn.dialect.name}")
+    return statement.on_conflict_do_nothing(index_elements=_OUTCOME_IDENTITY)
+
+
+def enqueue_outcome_jobs(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merge_commit_sha: str,
+    merged_at: datetime,
+    base_ref: str,
+    *,
+    window_days: tuple[int, ...] = (14, 60),
+    merged_head_sha: str | None = None,
+) -> dict[int, int]:
+    """Start the requested outcome-observation windows for one merged PR.
+
+    Returns ``{window_days: inserted_id}``. Windows already present in the
+    outcome ledger are absent, so a redelivery can fill a legacy one-window
+    gap without creating a second denominator vote for an existing window.
+
+    Both rows are prepared from the same merge facts and committed by one
+    multi-value statement in one transaction: a failure creating either
+    window must leave neither new row in the ledger.
+
+    `merged_head_sha` defaults to None and is not part of any caller's
+    required-facts check (see _record_merge) — it names the commit a
+    receipt can later claim a verdict about, nothing this table's own
+    windows or dedup depend on.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return {}
+    created_at = datetime.now(UTC)
+    rows = [
+        {
+            "installation_id": installation_id,
+            "github_repo_id": github_repo_id,
+            "pr_number": pr_number,
+            "merge_commit_sha": merge_commit_sha,
+            "merged_at": merged_at,
+            "base_ref": base_ref,
+            "window_days": days,
+            "due_at": merged_at + timedelta(days=days),
+            "created_at": created_at,
+            "merged_head_sha": merged_head_sha,
+        }
+        for days in window_days
+    ]
+    with engine.begin() as conn:
+        result = conn.execute(
+            _outcome_insert(conn)
+            .values(rows)
+            .returning(outcome_jobs.c.id, outcome_jobs.c.window_days)
+        )
+        return {days: job_id for job_id, days in result}
 
 
 def enqueue_outcome_job(
@@ -789,7 +927,7 @@ def enqueue_outcome_job(
     *,
     window_days: int = 14,
 ) -> int | None:
-    """Start the outcome-observation window for one merged PR.
+    """Start one outcome-observation window for one merged PR.
 
     Returns the new row's id, or None when this merge is already queued at
     this window — which is the ordinary case for a webhook redelivery.
@@ -801,36 +939,19 @@ def enqueue_outcome_job(
     rather than derived at query time because window_days is part of the
     unique key and may differ per row.
 
-    Dedup is the unique index, not a check-then-insert: GitHub redelivers,
-    and two deliveries racing a SELECT would both miss it and both insert,
-    giving one merge two independent due dates and two votes in a published
-    denominator.
+    This is a compatibility wrapper around ``enqueue_outcome_jobs`` for
+    callers that intentionally schedule a non-default single window.
     """
-    engine = _get_engine()
-    if engine is None:
-        return None
-    try:
-        with engine.begin() as conn:
-            return int(
-                conn.execute(
-                    outcome_jobs.insert().returning(outcome_jobs.c.id),
-                    {
-                        "installation_id": installation_id,
-                        "github_repo_id": github_repo_id,
-                        "pr_number": pr_number,
-                        "merge_commit_sha": merge_commit_sha,
-                        "merged_at": merged_at,
-                        "base_ref": base_ref,
-                        "window_days": window_days,
-                        "due_at": merged_at + timedelta(days=window_days),
-                        "created_at": datetime.now(UTC),
-                    },
-                ).scalar_one()
-            )
-    except IntegrityError as e:
-        if not any(m in str(e.orig).lower() for m in _OUTCOME_COLLISION):
-            raise
-        return None
+    inserted = enqueue_outcome_jobs(
+        installation_id,
+        github_repo_id,
+        pr_number,
+        merge_commit_sha,
+        merged_at,
+        base_ref,
+        window_days=(window_days,),
+    )
+    return inserted.get(window_days)
 
 
 def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bool:
@@ -897,6 +1018,8 @@ def save_read(verdict_id: int | None, cov: Coverage) -> int:
                     "files_sent": cov.files_sent,
                     "files_unseen": cov.files_unseen,
                     "file_cut": cov.file_cut,
+                    "changed_files": cov.changed_files,
+                    "files_dropped": cov.files_dropped,
                 }
             ],
         )
@@ -1114,6 +1237,16 @@ def _verdict_bundle(conn, v) -> dict:
     }
 
 
+def _load_verdict_row(conn, verdict_id: int):
+    """The raw `verdicts` row for one id, or None. Shared by every by-id
+    lookup so the query itself lives in exactly one place — find_verdict_by_id
+    and run_detail both start here, each still checking the None case itself,
+    before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
+    return conn.execute(
+        select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
+    ).mappings().first()
+
+
 def find_verdict_by_identity(
     installation_id: int, github_repo_id: int, pr_number: int, head_sha: str
 ) -> dict | None:
@@ -1177,12 +1310,415 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
     if engine is None:
         return None
     with engine.connect() as conn:
-        v = conn.execute(
-            select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-        ).mappings().first()
+        v = _load_verdict_row(conn, verdict_id)
         if v is None:
             return None
         return _verdict_bundle(conn, v)
+
+
+def governing_verdict(
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    merged_at: datetime,
+    *,
+    conn=None,
+) -> dict | None:
+    """The verdict that was standing when a human chose to merge.
+
+    THIS IMPLEMENTS A PRE-REGISTERED METRIC RULE, NOT A DISPLAY CHOICE.
+    `docs/design/outcome-loop/publication-preregistration.md` is LOCKED v8;
+    §2.1 defines this selection and §2.2 holds the SQL the published quarterly
+    miss rate runs. **Editing this function changes a published number.** The
+    receipt endpoint and the future publication query must both call it, so
+    that a customer's receipt cannot contradict the public table — which is
+    the most expensive failure available to this product, because the whole
+    claim is that both come from the same ledger.
+
+    Three details come from §2.2's SQL rather than §2.1's prose, and a
+    paraphrase of the prose gets each of them wrong:
+
+      * `tier='reader'` filters BEFORE the ranking (it is inside the CTE, not
+        the outer query), so a later deterministic fallback cannot displace an
+        earlier real read. §2.5 gives the fallback tier its own published row
+        precisely so it is never counted as the primary instrument.
+      * band is NOT part of selection — §2.2 puts `g.band = 'cleared'` in the
+        OUTER query, where it qualifies the published denominator. A flagged
+        PR has a governing verdict and gets a receipt; this function neither
+        takes band nor filters on it.
+      * the installation must still exist (§2.6's structural exclusion), so a
+        receipt cannot outlive the ledger row that scopes it, and research /
+        un-tenanted CLI rows never reach either artifact.
+
+    `row_number()`, never `DISTINCT ON`: the latter is Postgres-only and every
+    test here runs sqlite (`docs/REVIEWING.md:141-143` records that exact
+    trap), while production is Postgres. The most load-bearing rule in the
+    document has to be exercisable by the suite that guards it.
+
+    Scope, stated in full because it is the ONE place this is narrower than
+    §2.2's set query and a silent difference here is the whole risk:
+
+    §2.2 resolves the entire population in one pass, taking `merged_at` from
+    the joined `outcome_jobs` row; this takes `merged_at` as an argument and
+    answers for one merge identity. `uq_outcome_job` includes
+    `merge_commit_sha`, so a PR may carry more than one merge — which is why
+    §2.2 counts with `count(DISTINCT j.pr_number)`. On such a PR the two are
+    not equivalent: §2.2's `PARTITION BY` does not include the job, so its
+    single governing row is the verdict standing at the LATEST `merged_at`,
+    while this answers per merge and so reports, for an earlier merge, the
+    advice that was actually standing when THAT merge happened. Both name the
+    same verdict for the PR's latest merge, which is the one the published
+    denominator qualifies on; the receipt additionally shows the earlier
+    merge, which is a receipt's job. Pinned by
+    test_a_twice_merged_pr_resolves_per_merge_identity, and by the design
+    spec's §"One PR can have more than one merge identity".
+
+    Window selection is likewise the caller's: §2.2's `j.window_days = :window`
+    picks which JOBS are in scope, not which verdict governs, and the 14- and
+    60-day rows of one merge are written atomically from the same merge facts
+    (§6.3) — same `merged_at`, therefore necessarily the same governing
+    verdict, so the two published rows can never disagree about what Doug said.
+
+    Returns the full verdicts row merged with `_verdict_bundle`'s findings,
+    deviations and coverage, or None when no reader verdict was scored at or
+    before `merged_at` (§2.4's `fallback_only` / `merged_before_verdict`
+    buckets — excluded from the published rate, published as a count).
+
+    `conn`, keyword-only: pass an already-open connection to run on it
+    instead of opening one here. `receipt()` passes its own so a merge's
+    governing-verdict read shares that call's transaction and pool checkout
+    rather than opening a second one per merge. Every other caller omits it
+    and gets a connection opened and closed here, as before.
+    """
+    if conn is not None:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        return _select_governing_verdict(
+            conn, installation_id, github_repo_id, pr_number, merged_at
+        )
+
+
+def _select_governing_verdict(
+    conn, installation_id: int, github_repo_id: int, pr_number: int, merged_at: datetime
+) -> dict | None:
+    """`governing_verdict`'s §2.2 ranked-CTE query, run on an open connection.
+
+    Split out so `governing_verdict` can run this on a connection it opened
+    itself or one a caller already holds (see its `conn` parameter) without
+    duplicating the query between the two paths.
+    """
+    # §2.2's `ranked` CTE, narrowed to one PR. The window function is
+    # evaluated after WHERE, so every predicate here filters *before* the
+    # ranking exactly as the document's CTE does — that ordering is the whole
+    # point of the first bullet above and is why this cannot be flattened into
+    # an ORDER BY ... LIMIT 1 with the tier test bolted on afterwards.
+    #
+    # The PARTITION BY is redundant under that narrowing (the WHERE already
+    # pins all three of its columns) and is kept anyway, so the correspondence
+    # to the document is literal rather than argued. It is also what makes the
+    # narrowing safe to remove if the publication query ever wants this
+    # expression over the whole population.
+    ranked = (
+        select(
+            verdicts,
+            func.row_number()
+            .over(
+                partition_by=(
+                    verdicts.c.installation_id,
+                    verdicts.c.github_repo_id,
+                    verdicts.c.pr_number,
+                ),
+                order_by=(verdicts.c.scored_at.desc(), verdicts.c.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(
+            verdicts.c.installation_id == installation_id,
+            verdicts.c.github_repo_id == github_repo_id,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.tier == "reader",
+            verdicts.c.scored_at <= merged_at,
+            exists(select(1).where(installations.c.installation_id == installation_id)),
+        )
+        .subquery()
+    )
+    # one_or_none(), not first(): the partition is pinned to a single PR,
+    # so `rn = 1` names exactly one row or none. first() would silently
+    # return an arbitrary one if that ever stopped being true, and "the
+    # governing verdict was picked arbitrarily" is precisely the failure
+    # this rule is written down to prevent. Raising is the correct
+    # behaviour here — a receipt and a published number must not be
+    # served from a coin flip.
+    row = conn.execute(select(ranked).where(ranked.c.rn == 1)).mappings().one_or_none()
+    if row is None:
+        return None
+    # `rn` is the ranking scaffold, not a fact about the verdict; dropped
+    # so it cannot travel into a customer-facing receipt as if it were one.
+    return {k: v for k, v in row.items() if k != "rn"} | _verdict_bundle(conn, row)
+
+
+def _obj_or_none(value: str | None) -> object | None:
+    """Decode one JSON-as-TEXT column, or None when the row carries none.
+
+    outcomes.detail is declared Text, not the JSON column type this module
+    uses elsewhere (see that column's declaration comment — deliberate, for
+    sqlite/postgres parity on that column specifically), so SQLAlchemy hands
+    back a raw string here instead of an already-parsed value. This is the
+    one place that string becomes the object a caller can actually use.
+    """
+    return json.loads(value) if value is not None else None
+
+
+def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict | None:
+    """Everything one PR's receipt states, assembled from the ledger.
+
+    `merges` is a LIST, not a single record, because `uq_outcome_job`
+    includes `merge_commit_sha`: the schema itself permits one PR to carry
+    more than one merge identity (a revert-and-reland is the ordinary case),
+    which is exactly why §2.2 counts with `count(DISTINCT j.pr_number)`
+    rather than assuming one row per PR. Each merge's adjudication windows
+    nest under it, so the document always names which merge it is talking
+    about rather than pooling two merges' windows into one ambiguous list.
+
+    `latest_verdict` and `governing_verdict` are two separate fields on each
+    merge, not one field with an "is_latest" flag, because they answer
+    different questions. `latest_verdict` is "what is the newest thing Doug
+    has said about this PR" — it exists even with zero merges, for a PR still
+    open. `governing_verdict` is per merge: "what was standing when a human
+    chose to merge THIS commit" (see `governing_verdict`'s own docstring for
+    why that answer can differ merge to merge). When the two differ, work
+    landed — or the PR was rescored — after the advice a merge actually
+    happened on, and that gap is precisely what a reader of an incident
+    review needs to see; collapsing it into one field would erase the fact
+    this document exists to preserve.
+
+    `publication_governing` is set on exactly one merge: the one with the
+    greatest `merged_at`. Pre-registration §2.2's ranking window is
+    `PARTITION BY (installation_id, github_repo_id, pr_number)` with NO job
+    term, so the published quarterly number designates exactly one governing
+    verdict per PR — at that PR's latest merge — not one per merge. A receipt
+    with no such marker would let an earlier merge's own `governing_verdict`
+    read as though it were the number that got published; it was not. (This
+    field was added after the original task spec was written, once that
+    mismatch between per-merge and per-PR resolution was found — see this
+    task's brief for the history.)
+
+    Returns None only when nothing at all exists for this PR — no verdict
+    ever scored and no merge ever recorded — so a caller can tell "genuinely
+    nothing happened here" apart from "happened, but Doug had nothing to say"
+    (a real receipt with `latest_verdict: null` and/or an empty `merges`).
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    # engine.begin() buys a rollback if a statement in this block raises, not
+    # a consistent snapshot of the ledger. It covers `latest`, `jobs`,
+    # `outcome_rows`, latest_verdict's own _verdict_bundle call below, AND
+    # each merge's governing_verdict() call in the loop further down — that
+    # call is passed this same `conn`, so every read in this function shares
+    # one transaction and one pool checkout rather than governing_verdict()
+    # opening a fresh connection per merge. Even so, Postgres at READ
+    # COMMITTED (this deploy's isolation level) gives no cross-statement
+    # snapshot: each statement sees whatever was committed by the time it
+    # ran, not one point-in-time view of the ledger.
+    with engine.begin() as conn:
+        latest = (
+            conn.execute(
+                select(verdicts)
+                .where(
+                    verdicts.c.installation_id == installation_id,
+                    verdicts.c.github_repo_id == github_repo_id,
+                    verdicts.c.pr_number == pr_number,
+                    # Same exclusion as this query's five siblings, and the
+                    # ordinary case for it here: api.py's webhook handler
+                    # calls save_external_review on every pull_request_review
+                    # event, writing an external row into this identical
+                    # identity tuple with scored_at set to the human
+                    # reviewer's submitted_at. On a PR a human approved after
+                    # Doug's last score, that row is newest and would win
+                    # ORDER BY scored_at DESC — surfacing save_external_review's
+                    # 0.0/0.0 score/threshold placeholders, written because no
+                    # model ran and no diff was read, as "the newest thing
+                    # Doug has said about this PR".
+                    verdicts.c.tier != EXTERNAL_TIER,
+                )
+                .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        jobs = (
+            conn.execute(
+                select(outcome_jobs)
+                .where(
+                    outcome_jobs.c.installation_id == installation_id,
+                    outcome_jobs.c.github_repo_id == github_repo_id,
+                    outcome_jobs.c.pr_number == pr_number,
+                )
+                # Ascending merged_at groups each merge's job rows together in
+                # merge order, which is what lets the loop below build `merges`
+                # in merge order with a single pass and no separate sort step.
+                .order_by(outcome_jobs.c.merged_at, outcome_jobs.c.window_days)
+            )
+            .mappings()
+            .all()
+        )
+        if latest is None and not jobs:
+            return None
+
+        outcome_rows = (
+            conn.execute(
+                select(outcomes).where(
+                    outcomes.c.installation_id == installation_id,
+                    outcomes.c.github_repo_id == github_repo_id,
+                    outcomes.c.pr_number == pr_number,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        latest_verdict = (
+            dict(latest) | _verdict_bundle(conn, latest) if latest is not None else None
+        )
+
+        by_outcome = {(o["merge_commit_sha"], o["window_days"]): o for o in outcome_rows}
+        merges: list[dict] = []
+        by_sha: dict[str, dict] = {}
+        for job in jobs:
+            sha = job["merge_commit_sha"]
+            merge = by_sha.get(sha)
+            if merge is None:
+                merge = {
+                    "merge_commit_sha": sha,
+                    "merged_at": job["merged_at"],
+                    "base_ref": job["base_ref"],
+                    "merged_head_sha": job["merged_head_sha"],
+                    # Resolved per THIS merge's own merged_at, per
+                    # governing_verdict's contract — not the PR-wide answer,
+                    # which is why an earlier merge can carry a different
+                    # governing_verdict than the one that got published.
+                    "governing_verdict": governing_verdict(
+                        installation_id, github_repo_id, pr_number, job["merged_at"], conn=conn
+                    ),
+                    "adjudication": [],
+                }
+                by_sha[sha] = merge
+                merges.append(merge)
+            outcome = by_outcome.get((sha, job["window_days"]))
+            merge["adjudication"].append(
+                {
+                    "window_days": job["window_days"],
+                    "status": job["status"],
+                    "due_at": job["due_at"],
+                    "kind": outcome["kind"] if outcome else None,
+                    "observed_at": outcome["observed_at"] if outcome else None,
+                    "source": outcome["source"] if outcome else None,
+                    "detail": _obj_or_none(outcome["detail"]) if outcome else None,
+                }
+            )
+
+    # Flag by object identity, not by comparing merged_at values: max() over
+    # an empty list would raise, and identity guarantees exactly one True
+    # even in the unreached case of two merges tied on merged_at, which
+    # equality-based comparison would not.
+    governing_merge = max(merges, key=lambda m: m["merged_at"]) if merges else None
+    for merge in merges:
+        merge["publication_governing"] = merge is governing_merge
+
+    return {"latest_verdict": latest_verdict, "merges": merges}
+
+
+def run_detail(verdict_id: int) -> dict | None:
+    """Everything the console's forensic page shows for one run.
+
+    _verdict_bundle deliberately omits provenance — it renders a check run,
+    where model and prompt hash are noise. This page has the opposite need:
+    those fields ARE the answer to "what did Doug do with this PR". Rather
+    than widen the bundle and change what every check run carries, this
+    composes it with the columns it drops.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        v = _load_verdict_row(conn, verdict_id)
+        if v is None:
+            return None
+        detail = _verdict_bundle(conn, v)
+        detail.update(
+            {
+                "repo": v["repo"],
+                "pr_number": v["pr_number"],
+                "scored_at": v["scored_at"],
+                "model": v["model"],
+                "prompt_hash": v["prompt_hash"],
+                "diff_budget": v["diff_budget"],
+                "read_order": v["read_order"],
+                "risk_score": v["risk_score"],
+                "rationale": v["rationale"],
+                "head_sha": v["head_sha"],
+                "source": v["source"],
+                "installation_id": v["installation_id"],
+                "github_repo_id": v["github_repo_id"],
+                "pr_meta": v["pr_meta"],
+            }
+        )
+        job = conn.execute(
+            select(review_jobs).where(review_jobs.c.verdict_id == verdict_id).limit(1)
+        ).mappings().first()
+        detail["job"] = (
+            {
+                "status": job["status"],
+                "attempts": job["attempts"],
+                "claim_generation": job["claim_generation"],
+                "error": job["error"],
+                "enqueued_at": job["enqueued_at"],
+                "started_at": job["started_at"],
+                "finished_at": job["finished_at"],
+            }
+            if job
+            else None
+        )
+        # Outcomes key on (repo, pr_number), not on the verdict: a PR scored
+        # three times has one merge and one set of clocks, shared by all
+        # three runs. Both windows travel separately — they are different
+        # claims with different dates, and the page shows them side by side.
+        detail["outcomes"] = [
+            {
+                "kind": row["kind"],
+                "window_days": row["window_days"],
+                "observed_at": row["observed_at"],
+                "source": row["source"],
+                "detail": row["detail"],
+            }
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.repo == v["repo"])
+                .where(outcomes.c.pr_number == v["pr_number"])
+                .order_by(outcomes.c.window_days)
+            ).mappings()
+        ]
+        detail["outcome_jobs"] = [
+            {
+                "window_days": row["window_days"],
+                "status": row["status"],
+                "due_at": row["due_at"],
+                "merged_at": row["merged_at"],
+            }
+            for row in conn.execute(
+                select(outcome_jobs)
+                .where(outcome_jobs.c.github_repo_id == v["github_repo_id"])
+                .where(outcome_jobs.c.pr_number == v["pr_number"])
+                .order_by(outcome_jobs.c.window_days)
+            ).mappings()
+        ]
+    return detail
 
 
 def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
@@ -1310,6 +1846,415 @@ def latest_reviews(
     return out
 
 
+def run_history(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+) -> list[dict]:
+    """Verdict HISTORY, newest first — every run, not one row per PR.
+
+    `latest_reviews` answers "what is the current state of the queue".
+    This answers "what has Doug done", which is a different question: a PR
+    pushed three times is three runs, and collapsing them hides exactly the
+    comparison an operator opens the console to make.
+
+    Untenanted rows (installation_id IS NULL) are excluded by default. That
+    is the filter migrations.py:211 names as the correct one — real
+    installation ids rather than a label — and it is what keeps backfilled
+    probe corpora, CLI rows and the research quarantine out of a console
+    that is meant to show tenant traffic.
+
+    Each row carries `coverage`, `finding_counts`, `job` and `outcome_14`.
+    Every child join goes through an id-picking subquery because a plain
+    outerjoin duplicates the verdict row whenever two children match, and a
+    duplicated run reads as a real second review rather than as a bug.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0:
+        return []
+    from sqlalchemy import case, desc, func, select
+
+    query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
+    if not include_untenanted:
+        query = query.where(verdicts.c.installation_id.is_not(None))
+    if repo:
+        query = query.where(verdicts.c.repo == repo)
+    if installation_id is not None:
+        query = query.where(verdicts.c.installation_id == installation_id)
+    query = (
+        query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
+        .limit(limit)
+        .offset(offset)
+    )
+
+    with engine.connect() as conn:
+        rows = [dict(row) for row in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+        ids = [r["id"] for r in rows]
+
+        # One read per verdict: newest by id. A verdict can carry more than
+        # one (a retried read writes a second row), and both are real.
+        read_ids = (
+            select(reads.c.verdict_id, func.max(reads.c.id).label("read_id"))
+            .where(reads.c.verdict_id.in_(ids))
+            .group_by(reads.c.verdict_id)
+            .subquery()
+        )
+        cov_by_verdict = {
+            row["verdict_id"]: {
+                "diff_chars": row["diff_chars"],
+                "sent_chars": row["sent_chars"],
+                "files_sent": row["files_sent"],
+                "files_unseen": row["files_unseen"],
+                "file_cut": row["file_cut"],
+            }
+            for row in conn.execute(
+                select(reads).join(read_ids, read_ids.c.read_id == reads.c.id)
+            ).mappings()
+        }
+
+        counts_by_verdict = {
+            row["verdict_id"]: {
+                "total": row["total"],
+                "high": row["high"],
+                "medium": row["medium"],
+                "low": row["low"],
+            }
+            for row in conn.execute(
+                select(
+                    findings.c.verdict_id,
+                    func.count().label("total"),
+                    func.sum(case((findings.c.severity == "high", 1), else_=0)).label("high"),
+                    func.sum(case((findings.c.severity == "medium", 1), else_=0)).label(
+                        "medium"
+                    ),
+                    func.sum(case((findings.c.severity == "low", 1), else_=0)).label("low"),
+                )
+                .where(findings.c.verdict_id.in_(ids))
+                .group_by(findings.c.verdict_id)
+            ).mappings()
+        }
+
+        # Newest-attempts-last if a verdict is ever referenced by more than
+        # one job row (not enforced today — uq_review_job scopes uniqueness
+        # to (installation_id, github_repo_id, pr_number, head_sha), not to
+        # verdict_id). The dict below keeps whichever comes last in
+        # iteration order, the same last-observation-wins rule as
+        # outcome_by_pr just below.
+        job_by_verdict = {
+            row["verdict_id"]: {
+                "status": row["status"],
+                "attempts": row["attempts"],
+                "error": row["error"],
+                "enqueued_at": row["enqueued_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+            }
+            for row in conn.execute(
+                select(review_jobs)
+                .where(review_jobs.c.verdict_id.in_(ids))
+                .order_by(review_jobs.c.id)
+            ).mappings()
+        }
+
+        # 14-day only. Both windows exist for a merged PR, and carrying both
+        # into a list column is what fans one run out into two. Filtered on
+        # both halves of the key — repo alone would fetch every 14-day
+        # outcome for every repo on the page, not just the PRs on it.
+        #
+        # `outcomes` carries no unique constraint on (repo, pr_number,
+        # window_days), so if a PR is ever re-graded the dict below keeps
+        # the highest-id (most recent) row — last-observation-wins. That is
+        # a different reduction than find_scored_prs_with_outcomes uses on
+        # this same table (store.py:1240-1241), which fans a multi-outcome
+        # PR out into several rows and leaves the reduction to its caller.
+        # The difference is deliberate: outcome_14 is a single list-column
+        # value here, so there is no caller-side reduction to defer to.
+        keys = {(r["repo"], r["pr_number"]) for r in rows}
+        outcome_by_pr = {
+            (row["repo"], row["pr_number"]): row["kind"]
+            for row in conn.execute(
+                select(outcomes)
+                .where(outcomes.c.window_days == 14)
+                .where(outcomes.c.repo.in_({k[0] for k in keys}))
+                .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
+                .order_by(outcomes.c.id)
+            ).mappings()
+        }
+
+    zero = {"total": 0, "high": 0, "medium": 0, "low": 0}
+    for row in rows:
+        row["coverage"] = cov_by_verdict.get(row["id"])
+        row["finding_counts"] = counts_by_verdict.get(row["id"], dict(zero))
+        row["job"] = job_by_verdict.get(row["id"])
+        row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"]))
+    return rows
+
+
+def job_health(
+    *,
+    review_lease_seconds: int,
+    review_max_attempts: int,
+    outcome_lease_seconds: int,
+    outcome_max_attempts: int,
+    repo: str | None = None,
+    installation_id: int | None = None,
+) -> dict | None:
+    """Fixed-size health aggregates for both job lanes.
+
+    Returns None when no ledger is configured — never a dict of zeros, which
+    would render as "nothing is wrong" on a deployment that cannot answer.
+
+    The lane constants are arguments rather than imports because both ingest
+    and outcome_queue import this module; taking them in keeps one source of
+    truth without a cycle, and lets the response report the values actually
+    measured with.
+
+    'superseded' appears in no count. It is neither done (no verdict) nor
+    failed (nothing went wrong), and counting it is the fastest way to make
+    the strip cry wolf.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import func, select
+
+    rj, oj = review_jobs, outcome_jobs
+
+    def _scope_review(q):
+        if repo:
+            q = q.where(rj.c.repo_full_name == repo)
+        if installation_id is not None:
+            q = q.where(rj.c.installation_id == installation_id)
+        return q
+
+    def _scope_outcome(q):
+        # outcome_jobs carries no repo name — only github_repo_id — so a repo
+        # filter has to go through the ledger that maps the two.
+        if repo:
+            q = q.where(
+                oj.c.github_repo_id.in_(
+                    select(installation_repos.c.github_repo_id).where(
+                        installation_repos.c.full_name == repo
+                    )
+                )
+            )
+        if installation_id is not None:
+            q = q.where(oj.c.installation_id == installation_id)
+        return q
+
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        review_cutoff = now - timedelta(seconds=review_lease_seconds)
+        outcome_cutoff = now - timedelta(seconds=outcome_lease_seconds)
+        day_ago = now - timedelta(hours=24)
+
+        def _one(q):
+            return conn.execute(q).scalar()
+
+        def _ts(q):
+            """A MIN()-derived timestamp, normalised to aware UTC.
+
+            `as_of` comes from `_db_now` and is always aware, but these come
+            straight back off the column and are naive on sqlite, where
+            DateTime(timezone=True) round-trips with no designator. Emitting
+            an aware `as_of` beside a naive `oldest_pending_at` makes this
+            endpoint's correctness a property of the caller's parser rather
+            than of the response: a client subtracting one from the other is
+            off by its own local offset. The console is safe only because
+            `lib/runs.ts`'s parseUtc appends the Z; a second consumer would
+            not be.
+            """
+            value = _one(q)
+            return None if value is None else _as_utc(value)
+
+        def _count_review(*where):
+            return _one(_scope_review(select(func.count()).select_from(rj).where(*where))) or 0
+
+        def _count_outcome(*where):
+            return _one(_scope_outcome(select(func.count()).select_from(oj).where(*where))) or 0
+
+        review = {
+            "pending": _count_review(rj.c.status == "pending"),
+            # attempts = 0 ONLY. ingest.fail() resets enqueued_at on every
+            # retry, so a MIN over all pending rows reports a twice-failed
+            # job as freshly enqueued. These are two different quantities and
+            # must never be blended back into one MIN.
+            "oldest_pending_at": _ts(
+                _scope_review(
+                    select(func.min(rj.c.enqueued_at)).where(
+                        rj.c.status == "pending", rj.c.attempts == 0
+                    )
+                )
+            ),
+            "retrying": _count_review(rj.c.status == "pending", rj.c.attempts > 0),
+            "oldest_retry_at": _ts(
+                _scope_review(
+                    select(func.min(rj.c.enqueued_at)).where(
+                        rj.c.status == "pending", rj.c.attempts > 0
+                    )
+                )
+            ),
+            "running": _count_review(rj.c.status == "running"),
+            "stalled": _count_review(
+                rj.c.status == "running", rj.c.started_at < review_cutoff
+            ),
+            "failed": _count_review(rj.c.status == "failed"),
+            "failed_24h": _count_review(
+                rj.c.status == "failed", rj.c.finished_at >= day_ago
+            ),
+            "stall_lease_seconds": review_lease_seconds,
+            "max_attempts": review_max_attempts,
+        }
+
+        outcome = {
+            "pending": _count_outcome(oj.c.status == "pending"),
+            "overdue": _count_outcome(oj.c.status == "pending", oj.c.due_at < now),
+            # The earliest clock still in the FUTURE — a schedule, not an
+            # alarm. oldest_overdue_due_at is the earliest already past.
+            # They never overlap.
+            "next_due_at": _ts(
+                _scope_outcome(
+                    select(func.min(oj.c.due_at)).where(
+                        oj.c.status == "pending", oj.c.due_at >= now
+                    )
+                )
+            ),
+            "oldest_overdue_due_at": _ts(
+                _scope_outcome(
+                    select(func.min(oj.c.due_at)).where(
+                        oj.c.status == "pending", oj.c.due_at < now
+                    )
+                )
+            ),
+            "running": _count_outcome(oj.c.status == "running"),
+            "stalled": _count_outcome(
+                oj.c.status == "running", oj.c.started_at < outcome_cutoff
+            ),
+            "failed": _count_outcome(oj.c.status == "failed"),
+            "stall_lease_seconds": outcome_lease_seconds,
+            "max_attempts": outcome_max_attempts,
+        }
+
+        return {"review": review, "outcome": outcome, "as_of": now}
+
+
+def job_rows(
+    *,
+    lane: str,
+    lease_seconds: int,
+    unhealthy_only: bool = True,
+    status: str | None = None,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Job rows for one lane, newest first.
+
+    `status` accepts STORED statuses only. 'stalled', 'retrying' and
+    'overdue' are derived from started_at / attempts / due_at and are not
+    stored anywhere; they are reachable through unhealthy_only, and each
+    returned row carries the flags it was selected by so the caller renders
+    the reason without recomputing it against a lease it holds locally. That
+    is what keeps this list and the health strip from drifting apart.
+
+    'superseded' is never unhealthy — nothing went wrong — so it appears only
+    when unhealthy_only is False.
+    """
+    engine = _get_engine()
+    if engine is None or limit < 1 or offset < 0 or lane not in ("review", "outcome"):
+        return []
+    from sqlalchemy import desc, or_, select
+
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        cutoff = now - timedelta(seconds=lease_seconds)
+
+        if lane == "review":
+            t = review_jobs
+            query = select(t)
+            if repo:
+                query = query.where(t.c.repo_full_name == repo)
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.attempts > 0),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                        (t.c.status == "pending") & (t.c.attempts == 0),
+                    )
+                )
+        else:
+            t = outcome_jobs
+            query = select(t)
+            if repo:
+                query = query.where(
+                    t.c.github_repo_id.in_(
+                        select(installation_repos.c.github_repo_id).where(
+                            installation_repos.c.full_name == repo
+                        )
+                    )
+                )
+            if unhealthy_only:
+                query = query.where(
+                    or_(
+                        t.c.status == "failed",
+                        (t.c.status == "pending") & (t.c.due_at < now),
+                        (t.c.status == "running") & (t.c.started_at < cutoff),
+                    )
+                )
+
+        if status:
+            query = query.where(t.c.status == status)
+        if installation_id is not None:
+            query = query.where(t.c.installation_id == installation_id)
+        query = query.order_by(desc(t.c.id)).limit(limit).offset(offset)
+
+        rows = [dict(r) for r in conn.execute(query).mappings()]
+        if not rows:
+            return rows
+
+        names = {}
+        if lane == "outcome":
+            # Display only, and genuinely nullable: a repo can be absent from
+            # installation_repos entirely. A miss stays None so the caller
+            # renders the bare github_repo_id rather than a guess.
+            ids = {r["github_repo_id"] for r in rows}
+            names = {
+                row["github_repo_id"]: row["full_name"]
+                for row in conn.execute(
+                    select(
+                        installation_repos.c.github_repo_id,
+                        installation_repos.c.full_name,
+                    ).where(installation_repos.c.github_repo_id.in_(ids))
+                ).mappings()
+            }
+
+        for r in rows:
+            r["lane"] = lane
+            # sqlite hands DateTime(timezone=True) columns back naive; `now`
+            # and `cutoff` are always aware (_db_now's contract). Comparing
+            # them raw is the same trap _as_utc exists to close for the
+            # claim-holder comparisons in ingest/outcome_queue — this is that
+            # same comparison, just done in Python instead of in SQL.
+            started = r.get("started_at")
+            started = _as_utc(started) if started is not None else None
+            r["stalled"] = bool(
+                r["status"] == "running" and started is not None and started < cutoff
+            )
+            if lane == "review":
+                r["repo"] = r.pop("repo_full_name")
+                r["retrying"] = bool(r["status"] == "pending" and r["attempts"] > 0)
+            else:
+                r["repo"] = names.get(r["github_repo_id"])
+                r["overdue"] = bool(r["status"] == "pending" and _as_utc(r["due_at"]) < now)
+        return rows
+
+
 def active_installations() -> list[int]:
     """Installation ids in state 'active'. [] when storage is disabled."""
     engine = _get_engine()
@@ -1354,6 +2299,87 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def repo_id_for(full_name: str) -> tuple[int, int] | None:
+    """Resolve a display name to the ids that scope every read.
+
+    OPERATOR PATH ONLY, and the restriction is why this is written down
+    separately rather than folded into a shared resolver. It searches
+    installation_repos across EVERY installation and intersects against no
+    caller's scope at all, so reaching it with a dispensed tenant token would
+    resolve a name the caller may have no relationship with — and then hand
+    the resulting (installation_id, github_repo_id) pair to a read that
+    trusts it. Tenant callers resolve through active_repos(installation_id),
+    which IS that intersection: the key's frozen selection against the live
+    ledger. Pinned from the route's side by
+    test_the_tenant_path_never_resolves_through_repo_id_for.
+
+    Scoped to state='active', so a repo removed from its installation stops
+    resolving. Rows are never deleted (set_installation_repos' docstring says
+    why: a removed repo's verdicts still have to resolve to the repo they
+    describe), so without that filter a name would keep resolving forever
+    after the uninstall. `verdicts.repo` is display text and is NOT the
+    source of truth for tenancy (MT4) — this reads the junction table that
+    is, which is also why a ledger holding verdicts for a repo with no
+    installation_repos row resolves to nothing here rather than to whatever
+    those verdicts happen to say.
+
+    One full_name can carry more than one active row: a transfer mid-flight,
+    a repositories_removed delivery that never arrived leaving the previous
+    owner's row stale-active, or one installation holding two rows for a repo
+    deleted and recreated under the same name (uq_installation_repo is keyed
+    on the github_repo_id, not the name). No correct answer is available from
+    this table alone, so the newest registration wins — deterministic rather
+    than whichever row the planner returned first, because a receipt that
+    changes identity between two identical requests is worthless as evidence.
+
+    ANSWERING IS NOT ACCEPTING. That state is itself a ledger bug, so it is
+    logged every time it is resolved. Same posture as reconcile's open-PR cap
+    (worker.py): do the bounded thing, and say that you did — a fallback
+    nobody can see is indistinguishable from correct behaviour, and this one
+    silently decides which installation an operator's receipt is served from.
+    Loud here and not merely at startup because the drift checks in
+    _startup_reconcile cannot see this shape: both rows have an installation
+    and both have verdicts, so neither counter fires.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        # Not .limit(1): the extra rows are what the log line below is made
+        # of, and a query that could not see them could not report them.
+        # Bounded by how many installations registered this exact name, which
+        # is 1 in every healthy ledger.
+        rows = conn.execute(
+            select(
+                installation_repos.c.installation_id,
+                installation_repos.c.github_repo_id,
+            )
+            .where(
+                installation_repos.c.full_name == full_name,
+                installation_repos.c.state == "active",
+            )
+            .order_by(installation_repos.c.updated_at.desc(), installation_repos.c.id.desc())
+        ).all()
+    if not rows:
+        return None
+    chosen = (int(rows[0].installation_id), int(rows[0].github_repo_id))
+    if len(rows) > 1:
+        competing = ", ".join(
+            f"installation {int(r.installation_id)} repo {int(r.github_repo_id)}" for r in rows
+        )
+        # !r on the name: it arrives as a caller-supplied query parameter on a
+        # public endpoint, and a bare newline in it would otherwise forge a
+        # second log line (same guard _record_external_review uses).
+        print(
+            f"doug: DRIFT — {full_name!r} has {len(rows)} active installation_repos rows "
+            f"({competing}); resolving to installation {chosen[0]} repo {chosen[1]}, the most "
+            "recently registered. All but one of these rows is stale; redeliver the "
+            "installation_repositories webhook (ROADMAP MT4-class).",
+            file=sys.stderr,
+        )
+    return chosen
 
 
 def count_installations_referenced_by_verdicts() -> int:
@@ -1645,109 +2671,3 @@ def revoke_all_installation_tokens(installation_id: int) -> int:
         )
     return result.rowcount
 
-
-def comparison_reviews(
-    limit: int = 50,
-    repo: str | None = None,
-    *,
-    max_rows: int = COMPARISON_RUN_LIMIT,
-) -> list[dict]:
-    """All App and CI verdicts for the most recently scored PR groups.
-
-    The limit counts PRs, not verdict rows, so one side of a pair and duplicate
-    App writes cannot be cut away at the boundary. max_rows bounds the result
-    without making partial ledger evidence look complete: an oversized result
-    raises instead of cutting a comparison group.
-    """
-    engine = _get_engine()
-    if engine is None or limit < 1:
-        return []
-    if max_rows < 1:
-        raise ValueError("max_rows must be positive")
-    from sqlalchemy import and_, desc, func, or_, select
-
-    app_identity = and_(
-        verdicts.c.installation_id.is_not(None),
-        verdicts.c.github_repo_id.is_not(None),
-        verdicts.c.head_sha.is_not(None),
-    )
-    ci_identity = and_(
-        verdicts.c.installation_id.is_(None),
-        verdicts.c.github_repo_id.is_(None),
-    )
-    qualifies = and_(
-        verdicts.c.tier != EXTERNAL_TIER,
-        or_(app_identity, ci_identity),
-    )
-    recent = select(
-        verdicts.c.repo,
-        verdicts.c.pr_number,
-        func.max(verdicts.c.scored_at).label("latest_scored_at"),
-    ).where(qualifies)
-    if repo:
-        recent = recent.where(verdicts.c.repo == repo)
-    recent = (
-        recent.group_by(verdicts.c.repo, verdicts.c.pr_number)
-        .order_by(desc("latest_scored_at"))
-        .limit(limit)
-        .subquery()
-    )
-    latest_read_ids = (
-        select(
-            reads.c.verdict_id,
-            func.max(reads.c.id).label("read_id"),
-        )
-        .group_by(reads.c.verdict_id)
-        .subquery()
-    )
-    latest_read = reads.alias("latest_read")
-    query = (
-        select(
-            verdicts,
-            latest_read.c.id.label("_coverage_id"),
-            latest_read.c.diff_chars.label("_coverage_diff_chars"),
-            latest_read.c.sent_chars.label("_coverage_sent_chars"),
-            latest_read.c.files_sent.label("_coverage_files_sent"),
-            latest_read.c.files_unseen.label("_coverage_files_unseen"),
-            latest_read.c.file_cut.label("_coverage_file_cut"),
-        )
-        .join(
-            recent,
-            (recent.c.repo == verdicts.c.repo)
-            & (recent.c.pr_number == verdicts.c.pr_number),
-        )
-        .outerjoin(
-            latest_read_ids,
-            latest_read_ids.c.verdict_id == verdicts.c.id,
-        )
-        .outerjoin(latest_read, latest_read.c.id == latest_read_ids.c.read_id)
-        .where(qualifies)
-        .order_by(
-            desc(recent.c.latest_scored_at),
-            desc(verdicts.c.scored_at),
-            desc(verdicts.c.id),
-        )
-        .limit(max_rows + 1)
-    )
-    with engine.connect() as conn:
-        rows = conn.execute(query).mappings().all()
-    if len(rows) > max_rows:
-        raise ComparisonResultTooLarge(max_rows)
-    out = []
-    for row in rows:
-        verdict = {column.name: row[column.name] for column in verdicts.columns}
-        coverage = (
-            {
-                "id": row["_coverage_id"],
-                "verdict_id": verdict["id"],
-                "diff_chars": row["_coverage_diff_chars"],
-                "sent_chars": row["_coverage_sent_chars"],
-                "files_sent": row["_coverage_files_sent"],
-                "files_unseen": row["_coverage_files_unseen"],
-                "file_cut": row["_coverage_file_cut"],
-            }
-            if row["_coverage_id"] is not None
-            else None
-        )
-        out.append({**verdict, "coverage": coverage})
-    return out

@@ -206,6 +206,63 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE installations DROP COLUMN token_hash",
         ),
     ),
+    (
+        7,
+        (
+            # M3 adjudication identity. Existing outcomes stay NULL and are
+            # deliberately outside the partial unique index; only rows written
+            # by the live adjudicator carry a job discriminator.
+            "ALTER TABLE outcomes ADD COLUMN merge_commit_sha VARCHAR(64)",
+            # Durable claim lease and fence for the Cloud Run Job. A crashed
+            # execution is reclaimed on the next daily run without letting an
+            # old holder complete over a newer claim.
+            "ALTER TABLE outcome_jobs ADD COLUMN started_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE outcome_jobs ADD COLUMN finished_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE outcome_jobs ADD COLUMN error TEXT",
+            "ALTER TABLE outcome_jobs ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
+            # Coverage already carries these values in memory. Persist them so
+            # receipts can prove files were dropped before prompt assembly.
+            "ALTER TABLE reads ADD COLUMN changed_files INTEGER",
+            "ALTER TABLE reads ADD COLUMN files_dropped JSON",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_outcomes_job_identity "
+            "ON outcomes (installation_id, github_repo_id, pr_number, "
+            "merge_commit_sha, window_days) WHERE merge_commit_sha IS NOT NULL",
+        ),
+    ),
+    (
+        8,
+        (
+            # Instrument identity. prompt_hash covers SYSTEM + repr(SCHEMA)
+            # only, so two verdicts can share it and still have been read at
+            # different budgets — DIFF_BUDGET moved 30k->100k and read_order()
+            # tiering shipped in #56, neither of which is in the hash. These
+            # columns are stamped FORWARD ONLY: merge time is not serving
+            # time, so a dated backfill would mislabel every verdict scored in
+            # the deploy-lag window. NULL means "not recorded", and the
+            # receipt renders it as exactly that.
+            "ALTER TABLE verdicts ADD COLUMN diff_budget INTEGER",
+            "ALTER TABLE verdicts ADD COLUMN read_order VARCHAR(16)",
+            # Pre-registration §11 item 7, closed forward only. Does NOT change
+            # the locked §2.1 rule, which stays timestamp-matched.
+            "ALTER TABLE outcome_jobs ADD COLUMN merged_head_sha VARCHAR(64)",
+            # The prompt hash IS backfillable and this is not an inference:
+            # git log -L 45,92:api/doug/reader.py returns exactly one commit
+            # (293c19d, 2026-07-29), so SYSTEM+SCHEMA have never changed and
+            # there is one era. Checked a second, stronger way that does not
+            # depend on line-range tracking catching every edit: SYSTEM+SCHEMA
+            # extracted from 293c19d and from HEAD hash identically to each
+            # other and to the literal below (verified 2026-08-08) — content
+            # equality at both ends of history, not a trace of the lines
+            # between. The value is a LITERAL on purpose — a runtime
+            # reference to reader.PROMPT_HASH would, after any future prompt
+            # change, stamp historical rows with the NEW hash on a fresh
+            # replay, relabelling verdicts as the product of a prompt they
+            # never saw. IS NULL keeps it idempotent.
+            "UPDATE verdicts SET prompt_hash = "
+            "'8bd26c677a0e087a0b8c14933203cc85e15b65e32b432c10a3ae78009a951cdf' "
+            "WHERE tier = 'reader' AND prompt_hash IS NULL",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

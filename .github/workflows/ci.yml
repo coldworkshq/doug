@@ -12,7 +12,15 @@ jobs:
       run:
         working-directory: api
     steps:
+      # Full history: scripts/read_budget_gate.py pins END_SHA=135c8e5 and
+      # walks 30 first-parent commits back from it, on purpose — it is a
+      # fixed historical sample, and test_read_budget_scripts.py asserts its
+      # exact result. The default depth-1 checkout cannot resolve that SHA,
+      # so `git log ... 135c8e5` exits 128 and the test fails in CI while
+      # passing on any developer clone. That is how #56 merged red.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -36,6 +44,29 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  # doug-console is a separate app (console/) from doug-web, with its own
+  # lib tests — nothing above exercises it. It is deliberately not wired
+  # into deploy.yml (api/deploy/gcp.sh explains why: it's IAM-gated, so a
+  # deploy stays a human-run `gcp.sh console`), but that makes PR-time
+  # coverage the only automated check it gets before shipping to a service
+  # holding the unscoped operator credential.
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
   # The images that actually serve prod are otherwise built for the first
   # time *during* the prod deploy (gcloud run deploy --source) — a broken
   # Dockerfile or base-image regression surfaced there, mid-merge, and
@@ -53,3 +84,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker build web
+
+  # console/Dockerfile is byte-identical to web/Dockerfile, but that's
+  # exactly why this can't be skipped: both Docker failures this branch hit
+  # (a package.json missing an `overrides` block, breaking `npm ci` from a
+  # clean checkout; console/public/ not existing, breaking the final COPY)
+  # were specific to the console build context, not the shared Dockerfile
+  # text, and neither api-image nor web-image above could have caught them.
+  console-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build console

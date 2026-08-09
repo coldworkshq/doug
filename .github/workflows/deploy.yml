@@ -69,6 +69,10 @@ jobs:
             echo "$files"
             # grep returning 1 must not kill the step under `set -e`.
             if echo "$files" | grep -q '^api/'; then api=true; fi
+            # The Job receives this document's hash as deployment config.
+            # Refresh it even when the governing text is the only change.
+            if echo "$files" | grep -qx \
+              'docs/design/outcome-loop/publication-preregistration.md'; then api=true; fi
             if echo "$files" | grep -q '^web/'; then web=true; fi
           fi
           echo "api=$api" >> "$GITHUB_OUTPUT"
@@ -83,7 +87,17 @@ jobs:
       run:
         working-directory: api
     steps:
+      # Full history, same reason the changes job above needs it:
+      # scripts/read_budget_gate.py pins END_SHA=135c8e5 and walks 30
+      # first-parent commits back from it, and test_read_budget_scripts.py
+      # asserts that sample's exact result. A depth-1 checkout cannot resolve
+      # that SHA, so `git log ... 135c8e5` exits 128 and the suite fails here
+      # while passing on every developer clone. This gate is what ships the
+      # API, so the failure blocked deploys entirely rather than just going
+      # red — doug-api stayed on the pre-merge revision after #57 landed.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -110,7 +124,8 @@ jobs:
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
       # gcp.sh stages the revision with no traffic, smoke-tests its tagged
-      # URL, and promotes only on a 200 — a failed candidate never serves,
+      # URL, promotes only on a 200, then refreshes doug-adjudicator from the
+      # promoted revision's exact image. A failed candidate never serves,
       # and the previous revision keeps 100%.
       - run: bash deploy/gcp.sh deploy
         env:
@@ -127,7 +142,7 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url/openapi.json")
           echo "$url/openapi.json -> $code"
           [ "$code" = "200" ] || exit 1
-          echo "api deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "api + adjudicator deployed: $url" >> "$GITHUB_STEP_SUMMARY"
 
   web:
     needs: changes

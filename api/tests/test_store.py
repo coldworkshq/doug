@@ -1,11 +1,12 @@
+import datetime as _dt
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, inspect, select
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 
-from doug import reader, store
+from doug import ingest, outcome_queue, reader, store
 from doug.api import app
 from doug.models import Band, PRMetadata, Reason, Verdict
 
@@ -130,6 +131,35 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         f = conn.execute(select(store.findings)).mappings().one()
         assert f["verdict_id"] == vid
         assert f["severity"] == "high" and f["file"] == "cache.py"
+
+
+def test_save_review_persists_reason_severity_without_a_reader_verdict(tmp_path, monkeypatch):
+    """reader_verdict is optional on save_review's own signature — callers
+    that build a Verdict directly (run_history's own test suite among them)
+    are a legitimate use of it, not a misuse. Severity must survive on that
+    path too, not only when a matching reader_verdict also happens to be
+    passed and label-matches each reason."""
+    url = _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.62,
+        band=Band.FLAGGED,
+        threshold=0.30,
+        reasons=[
+            Reason(
+                rule="reader:race-condition",
+                label="Cache write is not guarded",
+                weight=0.0,
+                severity="high",
+            )
+        ],
+    )
+    vid = store.save_review("o/r", 7, "reader", verdict)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        f = conn.execute(select(store.findings)).mappings().one()
+    assert f["verdict_id"] == vid
+    assert f["severity"] == "high"
 
 
 def _pr() -> PRMetadata:
@@ -871,6 +901,52 @@ def test_enqueue_outcome_job_reads_a_redelivery_as_already_queued(tmp_path, monk
         assert len(conn.execute(select(store.outcome_jobs)).mappings().all()) == 1
 
 
+def test_enqueue_outcome_jobs_heals_a_legacy_one_window_gap(tmp_path, monkeypatch):
+    """A duplicate 14-day identity must not suppress the missing 60-day
+    identity. Treating the merge as a single all-or-nothing collision would
+    leave the M3 catch-up cohort permanently incomplete on redelivery."""
+    url = _db(tmp_path, monkeypatch)
+    assert _enqueue_outcome() is not None
+
+    inserted = store.enqueue_outcome_jobs(
+        INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main"
+    )
+
+    assert set(inserted) == {60}
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(
+            select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days)
+        ).mappings().all()
+    assert [row["window_days"] for row in rows] == [14, 60]
+
+
+def test_enqueue_outcome_jobs_rolls_back_both_windows_when_one_insert_fails(
+    tmp_path, monkeypatch
+):
+    """A 60-day failure must roll back the 14-day insert too; independently
+    committed single-row helpers would leave a half-cohort in the ledger."""
+    url = _db(tmp_path, monkeypatch)
+    store.enabled()
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TRIGGER reject_sixty_day_job
+            BEFORE INSERT ON outcome_jobs
+            WHEN NEW.window_days = 60
+            BEGIN
+              SELECT RAISE(ABORT, 'reject 60-day row');
+            END
+            """
+        )
+
+    with pytest.raises(IntegrityError, match="reject 60-day row"):
+        store.enqueue_outcome_jobs(INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main")
+
+    with engine.connect() as conn:
+        assert conn.execute(select(store.outcome_jobs)).all() == []
+
+
 def test_enqueue_outcome_job_re_raises_an_integrity_error_it_did_not_cause(
     tmp_path, monkeypatch
 ):
@@ -1180,6 +1256,42 @@ def test_an_external_review_arriving_first_does_not_suppress_dougs_review(
     assert store.find_verdict_by_identity(INSTALL, REPO_ID, 7, "a" * 40) is None
 
 
+# find_verdict_by_id itself has no direct caller in this suite — it is
+# worker.py's race-loser fallback, reached only when find_verdict_by_identity
+# misses twice in the same job (pre-read, then the post-collision re-check).
+# test_a_race_loser_replays_the_peer_and_does_not_attach_local_deviations in
+# test_worker.py exercises that branch, but the identity re-check there
+# always resolves before falling through, so find_verdict_by_id's own query
+# is never actually invoked by any existing test (confirmed empirically: a
+# call counter placed inside it stayed at zero across the whole worker and
+# store suites). The two tests below pin it directly — required by the
+# _load_verdict_row extraction, which must not change what this returns.
+
+
+def test_find_verdict_by_id_returns_the_bundle_for_a_known_id(tmp_path, monkeypatch):
+    """The durable handle worker.py falls back to when the identity re-read
+    misses. Must return the same check-run bundle find_verdict_by_identity
+    would — tier/score/reasons — and, being the check-run path, none of the
+    provenance run_detail exists to add back."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    found = store.find_verdict_by_id(vid)
+    assert found["tier"] == "reader"
+    assert found["score"] == VERDICT.score
+    assert found["reasons"][0]["rule"] == "reader:race-condition"
+    # the check-run bundle's deliberate omission — this is what run_detail
+    # exists to add back for the forensic page, not what this path returns
+    assert "model" not in found
+
+
+def test_find_verdict_by_id_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.find_verdict_by_id(4242) is None
+
+
 def test_an_external_review_does_not_take_a_pr_off_the_queue(tmp_path, monkeypatch):
     """latest_reviews groups by (repo, pr) and takes max(id). An external row
     is newer than Doug's, so filtering only the outer query would drop the PR
@@ -1269,197 +1381,6 @@ def test_an_external_review_does_not_erase_a_prs_findings_from_precision(
     assert [h["rule"] for h in joined["hits"]] == ["reader:race-condition"]
 
 
-def _comparison_review(
-    repo: str,
-    pr_number: int,
-    sha: str,
-    *,
-    app: bool,
-    legacy_ci: bool = False,
-    coverage: reader.Coverage | None = None,
-) -> int:
-    identity = (
-        {"installation_id": 10, "github_repo_id": 20, "head_sha": sha, "source": "app"}
-        if app
-        else {} if legacy_ci else {"head_sha": sha}
-    )
-    verdict_id = store.save_review(
-        repo,
-        pr_number,
-        "reader",
-        VERDICT,
-        RV,
-        pr_meta={**_pr().model_dump(mode="json"), "number": pr_number, "head_sha": sha},
-        coverage=coverage,
-        **identity,
-    )
-    assert verdict_id is not None
-    return verdict_id
-
-
-def test_comparison_reviews_keeps_both_paths_duplicates_and_coverage(
-    tmp_path, monkeypatch
-):
-    """The comparison read must preserve every qualifying App and CI run.
-
-    Dropping the CI-side predicate, collapsing CI duplicates, or failing to
-    load a reader receipt makes the App-versus-CI dashboard claim a
-    comparison it cannot actually show. App-path rows for one SHA are unique
-    (migration 005); CI duplicates and App+CI coexistence are what remain.
-    """
-    _db(tmp_path, monkeypatch)
-    coverage = reader.Coverage(
-        diff_chars=20,
-        sent_chars=10,
-        files_sent=1,
-        files_unseen=["second.py"],
-        file_cut="first.py",
-    )
-    app_one = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
-    # Same App identity: ledger keeps one row; the second save is idempotent.
-    assert _comparison_review("o/r", 7, "a" * 40, app=True) == app_one
-    current_ci = _comparison_review("o/r", 7, "a" * 40, app=False)
-    legacy_ci = _comparison_review("o/r", 7, "a" * 40, app=False, legacy_ci=True)
-    _external()
-    one_app_id = store.save_review(
-        "o/r",
-        7,
-        "reader",
-        VERDICT,
-        RV,
-        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
-        installation_id=10,
-    )
-    github_repo_id_only = store.save_review(
-        "o/r",
-        7,
-        "reader",
-        VERDICT,
-        RV,
-        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
-        github_repo_id=20,
-    )
-    app_without_head = store.save_review(
-        "o/r",
-        7,
-        "reader",
-        VERDICT,
-        RV,
-        pr_meta={**_pr().model_dump(mode="json"), "head_sha": "a" * 40},
-        installation_id=10,
-        github_repo_id=20,
-    )
-
-    rows = store.comparison_reviews(repo="o/r")
-    assert {row["id"] for row in rows} == {
-        app_one,
-        current_ci,
-        legacy_ci,
-    }
-    assert one_app_id not in {row["id"] for row in rows}
-    assert github_repo_id_only not in {row["id"] for row in rows}
-    assert app_without_head not in {row["id"] for row in rows}
-    by_id = {row["id"]: row for row in rows}
-    assert by_id[app_one]["coverage"]["sent_chars"] == 10
-    assert by_id[app_one]["coverage"]["file_cut"] == "first.py"
-    assert by_id[current_ci]["coverage"] is None
-    assert by_id[legacy_ci]["coverage"] is None
-
-
-def test_comparison_reviews_loads_all_coverage_in_one_select(tmp_path, monkeypatch):
-    """Adding another verdict must not add another database round trip.
-
-    The dashboard can request 200 PR groups and duplicates are deliberately
-    preserved. A SELECT inside the verdict loop turns that honest ledger read
-    into hundreds of sequential queries.
-    """
-    _db(tmp_path, monkeypatch)
-    coverage = reader.Coverage(
-        diff_chars=20,
-        sent_chars=10,
-        files_sent=1,
-        files_unseen=["second.py"],
-        file_cut="first.py",
-    )
-    covered = _comparison_review("o/r", 7, "a" * 40, app=True, coverage=coverage)
-    assert store.save_read(
-        covered,
-        reader.Coverage(
-            diff_chars=20,
-            sent_chars=18,
-            files_sent=2,
-            files_unseen=[],
-            file_cut=None,
-        ),
-    ) == 1
-    _comparison_review("o/r", 7, "a" * 40, app=False)
-    _comparison_review("o/r", 7, "a" * 40, app=True)
-    engine = store._get_engine()
-    assert engine is not None
-    selects: list[str] = []
-
-    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
-        if statement.lstrip().upper().startswith("SELECT"):
-            selects.append(statement)
-
-    event.listen(engine, "before_cursor_execute", record_select)
-    try:
-        rows = store.comparison_reviews(repo="o/r")
-    finally:
-        event.remove(engine, "before_cursor_execute", record_select)
-
-    assert len(selects) == 1
-    by_id = {row["id"]: row for row in rows}
-    assert by_id[covered]["coverage"]["sent_chars"] == 18
-    assert by_id[covered]["coverage"]["file_cut"] is None
-
-
-def test_current_ci_review_is_visible_in_comparisons_with_its_exact_head(
-    tmp_path, monkeypatch
-):
-    """Historical CI rows (head_sha set, no App ids) must stay servable.
-
-    Treating any row with a head column as App or malformed hides every old
-    CI result from the soak dashboard even though the review completed.
-    """
-    _db(tmp_path, monkeypatch)
-    sha = "c" * 40
-    verdict_id = _comparison_review("o/r", 7, sha, app=False)
-
-    runs = TestClient(app).get("/v1/comparisons", headers=AUTH).json()["runs"]
-    assert [run["id"] for run in runs] == [verdict_id]
-    assert runs[0]["path"] == "ci"
-    assert runs[0]["head_sha"] == sha
-
-
-def test_comparison_reviews_limits_pr_groups_without_cutting_their_runs(
-    tmp_path, monkeypatch
-):
-    """The limit counts scored PR groups, never one side of a comparison."""
-    _db(tmp_path, monkeypatch)
-    _comparison_review("o/r", 1, "a" * 40, app=True)
-    _comparison_review("o/r", 1, "a" * 40, app=False)
-    newest_app = _comparison_review("o/r", 2, "b" * 40, app=True)
-    newest_ci = _comparison_review("o/r", 2, "b" * 40, app=False)
-
-    rows = store.comparison_reviews(limit=1)
-    assert {row["id"] for row in rows} == {newest_app, newest_ci}
-    assert {row["pr_number"] for row in rows} == {2}
-
-
-def test_comparison_reviews_scopes_repo_and_is_empty_without_storage(
-    tmp_path, monkeypatch
-):
-    """A repo view cannot leak another repo, and disabled storage stays inert."""
-    _db(tmp_path, monkeypatch)
-    wanted = _comparison_review("a/x", 1, "a" * 40, app=True)
-    _comparison_review("b/y", 2, "b" * 40, app=True)
-    assert [row["id"] for row in store.comparison_reviews(repo="a/x")] == [wanted]
-
-    monkeypatch.delenv("DATABASE_URL")
-    assert store.comparison_reviews() == []
-
-
 def _scored(repo, pr, installation_id, score=0.5, github_repo_id=None):
     """One verdict row, App-identified or CI-identified (installation None)."""
     return store.save_review(
@@ -1535,6 +1456,367 @@ def test_latest_reviews_repo_ids_filter_is_inside_the_grouped_subquery(tmp_path,
     assert len(rows) == 1, "the PR vanished — the filter is outside the subquery"
     assert rows[0]["id"] == in_scope_id
     assert rows[0]["score"] == 0.61
+
+
+def test_run_history_returns_every_run_for_a_pr_not_just_the_latest(tmp_path, monkeypatch):
+    """The defining difference from latest_reviews. A PR pushed three times
+    is three runs; a console that collapses them cannot answer "what did
+    Doug do on this push" — which is the whole point of the page."""
+    _db(tmp_path, monkeypatch)
+    for sha in ("a" * 40, "b" * 40, "c" * 40):
+        store.save_review(
+            "o/r", 7, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+        )
+    rows = store.run_history()
+    assert len(rows) == 3
+    assert {r["head_sha"] for r in rows} == {"a" * 40, "b" * 40, "c" * 40}
+    assert store.latest_reviews() and len(store.latest_reviews()) == 1
+
+
+def test_run_history_carries_repo_and_installation(tmp_path, monkeypatch):
+    """The field latest_reviews drops. Without it the console cannot group
+    per repo, which is the reported gap."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    row = store.run_history()[0]
+    assert row["repo"] == "o/r"
+    assert row["installation_id"] == 99
+    assert row["github_repo_id"] == 1
+
+
+def test_run_history_excludes_untenanted_rows_by_default(tmp_path, monkeypatch):
+    """Backfilled probe corpora, CLI rows and the research quarantine all
+    carry no installation_id. Including them would flood the console with
+    thousands of rows that are not tenant traffic — the exact failure
+    DOUG_QUEUE_REPO exists to paper over on doug-web."""
+    _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 1, "reader", VERDICT)  # no installation — CLI/backfill
+    store.save_review(
+        "o/r", 2, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert [r["pr_number"] for r in store.run_history()] == [2]
+    assert {r["pr_number"] for r in store.run_history(include_untenanted=True)} == {1, 2}
+
+
+def test_run_history_excludes_external_tier(tmp_path, monkeypatch):
+    """External rows are other reviewers' verdicts, not Doug's runs."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, store.EXTERNAL_TIER, VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40,
+    )
+    assert store.run_history() == []
+
+
+def test_run_history_scopes_by_repo_and_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/one", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=11, head_sha="a" * 40, source="app",
+    )
+    store.save_review(
+        "o/two", 2, "reader", VERDICT,
+        github_repo_id=2, installation_id=22, head_sha="b" * 40, source="app",
+    )
+    assert [r["repo"] for r in store.run_history(repo="o/one")] == ["o/one"]
+    assert [r["installation_id"] for r in store.run_history(installation_id=22)] == [22]
+
+
+def test_run_history_paginates_newest_first(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    for n in range(5):
+        vid = store.save_review(
+            "o/r", n, "reader", VERDICT,
+            github_repo_id=1, installation_id=99, head_sha=str(n) * 40, source="app",
+        )
+        engine = store._get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                store.verdicts.update()
+                .where(store.verdicts.c.id == vid)
+                .values(scored_at=base + timedelta(hours=n))
+            )
+    assert [r["pr_number"] for r in store.run_history(limit=2)] == [4, 3]
+    assert [r["pr_number"] for r in store.run_history(limit=2, offset=2)] == [2, 1]
+
+
+def test_run_history_attaches_coverage_without_duplicating_runs(tmp_path, monkeypatch):
+    """Two reads on one verdict must not become two runs. A plain outerjoin
+    fans out here, and a duplicated run reads as a real second review."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=1000, sent_chars=170, files_sent=4,
+            files_unseen=["tenancy.py"], file_cut="api.py",
+        ),
+    )
+    store.save_read(vid, store.Coverage(
+        diff_chars=1200, sent_chars=900, files_sent=20,
+        files_unseen=[], file_cut=None,
+    ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["coverage"]["files_sent"] == 20
+    assert rows[0]["coverage"]["diff_chars"] == 1200
+
+
+def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monkeypatch):
+    """No read happened, so there is no coverage. This must be None and
+    render as "no read" — never as 0%, which would read as a total miss."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["coverage"] is None
+
+
+def test_run_history_counts_findings_by_severity(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    verdict = Verdict(
+        score=0.8, band=Band.FLAGGED, threshold=0.62,
+        reasons=[
+            Reason(rule="reader:a", label="a", weight=0.0, severity="high"),
+            Reason(rule="reader:b", label="b", weight=0.0, severity="low"),
+            Reason(rule="reader:c", label="c", weight=0.0, severity="low"),
+        ],
+    )
+    store.save_review(
+        "o/r", 1, "reader", verdict,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    counts = store.run_history()[0]["finding_counts"]
+    assert counts == {"total": 3, "high": 1, "medium": 0, "low": 2}
+
+
+def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
+    """The job row is the "what did Doug do" record: attempts and error are
+    the only place a failed run explains itself."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=1, head_sha="a" * 40, status="done", attempts=2,
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 41, tzinfo=UTC),
+            verdict_id=vid,
+        ))
+    job = store.run_history()[0]["job"]
+    assert job["status"] == "done"
+    assert job["attempts"] == 2
+
+
+def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
+    """Both windows exist for a merged PR. The list column is the 14d one;
+    joining both would fan the run out into two rows."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for window, kind in ((14, "clean"), (60, "revert")):
+            conn.execute(store.outcomes.insert().values(
+                repo="o/r", pr_number=1, kind=kind, window_days=window,
+                observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
+                github_repo_id=1, installation_id=99,
+            ))
+    rows = store.run_history()
+    assert len(rows) == 1
+    assert rows[0]["outcome_14"] == "clean"
+
+
+def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypatch):
+    """Ungraded is not clean. The console must render these differently."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_history()[0]["outcome_14"] is None
+
+
+# --- run_detail (the forensic bundle for one run) ---
+
+
+def test_run_detail_carries_the_fields_the_check_run_bundle_drops(tmp_path, monkeypatch):
+    """_verdict_bundle serves the check run and omits provenance on purpose.
+    The forensic page is the opposite need: model, prompt hash and rationale
+    ARE the answer to "what did Doug do"."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        prompt_hash="a3f9e2c1",
+    )
+    detail = store.run_detail(vid)
+    assert detail["repo"] == "o/r"
+    assert detail["pr_number"] == 7
+    assert detail["model"] == "claude-opus-5"
+    assert detail["prompt_hash"] == "a3f9e2c1"
+    assert detail["risk_score"] == 62
+    assert detail["rationale"] == "Unlocked cache write."
+    assert detail["source"] == "app"
+    assert detail["head_sha"] == "a" * 40
+    # and still everything the bundle already gave
+    assert detail["reasons"][0]["rule"] == "reader:race-condition"
+
+
+def test_run_detail_returns_none_for_an_unknown_id(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    assert store.run_detail(4242) is None
+
+
+def test_run_detail_attaches_the_job_including_its_error(tmp_path, monkeypatch):
+    """A failed run explains itself nowhere else."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.review_jobs.insert().values(
+            installation_id=99, github_repo_id=1, repo_full_name="o/r",
+            pr_number=7, head_sha="a" * 40, status="failed", attempts=3,
+            claim_generation=3, error="reader timeout after 60s",
+            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC), verdict_id=vid,
+        ))
+    job = store.run_detail(vid)["job"]
+    assert job["status"] == "failed"
+    assert job["attempts"] == 3
+    assert job["claim_generation"] == 3
+    assert job["error"] == "reader timeout after 60s"
+
+
+def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatch):
+    """The 14d and 60d clocks are different claims with different dates, and
+    the page shows them side by side. Collapsing them loses the censoring
+    story."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="clean", window_days=14,
+            observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
+        conn.execute(store.outcome_jobs.insert().values(
+            installation_id=99, github_repo_id=1, pr_number=7,
+            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 3, tzinfo=UTC),
+            base_ref="main", window_days=60,
+            due_at=datetime(2026, 10, 2, tzinfo=UTC), status="pending",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        ))
+    detail = store.run_detail(vid)
+    assert [o["window_days"] for o in detail["outcomes"]] == [14]
+    assert detail["outcomes"][0]["kind"] == "clean"
+    assert [j["window_days"] for j in detail["outcome_jobs"]] == [60]
+    assert detail["outcome_jobs"][0]["status"] == "pending"
+
+
+def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatch):
+    """save_deviations writes a kind="none" row to record "the read ran and
+    found nothing". It is a storage marker, never a finding. If it reached
+    the page it would render as a deviation named "none" — Doug reporting a
+    problem it explicitly did not find."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    # signature: (verdict_id, findings, intent_refs, intent_alignment)
+    store.save_deviations(vid, [], intent_refs=[], intent_alignment=100)
+    detail = store.run_detail(vid)
+    assert detail["deviations"] == []
+    # The row exists — "read happened, found nothing" stays distinguishable
+    # from "no read happened", which is why the marker is written at all.
+    assert detail["intent_alignment"] == 100
+
+
+def test_run_detail_exposes_pr_meta_for_the_coverage_denominator(tmp_path, monkeypatch):
+    """changed_files lives on pr_meta and is the only correct denominator.
+    Without it on the detail payload the page would fall back to
+    len(files_unseen) + files_sent, which is not the true file count."""
+    _db(tmp_path, monkeypatch)
+    meta = PRMetadata(
+        number=7, title="t", author="a", files=["one.py"], changed_files=23,
+        files_dropped=["uv.lock"],
+    )
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, pr_meta=meta.model_dump(),
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["pr_meta"]["changed_files"] == 23
+    assert detail["pr_meta"]["files_dropped"] == ["uv.lock"]
+
+
+def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(
+    tmp_path, monkeypatch
+):
+    """A run with no review_jobs row and no outcomes/outcome_jobs rows is the
+    common case (most PRs are still open, most jobs are pre-Task-6 CI rows).
+    "no job" must stay None and "no outcomes yet" must stay [] — 'empty is
+    not zero' is a standing constraint, and a job silently defaulting to {}
+    or an outcome list silently gaining a phantom row would both pass any
+    assertion that only checks truthiness."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["job"] is None
+    assert detail["outcomes"] == []
+    assert detail["outcome_jobs"] == []
+
+
+def test_run_detail_carries_scored_at_and_app_identity(tmp_path, monkeypatch):
+    """The remaining passthrough columns _verdict_bundle also drops: when
+    the run happened and which installation/repo id it belongs to. Task 5
+    serialises this bundle whole, so a dropped or misspelled key here would
+    otherwise pass silently — the brief's own carries-the-fields test does
+    not touch these three."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    detail = store.run_detail(vid)
+    assert detail["scored_at"] is not None
+    assert detail["installation_id"] == 99
+    assert detail["github_repo_id"] == 1
+
+
+def test_run_detail_tolerates_a_null_pr_meta(tmp_path, monkeypatch):
+    """save_review defaults pr_meta to None (CLI callers, pre-App rows). A
+    task earlier in this build crashed on exactly this column being null;
+    run_detail must pass it through as None, not assume it can be indexed."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    assert store.run_detail(vid)["pr_meta"] is None
 
 
 # --- installation_tokens (tenant API keys spec, 2026-08-04) ---
@@ -1650,19 +1932,10 @@ def test_migration_6_applies_on_fresh_and_legacy_shapes(tmp_path, monkeypatch):
             "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
             "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
         )
-    # apply() always runs after create_all() in production (see this module's
-    # docstring), so by the time migration 6 runs an `installations` table
-    # always exists and migrations 1-5's target tables (verdicts, outcomes,
-    # review_jobs, ...) are already there too. This engine only ever built
-    # `installations` by hand, so migrations 1-5 are seeded as already-done
-    # here to isolate the one thing this test means to exercise: migration 6
-    # against a real legacy `installations` shape.
-    migrations.schema_migrations.create(engine, checkfirst=True)
-    with engine.begin() as conn:
-        conn.execute(
-            migrations.schema_migrations.insert(),
-            [{"version": v, "applied_at": datetime.now(UTC)} for v in range(1, 6)],
-        )
+    # Production calls create_all before migrations.apply. It leaves the
+    # legacy installations table untouched while creating every other table
+    # later migrations legitimately reference.
+    store.metadata.create_all(engine)
     migrations.apply(engine)
     assert "token_hash" not in {c["name"] for c in inspect(engine).get_columns("installations")}
 
@@ -1765,3 +2038,418 @@ def test_missing_from_ledger_treats_a_removed_row_as_covered(tmp_path, monkeypat
     )
     _scored("drewjst/a", 1, 150424894, github_repo_id=111)
     assert store.count_verdict_repos_missing_from_ledger() == 0
+
+
+# --- store.job_health — the console strip's only data source. Every test here
+# pins a way the aggregate could claim something the ledger does not say.
+
+
+def _health(url, **kw):
+    """Call job_health with the real lane constants, the way api.py does."""
+    return store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+        **kw,
+    )
+
+
+def test_job_health_excludes_superseded_from_every_count(tmp_path, monkeypatch):
+    """A superseded job is neither done nor failed and nothing went wrong —
+    ingest.supersede() lands it revivable on purpose. Counting it is the
+    single easiest way to make the strip cry wolf, so it must appear in no
+    count at all."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    health = _health(None)
+
+    assert health["review"]["pending"] == 0
+    assert health["review"]["running"] == 0
+    assert health["review"]["failed"] == 0
+    assert health["review"]["retrying"] == 0
+
+
+def test_job_health_does_not_report_a_retried_job_as_freshly_pending(
+    tmp_path, monkeypatch
+):
+    """ingest.fail() below the cap sets enqueued_at = now, deliberately, so
+    the retry goes to the BACK of the queue instead of burning every attempt
+    in one pass. A naive MIN(enqueued_at) over all pending rows therefore
+    reports a twice-failed job as brand new — blind to exactly the jobs most
+    likely to be in trouble. oldest_pending_at must see attempts = 0 only."""
+    _db(tmp_path, monkeypatch)
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
+
+    health = _health(None)
+
+    # It is pending, and it is retrying, and those are different facts.
+    assert health["review"]["pending"] == 1
+    assert health["review"]["retrying"] == 1
+    # No fresh-pending row exists, so there is no fresh-pending age to report.
+    assert health["review"]["oldest_pending_at"] is None
+    # The retry has its own age, which means "when the last attempt gave up".
+    assert health["review"]["oldest_retry_at"] is not None
+
+
+def test_job_health_measures_each_lane_against_its_own_lease(
+    tmp_path, monkeypatch
+):
+    """ingest's lease is 900s; outcome_queue's is 7200s. A claim 20 minutes
+    old is stalled in the review lane and perfectly healthy in the outcome
+    lane. One shared lease constant would alarm on the healthy one."""
+    _db(tmp_path, monkeypatch)
+    twenty_min_ago = _dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=20)
+
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    _force_started_at(store.review_jobs, claimed["id"], twenty_min_ago)
+
+    outcome_id = store.enqueue_outcome_jobs(
+        99, 1, 7, "b" * 40, twenty_min_ago, "main", window_days=(14,)
+    )[14]
+    _force_running(store.outcome_jobs, outcome_id, twenty_min_ago)
+
+    health = _health(None)
+
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["stalled"] == 0
+
+
+def test_job_health_reports_the_lane_constants_it_measured_with(
+    tmp_path, monkeypatch
+):
+    """The console renders 'attempts 4/10' and computes nothing against a
+    lease it holds locally. If a constant moves, the UI must follow rather
+    than silently disagree with the sweep that enforces it."""
+    _db(tmp_path, monkeypatch)
+
+    health = _health(None)
+
+    assert health["review"]["stall_lease_seconds"] == ingest.STALL_LEASE_SECONDS
+    assert health["review"]["max_attempts"] == ingest.MAX_ATTEMPTS
+    assert health["outcome"]["stall_lease_seconds"] == outcome_queue.STALL_LEASE_SECONDS
+    assert health["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
+
+
+def test_job_health_separates_overdue_from_next_due(tmp_path, monkeypatch):
+    """next_due_at is the earliest clock still in the future;
+    oldest_overdue_due_at is the earliest already past. Blending them would
+    make 'the next clock' read as an alarm or an alarm read as a schedule."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    # Merged 20 days ago: its 14-day clock is 6 days overdue, its 60-day
+    # clock is still 40 days out.
+    store.enqueue_outcome_jobs(
+        99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main"
+    )
+
+    health = _health(None)
+
+    assert health["outcome"]["overdue"] == 1
+    assert health["outcome"]["oldest_overdue_due_at"] is not None
+    assert health["outcome"]["next_due_at"] is not None
+    assert health["outcome"]["next_due_at"] > health["outcome"]["oldest_overdue_due_at"]
+
+
+def test_job_health_timestamps_are_all_timezone_aware(tmp_path, monkeypatch):
+    """Every timestamp this endpoint emits must carry a zone, including the
+    four MIN()-derived ones.
+
+    `as_of` comes from `_db_now` and is always aware, but the MIN() results
+    are read straight back off the column — naive on sqlite, where
+    DateTime(timezone=True) round-trips without a designator. Serialised, an
+    aware `as_of` and a naive `oldest_pending_at` cross the wire in different
+    formats, and a client subtracting one from the other is off by its own
+    local offset (7h in this repo's timezone). The console happens to be safe
+    because `lib/runs.ts`'s parseUtc appends the Z, but that makes the
+    endpoint's correctness a property of one caller's discipline rather than
+    of the endpoint. Any second consumer mis-renders every age.
+
+    All four are asserted, not a sample: they come from four separate
+    queries and a fix that normalised only the two obvious ones would leave
+    the other two wrong with nothing to catch it."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+
+    # A fresh pending job (oldest_pending_at) and a retried one
+    # (oldest_retry_at) in the review lane.
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    claimed = ingest.claim()
+    ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
+
+    # Merged 20 days ago: the 14-day clock is overdue
+    # (oldest_overdue_due_at), the 60-day one is still ahead (next_due_at).
+    store.enqueue_outcome_jobs(99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main")
+
+    health = _health(None)
+
+    for lane, field in (
+        ("review", "oldest_pending_at"),
+        ("review", "oldest_retry_at"),
+        ("outcome", "next_due_at"),
+        ("outcome", "oldest_overdue_due_at"),
+    ):
+        value = health[lane][field]
+        assert value is not None, f"{lane}.{field} not seeded by this fixture"
+        assert value.tzinfo is not None, f"{lane}.{field} crossed the wire naive"
+
+    assert health["as_of"].tzinfo is not None
+
+
+def test_job_health_returns_none_without_a_ledger(tmp_path, monkeypatch):
+    """None, never a dict of zeros. A zeroed health payload would render as
+    'nothing is wrong' on a deployment that cannot answer the question.
+
+    store._get_engine() re-reads DATABASE_URL on every call and returns None
+    when it is unset, so unsetting the variable is the whole fixture — there
+    is no engine-reset helper in this codebase and none is needed."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert _health(None) is None
+
+
+def test_job_health_scopes_by_repo(tmp_path, monkeypatch):
+    """An operator curling /v1/health?repo=o/a must see only o/a's jobs.
+
+    outcome_jobs carries no repo name column — only github_repo_id — so
+    _scope_outcome resolves the name through installation_repos. A test that
+    only seeded the review lane would miss that join entirely and still pass
+    even if the outcome scope silently matched every repo; both lanes get
+    an unhealthy row here for exactly that reason, and both must exclude the
+    other repo's."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    twenty_min_ago = now - _dt.timedelta(minutes=20)
+    store.set_installation_repos(99, [(1, "o/a"), (2, "o/b")], replace=True)
+
+    # Repo A: one stalled review claim, one overdue outcome window.
+    ingest.enqueue(99, 1, "o/a", 7, "a" * 40)
+    claimed_a = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    # Repo B: the same unhealthy shapes. Must not leak into o/a's scoped view.
+    ingest.enqueue(99, 2, "o/b", 8, "b" * 40)
+    claimed_b = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        99, 2, 8, "d" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    health = _health(None, repo="o/a")
+
+    assert health["review"]["running"] == 1
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["pending"] == 1
+    assert health["outcome"]["overdue"] == 1
+
+
+def test_job_health_scopes_by_installation(tmp_path, monkeypatch):
+    """Two tenants' unhealthy jobs must not blur into one installation's
+    count — an operator debugging installation 11 must not see installation
+    22's stalled claims or overdue windows counted against it, in either
+    lane."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    twenty_min_ago = now - _dt.timedelta(minutes=20)
+
+    ingest.enqueue(11, 1, "o/a", 7, "a" * 40)
+    claimed_a = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        11, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    ingest.enqueue(22, 2, "o/b", 8, "b" * 40)
+    claimed_b = ingest.claim()
+    _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
+    store.enqueue_outcome_jobs(
+        22, 2, 8, "d" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
+    )
+
+    health = _health(None, installation_id=11)
+
+    assert health["review"]["running"] == 1
+    assert health["review"]["stalled"] == 1
+    assert health["outcome"]["pending"] == 1
+    assert health["outcome"]["overdue"] == 1
+
+
+# --- store.job_rows — the failure list backing the /jobs page. Every test
+# here pins a way the row-level query could disagree with job_health's count.
+
+
+def test_job_rows_defaults_to_unhealthy_only(tmp_path, monkeypatch):
+    """The page exists to answer 'what is wrong'. A raw job list is
+    overwhelmingly done and superseded, so the default filter is the RED and
+    AMBER states and nothing else."""
+    _db(tmp_path, monkeypatch)
+    # One healthy done job.
+    done_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.complete(done_id, None, claim_generation=claimed["claim_generation"])
+    # One failed job: three attempts exhausts ingest.MAX_ATTEMPTS.
+    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    for _ in range(ingest.MAX_ATTEMPTS):
+        c = ingest.claim()
+        ingest.fail(c["id"], "boom", claim_generation=c["claim_generation"])
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert [r["pr_number"] for r in rows] == [8]
+    assert rows[0]["status"] == "failed"
+
+
+def test_job_rows_never_returns_superseded_as_unhealthy(tmp_path, monkeypatch):
+    """Same reason job_health excludes it: nothing went wrong."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert rows == []
+
+
+def test_job_rows_shows_everything_when_unhealthy_only_is_off(
+    tmp_path, monkeypatch
+):
+    """'The job I expected does not exist at all' is a real diagnosis, and
+    only a complete list reaches it."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    rows = store.job_rows(
+        lane="review",
+        lease_seconds=ingest.STALL_LEASE_SECONDS,
+        unhealthy_only=False,
+    )
+
+    assert [r["status"] for r in rows] == ["superseded"]
+
+
+def test_job_rows_carries_the_derived_flag_it_was_selected_by(
+    tmp_path, monkeypatch
+):
+    """The page renders the REASON a row is unhealthy without recomputing it
+    against a lease constant it would have to hold locally — which is how the
+    list and the strip drift apart."""
+    _db(tmp_path, monkeypatch)
+    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    _force_started_at(
+        store.review_jobs,
+        claimed["id"],
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=1000),
+    )
+
+    rows = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
+
+    assert rows[0]["stalled"] is True
+    assert rows[0]["retrying"] is False
+
+
+def test_job_rows_renders_no_repo_name_when_the_ledger_has_none(
+    tmp_path, monkeypatch
+):
+    """outcome_jobs carries only github_repo_id. The display name comes from
+    installation_repos, which worker.py documents as able to go stale and
+    which count_verdict_repos_missing_from_ledger proves can be absent. A
+    miss must return None so the caller renders the bare id — never a guess,
+    never a blank."""
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        window_days=(14,),
+    )
+
+    rows = store.job_rows(
+        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
+    )
+
+    assert rows[0]["repo"] is None
+    assert rows[0]["github_repo_id"] == 4242
+    assert rows[0]["overdue"] is True
+
+
+def test_job_rows_resolves_the_outcome_repo_name_when_the_ledger_has_it(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    # set_installation_repos takes (github_repo_id, full_name) tuples — the
+    # same call the installation_repositories webhook tests already use.
+    store.set_installation_repos(99, [(4242, "o/r")], replace=True)
+    store.enqueue_outcome_jobs(
+        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        window_days=(14,),
+    )
+
+    rows = store.job_rows(
+        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
+    )
+
+    assert rows[0]["repo"] == "o/r"
+
+
+def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(
+    tmp_path, monkeypatch
+):
+    """ingest.complete() takes verdict_id: int | None — 'a skipped PR is
+    finished, not failed'. A healthy done job can carry a NULL verdict, so
+    unlinkable does not mean unhealthy. Surfacing it as a failure would
+    invent an incident out of Doug correctly declining to review."""
+    _db(tmp_path, monkeypatch)
+    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    claimed = ingest.claim()
+    ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
+
+    unhealthy = store.job_rows(
+        lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS
+    )
+    everything = store.job_rows(
+        lane="review",
+        lease_seconds=ingest.STALL_LEASE_SECONDS,
+        unhealthy_only=False,
+    )
+
+    assert unhealthy == []
+    assert everything[0]["status"] == "done"
+    assert everything[0]["verdict_id"] is None
+
+
+def _force_started_at(table, job_id, when):
+    """Age a claim's lease without waiting for one. reclaim_stalled compares
+    started_at to the DB clock, so this is the only way to test the stalled
+    branch in under 900 seconds."""
+    from sqlalchemy import update as _update
+
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            _update(table).where(table.c.id == job_id).values(started_at=when)
+        )
+
+
+def _force_running(table, job_id, when):
+    from sqlalchemy import update as _update
+
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            _update(table)
+            .where(table.c.id == job_id)
+            .values(status="running", started_at=when)
+        )

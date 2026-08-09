@@ -16,15 +16,38 @@ from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, app_auth, ingest, precision, reader, store, tenancy, worker
+from . import (
+    __version__,
+    app_auth,
+    ingest,
+    outcome_queue,
+    precision,
+    reader,
+    store,
+    tenancy,
+    worker,
+)
 from .models import (
     Band,
+    HealthResponse,
+    JobItem,
+    JobListResponse,
     PRMetadata,
     QueueItem,
     QueueResponse,
     QueueSummary,
     ReadScoreRequest,
     Reason,
+    RunCoverage,
+    RunDetailJob,
+    RunDetailResponse,
+    RunDeviation,
+    RunFindingCounts,
+    RunJob,
+    RunListResponse,
+    RunOutcome,
+    RunOutcomeJob,
+    RunSummaryItem,
     Verdict,
 )
 from .scoring import default_threshold, score
@@ -252,6 +275,17 @@ def _operator_only(x_doug_token: str) -> None:
     gets 404 — the same no-existence-leak rule a cross-tenant repo gets.
     A token that resolves to nothing is 401, because nothing about it was
     ever valid.
+
+    That no-existence-leak rule is about DATA, not about the route itself:
+    this gate runs after FastAPI has already coerced the request's typed
+    query and path params, so a malformed one (e.g. `?limit=abc`, or a
+    non-integer `verdict_id`) 422s on a real operator route before this
+    function ever runs, versus 404 on a route that doesn't exist at all —
+    letting an unauthenticated caller distinguish the two. That is accepted,
+    not a gap: routes are public by ADR-0008, this gate still fails closed
+    on every credential it does see, no response body it produces ever
+    contains data, and the same 422-vs-404 split pre-exists identically on
+    `/v1/patterns` and `/v1/runs`.
     """
     expected = os.environ.get("DOUG_API_TOKEN")
     if not expected:
@@ -381,6 +415,548 @@ def queue(
             threshold=thr,
         ),
         items=items,
+    )
+
+
+# Rendered in words on EVERY merge, not only the one that governed.
+#
+# Exactly one merge of a PR carries publication_governing=True — the greatest
+# merged_at — because pre-registration §2.2's ranking window has no job term:
+# the published quarterly number designates one governing verdict per PULL
+# REQUEST, not one per merge. A receipt shows every merge, each with its own
+# governing verdict resolved at its own merged_at, so a bare boolean is not
+# enough. A person reading the earlier merge after an incident sees a real
+# verdict sitting beside a `false` and nothing at all connecting the two
+# facts; the natural reading is that the verdict shown is the number that got
+# published. It is not. These sentences are what say so.
+PUBLICATION_GOVERNING_NOTE = (
+    "This is the merge whose governing verdict the published quarterly "
+    "statistic uses for this pull request."
+)
+NOT_PUBLICATION_GOVERNING_NOTE = (
+    "This merge did not govern publication. The pull request merged again "
+    "later, and the published quarterly statistic uses the verdict standing "
+    "at that later merge. The verdict shown here is historical context — what "
+    "was standing when THIS commit merged — and is not the published number."
+)
+
+
+class ReceiptRead(BaseModel):
+    """What the reader was configured to see, as recorded on the verdict row.
+
+    `recorded` is False whenever EITHER column is NULL, and that is the whole
+    point of the field. Migration 008 started stamping these; every verdict
+    scored before it legitimately has neither. A half-stamped pair describes
+    no instrument either — a budget with no ordering does not say which part
+    of the diff the model was given, an ordering with no budget does not say
+    how much of it — so one boolean carries "these numbers mean something"
+    and absence can never be read as a value.
+    """
+
+    diff_budget: int | None
+    read_order: str | None
+    recorded: bool
+
+
+class ReceiptVerdict(BaseModel):
+    """One verdict as evidence: what Doug said, and what instrument said it.
+
+    `raw` is deliberately not here. It is the reader's full output kept for
+    reprocessing, not a statement Doug made, and a receipt is the set of
+    statements — see design-lock.md:15 on evidence versus judgment.
+    """
+
+    verdict_id: int
+    scored_at: datetime
+    tier: str
+    source: str | None
+    head_sha: str | None
+    model: str | None
+    # None means the row predates prompt-hash stamping on the worker path. It
+    # is NOT a match against the frozen prompt and must never render as one —
+    # same rule RunDetailResponse.prompt_hash carries.
+    prompt_hash: str | None
+    read: ReceiptRead
+    score: float
+    band: Band
+    threshold: float
+    risk_score: int | None
+    rationale: str | None
+    reasons: list[Reason]
+    deviations: list[RunDeviation]
+    intent_alignment: int | None
+    intent_refs: list[str]
+    coverage: RunCoverage | None
+
+
+class ReceiptWindow(BaseModel):
+    """One observation window of one merge.
+
+    `status` is the JOB's (pending | running | done | failed) and `kind` is
+    the ADJUDICATION's (revert | clean | censored). §6.2 keeps those two
+    vocabularies apart on purpose, and this model does too: `kind` is None
+    while the window is still open or the job never completed, which is not a
+    clean result and is never substituted with one.
+    """
+
+    window_days: int
+    status: str
+    due_at: datetime
+    kind: str | None
+    observed_at: datetime | None
+    source: str | None
+    detail: dict | None
+    # The pre-registration hash `settle_batch` stamped into `detail` at
+    # adjudication time — read from THAT stamp, never from the environment.
+    # None on a pending window: no adjudication has happened yet, so nothing
+    # has been stamped. Render the receipt's top-level `preregistration`
+    # block for what will govern it. A receipt must never substitute today's
+    # env value here — that would claim a document governed a judgment it
+    # never actually saw.
+    prereg_hash: str | None
+
+
+class ReceiptMerge(BaseModel):
+    """One merge identity of this PR. A PR can carry several — uq_outcome_job
+    includes merge_commit_sha, and a revert-and-reland is the ordinary case."""
+
+    merge_commit_sha: str
+    merged_at: datetime
+    base_ref: str
+    # NULL on merges recorded before migration 008, and on any payload that
+    # carried no pull_request.head (a deleted fork branch) — see _record_merge.
+    merged_head_sha: str | None
+    governing_verdict: ReceiptVerdict | None
+    publication_governing: bool
+    publication_note: str
+    adjudication: list[ReceiptWindow]
+
+
+class ReceiptPreregistration(BaseModel):
+    """The methodology document currently in force — not necessarily what
+    governed any adjudicated window already on this receipt.
+
+    Each ReceiptWindow carries its own `prereg_hash`, stamped at adjudication
+    time, and that stamp is authoritative for that window forever. This block
+    is for the windows that have none yet: a pending window has no stamp, and
+    `in_force` names the document that WILL govern it once it closes.
+    Reprinting this hash over an already-adjudicated window would manufacture
+    a confident-but-derived claim about which document actually governed it —
+    the one thing this design exists to prevent.
+
+    `hash` is None and `in_force` is False whenever DOUG_PREREG_HASH is
+    unset — local dev and the test suite never set it — rather than a crash
+    or a fabricated value.
+    """
+
+    hash: str | None
+    in_force: bool
+
+
+class ReceiptResponse(BaseModel):
+    """One PR's evidentiary record.
+
+    `latest_verdict` and each merge's `governing_verdict` answer different
+    questions and are never collapsed: the newest thing Doug has said about
+    this PR, versus what was standing when a human chose to merge a
+    particular commit. When they differ, work landed or the PR was rescored
+    after the advice the merge actually happened on, and that gap is exactly
+    what a reader of an incident review came for.
+    """
+
+    repo: str
+    pr_number: int
+    preregistration: ReceiptPreregistration
+    latest_verdict: ReceiptVerdict | None
+    merges: list[ReceiptMerge]
+
+
+def _receipt_verdict(row: dict | None) -> ReceiptVerdict | None:
+    """One store verdict dict as the wire model, honesty states rendered."""
+    if row is None:
+        return None
+    budget, order = row["diff_budget"], row["read_order"]
+    return ReceiptVerdict(
+        verdict_id=row["id"],
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        source=row["source"],
+        head_sha=row["head_sha"],
+        model=row["model"],
+        prompt_hash=row["prompt_hash"],
+        read=ReceiptRead(
+            diff_budget=budget,
+            read_order=order,
+            # AND, not OR: see ReceiptRead's docstring — half a pair is not a
+            # described read, and rendering it as one would let a consumer
+            # quote a budget nothing was actually read under.
+            recorded=budget is not None and order is not None,
+        ),
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        risk_score=row["risk_score"],
+        rationale=row["rationale"],
+        reasons=[Reason(**r) for r in row["reasons"]],
+        deviations=[RunDeviation(**d) for d in row["deviations"]],
+        intent_alignment=row["intent_alignment"],
+        intent_refs=row["intent_refs"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+    )
+
+
+def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
+    """store.receipt()'s document as the response contract.
+
+    Two things this layer adds rather than passes through. The publication
+    note: store.receipt() sets the boolean; a boolean is a fact the ledger
+    knows and a sentence is what makes it readable, so the words live here
+    with the rest of the presentation. And the preregistration block: it
+    reads the CURRENT deploy's DOUG_PREREG_HASH, which is what the top-level
+    `in_force` value means and is why it is assembled here rather than in
+    store.receipt() — that function reads the ledger, not the environment.
+    """
+    prereg_hash = os.environ.get("DOUG_PREREG_HASH")
+    return ReceiptResponse(
+        repo=repo,
+        pr_number=pr_number,
+        preregistration=ReceiptPreregistration(
+            # Truthiness, not `is not None`: DOUG_PREREG_HASH="" must not
+            # render as an in-force document with an empty hash. Not
+            # reachable via gcp.sh (it runs `set -euo pipefail`), but a
+            # local/manual deploy can still set an empty value.
+            hash=prereg_hash, in_force=bool(prereg_hash)
+        ),
+        latest_verdict=_receipt_verdict(data["latest_verdict"]),
+        merges=[
+            ReceiptMerge(
+                merge_commit_sha=m["merge_commit_sha"],
+                merged_at=m["merged_at"],
+                base_ref=m["base_ref"],
+                merged_head_sha=m["merged_head_sha"],
+                governing_verdict=_receipt_verdict(m["governing_verdict"]),
+                publication_governing=m["publication_governing"],
+                publication_note=(
+                    PUBLICATION_GOVERNING_NOTE
+                    if m["publication_governing"]
+                    else NOT_PUBLICATION_GOVERNING_NOTE
+                ),
+                adjudication=[
+                    # prereg_hash comes from the stamp inside `detail`, never
+                    # from the environment — see ReceiptWindow's docstring.
+                    ReceiptWindow(**a, prereg_hash=(a["detail"] or {}).get("prereg_hash"))
+                    for a in m["adjudication"]
+                ],
+            )
+            for m in data["merges"]
+        ],
+    )
+
+
+@app.get("/v1/prs/{pr_number}/receipt")
+def pr_receipt(
+    pr_number: int,
+    repo: str,
+    x_doug_token: str = Header(""),
+) -> ReceiptResponse:
+    """One PR's evidentiary record.
+
+    `repo` is required: a PR number alone is ambiguous across repositories.
+    Scoping mirrors /v1/queue exactly — the operator token is unscoped, a
+    dispensed token must carry receipt:read AND the repo must be inside its
+    live-intersected selection.
+
+    THE STATUS CODES ARE THE SECURITY CONTRACT, not error handling:
+
+      503  no operator secret, or no ledger. Both are deployment faults and
+           both are checked BEFORE the token, deliberately: without a ledger
+           tenancy.resolve can read no key at all, so every dispensed token
+           would come back 401 "bad token" and a customer would be told their
+           credential is broken when what is broken is the deployment. A
+           misconfiguration must not be reported as a credential failure.
+      401  the token resolves to nothing, or resolves without receipt:read.
+           Not 403 for the missing scope, matching /v1/queue: a scope a key
+           does not hold is not a door it may knock on.
+      404  everything else that refuses — a repo outside the caller's scope,
+           a repo nobody has, a PR with no verdict and no merge.
+
+    That last line is the one that matters. Out-of-scope and absent share a
+    code AND a body, so a caller cannot tell "not yours" from "not there". A
+    403 would confirm the repo exists; so would a distinct message; so would
+    a 200 carrying an empty document, which is why the refusal is raised
+    rather than returned. That would hand one customer a probe for another
+    customer's private repository names — the same no-existence-leak rule
+    /v1/queue's ?repo= filter, _operator_only and dispense_token all run.
+
+    The two token paths resolve the repo through DIFFERENT functions and that
+    asymmetry is the point: a tenant resolves via active_repos, which is
+    scoped to their installation, and the id it returns is checked against
+    the key's effective selection before any read happens. store.repo_id_for
+    searches every installation and is unreachable from this branch.
+    """
+    expected = os.environ.get("DOUG_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+
+    installation_id: int | None = None
+    if not hmac.compare_digest(x_doug_token, expected):
+        try:
+            ctx = tenancy.resolve(x_doug_token)
+        except tenancy.KeysNotConfigured as e:
+            raise HTTPException(
+                status_code=503, detail="token verification not configured"
+            ) from e
+        if ctx is None or "receipt:read" not in ctx.scopes:
+            raise HTTPException(status_code=401, detail="bad token")
+        installation_id = ctx.installation_id
+        live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}
+        rid = live.get(repo)
+        # The key's effective scope, in ids: its frozen selection (already
+        # live-intersected by resolve) or, for 'all', everything live NOW.
+        # installation_repos is the ONE source of truth — verdicts.repo and
+        # full_name are display everywhere (MT4).
+        effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())
+        if rid is None or rid not in effective:
+            raise _not_found()
+        repo_id = rid
+    else:
+        resolved = store.repo_id_for(repo)
+        if resolved is None:
+            raise _not_found()
+        installation_id, repo_id = resolved
+
+    data = store.receipt(installation_id, repo_id, pr_number)
+    if data is None:
+        raise _not_found()
+    return _receipt_response(repo, pr_number, data)
+
+
+def _run_item(row: dict) -> RunSummaryItem:
+    """One ledger row as a list item.
+
+    `changed_files` travels separately from `coverage` because it is GitHub's
+    own count on pr_meta, and it is the ONLY correct denominator for a
+    coverage percentage — `len(files)` is the paginated list actually
+    fetched and can be short on exactly the large PRs where coverage matters
+    most. None here means the console renders "denominator unknown".
+
+    `_with_url` assumes `pr_meta` is a dict — every /v1/queue row is filtered
+    on that before it ever reaches _with_url. run_history carries every
+    verdict, including rows saved with no pr_meta at all (save_review's
+    `pr_meta` kwarg is optional), so a bare `_with_url(row)` call raises
+    validating None into PRMetadata instead of degrading. _run_item instead
+    synthesizes a title and URL from repo/pr_number and leaves changed_files
+    None when pr_meta is missing.
+    """
+    pr_meta = row["pr_meta"]
+    if isinstance(pr_meta, dict):
+        meta = _with_url(row)
+        title, url, changed_files = meta.title, meta.url, meta.changed_files
+    else:
+        title = f"PR #{row['pr_number']}"
+        url = f"https://github.com/{row['repo']}/pull/{row['pr_number']}"
+        changed_files = None
+    return RunSummaryItem(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        pr_number=row["pr_number"],
+        title=title,
+        url=url,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        source=row["source"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        changed_files=changed_files,
+        finding_counts=RunFindingCounts(**row["finding_counts"]),
+        job=RunJob(**row["job"]) if row["job"] else None,
+        outcome_14=row["outcome_14"],
+    )
+
+
+@app.get("/v1/runs")
+def runs(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    include_untenanted: bool = False,
+    x_doug_token: str = Header(""),
+) -> RunListResponse:
+    """Verdict history for the operator console. Operator-only, permanently:
+    this crosses every installation by design, which is exactly what no
+    tenant credential may ever do."""
+    _operator_only(x_doug_token)
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    rows = store.run_history(
+        limit=limit,
+        offset=offset,
+        repo=repo,
+        installation_id=installation_id,
+        include_untenanted=include_untenanted,
+    )
+    return RunListResponse(
+        items=[_run_item(row) for row in rows], limit=limit, offset=offset
+    )
+
+
+@app.get("/v1/runs/{verdict_id}")
+def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResponse:
+    """One run, end to end. Operator-only for the same reason /v1/runs is."""
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    row = store.run_detail(verdict_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return RunDetailResponse(
+        verdict_id=row["id"],
+        repo=row["repo"],
+        pr_number=row["pr_number"],
+        installation_id=row["installation_id"],
+        github_repo_id=row["github_repo_id"],
+        # Guarded the same way _run_item guards it: run_detail's row, like
+        # run_history's, can carry pr_meta=None (nullable column,
+        # save_review's default), and _with_url assumes a dict. Nulled
+        # rather than synthesized — see RunDetailResponse.pr's docstring.
+        pr=_with_url(row) if isinstance(row["pr_meta"], dict) else None,
+        scored_at=row["scored_at"],
+        tier=row["tier"],
+        prompt_hash=row["prompt_hash"],
+        model=row["model"],
+        source=row["source"],
+        head_sha=row["head_sha"],
+        risk_score=row["risk_score"],
+        rationale=row["rationale"],
+        score=row["score"],
+        band=Band(row["band"]),
+        threshold=row["threshold"],
+        coverage=RunCoverage(**row["coverage"]) if row["coverage"] else None,
+        reasons=[Reason(**r) for r in row["reasons"]],
+        deviations=[RunDeviation(**d) for d in row["deviations"]],
+        intent_alignment=row["intent_alignment"],
+        intent_refs=row["intent_refs"],
+        job=RunDetailJob(**row["job"]) if row["job"] else None,
+        outcomes=[RunOutcome(**o) for o in row["outcomes"]],
+        outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
+    )
+
+
+@app.get("/v1/health")
+def health(
+    repo: str | None = None,
+    installation_id: int | None = None,
+    x_doug_token: str = Header(""),
+) -> HealthResponse:
+    """Both job lanes' health. Operator-only for the same reason /v1/runs is:
+    it crosses every installation by design.
+
+    The lane constants are passed in from the modules that enforce them, so
+    the response reports what was actually measured with rather than a
+    literal duplicated here.
+    """
+    _operator_only(x_doug_token)
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    data = store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+        repo=repo,
+        installation_id=installation_id,
+    )
+    if data is None:
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    return HealthResponse(**data)
+
+
+# The stored statuses each lane's queue actually writes. 'stalled',
+# 'retrying' and 'overdue' are deliberately absent: they are derived from
+# started_at / attempts / due_at, and accepting them as a status would put
+# the derivation somewhere /v1/health cannot see.
+_REVIEW_STATUSES = frozenset({"pending", "running", "done", "failed", "superseded"})
+_OUTCOME_STATUSES = frozenset({"pending", "running", "done", "failed"})
+
+# Statuses that can never be unhealthy: nothing went wrong when a review job
+# finishes ('done') or is superseded, and the same is true of a finished
+# outcome job. status=<one of these> composed with the default view=unhealthy
+# is empty by construction — store.job_rows' unhealthy_only clause excludes
+# every row in this status regardless of what else is asked for — so it 422s
+# instead of returning a silent empty list indistinguishable from "there are
+# none".
+_NEVER_UNHEALTHY = {
+    "review": frozenset({"done", "superseded"}),
+    "outcome": frozenset({"done"}),
+}
+
+
+@app.get("/v1/jobs")
+def jobs(
+    lane: str = "review",
+    view: str = "unhealthy",
+    status: str | None = None,
+    repo: str | None = None,
+    installation_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    x_doug_token: str = Header(""),
+) -> JobListResponse:
+    """Job rows for one lane. Operator-only for the same reason /v1/runs is.
+
+    Read-only: nothing here requeues, retries or clears a job.
+    """
+    _operator_only(x_doug_token)
+    if lane not in ("review", "outcome"):
+        raise HTTPException(status_code=422, detail="lane must be review or outcome")
+    if view not in ("unhealthy", "all"):
+        raise HTTPException(status_code=422, detail="view must be unhealthy or all")
+    allowed = _REVIEW_STATUSES if lane == "review" else _OUTCOME_STATUSES
+    if status is not None and status not in allowed:
+        raise HTTPException(
+            status_code=422, detail=f"status must be one of {sorted(allowed)}"
+        )
+    if status is not None and view == "unhealthy" and status in _NEVER_UNHEALTHY[lane]:
+        # Not silently forced to view=all: that would hide the caller's
+        # contradiction instead of reporting it.
+        raise HTTPException(
+            status_code=422,
+            detail=f"status={status} is never unhealthy; pass view=all",
+        )
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    lease = (
+        ingest.STALL_LEASE_SECONDS
+        if lane == "review"
+        else outcome_queue.STALL_LEASE_SECONDS
+    )
+    rows = store.job_rows(
+        lane=lane,
+        lease_seconds=lease,
+        unhealthy_only=view == "unhealthy",
+        status=status,
+        repo=repo,
+        installation_id=installation_id,
+        limit=limit,
+        offset=offset,
+    )
+    return JobListResponse(
+        items=[JobItem(**row) for row in rows], limit=limit, offset=offset
     )
 
 
@@ -930,13 +1506,21 @@ def _record_merge(payload: dict) -> None:
             file=sys.stderr,
         )
         return
-    store.enqueue_outcome_job(
+    # Pre-registration §11 item 7, forward only. Deliberately read AFTER the
+    # five-fact guard above and left out of it: merged_head_sha drives
+    # neither censoring (base_ref) nor tenancy (github_repo_id), the two
+    # things that guard protects. A payload missing pull_request.head — a
+    # deleted fork branch, an older payload shape — must still start both
+    # clocks; only this one column goes in NULL.
+    merged_head_sha = _text(_obj(pr.get("head")).get("sha"), store.outcome_jobs.c.merged_head_sha)
+    store.enqueue_outcome_jobs(
         payload["installation"]["id"],
         repo_id,
         number,
         merge_sha,
         merged_at,
         base_ref,
+        merged_head_sha=merged_head_sha,
     )
 
 
@@ -1187,58 +1771,3 @@ async def github_webhook(
         await run_in_threadpool(_record_external_review, payload)
 
     return Response(status_code=202)
-
-
-def _comparison_path(row: dict) -> str:
-    app_identity = (row["installation_id"], row["github_repo_id"])
-    return "app" if all(value is not None for value in app_identity) else "ci"
-
-
-def _comparison_run(row: dict) -> dict:
-    path = _comparison_path(row)
-    meta = row.get("pr_meta") if isinstance(row.get("pr_meta"), dict) else {}
-    coverage = row.get("coverage")
-    return {
-        "id": row["id"],
-        "repo": row["repo"],
-        "pr_number": row["pr_number"],
-        "title": meta.get("title") or f"PR #{row['pr_number']}",
-        "url": meta.get("url") or f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
-        "head_sha": (
-            row["head_sha"] if row["head_sha"] is not None else meta.get("head_sha")
-        ),
-        "path": path,
-        "scored_at": row["scored_at"],
-        "score": row["score"],
-        "band": row["band"],
-        "threshold": row["threshold"],
-        "tier": row["tier"],
-        "coverage": (
-            {key: coverage[key] for key in (
-                "diff_chars", "sent_chars", "files_sent", "files_unseen", "file_cut"
-            )}
-            if coverage else None
-        ),
-    }
-
-
-@app.get("/v1/comparisons")
-def comparisons(
-    repo: str | None = None,
-    limit: int = 50,
-    x_doug_token: str = Header(""),
-) -> dict:
-    _operator_only(x_doug_token)
-    if not 1 <= limit <= 200:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
-    if not store.enabled():
-        raise HTTPException(status_code=503, detail="no ledger configured")
-    try:
-        rows = store.comparison_reviews(
-            limit,
-            repo,
-            max_rows=store.COMPARISON_RUN_LIMIT,
-        )
-    except store.ComparisonResultTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    return {"runs": [_comparison_run(row) for row in rows]}

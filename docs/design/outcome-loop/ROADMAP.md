@@ -255,16 +255,69 @@ path, no cross-tenant read, no silent partial reads.
 
 ## M3 — The loop itself *(~5–7d build + 14d calendar)*
 
-- [ ] `doug/adjudicate.py` as a pure function over (job rows, revert map) + fixtures that run
-  `git_labels` cases through the **live** path (live label ≡ backtest label, pinned by test)
-- [ ] Cloud Run Job (2Gi) + Cloud Scheduler; claim `due_at <= now()` FOR UPDATE SKIP LOCKED
-- [ ] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`
-- [ ] Receipts: `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring + findings + inputs-seen + adjudication block + hashes)
+- [x] `doug/adjudicate.py` as a pure function over (job rows, revert map) + fixtures that run
+  `git_labels` cases through the **live** path (live label ≡ backtest label, pinned by test).
+  The pure core landed first; the Cloud Run Job that drains it is now live in the item below.
+  Building it found a defect three review rounds of the pre-registration had missed: the
+  window predicate had no **lower** bound, so a revert dated *before* a PR merged counted as
+  a miss against it. `scripts/label_precision_delta.py` had already measured that at 6/67 on
+  sentry and 6/54 on grafana, and `screen_features.py`/`rf_kamei.py` already filtered it while
+  the adjudicator would not — so "live labels and backtest labels are the same event"
+  (`design-lock.md:29`), the whole reason `git_labels.py` is the only detector, was false.
+  `TOLERANCE_DAYS` now lives once in `git_labels.py` and both sides import it.
+- [x] Cloud Run Job (2Gi) + Cloud Scheduler; repository-batched claims use
+  `due_at <= now()` + `FOR UPDATE SKIP LOCKED`, a two-hour crash lease and a
+  generation fence. Daily 03:00 UTC, one task, zero platform retries, so the
+  pre-registered ten attempts buy ten scheduled days. Shipped in #64, deploy
+  boundary corrected in #65, and verified in production on 2026-08-07:
+  `doug-adjudicator-nvwqn` succeeded with an all-zero no-op summary before the
+  first due clock; both session-independent SQL audits returned zero rows.
+- [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
+  Pure fixtures and the scheduled worker path are built; production execution
+  remains the live gate.
+- [~] **Receipts:** `GET /v1/prs/{n}/receipt` (verdict + threshold-at-scoring +
+  findings + read coverage + adjudication block + hashes) — the endpoint
+  ships, reachable by the operator token (unscoped, no `receipt:read` check
+  on that path) or by a dispensed token carrying the new `receipt:read`
+  scope, and so does every honesty state the design named: absent read
+  configuration renders as "not recorded" rather than a number, a merged PR
+  with no governing verdict says so instead of silently falling back to
+  `latest_verdict`, a PR merged more than once names which merge is
+  `publication_governing`, a fallback-tier merge is labelled rather than
+  scored as if it were a reader read, and a stamped-vs-in-force
+  pre-registration hash mismatch shows both hashes rather than one.
+  **Narrower than the design spec:** no top-level `url`, no per-merge
+  `governing_rule` string, and "read coverage" shipped as the pre-existing
+  5-field `RunCoverage` (`diff_chars`, `sent_chars`, `files_sent`,
+  `files_unseen`, `file_cut`) rather than the spec's `inputs_seen` shape
+  (`changed_files`, `files_dropped`, `complete` among them) — see the spec's
+  "Response shape" section, now marked aspirational there. Follow-up, not
+  done here.
+  **What's not landed:** zero adjudications exist anywhere before the first
+  due clock (2026-08-16), so the adjudicated half of the exit gate's "one
+  receipt correct end-to-end" — a real adjudication block on a real merge —
+  is carried today by `governing_verdict()`'s fixture pin against §2.2's SQL
+  and by the honesty-state tests, not by a production receipt. Nothing
+  further needs to ship for that gap to close: it closes itself the first
+  time a real merge clears its 60-day window.
+  Migration **8** is consumed by this slice (`verdicts.diff_budget`,
+  `verdicts.read_order`, `outcome_jobs.merged_head_sha`, plus a one-time
+  `verdicts.prompt_hash` backfill over historical reader rows) —
+  **MT3's `installations.reconciled_at` is migration 9.**
+  `merged_head_sha`, captured at merge, closes pre-registration §11 item 7
+  ("PR head sha at merge — not stored") **forward only**: rows written before
+  this slice stay NULL, and it does not touch the locked §2.1 timestamp-match
+  rule.
 - [ ] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
 - [ ] Public Doug-on-Doug scoreboard page (dogfood proof, no auth)
-- [ ] **Pre-registration document published + hashed** (metrics, denominator, both windows,
-  right-censoring, cadence) — hash lands in receipts; 60-day-backfill runbook written
-  (must run before the first 14-day publication)
+- [~] **Pre-registration document published + hashed** (metrics, denominator, both windows,
+  right-censoring, cadence). `LOCKED v8`, the atomic dual-write, guarded catch-up CLI,
+  deploy lock, and production runbook are built on `m3-60-day-backfill`; production is
+  unchanged until the branch merges and Task 7 runs.
+  - [ ] **Task 7 production catch-up:** deploy the merged lock hash, capture the dry-run
+    count, pause the Scheduler, apply and verify the manifest, execute one manual Job,
+    pass the SQL/CLI audits, then resume the Scheduler. This remains a hard gate before
+    the first 14-day publication.
 
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real
@@ -333,6 +386,7 @@ would bite a real tenant.
   per cold start, on a scale-to-zero service where cold starts are frequent —
   and the loop is **serial across installations**, so one large tenant delays
   every tenant behind it. Fixing MT0 exposes this rather than causing it.
+  (Next free migration: **9** — migration 8 is consumed by M3's receipts slice.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as
@@ -385,7 +439,7 @@ GC'd mid-call-chain (#52) — an executable gate earns its keep.
 - [ ] App visibility → "Any account" *(gated on MT above)*
 - [ ] Onboard 2–3 design partners: $99/installation hand-invoiced, allowance rows, meter visible day 1
 - [ ] 30 days of fill: prospective counters ticking on a real tenant, zero cross-tenant reads
-- [ ] 60-day backfill run; **first pre-committed publication ships on its date, good or bad**
+- [ ] 60-day clocks mature; **first pre-committed publication ships on its date, good or bad**
 
 **Exit gate:** the first published number exists with N + CI + censoring rate, on schedule.
 

@@ -1,10 +1,67 @@
+import subprocess
+
 from doug.backtest.git_labels import (
     Commit,
+    clone_treeless,
     parse_revert_targets,
     parse_revert_targets_dated,
+    parse_revert_targets_evidenced,
     pr_numbers_by_sha,
     pr_titles_from_subjects,
 )
+
+
+def test_clone_uses_process_only_auth_without_putting_token_in_argv(tmp_path, monkeypatch):
+    """A failed clone can render argv in logs. Installation credentials must
+    therefore stay out of both argv and the repository's persisted remote."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    token = "github-installation-secret"
+
+    clone_treeless("drewjst", "doug", tmp_path / "clone.git", token=token)
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command[-2] == "https://github.com/drewjst/doug.git"
+    assert token not in repr(command)
+    assert "x-access-token" not in repr(command)
+    assert kwargs["check"] is True
+    assert kwargs["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
+    assert token not in kwargs["env"]["GIT_CONFIG_VALUE_0"]
+
+
+def test_reused_clone_fails_loud_when_authenticated_refresh_fails(tmp_path, monkeypatch):
+    """A stale cache is not negative evidence. Refresh must be authenticated
+    and a failed fetch must abort before the adjudicator reads old history."""
+    clone = tmp_path / "clone.git"
+    clone.mkdir()
+    (clone / "HEAD").write_text("ref: refs/heads/main\n")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.CalledProcessError(128, command)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    token = "github-installation-secret"
+
+    try:
+        clone_treeless("drewjst", "doug", clone, token=token)
+    except subprocess.CalledProcessError:
+        pass
+    else:
+        raise AssertionError("a failed refresh must not expose stale history")
+
+    command, kwargs = calls[0]
+    assert command[-1] == "origin"
+    assert kwargs["check"] is True
+    assert token not in repr(command)
+    assert kwargs["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
 
 
 def test_squash_title_map_ignores_reverts_and_merges():
@@ -165,6 +222,19 @@ def test_body_marker_alone_is_not_treated_as_a_revert():
         Commit(sha="4" * 40, date="2026-01-01T00:00:00+00:00", subject="Revert caching (#9)"),
     ]
     assert parse_revert_targets_dated(commits, {}) == {}
+
+
+def test_the_evidenced_variant_keeps_the_reverting_commit_the_dated_one_drops():
+    # The receipt is promised a revert sha (product-spec.md:39) and
+    # parse_revert_targets_dated returns only a date. Live-≡-backtest
+    # equivalence for this variant, and the instant/tie-break amendments it
+    # carries, are pinned in test_adjudicate.py.
+    revert = Commit(sha="7" * 40, date="2026-05-01T00:00:00+00:00",
+                    subject='Revert "Wire up config metrics correctly"',
+                    body="This reverts commit " + "8" * 40 + ".")
+    commits = [revert, Commit(sha="8" * 40, date="2026-01-02T00:00:00+00:00",
+                              subject="Wire up config metrics (#77)")]
+    assert parse_revert_targets_evidenced(commits, {}) == {77: revert}
 
 
 def test_pr_numbers_by_sha_maps_only_squash_subjects():

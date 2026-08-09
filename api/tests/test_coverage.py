@@ -194,6 +194,21 @@ def test_coverage_is_recorded_for_complete_reads_too(tmp_path, monkeypatch):
         assert row["files_unseen"] == [] and row["file_cut"] is None
 
 
+def test_save_read_persists_the_changed_file_receipt_fields(tmp_path, monkeypatch):
+    """The reader already computes these values, but until migration 007 the
+    ledger cannot prove whether GitHub omitted files before prompt assembly."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    cov = reader.coverage(
+        _diff([("a.py", 400)]), changed_files=2, files_dropped=["large.txt"]
+    )
+    store.save_review("drewjst/doug", 63, "reader", _verdict(), coverage=cov)
+
+    with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
+        row = conn.execute(select(store.reads)).mappings().one()
+    assert row["changed_files"] == 2
+    assert row["files_dropped"] == ["large.txt"]
+
+
 def test_save_review_without_coverage_writes_no_reads_row(tmp_path, monkeypatch):
     """The deterministic tier passes coverage=None; that must not produce a
     reads row that looks like a zero-length or empty read."""

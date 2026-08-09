@@ -214,6 +214,38 @@ def test_the_deterministic_tier_leaves_the_prompt_hash_null(tmp_path, monkeypatc
     assert v["prompt_hash"] is None
 
 
+def _drain_one_reader_job(tmp_path, monkeypatch) -> int:
+    """Enqueue and process one job through the reader tier, end to end."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)  # tier="reader" default
+    ingest.enqueue(**JOB)
+    return worker.process_job(ingest.claim())
+
+
+def _drain_one_fallback_job(tmp_path, monkeypatch) -> int:
+    """Enqueue and process one job through the deterministic fallback tier."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch, tier="deterministic")
+    ingest.enqueue(**JOB)
+    return worker.process_job(ingest.claim())
+
+
+def test_reader_verdict_records_its_read_configuration(tmp_path, monkeypatch):
+    """A receipt cannot claim instrument identity from prompt_hash alone."""
+    verdict_id = _drain_one_reader_job(tmp_path, monkeypatch)
+    row = store.run_detail(verdict_id)
+    assert row["diff_budget"] == reader.DIFF_BUDGET
+    assert row["read_order"] == review.READ_ORDER
+
+
+def test_fallback_verdict_records_no_read_configuration(tmp_path, monkeypatch):
+    """The deterministic scorer never opens the diff, so there is no budget."""
+    verdict_id = _drain_one_fallback_job(tmp_path, monkeypatch)
+    row = store.run_detail(verdict_id)
+    assert row["diff_budget"] is None
+    assert row["read_order"] is None
+
+
 def test_the_check_run_is_posted_against_the_jobs_head_sha(tmp_path, monkeypatch):
     """Not the PR's current SHA. A push burst means pulls.get already
     returns a newer commit than the one this job was enqueued for, and
