@@ -3071,8 +3071,23 @@ def test_showcase_queue_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
     selector."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    # A row under the pinned repo, so a ?repo= that actually scoped the
+    # query would return a DIFFERENT (empty) result for "someone/private"
+    # rather than coincidentally matching an equally-empty ledger.
+    store.save_review(
+        "drewjst/doug", 1, "reader", VERDICT,
+        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+    )
     client = TestClient(app)
+    # Reset immediately before EACH request: the route is backed by a
+    # single-slot cache (api._showcase_cache), so a stale reset only
+    # before the first request would let the second one — the one
+    # carrying the attempted override — serve straight from the cache
+    # the first request warmed, never touching the handler's own
+    # (non-)handling of `repo` at all.
+    monkeypatch.setattr(api, "_showcase_cache", None)
     pinned = client.get("/v1/showcase/queue").json()
+    monkeypatch.setattr(api, "_showcase_cache", None)
     attempted = client.get("/v1/showcase/queue?repo=someone/private").json()
     assert pinned == attempted
 
@@ -3156,15 +3171,22 @@ def test_showcase_queue_ignores_a_caller_supplied_threshold(tmp_path, monkeypatc
     unauthenticated endpoint backed by a process-lifetime cache."""
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
-    monkeypatch.setattr(api, "_showcase_cache", None)
     store.save_review(
         "drewjst/doug", 1, "reader", VERDICT,
         pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
     )
     client = TestClient(app)
+    # Reset immediately before EACH request: the route is backed by a
+    # single-slot cache (api._showcase_cache), so a stale reset only
+    # before the first request would let the second one — the one
+    # carrying the attempted override — serve straight from the cache
+    # the first request warmed, never touching the handler's own
+    # (non-)handling of `threshold` at all.
+    monkeypatch.setattr(api, "_showcase_cache", None)
     default = client.get("/v1/showcase/queue").json()
     # 0.99 sits well above the seeded score (0.62) — if threshold were
     # honoured this would flip the row's band and the summary counts.
+    monkeypatch.setattr(api, "_showcase_cache", None)
     attempted = client.get("/v1/showcase/queue?threshold=0.99").json()
     assert attempted == default
 
