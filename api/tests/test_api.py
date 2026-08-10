@@ -484,6 +484,61 @@ def test_installation_created_records_the_account_and_its_repos(tmp_path, monkey
     assert kicks == [(150424894, "reconcile"), "drain"]
 
 
+def test_installation_created_records_the_installer(tmp_path, monkeypatch):
+    """Task 5's bind endpoint proves "you are the person who installed Doug
+    here" by matching this column against the signed-in GitHub user — it has
+    to come from the one action that actually names an installer."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [],
+            "sender": {"id": 42, "login": "drewjst"},
+        },
+    )
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] == 42
+
+
+def test_installation_created_tolerates_a_missing_sender(tmp_path, monkeypatch):
+    """Older redeliveries and synthetic payloads can omit or malform sender.
+    The installation row is more important than who's on it, so this must
+    record the installation rather than raise."""
+    _hook_env(tmp_path, monkeypatch)
+    r = _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert r.status_code == 202
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] is None
+
+
+def test_suspend_does_not_overwrite_the_recorded_installer(tmp_path, monkeypatch):
+    """suspend/unsuspend/deleted deliveries name whoever performed THAT
+    action, not who installed Doug — passing their sender through would
+    misattribute Task 5's bind proof to the wrong person."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [],
+            "sender": {"id": 42, "login": "drewjst"},
+        },
+    )
+    _webhook(
+        "installation",
+        {
+            "action": "suspend",
+            "installation": INSTALLATION,
+            "sender": {"id": 99, "login": "someone-else"},
+        },
+    )
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] == 42
+
+
 def test_uninstall_then_reinstall_converges_on_the_smaller_repo_set(tmp_path, monkeypatch):
     """Reinstalling on fewer repos must leave the dropped one uncovered, and
     the uninstall is what makes that true.

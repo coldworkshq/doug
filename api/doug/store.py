@@ -189,6 +189,20 @@ installations = Table(
     Column("account_type", String(20)),  # User | Organization
     Column("state", String(20), nullable=False),  # active | suspended | deleted
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # The WorkOS Organization bound to this installation (Front Door Phase
+    # 1a). NULL for every row that predates it — including the operator's
+    # own install, which was populated by webhook redelivery (MT0) and has
+    # no WorkOS identity. Unique so a session's org_id resolves to exactly
+    # one tenant.
+    Column("workos_org_id", String(255), nullable=True, unique=True),
+    # The GitHub user the `installation.created` webhook named as sender —
+    # the only action that actually names an installer, as opposed to
+    # whoever performed a later suspend/unsuspend/deleted. The bind
+    # endpoint (Task 5) proves "you are the person who installed Doug here"
+    # by matching this column. Not unique: one GitHub user can install Doug
+    # on many accounts/orgs. NULL for every row created before this column,
+    # and for any `created` delivery whose sender was missing or malformed.
+    Column("installed_by_github_user_id", BigInteger, nullable=True),
 )
 
 installation_repos = Table(
@@ -734,10 +748,21 @@ def save_external_review(
 
 
 def upsert_installation(
-    installation_id: int, account_login: str, account_type: str, state: str
+    installation_id: int,
+    account_login: str,
+    account_type: str,
+    state: str,
+    installed_by_github_user_id: int | None = None,
 ) -> None:
     """Record an installation's current state. Never deletes: a suspended or
-    deleted installation is a state the verdicts it produced still point at."""
+    deleted installation is a state the verdicts it produced still point at.
+
+    installed_by_github_user_id is install-time identity, not per-call state:
+    the caller passes it only from a `created` delivery (see api._record_
+    installation) and otherwise leaves it as None, which is why a None here
+    is left OUT of the update values rather than written as NULL — a later
+    suspend/unsuspend/deleted call has no installer to report and must not
+    blank out the one already on the row."""
     engine = _get_engine()
     if engine is None:
         return
@@ -747,6 +772,8 @@ def upsert_installation(
         "state": state,
         "updated_at": datetime.now(UTC),
     }
+    if installed_by_github_user_id is not None:
+        values["installed_by_github_user_id"] = installed_by_github_user_id
     with engine.connect() as conn:
         row = conn.execute(
             select(installations.c.id).where(installations.c.installation_id == installation_id)

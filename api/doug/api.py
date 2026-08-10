@@ -1398,11 +1398,22 @@ def _repo_list(raw) -> list[tuple[int, str]]:
 def _record_installation(payload: dict, action: str) -> None:
     inst = payload["installation"]
     account = _obj(inst.get("account"))
+    # Only `created` names an installer — suspend/unsuspend/deleted name
+    # whoever performed THAT action, which is a different fact and must not
+    # overwrite it (store.upsert_installation already refuses to write a
+    # None over an existing value, but this keeps a *wrong* id from ever
+    # being offered in the first place). A missing or non-int sender
+    # (older redeliveries, synthetic payloads) is recorded as None rather
+    # than raised: an installation row is more important than who's on it.
+    sender_id = _obj(payload.get("sender")).get("id")
     store.upsert_installation(
         inst["id"],
         _text(account.get("login"), store.installations.c.account_login) or "",
         _text(account.get("type"), store.installations.c.account_type) or "",
         INSTALLATION_STATES[action],
+        installed_by_github_user_id=(
+            sender_id if action == "created" and isinstance(sender_id, int) else None
+        ),
     )
     if action == "created":
         # Marks what this installation covers and never un-marks. `created`

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import BigInteger, create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from doug import ingest, outcome_queue, reader, store
@@ -710,6 +710,66 @@ def test_upsert_installation_does_not_raise_when_two_racers_insert_the_same_id(
         rows = conn.execute(select(store.installations)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["installation_id"] == INSTALL and rows[0]["state"] == "active"
+
+
+def test_installations_carries_a_unique_workos_org_id(tmp_path, monkeypatch):
+    """One WorkOS organization maps to exactly one installation. Without the
+    unique constraint, two installations could claim the same org and a
+    session would resolve to whichever row the database returned first."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/d.db")
+    cols = {c.name: c for c in store.installations.columns}
+    assert "workos_org_id" in cols, "column missing"
+    assert cols["workos_org_id"].unique is True, "must be unique"
+    assert cols["workos_org_id"].nullable is True, "existing rows have no org yet"
+
+
+def test_installations_carries_a_non_unique_installer_id(tmp_path, monkeypatch):
+    """One GitHub user can install Doug on many accounts/orgs — a unique
+    constraint here would make every install after their first one fail."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/d.db")
+    cols = {c.name: c for c in store.installations.columns}
+    assert "installed_by_github_user_id" in cols, "column missing"
+    assert cols["installed_by_github_user_id"].unique is not True, "must not be unique"
+    assert cols["installed_by_github_user_id"].nullable is True
+    assert isinstance(cols["installed_by_github_user_id"].type, BigInteger)
+
+
+def test_upsert_installation_records_the_installer_on_first_insert(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(
+        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
+    )
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] == 42
+
+
+def test_upsert_installation_default_omits_the_installer(tmp_path, monkeypatch):
+    """Callers that pass no installer (every existing call site) must still
+    insert cleanly, with the column left NULL."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] is None
+
+
+def test_upsert_installation_leaves_the_installer_untouched_when_not_given(
+    tmp_path, monkeypatch
+):
+    """Suspend/unsuspend/deleted deliveries call upsert_installation with no
+    installer to report; that must not blank out the one recorded at install
+    time — the bind endpoint (Task 5) needs it to survive every state change
+    in between."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(
+        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
+    )
+    store.upsert_installation(INSTALL, "drewjst", "User", "suspended")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] == 42
+    assert rows[0]["state"] == "suspended"
 
 
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):

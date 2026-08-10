@@ -92,6 +92,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         assert columns <= _columns(engine, table)
     for table, columns in M8_COLUMNS.items():
         assert columns <= _columns(engine, table)
+    for table, columns in M9_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -174,6 +176,10 @@ M8_COLUMNS = {
     "outcome_jobs": {"merged_head_sha"},
 }
 
+M9_COLUMNS = {
+    "installations": {"workos_org_id", "installed_by_github_user_id"},
+}
+
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
     """Same drift guard migrations 002 and 007 carry: a metadata-only column
@@ -183,6 +189,88 @@ def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
     assert _statements_by_table(dict(migrations.MIGRATIONS)[8]) == M8_COLUMNS
     for table, columns in M8_COLUMNS.items():
         assert columns <= _columns(engine, table)
+
+
+def test_migration_009_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard as migrations 002/007/008: a metadata-only column
+    passes on a fresh database and is absent from Cloud SQL."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl9.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[9]) == M9_COLUMNS
+    for table, columns in M9_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_009_installs_a_unique_index_on_workos_org_id(tmp_path):
+    """The bind flow (Tasks 4-8) resolves a session's tenant by this column;
+    without a real unique index a session could resolve to either of two
+    installations that happen to share an org."""
+    engine = create_engine(f"sqlite:///{tmp_path}/workos-idx.db")
+    store.metadata.create_all(engine)
+    assert 9 in migrations.apply(engine)
+    indexes = inspect(engine).get_indexes("installations")
+    by_name = {idx["name"]: idx for idx in indexes}
+    assert "ix_installations_workos_org_id" in by_name
+    assert by_name["ix_installations_workos_org_id"].get("unique")
+
+
+def test_workos_org_id_unique_constraint_is_enforced_on_a_fresh_database(tmp_path):
+    """Column(unique=True) is the DDL a fresh database gets from
+    store.metadata. It must reject a duplicate exactly like the migrated
+    path's CREATE UNIQUE INDEX does below — the two DDL routes the module
+    docstring describes must produce equivalent constraints, not merely
+    equivalent-looking columns."""
+    engine = create_engine(f"sqlite:///{tmp_path}/fresh-unique.db")
+    store.metadata.create_all(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": 1,
+                "state": "active",
+                "updated_at": now,
+                "workos_org_id": "org_123",
+            },
+        )
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": 2,
+                "state": "active",
+                "updated_at": now,
+                "workos_org_id": "org_123",
+            },
+        )
+
+
+def test_workos_org_id_unique_index_is_enforced_on_a_migrated_database(tmp_path):
+    """The other DDL route: an `installations` table from before this
+    migration, upgraded by migration 9's own CREATE UNIQUE INDEX rather than
+    the Table's Column(unique=True). Must reject a duplicate the same way
+    the fresh-database path above does."""
+    engine = create_engine(f"sqlite:///{tmp_path}/migrated-unique.db")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL)"
+        )
+    for statement in dict(migrations.MIGRATIONS)[9]:
+        migrations._run(engine, statement)
+    now = datetime.now(UTC)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO installations (installation_id, state, updated_at, workos_org_id) "
+            f"VALUES (1, 'active', '{now.isoformat()}', 'org_123')"
+        )
+    with engine.begin() as conn, pytest.raises(DatabaseError):
+        conn.exec_driver_sql(
+            "INSERT INTO installations (installation_id, state, updated_at, workos_org_id) "
+            f"VALUES (2, 'active', '{now.isoformat()}', 'org_123')"
+        )
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -621,9 +709,9 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
 
     # store.metadata.create_all() above already built the current table shapes,
-    # so migrations 6, 7, and 8 all find their ALTER work satisfied and still
-    # record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8]
+    # so migrations 6, 7, 8, and 9 all find their ALTER work satisfied and
+    # still record their versions alongside migration 5.
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9]
     with engine.connect() as conn:
         app_ids = [
             r[0]
