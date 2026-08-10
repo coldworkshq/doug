@@ -409,60 +409,83 @@ git commit -m "feat: resolve a WorkOS session to a live tenant scope"
 
 **This is the task most likely to ship a vulnerability. Read the whole thing before writing code.**
 
+> **STRUCTURAL CHANGE, 2026-08-09 (Andrew).** The original plan had **Task 5**
+> *consuming* a `workos_org_id` that only **Task 6** *produces*, so Task 5 as
+> ordered could not work end to end. Worse, accepting a caller-supplied org id
+> reopened a squatting attack: bind a victim's org id to your own installation
+> before they bind, and Task 1's UNIQUE index then blocks their legitimate bind
+> permanently. **Task 6 is therefore merged into this task**, and the request
+> body carries **only `installation_id`** — the org id never crosses the wire,
+> so the attack is removed rather than defended against.
+
 **Files:**
+- Modify: `api/doug/session_auth.py` (extract a claims-only verifier)
+- Create: `api/doug/workos_client.py`
+- Create: `api/tests/test_workos_client.py`
+- Modify: `api/doug/store.py` (installer lookup + the bind write)
 - Modify: `api/doug/api.py` (new `POST /v1/installations/bind`)
-- Modify: `api/doug/tenancy.py` (reuse `verify_org_admin`, `tenancy.py:245`)
+- Modify: `api/pyproject.toml` (declare `httpx` explicitly)
+- Modify: `api/deploy/gcp.sh` + `api/tests/test_deploy_gcp.py` (`WORKOS_*` secrets on doug-api)
 - Test: `api/tests/test_api.py`
 
 **Interfaces:**
 - Consumes: Tasks 1, 3, 4.
-- Produces: `POST /v1/installations/bind` taking `{installation_id, workos_org_id}` under a verified session, returning 204 on success.
+- Produces: `POST /v1/installations/bind` taking `{"installation_id": int}` under a verified AuthKit JWT, returning 204.
 
 **The attack this must refuse.** Setup-URL parameters are attacker-supplied and no GitHub redirect need ever occur. An attacker with `:read` on one repo sees a victim's `installation_id` in their own `GET /user/installations`, then posts it here. A membership check alone **passes** — the installation genuinely is in their list. Binding must therefore require proof of **authority**, not visibility.
 
-> **CORRECTION, 2026-08-09 — an earlier draft of this plan said to use
-> `tenancy.verify_org_admin` (`tenancy.py:245`). That does not work here, and
-> the reason matters.**
->
-> `verify_org_admin(pat, owner)` takes a **PAT**. Its authority hop is
-> `orgs.get_membership_for_authenticated_user`, which for a GitHub App
-> *user-to-server* token requires the App to hold the organization
-> **Members: read** permission. Doug is a code-review app and does not have it.
-> Adding it would make GitHub require **every existing installation to
-> re-accept permissions**, interrupting live tenants — a real cost, to ask for
-> org membership data a code reviewer has no other use for.
->
-> The obvious fallback is not available either: nothing records who performed
-> an installation. `grep sender api/doug/api.py` returns nothing, and
-> `store.upsert_installation` (`store.py:736`) takes only
-> `(installation_id, account_login, account_type, state)`.
+**Why not org-admin.** `tenancy.verify_org_admin` (`tenancy.py:245`) takes a **PAT**, and it has two paths: a login match (caller *is* the account) which needs no extra permission but only fires for **User** installs, and an admin-membership hop (`orgs.get_membership_for_authenticated_user`) which for a user-to-server token requires the App to hold organization **Members: read**. Doug does not have it, and adding it would force **every existing installation to re-accept permissions**. `coldworkshq` is an **org** install, so it falls to the hop Doug cannot make. Rejected on evidence, not preference.
 
-**Use the installer identity instead.** Capture `sender.id` from the
-`installation` webhook into a new `installations.installed_by_github_user_id`
-column (fold it into Task 1's migration — one migration, two columns), and
-require the session's GitHub user id to equal it before binding.
+**The proof actually used: installer identity.** Task 1 captured the `installation` webhook's `sender.id` into `installations.installed_by_github_user_id` (written only on `action == "created"`, and never overwritten by a later suspend/redelivery). Bind requires the signed-in user's GitHub id to equal it. This proves something **narrower and more relevant** than org-admin — *you are the person who installed Doug here* — with no new App permission and no tenant disruption.
 
-This proves something **narrower and more relevant** than org-admin: you are
-the person who actually installed Doug here. It needs no new App permission and
-disrupts no existing tenant. Its limit is honest and must be stated in the
-code: it only works for installations created **after** this ships. Pre-existing
-ones — notably the operator's own `150424894`, populated by webhook redelivery
-under MT0 — have no recorded installer and cannot self-bind. They need a
-deliberate operator bind or a one-off backfill, which is acceptable because the
-target of this phase, `coldworkshq/coldworks`, is a **fresh** install that fires
-a fresh webhook carrying its sender.
+**Its limit is honest and must be stated in the code:** it only works for installations created **after** Task 1 shipped. Pre-existing ones — notably the operator's own `150424894`, populated by webhook redelivery under MT0 — have no recorded installer and **cannot self-bind**. They need a deliberate operator bind or a one-off backfill. `coldworkshq/coldworks` is a fresh install and fires a fresh webhook carrying its sender, so the phase target is unaffected.
 
-Get the session's GitHub user id from the identity WorkOS already holds for the
-user — do not call GitHub again for it, and do not trust any id supplied in the
-request body.
+**Bind cannot use `resolve_session`.** `resolve_session` maps `org_id` → installation, but at bind time there is **no org** — creating it is what bind does. Using it here would be circular and would always fail closed. Bind needs a strictly weaker primitive that proves *who is signed in* and asserts nothing about what they may see.
 
-- [ ] **Step 1: Write the failing tests — the first is the security test**
+**`idp_id` is an UNRETIRED RISK.** WorkOS documents `idp_id` only as "a unique identifier from the external provider", with a **Microsoft** example; neither the identities reference nor the GitHub integration page states its format for GitHub. It could not be measured — the gate probe's credentials were deleted. The inference is that it is the numeric GitHub user id. **Do not paper over this**: compare as normalized strings, and when `idp_id` is non-numeric, refuse **and log the value received**, so the first real bind diagnoses it in one query instead of silently denying forever.
+
+**Verified WorkOS endpoints** (checked against live docs 2026-08-09 — do not invent others). All take `Authorization: Bearer $WORKOS_API_KEY`:
+
+| Purpose | Method + path |
+|---|---|
+| GitHub user id | `GET /user_management/users/{user_id}/identities` → `[].idp_id` |
+| Find org | `GET /organizations/external_id/{external_id}` |
+| Create org | `POST /organizations` `{name, external_id}` |
+| Add member | `POST /user_management/organization_memberships` `{user_id, organization_id}` |
+
+- [ ] **Step 1: Extract a claims-only verifier — pure refactor, no behaviour change**
+
+In `session_auth.py`, split the signature/exp verification out of `resolve_session` so both callers share it:
+
+```python
+def verify_session_claims(bearer: str) -> dict | None:
+    """Verify an AuthKit JWT's signature and expiry, and return its claims.
+
+    Deliberately weaker than resolve_session: it proves WHO is signed in and
+    says nothing about what they may see. Bind needs exactly this, because it
+    runs BEFORE any organization exists — creating one is what bind does — so
+    resolve_session (which fails closed without org_id) would be circular.
+    Never use this for a data read; use resolve_session, which additionally
+    resolves and live-intersects a tenant scope.
+    """
+```
+
+`resolve_session` then calls it and keeps its own `org_id` handling. **Both existing log lines and their split must survive** (JWKS failure vs token failure stay distinguishable). The Task 4 tests are the proof: all 11 must pass unmodified.
+
+- [ ] **Step 2: Write the failing tests — the first is the security test**
 
 ```python
 def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer():
     """The exact claimable-tenant attack. GET /user/installations answers on
-    :read, so visibility is NOT authority. A caller who can merely see an
-    installation must not be able to bind it to their own organization."""
+    :read, so visibility is NOT authority. A caller whose GitHub id does not
+    match installed_by_github_user_id must be refused even though the
+    installation is genuinely visible to them."""
+
+
+def test_bind_refuses_an_installation_with_no_recorded_installer():
+    """Pre-Task-1 rows carry NULL. NULL must never compare equal to anything —
+    a fail-open here would let ANY signed-in user claim every legacy tenant,
+    including the operator's own 150424894."""
 
 
 def test_bind_is_idempotent_for_the_same_org():
@@ -472,26 +495,62 @@ def test_bind_is_idempotent_for_the_same_org():
 def test_bind_refuses_to_move_an_installation_to_a_different_org():
     """Re-binding a live installation to another organization is a takeover,
     not an update."""
+
+
+def test_bind_refuses_a_non_numeric_idp_id_and_says_so():
+    """idp_id's GitHub format is undocumented and unmeasured. If it is not the
+    numeric user id, bind must refuse AND log the value, so the first real
+    attempt is diagnosable in one query rather than silently denying."""
+
+
+def test_bind_never_calls_workos_when_the_installer_check_fails():
+    """Authority first, side effects second: a refused caller must not create
+    an organization or a membership. Same cheapest-first, spend-nothing-on-a-
+    caller-who-proves-nothing posture as tenancy.verify_org_admin."""
 ```
 
-- [ ] **Step 2: Run, watch fail.**
+Mock the WorkOS HTTP calls; **no test may reach the network** (Task 4 established the pattern and it was verified by re-running with proxies pointed at a dead address).
 
-- [ ] **Step 3: Implement**, with a Postgres advisory lock around the find-or-create: `external_id` has no documented upsert and no documented conflict code, so it is **not** race-safe. Under SQLite the lock is a no-op — guard on dialect and say so in a comment.
+- [ ] **Step 3: Run, watch fail** — `cd api && uv run pytest tests/test_api.py tests/test_workos_client.py -k bind -v`
 
-- [ ] **Step 4: Suite + lint + commit.**
+- [ ] **Step 4: Implement**
+
+Order matters and is load-bearing — **prove authority before spending anything**:
+
+1. `verify_session_claims(bearer)` → claims, else 401. A `SessionAuthNotConfigured` becomes **503**, matching `api.py:391`'s idiom.
+2. `workos_client.github_user_id_for(claims["sub"])` → the identity hop.
+3. Compare against `installations.installed_by_github_user_id` for the posted `installation_id`. **NULL refuses. Non-numeric `idp_id` refuses and logs.** Mismatch refuses.
+4. Only now: `ensure_org` → `ensure_membership` → write `workos_org_id`.
+
+`ensure_org` is get-or-create (`GET /organizations/external_id/gh-inst-<id>`, else `POST /organizations`) — inherently TOCTOU, so wrap the find-or-create **and** the bind write in a Postgres advisory lock keyed on the installation id. Under SQLite the lock is a no-op; **guard on dialect and say so in a comment**.
+
+Idempotency and takeover are the same check: if the row already has a `workos_org_id`, return 204 when it equals the resolved org and **refuse** when it differs.
+
+- [ ] **Step 5: Deploy config**
+
+`WORKOS_API_KEY` and `WORKOS_CLIENT_ID` become Secret Manager entries with an `add-iam-policy-binding` for the api's service account in `setup()` (pattern at `gcp.sh:165-171`), plus `--set-secrets` on the **api** deploy. **Read the surrounding lines before editing** — a previous plan in this repo cited `gcp.sh:378` for `--set-secrets` when it was `:379`, and following it literally would have made gcloud resolve a Secret Manager entry named `drewjst/doug` and **fail the deploy**. Update `test_deploy_gcp.py`'s expectations rather than deleting them.
+
+- [ ] **Step 6: Suite + lint + commit**
+
+```bash
+cd api && uv run pytest -q 2>&1 | tail -2 && uv run ruff check . && bash -n deploy/gcp.sh
+```
 
 ---
 
-### Task 6: WorkOS organization lifecycle
+### Task 6: WorkOS organization lifecycle — **MERGED INTO TASK 5**
 
-**Files:** `api/doug/workos_client.py` (new), `api/tests/test_workos_client.py`
+`ensure_org` / `ensure_membership` ship inside Task 5's atomic bind, because bind
+is their only caller and splitting them left Task 5 unbuildable (see Task 5's
+structural note).
 
-**Interfaces:**
-- Produces: `ensure_org(installation_id, account_login) -> str` (returns `workos_org_id`, keyed `external_id="gh-inst-<id>"`), `ensure_membership(org_id, workos_user_id)`, `revoke_memberships(org_id)`.
-
-**Teardown is not optional.** The design's earlier claim that stale access ends "at next sign-in" was false: membership is additive and nothing removes it. `installation.deleted` and `suspend` webhooks must revoke memberships, and uninstall/reinstall mints a **new** `installation_id`, orphaning `gh-inst-<old>` with live members.
-
-- [ ] Steps: failing tests (including "uninstall revokes"), watch fail, implement against a mocked WorkOS API, wire the webhook handlers, suite, commit.
+**What did NOT merge, and is still owed — teardown.** The design's earlier claim
+that stale access ends "at next sign-in" was false: membership is additive and
+nothing removes it. `installation.deleted` and `suspend` webhooks must revoke
+memberships, and uninstall/reinstall mints a **new** `installation_id`,
+orphaning `gh-inst-<old>` with live members. `revoke_memberships(org_id)` and
+its webhook wiring are **deferred to Phase 1b** and must be listed in its plan —
+they are a real hole, not a nicety, and Phase 1a's exit gate does not cover them.
 
 ---
 
@@ -569,8 +628,23 @@ A sibling to `prove-isolation.sh`, executable against prod — that script earne
 
 ## Honest status of this plan — read before executing
 
+**UPDATE 2026-08-09, during execution.** Tasks 1–4 are **built and reviewed**
+(`50fc60b`, `9f3fac9`, `d523b47`, `6509b04`). Task 5 has been **rewritten and
+expanded** to execution standard, absorbing Task 6 (see its structural note);
+Task 6's teardown half is deferred to Phase 1b and recorded there. **Tasks 7–10
+remain specified but not stepped** and are being expanded one at a time, just
+before execution, as the section below instructs.
+
+Four defects were found in Tasks 1–5 *before* writing code, three of which
+would have shipped bugs: the `ctx is None` sentinel is only an operator test at
+one of its three cited sites (replacing the other two would 500 on an
+unresolvable token); routing `resolve()` through `live_scope` would have added
+two DB queries per authenticated call; `live_scope` returning every repo on a
+`None` claim was MT1 reintroduced; and Task 5 consumed an org id only Task 6
+produced. The section below predicted this for 6–10. It was true of 1–5 too.
+
 **Tasks 1–5 are execution-ready**: exact files, real code, runnable verification
-commands. **Tasks 6–10 are specified but not stepped** — they state the
+commands. **Tasks 7–10 are specified but not stepped** — they state the
 requirements, the traps, and the exit conditions, but they do not yet carry
 task-by-task code the way Tasks 1–5 do.
 
