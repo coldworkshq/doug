@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import IntegrityError
 
 from doug import entitlements, store
 
@@ -402,3 +403,104 @@ def test_the_ledger_being_off_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     store.replace_session_entitlements("user_01ABC", [(1001, [11])])
     assert store.session_entitlements_for("user_01ABC") == []
+
+
+# ---------------------------------------------------------------------------
+# The schema itself. session_entitlements is a NEW table, so create_all() is
+# the ONLY path that builds it and there is no migration to state its shape a
+# second time (migrations.py's docstring; migration 6's note for
+# installation_tokens). That means these two tests carry alone the weight the
+# migration-parity tests in test_migrations.py share elsewhere: nothing else
+# in the repo asserts that the unique constraint and the index exist.
+
+
+def test_one_row_per_user_per_installation_is_enforced_by_the_database(tmp_path, monkeypatch):
+    """Re-deriving must replace rather than accumulate, and the constraint is
+    what makes that a property of the schema instead of a habit of the one
+    function that writes it.
+
+    Inserted through Core rather than through replace_session_entitlements on
+    purpose: that function deletes before it inserts, so it would pass this
+    test whether or not the constraint exists — which is exactly the way a
+    test passes for the wrong reason.
+    """
+    _db(tmp_path, monkeypatch)
+    row = {
+        "workos_user_id": "user_01ABC",
+        "installation_id": 1001,
+        "repo_ids": "[11]",
+        "derived_at": datetime.now(UTC),
+    }
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        conn.execute(store.session_entitlements.insert(), row)
+
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(store.session_entitlements.insert(), row)
+
+    # Same user, DIFFERENT installation, and the same installation for a
+    # different user: both are legitimate and must still insert. Without
+    # these, a unique constraint on either column alone would pass above and
+    # silently cap every user at one tenant.
+    with engine.begin() as conn:
+        conn.execute(store.session_entitlements.insert(), {**row, "installation_id": 1002})
+        conn.execute(store.session_entitlements.insert(), {**row, "workos_user_id": "user_02DEF"})
+
+
+def test_lookups_by_workos_user_are_indexed(tmp_path, monkeypatch):
+    """Every read of this table is 'what may THIS user see', on the request
+    path of a signed-in page load. Unindexed, that is a sequential scan over
+    every user's rows once the table holds more than a demo's worth."""
+    _db(tmp_path, monkeypatch)
+    indexes = inspect(store._get_engine()).get_indexes("session_entitlements")
+    assert any(idx["column_names"] == ["workos_user_id"] for idx in indexes), indexes
+
+
+def test_two_concurrent_derivations_for_one_user_do_not_collide(tmp_path, monkeypatch):
+    """Two tabs finishing sign-in at once.
+
+    Under Postgres read-committed, the second transaction's DELETE cannot see
+    the first's uncommitted rows, so it removes nothing and then collides on
+    the unique constraint above. That is "already done", not "failed" — the
+    same case upsert_installation handles for its own insert race — and the
+    retry re-runs the delete against the winner's now-committed rows.
+
+    sqlite serialises writers and can never produce the interleaving, so the
+    collision is injected at the write seam rather than raced for. What is
+    genuinely exercised here is the retry, and that the retry's write really
+    lands.
+    """
+    _db(tmp_path, monkeypatch)
+    real = store._write_session_entitlements
+    attempts: list[str] = []
+
+    def _collide_once(engine, workos_user_id, rows):
+        attempts.append(workos_user_id)
+        if len(attempts) == 1:
+            raise IntegrityError(
+                "stmt", {}, Exception('duplicate key value violates unique constraint "uq_"')
+            )
+        return real(engine, workos_user_id, rows)
+
+    monkeypatch.setattr(store, "_write_session_entitlements", _collide_once)
+    store.replace_session_entitlements("user_01ABC", [(1001, [11])])
+
+    assert len(attempts) == 2, "the loser retried"
+    assert store.session_entitlements_for("user_01ABC") == [
+        {"installation_id": 1001, "repo_ids": frozenset({11}), "derived_at": ANY_TIME}
+    ]
+
+
+def test_a_collision_that_survives_the_retry_is_raised_not_swallowed(tmp_path, monkeypatch):
+    """The retry covers a lost race, which resolves. Anything that collides
+    twice is not a race — swallowing it would return 204 to a caller whose
+    scope was never written, and an empty dashboard with no error anywhere is
+    the worst of both."""
+    _db(tmp_path, monkeypatch)
+
+    def _always_collide(engine, workos_user_id, rows):
+        raise IntegrityError("stmt", {}, Exception("duplicate key value violates unique"))
+
+    monkeypatch.setattr(store, "_write_session_entitlements", _always_collide)
+    with pytest.raises(IntegrityError):
+        store.replace_session_entitlements("user_01ABC", [(1001, [11])])

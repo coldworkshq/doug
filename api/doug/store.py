@@ -2497,6 +2497,16 @@ def replace_session_entitlements(
     caller's business and is never passed to this function, let alone
     written (entitlements.py's property 2).
 
+    TRIED TWICE, because the replacement is a delete-then-insert pair and two
+    sign-ins for the same user can interleave. Under Postgres read-committed
+    the second transaction's DELETE cannot see the first's uncommitted rows,
+    so it removes nothing and then collides on uq_session_entitlement. That
+    is "already done, not failed" — the same case upsert_installation handles
+    for its own insert race — and the retry's DELETE runs against the
+    winner's now-committed rows. A collision that survives the retry is not a
+    race and is raised: returning success on a scope that was never written
+    would leave an empty dashboard with no error anywhere.
+
     `now` is a test seam for ageing a row past entitlements.TTL, same shape
     as record_deep_read's. Production always passes the wall clock.
     """
@@ -2508,29 +2518,40 @@ def replace_session_entitlements(
     # here instead of raising on the unique constraint. The constraint is
     # still the authority; this only keeps a malformed upstream response from
     # becoming a 500 on someone's sign-in.
-    by_installation = {
-        int(installation_id): sorted({int(r) for r in repo_ids})
-        for installation_id, repo_ids in tenants
-    }
+    rows = [
+        {
+            "workos_user_id": workos_user_id,
+            "installation_id": installation_id,
+            "repo_ids": json.dumps(repo_ids),
+            "derived_at": stamped,
+        }
+        for installation_id, repo_ids in {
+            int(installation_id): sorted({int(r) for r in repo_ids})
+            for installation_id, repo_ids in tenants
+        }.items()
+    ]
+    for attempt in (1, 2):
+        try:
+            _write_session_entitlements(engine, workos_user_id, rows)
+            return
+        except IntegrityError:
+            if attempt == 2:
+                raise
+
+
+def _write_session_entitlements(engine, workos_user_id: str, rows: list[dict]) -> None:
+    """One replacement, in one transaction: the delete runs whether or not
+    there is anything to insert, and a reader never sees the gap between
+    them. Its own function so the race above has a seam a test can collide —
+    sqlite serialises writers and can never produce the interleaving."""
     with engine.begin() as conn:
         conn.execute(
             session_entitlements.delete().where(
                 session_entitlements.c.workos_user_id == workos_user_id
             )
         )
-        if by_installation:
-            conn.execute(
-                session_entitlements.insert(),
-                [
-                    {
-                        "workos_user_id": workos_user_id,
-                        "installation_id": installation_id,
-                        "repo_ids": json.dumps(repo_ids),
-                        "derived_at": stamped,
-                    }
-                    for installation_id, repo_ids in by_installation.items()
-                ],
-            )
+        if rows:
+            conn.execute(session_entitlements.insert(), rows)
 
 
 def _stored_repo_ids(raw: str | None) -> frozenset[int]:
