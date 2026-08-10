@@ -95,6 +95,55 @@ class TokenContext:
     repo_ids: frozenset[int] | None
 
 
+@dataclass(frozen=True)
+class SessionContext:
+    """What a signed-in browser session may see.
+
+    Unlike TokenContext, repo_ids is NEVER None. A key's selection was
+    proved at mint time ("proof covers selection", MT1); a session has no
+    mint step, so there is nothing to license installation-wide access. The
+    scope is always the explicit set GitHub reported for THIS user,
+    intersected with the live ledger via live_scope() below.
+    """
+
+    installation_id: int
+    repo_ids: frozenset[int]
+    scopes: tuple[str, ...]
+
+
+def _live_repos(installation_id: int, claimed: frozenset[int]) -> frozenset[int]:
+    """Intersect a claimed repo set against the live ledger. The one piece
+    resolve() and live_scope() genuinely share — everything else about a
+    token row (revoked_at, expires_at, repo_selection) has no session
+    analogue, so this stays this small on purpose."""
+    live = {rid for rid, _ in store.active_repos(installation_id)}
+    return frozenset(claimed) & live
+
+
+def live_scope(
+    installation_id: int, claimed_repo_ids: frozenset[int] | None
+) -> frozenset[int] | None:
+    """A session's live, intersected scope — or None when it may see nothing.
+
+    None comes back in three cases: the installation is not active, the
+    intersection against the live ledger is empty, or claimed_repo_ids
+    itself is None. That last one is deliberate and NOT a "no claim yet"
+    passthrough to "every repo": a session's repo_ids must never be
+    installation-wide (see SessionContext), so a missing claim fails closed
+    exactly like an empty intersection does, rather than being read as
+    'unrestricted'. Every real caller has a concrete claim — the dashboard
+    derives it from GET /user/installations/{id}/repositories, which
+    returns a concrete repo list for both repository_selection values ('all'
+    and 'selected').
+    """
+    if store.installation_state(installation_id) != "active":
+        return None
+    if claimed_repo_ids is None:
+        return None
+    effective = _live_repos(installation_id, claimed_repo_ids)
+    return effective or None
+
+
 def resolve(token: str) -> TokenContext | None:
     """Map a presented token to its live context, or None.
 
@@ -132,11 +181,10 @@ def resolve(token: str) -> TokenContext | None:
     repo_ids: frozenset[int] | None = None
     if row["repo_selection"] == "selected":
         frozen = store.installation_token_repo_ids(row["id"])
-        live = {rid for rid, _ in store.active_repos(row["installation_id"])}
-        effective = frozen & live
+        effective = _live_repos(row["installation_id"], frozen)
         if not effective:
             return None
-        repo_ids = frozenset(effective)
+        repo_ids = effective
     store.touch_installation_token_last_used(row["id"])
     return TokenContext(
         installation_id=int(row["installation_id"]),

@@ -572,3 +572,75 @@ def test_new_keys_mint_both_scopes(tmp_path, monkeypatch):
     minted = _minted_all(monkeypatch, tmp_path)
     ctx = tenancy.resolve(minted.token)
     assert set(ctx.scopes) == {"queue:read", "receipt:read"}
+
+
+def test_session_context_repo_ids_is_never_none():
+    """TokenContext allows repo_ids=None to mean installation-wide, because a
+    key's selection was proved at mint time. A browser session has no mint
+    step, so installation-wide would hand a user with :read on ONE repo the
+    whole org's rows — MT1 reintroduced, and worse, since MT1 needed admin."""
+    import dataclasses
+
+    fields = {f.name: f for f in dataclasses.fields(tenancy.SessionContext)}
+    assert "repo_ids" in fields
+    ann = str(fields["repo_ids"].type)
+    assert "None" not in ann and "Optional" not in ann, (
+        f"repo_ids must not be optional on a session context, got {ann}"
+    )
+
+
+def test_installation_state_returns_the_state_and_none_for_unknown(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _install()
+    assert store.installation_state(150424894) == "active"
+    assert store.installation_state(999999999) is None
+
+
+def test_live_scope_drops_repos_the_installation_no_longer_covers(tmp_path, monkeypatch):
+    """The claim is what GitHub said; the ledger is the authority. A repo that
+    left the installation must not survive in a session's scope."""
+    _db(tmp_path, monkeypatch)
+    _install()
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a")], replace=False
+    )
+    # The claim names two repos; only one is still active on the ledger.
+    assert tenancy.live_scope(150424894, frozenset({111, 222})) == frozenset({111})
+
+
+def test_live_scope_returns_none_for_a_non_active_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "suspended")
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a")], replace=False
+    )
+    assert tenancy.live_scope(150424894, frozenset({111})) is None
+
+
+def test_live_scope_returns_none_when_the_intersection_is_empty(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _install()
+    store.set_installation_repos(
+        150424894, [(111, "drewjst/a")], replace=False
+    )
+    # Claimed repo is not on the live ledger at all.
+    assert tenancy.live_scope(150424894, frozenset({999})) is None
+
+
+def test_live_scope_refuses_a_none_claim_rather_than_returning_everything(tmp_path, monkeypatch):
+    """RULING 2, and the security-critical case in this file: the brief's
+    draft returned every live repo when claimed_repo_ids was None, which is
+    installation-wide scope for a session — exactly the MT1 regression this
+    phase exists to prevent. A session's repo_ids must NEVER be None, so
+    live_scope must refuse a None claim rather than resolve it to 'all'.
+    This is the behavioural test that would fail if a session could obtain
+    installation-wide scope through live_scope: two repos genuinely exist and
+    are active, and the call still returns None instead of handing both back."""
+    _db(tmp_path, monkeypatch)
+    _install()
+    store.set_installation_repos(
+        150424894,
+        [(111, "drewjst/a"), (222, "drewjst/b")],
+        replace=False,
+    )
+    assert tenancy.live_scope(150424894, None) is None

@@ -2300,6 +2300,23 @@ def active_installations() -> list[int]:
         ]
 
 
+def installation_state(installation_id: int) -> str | None:
+    """This installation's current state, or None when there is no row (or
+    storage is disabled). The single-column sibling of active_installations:
+    that lists every 'active' id, this reads one id's state regardless of
+    what it is — the caller (tenancy.live_scope) decides what counts as
+    serviceable."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        return conn.execute(
+            select(installations.c.state).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+
+
 def active_repos(installation_id: int) -> list[tuple[int, str]]:
     """(github_repo_id, full_name) for this installation's active repos.
 
