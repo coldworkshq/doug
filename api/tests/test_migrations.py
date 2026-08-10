@@ -92,6 +92,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         assert columns <= _columns(engine, table)
     for table, columns in M8_COLUMNS.items():
         assert columns <= _columns(engine, table)
+    for table, columns in M10_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_apply_on_a_freshly_created_schema_records_without_erroring(tmp_path):
@@ -174,6 +176,8 @@ M8_COLUMNS = {
     "outcome_jobs": {"merged_head_sha"},
 }
 
+M10_COLUMNS = {"review_jobs": {"base_sha"}}
+
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
     """Same drift guard migrations 002 and 007 carry: a metadata-only column
@@ -183,6 +187,19 @@ def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
     assert _statements_by_table(dict(migrations.MIGRATIONS)[8]) == M8_COLUMNS
     for table, columns in M8_COLUMNS.items():
         assert columns <= _columns(engine, table)
+
+
+def test_migration_010_declares_the_same_columns_as_their_tables(tmp_path):
+    """The event-time base must reach production through a migration, while
+    remaining nullable for historical jobs whose base cannot be recovered."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl10.db")
+    store.metadata.create_all(engine)
+
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[10]) == M10_COLUMNS
+    column = store.review_jobs.c.base_sha
+    assert column.type.length == 64
+    assert column.nullable
+    assert M10_COLUMNS["review_jobs"] <= _columns(engine, "review_jobs")
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -621,9 +638,9 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
 
     # store.metadata.create_all() above already built the current table shapes,
-    # so migrations 6, 7, and 8 all find their ALTER work satisfied and still
-    # record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8]
+    # so migrations 6, 7, 8, and 10 all find their ALTER work satisfied and
+    # still record their versions alongside migration 5.
+    assert migrations.apply(engine) == [5, 6, 7, 8, 10]
     with engine.connect() as conn:
         app_ids = [
             r[0]

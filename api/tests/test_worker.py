@@ -20,6 +20,7 @@ JOB = dict(
     github_repo_id=987,
     repo_full_name="drewjst/doug",
     pr_number=7,
+    base_sha="0" * 40,
     head_sha="a" * 40,
 )
 
@@ -62,7 +63,10 @@ def _pr() -> PRMetadata:
     )
 
 
-def _gh(heads: dict[int, str] | None = None):
+def _gh(
+    heads: dict[int, str] | None = None,
+    bases: dict[int, str | None] | None = None,
+):
     """A client whose pulls.get reports the PR's current head SHA.
 
     By default that is the head of the newest job queued for the PR — the
@@ -71,6 +75,7 @@ def _gh(heads: dict[int, str] | None = None):
     is how a test simulates a push landing between enqueue and claim.
     """
     heads = heads or {}
+    bases = bases or {}
 
     def _get(*, owner, repo, pull_number):
         sha = heads.get(pull_number)
@@ -82,13 +87,35 @@ def _gh(heads: dict[int, str] | None = None):
                     .order_by(store.review_jobs.c.id.desc())
                     .limit(1)
                 ).scalar_one()
-        return SimpleNamespace(parsed_data=SimpleNamespace(head=SimpleNamespace(sha=sha)))
+        if pull_number in bases:
+            base_sha = bases[pull_number]
+        else:
+            with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
+                base_sha = conn.execute(
+                    select(store.review_jobs.c.base_sha)
+                    .where(store.review_jobs.c.pr_number == pull_number)
+                    .order_by(store.review_jobs.c.id.desc())
+                    .limit(1)
+                ).scalar_one()
+        return SimpleNamespace(
+            parsed_data=SimpleNamespace(
+                head=SimpleNamespace(sha=sha),
+                base=SimpleNamespace(sha=base_sha),
+            )
+        )
 
     return SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get)))
 
 
 def _wire(
-    monkeypatch, *, tier="reader", intent=None, fetch=None, heads=None, scopes=None
+    monkeypatch,
+    *,
+    tier="reader",
+    intent=None,
+    fetch=None,
+    heads=None,
+    bases=None,
+    scopes=None,
 ) -> list[dict]:
     """Cut every seam that would touch the network. Returns the posted
     check runs, which is what a caller of this pipeline can observe.
@@ -96,7 +123,7 @@ def _wire(
     `scopes` collects what each paid read was charged to, for the tests
     that care which budget a job spends from."""
     posted: list[dict] = []
-    gh = _gh(heads)
+    gh = _gh(heads, bases)
     monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
 
@@ -460,7 +487,7 @@ def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monke
     it never saw. Losing the read would be better than mislabelling it;
     doing neither is better still."""
     url = _db(tmp_path, monkeypatch)
-    posted = _wire(monkeypatch, heads={7: "c" * 40})
+    posted = _wire(monkeypatch, heads={7: "c" * 40}, bases={7: "2" * 40})
     ingest.enqueue(**JOB)
 
     assert worker.process_job(ingest.claim()) is None
@@ -468,7 +495,27 @@ def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monke
     jobs = {j["head_sha"]: j for j in _rows(url, store.review_jobs)}
     assert jobs["a" * 40]["status"] == "superseded"
     assert jobs["c" * 40]["status"] == "pending"
+    assert jobs["c" * 40]["base_sha"] == "2" * 40
     # Nothing was paid for and nothing was published against the stale SHA.
+    assert _rows(url, store.verdicts) == []
+    assert posted == []
+
+
+def test_stale_head_without_a_replacement_base_is_retried_before_supersede(
+    tmp_path, monkeypatch
+):
+    """An incomplete GitHub response must not retire the only durable job
+    before Doug can describe its replacement. The ordinary drain failure path
+    keeps the original claim retryable and creates no partial-identity row."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch, heads={7: "c" * 40}, bases={7: None})
+    ingest.enqueue(**JOB)
+
+    assert worker.drain() == 1
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["head_sha"] == "a" * 40
+    assert job["status"] == "pending" and job["attempts"] == 1
     assert _rows(url, store.verdicts) == []
     assert posted == []
 
@@ -523,7 +570,12 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
     flip = iter(["c" * 40, "a" * 40] * 40)
 
     def _get(**kw):
-        return SimpleNamespace(parsed_data=SimpleNamespace(head=SimpleNamespace(sha=next(flip))))
+        return SimpleNamespace(
+            parsed_data=SimpleNamespace(
+                head=SimpleNamespace(sha=next(flip)),
+                base=SimpleNamespace(sha="2" * 40),
+            )
+        )
 
     monkeypatch.setattr(
         app_auth,
@@ -756,12 +808,22 @@ def test_a_lost_claim_after_save_skips_the_check_run(tmp_path, monkeypatch):
 # --- reconcile: the healing path for missed deliveries --------------------
 
 
-def _pull(number=1, head_sha="a" * 40, draft=False, head_repo_id=42, base_repo_id=42):
+def _pull(
+    number=1,
+    head_sha="a" * 40,
+    base_sha="0" * 40,
+    draft=False,
+    head_repo_id=42,
+    base_repo_id=42,
+):
     return SimpleNamespace(
         number=number,
         draft=draft,
         head=SimpleNamespace(sha=head_sha, repo=SimpleNamespace(id=head_repo_id)),
-        base=SimpleNamespace(repo=SimpleNamespace(id=base_repo_id, full_name="o/r")),
+        base=SimpleNamespace(
+            sha=base_sha,
+            repo=SimpleNamespace(id=base_repo_id, full_name="o/r"),
+        ),
     )
 
 
@@ -787,7 +849,23 @@ def test_reconcile_enqueues_open_prs_and_skips_drafts(tmp_path, monkeypatch):
     assert worker.reconcile_installation(1) == 1
     job = ingest.claim()
     assert job["pr_number"] == 1 and job["github_repo_id"] == 42
+    assert job["base_sha"] == "0" * 40
     assert ingest.claim() is None
+
+
+def test_reconcile_logs_and_skips_a_pr_without_a_base_sha(tmp_path, monkeypatch, capsys):
+    """Reconciliation heals missed deliveries, but it cannot heal one by
+    inventing the event-time side of the comparison identity."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker.app_auth,
+        "installation_client",
+        lambda i: FakeListGH([_pull(base_sha=None)]),
+    )
+
+    assert worker.reconcile_installation(1) == 0
+    assert ingest.claim() is None
+    assert "base.sha" in capsys.readouterr().err
 
 
 def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
@@ -808,7 +886,7 @@ def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
     re-review: the unique index carries no status, so a head SHA already
     taken to 'done' collides on insert exactly like a pending one."""
     _installed(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
     assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
@@ -882,7 +960,7 @@ def test_reconcile_all_heals_a_crash_stranded_claim_end_to_end(tmp_path, monkeyp
     that."""
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     stuck = ingest.claim()
     assert stuck["id"] == job_id
     _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
@@ -913,7 +991,7 @@ def test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on(tmp_path, m
     having already retired it."""
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     stuck = ingest.claim()
     assert stuck["id"] == job_id
     _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
@@ -1067,7 +1145,7 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     """
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == job_id
@@ -1129,7 +1207,7 @@ def test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise
     """
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    job_id = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == job_id
@@ -1191,14 +1269,14 @@ def test_reconcile_logs_a_pr_the_cooloff_held_back_but_not_an_ordinary_dedupe(
     """
     url = f"sqlite:///{tmp_path}/doug.db"
     _installed(tmp_path, monkeypatch)
-    held = ingest.enqueue(1, 42, "o/r", 1, "a" * 40)
+    held = ingest.enqueue(1, 42, "o/r", 1, "a" * 40, base_sha="0" * 40)
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == held
         assert ingest.fail(
             held, "reader exploded", claim_generation=claimed["claim_generation"]
         )
-    reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40)
+    reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40, base_sha="0" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == reviewed
     assert ingest.complete(reviewed, None, claim_generation=claimed["claim_generation"])

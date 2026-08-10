@@ -692,7 +692,9 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
     assert store.enabled()
-    job_id = ingest.enqueue(150424894, 987, "drewjst/doug", 7, "a" * 40)
+    job_id = ingest.enqueue(
+        150424894, 987, "drewjst/doug", 7, "a" * 40, base_sha="0" * 40
+    )
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == job_id
@@ -704,7 +706,10 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
         number=7,
         draft=False,
         head=SimpleNamespace(sha="a" * 40, repo=SimpleNamespace(id=987)),
-        base=SimpleNamespace(repo=SimpleNamespace(id=987, full_name="drewjst/doug")),
+        base=SimpleNamespace(
+            sha="0" * 40,
+            repo=SimpleNamespace(id=987, full_name="drewjst/doug"),
+        ),
     )
     monkeypatch.setattr(
         worker.app_auth,
@@ -745,7 +750,15 @@ def test_only_a_new_installation_kicks_reconcile(tmp_path, monkeypatch):
     assert kicks == []
 
 
-def _pr_payload(action="opened", *, draft=False, head_repo_id=987, sha="a" * 40, number=7):
+def _pr_payload(
+    action="opened",
+    *,
+    draft=False,
+    head_repo_id=987,
+    sha="a" * 40,
+    base_sha="0" * 40,
+    number=7,
+):
     head_repo = None if head_repo_id is None else {"id": head_repo_id}
     return {
         "action": action,
@@ -754,7 +767,10 @@ def _pr_payload(action="opened", *, draft=False, head_repo_id=987, sha="a" * 40,
             "number": number,
             "draft": draft,
             "head": {"sha": sha, "repo": head_repo},
-            "base": {"repo": {"id": 987, "full_name": "drewjst/doug"}},
+            "base": {
+                "sha": base_sha,
+                "repo": {"id": 987, "full_name": "drewjst/doug"},
+            },
         },
     }
 
@@ -771,8 +787,22 @@ def test_a_pull_request_event_enqueues_one_durable_job(tmp_path, monkeypatch):
     assert j["github_repo_id"] == 987
     assert j["repo_full_name"] == "drewjst/doug"
     assert j["pr_number"] == 7 and j["head_sha"] == "a" * 40
+    assert j["base_sha"] == "0" * 40
     assert j["status"] == "pending"
     assert kicks == ["drain"]
+
+
+def test_missing_base_sha_is_logged_and_not_enqueued(tmp_path, monkeypatch, capsys):
+    """A 202 may acknowledge a malformed GitHub delivery, but it must not
+    mint a job whose comparison identity is already incomplete."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+
+    response = _webhook("pull_request", _pr_payload(base_sha=None))
+
+    assert response.status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+    assert "base.sha" in capsys.readouterr().err
 
 
 def test_every_head_moving_action_enqueues(tmp_path, monkeypatch):
