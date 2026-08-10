@@ -130,20 +130,50 @@ def test_unknown_org_id_is_refused(tmp_path, monkeypatch):
     assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
 
 
-def test_expired_token_is_refused(monkeypatch):
-    """exp is checked, not just decoded."""
+def test_expired_token_is_refused(tmp_path, monkeypatch):
+    """exp is checked, not just decoded.
+
+    Seeded exactly like test_successful_resolve_..._live_intersected_scope
+    below, and the FIRST assertion pins that a normal token really does
+    resolve under this seeding. That matters: without a bound installation
+    and a live repo, both assertions would trivially be None regardless of
+    whether exp was ever checked — org_id lookup returning None is not the
+    same failure as exp verification catching an expired token, and a test
+    that can't tell them apart can't fail for the right reason. The second
+    assertion changes exactly one thing (exp) from the first."""
+    _db(tmp_path, monkeypatch)
+    _install(150424894, org_id="org_123")
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     _use_fake_jwks(monkeypatch)
-    token = _token(org_id="org_123", exp=int(time.time()) - 60)
-    assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
+
+    valid = _token(org_id="org_123")
+    assert session_auth.resolve_session(f"Bearer {valid}", frozenset({111})) is not None
+
+    expired = _token(org_id="org_123", exp=int(time.time()) - 60)
+    assert session_auth.resolve_session(f"Bearer {expired}", frozenset({111})) is None
 
 
-def test_tampered_signature_is_refused(monkeypatch):
+def test_tampered_signature_is_refused(tmp_path, monkeypatch):
     """Signed with a DIFFERENT key than the one JWKS reports for this
     client — exactly what a forged token looks like. Must be caught at
-    signature verification, not by trusting the payload."""
+    signature verification, not by trusting the payload.
+
+    Same seeding-and-contrast shape as test_expired_token_is_refused, for
+    the same reason: without a bound installation and a live repo the
+    forged token would return None from the org_id lookup regardless of
+    whether the signature was ever checked. The first assertion proves a
+    genuinely-signed token of the same shape resolves; the second changes
+    only the signing key."""
+    _db(tmp_path, monkeypatch)
+    _install(150424894, org_id="org_123")
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     _use_fake_jwks(monkeypatch)  # reports the real public key
+
+    valid = _token(org_id="org_123")
+    assert session_auth.resolve_session(f"Bearer {valid}", frozenset({111})) is not None
+
     forged = _token(private_key=_OTHER_PRIVATE_KEY, org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {forged}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {forged}", frozenset({111})) is None
 
 
 def test_session_scopes_cannot_exceed_the_enumerated_set():
