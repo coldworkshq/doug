@@ -11,8 +11,8 @@ FIXTURE_SECRET = "install-flow-fixture-secret-32-bytes"
 FIXTURE_NONCE = bytes(range(32))
 FIXTURE_TOKEN = (
     "eyJ2IjoxLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgi"
-    "LCJleHAiOjIwMDAwMDAwMDAsInN1YiI6InVzZXJfMDFBQkMiLCJpbnN0YWxsYXRpb25faWQiOjEwMDF9"
-    ".uvB2k7PQLLXOjVmscQyZ4PJo20ay1VsmfR9LZ_p34Sg"
+    "LCJleHAiOjIwMDAwMDAwMDAsInN1YiI6InVzZXJfMDFBQkMiLCJpbnN0YWxsYXRpb25faWQiOjEwMDEs"
+    "InBrY2VfcmV0cmllZCI6ZmFsc2V9.80d_xUkijhR281JyJ8ATMcYGRgotlbWqw5t23Tiu_-g"
 )
 
 
@@ -26,12 +26,25 @@ def _signed(payload: dict) -> str:
     return f"{segment.decode()}.{signature.decode()}"
 
 
+def _tamper_token(token: str) -> str:
+    replacement = "A" if token[-1] != "A" else "B"
+    tampered = token[:-1] + replacement
+    assert tampered != token
+    return tampered
+
+
+def test_tamper_helper_changes_tokens_ending_in_either_candidate_character():
+    assert _tamper_token("tokenA") == "tokenB"
+    assert _tamper_token("tokenB") == "tokenA"
+
+
 def test_python_and_typescript_share_one_exact_install_flow_fixture():
     token = install_flow.seal_install_flow(
         nonce=FIXTURE_NONCE,
         expires_at=2_000_000_000,
         subject="user_01ABC",
         installation_id=1001,
+        pkce_retried=False,
         secret=FIXTURE_SECRET,
     )
     assert token == FIXTURE_TOKEN
@@ -47,6 +60,7 @@ def test_python_and_typescript_share_one_exact_install_flow_fixture():
     assert flow.subject == "user_01ABC"
     assert flow.installation_id == 1001
     assert flow.expires_at == 2_000_000_000
+    assert flow.pkce_retried is False
 
 
 def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subject():
@@ -55,6 +69,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
         expires_at=2_000_000_000,
         subject=None,
         installation_id=1001,
+        pkce_retried=False,
         secret=FIXTURE_SECRET,
     )
     flow = install_flow.verify_install_flow(
@@ -74,7 +89,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
 @pytest.mark.parametrize(
     ("token", "now", "subject", "installation_id"),
     [
-        (FIXTURE_TOKEN[:-1] + "A", 1_999_999_999, "user_01ABC", 1001),
+        (_tamper_token(FIXTURE_TOKEN), 1_999_999_999, "user_01ABC", 1001),
         (FIXTURE_TOKEN, 2_000_000_000, "user_01ABC", 1001),
         (FIXTURE_TOKEN, 1_999_999_999, "user_attacker", 1001),
         (FIXTURE_TOKEN, 1_999_999_999, "user_01ABC", 1002),
@@ -86,6 +101,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
                     "exp": 2_000_000_000,
                     "sub": "user_01ABC",
                     "installation_id": 1001,
+                    "pkce_retried": False,
                 }
             ),
             1_999_999_999,
@@ -100,6 +116,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
                     "exp": 2_000_000_000,
                     "sub": "user_01ABC",
                     "installation_id": 1001,
+                    "pkce_retried": False,
                 }
             ),
             1_999_999_999,
@@ -145,6 +162,7 @@ def test_setup_generated_64_hex_secret_is_accepted():
         expires_at=2_000_000_000,
         subject="user_01ABC",
         installation_id=1001,
+        pkce_retried=False,
         secret=secret,
     )
 
@@ -153,3 +171,30 @@ def test_setup_generated_64_hex_secret_is_accepted():
     )
 
     assert flow.installation_id == 1001
+
+
+def test_pkce_retry_guard_is_an_exact_signed_boolean():
+    retried = install_flow.seal_install_flow(
+        nonce=FIXTURE_NONCE,
+        expires_at=2_000_000_000,
+        subject="user_01ABC",
+        installation_id=1001,
+        pkce_retried=True,
+        secret=FIXTURE_SECRET,
+    )
+    assert install_flow.verify_install_flow(
+        retried, now=1_999_999_999, secret=FIXTURE_SECRET
+    ).pkce_retried is True
+
+    base = {
+        "v": 1,
+        "nonce": base64.urlsafe_b64encode(FIXTURE_NONCE).rstrip(b"=").decode(),
+        "exp": 2_000_000_000,
+        "sub": "user_01ABC",
+        "installation_id": 1001,
+    }
+    for payload in (base, {**base, "pkce_retried": 1}):
+        with pytest.raises(install_flow.InstallFlowError, match="^invalid install flow$"):
+            install_flow.verify_install_flow(
+                _signed(payload), now=1_999_999_999, secret=FIXTURE_SECRET
+            )

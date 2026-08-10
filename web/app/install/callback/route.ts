@@ -109,6 +109,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           expiresAt: Math.floor(Date.now() / 1000) + FLOW_MAX_AGE,
           subject: null,
           installationId: null,
+          pkceRetried: false,
         };
   } catch {
     return invalidFlow();
@@ -135,6 +136,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       expiresAt: pending.expiresAt,
       subject: pending.subject,
       installationId,
+      pkceRetried: pending.pkceRetried,
     });
     const signInUrl = await getSignInUrl({ returnTo: "/install/callback" });
     return setFlow(NextResponse.redirect(signInUrl), token);
@@ -148,6 +150,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     expiresAt: pending.expiresAt,
     subject: auth.user.id,
     installationId,
+    pkceRetried: pending.pkceRetried,
   });
   const apiUrl = process.env.DOUG_API_URL ?? "http://localhost:8000";
   let response: Response;

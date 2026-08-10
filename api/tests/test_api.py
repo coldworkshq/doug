@@ -3544,8 +3544,16 @@ def _flow_token(
         expires_at=expires_at or int(time.time()) + 300,
         subject=sub,
         installation_id=installation_id,
+        pkce_retried=False,
         secret=_FLOW_SECRET,
     )
+
+
+def _tamper_flow_token(token: str) -> str:
+    replacement = "A" if token[-1] != "A" else "B"
+    tampered = token[:-1] + replacement
+    assert tampered != token
+    return tampered
 
 
 def _complete_flow(
@@ -3562,6 +3570,11 @@ def _complete_flow(
     )
 
 
+def test_api_tamper_helper_changes_tokens_ending_in_either_candidate_character():
+    assert _tamper_flow_token("tokenA") == "tokenB"
+    assert _tamper_flow_token("tokenB") == "tokenA"
+
+
 def test_install_flow_completion_verifies_session_signature_expiry_subject_and_id(
     tmp_path, monkeypatch
 ):
@@ -3574,7 +3587,7 @@ def test_install_flow_completion_verifies_session_signature_expiry_subject_and_i
     client = TestClient(app)
     valid = _flow_token()
     cases = [
-        (valid[:-1] + "A", "user_01ABC", 1001),
+        (_tamper_flow_token(valid), "user_01ABC", 1001),
         (_flow_token(expires_at=int(time.time()) - 1), "user_01ABC", 1001),
         (valid, "user_attacker", 1001),
         (valid, "user_01ABC", 1002),
@@ -3615,6 +3628,7 @@ def test_pre_auth_flow_without_a_bound_subject_cannot_complete(tmp_path, monkeyp
         expires_at=int(time.time()) + 300,
         subject=None,
         installation_id=1001,
+        pkce_retried=False,
         secret=_FLOW_SECRET,
     )
 
@@ -3749,6 +3763,77 @@ def test_install_flow_completion_parses_untrusted_bodies_without_fastapi_echo(
     assert _bound_org(1001) is None
 
 
+def test_install_flow_completion_rejects_chunked_body_over_4096_before_json_or_core(
+    monkeypatch,
+):
+    marker = "over-limit-flow-marker-that-must-not-echo"
+    payload = json.dumps(
+        {"installation_id": 1001, "flow_token": marker + "x" * 4096}
+    ).encode()
+    assert len(payload) > 4096
+    parsed_lengths: list[int] = []
+    core_calls = []
+    real_loads = api.json.loads
+
+    def recording_loads(value):
+        parsed_lengths.append(len(value))
+        return real_loads(value)
+
+    def forbidden_core(*args):
+        core_calls.append(args)
+        return api.Response(status_code=204)
+
+    monkeypatch.setattr(api.json, "loads", recording_loads)
+    monkeypatch.setattr(api, "_complete_install_flow_sync", forbidden_core)
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        content=iter((payload[:2048], payload[2048:])),
+        headers={"Authorization": "Bearer marker", "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 404
+    # Do not call response.json(): api.json is the stdlib module, so the
+    # monkeypatch deliberately observes every json.loads call in this process.
+    assert response.text == '{"detail":"not found"}'
+    assert marker not in response.text
+    assert parsed_lengths == []
+    assert core_calls == []
+
+
+def test_install_flow_completion_parses_exactly_4096_bounded_bytes(monkeypatch):
+    token = "bounded-token"
+    compact = json.dumps(
+        {"installation_id": 1001, "flow_token": token}, separators=(",", ":")
+    ).encode()
+    payload = compact + b" " * (4096 - len(compact))
+    assert len(payload) == 4096
+    parsed_lengths: list[int] = []
+    core_calls = []
+    real_loads = api.json.loads
+
+    def recording_loads(value):
+        parsed_lengths.append(len(value))
+        return real_loads(value)
+
+    def successful_core(body, authorization):
+        core_calls.append((body, authorization))
+        return api.Response(status_code=204)
+
+    monkeypatch.setattr(api.json, "loads", recording_loads)
+    monkeypatch.setattr(api, "_complete_install_flow_sync", successful_core)
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        content=payload,
+        headers={"Authorization": "Bearer bounded", "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 204
+    assert parsed_lengths == [4096]
+    assert core_calls == [
+        ({"installation_id": 1001, "flow_token": token}, "Bearer bounded")
+    ]
+
+
 def test_install_flow_configuration_fault_is_named_before_workos(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _installed(1001, installer=777)
@@ -3775,22 +3860,20 @@ def test_install_flow_completion_moves_blocking_authority_work_off_the_event_loo
 ):
     """The async route must parse its own untrusted bytes, then hand every
     database/WorkOS operation to a worker thread."""
-    from starlette.requests import Request as StarletteRequest
-
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
     seen: dict[str, str] = {}
-    real_body = StarletteRequest.body
+    real_read_body = api._read_complete_install_flow_body
 
-    async def marked_body(request):
+    async def marked_read_body(request):
         seen["loop"] = threading.current_thread().name
-        return await real_body(request)
+        return await real_read_body(request)
 
     def marked_enabled():
         seen["ledger"] = threading.current_thread().name
         return False
 
-    monkeypatch.setattr(StarletteRequest, "body", marked_body)
+    monkeypatch.setattr(api, "_read_complete_install_flow_body", marked_read_body)
     monkeypatch.setattr(store, "enabled", marked_enabled)
     assert inspect.iscoroutinefunction(api.complete_install_flow)
 
@@ -3868,6 +3951,83 @@ def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(
     assert sum(_bound_org(i) is not None for i in (1001, 1002)) == 1
     consumed = store.install_flow_consumption(hashlib.sha256(nonce).hexdigest())
     assert consumed["installation_id"] == 1001
+
+
+def test_install_completions_do_not_starve_a_two_connection_main_pool(
+    tmp_path, monkeypatch
+):
+    """Session advisory locks must not occupy the ledger pool while WorkOS
+    and binding helpers need that same pool. Two connections is enough for
+    two concurrent completions when locking has its own bounded engine."""
+    url = _db(tmp_path, monkeypatch)
+    main_engine = create_engine(
+        url,
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=0.25,
+    )
+    store.metadata.create_all(main_engine)
+    monkeypatch.setattr(store, "_engine", main_engine)
+    monkeypatch.setattr(store, "_engine_url", url)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    tokens = {
+        1001: _flow_token(1001, nonce=b"\x11" * 32),
+        1002: _flow_token(1002, nonce=b"\x12" * 32),
+    }
+    first_workos_entered = threading.Event()
+    release_first = threading.Event()
+    request_lock = threading.Lock()
+    identity_calls = 0
+    real_request = fake
+
+    def gated_request(method, path, *, json=None):
+        nonlocal identity_calls
+        if method == "GET" and path.endswith("/identities"):
+            with request_lock:
+                identity_calls += 1
+                call_number = identity_calls
+            if call_number == 1:
+                first_workos_entered.set()
+                assert release_first.wait(5), "coordinator never released first flow"
+        return real_request(method, path, json=json)
+
+    monkeypatch.setattr(workos_client, "_request", gated_request)
+    results: dict[int, int] = {}
+    errors: list[BaseException] = []
+    finished = {installation_id: threading.Event() for installation_id in tokens}
+
+    def complete(installation_id):
+        try:
+            results[installation_id] = _complete_flow(
+                TestClient(app), installation_id, tokens[installation_id]
+            ).status_code
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished[installation_id].set()
+
+    first = threading.Thread(target=complete, args=(1001,))
+    second = threading.Thread(target=complete, args=(1002,))
+    try:
+        first.start()
+        assert first_workos_entered.wait(5), "first flow never reached WorkOS"
+        second.start()
+        second_finished_while_first_held_lock = finished[1002].wait(0.5)
+        release_first.set()
+        first.join(5)
+        second.join(5)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert second_finished_while_first_held_lock is False
+        assert errors == []
+        assert results == {1001: 204, 1002: 204}
+        assert _bound_org(1001) == "org_for_gh-inst-1001"
+        assert _bound_org(1002) == "org_for_gh-inst-1002"
+    finally:
+        main_engine.dispose()
 
 
 def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(

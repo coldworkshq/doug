@@ -759,17 +759,96 @@ def test_consumed_install_flows_is_a_digest_only_create_all_table(tmp_path, monk
     assert "consumed_install_flows" in inspect(create_engine(url)).get_table_names()
 
 
-def test_install_flow_nonce_lock_has_a_bounded_local_pool_and_negative_pg_namespace():
-    """Attacker-selected nonces cannot allocate one immortal process lock
-    apiece, and their Postgres advisory keys cannot collide with the positive
-    installation-id namespace."""
-    digests = [hashlib.sha256(str(i).encode()).hexdigest() for i in range(4096)]
-    local_locks = {id(store._install_flow_local_lock(digest)) for digest in digests}
-    advisory_keys = [store._install_flow_advisory_key(digest) for digest in digests]
+def test_install_flow_lock_engine_is_bounded_cached_and_disposed_on_url_change(
+    monkeypatch,
+):
+    class FakeEngine:
+        def __init__(self, url):
+            self.url = url
+            self.disposed = 0
 
-    assert 1 < len(local_locks) <= 256
-    assert all(-(2**63) <= key < 0 for key in advisory_keys)
-    assert store._install_flow_advisory_key(digests[0]) == advisory_keys[0]
+        def dispose(self):
+            self.disposed += 1
+
+    built = []
+
+    def build(url, **options):
+        engine = FakeEngine(url)
+        built.append((engine, options))
+        return engine
+
+    monkeypatch.setattr(store, "create_engine", build)
+    monkeypatch.setattr(store, "_install_flow_lock_engine", None, raising=False)
+    monkeypatch.setattr(store, "_install_flow_lock_engine_url", None, raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/first")
+
+    first = store._get_install_flow_lock_engine()
+    assert store._get_install_flow_lock_engine() is first
+    assert built == [
+        (first, {"pool_pre_ping": True, "pool_size": 1, "max_overflow": 0})
+    ]
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/second")
+    second = store._get_install_flow_lock_engine()
+    assert second is not first
+    assert first.disposed == 1
+    assert built[1] == (
+        second,
+        {"pool_pre_ping": True, "pool_size": 1, "max_overflow": 0},
+    )
+
+    monkeypatch.delenv("DATABASE_URL")
+    assert store._get_install_flow_lock_engine() is None
+    assert second.disposed == 1
+
+
+def test_combined_install_flow_lock_uses_only_lock_pool_and_releases_in_reverse(
+    monkeypatch,
+):
+    digest = hashlib.sha256(b"combined-lock-call-site").hexdigest()
+    nonce_key = store._install_flow_advisory_key(digest)
+    events = []
+
+    class RecordingConnection:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+        def execution_options(self, **options):
+            events.append(("options", options))
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, statement, params):
+            events.append((str(statement), params["key"]))
+
+    class LockEngine:
+        def connect(self):
+            return RecordingConnection()
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: LockEngine())
+
+    def main_pool_forbidden():
+        raise AssertionError("combined lock reached the main ledger pool")
+
+    monkeypatch.setattr(store, "_get_engine", main_pool_forbidden)
+    with pytest.raises(RuntimeError, match="body failure"):
+        with store.install_flow_bind_lock(digest, 1001):
+            events.append(("body", None))
+            raise RuntimeError("body failure")
+
+    assert events == [
+        ("options", {"isolation_level": "AUTOCOMMIT"}),
+        ("SELECT pg_advisory_lock(:key)", nonce_key),
+        ("SELECT pg_advisory_lock(:key)", 1001),
+        ("body", None),
+        ("SELECT pg_advisory_unlock(:key)", 1001),
+        ("SELECT pg_advisory_unlock(:key)", nonce_key),
+    ]
+    assert nonce_key < 0
 
 
 def test_install_flow_consumption_is_inserted_before_the_authority_write(

@@ -431,14 +431,9 @@ _engine = None
 # DATABASE_URL — and rebuilt the engine, pool and all, on every call.
 _engine_url = None
 _engine_lock = threading.Lock()
-# Nonce values are attacker-selected. A fixed pool bounds process memory while
-# still ensuring every equal digest takes the same in-process lock. Postgres
-# adds the cross-instance half in install_flow_lock below.
-_INSTALL_FLOW_LOCAL_LOCKS = tuple(threading.Lock() for _ in range(64))
-
-
-def _install_flow_local_lock(nonce_digest: str):
-    return _INSTALL_FLOW_LOCAL_LOCKS[int(nonce_digest, 16) % len(_INSTALL_FLOW_LOCAL_LOCKS)]
+_install_flow_lock_engine = None
+_install_flow_lock_engine_url = None
+_install_flow_lock_engine_lock = threading.Lock()
 
 
 def _install_flow_advisory_key(nonce_digest: str) -> int:
@@ -453,6 +448,34 @@ def _get_existing_schema_engine():
     if not url:
         return None
     return create_engine(url, pool_pre_ping=True)
+
+
+def _get_install_flow_lock_engine():
+    """Return the one-connection engine reserved for install-flow locks."""
+    global _install_flow_lock_engine, _install_flow_lock_engine_url
+    url = os.environ.get("DATABASE_URL")
+    with _install_flow_lock_engine_lock:
+        if not url:
+            if _install_flow_lock_engine is not None:
+                _install_flow_lock_engine.dispose()
+            _install_flow_lock_engine = None
+            _install_flow_lock_engine_url = None
+            return None
+        if (
+            _install_flow_lock_engine is None
+            or _install_flow_lock_engine_url != url
+        ):
+            engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                pool_size=1,
+                max_overflow=0,
+            )
+            if _install_flow_lock_engine is not None:
+                _install_flow_lock_engine.dispose()
+            _install_flow_lock_engine = engine
+            _install_flow_lock_engine_url = url
+        return _install_flow_lock_engine
 
 
 def _get_engine():
@@ -2469,30 +2492,36 @@ def installation_bind_lock(installation_id: int):
 
 
 @contextmanager
-def install_flow_lock(nonce_digest: str):
-    """Serialize one flow nonce before any external authority call.
+def install_flow_bind_lock(nonce_digest: str, installation_id: int):
+    """Serialize one nonce and installation without occupying the ledger pool.
 
-    The fixed local stripe prevents same-process races on sqlite and bounds
-    attacker-driven lock allocation. A negative Postgres advisory key extends
-    the same digest lock across service instances without colliding with the
-    positive installation-id lock namespace.
+    One purpose-built connection holds both session locks in a fixed order.
+    PostgreSQL uses a negative nonce key followed by the positive installation
+    id and releases them in reverse. SQLite has no advisory locks, but holding
+    the engine's sole connection still provides bounded per-instance
+    serialization for the authority work guarded by this context.
     """
-    local_lock = _install_flow_local_lock(nonce_digest)
-    with local_lock:
-        engine = _get_engine()
-        if engine is None:
+    engine = _get_install_flow_lock_engine()
+    if engine is None:
+        yield
+        return
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        if conn.dialect.name != "postgresql":
             yield
             return
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            if conn.dialect.name != "postgresql":
-                yield
-                return
-            key = {"key": _install_flow_advisory_key(nonce_digest)}
-            conn.execute(text("SELECT pg_advisory_lock(:key)"), key)
+        nonce_key = {"key": _install_flow_advisory_key(nonce_digest)}
+        installation_key = {"key": int(installation_id)}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), nonce_key)
+        try:
+            conn.execute(text("SELECT pg_advisory_lock(:key)"), installation_key)
             try:
                 yield
             finally:
-                conn.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+                conn.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), installation_key
+                )
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), nonce_key)
 
 
 def bind_installation_org(installation_id: int, org_id: str) -> str | None:
@@ -2573,7 +2602,7 @@ def consume_install_flow_and_bind(
 ) -> str:
     """Atomically spend a verified flow and write its installation authority.
 
-    The caller holds installation_bind_lock and has already performed the
+    The caller holds install_flow_bind_lock and has already performed the
     WorkOS identity and organization operations. This transaction re-checks
     the nonce, inserts its digest BEFORE the authority update, and commits
     both together. Results are `bound`, exact `replay`, identity `mismatch`,

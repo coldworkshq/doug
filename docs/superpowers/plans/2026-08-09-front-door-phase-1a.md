@@ -703,7 +703,8 @@ identity matching the webhook-recorded installer.
    this one signed cookie so `/auth/callback` can recover an expired PKCE
    attempt; it does not widen AuthKit's own cookie. Its payload is
    versioned and carries `nonce`, `exp`, the WorkOS `sub`, and later the
-   installation id. Redirect to
+   installation id, plus the exact boolean `pkce_retried` (initially `false`).
+   Redirect to
    `https://github.com/apps/dougs-review/installations/new`; send no GitHub
    `state` parameter.
 3. `/install/callback` is included in the AuthKit proxy matcher because the
@@ -714,13 +715,20 @@ identity matching the webhook-recorded installer.
    callback. AuthKit's PKCE proof keeps its installed 600-second cap. A real
    `CallbackError` with `missing_pkce_cookie` may start a fresh PKCE attempt
    only when `/auth/callback` can verify the still-unexpired signed flow and
-   its installation id; all other errors are constant, non-looping failures.
+   its installation id. Recovery is one-shot: it refuses a flow whose signed
+   `pkce_retried` is already `true`; otherwise it reseals the same nonce,
+   expiry, subject, and installation id with the bit set and gives the root
+   HttpOnly cookie only the remaining signed lifetime. All other errors are
+   constant, non-looping failures.
 4. With a session, the callback seals the current WorkOS `sub` into the flow
    and server-to-server POSTs `{installation_id, flow_token}` to the new API
    endpoint using the WorkOS access token. Neither token reaches browser JS,
    a URL, a log, or localStorage. The API route reads and JSON-parses the
    request itself so FastAPI/Pydantic cannot echo rejected token input, then
    sends its blocking database and WorkOS core through `run_in_threadpool`.
+   It streams a hard maximum of 4,096 bytes before JSON parsing,
+   authentication, or threadpool dispatch; byte 4,097 gets the same constant
+   404 as every other malformed proof.
 5. The API independently verifies the WorkOS JWT plus HMAC version,
    signature, expiry, subject, installation id, and nonce shape. It then
    reuses Task 5's exact installer-identity proof. A user with no linked
@@ -729,15 +737,19 @@ identity matching the webhook-recorded installer.
    setup** state, never as a failure to hold a Doug account.
 6. A new-table-only `consumed_install_flows` record stores the SHA-256 nonce
    digest, WorkOS user id, installation id, and consumed time; raw nonces are
-   never stored. Before any WorkOS call, an outer nonce-digest lock checks
-   durable consumption globally: fixed local stripes bound attacker-driven
-   allocation and negative Postgres bigint advisory keys namespace it away
-   from positive installation locks. Under that lock and then the existing
-   installation lock, a successful bind performs idempotent WorkOS setup,
-   then in one database transaction inserts consumption **before** the
-   installation authority write. Both DB writes commit or roll back together.
-   A same-user/same-install replay may return success but must execute no
-   WorkOS or binding side effect; any mismatched replay is refused.
+   never stored. Before any WorkOS call, a purpose-built lock engine using the
+   same `DATABASE_URL` reserves one connection (`pool_size=1`, no overflow).
+   One AUTOCOMMIT connection acquires the negative nonce advisory key and then
+   the positive installation key, releases them in reverse, and never touches
+   the normal ledger pool. Body reads/writes and WorkOS-backed helpers continue
+   to use the normal pool, avoiding nested-pool starvation. PostgreSQL provides
+   cross-instance serialization; SQLite holds the lock engine's sole
+   connection for bounded per-instance serialization. Under that combined
+   lock, a successful bind performs idempotent WorkOS setup, then in one
+   database transaction inserts consumption **before** the installation
+   authority write. Both DB writes commit or roll back together. A
+   same-user/same-install replay may return success but must execute no WorkOS
+   or binding side effect; any mismatched replay is refused.
 7. `setup_action=request` clears the flow and returns a calm waiting-for-admin
    state without calling bind. `setup_action=update` never calls bind: it
    clears the flow and sends the user through AuthKit with `prompt=consent`
@@ -769,9 +781,10 @@ identity matching the webhook-recorded installer.
       existing endpoint. Add failing caller-level API tests proving the new
       endpoint internally parses every body shape without token echo, moves
       blocking authority work off the event loop, uses every verification
-      boundary, locks a nonce across installation ids before WorkOS, and that
-      replay skips WorkOS; run red, implement, run the old and new bind suites
-      green.
+      boundary, rejects streamed bodies beyond 4,096 bytes before JSON/auth,
+      locks a nonce across installation ids before WorkOS without consuming a
+      normal-pool connection, and that replay skips WorkOS; run red, implement,
+      run the old and new bind suites green.
 - [ ] 5. Add failing route tests for start, cold arrival/resume, subject
       mismatch, request, update, GitHub-identity-required, upstream outage,
       cookie attributes/TTL/root path, matcher exclusions, missing-PKCE
@@ -785,8 +798,9 @@ identity matching the webhook-recorded installer.
       let replay call WorkOS; bind on `update` or `request`; put a token in a
       URL/browser-readable cookie; remove the global nonce lock; restore
       framework body validation; treat a missing signing secret as forged
-      input; grant either service an extra secret. Each named test must fail,
-      then restore.
+      input; remove the signed one-shot PKCE bit; route locks through the main
+      pool; disable the 4,096-byte limit; make a tamper helper a no-op; grant
+      either service an extra secret. Each named test must fail, then restore.
 - [ ] 8. Run `cd api && uv run pytest && uv run ruff check .`, root deploy
       syntax, and `cd web && npm test && npm run lint && npm run build`; commit
       only explicit Task 8 paths.

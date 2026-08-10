@@ -1460,7 +1460,7 @@ def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
         raise _not_found() from exc
     nonce_digest = hashlib.sha256(flow.nonce).hexdigest()
 
-    with store.install_flow_lock(nonce_digest):
+    with store.install_flow_bind_lock(nonce_digest, installation_id):
         consumed = store.install_flow_consumption(nonce_digest)
         if consumed is not None:
             if (
@@ -1470,31 +1470,45 @@ def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
                 return Response(status_code=204)
             raise _not_found()
 
-        with store.installation_bind_lock(installation_id):
-            row, claimed = _prove_installer(installation_id, workos_user_id)
-            current = _current_proved_row(installation_id, row, claimed)
-            organization_id = _ensure_workos_binding(
-                installation_id, workos_user_id, current
+        row, claimed = _prove_installer(installation_id, workos_user_id)
+        current = _current_proved_row(installation_id, row, claimed)
+        organization_id = _ensure_workos_binding(
+            installation_id, workos_user_id, current
+        )
+        result = store.consume_install_flow_and_bind(
+            nonce_digest,
+            workos_user_id,
+            installation_id,
+            organization_id,
+        )
+        if result == "mismatch":
+            raise _not_found()
+        if result == "conflict":
+            raise HTTPException(
+                status_code=409,
+                detail="installation is bound to another organization",
             )
-            result = store.consume_install_flow_and_bind(
-                nonce_digest,
-                workos_user_id,
-                installation_id,
-                organization_id,
-            )
-            if result == "mismatch":
-                raise _not_found()
-            if result == "conflict":
-                raise HTTPException(
-                    status_code=409,
-                    detail="installation is bound to another organization",
-                )
     print(
         f"doug: completed install flow for installation {installation_id} "
         f"and organization {organization_id}",
         file=sys.stderr,
     )
     return Response(status_code=204)
+
+
+COMPLETE_INSTALL_FLOW_MAX_BODY_BYTES = 4096
+
+
+async def _read_complete_install_flow_body(request: Request) -> bytes:
+    """Buffer at most the route's small, fixed proof envelope."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > COMPLETE_INSTALL_FLOW_MAX_BODY_BYTES:
+            raise _not_found()
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.post("/v1/installations/bind/complete", status_code=204)
@@ -1506,7 +1520,7 @@ async def complete_install_flow(
     if content_type != "application/json":
         raise _not_found()
     try:
-        body = json.loads(await request.body())
+        body = json.loads(await _read_complete_install_flow_body(request))
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise _not_found() from None
     if not isinstance(body, dict) or set(body) != {"installation_id", "flow_token"}:

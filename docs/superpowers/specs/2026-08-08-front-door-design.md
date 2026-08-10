@@ -259,19 +259,28 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    AuthKit's installed PKCE proof remains capped at 600 seconds. If an inbox
    round-trip outlives it, `/auth/callback` recovers only a real
    `missing_pkce_cookie` callback error with a still-valid signed install flow
-   carrying an installation id, then starts a fresh provider-neutral sign-in
-   attempt returning to `/install/callback`. No other callback error loops.
+   carrying an installation id and signed `pkce_retried=false`. It reseals the
+   same nonce, expiry, subject, and installation id with `pkce_retried=true`,
+   sets the replacement cookie for only the flow's remaining signed lifetime,
+   then starts a fresh provider-neutral sign-in attempt returning to
+   `/install/callback`. A flow already carrying `pkce_retried=true` is refused;
+   no other callback error loops.
 
 5. **Consume the nonce** (single-use; burn its digest in API storage, not just
    compare it in web memory). Doug-web and doug-api share a dedicated install
    flow HMAC secret; it is not the AuthKit cookie key. Missing or
    shorter-than-32-byte keys are named configuration faults. The API parses
-   the JSON body internally, then runs its blocking core off the event loop.
-   A nonce-digest lock is acquired before WorkOS globally across installation
-   ids, using bounded local stripes and negative Postgres advisory keys. The
-   successful bind transaction inserts the consumption before its authority
-   write, and both commit or roll back together. A same-flow retry may return
-   idempotent success but must not repeat WorkOS or binding side effects.
+   at most 4,096 streamed body bytes internally before JSON, authentication,
+   or threadpool work, then runs its blocking core off the event loop. A
+   purpose-built engine for the same `DATABASE_URL` has a one-connection pool;
+   one AUTOCOMMIT connection acquires the negative nonce advisory key and then
+   the positive installation key, while all ledger reads and writes continue
+   through the normal pool. It releases both locks in reverse order. SQLite
+   holds that sole purpose connection for bounded per-instance serialization.
+   The successful bind transaction inserts the consumption before its
+   authority write, and both commit or roll back together. A same-flow retry
+   may return idempotent success but must not repeat WorkOS or binding side
+   effects.
 6. **Prove authority, not visibility.** Match the signed-in WorkOS user's
    linked GitHub identity to `installations.installed_by_github_user_id`, the
    sender recorded by the `installation.created` webhook. Task 5 rejected the
@@ -416,8 +425,9 @@ works" needs orgs that only the bind step provisions.
   helper; JWKS verification; the session branch at `api.py:326`; the new
   installation-by-org query.
 - `/install/start`, matcher-included/no-session-tolerant `/install/callback`,
-  signed single-use nonce cookie, installer proof, globally nonce-locked then
-  installation-locked org ensure, membership provisioning and **teardown**.
+  signed single-use nonce cookie, installer proof, combined nonce-plus-install
+  lock on a separate one-connection engine, org ensure, membership provisioning
+  and **teardown**.
 - `/dashboard` with the welcome/IOU block, tenant-scoped queue, and receipts.
 
 **Session fetch helpers must not reuse `web/lib/api.ts`.** `inflight` and

@@ -17,8 +17,8 @@ const FIXTURE_SECRET = "install-flow-fixture-secret-32-bytes";
 const FIXTURE_NONCE = Uint8Array.from({ length: 32 }, (_, index) => index);
 const FIXTURE_TOKEN =
   "eyJ2IjoxLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgi" +
-  "LCJleHAiOjIwMDAwMDAwMDAsInN1YiI6InVzZXJfMDFBQkMiLCJpbnN0YWxsYXRpb25faWQiOjEwMDF9" +
-  ".uvB2k7PQLLXOjVmscQyZ4PJo20ay1VsmfR9LZ_p34Sg";
+  "LCJleHAiOjIwMDAwMDAwMDAsInN1YiI6InVzZXJfMDFBQkMiLCJpbnN0YWxsYXRpb25faWQiOjEwMDEs" +
+  "InBrY2VfcmV0cmllZCI6ZmFsc2V9.80d_xUkijhR281JyJ8ATMcYGRgotlbWqw5t23Tiu_-g";
 
 function signed(payload) {
   const segment = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -26,12 +26,25 @@ function signed(payload) {
   return `${segment}.${signature}`;
 }
 
+function tamperToken(token) {
+  const replacement = token.at(-1) === "A" ? "B" : "A";
+  const tampered = token.slice(0, -1) + replacement;
+  assert.notEqual(tampered, token);
+  return tampered;
+}
+
+test("tamper helper changes tokens ending in either candidate character", () => {
+  assert.equal(tamperToken("tokenA"), "tokenB");
+  assert.equal(tamperToken("tokenB"), "tokenA");
+});
+
 test("TypeScript and Python share one exact install-flow fixture", () => {
   const token = sealInstallFlow({
     nonce: FIXTURE_NONCE,
     expiresAt: 2_000_000_000,
     subject: "user_01ABC",
     installationId: 1001,
+    pkceRetried: false,
     secret: FIXTURE_SECRET,
   });
   assert.equal(token, FIXTURE_TOKEN);
@@ -46,6 +59,7 @@ test("TypeScript and Python share one exact install-flow fixture", () => {
   assert.equal(flow.subject, "user_01ABC");
   assert.equal(flow.installationId, 1001);
   assert.equal(flow.expiresAt, 2_000_000_000);
+  assert.equal(flow.pkceRetried, false);
 });
 
 test("a pre-auth flow may carry null subject until WorkOS binds it", () => {
@@ -54,6 +68,7 @@ test("a pre-auth flow may carry null subject until WorkOS binds it", () => {
     expiresAt: 2_000_000_000,
     subject: null,
     installationId: 1001,
+    pkceRetried: false,
     secret: FIXTURE_SECRET,
   });
   const flow = verifyInstallFlow(token, {
@@ -72,9 +87,38 @@ test("a pre-auth flow may carry null subject until WorkOS binds it", () => {
   );
 });
 
+test("PKCE retry guard is an exact signed boolean", () => {
+  const token = sealInstallFlow({
+    nonce: FIXTURE_NONCE,
+    expiresAt: 2_000_000_000,
+    subject: "user_01ABC",
+    installationId: 1001,
+    pkceRetried: true,
+    secret: FIXTURE_SECRET,
+  });
+  assert.equal(
+    verifyInstallFlow(token, { now: 1_999_999_999, secret: FIXTURE_SECRET }).pkceRetried,
+    true,
+  );
+
+  const base = {
+    v: 1,
+    nonce: Buffer.from(FIXTURE_NONCE).toString("base64url"),
+    exp: 2_000_000_000,
+    sub: "user_01ABC",
+    installation_id: 1001,
+  };
+  for (const payload of [base, { ...base, pkce_retried: 1 }]) {
+    assert.throws(
+      () => verifyInstallFlow(signed(payload), { now: 1_999_999_999, secret: FIXTURE_SECRET }),
+      /^Error: invalid install flow$/,
+    );
+  }
+});
+
 test("verification refuses tamper, expiry, identity swaps, and malformed nonces", () => {
   const cases = [
-    [FIXTURE_TOKEN.slice(0, -1) + "A", 1_999_999_999, "user_01ABC", 1001],
+    [tamperToken(FIXTURE_TOKEN), 1_999_999_999, "user_01ABC", 1001],
     [FIXTURE_TOKEN, 2_000_000_000, "user_01ABC", 1001],
     [FIXTURE_TOKEN, 1_999_999_999, "user_attacker", 1001],
     [FIXTURE_TOKEN, 1_999_999_999, "user_01ABC", 1002],
@@ -85,6 +129,7 @@ test("verification refuses tamper, expiry, identity swaps, and malformed nonces"
         exp: 2_000_000_000,
         sub: "user_01ABC",
         installation_id: 1001,
+        pkce_retried: false,
       }),
       1_999_999_999,
       "user_01ABC",
@@ -97,6 +142,7 @@ test("verification refuses tamper, expiry, identity swaps, and malformed nonces"
         exp: 2_000_000_000,
         sub: "user_01ABC",
         installation_id: 1001,
+        pkce_retried: false,
       }),
       1_999_999_999,
       "user_01ABC",
@@ -145,6 +191,7 @@ test("missing or short secrets are named configuration faults without sensitive 
       expiresAt: 2_000_000_000,
       subject: "user_01ABC",
       installationId: 1001,
+      pkceRetried: false,
       secret: setupSecret,
     });
     assert.equal(
@@ -164,12 +211,14 @@ function routeToken({
   installationId = 1001,
   nonce = Uint8Array.from({ length: 32 }, () => 7),
   expiresAt = Math.floor(Date.now() / 1000) + 1800,
+  pkceRetried = false,
 } = {}) {
   return sealInstallFlow({
     nonce,
     expiresAt,
     subject,
     installationId,
+    pkceRetried,
     secret: ROUTE_SECRET,
   });
 }
@@ -215,6 +264,7 @@ test("install start explicitly requires WorkOS and creates the human-TTL HttpOnl
     const flow = verifyInstallFlow(cookieValue(response), { secret: ROUTE_SECRET });
     assert.equal(flow.subject, "user_01ABC");
     assert.equal(flow.installationId, null);
+    assert.equal(flow.pkceRetried, false);
   } finally {
     if (old.secret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
     else process.env.DOUG_INSTALL_FLOW_SECRET = old.secret;
@@ -255,6 +305,7 @@ test("GitHub-first callback stores installation state, signs in, and resumes wit
     const pending = verifyInstallFlow(pendingToken, { secret: ROUTE_SECRET });
     assert.equal(pending.subject, null);
     assert.equal(pending.installationId, 1001);
+    assert.equal(pending.pkceRetried, false);
     assert.deepEqual(requests, []);
 
     globalThis.__workosAuth = {
@@ -452,8 +503,11 @@ test("temporary API failure preserves the flow for a safe retry", async () => {
   }
 });
 
-test("an expired AuthKit PKCE callback renews only from a valid pending install flow", async () => {
+test("an expired AuthKit PKCE callback gets one signed retry with only its remaining lifetime", async () => {
   const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  const realNow = Date.now;
+  const now = 1_900_000_000;
+  Date.now = () => now * 1000;
   process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
   globalThis.__workosSignInCalls = [];
   globalThis.__workosSignInUrl = "https://auth.workos.test/renewed-pkce";
@@ -464,25 +518,51 @@ test("an expired AuthKit PKCE callback renews only from a valid pending install 
   );
   try {
     const { GET } = await import("../app/auth/callback/route.ts?install-flow-pkce-recovery");
-    const token = routeToken();
-    const response = await GET(
+    const token = routeToken({ expiresAt: now + 127 });
+    const original = verifyInstallFlow(token, { now, secret: ROUTE_SECRET });
+    const first = await GET(
       await nextRequest(
         "https://doug.example/auth/callback?code=code-marker&state=state-marker",
         token,
       ),
     );
 
-    assert.equal(response.status, 307);
-    assert.equal(response.headers.get("location"), "https://auth.workos.test/renewed-pkce");
+    assert.equal(first.status, 307);
+    assert.equal(first.headers.get("location"), "https://auth.workos.test/renewed-pkce");
     assert.deepEqual(globalThis.__workosSignInCalls, [{ returnTo: "/install/callback" }]);
-    assert.equal(response.headers.get("location").includes(token), false);
-    assert.equal((await response.text()).includes("marker-that-must-not-escape"), false);
+    assert.equal(first.headers.get("location").includes(token), false);
+    assert.equal((await first.text()).includes("marker-that-must-not-escape"), false);
+    const retryCookie = first.headers.get("set-cookie");
+    assert.match(retryCookie, /doug_install_flow=/i);
+    assert.match(retryCookie, /HttpOnly/i);
+    assert.match(retryCookie, /SameSite=lax/i);
+    assert.match(retryCookie, /Path=\//i);
+    assert.match(retryCookie, /Max-Age=127/i);
+    const retryToken = cookieValue(first);
+    const retried = verifyInstallFlow(retryToken, { now, secret: ROUTE_SECRET });
+    assert.equal(retried.pkceRetried, true);
+    assert.equal(retried.expiresAt, original.expiresAt);
+    assert.equal(retried.subject, original.subject);
+    assert.equal(retried.installationId, original.installationId);
+    assert.deepEqual(retried.nonce, original.nonce);
+
+    const second = await GET(
+      await nextRequest(
+        "https://doug.example/auth/callback?code=second-code&state=second-state",
+        retryToken,
+      ),
+    );
+    assert.equal(second.status, 400);
+    assert.equal(second.headers.get("location"), null);
+    assert.equal(await second.text(), "Authentication could not be completed.");
+    assert.deepEqual(globalThis.__workosSignInCalls, [{ returnTo: "/install/callback" }]);
     assert.equal(
-      response.headers.get("set-cookie")?.includes("doug_install_flow") ?? false,
+      second.headers.get("set-cookie")?.includes("doug_install_flow") ?? false,
       false,
     );
   } finally {
     delete globalThis.__workosCallbackError;
+    Date.now = realNow;
     if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
     else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
   }
@@ -502,6 +582,7 @@ test("PKCE recovery refuses stale, malformed, unrelated, and lookalike callback 
       routeToken({ expiresAt: Math.floor(Date.now() / 1000) - 1 }),
     ],
     [new CallbackError(marker, "missing_pkce_cookie"), routeToken({ installationId: null })],
+    [new CallbackError(marker, "missing_pkce_cookie"), routeToken({ pkceRetried: true })],
     [new CallbackError(marker, "oauth_state_mismatch"), routeToken()],
     [Object.assign(new Error(marker), { code: "missing_pkce_cookie" }), routeToken()],
   ];

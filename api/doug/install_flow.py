@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 
 _NONCE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
-_FIELDS = {"v", "nonce", "exp", "sub", "installation_id"}
+_FIELDS = {"v", "nonce", "exp", "sub", "installation_id", "pkce_retried"}
 
 
 class InstallFlowError(ValueError):
@@ -33,6 +33,7 @@ class InstallFlow:
     expires_at: int
     subject: str | None
     installation_id: int | None
+    pkce_retried: bool
 
 
 def _secret(value: str | None) -> bytes:
@@ -55,7 +56,7 @@ def _b64decode(value: str) -> bytes:
     return decoded
 
 
-def _valid_payload(payload: object) -> tuple[bytes, int, str | None, int | None]:
+def _valid_payload(payload: object) -> tuple[bytes, int, str | None, int | None, bool]:
     if not isinstance(payload, dict) or set(payload) != _FIELDS or payload.get("v") != 1:
         raise InstallFlowError
     nonce_text = payload.get("nonce")
@@ -77,7 +78,10 @@ def _valid_payload(payload: object) -> tuple[bytes, int, str | None, int | None]
         or installation_id <= 0
     ):
         raise InstallFlowError
-    return nonce, expires_at, subject, installation_id
+    pkce_retried = payload.get("pkce_retried")
+    if not isinstance(pkce_retried, bool):
+        raise InstallFlowError
+    return nonce, expires_at, subject, installation_id, pkce_retried
 
 
 def seal_install_flow(
@@ -85,6 +89,7 @@ def seal_install_flow(
     nonce: bytes,
     expires_at: int,
     subject: str | None,
+    pkce_retried: bool,
     installation_id: int | None = None,
     secret: str | None = None,
 ) -> str:
@@ -95,6 +100,7 @@ def seal_install_flow(
         "exp": expires_at,
         "sub": subject,
         "installation_id": installation_id,
+        "pkce_retried": pkce_retried,
     }
     _valid_payload(payload)
     segment = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
@@ -127,7 +133,7 @@ def verify_install_flow(
         if not hmac.compare_digest(signature, expected_signature):
             raise InstallFlowError
         payload = json.loads(_b64decode(segment))
-        nonce, expires_at, subject, installation_id = _valid_payload(payload)
+        nonce, expires_at, subject, installation_id, pkce_retried = _valid_payload(payload)
         current_time = int(time.time()) if now is None else now
         if expires_at <= current_time:
             raise InstallFlowError
@@ -143,6 +149,7 @@ def verify_install_flow(
             expires_at=expires_at,
             subject=subject,
             installation_id=installation_id,
+            pkce_retried=pkce_retried,
         )
     except InstallFlowError:
         raise

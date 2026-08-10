@@ -36,6 +36,7 @@ export async function GET(): Promise<NextResponse> {
     expiresAt: Math.floor(Date.now() / 1000) + FLOW_MAX_AGE,
     subject: user.id,
     installationId: null,
+    pkceRetried: false,
   });
   const response = NextResponse.redirect(
     new URL(`https://github.com/apps/${encodeURIComponent(slug)}/installations/new`),

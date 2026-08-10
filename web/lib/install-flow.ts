@@ -5,6 +5,7 @@ type InstallFlow = {
   expiresAt: number;
   subject: string | null;
   installationId: number | null;
+  pkceRetried: boolean;
 };
 
 type SealOptions = InstallFlow & { secret?: string };
@@ -16,7 +17,7 @@ type VerifyOptions = {
   secret?: string;
 };
 
-const fields = ["exp", "installation_id", "nonce", "sub", "v"];
+const fields = ["exp", "installation_id", "nonce", "pkce_retried", "sub", "v"];
 
 export class InstallFlowConfigurationError extends Error {
   constructor() {
@@ -68,11 +69,13 @@ function parsePayload(value: unknown): InstallFlow {
   ) {
     throw invalid();
   }
+  if (typeof payload.pkce_retried !== "boolean") throw invalid();
   return {
     nonce: Uint8Array.from(nonce),
     expiresAt: payload.exp as number,
     subject: payload.sub as string | null,
     installationId: payload.installation_id as number | null,
+    pkceRetried: payload.pkce_retried,
   };
 }
 
@@ -81,6 +84,7 @@ export function sealInstallFlow({
   expiresAt,
   subject,
   installationId,
+  pkceRetried,
   secret,
 }: SealOptions): string {
   const signingSecret = resolveSecret(secret);
@@ -90,6 +94,7 @@ export function sealInstallFlow({
     exp: expiresAt,
     sub: subject,
     installation_id: installationId,
+    pkce_retried: pkceRetried,
   };
   parsePayload(payload);
   const segment = Buffer.from(JSON.stringify(payload)).toString("base64url");

@@ -8,6 +8,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { recordProviderEntitlements } from "@/lib/entitlements";
 import {
   InstallFlowConfigurationError,
+  sealInstallFlow,
   verifyInstallFlow,
 } from "@/lib/install-flow";
 
@@ -37,12 +38,23 @@ async function recoverExpiredPkce({
     return message("Authentication could not be completed.", 400);
   }
 
+  let retryToken: string;
+  let remainingLifetime: number;
   try {
     const token = request.cookies.get(FLOW_COOKIE)?.value;
-    const flow = token ? verifyInstallFlow(token) : null;
-    if (!flow || flow.installationId === null) {
+    const now = Math.floor(Date.now() / 1000);
+    const flow = token ? verifyInstallFlow(token, { now }) : null;
+    if (!flow || flow.installationId === null || flow.pkceRetried) {
       return message("Authentication could not be completed.", 400);
     }
+    remainingLifetime = flow.expiresAt - now;
+    retryToken = sealInstallFlow({
+      nonce: flow.nonce,
+      expiresAt: flow.expiresAt,
+      subject: flow.subject,
+      installationId: flow.installationId,
+      pkceRetried: true,
+    });
   } catch (caught) {
     if (caught instanceof InstallFlowConfigurationError) {
       return message("Repository setup is temporarily unavailable. Please retry.", 503);
@@ -51,7 +63,17 @@ async function recoverExpiredPkce({
   }
 
   try {
-    return NextResponse.redirect(await getSignInUrl({ returnTo: "/install/callback" }));
+    const response = NextResponse.redirect(
+      await getSignInUrl({ returnTo: "/install/callback" }),
+    );
+    response.cookies.set(FLOW_COOKIE, retryToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: remainingLifetime,
+      secure: process.env.NODE_ENV === "production",
+    });
+    return response;
   } catch {
     return message("Repository setup is temporarily unavailable. Please retry.", 503);
   }
