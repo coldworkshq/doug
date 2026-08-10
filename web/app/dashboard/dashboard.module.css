@@ -41,6 +41,8 @@
 .switchControl:focus-within { border-color: var(--chrome); outline: 2px solid color-mix(in srgb, var(--chrome) 35%, transparent); outline-offset: 2px; }
 .scopeSubmit { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 10px; cursor: pointer; }
 .scopeSubmit:hover, .scopeSubmit:focus-visible { border-color: var(--chrome); color: var(--ink); }
+.connectRepositories { color: var(--chrome); font-family: var(--font-geist-mono); font-size: 10px; text-decoration: underline; text-underline-offset: 3px; }
+.connectRepositories:focus-visible { outline: 2px solid color-mix(in srgb, var(--chrome) 35%, transparent); outline-offset: 3px; }
 .account { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 10px; }
 .account button { border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
 
@@ -48,6 +50,19 @@
 .tabs > * { padding: 9px 13px 8px; border-bottom: 2px solid transparent; color: #aaa79f; font-family: var(--font-geist-mono); font-size: 10px; letter-spacing: .08em; text-decoration: none; text-transform: uppercase; }
 .tabs a[aria-current] { margin-bottom: -1px; border-bottom-color: var(--chrome); color: var(--ink); font-weight: 600; }
 .tabs small { font-size: 8px; }
+
+.setupStrip { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; max-width: 1400px; margin: 0 auto; padding: 10px 20px; border-bottom: 1px solid var(--rule); background: color-mix(in srgb, var(--paper) 91%, transparent); font-family: var(--font-geist-mono); }
+.setupHeading { display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+.setupHeading span { color: var(--chrome); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
+.setupHeading small { color: var(--ink-muted); font-size: 9px; line-height: 1.35; }
+.setupRows { display: flex; flex-direction: column; }
+.setupRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; padding: 5px 0; border-top: 1px solid var(--rule-soft); }
+.setupRow:first-child { border-top: 0; }
+.setupRow > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.setupRow strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.setupRow small { color: var(--ink-muted); font-size: 9px; }
+.setupRow button { padding: 5px 8px; border: 1px solid var(--chrome); border-radius: 3px; background: transparent; color: var(--chrome); font: inherit; font-size: 9px; cursor: pointer; text-transform: uppercase; }
+.setupRow button:hover, .setupRow button:focus-visible { background: var(--chrome-wash); outline: 2px solid color-mix(in srgb, var(--chrome) 30%, transparent); outline-offset: 2px; }
 
 .screenLabel { display: flex; align-items: center; gap: 12px; max-width: 1440px; margin: 0 auto; padding: 26px 20px 12px; color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; }
 .screenLabel::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
@@ -147,7 +162,6 @@
 .emptyState > p:not(.route), .chooseState > p:not(.route) { max-width: 620px; margin-top: 16px; color: var(--ink-muted); font-size: 16px; }
 .primaryAction { display: inline-block; margin-top: 26px; padding: 10px 14px; border-radius: 4px; background: var(--ink); color: var(--paper); font-family: var(--font-geist-mono); font-size: 11px; text-decoration: none; }
 .chooseState .scopeForm { margin-top: 28px; }
-.setupNote { font-family: var(--font-geist-mono); font-size: 10px !important; }
 
 @keyframes rowIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 
@@ -155,7 +169,9 @@
   .bar { position: static; align-items: flex-start; flex-wrap: wrap; }
   .account { width: 100%; margin-left: 0; justify-content: flex-end; }
   .scopeForm, .repoForm { max-width: 100%; }
+  .connectRepositories { margin-left: auto; }
   .switchControl select { max-width: 180px; }
+  .setupStrip { grid-template-columns: 1fr; }
   .forensicGrid { grid-template-columns: 1fr; }
   .spine { padding-right: 0; padding-bottom: 22px; border-right: 0; border-bottom: 1px solid var(--rule); }
   .evidence { padding-left: 0; }

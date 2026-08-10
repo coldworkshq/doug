@@ -284,6 +284,32 @@ export async function getConnections(accessToken: string): Promise<ConnectionsRe
   return body;
 }
 
+export async function bindInstallation(
+  accessToken: string,
+  installationId: number,
+): Promise<void> {
+  const message = "Doug could not finish this repository connection.";
+  try {
+    if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+      throw new SessionApiError(message);
+    }
+    const response = await fetch(`${SESSION_API_URL}/v1/installations/bind`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ installation_id: installationId }),
+      signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
+    });
+    if (response.status !== 204) throw new SessionApiError(message);
+  } catch (error) {
+    if (error instanceof SessionApiError) throw error;
+    throw new SessionApiError(message);
+  }
+}
+
 export async function getSessionRuns(
   accessToken: string,
   repo = "all",

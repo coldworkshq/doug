@@ -111,3 +111,42 @@ export function outcomeTone(kind: string | null): OutcomeTone {
   if (kind === "revert" || kind === "hotfix") return "flag";
   return "neutral";
 }
+
+type SetupConnectionLike = {
+  installation_id: number;
+  organization_id: string | null;
+  status: "ready" | "setup_required";
+  repositories: Array<unknown>;
+};
+
+export function parseInstallationId(value: unknown): number | null {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const installationId = Number(value);
+  return Number.isSafeInteger(installationId) ? installationId : null;
+}
+
+export function isFinishableSetupConnection(
+  connections: SetupConnectionLike[],
+  installationId: number,
+): boolean {
+  return connections.some((connection) =>
+    connection.installation_id === installationId &&
+    connection.status === "setup_required" &&
+    connection.organization_id === null &&
+    connection.repositories.length > 0
+  );
+}
+
+export function readyOrganizationAfterSetup(
+  connections: SetupConnectionLike[],
+  installationId: number,
+): string | null {
+  const connection = connections.find((candidate) =>
+    candidate.installation_id === installationId &&
+    candidate.status === "ready" &&
+    typeof candidate.organization_id === "string" &&
+    candidate.organization_id.length > 0 &&
+    candidate.repositories.length > 0
+  );
+  return connection?.organization_id || null;
+}

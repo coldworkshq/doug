@@ -19,7 +19,7 @@ import {
   type RunSummary,
 } from "@/lib/session-api";
 
-import { switchConnectionAction } from "./actions";
+import { finishSetupAction, switchConnectionAction } from "./actions";
 import styles from "./dashboard.module.css";
 
 const LEMA_LABEL = "Lema — separate product";
@@ -89,6 +89,35 @@ function ScopePicker({
       </label>
       <button type="submit" className={styles.scopeSubmit}>open</button>
     </form>
+  );
+}
+
+function PendingConnections({ connections }: { connections: RepositoryConnection[] }) {
+  const pending = connections.filter(
+    (connection) => connection.status === "setup_required",
+  );
+  if (pending.length === 0) return null;
+  return (
+    <section className={styles.setupStrip} aria-labelledby="pending-connections-title">
+      <div className={styles.setupHeading}>
+        <span id="pending-connections-title">setup required</span>
+        <small>Finish binding these installations before opening their run ledger.</small>
+      </div>
+      <div className={styles.setupRows}>
+        {pending.map((connection) => (
+          <div className={styles.setupRow} key={connection.installation_id}>
+            <span>
+              <strong>{connectionLabel(connection)}</strong>
+              <small>{connection.account_type.toLowerCase()} · {connection.repositories.length} repositories</small>
+            </span>
+            <form action={finishSetupAction}>
+              <input type="hidden" name="installation_id" value={connection.installation_id} />
+              <button type="submit">finish setup</button>
+            </form>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -327,6 +356,7 @@ export default async function DashboardPage({
           </label>
           <button type="submit" className={styles.scopeSubmit}>filter</button>
         </form>}
+        <Link href="/install/start" className={styles.connectRepositories}>Connect repositories</Link>
         <div className={styles.account}>
           <span>{user.email}</span>
           <form action={signOutAction}><button type="submit">sign out</button></form>
@@ -337,6 +367,7 @@ export default async function DashboardPage({
         <span>Repositories <small>later</small></span>
         <span>Evidence <small>later</small></span>
       </nav>
+      <PendingConnections connections={connections} />
 
       {connections.length === 0 ? <NoConnection userLabel={userLabel} /> : !current ? (
         <main className={styles.chooseState}>
@@ -344,11 +375,6 @@ export default async function DashboardPage({
           <h1>Choose a connected space.</h1>
           <p>Each space stays separate. Runs from one installation never join another.</p>
           <ScopePicker connections={connections} current={null} />
-          {connections.filter((connection) => connection.status === "setup_required").map((connection) => (
-            <p className={styles.setupNote} key={connection.installation_id}>
-              {connectionLabel(connection)} · setup required
-            </p>
-          ))}
         </main>
       ) : (
         <main>

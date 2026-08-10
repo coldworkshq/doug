@@ -47,6 +47,62 @@ test("session fetch is cacheless, bounded, and puts the WorkOS bearer only in a 
   }
 });
 
+test("direct bind posts only the installation id with a bounded WorkOS bearer request", async () => {
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return new Response(null, { status: 204 });
+  };
+  try {
+    const { bindInstallation } = await import("./session-api.ts?bind-request");
+    await bindInstallation("workos-session-secret", 404);
+    assert.equal(calls.length, 1);
+    assert.equal(String(calls[0].url).endsWith("/v1/installations/bind"), true);
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.cache, "no-store");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer workos-session-secret");
+    assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+    assert.deepEqual(JSON.parse(calls[0].options.body), { installation_id: 404 });
+    assert.ok(calls[0].options.signal instanceof AbortSignal);
+    assert.equal(String(calls[0].url).includes("workos-session-secret"), false);
+    assert.equal(calls[0].options.body.includes("workos-session-secret"), false);
+    assert.equal(calls[0].options.body.includes("organization"), false);
+    assert.equal(calls[0].options.body.includes("token"), false);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+test("direct bind accepts exactly 204 and keeps upstream and token failures constant", async () => {
+  const oldFetch = globalThis.fetch;
+  try {
+    const { bindInstallation, SessionApiError } = await import(
+      "./session-api.ts?bind-failures"
+    );
+    for (const response of [
+      async () => new Response("workos-session-secret leaked upstream", { status: 200 }),
+      async () => new Response("provider token leaked upstream", { status: 503 }),
+      async () => { throw new Error("network carried workos-session-secret"); },
+    ]) {
+      globalThis.fetch = response;
+      await assert.rejects(
+        bindInstallation("workos-session-secret", 404),
+        (error) => {
+          assert.ok(error instanceof SessionApiError);
+          assert.equal(error.message, "Doug could not finish this repository connection.");
+          assert.equal(String(error).includes("workos-session-secret"), false);
+          assert.equal(String(error).includes("provider token"), false);
+          assert.equal(String(error).includes("network carried"), false);
+          return true;
+        },
+      );
+    }
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
 test("session responses reject extra or malformed fields instead of rendering invented facts", async () => {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async () =>

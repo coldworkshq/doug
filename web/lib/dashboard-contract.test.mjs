@@ -65,3 +65,37 @@ test("coverage, outcomes, and select focus use honest visual semantics", async (
   assert.match(page, /outcomeTone\(outcome\.kind\)/);
   assert.match(css, /\.switchControl:focus-within\s*\{[^}]*(outline|box-shadow):/);
 });
+
+test("repository connection and every pending setup remain reachable in all dashboard states", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const connectMarkup = '<Link href="/install/start" className={styles.connectRepositories}>Connect repositories</Link>';
+  const connect = page.indexOf(connectMarkup);
+  const stateBranches = page.indexOf("connections.length === 0");
+  const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
+  assert.ok(connect >= 0 && connect < stateBranches);
+  assert.ok(pendingStrip >= 0 && pendingStrip < stateBranches);
+  assert.ok(page.includes(connectMarkup));
+  assert.match(page, /action=\{finishSetupAction\}/);
+  assert.match(page, /name="installation_id"/);
+  assert.match(page, />finish setup<\/button>/);
+});
+
+test("finish setup is a POST-only exact pre-bind and post-bind server action", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  const start = actions.indexOf("export async function finishSetupAction");
+  const end = actions.indexOf("export async function switchConnectionAction", start);
+  const finish = actions.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(actions, /^"use server";/);
+  assert.equal((finish.match(/getConnections\(/g) ?? []).length, 2);
+  assert.match(finish, /formData\.get\("installation_id"\)/);
+  assert.equal(finish.includes('formData.get("organization_id")'), false);
+  assert.match(finish, /isFinishableSetupConnection/);
+  assert.match(finish, /bindInstallation\(auth\.accessToken, installationId\)/);
+  assert.match(finish, /readyOrganizationAfterSetup/);
+  assert.match(finish, /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/);
+  assert.ok(finish.indexOf("isFinishableSetupConnection") < finish.indexOf("bindInstallation"));
+  assert.ok(finish.lastIndexOf("getConnections") > finish.indexOf("bindInstallation"));
+  assert.ok(finish.indexOf("readyOrganizationAfterSetup") > finish.indexOf("bindInstallation"));
+  assert.equal(actions.includes("export async function GET"), false);
+});

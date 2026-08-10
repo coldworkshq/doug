@@ -117,3 +117,47 @@ test("outcome tone follows the recorded result instead of treating every outcome
   assert.equal(outcomeTone("unknown-future-kind"), "neutral");
   assert.equal(outcomeTone(null), "neutral");
 });
+
+test("setup recovery accepts only a positive safe id on an exact visible pending connection", async () => {
+  const {
+    parseInstallationId,
+    isFinishableSetupConnection,
+    readyOrganizationAfterSetup,
+  } = await import("./dashboard-model.ts?setup-recovery");
+  const pending = {
+    installation_id: 404,
+    organization_id: null,
+    status: "setup_required",
+    repositories: [{ id: 41, full_name: "acme/pending" }],
+  };
+  assert.equal(parseInstallationId("404"), 404);
+  for (const value of [null, "", "0", "-1", "1.5", "01", "9007199254740992"]) {
+    assert.equal(parseInstallationId(value), null);
+  }
+  assert.equal(isFinishableSetupConnection([pending], 404), true);
+  assert.equal(isFinishableSetupConnection([pending], 405), false);
+  assert.equal(isFinishableSetupConnection([{ ...pending, status: "ready" }], 404), false);
+  assert.equal(isFinishableSetupConnection([{ ...pending, repositories: [] }], 404), false);
+  assert.equal(
+    isFinishableSetupConnection([{ ...pending, organization_id: "org_caller" }], 404),
+    false,
+  );
+
+  assert.equal(readyOrganizationAfterSetup([pending], 404), null);
+  assert.equal(
+    readyOrganizationAfterSetup([{
+      ...pending,
+      status: "ready",
+      organization_id: "org_server_returned",
+    }], 404),
+    "org_server_returned",
+  );
+  assert.equal(
+    readyOrganizationAfterSetup([{
+      ...pending,
+      status: "ready",
+      organization_id: "",
+    }], 404),
+    null,
+  );
+});

@@ -2,7 +2,44 @@
 
 import { switchToOrganization, withAuth } from "@workos-inc/authkit-nextjs";
 
-import { getConnections } from "@/lib/session-api";
+import {
+  isFinishableSetupConnection,
+  parseInstallationId,
+  readyOrganizationAfterSetup,
+} from "@/lib/dashboard-model";
+import { bindInstallation, getConnections } from "@/lib/session-api";
+
+const SETUP_ERROR = "That repository connection is not available.";
+
+export async function finishSetupAction(formData: FormData): Promise<void> {
+  let organizationId: string;
+  try {
+    const installationId = parseInstallationId(formData.get("installation_id"));
+    if (installationId === null) throw new Error(SETUP_ERROR);
+
+    const auth = await withAuth();
+    if (!auth.user || !auth.accessToken) throw new Error(SETUP_ERROR);
+
+    const before = await getConnections(auth.accessToken);
+    if (!isFinishableSetupConnection(before.connections, installationId)) {
+      throw new Error(SETUP_ERROR);
+    }
+
+    await bindInstallation(auth.accessToken, installationId);
+
+    const after = await getConnections(auth.accessToken);
+    const readyOrganizationId = readyOrganizationAfterSetup(
+      after.connections,
+      installationId,
+    );
+    if (!readyOrganizationId) throw new Error(SETUP_ERROR);
+    organizationId = readyOrganizationId;
+  } catch {
+    throw new Error(SETUP_ERROR);
+  }
+
+  await switchToOrganization(organizationId, { returnTo: "/dashboard" });
+}
 
 export async function switchConnectionAction(formData: FormData): Promise<void> {
   const organizationId = formData.get("organization_id");
