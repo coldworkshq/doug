@@ -261,6 +261,59 @@ def test_read_diff_captures_transport_stop_parse_and_spend_failures(
     assert client.messages.calls == 0
 
 
+def test_client_construction_failures_are_captured_without_changing_exception(
+    tmp_path, monkeypatch
+):
+    def fail_client():
+        raise RuntimeError("client initialization failed")
+
+    monkeypatch.setattr(reader, "_client", fail_client)
+
+    risk_root = tmp_path / "risk"
+    _enable_capture(monkeypatch, risk_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(RuntimeError, match="client initialization failed"):
+            reader.read_diff(_pr(), "+ x", scope=SCOPE)
+    (risk,) = _captured_packs(risk_root)
+    assert risk.capture_status == "failed"
+    assert risk.failure.phase == "preflight"
+    assert not risk.model_call_made
+    assert risk.request is None
+
+    intent_root = tmp_path / "intent"
+    _enable_capture(monkeypatch, intent_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(RuntimeError, match="client initialization failed"):
+            reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE)
+    (intent,) = _captured_packs(intent_root)
+    assert intent.capture_status == "failed"
+    assert intent.failure.phase == "preflight"
+    assert not intent.model_call_made
+    assert intent.request is None
+
+
+def test_transport_failure_capture_never_persists_exception_headers_or_secrets(
+    tmp_path, monkeypatch
+):
+    _enable_capture(monkeypatch, tmp_path)
+    unsafe = RuntimeError(
+        "response headers={'authorization': 'Bearer secret-token', "
+        "'cookie': 'session-secret'}"
+    )
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError) as raised:
+            reader.read_diff(_pr(), "+ x", scope=SCOPE, client=RaisingClient(unsafe))
+
+    assert "secret-token" in str(raised.value), "live error behavior is unchanged"
+    (pack,) = _captured_packs(tmp_path)
+    captured = pack.canonical_bytes().lower()
+    assert b"secret-token" not in captured
+    assert b"session-secret" not in captured
+    assert b"authorization" not in captured
+    assert pack.failure.error_type == "RuntimeError"
+
+
 def test_risk_and_intent_captures_have_distinct_instruments(tmp_path, monkeypatch):
     _enable_capture(monkeypatch, tmp_path)
 

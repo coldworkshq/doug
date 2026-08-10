@@ -178,7 +178,8 @@ def test_adjudication_never_mutates_the_pack_and_supersession_is_explicit():
     before = canonical_json_bytes(pack.model_dump(mode="json"))
     first = _adjudication(pack, "unknown")
     second = _adjudication(pack, "verified_actionable", supersedes=first.adjudication_id)
-    assert resolve_adjudications([first, second])[pack.findings[0].finding_id] == second
+    target = (pack.pack_hash, pack.run_id, pack.findings[0].finding_id)
+    assert resolve_adjudications([first, second])[target] == second
     assert canonical_json_bytes(pack.model_dump(mode="json")) == before
 
 def test_zero_partial_and_failed_runs_enter_both_denominators():

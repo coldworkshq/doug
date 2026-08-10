@@ -81,9 +81,11 @@ not captured. Credential-shaped keys in Doug-controlled structured data are
 rejected. Arbitrary source text is not substring-scanned, because a diff may
 legitimately contain words such as `authorization` and must remain byte-exact.
 
-A spend-cap failure occurs before an SDK request exists. Its failed pack has
-`model_call_made=false` and a null request reference. Transport, stop-reason,
-and parse failures retain the request and any selected raw output that exists.
+A spend-cap or SDK-client-construction failure occurs before an SDK request
+exists. Its failed pack has `model_call_made=false` and a null request
+reference. Transport, stop-reason, and parse failures retain the request and
+any selected raw output that exists. Failure detail uses a phase-specific safe
+message and exception class; raw exception text is never copied into a pack.
 Successful incomplete reads are `partial`; successful zero-finding reads are
 `captured`, not omitted.
 
@@ -123,8 +125,9 @@ object. The command does not repair, delete, upload, or infer data.
 
 Judgment is an append-only `ExampleAdjudicationV0` overlay. A correction names
 the exact prior `adjudication_id` in `supersedes`; timestamps never pick a
-winner. Resolution rejects a missing target, cross-finding edge, cycle, or two
-live heads.
+winner. Resolution keys each target by `(pack_hash, run_id, finding_id)` so
+identical findings on independent PRs do not collide. It rejects a missing
+target, cross-finding edge, cycle, or two live heads for the same scoped target.
 
 Offline scorecards accept one risk pack for each eligible PR identity. Every
 captured, zero-finding, partial, and failed pack remains in both PR

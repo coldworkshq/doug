@@ -51,9 +51,16 @@ class ControlGateV0(FrozenModel):
     spam_passes_burden: bool
 
 
+AdjudicationTargetV0 = tuple[str, str, str]
+
+
+def _target(overlay: ExampleAdjudicationV0) -> AdjudicationTargetV0:
+    return (overlay.pack_hash, overlay.run_id, overlay.finding_id)
+
+
 def resolve_adjudications(
     overlays: Iterable[ExampleAdjudicationV0],
-) -> dict[str, ExampleAdjudicationV0]:
+) -> dict[AdjudicationTargetV0, ExampleAdjudicationV0]:
     """Resolve one live append-only adjudication head per finding.
 
     Time never breaks a tie. Every correction must name exactly the record it
@@ -72,15 +79,7 @@ def resolve_adjudications(
         target = records.get(overlay.supersedes)
         if target is None:
             raise EvaluationContractError(f"missing supersession target {overlay.supersedes}")
-        if (
-            target.pack_hash,
-            target.run_id,
-            target.finding_id,
-        ) != (
-            overlay.pack_hash,
-            overlay.run_id,
-            overlay.finding_id,
-        ):
+        if _target(target) != _target(overlay):
             raise EvaluationContractError(
                 f"cross-finding supersession from {overlay.adjudication_id}"
             )
@@ -106,16 +105,16 @@ def resolve_adjudications(
     superseded = {
         overlay.supersedes for overlay in records.values() if overlay.supersedes is not None
     }
-    live_by_finding: dict[str, list[ExampleAdjudicationV0]] = defaultdict(list)
+    live_by_finding: dict[AdjudicationTargetV0, list[ExampleAdjudicationV0]] = defaultdict(list)
     for adjudication_id, overlay in records.items():
         if adjudication_id not in superseded:
-            live_by_finding[overlay.finding_id].append(overlay)
+            live_by_finding[_target(overlay)].append(overlay)
 
-    resolved: dict[str, ExampleAdjudicationV0] = {}
-    for finding_id, live in live_by_finding.items():
+    resolved: dict[AdjudicationTargetV0, ExampleAdjudicationV0] = {}
+    for target, live in live_by_finding.items():
         if len(live) != 1:
-            raise EvaluationContractError(f"two live adjudication heads for finding {finding_id}")
-        resolved[finding_id] = live[0]
+            raise EvaluationContractError(f"two live adjudication heads for finding {target}")
+        resolved[target] = live[0]
     return resolved
 
 
@@ -180,13 +179,9 @@ def score_packs(
     unsupported = 0
     for pack in checked:
         for finding in pack.findings[:finding_cap]:
-            adjudication = effective.get(finding.finding_id)
+            adjudication = effective.get((pack.pack_hash, pack.run_id, finding.finding_id))
             if adjudication is None:
                 unsupported += 1
-            elif adjudication.pack_hash != pack.pack_hash:
-                raise EvaluationContractError(
-                    f"finding identity {finding.finding_id} appears in multiple packs"
-                )
             elif adjudication.disposition == "verified_actionable":
                 actionable += 1
             elif adjudication.disposition == "verified_accepted_nonactionable":

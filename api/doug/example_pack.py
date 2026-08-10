@@ -227,6 +227,25 @@ class CapturedFindingV0(FrozenModel):
         )
 
 
+def parsed_finding_values(
+    parsed_output: dict[str, Any] | None,
+) -> tuple[dict[str, Any], ...]:
+    """Return the exact ordered finding objects represented by parsed output."""
+
+    if parsed_output is None:
+        return ()
+    values: list[dict[str, Any]] = []
+    for field in ("findings", "deviation_findings"):
+        findings = parsed_output.get(field, [])
+        if not isinstance(findings, list):
+            raise ValueError(f"parsed output {field} must be a list")
+        for finding in findings:
+            if not isinstance(finding, dict):
+                raise ValueError(f"parsed output {field} entries must be objects")
+            values.append(finding)
+    return tuple(values)
+
+
 class ExamplePackV0(FrozenModel):
     schema_version: Literal["example-pack-v0"] = "example-pack-v0"
     pack_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -284,6 +303,28 @@ class ExamplePackV0(FrozenModel):
             raise ValueError("partial capture requires incomplete coverage")
         if self.findings and self.raw_output is None:
             raise ValueError("finding identities require raw output")
+        parsed_findings = parsed_finding_values(self.parsed_output)
+        if len(parsed_findings) != len(self.findings):
+            raise ValueError("findings do not match parsed output finding count")
+        for ordinal, (captured, parsed) in enumerate(
+            zip(self.findings, parsed_findings, strict=True)
+        ):
+            if captured.finding != parsed:
+                raise ValueError(f"finding ordinal {ordinal} does not match parsed output")
+            if captured.ordinal != ordinal:
+                raise ValueError(
+                    f"finding ordinal {captured.ordinal} is not contiguous at {ordinal}"
+                )
+            expected = CapturedFindingV0.build(
+                raw_output_sha256=self.raw_output.sha256,
+                attempt_kind=self.attempt_kind,
+                ordinal=ordinal,
+                finding=parsed,
+            )
+            if captured.finding_id != expected.finding_id:
+                raise ValueError(
+                    f"finding_id mismatch at ordinal {ordinal}: expected {expected.finding_id}"
+                )
         return self
 
 

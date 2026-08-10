@@ -23,6 +23,7 @@ from .example_pack import (
     NameVersionV0,
     UsageV0,
     WholeInstrumentManifestV0,
+    parsed_finding_values,
     sha256_hex,
 )
 
@@ -76,21 +77,6 @@ def configured_store(
 
 def _diagnostic(message: str) -> None:
     print(message[:500], file=sys.stderr)
-
-
-def _finding_values(parsed_output: dict[str, object] | None) -> list[dict[str, object]]:
-    if parsed_output is None:
-        return []
-    values: list[dict[str, object]] = []
-    for field in ("findings", "deviation_findings"):
-        findings = parsed_output.get(field, [])
-        if not isinstance(findings, list):
-            raise ValueError(f"parsed output {field} must be a list")
-        for finding in findings:
-            if not isinstance(finding, dict):
-                raise ValueError(f"parsed output {field} entries must be objects")
-            values.append(finding)
-    return values
 
 
 def record_attempt(
@@ -147,7 +133,7 @@ def record_attempt(
             if raw_output_bytes is not None
             else None
         )
-        finding_values = _finding_values(parsed_output)
+        finding_values = parsed_finding_values(parsed_output)
         findings = (
             tuple(
                 CapturedFindingV0.build(

@@ -55,8 +55,9 @@ def _pack(
     pull_number: int = 1,
     attempt_kind: str = "risk",
     run_suffix: str = "0",
+    raw_sha: str | None = None,
 ) -> ExamplePackV0:
-    raw_sha = f"{pull_number:064x}"
+    raw_sha = raw_sha or f"{pull_number:064x}"
     findings = tuple(
         CapturedFindingV0.build(
             raw_output_sha256=raw_sha,
@@ -149,7 +150,8 @@ def test_adjudication_never_mutates_pack_and_supersession_is_explicit():
         second=1,
     )
 
-    assert resolve_adjudications([first, second])[pack.findings[0].finding_id] == second
+    target = (pack.pack_hash, pack.run_id, pack.findings[0].finding_id)
+    assert resolve_adjudications([first, second])[target] == second
     assert canonical_json_bytes(pack.model_dump(mode="json")) == before
 
 
@@ -206,6 +208,25 @@ def test_finding_cap_is_applied_per_pack_without_dropping_pack_denominators():
     assert score.eligible_prs == 2
     assert score.unsupported == 4
     assert score.unsupported_finding_burden == 2
+
+
+def test_identical_findings_on_independent_prs_have_independent_adjudications():
+    shared_raw = "a" * 64
+    first = _pack(1, pull_number=1, raw_sha=shared_raw)
+    second = _pack(1, pull_number=2, raw_sha=shared_raw)
+    assert first.findings[0].finding_id == second.findings[0].finding_id
+    first_overlay = _adjudication(first, "verified_actionable")
+    second_overlay = _adjudication(second, "disproved")
+
+    resolved = resolve_adjudications([first_overlay, second_overlay])
+    score = score_packs([first, second], [first_overlay, second_overlay], finding_cap=3)
+
+    assert resolved[(first.pack_hash, first.run_id, first.findings[0].finding_id)] == first_overlay
+    assert (
+        resolved[(second.pack_hash, second.run_id, second.findings[0].finding_id)] == second_overlay
+    )
+    assert score.validated_actionable == 1
+    assert score.unsupported == 1
 
 
 def test_missing_supersession_target_is_rejected():

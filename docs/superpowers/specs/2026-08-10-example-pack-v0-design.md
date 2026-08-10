@@ -98,7 +98,7 @@ Content references carry `sha256`, byte length, and media type. The request enve
 
 `instrument_id` is SHA-256 over the canonical whole-instrument manifest. `pack_hash` is SHA-256 over the canonical pack payload with the `pack_hash` field omitted. `adjudication_id` is SHA-256 over the canonical adjudication payload with the `adjudication_id` field omitted.
 
-Finding identity is independent of mutable judgment. Each `finding_id` is SHA-256 over canonical JSON containing the raw-output blob hash, attempt kind, zero-based output ordinal, and the exact parsed finding. Two byte-identical duplicate findings at different output positions remain separately identifiable.
+Finding identity is independent of mutable judgment. Each `finding_id` is SHA-256 over canonical JSON containing the raw-output blob hash, attempt kind, zero-based output ordinal, and the exact parsed finding. Two byte-identical duplicate findings at different output positions remain separately identifiable. Pack validation requires contiguous ordinals, exact equality with the finding objects in `parsed_output`, and a recomputed ID for every finding; a caller cannot make a forged finding authoritative by merely recomputing `pack_hash`.
 
 ## Whole-instrument manifest
 
@@ -201,7 +201,7 @@ adjudicated_at: <UTC timestamp>
 supersedes: <prior adjudication_id or null>
 ```
 
-The storage layer only appends adjudications. A correction creates a new record with `supersedes` naming the exact prior record. Scorecard resolution rejects missing supersession targets, cross-finding supersession, cycles, and two live unsuperseded records for one finding. Timestamp order never silently chooses a winner.
+The storage layer only appends adjudications. A correction creates a new record with `supersedes` naming the exact prior record. Scorecard resolution keys the target by `(pack_hash, run_id, finding_id)`, so identical outputs on independent PRs remain independent. It rejects missing supersession targets, cross-finding supersession, cycles, and two live unsuperseded records for one scoped finding. Timestamp order never silently chooses a winner.
 
 ## Storage and secret boundary
 

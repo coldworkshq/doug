@@ -563,8 +563,18 @@ def _capture_usage(response) -> UsageV0:
 
 
 def _failure(phase: str, exc: BaseException) -> FailureV0:
-    detail = f"{type(exc).__name__}: {exc}"[:500] or type(exc).__name__
-    return FailureV0(phase=phase, error_type=type(exc).__name__[:120], detail=detail)
+    safe_detail = {
+        "preflight": "attempt stopped before an SDK request was created",
+        "transport": "SDK request failed before a response was available",
+        "stop_reason": "model response did not end with end_turn",
+        "parse": "selected model text did not match the output schema",
+    }[phase]
+    error_type = type(exc).__name__[:120]
+    return FailureV0(
+        phase=phase,
+        error_type=error_type,
+        detail=f"{error_type}: {safe_detail}",
+    )
 
 
 def _record_attempt(
@@ -647,7 +657,25 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         )
         raise
     if client is None:
-        client = _client()
+        try:
+            client = _client()
+        except Exception as exc:  # noqa: BLE001 - preserve existing exception
+            _record_attempt(
+                attempt_kind="risk",
+                pr=pr,
+                diff=diff,
+                request_bytes=None,
+                raw_output_bytes=None,
+                parsed_output=None,
+                response=None,
+                started_ns=started_ns,
+                model_call_made=False,
+                failure=_failure("preflight", exc),
+                fallback_state="deterministic_expected",
+                system=SYSTEM,
+                schema=SCHEMA,
+            )
+            raise
     request = {
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
@@ -797,7 +825,25 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         )
         raise
     if client is None:
-        client = _client()
+        try:
+            client = _client()
+        except Exception as exc:  # noqa: BLE001 - preserve existing exception
+            _record_attempt(
+                attempt_kind="intent",
+                pr=pr,
+                diff=diff,
+                request_bytes=None,
+                raw_output_bytes=None,
+                parsed_output=None,
+                response=None,
+                started_ns=started_ns,
+                model_call_made=False,
+                failure=_failure("preflight", exc),
+                fallback_state="intent_unavailable",
+                system=DECISION_INTENT_SYSTEM,
+                schema=INTENT_SCHEMA,
+            )
+            raise
     request = {
         "model": MODEL,
         "max_tokens": MAX_TOKENS,

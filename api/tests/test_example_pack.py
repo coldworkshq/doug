@@ -72,6 +72,7 @@ def _pack(
     manifest: WholeInstrumentManifestV0 | None = None,
 ) -> ExamplePackV0:
     manifest = manifest or _manifest()
+    parsed_findings = [finding.finding for finding in findings]
     return ExamplePackV0.build(
         run_id="review-job:1:claim:1:risk",
         attempt_kind="risk",
@@ -81,7 +82,11 @@ def _pack(
         evidence=ContentRefV0.from_bytes(evidence, media_type="text/x-diff"),
         model_call_made=True,
         raw_output=ContentRefV0.from_bytes(raw_output, media_type="application/json"),
-        parsed_output={"risk_score": 0, "rationale": "", "findings": []},
+        parsed_output={
+            "risk_score": 0,
+            "rationale": "",
+            "findings": parsed_findings,
+        },
         coverage=CoverageV0(
             diff_chars=len(evidence),
             sent_chars=len(evidence),
@@ -168,6 +173,39 @@ def test_finding_identity_is_deterministic_and_ordinal_distinguishes_duplicates(
     )
     assert first == repeated
     assert first.finding_id != duplicate_position.finding_id
+
+
+def test_pack_recomputes_finding_ids_ordinals_and_parsed_finding_values():
+    raw = b'{"findings":[]}'
+    exact = {
+        "category_slug": "race-condition",
+        "description": "unguarded write",
+        "file": "cache.py",
+        "severity": "high",
+    }
+    finding = CapturedFindingV0.build(
+        raw_output_sha256=ContentRefV0.from_bytes(raw, media_type="application/json").sha256,
+        attempt_kind="risk",
+        ordinal=0,
+        finding=exact,
+    )
+
+    with pytest.raises(ValueError, match="finding_id"):
+        _pack(
+            raw_output=raw,
+            findings=(finding.model_copy(update={"finding_id": "f" * 64}),),
+        )
+    with pytest.raises(ValueError, match="ordinal"):
+        _pack(
+            raw_output=raw,
+            findings=(finding.model_copy(update={"ordinal": 4}),),
+        )
+
+    valid = _pack(raw_output=raw, findings=(finding,))
+    changed = valid.model_dump(mode="json", exclude={"pack_hash"})
+    changed["parsed_output"]["findings"][0]["description"] = "different"
+    with pytest.raises(ValueError, match="parsed output"):
+        ExamplePackV0.build(**changed)
 
 
 def test_model_call_requires_the_exact_request_reference():
