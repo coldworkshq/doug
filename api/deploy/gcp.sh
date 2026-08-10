@@ -133,8 +133,14 @@ setup() {
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role=roles/cloudsql.client >/dev/null
 
+  # doug-workos-api-key reads every tenant's identity data and doug-workos-
+  # client-id is what session_auth's JWKS URL is built from — without the
+  # second, every browser session 503s. Both are created by hand (like the
+  # Anthropic key below) so neither sits in shell history; the loop only
+  # binds read access and WARNs while they are missing.
   for s in doug-database-url doug-api-token doug-anthropic-key \
-           doug-webhook-secret doug-github-app-key doug-token-pepper; do
+           doug-webhook-secret doug-github-app-key doug-token-pepper \
+           doug-workos-api-key doug-workos-client-id; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -366,13 +372,20 @@ deploy() {
   # same compute_prereg_hash call site. The receipt endpoint reports this as
   # the methodology document currently in force — never a value it reads
   # from anywhere else.
+  #
+  # WORKOS_CLIENT_ID and WORKOS_API_KEY reach the api and NOTHING else.
+  # doug-web is --allow-unauthenticated and holds no credential at all (see
+  # setup); the console talks to this service over HTTP. The client id is not
+  # secret, but it lives in Secret Manager beside the key so the front door
+  # has one place to look, and a missing one 503s /v1/installations/bind with
+  # a named detail rather than refusing every session as if it were forged.
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest" \
     --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \

@@ -4,14 +4,28 @@ import hmac
 import inspect
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from doug import api, app_auth, ingest, outcome_queue, store, tenancy, worker
+from doug import (
+    api,
+    app_auth,
+    ingest,
+    outcome_queue,
+    session_auth,
+    store,
+    tenancy,
+    worker,
+    workos_client,
+)
 from doug.api import app
 from doug.models import Band, JobItem, Reason, Verdict
 
@@ -3360,3 +3374,403 @@ def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
     # caller-controlled key could have grown to 50 entries.
     assert isinstance(api._showcase_cache, tuple)
     assert len(api._showcase_cache) == 2
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/installations/bind — authority, not visibility.
+#
+# No test below performs network I/O. The session is a real RS256 JWT minted
+# locally against a generated key (session_auth._jwks is monkeypatched, the
+# same way tests/test_session_auth.py does it), and every WorkOS call goes
+# through workos_client._request, replaced here by a STATEFUL fake: it
+# remembers the organizations it created and the memberships it was asked
+# for, so idempotency and "nothing was created" are observed facts rather
+# than assumptions about a stub.
+
+_BIND_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_BIND_OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+class _BindJWKS:
+    """Stands in for jwt.PyJWKClient — only .key is ever read."""
+
+    class _Key:
+        def __init__(self, key):
+            self.key = key
+
+    def get_signing_key_from_jwt(self, token):
+        return self._Key(_BIND_KEY.public_key())
+
+
+class _FakeWorkOS:
+    """Stateful stand-in for workos_client._request.
+
+    `idp_id` is what GET /identities reports for the signed-in user — the
+    value the installer check compares. `orgs` maps external_id -> org id and
+    starts empty, so the first bind genuinely creates and the second
+    genuinely finds.
+    """
+
+    def __init__(self, idp_id: str | None = "777", orgs: dict[str, str] | None = None):
+        self.idp_id = idp_id
+        self.orgs = dict(orgs or {})
+        self.memberships: list[tuple[str, str]] = []
+        self.calls: list[str] = []
+
+    def __call__(self, method, path, *, json=None):
+        self.calls.append(f"{method} {path}")
+        if method == "GET" and path.endswith("/identities"):
+            if self.idp_id is None:
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200, json=[{"idp_id": self.idp_id, "type": "OAuth", "provider": "GithubOAuth"}]
+            )
+        if method == "GET" and path.startswith("/organizations/external_id/"):
+            external_id = path.rsplit("/", 1)[1]
+            if external_id in self.orgs:
+                return httpx.Response(200, json={"id": self.orgs[external_id]})
+            return httpx.Response(404, json={"code": "entity_not_found"})
+        if method == "POST" and path == "/organizations":
+            external_id = json["external_id"]
+            self.orgs.setdefault(external_id, f"org_for_{external_id}")
+            return httpx.Response(201, json={"id": self.orgs[external_id]})
+        if method == "POST" and path == "/user_management/organization_memberships":
+            self.memberships.append((json["user_id"], json["organization_id"]))
+            return httpx.Response(201, json={"id": "om_01"})
+        raise AssertionError(f"unexpected WorkOS call: {method} {path}")
+
+    def creates(self) -> list[str]:
+        return [c for c in self.calls if c.startswith("POST")]
+
+
+def _bind_env(monkeypatch, idp_id: str | None = "777", orgs=None) -> _FakeWorkOS:
+    fake = _FakeWorkOS(idp_id=idp_id, orgs=orgs)
+    monkeypatch.setattr(workos_client, "_request", fake)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
+    return fake
+
+
+def _session(key=_BIND_KEY, sub="user_01ABC") -> dict:
+    now = int(time.time())
+    token = jwt.encode(
+        {"iss": "https://auth.workos.com", "sub": sub, "iat": now, "exp": now + 300},
+        key,
+        algorithm="RS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _installed(installation_id: int, installer: int | None, *, org_id: str | None = None):
+    store.upsert_installation(
+        installation_id,
+        "drewjst",
+        "Organization",
+        "active",
+        installed_by_github_user_id=installer,
+    )
+    if org_id is not None:
+        engine = store._get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                store.installations.update()
+                .where(store.installations.c.installation_id == installation_id)
+                .values(workos_org_id=org_id)
+            )
+
+
+def _bound_org(installation_id: int) -> str | None:
+    engine = store._get_engine()
+    with engine.connect() as conn:
+        return conn.execute(
+            select(store.installations.c.workos_org_id).where(
+                store.installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+
+
+def _bind(client, installation_id: int, **extra):
+    return client.post(
+        "/v1/installations/bind",
+        json={"installation_id": installation_id, **extra},
+        headers=_session(),
+    )
+
+
+def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(
+    tmp_path, monkeypatch
+):
+    """The exact claimable-tenant attack. GET /user/installations answers on
+    :read, so visibility is NOT authority. A caller whose GitHub id does not
+    match installed_by_github_user_id must be refused even though the
+    installation is genuinely visible to them.
+
+    The first half is not decoration: it proves this caller, this session and
+    this ledger DO produce a 204 — so the refusal below can only come from
+    the one thing that changed, the recorded installer."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)  # installed by the signed-in user
+    _installed(1002, installer=999)  # someone else's, merely visible
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+
+    refused = _bind(client, 1002)
+    assert refused.status_code == 404
+    assert _bound_org(1002) is None
+    assert fake.memberships == [("user_01ABC", "org_for_gh-inst-1001")]
+
+
+def test_bind_refuses_an_installation_with_no_recorded_installer(tmp_path, monkeypatch):
+    """Pre-Task-1 rows carry NULL. NULL must never compare equal to anything —
+    a fail-open here would let ANY signed-in user claim every legacy tenant,
+    including the operator's own 150424894."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(150424894, installer=None)  # populated by MT0 webhook redelivery
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    spent = len(fake.calls)
+
+    refused = _bind(client, 150424894)
+    assert refused.status_code == 404
+    assert _bound_org(150424894) is None
+    # Cheapest-first, same posture as tenancy.verify_org_admin: a row that can
+    # never prove authority costs WorkOS nothing at all, not even the identity
+    # lookup.
+    assert fake.calls[spent:] == []
+
+
+def test_bind_is_idempotent_for_the_same_org(tmp_path, monkeypatch):
+    """installation.created is replayable via GitHub's Redeliver button."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    assert _bind(client, 1001).status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+    # One organization, not two: the second bind found the first one's.
+    assert fake.creates().count("POST /organizations") == 1
+
+
+def test_bind_refuses_to_move_an_installation_to_a_different_org(tmp_path, monkeypatch):
+    """Re-binding a live installation to another organization is a takeover,
+    not an update.
+
+    Both installations below are bound already and both callers prove the same
+    authority; the ONLY difference is whether the bound org is the one this
+    installation's external_id resolves to."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777, org_id="org_manual")
+    _installed(1002, installer=777, org_id="org_for_gh-inst-1002")
+    _installed(1003, installer=777, org_id="org_ghost")
+    fake = _bind_env(
+        monkeypatch,
+        idp_id="777",
+        orgs={"gh-inst-1001": "org_canonical", "gh-inst-1002": "org_for_gh-inst-1002"},
+    )
+    client = TestClient(app)
+
+    assert _bind(client, 1002).status_code == 204  # already bound to its own org
+
+    refused = _bind(client, 1001)
+    assert refused.status_code == 409
+    assert _bound_org(1001) == "org_manual"
+    assert ("user_01ABC", "org_canonical") not in fake.memberships
+
+    # A row naming an organization its own external_id does not resolve to is
+    # inconsistent state, not a bind to complete — and refusing it must leave
+    # nothing behind, so no organization is created on the way to the 409.
+    assert _bind(client, 1003).status_code == 409
+    assert _bound_org(1003) == "org_ghost"
+    assert "POST /organizations" not in fake.calls
+
+
+def test_bind_refuses_a_non_numeric_idp_id_and_says_so(tmp_path, monkeypatch, capsys):
+    """idp_id's GitHub format is undocumented and unmeasured. If it is not the
+    numeric user id, bind must refuse AND log the value, so the first real
+    attempt is diagnosable in one query rather than silently denying."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="github|777")
+    client = TestClient(app)
+
+    refused = _bind(client, 1001)
+    assert refused.status_code == 404
+    assert _bound_org(1001) is None
+    assert fake.memberships == []
+    err = capsys.readouterr().err
+    assert "github|777" in err  # the value received, not just "refused"
+    assert "idp_id" in err
+
+    # Same route, same session, same row: only the format of idp_id changed.
+    _bind_env(monkeypatch, idp_id="777")
+    assert _bind(TestClient(app), 1001).status_code == 204
+
+
+def test_bind_never_calls_workos_when_the_installer_check_fails(tmp_path, monkeypatch):
+    """Authority first, side effects second: a refused caller must not create
+    an organization or a membership. Same cheapest-first, spend-nothing-on-a-
+    caller-who-proves-nothing posture as tenancy.verify_org_admin.
+
+    The identity lookup itself is a read and is allowed — it is what produces
+    the id being checked. What must not happen is a WRITE."""
+    _db(tmp_path, monkeypatch)
+    _installed(1002, installer=999)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1002).status_code == 404
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert fake.calls == ["GET /user_management/users/user_01ABC/identities"]
+
+    # The fake and the route DO reach WorkOS when authority holds — without
+    # this, "no POSTs" would pass even if bind were broken end to end.
+    _installed(1001, installer=777)
+    assert _bind(client, 1001).status_code == 204
+    assert fake.creates() == [
+        "POST /organizations",
+        "POST /user_management/organization_memberships",
+    ]
+
+
+def test_bind_ignores_a_client_supplied_workos_org_id(tmp_path, monkeypatch):
+    """The org id never crosses the wire. Accepting one is what made org
+    squatting possible — bind a victim's org id first and Task 1's UNIQUE
+    index blocks their real bind permanently — so the parameter was removed
+    rather than defended against."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001, workos_org_id="org_victim").status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+
+
+def test_bind_refuses_a_forged_session(tmp_path, monkeypatch):
+    """Signed with a key JWKS never reported. The endpoint verifies the
+    session itself; it does not trust the payload."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    forged = client.post(
+        "/v1/installations/bind",
+        json={"installation_id": 1001},
+        headers=_session(key=_BIND_OTHER_KEY),
+    )
+    assert forged.status_code == 401
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_bind_refuses_without_a_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _bind_env(monkeypatch, idp_id="777")
+    res = TestClient(app).post("/v1/installations/bind", json={"installation_id": 1001})
+    assert res.status_code == 401
+
+
+def test_bind_503s_when_session_auth_is_unconfigured(tmp_path, monkeypatch):
+    """WORKOS_CLIENT_ID missing is a deployment fault, not a forged token —
+    api.py:391's named-503 idiom, so it is diagnosable instead of looking
+    like every session being refused."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    # The REAL _jwks runs here — that is the point. Only its configuration is
+    # taken away, and the cached client is cleared so a previous test's
+    # instance cannot answer for it.
+    monkeypatch.setattr(workos_client, "_request", _FakeWorkOS())
+    monkeypatch.delenv("WORKOS_CLIENT_ID", raising=False)
+    monkeypatch.setattr(session_auth, "_jwks_client", None)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert res.json()["detail"] == "session auth not configured"
+
+
+def test_bind_503s_when_workos_is_unconfigured(tmp_path, monkeypatch):
+    """The API key is the other half of the same deployment promise."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    monkeypatch.delenv("WORKOS_API_KEY", raising=False)
+
+    def _explode(*a, **k):
+        raise AssertionError("network reached without an API key")
+
+    monkeypatch.setattr(workos_client, "_send", _explode)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert _bound_org(1001) is None
+
+
+def test_bind_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _bind_env(monkeypatch, idp_id="777")
+    res = TestClient(app).post(
+        "/v1/installations/bind", json={"installation_id": 1001}, headers=_session()
+    )
+    assert res.status_code == 503
+
+
+def test_bind_503s_when_workos_is_unreachable(tmp_path, monkeypatch):
+    """An outage is not a failed identity check. A 404 here would tell a real
+    installer their proof was wrong during someone else's incident."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
+
+    def _down(method, url, *, headers, json):
+        raise httpx.ConnectError("workos: connection refused")
+
+    # Patched at the transport seam, not at _request: the translation from
+    # httpx's exception tree to WorkOSError is the thing under test here.
+    monkeypatch.setattr(workos_client, "_send", _down)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert _bound_org(1001) is None
+
+
+def test_bind_re_proves_the_installer_against_the_row_it_writes(tmp_path, monkeypatch):
+    """The row read before the identity hop is a snapshot taken across a
+    network call. An uninstall and reinstall by someone else inside that
+    window rewrites installed_by_github_user_id, and binding on the stale
+    fact would hand this tenant to the previous installer. The proof is
+    repeated against the row read under the lock — the same row the write
+    lands on."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204  # the unraced path still binds
+
+    real = store.installation_bind_row
+    reads: list[int] = []
+
+    def _reinstalled_midway(installation_id: int):
+        row = real(installation_id)
+        reads.append(installation_id)
+        if row is not None and reads.count(installation_id) > 1:
+            # The reinstall lands between the two reads: same installation,
+            # a different person's id on it now.
+            return {**row, "installed_by_github_user_id": 999}
+        return row
+
+    monkeypatch.setattr(store, "installation_bind_row", _reinstalled_midway)
+    refused = _bind(client, 1002)
+    assert refused.status_code == 404
+    assert _bound_org(1002) is None
+    assert ("user_01ABC", "org_for_gh-inst-1002") not in fake.memberships

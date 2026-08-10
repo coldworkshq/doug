@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
@@ -42,6 +43,7 @@ from sqlalchemy import (
     func,
     inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -2335,6 +2337,114 @@ def installation_id_for_workos_org(org_id: str) -> int | None:
             )
         ).scalar_one_or_none()
     return int(result) if result is not None else None
+
+
+def installation_bind_row(installation_id: int) -> dict | None:
+    """The facts the bind endpoint decides on, or None when there is no such
+    installation (or storage is disabled).
+
+    One row rather than three lookups so "no installation" and "an
+    installation whose installer is NULL" stay distinguishable in the code
+    that refuses them. They are the same answer to a caller and two different
+    facts to an operator: the second is a pre-Task-1 tenant that can still be
+    rescued by hand, the first is nothing at all.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    installations.c.installed_by_github_user_id,
+                    installations.c.workos_org_id,
+                    installations.c.account_login,
+                    installations.c.state,
+                ).where(installations.c.installation_id == installation_id)
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row is not None else None
+
+
+@contextmanager
+def installation_bind_lock(installation_id: int):
+    """Serialise binding one installation, across instances.
+
+    Find-or-create at WorkOS and the bind write under it are a read-then-write
+    pair spanning a network call, so two instances handling a double-clicked
+    bind can interleave. A Postgres advisory lock keyed on the installation id
+    makes the pair atomic between them.
+
+    POSTGRES ONLY, and the dialect guard is deliberate rather than incidental:
+    sqlite has no advisory locks and every test here runs sqlite (the trap
+    docs/REVIEWING.md:141-143 records), so under sqlite this yields
+    immediately and correctness rests entirely on bind_installation_org's
+    compare-and-set below. The lock narrows a window; the CAS is what closes
+    it. Neither is trusted to do the other's job.
+
+    AUTOCOMMIT, and a session-scoped lock released in `finally`: the block it
+    guards makes HTTP calls, and holding an open transaction idle across them
+    is what keeps a vacuum from reclaiming rows for as long as WorkOS is slow.
+
+    The key is the installation id itself. This is the only advisory lock in
+    the codebase, so the bigint space is unshared and there is nothing to
+    collide with — a second user of pg_advisory_lock must namespace against
+    this one.
+    """
+    engine = _get_engine()
+    if engine is None:
+        yield
+        return
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        if conn.dialect.name != "postgresql":
+            yield
+            return
+        key = {"key": int(installation_id)}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), key)
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+
+
+def bind_installation_org(installation_id: int, org_id: str) -> str | None:
+    """Bind an installation to a WorkOS organization; report what the row says
+    afterwards.
+
+    Compare-and-set, never a blind write: the UPDATE fires only while
+    workos_org_id IS NULL, and the value returned is re-read from the row, not
+    assumed from the rowcount. The caller compares it against the organization
+    it resolved and refuses when they differ — which makes idempotency
+    (equal: 204) and takeover (different: refused) the same check, and keeps
+    it correct when two binds race, because the loser reads the winner's value
+    instead of its own.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                update(installations)
+                .where(
+                    (installations.c.installation_id == installation_id)
+                    & (installations.c.workos_org_id.is_(None))
+                )
+                .values(workos_org_id=org_id)
+            )
+    except IntegrityError:
+        # workos_org_id is UNIQUE: this organization already belongs to a
+        # DIFFERENT installation. Not this caller's to take — fall through and
+        # report what the row actually says, which the caller then refuses.
+        pass
+    with engine.connect() as conn:
+        return conn.execute(
+            select(installations.c.workos_org_id).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
 
 
 def active_repos(installation_id: int) -> list[tuple[int, str]]:

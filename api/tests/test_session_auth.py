@@ -256,3 +256,35 @@ def test_installation_id_for_workos_org_resolves_the_bound_installation(tmp_path
     _install(999999999, org_id=None)
     assert store.installation_id_for_workos_org("org_bound") == 150424894
     assert store.installation_id_for_workos_org("org_unbound_anywhere") is None
+
+
+def test_verify_session_claims_is_strictly_weaker_than_resolve_session(monkeypatch):
+    """The bind endpoint's primitive: it proves WHO is signed in and asserts
+    nothing about what they may see.
+
+    The same token drives both calls. resolve_session refuses it — no org is
+    selected, so there is no tenant to resolve — while verify_session_claims
+    returns the claims, which is exactly what bind needs, because bind runs
+    BEFORE any organization exists. If the two ever collapse into one
+    function, this test fails."""
+    _use_fake_jwks(monkeypatch)
+    token = _token()  # no org_id: the normal first sign-in state
+    assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
+    claims = session_auth.verify_session_claims(f"Bearer {token}")
+    assert claims is not None
+    assert claims["sub"] == "user_01ABC"
+
+
+def test_verify_session_claims_refuses_a_forged_or_absent_token(monkeypatch):
+    """The weaker primitive is not a weaker verification: signature and exp
+    are still the gate, and an empty bearer never reaches JWKS at all."""
+    calls = []
+    monkeypatch.setattr(session_auth, "_jwks", lambda: calls.append("jwks") or _FakeJWKSClient())
+    assert session_auth.verify_session_claims("") is None
+    assert calls == []
+
+    _use_fake_jwks(monkeypatch)
+    assert session_auth.verify_session_claims(f"Bearer {_token(_OTHER_PRIVATE_KEY)}") is None
+    assert session_auth.verify_session_claims(
+        f"Bearer {_token(exp=int(time.time()) - 60)}"
+    ) is None

@@ -46,10 +46,15 @@ def _jwks() -> PyJWKClient:
     return _jwks_client
 
 
-def resolve_session(
-    bearer: str, claimed_repo_ids: frozenset[int] | None
-) -> tenancy.SessionContext | None:
-    """Map a bearer token to its live session context, or None.
+def verify_session_claims(bearer: str) -> dict | None:
+    """Verify an AuthKit JWT's signature and expiry, and return its claims.
+
+    Deliberately weaker than resolve_session: it proves WHO is signed in and
+    says nothing about what they may see. Bind needs exactly this, because it
+    runs BEFORE any organization exists — creating one is what bind does — so
+    resolve_session (which fails closed without org_id) would be circular.
+    Never use this for a data read; use resolve_session, which additionally
+    resolves and live-intersects a tenant scope.
 
     Two separate try/except blocks on purpose, each with its own log line —
     same shape as tenancy.verify_admin's caller-check / installation-lookup
@@ -78,7 +83,7 @@ def resolve_session(
         return None
 
     try:
-        claims = jwt.decode(
+        return jwt.decode(
             token, signing_key, algorithms=["RS256"], options={"require": ["exp"]}
         )
     except Exception as e:  # noqa: BLE001 — any failure here is "not a valid token"
@@ -87,6 +92,20 @@ def resolve_session(
             f"({type(e).__name__}: {str(e)[:200]})",
             file=sys.stderr,
         )
+        return None
+
+
+def resolve_session(
+    bearer: str, claimed_repo_ids: frozenset[int] | None
+) -> tenancy.SessionContext | None:
+    """Map a bearer token to its live session context, or None.
+
+    The verification half lives in verify_session_claims above (bind shares
+    it); everything below is the tenant resolution this function adds on top,
+    and which a session must pass before it may read anything.
+    """
+    claims = verify_session_claims(bearer)
+    if claims is None:
         return None
 
     org_id = claims.get("org_id")

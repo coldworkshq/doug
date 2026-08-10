@@ -591,3 +591,33 @@ def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
         if line.startswith(f"iam service-accounts describe {scheduler}")
     ]
     assert len(describes) == 2
+
+
+def test_api_deploy_carries_the_workos_secrets(tmp_path):
+    """The bind endpoint cannot prove anything without WORKOS_API_KEY, and
+    session_auth cannot build a JWKS URL without WORKOS_CLIENT_ID — a
+    deployment missing either 503s the whole front door. They reach the
+    service only through this flag."""
+    lines = _run_gcp(tmp_path, "deploy")
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    assert "WORKOS_API_KEY=doug-workos-api-key:latest" in api_deploy
+    assert "WORKOS_CLIENT_ID=doug-workos-client-id:latest" in api_deploy
+
+
+def test_setup_binds_the_workos_secrets_to_the_api_service_account_only():
+    """A --set-secrets flag without a matching secretAccessor binding fails at
+    runtime on the first request, long after the deploy went green. The
+    browser-facing service must not gain them: doug-web holds no credential,
+    and the WorkOS key reads every tenant's identity data."""
+    setup = _function_body("setup")
+    assert "doug-workos-api-key" in setup
+    assert "doug-workos-client-id" in setup
+    after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
+        "service-accounts create doug-console-sa", 1
+    )[0]
+    assert "doug-workos-api-key" not in after_web
+    assert "doug-workos-client-id" not in after_web
+    assert "doug-workos-api-key" not in _function_body("web")
+    assert "doug-workos-api-key" not in _function_body("console")

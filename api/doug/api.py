@@ -24,9 +24,11 @@ from . import (
     outcome_queue,
     precision,
     reader,
+    session_auth,
     store,
     tenancy,
     worker,
+    workos_client,
 )
 from .models import (
     Band,
@@ -1272,6 +1274,178 @@ def revoke_token(
             raise _not_found()
         return {"revoked": True}
     raise _not_found()
+
+
+class BindRequest(BaseModel):
+    """The whole request body. ONE field, and that is the security property.
+
+    An earlier design took a `workos_org_id` from the caller, which made org
+    squatting possible: post a victim's org id against your own installation
+    before they bind, and Task 1's UNIQUE index blocks their real bind
+    permanently. The organization is now derived from the installation id
+    (workos_client.external_id_for), so the attack has nothing to say rather
+    than being defended against. Anything else a client sends is ignored.
+    """
+
+    installation_id: int
+
+
+@app.post("/v1/installations/bind", status_code=204)
+def bind_installation(body: BindRequest, authorization: str = Header("")) -> Response:
+    """Bind a GitHub App installation to a WorkOS organization.
+
+    THE PROOF IS AUTHORITY, NOT VISIBILITY, and the difference is the whole
+    endpoint. Setup-URL parameters are attacker-supplied and no GitHub
+    redirect need ever occur, so an attacker holding `:read` on one repo sees
+    a victim's installation_id in their own GET /user/installations and can
+    post it here. A membership check would PASS — the installation genuinely
+    is in their list — and hand them the tenant.
+
+    What is required instead is that the signed-in user's GitHub id equals
+    `installations.installed_by_github_user_id`, the `sender.id` of the
+    `installation.created` webhook (Task 1). That proves something narrower
+    and more relevant than org-admin — *you are the person who installed Doug
+    here* — with no new App permission and no re-acceptance by existing
+    tenants. Org-admin was rejected on evidence, not preference:
+    tenancy.verify_org_admin's membership hop needs organization Members:read
+    for a user-to-server token, which Doug does not hold and cannot add
+    without forcing every installation to re-accept permissions.
+
+    ITS LIMIT IS REAL AND STATED HERE RATHER THAN PAPERED OVER: it only works
+    for installations created after Task 1 shipped. Rows predating it carry
+    NULL — including the operator's own 150424894, populated by webhook
+    redelivery under MT0 — and they CANNOT self-bind. NULL never compares
+    equal to anything here; a fail-open would let any signed-in stranger
+    claim every legacy tenant at once. Those need a deliberate operator bind
+    or a one-off backfill.
+
+    THE ORDER BELOW IS LOAD-BEARING, same posture as tenancy.verify_admin's:
+    the session, then the ledger row (free, local), then the identity hop
+    (one WorkOS read), then the comparison — and only after all of that does
+    anything get CREATED. A caller who proves nothing leaves no organization,
+    no membership, and no row behind.
+
+    Every authority failure is the same 404, mirroring dispense_token: a
+    caller cannot tell "exists but refused" from "does not exist". The two
+    exceptions are deployment faults (503, named, per api.py:391's idiom) and
+    a live installation already bound elsewhere (409) — which is only ever
+    seen by someone who has ALREADY proved they installed it.
+
+    `installations.state` is deliberately not gated: binding a suspended or
+    deleted installation grants nothing, because tenancy.live_scope refuses
+    every read against one.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+
+    # 1. Who is signed in. Nothing else about them is asserted — bind runs
+    #    BEFORE any organization exists, so resolve_session (which fails
+    #    closed without org_id) would be circular here.
+    try:
+        claims = session_auth.verify_session_claims(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if claims is None:
+        raise HTTPException(status_code=401, detail="bad session")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        raise HTTPException(status_code=401, detail="bad session")
+
+    installation_id = body.installation_id
+
+    # 2. The ledger row, before any WorkOS call: an installation with no
+    #    recorded installer can never prove authority, so it costs WorkOS
+    #    nothing at all — not even the identity read.
+    row = store.installation_bind_row(installation_id)
+    if row is None or row["installed_by_github_user_id"] is None:
+        raise _not_found()
+
+    # 3. The identity hop. A read, not a write — it produces the id being
+    #    checked in step 4.
+    try:
+        idp_id = workos_client.github_user_id_for(workos_user_id)
+    except workos_client.WorkOSNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="workos not configured") from exc
+    except workos_client.WorkOSError as exc:
+        # An outage is not a failed proof. Refusing here would tell a real
+        # installer their credentials were wrong during someone else's
+        # incident, and they would have no way to tell the difference.
+        raise HTTPException(status_code=503, detail="workos unavailable") from exc
+    if idp_id is None:
+        raise _not_found()
+
+    # 4. The comparison, as normalised strings.
+    #
+    #    idp_id's format for a GitHub connection is UNDOCUMENTED and was never
+    #    measured — WorkOS documents it only as "a unique identifier from the
+    #    external provider", with a Microsoft example. The inference is that
+    #    it is the numeric GitHub user id. If that inference is wrong, EVERY
+    #    bind fails, so the value is logged rather than silently denied: one
+    #    log query then diagnoses it instead of a permanent, invisible refusal.
+    claimed = str(idp_id).strip()
+    if not claimed.isdigit():
+        print(
+            f"doug: bind refused — WorkOS idp_id is not a numeric GitHub user id. "
+            f"Received {claimed!r} for installation {installation_id}. If this is the "
+            f"real GitHub identity format, the comparison in api.bind_installation "
+            f"needs updating; nothing binds until it is.",
+            file=sys.stderr,
+        )
+        raise _not_found()
+    if claimed != str(row["installed_by_github_user_id"]).strip():
+        raise _not_found()
+
+    # 5. Authority is proved. Only now may anything be created.
+    with store.installation_bind_lock(installation_id):
+        # Re-read inside the lock: a peer bind may have committed between
+        # step 2 and here, and the value that matters is the current one.
+        current = store.installation_bind_row(installation_id) or row
+        # And re-prove against it. Step 4 checked a snapshot taken before a
+        # network call; an uninstall and reinstall by someone else inside that
+        # window rewrites installed_by_github_user_id, and binding on the
+        # stale fact would hand this tenant to the previous installer. The
+        # `or ""` keeps a row that became NULL refusing rather than raising.
+        if claimed != str(current["installed_by_github_user_id"] or "").strip():
+            raise _not_found()
+        external_id = workos_client.external_id_for(installation_id)
+        bound = current["workos_org_id"]
+        try:
+            if bound is not None:
+                # Already bound: resolve WITHOUT creating. Moving a live
+                # installation to another organization is a takeover, not an
+                # update, and this branch refuses it — so it must also leave
+                # nothing behind, or every refusal would orphan a fresh
+                # organization at WorkOS. A missing one refuses too: a row
+                # naming an organization its own external_id does not resolve
+                # to is inconsistent state, not a bind to complete.
+                organization_id = workos_client.find_organization(external_id)
+                if organization_id != bound:
+                    raise HTTPException(
+                        status_code=409, detail="installation is bound to another organization"
+                    )
+            else:
+                organization_id = workos_client.ensure_organization(
+                    name=current["account_login"] or external_id, external_id=external_id
+                )
+            workos_client.ensure_membership(workos_user_id, organization_id)
+        except workos_client.WorkOSNotConfigured as exc:
+            raise HTTPException(status_code=503, detail="workos not configured") from exc
+        except workos_client.WorkOSError as exc:
+            raise HTTPException(status_code=503, detail="workos unavailable") from exc
+
+        written = store.bind_installation_org(installation_id, organization_id)
+        if written != organization_id:
+            # The row already carried a different organization, or this one
+            # belongs to another installation (workos_org_id is UNIQUE). Both
+            # are the same refusal: this bind did not happen.
+            raise HTTPException(
+                status_code=409, detail="installation is bound to another organization"
+            )
+    print(
+        f"doug: bound installation {installation_id} to organization {organization_id}",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
 
 
 class PatternRow(BaseModel):
