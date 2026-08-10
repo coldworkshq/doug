@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -482,3 +483,31 @@ class FileExamplePackStore:
             packs=len(pack_paths),
             adjudications=len(adjudication_paths),
         )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Validate one explicitly named local store; never mutate or repair it."""
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if len(arguments) != 2 or arguments[0] != "validate":
+        print(
+            "usage: python -m doug.example_pack validate <absolute-root>",
+            file=sys.stderr,
+        )
+        return 2
+    root = Path(arguments[1])
+    if not root.is_absolute():
+        print("doug: example-pack root must be absolute", file=sys.stderr)
+        return 2
+    try:
+        result = FileExamplePackStore(root).validate()
+    except Exception as exc:  # noqa: BLE001 - CLI converts integrity errors to status
+        detail = f"{type(exc).__name__}: {exc}"
+        print(f"doug: example-pack validation failed: {detail}"[:499], file=sys.stderr)
+        return 1
+    print(f"blobs={result.blobs} packs={result.packs} adjudications={result.adjudications}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

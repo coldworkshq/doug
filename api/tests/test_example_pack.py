@@ -20,6 +20,7 @@ from doug.example_pack import (
     UsageV0,
     WholeInstrumentManifestV0,
     canonical_json_bytes,
+    main,
 )
 
 NOW = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
@@ -320,3 +321,78 @@ def test_pack_hash_and_adjudication_hash_are_verified_on_load():
     bad_adjudication["adjudication_id"] = "0" * 64
     with pytest.raises(ValueError, match="adjudication_id"):
         ExampleAdjudicationV0.model_validate(bad_adjudication)
+
+
+def _valid_cli_store(root):
+    store = FileExamplePackStore(root)
+    request = b'{"model":"a"}'
+    evidence = b"+x"
+    raw = b'{"findings":[]}'
+    for data, media_type in (
+        (request, "application/json"),
+        (evidence, "text/x-diff"),
+        (raw, "application/json"),
+    ):
+        store.put_blob(data, media_type=media_type)
+    finding = CapturedFindingV0.build(
+        raw_output_sha256=ContentRefV0.from_bytes(raw, media_type="application/json").sha256,
+        attempt_kind="risk",
+        ordinal=0,
+        finding={
+            "category_slug": "race-condition",
+            "description": "unguarded write",
+            "file": "cache.py",
+            "severity": "high",
+        },
+    )
+    pack = _pack(
+        request=request,
+        evidence=evidence,
+        raw_output=raw,
+        findings=(finding,),
+    )
+    store.put_pack(pack)
+    adjudication = ExampleAdjudicationV0.build(
+        pack_hash=pack.pack_hash,
+        run_id=pack.run_id,
+        finding_id=finding.finding_id,
+        disposition="unknown",
+        evidence=(),
+        verifier_receipts=(),
+        adjudicator="test",
+        adjudicated_at=NOW,
+        supersedes=None,
+    )
+    store.put_adjudication(adjudication)
+    return store, pack
+
+
+def test_validate_cli_reports_deterministic_counts(tmp_path, capsys):
+    _valid_cli_store(tmp_path)
+
+    assert main(["validate", str(tmp_path)]) == 0
+
+    output = capsys.readouterr()
+    assert output.out == "blobs=3 packs=1 adjudications=1\n"
+    assert output.err == ""
+
+
+def test_validate_cli_fails_loudly_on_corrupt_referenced_blob(tmp_path, capsys):
+    _store, pack = _valid_cli_store(tmp_path)
+    request = tmp_path / "blobs/sha256" / pack.request.sha256
+    request.write_bytes(b"corrupt")
+
+    assert main(["validate", str(tmp_path)]) == 1
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "example-pack validation failed" in output.err
+    assert len(output.err) <= 500
+
+
+def test_validate_cli_refuses_relative_root(capsys):
+    assert main(["validate", "relative/path"]) == 2
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "must be absolute" in output.err
