@@ -664,7 +664,75 @@ cd api && uv run pytest -q 2>&1 | tail -2 && uv run ruff check .
 
 ### Task 8: `/install/start` and `/install/callback`
 
-**Files:** `web/app/install/start/route.ts`, `web/app/install/callback/route.ts` (both new)
+**Expanded 2026-08-10 after the security-boundary checkpoint.** The original
+two-web-file scope was impossible: doug-web has no durable store in which to
+burn a nonce. Andrew approved a purpose-scoped shared signing secret, an API
+completion endpoint, and a durable consumed-flow table. This is not a second
+account system. **WorkOS remains Doug identity; GitHub is an optional product
+capability entered only through “Connect repositories.”** A WorkOS user with
+no GitHub account still signs in and uses every non-GitHub surface. Binding a
+GitHub installation is the narrower operation that requires a linked GitHub
+identity matching the webhook-recorded installer.
+
+**Files:**
+- `api/doug/install_flow.py` (new)
+- `api/doug/store.py`
+- `api/doug/api.py`
+- `api/tests/test_install_flow.py` (new)
+- `api/tests/test_api.py`
+- `api/tests/test_store.py`
+- `web/lib/install-flow.ts` (new)
+- `web/lib/install-flow.test.mjs` (new)
+- `web/lib/node-next-loader.mjs`
+- `web/app/install/start/route.ts` (new)
+- `web/app/install/callback/route.ts` (new)
+- `web/proxy.ts`
+- `api/deploy/gcp.sh`
+- `api/tests/test_deploy_gcp.py`
+
+**Resolved mechanism:**
+1. `DOUG_INSTALL_FLOW_SECRET` is a dedicated HMAC secret shared only by
+   doug-web and doug-api. It is not `WORKOS_COOKIE_PASSWORD`, an operator/API
+   token, or a provider credential. `DOUG_GITHUB_APP_SLUG=dougs-review` is a
+   non-secret web setting.
+2. `/install/start` requires a WorkOS session, creates 32 random bytes of
+   nonce, and sets `doug_install_flow`: signed, HttpOnly, SameSite=Lax,
+   production-Secure, path `/install`, 30-minute max age. Its payload is
+   versioned and carries `nonce`, `exp`, the WorkOS `sub`, and later the
+   installation id. Redirect to
+   `https://github.com/apps/dougs-review/installations/new`; send no GitHub
+   `state` parameter.
+3. `/install/callback` stays outside the AuthKit proxy because a GitHub-first
+   install has no Doug session. It validates a positive integer installation
+   id, puts it into the signed flow cookie, and, without a session, returns
+   through AuthKit to the same callback. The cookie, not AuthKit's ten-minute
+   PKCE state, owns the 30-minute inbox/new-tab lifetime.
+4. With a session, the callback seals the current WorkOS `sub` into the flow
+   and server-to-server POSTs `{installation_id, flow_token}` to the new API
+   endpoint using the WorkOS access token. Neither token reaches browser JS,
+   a URL, a log, or localStorage.
+5. The API independently verifies the WorkOS JWT plus HMAC version,
+   signature, expiry, subject, installation id, and nonce shape. It then
+   reuses Task 5's exact installer-identity proof. A user with no linked
+   GitHub identity gets the same non-enumerating authority refusal; the web
+   renders it as an actionable **GitHub connection required for repository
+   setup** state, never as a failure to hold a Doug account.
+6. A new-table-only `consumed_install_flows` record stores the SHA-256 nonce
+   digest, WorkOS user id, installation id, and consumed time; raw nonces are
+   never stored. Under the existing installation advisory lock, a successful
+   bind checks for an earlier consumption, performs idempotent WorkOS setup,
+   then in one database transaction inserts the consumption **before** the
+   installation authority write. Both DB writes commit or roll back together.
+   A same-user/same-install replay may return success but must execute no
+   WorkOS or binding side effect; any mismatched replay is refused.
+7. `setup_action=request` clears the flow and returns a calm waiting-for-admin
+   state without calling bind. `setup_action=update` never calls bind: it
+   clears the flow and sends the user through AuthKit with `prompt=consent`
+   and `returnTo=/dashboard`, so Task 7b's callback re-derives GitHub scope.
+8. Expand the proxy matcher only to `/install/start`; `/`, `/queue`, and
+   `/install/callback` remain excluded. Expand the exact deploy allowlists so
+   doug-web has its four AuthKit secrets plus only the flow secret, doug-api
+   has the same flow secret, and the web receives the slug as plain env.
 
 **The cookie must survive an inbox round-trip.** WorkOS refuses a first authentication until email is verified, so the user leaves for their inbox and returns — possibly minutes later, possibly in a new tab. A short redirect-scale TTL loses the pending installation and breaks first-time self-serve at the exact moment the design exists to make seamless. Size the TTL for a human checking email.
 
@@ -673,7 +741,33 @@ cd api && uv run pytest -q 2>&1 | tail -2 && uv run ruff check .
 - `setup_action=update` fires whenever anyone edits repo selection: treat as re-derive-scope, **never** as bind.
 - `setup_action=request` produces **no installation at all** (org admin must approve) — land on an explanatory "waiting for your admin" state, not an error.
 
-- [ ] Steps: failing route tests, watch fail, implement, verify the cold-arrival path resumes, commit.
+- [ ] 1. Add failing cross-runtime HMAC fixture tests plus expiry, tamper,
+      wrong-subject, wrong-installation, missing-secret, and secret-safe error
+      tests; run them red.
+- [ ] 2. Implement the flow codecs independently in Python and TypeScript;
+      run the shared fixture and negative tests green.
+- [ ] 3. Add failing store tests for atomic consume-before-bind, rollback on
+      conflict, same-flow replay without a second authority write, mismatched
+      replay refusal, and raw-nonce absence; run them red, implement, green.
+- [ ] 4. Extract Task 5's session/authority/bind core without weakening its
+      existing endpoint. Add failing caller-level API tests proving the new
+      endpoint uses every verification boundary and that replay skips WorkOS;
+      run red, implement, run the old and new bind suites green.
+- [ ] 5. Add failing route tests for start, cold arrival/resume, subject
+      mismatch, request, update, GitHub-identity-required, upstream outage,
+      cookie attributes/TTL, matcher exclusions, token placement, and success
+      redirect; run red, implement, green.
+- [ ] 6. Add failing exact IAM/runtime/env deploy pins, run red, update setup
+      and deploy, then run them green plus `bash -n api/deploy/gcp.sh`.
+- [ ] 7. Mutate each load-bearing boundary independently: broaden matcher;
+      shorten cookie to redirect scale; omit HMAC/subject/id/expiry checks;
+      make nonce comparison-only; move consumption after the authority write;
+      let replay call WorkOS; bind on `update` or `request`; put a token in a
+      URL/browser-readable cookie; grant either service an extra secret. Each
+      named test must fail, then restore.
+- [ ] 8. Run `cd api && uv run pytest && uv run ruff check .`, root deploy
+      syntax, and `cd web && npm test && npm run lint && npm run build`; commit
+      only explicit Task 8 paths.
 
 ---
 

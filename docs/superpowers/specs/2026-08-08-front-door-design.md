@@ -126,6 +126,14 @@ includes the proxy bundle before assuming the image is unchanged.
 
 ## 2. Identity, and the difference between visibility and authority
 
+**Doug identity is provider-neutral.** WorkOS is the account and session
+boundary; GitHub is one optional capability, not a prerequisite for holding a
+Doug account. A person without GitHub can sign in and use present or future
+non-repository capabilities (for example session-state management). Only the
+act of connecting GitHub repositories requires a linked GitHub identity and
+the narrower installer-authority proof below. Do not put a GitHub requirement
+in the general AuthKit proxy, session verifier, or account model.
+
 WorkOS AuthKit, GitHub connection configured against **Doug's own GitHub App**
 (app id 4450932, `gcp.sh:379`, `:416`), "Return GitHub OAuth tokens" enabled,
 and the App's **Email addresses** account permission set to read-only (the
@@ -232,7 +240,7 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    server component. Confirm against the installed SDK's README at
    implementation time and follow the README, not this paragraph.
 2. Signed in with no installations → "Install Doug".
-3. `/install/start` sets a **short-TTL signed HttpOnly cookie** holding a
+3. `/install/start` sets a **30-minute signed HttpOnly cookie** holding a
    single-use nonce bound to the WorkOS user, then redirects to
    `github.com/apps/<slug>/installations/new`.
 4. GitHub → the App's **Setup URL** → `/install/callback?installation_id=…`
@@ -246,14 +254,20 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    arrival path needs the same cookie anyway, the two entrances collapse into
    one code path.
 
-5. **Consume the nonce** (single-use; burn it in storage, not just compare it).
-6. **Prove authority, not visibility.** Confirm the caller administers the
-   installation via `tenancy.verify_org_admin` (`tenancy.py:245`, already
-   exists). The `GET /user/installations` membership check is *necessary but
-   not sufficient* — an attacker with `:read` on one repo sees the victim's
-   `installation_id` in their own list, and since setup-URL parameters are
-   attacker-supplied with no GitHub redirect required, a visibility-only check
-   lets them claim the victim's tenant.
+5. **Consume the nonce** (single-use; burn its digest in API storage, not just
+   compare it in web memory). Doug-web and doug-api share a dedicated install
+   flow HMAC secret; it is not the AuthKit cookie key. The successful bind
+   transaction inserts the consumption before its authority write, and both
+   commit or roll back together. A same-flow retry may return idempotent
+   success but must not repeat WorkOS or binding side effects.
+6. **Prove authority, not visibility.** Match the signed-in WorkOS user's
+   linked GitHub identity to `installations.installed_by_github_user_id`, the
+   sender recorded by the `installation.created` webhook. Task 5 rejected the
+   earlier `tenancy.verify_org_admin` proposal because its membership proof
+   needs a GitHub organization permission Doug does not hold and would force
+   existing installations to re-accept. `GET /user/installations` remains
+   insufficient: an attacker with `:read` on one repo sees the victim's
+   `installation_id`, and setup-URL parameters are attacker-supplied.
 7. Ensure the WorkOS org under a **Postgres advisory lock** —
    `external_id` has no documented upsert and no documented conflict code, so
    find-or-create is not race-safe. Look it up via
