@@ -81,7 +81,11 @@ def test_github_user_id_reads_a_data_wrapped_list(monkeypatch):
                     200,
                     json={
                         "data": [
-                            {"idp_id": "184352", "provider": "GithubOAuth"}
+                            {
+                                "idp_id": "184352",
+                                "type": "OAuth",
+                                "provider": "GithubOAuth",
+                            }
                         ],
                         "list_metadata": {},
                     },
@@ -91,6 +95,47 @@ def test_github_user_id_reads_a_data_wrapped_list(monkeypatch):
     )
     monkeypatch.setattr(workos_client, "_request", fake)
     assert workos_client.github_user_id_for("user_01ABC") == "184352"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"idp_id": "184352", "provider": "GithubOAuth"},
+        {"idp_id": "184352", "type": "SSO", "provider": "GithubOAuth"},
+        {"idp_id": "184352", "type": "OAuth"},
+        {"idp_id": "184352", "type": "OAuth", "provider": "GoogleOAuth"},
+    ],
+    ids=["missing-type", "wrong-type", "missing-provider", "other-provider"],
+)
+def test_github_user_id_requires_the_documented_oauth_provider_contract(
+    monkeypatch, identity
+):
+    """A numeric external id is not GitHub authority unless WorkOS labels
+    that exact identity as its GitHub OAuth identity."""
+    fake = _Fake(
+        **{
+            "GET /user_management/users/user_01ABC/identities": _identities(identity)
+        }
+    )
+    monkeypatch.setattr(workos_client, "_request", fake)
+
+    assert workos_client.github_user_id_for("user_01ABC") is None
+
+
+def test_github_user_id_refuses_multiple_matching_github_identities(monkeypatch):
+    """Picking either matching row would make identity order an authority
+    decision; an ambiguous WorkOS answer must fail closed."""
+    fake = _Fake(
+        **{
+            "GET /user_management/users/user_01ABC/identities": _identities(
+                {"idp_id": "184352", "type": "OAuth", "provider": "GithubOAuth"},
+                {"idp_id": "999999", "type": "OAuth", "provider": "github"},
+            )
+        }
+    )
+    monkeypatch.setattr(workos_client, "_request", fake)
+
+    assert workos_client.github_user_id_for("user_01ABC") is None
 
 
 def test_github_user_id_is_none_when_the_user_has_no_identities(monkeypatch):

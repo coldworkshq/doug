@@ -851,6 +851,85 @@ def test_install_flow_lock_checkout_does_not_hide_unrelated_errors(monkeypatch):
             pytest.fail("a failed checkout must not enter the authority body")
 
 
+def test_direct_installation_bind_lock_uses_only_the_purpose_lock_pool(
+    monkeypatch,
+):
+    """A slow advisory wait and the WorkOS work inside the lock must not
+    occupy a connection needed by normal ledger reads and writes."""
+    events = []
+
+    class RecordingConnection:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+        def execution_options(self, **options):
+            events.append(("options", options))
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, statement, params):
+            events.append((str(statement), params["key"]))
+
+    class LockEngine:
+        def connect(self):
+            return RecordingConnection()
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: LockEngine())
+
+    def main_pool_forbidden():
+        raise AssertionError("direct bind lock reached the main ledger pool")
+
+    monkeypatch.setattr(store, "_get_engine", main_pool_forbidden)
+    with pytest.raises(RuntimeError, match="body failure"):
+        with store.installation_bind_lock(1001):
+            events.append(("body", None))
+            raise RuntimeError("body failure")
+
+    assert events == [
+        ("options", {"isolation_level": "AUTOCOMMIT"}),
+        ("SELECT pg_advisory_lock(:key)", 1001),
+        ("body", None),
+        ("SELECT pg_advisory_unlock(:key)", 1001),
+    ]
+
+
+def test_direct_installation_bind_lock_checkout_timeout_is_named(monkeypatch):
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError("purpose pool exhausted with a secret")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    with pytest.raises(
+        store.InstallationBindLockUnavailable,
+        match="^installation bind temporarily unavailable$",
+    ) as raised:
+        with store.installation_bind_lock(1001):
+            pytest.fail("checkout exhaustion must not enter the authority body")
+
+    assert isinstance(raised.value.__cause__, SQLAlchemyTimeoutError)
+
+
+def test_direct_installation_bind_lock_checkout_does_not_hide_unrelated_errors(
+    monkeypatch,
+):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("programmer bug")
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: BrokenEngine())
+
+    with pytest.raises(RuntimeError, match="^programmer bug$"):
+        with store.installation_bind_lock(1001):
+            pytest.fail("a failed checkout must not enter the authority body")
+
+
 def test_combined_install_flow_lock_uses_only_lock_pool_and_releases_in_reverse(
     monkeypatch,
 ):

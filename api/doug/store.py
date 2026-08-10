@@ -445,6 +445,10 @@ class InstallFlowLockUnavailable(RuntimeError):
     """The purpose lock pool could not admit this install flow in time."""
 
 
+class InstallationBindLockUnavailable(RuntimeError):
+    """The purpose lock pool could not admit this direct bind in time."""
+
+
 def _install_flow_advisory_key(nonce_digest: str) -> int:
     """Map a SHA-256 digest into Postgres's negative signed-bigint namespace."""
     positive = int(nonce_digest[:16], 16) & ((1 << 63) - 1)
@@ -2510,19 +2514,27 @@ def installation_bind_lock(installation_id: int):
     compare-and-set below. The lock narrows a window; the CAS is what closes
     it. Neither is trusted to do the other's job.
 
-    AUTOCOMMIT, and a session-scoped lock released in `finally`: the block it
-    guards makes HTTP calls, and holding an open transaction idle across them
-    is what keeps a vacuum from reclaiming rows for as long as WorkOS is slow.
+    The purpose-built one-connection lock engine keeps both the advisory wait
+    and the WorkOS/ledger work inside the lock off the normal ledger pool.
+    Checkout is bounded and becomes a named error; unrelated failures remain
+    visible. AUTOCOMMIT plus a session-scoped lock released in `finally` means
+    no transaction is held idle across the HTTP calls.
 
     The key is the positive installation id itself. Install-flow nonce locks
     use only negative bigint keys, so the two authority namespaces cannot
     collide.
     """
-    engine = _get_engine()
+    engine = _get_install_flow_lock_engine()
     if engine is None:
         yield
         return
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise InstallationBindLockUnavailable(
+            "installation bind temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
         if conn.dialect.name != "postgresql":
             yield
             return

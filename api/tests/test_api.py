@@ -3444,8 +3444,14 @@ class _FakeWorkOS:
     genuinely finds.
     """
 
-    def __init__(self, idp_id: str | None = "777", orgs: dict[str, str] | None = None):
+    def __init__(
+        self,
+        idp_id: str | None = "777",
+        orgs: dict[str, str] | None = None,
+        identities: list[dict] | None = None,
+    ):
         self.idp_id = idp_id
+        self.identities = identities
         self.orgs = dict(orgs or {})
         self.memberships: list[tuple[str, str]] = []
         self.calls: list[str] = []
@@ -3453,6 +3459,8 @@ class _FakeWorkOS:
     def __call__(self, method, path, *, json=None):
         self.calls.append(f"{method} {path}")
         if method == "GET" and path.endswith("/identities"):
+            if self.identities is not None:
+                return httpx.Response(200, json=self.identities)
             if self.idp_id is None:
                 return httpx.Response(200, json=[])
             return httpx.Response(
@@ -3476,8 +3484,13 @@ class _FakeWorkOS:
         return [c for c in self.calls if c.startswith("POST")]
 
 
-def _bind_env(monkeypatch, idp_id: str | None = "777", orgs=None) -> _FakeWorkOS:
-    fake = _FakeWorkOS(idp_id=idp_id, orgs=orgs)
+def _bind_env(
+    monkeypatch,
+    idp_id: str | None = "777",
+    orgs=None,
+    identities: list[dict] | None = None,
+) -> _FakeWorkOS:
+    fake = _FakeWorkOS(idp_id=idp_id, orgs=orgs, identities=identities)
     monkeypatch.setattr(workos_client, "_request", fake)
     monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
     monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
@@ -4209,6 +4222,68 @@ def test_bind_never_calls_workos_when_the_installer_check_fails(tmp_path, monkey
         "POST /organizations",
         "POST /user_management/organization_memberships",
     ]
+
+
+@pytest.mark.parametrize(
+    "identities",
+    [
+        [{"idp_id": "777", "provider": "GithubOAuth"}],
+        [{"idp_id": "777", "type": "SSO", "provider": "GithubOAuth"}],
+        [{"idp_id": "777", "type": "OAuth"}],
+        [{"idp_id": "777", "type": "OAuth", "provider": "GoogleOAuth"}],
+        [
+            {"idp_id": "777", "type": "OAuth", "provider": "GithubOAuth"},
+            {"idp_id": "999", "type": "OAuth", "provider": "github"},
+        ],
+    ],
+    ids=[
+        "missing-type",
+        "wrong-type",
+        "missing-provider",
+        "other-provider",
+        "ambiguous-github-identities",
+    ],
+)
+def test_bind_rejects_numeric_ids_without_one_github_oauth_identity(
+    tmp_path, monkeypatch, identities
+):
+    """A coincidentally matching number in an unproved identity must never
+    cross either WorkOS write boundary or bind the ledger row."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, identities=identities)
+
+    response = _bind(TestClient(app), 1001)
+
+    assert response.status_code == 404
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert _bound_org(1001) is None
+
+
+def test_direct_bind_lock_checkout_exhaustion_is_token_safe_before_workos_or_write(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    secret = "purpose-pool-secret"
+
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError(f"purpose pool exhausted for {secret}")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    response = _bind(TestClient(app), 1001)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "installation bind temporarily unavailable"}
+    assert secret not in response.text
+    assert fake.calls == []
+    assert _bound_org(1001) is None
 
 
 def test_bind_ignores_a_client_supplied_workos_org_id(tmp_path, monkeypatch):

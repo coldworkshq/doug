@@ -125,12 +125,11 @@ def github_user_id_for(workos_user_id: str) -> str | None:
     guess a fallback — the caller compares it and says so loudly when it is
     not what the inference expects.
 
-    The identity is selected by provider, never by "it was the only one
-    present": a Google identity's idp_id is a Google subject id, and
-    comparing that against a GitHub user id is meaningless. A provider-less
-    response (a shape not seen in the docs) with exactly one identity is read
-    as that identity, since a GitHub connection is the only one Doug
-    configures; anything ambiguous returns None.
+    The identity is selected only when WorkOS explicitly labels exactly one
+    row as both OAuth and GitHub. A Google identity's idp_id is a Google
+    subject id, and an unlabeled numeric id is not evidence of GitHub
+    authority. Missing fields, other identity types, and ambiguous matching
+    rows all fail closed.
     """
     path = f"/user_management/users/{workos_user_id}/identities"
     response = _request("GET", path)
@@ -139,9 +138,12 @@ def github_user_id_for(workos_user_id: str) -> str | None:
     if response.status_code >= 400:
         raise _failure("GET", path, response)
     identities = _entries(response.json())
-    github = [i for i in identities if "github" in str(i.get("provider") or "").lower()]
-    if not github and len(identities) == 1 and not identities[0].get("provider"):
-        github = identities
+    github = [
+        identity
+        for identity in identities
+        if identity.get("type") == "OAuth"
+        and "github" in str(identity.get("provider") or "").lower()
+    ]
     if len(github) != 1:
         return None
     idp_id = github[0].get("idp_id")

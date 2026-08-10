@@ -1503,17 +1503,23 @@ def bind_installation(body: BindRequest, authorization: str = Header("")) -> Res
         raise HTTPException(status_code=503, detail="no ledger configured")
     workos_user_id = _session_subject(authorization)
     installation_id = body.installation_id
-    row, claimed = _prove_installer(installation_id, workos_user_id)
-    with store.installation_bind_lock(installation_id):
-        current = _current_proved_row(installation_id, row, claimed)
-        organization_id = _ensure_workos_binding(
-            installation_id, workos_user_id, current
-        )
-        written = store.bind_installation_org(installation_id, organization_id)
-        if written != organization_id:
-            raise HTTPException(
-                status_code=409, detail="installation is bound to another organization"
+    try:
+        with store.installation_bind_lock(installation_id):
+            row, claimed = _prove_installer(installation_id, workos_user_id)
+            current = _current_proved_row(installation_id, row, claimed)
+            organization_id = _ensure_workos_binding(
+                installation_id, workos_user_id, current
             )
+            written = store.bind_installation_org(installation_id, organization_id)
+            if written != organization_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+    except store.InstallationBindLockUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="installation bind temporarily unavailable"
+        ) from exc
     print(
         f"doug: bound installation {installation_id} to organization {organization_id}",
         file=sys.stderr,
