@@ -1359,14 +1359,23 @@ def _verdict_bundle(conn, v) -> dict:
     }
 
 
-def _load_verdict_row(conn, verdict_id: int):
+def _load_verdict_row(
+    conn,
+    verdict_id: int,
+    *,
+    installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
+):
     """The raw `verdicts` row for one id, or None. Shared by every by-id
     lookup so the query itself lives in exactly one place — find_verdict_by_id
     and run_detail both start here, each still checking the None case itself,
     before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
-    return conn.execute(
-        select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-    ).mappings().first()
+    query = select(verdicts).where(verdicts.c.id == verdict_id)
+    if installation_id is not None:
+        query = query.where(verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
+    return conn.execute(query.limit(1)).mappings().first()
 
 
 def find_verdict_by_identity(
@@ -1756,7 +1765,12 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
     return {"latest_verdict": latest_verdict, "merges": merges}
 
 
-def run_detail(verdict_id: int) -> dict | None:
+def run_detail(
+    verdict_id: int,
+    *,
+    installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
+) -> dict | None:
     """Everything the console's forensic page shows for one run.
 
     _verdict_bundle deliberately omits provenance — it renders a check run,
@@ -1769,7 +1783,12 @@ def run_detail(verdict_id: int) -> dict | None:
     if engine is None:
         return None
     with engine.connect() as conn:
-        v = _load_verdict_row(conn, verdict_id)
+        v = _load_verdict_row(
+            conn,
+            verdict_id,
+            installation_id=installation_id,
+            repo_ids=repo_ids,
+        )
         if v is None:
             return None
         detail = _verdict_bundle(conn, v)
@@ -1973,6 +1992,7 @@ def run_history(
     offset: int = 0,
     repo: str | None = None,
     installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
     include_untenanted: bool = False,
 ) -> list[dict]:
     """Verdict HISTORY, newest first — every run, not one row per PR.
@@ -2005,6 +2025,8 @@ def run_history(
         query = query.where(verdicts.c.repo == repo)
     if installation_id is not None:
         query = query.where(verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
     query = (
         query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
         .limit(limit)
@@ -2806,6 +2828,111 @@ def session_entitlements_for(workos_user_id: str) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def session_entitlement_for(
+    workos_user_id: str, installation_id: int
+) -> dict | None:
+    """One user's claim for one selected installation.
+
+    The two-column predicate is the authority boundary.  Reading all rows and
+    joining them in Python makes an accidental union across installations or
+    users much easier; the selected WorkOS organization has already resolved
+    to exactly one installation before this lookup runs.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    session_entitlements.c.installation_id,
+                    session_entitlements.c.repo_ids,
+                    session_entitlements.c.derived_at,
+                ).where(
+                    session_entitlements.c.workos_user_id == workos_user_id,
+                    session_entitlements.c.installation_id == installation_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+    if row is None:
+        return None
+    return {
+        "installation_id": int(row["installation_id"]),
+        "repo_ids": _stored_repo_ids(row["repo_ids"]),
+        "derived_at": _as_utc(row["derived_at"]),
+    }
+
+
+def session_connections_for(workos_user_id: str) -> list[dict]:
+    """Connection facts for this user, before freshness is applied.
+
+    Only active installations and active repository rows join.  The stored
+    claim remains explicit ids and is intersected here; display names never
+    become authority.  The caller owns the time-dependent staleness decision
+    so this projection stays deterministic under tests.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    joined = session_entitlements.join(
+        installations,
+        session_entitlements.c.installation_id == installations.c.installation_id,
+    ).outerjoin(
+        installation_repos,
+        (installation_repos.c.installation_id == installations.c.installation_id)
+        & (installation_repos.c.state == "active"),
+    )
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                select(
+                    session_entitlements.c.installation_id,
+                    session_entitlements.c.repo_ids,
+                    session_entitlements.c.derived_at,
+                    installations.c.workos_org_id,
+                    installations.c.account_login,
+                    installations.c.account_type,
+                    installation_repos.c.github_repo_id,
+                    installation_repos.c.full_name,
+                )
+                .select_from(joined)
+                .where(
+                    session_entitlements.c.workos_user_id == workos_user_id,
+                    installations.c.state == "active",
+                )
+                .order_by(
+                    session_entitlements.c.installation_id,
+                    installation_repos.c.github_repo_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+    projected: dict[int, dict] = {}
+    for row in rows:
+        installation_id = int(row["installation_id"])
+        connection = projected.setdefault(
+            installation_id,
+            {
+                "installation_id": installation_id,
+                "organization_id": row["workos_org_id"],
+                "account_login": row["account_login"],
+                "account_type": row["account_type"],
+                "derived_at": _as_utc(row["derived_at"]),
+                "claimed_repo_ids": _stored_repo_ids(row["repo_ids"]),
+                "repositories": [],
+            },
+        )
+        repo_id = row["github_repo_id"]
+        if repo_id is not None and int(repo_id) in connection["claimed_repo_ids"]:
+            connection["repositories"].append(
+                {"id": int(repo_id), "full_name": row["full_name"]}
+            )
+    return list(projected.values())
 
 
 def active_repos(installation_id: int) -> list[tuple[int, str]]:

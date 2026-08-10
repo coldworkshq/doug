@@ -1080,6 +1080,45 @@ def test_upsert_installation_leaves_the_installer_untouched_when_not_given(
     assert rows[0]["state"] == "suspended"
 
 
+def test_session_entitlement_lookup_uses_both_user_and_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.replace_session_entitlements(
+        "user_selected", [(INSTALL, [11]), (INSTALL + 1, [22])]
+    )
+    store.replace_session_entitlements("user_other", [(INSTALL, [12])])
+
+    selected = store.session_entitlement_for("user_selected", INSTALL)
+
+    assert selected is not None
+    assert selected["installation_id"] == INSTALL
+    assert selected["repo_ids"] == frozenset({11})
+    assert store.session_entitlement_for("user_missing", INSTALL) is None
+
+
+def test_session_connection_projection_intersects_claims_with_live_rows(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "acme", "Organization", "active")
+    store.set_installation_repos(
+        INSTALL, [(11, "acme/one"), (12, "acme/two")], replace=True
+    )
+    store.replace_session_entitlements("user_selected", [(INSTALL, [11, 999])])
+    with store._get_engine().begin() as conn:
+        conn.execute(
+            store.installations.update()
+            .where(store.installations.c.installation_id == INSTALL)
+            .values(workos_org_id="org_acme")
+        )
+
+    rows = store.session_connections_for("user_selected")
+
+    assert len(rows) == 1
+    assert rows[0]["organization_id"] == "org_acme"
+    assert rows[0]["claimed_repo_ids"] == frozenset({11, 999})
+    assert rows[0]["repositories"] == [{"id": 11, "full_name": "acme/one"}]
+
+
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
     """The installation payload carries the authoritative list. A reinstall
     that dropped a repo must not leave it active — Doug would keep reviewing a

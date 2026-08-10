@@ -379,6 +379,7 @@ def queue(
     threshold: float | None = None,
     repo: str | None = None,
     x_doug_token: str = Header(""),
+    authorization: str = Header(""),
 ) -> QueueResponse:
     """The review queue: real PR titles, authors and reader rationales, on
     a service deployed --allow-unauthenticated, so this stays token-gated.
@@ -396,17 +397,25 @@ def queue(
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
     repo_ids: frozenset[int] | None = None
-    ctx: tenancy.TokenContext | None = None
+    ctx: tenancy.TokenContext | tenancy.SessionContext | None = None
     # Operator identity is this comparison, explicitly — never inferred from
     # ctx staying None. A future session credential that never produces a
     # TokenContext must not silently inherit the operator's unscoped ?repo=
     # name lookup below just by also leaving ctx as None.
     is_operator = hmac.compare_digest(x_doug_token, expected)
     if not is_operator:
-        try:
-            ctx = tenancy.resolve(x_doug_token)
-        except tenancy.KeysNotConfigured as e:
-            raise HTTPException(status_code=503, detail="token verification not configured") from e
+        if authorization.strip():
+            try:
+                ctx = session_auth.resolve_session(authorization)
+            except session_auth.SessionAuthNotConfigured as e:
+                raise HTTPException(status_code=503, detail="session auth not configured") from e
+        else:
+            try:
+                ctx = tenancy.resolve(x_doug_token)
+            except tenancy.KeysNotConfigured as e:
+                raise HTTPException(
+                    status_code=503, detail="token verification not configured"
+                ) from e
         if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
         # Scope gate: every key mints with queue:read today, but the scopes
@@ -752,6 +761,7 @@ def pr_receipt(
     pr_number: int,
     repo: str,
     x_doug_token: str = Header(""),
+    authorization: str = Header(""),
 ) -> ReceiptResponse:
     """One PR's evidentiary record.
 
@@ -796,12 +806,18 @@ def pr_receipt(
 
     installation_id: int | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        try:
-            ctx = tenancy.resolve(x_doug_token)
-        except tenancy.KeysNotConfigured as e:
-            raise HTTPException(
-                status_code=503, detail="token verification not configured"
-            ) from e
+        if authorization.strip():
+            try:
+                ctx = session_auth.resolve_session(authorization)
+            except session_auth.SessionAuthNotConfigured as e:
+                raise HTTPException(status_code=503, detail="session auth not configured") from e
+        else:
+            try:
+                ctx = tenancy.resolve(x_doug_token)
+            except tenancy.KeysNotConfigured as e:
+                raise HTTPException(
+                    status_code=503, detail="token verification not configured"
+                ) from e
         if ctx is None or "receipt:read" not in ctx.scopes:
             raise HTTPException(status_code=401, detail="bad token")
         installation_id = ctx.installation_id
@@ -914,6 +930,11 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
     row = store.run_detail(verdict_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    return _run_detail_response(row)
+
+
+def _run_detail_response(row: dict) -> RunDetailResponse:
+    """Serialize one already-authorized run row for either route family."""
     return RunDetailResponse(
         verdict_id=row["id"],
         repo=row["repo"],
@@ -945,6 +966,73 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
         outcomes=[RunOutcome(**o) for o in row["outcomes"]],
         outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
     )
+
+
+def _session_read_context(authorization: str, scope: str) -> tenancy.SessionContext:
+    try:
+        ctx = session_auth.resolve_session(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if ctx is None or scope not in ctx.scopes:
+        raise HTTPException(status_code=401, detail="bad session")
+    return ctx
+
+
+@app.get("/v1/sessions/runs")
+def session_runs(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str = "all",
+    tenant: str | None = None,
+    authorization: str = Header(""),
+) -> RunListResponse:
+    """Run history inside the one installation selected in this session."""
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if tenant is not None:
+        raise HTTPException(status_code=422, detail="tenant selection is not supported")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    ctx = _session_read_context(authorization, "queue:read")
+    effective = ctx.repo_ids
+    if repo != "all":
+        live = {
+            full_name: repo_id
+            for repo_id, full_name in store.active_repos(ctx.installation_id)
+        }
+        repo_id = live.get(repo)
+        if repo_id is None or repo_id not in effective:
+            raise _not_found()
+        effective = frozenset({repo_id})
+    rows = store.run_history(
+        limit=limit,
+        offset=offset,
+        installation_id=ctx.installation_id,
+        repo_ids=effective,
+    )
+    return RunListResponse(
+        items=[_run_item(row) for row in rows], limit=limit, offset=offset
+    )
+
+
+@app.get("/v1/sessions/runs/{verdict_id}")
+def session_run_detail(
+    verdict_id: int, authorization: str = Header("")
+) -> RunDetailResponse:
+    """One run, scoped in SQL before any evidence is assembled."""
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    ctx = _session_read_context(authorization, "queue:read")
+    row = store.run_detail(
+        verdict_id,
+        installation_id=ctx.installation_id,
+        repo_ids=ctx.repo_ids,
+    )
+    if row is None:
+        raise _not_found()
+    return _run_detail_response(row)
 
 
 @app.get("/v1/health")
@@ -1555,6 +1643,43 @@ class EntitlementsRequest(BaseModel):
 
     provider: str = ""
     token: str = ""
+
+
+@app.get("/v1/sessions/connections")
+def session_connections(authorization: str = Header("")) -> dict:
+    """The signed-in user's current repository connections.
+
+    Claims-only authentication is intentional: an orgless session is the
+    normal first visit and must be able to discover several selectable
+    installations.  Stored scope is still intersected with live ledger rows;
+    a connection with no readable repository disappears rather than becoming
+    an installation-wide sentinel.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    workos_user_id = _session_subject(authorization)
+    connections = []
+    for row in store.session_connections_for(workos_user_id):
+        if entitlements.is_stale(row["derived_at"]) or not row["repositories"]:
+            continue
+        account_login = row["account_login"]
+        connections.append(
+            {
+                "provider": "github",
+                "installation_id": row["installation_id"],
+                "organization_id": row["organization_id"],
+                "account_login": account_login,
+                "account_type": row["account_type"],
+                "status": "ready" if row["organization_id"] else "setup_required",
+                "label": (
+                    "Lema — separate product"
+                    if isinstance(account_login, str) and account_login.lower() == "lemahq"
+                    else None
+                ),
+                "repositories": row["repositories"],
+            }
+        )
+    return {"connections": connections}
 
 
 @app.post("/v1/sessions/entitlements", status_code=204)

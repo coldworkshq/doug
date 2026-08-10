@@ -19,7 +19,7 @@ import sys
 import jwt
 from jwt import PyJWKClient
 
-from . import store, tenancy
+from . import entitlements, store, tenancy
 
 SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read")
 
@@ -95,9 +95,7 @@ def verify_session_claims(bearer: str) -> dict | None:
         return None
 
 
-def resolve_session(
-    bearer: str, claimed_repo_ids: frozenset[int] | None
-) -> tenancy.SessionContext | None:
+def resolve_session(bearer: str) -> tenancy.SessionContext | None:
     """Map a bearer token to its live session context, or None.
 
     The verification half lives in verify_session_claims above (bind shares
@@ -109,6 +107,9 @@ def resolve_session(
         return None
 
     org_id = claims.get("org_id")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        return None
     if not org_id:
         # Absent whenever no organization is selected — the NORMAL first
         # sign-in state, not an edge case. Fail closed; NEVER default to
@@ -117,7 +118,10 @@ def resolve_session(
     installation_id = store.installation_id_for_workos_org(org_id)
     if installation_id is None:
         return None
-    scope = tenancy.live_scope(installation_id, claimed_repo_ids)
+    claim = store.session_entitlement_for(workos_user_id, installation_id)
+    if claim is None or entitlements.is_stale(claim["derived_at"]):
+        return None
+    scope = tenancy.live_scope(installation_id, claim["repo_ids"])
     if scope is None:
         return None
     return tenancy.SessionContext(

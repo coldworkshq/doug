@@ -3484,10 +3484,13 @@ def _bind_env(monkeypatch, idp_id: str | None = "777", orgs=None) -> _FakeWorkOS
     return fake
 
 
-def _session(key=_BIND_KEY, sub="user_01ABC") -> dict:
+def _session(key=_BIND_KEY, sub="user_01ABC", org_id: str | None = None) -> dict:
     now = int(time.time())
+    claims = {"iss": "https://auth.workos.com", "sub": sub, "iat": now, "exp": now + 300}
+    if org_id is not None:
+        claims["org_id"] = org_id
     token = jwt.encode(
-        {"iss": "https://auth.workos.com", "sub": sub, "iat": now, "exp": now + 300},
+        claims,
         key,
         algorithm="RS256",
     )
@@ -4503,8 +4506,321 @@ def test_a_first_time_user_with_no_organization_can_record_entitlements(tmp_path
     # The same session, through the stricter resolver, is refused — which is
     # what makes the 204 above evidence about WHICH check the route runs.
     assert (
-        session_auth.resolve_session(_session()["Authorization"], frozenset({11})) is None
+        session_auth.resolve_session(_session()["Authorization"]) is None
     )
+
+
+# GET /v1/sessions/connections is the orgless landing read. It projects only
+# stored conclusions and current ledger liveness; no provider credential is
+# available on this later request.
+
+
+def _connection_install(
+    installation_id: int,
+    login: str,
+    account_type: str,
+    repos: list[tuple[int, str]],
+    *,
+    org_id: str | None = None,
+    state: str = "active",
+):
+    store.upsert_installation(installation_id, login, account_type, state)
+    store.set_installation_repos(installation_id, repos, replace=False)
+    if org_id is not None:
+        with store._get_engine().begin() as conn:
+            conn.execute(
+                store.installations.update()
+                .where(store.installations.c.installation_id == installation_id)
+                .values(workos_org_id=org_id)
+            )
+
+
+def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {"connections": []}
+
+
+def test_connections_project_several_installations_and_explicit_live_repos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _connection_install(
+        101,
+        "drewjst",
+        "User",
+        [(11, "drewjst/doug"), (12, "drewjst/notes")],
+        org_id="org_user",
+    )
+    _connection_install(
+        202,
+        "LemaHQ",
+        "Organization",
+        [(21, "lemahq/lema"), (22, "lemahq/lema-verify")],
+        org_id="org_lema",
+    )
+    store.replace_session_entitlements("user_01ABC", [(101, [11, 12]), (202, [21, 22])])
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connections": [
+            {
+                "provider": "github",
+                "installation_id": 101,
+                "organization_id": "org_user",
+                "account_login": "drewjst",
+                "account_type": "User",
+                "status": "ready",
+                "label": None,
+                "repositories": [
+                    {"id": 11, "full_name": "drewjst/doug"},
+                    {"id": 12, "full_name": "drewjst/notes"},
+                ],
+            },
+            {
+                "provider": "github",
+                "installation_id": 202,
+                "organization_id": "org_lema",
+                "account_login": "LemaHQ",
+                "account_type": "Organization",
+                "status": "ready",
+                "label": "Lema — separate product",
+                "repositories": [
+                    {"id": 21, "full_name": "lemahq/lema"},
+                    {"id": 22, "full_name": "lemahq/lema-verify"},
+                ],
+            },
+        ]
+    }
+
+
+def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _connection_install(101, "coldworkshq", "Organization", [(11, "coldworkshq/coldworks")])
+    _connection_install(202, "gone", "Organization", [(22, "gone/private")], state="suspended")
+    _connection_install(
+        303, "shrunk", "Organization", [(33, "shrunk/removed")], org_id="org_shrunk"
+    )
+    store.set_installation_repos(303, [(33, "shrunk/removed")], replace=False, state="removed")
+    store.replace_session_entitlements(
+        "user_01ABC", [(101, [11]), (202, [22]), (303, [33]), (404, [44])]
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json()["connections"] == [
+        {
+            "provider": "github",
+            "installation_id": 101,
+            "organization_id": None,
+            "account_login": "coldworkshq",
+            "account_type": "Organization",
+            "status": "setup_required",
+            "label": None,
+            "repositories": [{"id": 11, "full_name": "coldworkshq/coldworks"}],
+        }
+    ]
+
+
+def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _connection_install(
+        101,
+        "acme",
+        "Organization",
+        [(11, "acme/repo11")],
+        org_id="org_acme",
+    )
+    store.replace_session_entitlements(
+        "user_01ABC",
+        [(101, [11])],
+        now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {"connections": []}
+
+
+def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _connection_install(
+        101,
+        "acme",
+        "Organization",
+        [(repo_id, f"acme/repo{repo_id}") for repo_id in repos],
+        org_id="org_acme",
+    )
+    store.replace_session_entitlements("user_01ABC", [(101, claim)])
+    return _session(org_id="org_acme")
+
+
+def test_session_queue_uses_only_the_selected_users_explicit_repos(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
+    _seed_verdict(repo="acme/repo12", pr_number=12, installation_id=101, github_repo_id=12)
+    _seed_verdict(repo="other/repo11", pr_number=99, installation_id=202, github_repo_id=11)
+
+    response = TestClient(app).get("/v1/queue", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["pr"]["number"] for item in response.json()["items"]] == [11]
+    assert (
+        TestClient(app)
+        .get("/v1/queue?repo=acme/repo12", headers=headers)
+        .json()
+        == {"detail": "not found"}
+    )
+
+
+def test_session_queue_orgless_and_present_bad_bearer_fail_without_key_fallback(
+    tmp_path, monkeypatch
+):
+    _session_scope(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    tenant_key = tenancy.mint_key(
+        101,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="acme",
+    ).token
+
+    orgless = TestClient(app).get("/v1/queue", headers=_session())
+    bad_bearer = TestClient(app).get(
+        "/v1/queue",
+        headers={"Authorization": "Bearer forged", "X-Doug-Token": tenant_key},
+    )
+
+    assert orgless.status_code == 401
+    assert bad_bearer.status_code == 401
+
+
+@pytest.mark.parametrize("failure", ["stale", "suspended"])
+def test_session_queue_refuses_dead_stored_scope(tmp_path, monkeypatch, failure):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    if failure == "stale":
+        store.replace_session_entitlements(
+            "user_01ABC",
+            [(101, [11])],
+            now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+        )
+    else:
+        store.upsert_installation(101, "acme", "Organization", "suspended")
+
+    response = TestClient(app).get("/v1/queue", headers=headers)
+
+    assert response.status_code == 401
+
+
+def test_session_receipt_scopes_before_assembly_and_hides_cross_tenant_existence(
+    tmp_path, monkeypatch
+):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
+    _seed_verdict(repo="acme/repo12", pr_number=12, installation_id=101, github_repo_id=12)
+
+    own = TestClient(app).get(
+        "/v1/prs/11/receipt?repo=acme/repo11", headers=headers
+    )
+    sibling = TestClient(app).get(
+        "/v1/prs/12/receipt?repo=acme/repo12", headers=headers
+    )
+    absent = TestClient(app).get(
+        "/v1/prs/999/receipt?repo=acme/repo12", headers=headers
+    )
+
+    assert own.status_code == 200
+    assert sibling.status_code == 404
+    assert sibling.json() == absent.json() == {"detail": "not found"}
+
+
+def test_session_run_history_never_crosses_installations_or_the_explicit_repo_set(
+    tmp_path, monkeypatch
+):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    own = store.save_review(
+        "acme/repo11",
+        11,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 11},
+        installation_id=101,
+        github_repo_id=11,
+    )
+    store.save_review(
+        "acme/repo12",
+        12,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 12},
+        installation_id=101,
+        github_repo_id=12,
+    )
+    store.save_review(
+        "other/repo11",
+        99,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 99},
+        installation_id=202,
+        github_repo_id=11,
+    )
+
+    response = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
+
+    assert response.status_code == 200
+    assert [row["verdict_id"] for row in response.json()["items"]] == [own]
+    assert TestClient(app).get("/v1/sessions/runs?tenant=all", headers=headers).status_code == 422
+
+
+def test_session_run_detail_is_query_scoped_and_uses_one_uniform_404(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    own = store.save_review(
+        "acme/repo11", 11, "reader", VERDICT,
+        installation_id=101, github_repo_id=11,
+    )
+    sibling = store.save_review(
+        "acme/repo12", 12, "reader", VERDICT,
+        installation_id=101, github_repo_id=12,
+    )
+    cross = store.save_review(
+        "other/repo11", 99, "reader", VERDICT,
+        installation_id=202, github_repo_id=11,
+    )
+
+    visible = TestClient(app).get(f"/v1/sessions/runs/{own}", headers=headers)
+    refusals = [
+        TestClient(app).get(f"/v1/sessions/runs/{value}", headers=headers)
+        for value in (sibling, cross, 999999)
+    ]
+
+    assert visible.status_code == 200
+    assert all(response.status_code == 404 for response in refusals)
+    assert {json.dumps(response.json(), sort_keys=True) for response in refusals} == {
+        json.dumps({"detail": "not found"}, sort_keys=True)
+    }
+
+
+def test_session_bearer_remains_refused_on_operator_run_routes(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+
+    assert TestClient(app).get("/v1/runs", headers=headers).status_code == 401
+    assert TestClient(app).get("/v1/runs/1", headers=headers).status_code == 401
 
 
 def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):

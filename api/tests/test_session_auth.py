@@ -7,6 +7,7 @@ posture test_tenancy.py takes toward GitHub's API via _caller_client /
 app_client.
 """
 
+import inspect
 import time
 
 import jwt
@@ -100,8 +101,9 @@ def test_empty_bearer_is_refused_without_reaching_jwks(monkeypatch):
     keyformat.parse being 'zero I/O' before keys_configured() or a lookup."""
     calls = []
     monkeypatch.setattr(session_auth, "_jwks", lambda: calls.append("jwks") or _FakeJWKSClient())
-    assert session_auth.resolve_session("", frozenset({1})) is None
+    assert session_auth.resolve_session("") is None
     assert calls == []
+    assert list(inspect.signature(session_auth.resolve_session).parameters) == ["bearer"]
 
 
 def test_absent_org_id_fails_closed(monkeypatch):
@@ -117,7 +119,7 @@ def test_absent_org_id_fails_closed(monkeypatch):
         store, "installation_id_for_workos_org", lambda org_id: calls.append(org_id) or 1
     )
     token = _token()  # no org_id claim at all
-    assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {token}") is None
     assert calls == []
 
 
@@ -127,7 +129,7 @@ def test_unknown_org_id_is_refused(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _use_fake_jwks(monkeypatch)
     token = _token(org_id="org_ghost")
-    assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {token}") is None
 
 
 def test_expired_token_is_refused(tmp_path, monkeypatch):
@@ -147,10 +149,11 @@ def test_expired_token_is_refused(tmp_path, monkeypatch):
     _use_fake_jwks(monkeypatch)
 
     valid = _token(org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {valid}", frozenset({111})) is not None
+    store.replace_session_entitlements("user_01ABC", [(150424894, [111])])
+    assert session_auth.resolve_session(f"Bearer {valid}") is not None
 
     expired = _token(org_id="org_123", exp=int(time.time()) - 60)
-    assert session_auth.resolve_session(f"Bearer {expired}", frozenset({111})) is None
+    assert session_auth.resolve_session(f"Bearer {expired}") is None
 
 
 def test_tampered_signature_is_refused(tmp_path, monkeypatch):
@@ -170,10 +173,11 @@ def test_tampered_signature_is_refused(tmp_path, monkeypatch):
     _use_fake_jwks(monkeypatch)  # reports the real public key
 
     valid = _token(org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {valid}", frozenset({111})) is not None
+    store.replace_session_entitlements("user_01ABC", [(150424894, [111])])
+    assert session_auth.resolve_session(f"Bearer {valid}") is not None
 
     forged = _token(private_key=_OTHER_PRIVATE_KEY, org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {forged}", frozenset({111})) is None
+    assert session_auth.resolve_session(f"Bearer {forged}") is None
 
 
 def test_session_scopes_cannot_exceed_the_enumerated_set():
@@ -192,7 +196,7 @@ def test_missing_workos_client_id_raises_configuration_exception(monkeypatch):
     monkeypatch.setattr(session_auth, "_jwks_client", None)  # don't reuse a cached client
     token = _token(org_id="org_123")
     with pytest.raises(session_auth.SessionAuthNotConfigured):
-        session_auth.resolve_session(f"Bearer {token}", frozenset({1}))
+        session_auth.resolve_session(f"Bearer {token}")
 
 
 def test_jwks_outage_and_forged_token_are_logged_differently(monkeypatch, capsys):
@@ -206,14 +210,14 @@ def test_jwks_outage_and_forged_token_are_logged_differently(monkeypatch, capsys
 
     monkeypatch.setattr(session_auth, "_jwks", lambda: _BoomJWKS())
     outage_token = _token(org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {outage_token}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {outage_token}") is None
     outage_err = capsys.readouterr().err
     assert "JWKS" in outage_err
     assert outage_token not in outage_err
 
     _use_fake_jwks(monkeypatch)
     forged = _token(private_key=_OTHER_PRIVATE_KEY, org_id="org_123")
-    assert session_auth.resolve_session(f"Bearer {forged}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {forged}") is None
     forged_err = capsys.readouterr().err
     assert "verification" in forged_err
     assert "JWKS" not in forged_err
@@ -229,8 +233,9 @@ def test_successful_resolve_returns_a_session_context_with_live_intersected_scop
         150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
     )
     _use_fake_jwks(monkeypatch)
+    store.replace_session_entitlements("user_01ABC", [(150424894, [111, 999])])
     token = _token(org_id="org_live")
-    ctx = session_auth.resolve_session(f"Bearer {token}", frozenset({111, 999}))
+    ctx = session_auth.resolve_session(f"Bearer {token}")
     assert ctx == tenancy.SessionContext(
         installation_id=150424894,
         repo_ids=frozenset({111}),  # 999 is claimed but not live: dropped
@@ -238,16 +243,57 @@ def test_successful_resolve_returns_a_session_context_with_live_intersected_scop
     )
 
 
-def test_none_claim_yields_no_session(tmp_path, monkeypatch):
-    """RULING 6: claimed_repo_ids passes straight through to
-    tenancy.live_scope, which fails closed on None rather than resolving it
-    to 'every repo' — a session must never get installation-wide scope."""
+def test_missing_stored_claim_yields_no_session(tmp_path, monkeypatch):
+    """A caller cannot supply repo ids. No stored row means no data scope."""
     _db(tmp_path, monkeypatch)
     _install(150424894, org_id="org_live")
     store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     _use_fake_jwks(monkeypatch)
     token = _token(org_id="org_live")
-    assert session_auth.resolve_session(f"Bearer {token}", None) is None
+    assert session_auth.resolve_session(f"Bearer {token}") is None
+
+
+def test_session_scope_comes_from_the_matching_user_and_installation_only(
+    tmp_path, monkeypatch
+):
+    """Changing either identity coordinate must change the answer.
+
+    This fails if resolution reads another user's claim or unions the same
+    user's several installations. The live repo shared by the rows keeps the
+    contrast about stored identity, not liveness.
+    """
+    _db(tmp_path, monkeypatch)
+    _install(101, org_id="org_selected")
+    _install(202, org_id="org_other")
+    store.set_installation_repos(
+        101, [(11, "one/a"), (12, "one/b"), (22, "one/shared-id")], replace=False
+    )
+    store.set_installation_repos(202, [(22, "two/c")], replace=False)
+    store.replace_session_entitlements("user_01ABC", [(101, [11]), (202, [22])])
+    store.replace_session_entitlements("user_other", [(101, [12])])
+    _use_fake_jwks(monkeypatch)
+
+    ctx = session_auth.resolve_session(f"Bearer {_token(org_id='org_selected')}")
+    assert ctx is not None
+    assert ctx.installation_id == 101
+    assert ctx.repo_ids == frozenset({11})
+
+
+def test_stale_stored_claim_is_refused(tmp_path, monkeypatch):
+    """Stored scope expires independently of the much longer WorkOS cookie."""
+    from datetime import UTC, datetime, timedelta
+
+    from doug import entitlements
+
+    _db(tmp_path, monkeypatch)
+    _install(101, org_id="org_selected")
+    store.set_installation_repos(101, [(11, "one/a")], replace=False)
+    store.replace_session_entitlements(
+        "user_01ABC", [(101, [11])], now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1)
+    )
+    _use_fake_jwks(monkeypatch)
+
+    assert session_auth.resolve_session(f"Bearer {_token(org_id='org_selected')}") is None
 
 
 def test_installation_id_for_workos_org_resolves_the_bound_installation(tmp_path, monkeypatch):
@@ -269,7 +315,7 @@ def test_verify_session_claims_is_strictly_weaker_than_resolve_session(monkeypat
     function, this test fails."""
     _use_fake_jwks(monkeypatch)
     token = _token()  # no org_id: the normal first sign-in state
-    assert session_auth.resolve_session(f"Bearer {token}", frozenset({1})) is None
+    assert session_auth.resolve_session(f"Bearer {token}") is None
     claims = session_auth.verify_session_claims(f"Bearer {token}")
     assert claims is not None
     assert claims["sub"] == "user_01ABC"
