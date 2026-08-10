@@ -14,7 +14,7 @@ The Saint Bernard carries the tone: calm, unhurried, reliable. Doug doesn't bark
 
 **2. The receipt — the artifact you paste into an incident review.** A dated, immutable claim that later gets graded. Five blocks: the verdict with its threshold *pinned at scoring time*; findings (reader findings shown with "did not move the score" honesty for weight-0 entries); inputs seen — files read vs. dropped, deep read vs. fallback-grade, model + prompt hash + pre-registration hash; the adjudication block — `adjudicates Aug 19` → later `reverted day 6, commit abc123` or `no revert observed in 14 days · 60-day window pending` or `censored: merged to release-2.4, outside our view — we say so rather than guess`; permalink. The receipt is the product's whole argument in one screen: *we said this, on this date, seeing exactly this, and here is what production did about it.*
 
-**3. The scoreboard — the empty state IS the product.** Day 1 has two panels, visually distinct: the **replay panel** — the last 90 days scored and adjudicated against reverts that already happened, labeled `replay · retrospective` — full on day 1, never blending into the live numbers; and the **prospective panel**: `0 adjudicated · 37 pending · first adjudication Aug 19 · at your merge volume, a rate worth reading (N≥30) lands ~Nov`. A visible per-PR state machine (scored → merged → adjudicating → survived / reverted / censored) that fills row by row. When a rate exists it renders with N and CI; below the pre-registered floor it carries the label `below our floor — this is a rumor` in the UI itself. The right-censoring rate sits beside it, not in a footnote. Watching this fill is the week-3 retention moment — design for the *tick*, the moment a pending row flips.
+**3. The scoreboard — the empty state IS the product.** Day 1 has two panels, visually distinct: the **replay panel** — the last 90 days scored and adjudicated against reverts that already happened, labeled `replay · retrospective` — full on day 1, never blending into the live numbers; and the **prospective panel**: `0 adjudicated · 37 pending · first adjudication Aug 19 · rates publish on schedule · first possibly decidable ~Nov`. A visible per-PR state machine (scored → merged → adjudicating → survived / reverted / censored) that fills row by row. Every rate renders with N and its interval; until the locked two-sided interval excludes the repo/window base rate it carries the label `not yet decidable — a count, not a rate` in the UI itself. The right-censoring rate sits beside it, not in a footnote. Watching this fill is the week-3 retention moment — design for the *tick*, the moment a pending row flips.
 
 **4. The queue — "62 open. 5 need you."** The attention router: open PRs pinned by risk, threshold slider, tier pill on every row (deep read vs fallback-grade), author shown because routing needs it. Cleared band permanently footnoted: *cleared = not deeply inspected by a human — on one of two research repos our cleared band was not safer than blind; your number is what we're measuring.*
 
@@ -74,10 +74,11 @@ DESIGN THESE FIVE SURFACES:
    to release-2.4, outside our view"; permalink.
 
 3. SCOREBOARD (web) — the empty state is the product: "0 adjudicated · 37 pending · first
-   adjudication Aug 19 · at your merge volume, N≥30 lands ~Nov". Per-PR state machine rows
+   adjudication Aug 19 · rates publish on schedule · first possibly decidable ~Nov". Per-PR state machine rows
    (scored → merged → adjudicating → survived/reverted/censored) that visibly fill over
-   weeks; design the TICK — the moment a pending row flips. Rates render with N + CI; below
-   the pre-registered floor they carry an inline label "below our floor — this is a rumor".
+   weeks; design the TICK — the moment a pending row flips. Rates render with N + CI; until
+   the two-sided interval excludes the repo/window base rate they carry the inline label
+   "not yet decidable — a count, not a rate".
    Right-censoring rate sits beside the headline number, not in a footnote.
 
 4. QUEUE (web) — "62 open. 5 need you." Open PRs pinned by risk score strip, threshold
@@ -86,8 +87,9 @@ DESIGN THESE FIVE SURFACES:
    repos our cleared band was not safer than blind; your number is what we're measuring."
 
 5. INSTALL / WELCOME (web) — the dated IOU: what Doug will measure, the two windows (14/60
-   days), the projection ("first adjudication lands ~<date>; a rate worth reading lands
-   ~<date>"), and a link to the hashed public pre-registration document. Pricing card:
+   days), the projection ("first adjudication lands ~<date>; first possibly decidable
+   ~<date>; scheduled publications may remain not yet decidable"), and a link to the hashed
+   public pre-registration document. Pricing card:
    $99/installation/month — 5 repos, 200 deep reads pooled, $0.40/read after; the meter is
    always visible in-product.
 
