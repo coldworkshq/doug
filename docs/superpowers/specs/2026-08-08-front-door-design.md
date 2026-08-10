@@ -55,27 +55,37 @@ only service with staged traffic and `promote_if_healthy` on `/`
 could take down the marketing homepage — a failure a separate service could not
 produce. Mitigated by excluding `/` and `/queue` from the auth matcher (§1).
 
-## 0. The gate before any code
+## 0. The gate — PASSED 2026-08-09
 
-**Prove the token assumption with one live call.** Nothing in WorkOS's or
-GitHub's documentation states end-to-end that the access token a WorkOS GitHub
-**App** connection returns is a GitHub *user-to-server* token that
-`GET /user/installations` will answer for. The evidence is circumstantial but
-strong: WorkOS documents that for GitHub Apps the response also carries "a
-refresh token and expiration when available"
-(<https://workos.com/docs/integrations/github-oauth>), and only user-to-server
-tokens expire and refresh
-(<https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app>).
+This section opened as the design's one unproven assumption: nothing in
+WorkOS's or GitHub's documentation states end-to-end that the access token a
+WorkOS GitHub **App** connection returns is a *user-to-server* token that
+`GET /user/installations` answers for. It was probed against WorkOS
+**production** with Doug's real App. **It holds**, and the proof is stronger
+than a 200:
 
-The whole entitlement model rests on that inference. Configure the connection,
-sign in once, call `GET /user/installations`, confirm it answers. **If it does
-not, stop — the entitlement model needs rework before anything is built on it.**
+- `oauth_tokens.access_token` carries the prefix **`ghu_`** — GitHub's
+  documented prefix for a user-to-server token. The inference is now a measured
+  fact.
+- `refresh_token` present, `expires_at` present — the user-to-server lifecycle.
+- `GET /user/installations` → **HTTP 200**, returning two installations, both
+  `app_id=4450932`.
 
-Observed (not documented) supporting behaviour: calling that endpoint with a
-token not issued by a GitHub App returns HTTP 403 — *"You must authenticate
-with an access token authorized to a GitHub App in order to list
-installations."* Recorded here as an empirical observation from a live `gh api`
-call on 2026-08-08, not as a documented contract.
+Four results from that probe are requirements, not trivia, and each is carried
+into the sections below:
+
+1. **Email verification interrupts the first sign-in** (§3).
+2. **The GitHub token lives ~8 hours** — measured, so the residual-revocation
+   window is bounded rather than hand-waved (§2).
+3. **`repository_selection` differs across real installations** — `drewjst` is
+   `selected`, `lemahq` is `all` (§2).
+4. **`org_id` was absent on the first sign-in**, so the fail-closed path is
+   reachable on day one, not hypothetically (§2).
+
+Supporting observation, empirical rather than documented: that endpoint returns
+HTTP 403 — *"You must authenticate with an access token authorized to a GitHub
+App in order to list installations"* — for a token not issued by a GitHub App.
+Observed from a live `gh api` call, recorded as behaviour, not contract.
 
 ## 1. Surfaces
 
@@ -103,7 +113,9 @@ throws E900 if both files exist.
 
 `handleAuth({ baseURL })` is **required** here: the SDK needs it wherever the
 container hostname differs from the request host, which is Cloud Run exactly.
-Omitting it makes callbacks redirect wrong.
+Omitting it makes callbacks redirect wrong. The installed SDK also requires
+`/install/callback` to pass through `authkitProxy()` so `withAuth()` receives
+its injected headers; matching the route does not make it session-required.
 
 Sign-out is a **POST server action**, never a GET route.
 
@@ -115,6 +127,14 @@ goes red. Verify the standalone trace (`web/next.config.ts:4`,
 includes the proxy bundle before assuming the image is unchanged.
 
 ## 2. Identity, and the difference between visibility and authority
+
+**Doug identity is provider-neutral.** WorkOS is the account and session
+boundary; GitHub is one optional capability, not a prerequisite for holding a
+Doug account. A person without GitHub can sign in and use present or future
+non-repository capabilities (for example session-state management). Only the
+act of connecting GitHub repositories requires a linked GitHub identity and
+the narrower installer-authority proof below. Do not put a GitHub requirement
+in the general AuthKit proxy, session verifier, or account model.
 
 WorkOS AuthKit, GitHub connection configured against **Doug's own GitHub App**
 (app id 4450932, `gcp.sh:379`, `:416`), "Return GitHub OAuth tokens" enabled,
@@ -191,10 +211,31 @@ removes. So this design must include teardown:
 - Uninstall/reinstall mints a *new* `installation_id`, so `gh-inst-<old>` must
   be torn down or it lingers with live members.
 
-Residual gap, stated not closed: a user who loses repo access without any
-installation-level event keeps it until their next refresh. That window is the
-refresh interval, and it is bounded — which is the claim the earlier draft
-could not make.
+Residual gap, now stated with a number: a user who loses repo access without any
+installation-level event keeps it until their next refresh. The probe measured
+the GitHub token's lifetime at **~8 hours**, so that window is bounded at ~8h
+rather than "until next sign-in" (false) or indefinite (also false, once
+refresh-time re-derivation exists). **Re-derive repo scope on refresh, not only
+at sign-in** — that is what makes the bound real.
+
+### Per-user repo scope is not uniform
+
+The probe found `repository_selection` differing across the two real
+installations: `drewjst` is **`selected`**, `lemahq` is **`all`**. So
+`GET /user/installations/{id}/repositories` returns a *subset* for a `selected`
+install, and the session's `repo_ids` must come from that call intersected with
+`store.active_repos` — never assumed to be everything the installation covers.
+
+### A separate product that is shown but never joined
+
+The probe confirmed **`lemahq` (installation 151500529) is visible to the
+operator's GitHub user**, so a signed-in dashboard lists it as a separately
+selectable connection. Andrew's 2026-08-10 ruling is explicit: show it with the
+label **"Lema — separate product"**. A WorkOS session still selects exactly one
+installation, so Lema PRs never appear beside another Doug tenant's PRs. There
+is no implicit relationship between Lema and Doug repositories. Joining their
+history later would require a new, explicit repo-linking model and its own
+authority and provenance contract.
 
 ## 3. Install and bind
 
@@ -203,8 +244,8 @@ could not make.
    server component. Confirm against the installed SDK's README at
    implementation time and follow the README, not this paragraph.
 2. Signed in with no installations → "Install Doug".
-3. `/install/start` sets a **short-TTL signed HttpOnly cookie** holding a
-   single-use nonce bound to the WorkOS user, then redirects to
+3. `/install/start` sets a **30-minute signed HttpOnly, SameSite=Lax, Path=/
+   cookie** holding a single-use nonce bound to the WorkOS user, then redirects to
    `github.com/apps/<slug>/installations/new`.
 4. GitHub → the App's **Setup URL** → `/install/callback?installation_id=…`
 
@@ -217,14 +258,43 @@ could not make.
    arrival path needs the same cookie anyway, the two entrances collapse into
    one code path.
 
-5. **Consume the nonce** (single-use; burn it in storage, not just compare it).
-6. **Prove authority, not visibility.** Confirm the caller administers the
-   installation via `tenancy.verify_org_admin` (`tenancy.py:245`, already
-   exists). The `GET /user/installations` membership check is *necessary but
-   not sufficient* — an attacker with `:read` on one repo sees the victim's
-   `installation_id` in their own list, and since setup-URL parameters are
-   attacker-supplied with no GitHub redirect required, a visibility-only check
-   lets them claim the victim's tenant.
+   AuthKit's installed PKCE proof remains capped at 600 seconds. If an inbox
+   round-trip outlives it, `/auth/callback` recovers only a real
+   `missing_pkce_cookie` callback error with a still-valid signed install flow
+   carrying an installation id and signed `pkce_retried=false`. It reseals the
+   same nonce, expiry, subject, and installation id with `pkce_retried=true`,
+   sets the replacement cookie for only the flow's remaining signed lifetime,
+   then starts a fresh provider-neutral sign-in attempt returning to
+   `/install/callback`. A flow already carrying `pkce_retried=true` is refused;
+   no other callback error loops.
+
+5. **Consume the nonce** (single-use; burn its digest in API storage, not just
+   compare it in web memory). Doug-web and doug-api share a dedicated install
+   flow HMAC secret; it is not the AuthKit cookie key. Missing or
+   shorter-than-32-byte keys are named configuration faults. The API parses
+   at most 4,096 streamed body bytes internally before JSON, authentication,
+   or threadpool work, then runs its blocking core off the event loop. A
+   purpose-built engine for the same `DATABASE_URL` has a one-connection pool;
+   one AUTOCOMMIT connection acquires the negative nonce advisory key and then
+   the positive installation key, while all ledger reads and writes continue
+   through the normal pool. It releases both locks in reverse order. SQLite
+   holds that sole purpose connection for bounded per-instance serialization.
+   Pool checkout waits up to an explicit 240 seconds — leaving 60 seconds
+   inside Cloud Run's 300-second API envelope — rather than SQLAlchemy's
+   too-short 30-second default. Checkout exhaustion becomes the same token-safe
+   `503 install flow temporarily unavailable` before WorkOS or binding work.
+   The successful bind transaction inserts the consumption before its
+   authority write, and both commit or roll back together. A same-flow retry
+   may return idempotent success but must not repeat WorkOS or binding side
+   effects.
+6. **Prove authority, not visibility.** Match the signed-in WorkOS user's
+   linked GitHub identity to `installations.installed_by_github_user_id`, the
+   sender recorded by the `installation.created` webhook. Task 5 rejected the
+   earlier `tenancy.verify_org_admin` proposal because its membership proof
+   needs a GitHub organization permission Doug does not hold and would force
+   existing installations to re-accept. `GET /user/installations` remains
+   insufficient: an attacker with `:read` on one repo sees the victim's
+   `installation_id`, and setup-URL parameters are attacker-supplied.
 7. Ensure the WorkOS org under a **Postgres advisory lock** —
    `external_id` has no documented upsert and no documented conflict code, so
    find-or-create is not race-safe. Look it up via
@@ -233,6 +303,23 @@ could not make.
 
 **Cold arrival** (no session): stash `installation_id` in the same signed
 cookie, bounce to sign-in, resume at step 5.
+
+### The first sign-in is interrupted, and the flow must survive it
+
+The probe hit this and every first-time Doug user will: WorkOS refuses to
+complete a first authentication until email ownership is proven. It returns
+HTTP 403 `email_verification_required` with a `pending_authentication_token`,
+emails a one-time code, and completion requires a second call with
+`grant_type: urn:workos:oauth:grant-type:email-verification:code` plus
+`{code, pending_authentication_token}`.
+
+That puts an **inbox round-trip** between "signed in with GitHub" and "a session
+exists" — the user leaves the browser and comes back, possibly minutes later,
+possibly in a new tab. **The signed bind cookie from step 3 must outlive that
+gap**, or first-time self-serve installs break at exactly the moment the whole
+design exists to make seamless. Its TTL is sized for a human checking email, not
+for a redirect. AuthKit's hosted UI handles the verification screens; what this
+design owns is not losing the pending installation across them.
 
 **`setup_action` handling.** `update` fires whenever anyone edits repo
 selection and is a second uninvited bind trigger — treat it as re-derive-scope,
@@ -343,10 +430,17 @@ works" needs orgs that only the bind step provisions.
 - The migration; `is_operator: bool`; the shared liveness/repo-intersection
   helper; JWKS verification; the session branch at `api.py:326`; the new
   installation-by-org query.
-- `/install/start`, `/install/callback`, signed single-use nonce cookie,
-  org-admin proof, advisory-locked org ensure, membership provisioning and
-  **teardown**.
-- `/dashboard` with the welcome/IOU block, tenant-scoped queue, and receipts.
+- `/install/start`, matcher-included/no-session-tolerant `/install/callback`,
+  signed single-use nonce cookie, installer proof, combined nonce-plus-install
+  lock on a separate one-connection engine, org ensure, membership provisioning
+  and **teardown**.
+- `/dashboard` derived from the approved forensic-ledger console mockup, with a
+  WorkOS-selected installation, explicit repo selector inside that installation,
+  dense scoped run history, and a selected-run evidence/receipt pane. One user
+  may have several installations and each installation may have several repos;
+  the surface never aggregates installations. A no-GitHub user still has a Doug
+  account and receives an optional repository-connect action rather than an
+  authentication failure.
 
 **Session fetch helpers must not reuse `web/lib/api.ts`.** `inflight` and
 `last` (`:116-118`) are module-global and key-less — deliberately, for the

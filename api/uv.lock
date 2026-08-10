@@ -228,7 +228,9 @@ dependencies = [
     { name = "anthropic" },
     { name = "fastapi" },
     { name = "githubkit", extra = ["auth-app"] },
+    { name = "httpx" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -247,7 +249,9 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.120.2" },
     { name = "fastapi", specifier = ">=0.140.7" },
     { name = "githubkit", extras = ["auth-app"], specifier = ">=0.16.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13.0" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.51.0" },
 ]

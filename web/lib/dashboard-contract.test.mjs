@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { register } from "node:module";
+import test from "node:test";
+
+register("./node-next-loader.mjs", import.meta.url);
+
+const pageUrl = new URL("../app/dashboard/page.tsx", import.meta.url);
+const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
+const cssUrl = new URL("../app/dashboard/dashboard.module.css", import.meta.url);
+
+test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(page, /You're in\. Connect GitHub only when you want Doug to review repositories\./);
+  assert.match(page, /Lema — separate product/);
+  assert.match(page, /What the reader was given/);
+  assert.match(page, /coverageRuler/);
+  assert.equal(page.includes("tenant all"), false);
+  assert.equal(page.includes("health"), false);
+  assert.equal(page.includes("illustrative"), false);
+});
+
+test("reader evidence never labels a verdict id as a read id", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  assert.equal(page.includes("reads #{detail.verdict_id}"), false);
+  assert.match(page, /What the reader was given <span>reader evidence<\/span>/);
+});
+
+test("organization switching and sign-out are POST server actions", async () => {
+  const [page, actions] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(actionsUrl, "utf8"),
+  ]);
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /getConnections/);
+  assert.match(actions, /switchToOrganization/);
+  assert.match(actions, /connections\.some/);
+  assert.equal(actions.includes("ensureSignedIn"), false);
+  assert.match(
+    actions,
+    /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/,
+  );
+  assert.match(page, /action=\{switchConnectionAction\}/);
+  assert.match(page, /action=\{signOutAction\}/);
+  assert.equal(actions.includes("export async function GET"), false);
+});
+
+test("the signed-in console stays on the reference light paper surface", async () => {
+  const css = await readFile(cssUrl, "utf8");
+  assert.equal(css.includes(":global(.dark)"), false);
+  assert.match(css, /--paper:\s*#fcfcfa/);
+  assert.match(css, /max-width:\s*1440px/);
+});
+
+test("coverage, outcomes, and select focus use honest visual semantics", async () => {
+  const [page, css] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+  const cutMarker = css.match(/\.coverageRuler > i\s*\{[^}]+\}/)?.[0] ?? "";
+  assert.equal(cutMarker.includes("var(--flag-data)"), false);
+  assert.match(css, /\.outcomeClear\s*\{[^}]*var\(--clear-data\)/);
+  assert.match(css, /\.outcomeFlag\s*\{[^}]*var\(--flag-data\)/);
+  assert.match(css, /\.outcomeNeutral\s*\{[^}]*var\(--ink-muted\)/);
+  assert.match(page, /outcomeTone\(outcome\.kind\)/);
+  assert.match(css, /\.switchControl:focus-within\s*\{[^}]*(outline|box-shadow):/);
+});
+
+test("repository connection and every pending setup remain reachable in all dashboard states", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const connectMarkup = '<Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>';
+  const connect = page.indexOf(connectMarkup);
+  const stateBranches = page.indexOf("connections.length === 0");
+  const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
+  assert.ok(connect >= 0 && connect < stateBranches);
+  assert.ok(pendingStrip >= 0 && pendingStrip < stateBranches);
+  assert.ok(page.includes(connectMarkup));
+  assert.match(page, /action=\{finishSetupAction\}/);
+  assert.match(page, /name="installation_id"/);
+  assert.match(page, />finish setup<\/button>/);
+});
+
+test("state-mutating install links disable Next prefetch", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const installLinks = [...page.matchAll(/<Link\b[^>]*>/g)]
+    .map((match) => match[0])
+    .filter((markup) => markup.includes('href="/install/start"'));
+
+  assert.equal(installLinks.length, 2);
+  for (const markup of installLinks) {
+    assert.match(markup, /\bprefetch=\{false\}/);
+  }
+});
+
+test("finish setup is a POST-only exact pre-bind and post-bind server action", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  const start = actions.indexOf("export async function finishSetupAction");
+  const end = actions.indexOf("export async function switchConnectionAction", start);
+  const finish = actions.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(actions, /^"use server";/);
+  assert.equal((finish.match(/getConnections\(/g) ?? []).length, 2);
+  assert.match(finish, /formData\.get\("installation_id"\)/);
+  assert.equal(finish.includes('formData.get("organization_id")'), false);
+  assert.match(finish, /isFinishableSetupConnection/);
+  assert.match(finish, /bindInstallation\(auth\.accessToken, installationId\)/);
+  assert.match(finish, /readyOrganizationAfterSetup/);
+  assert.match(finish, /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/);
+  assert.ok(finish.indexOf("isFinishableSetupConnection") < finish.indexOf("bindInstallation"));
+  assert.ok(finish.lastIndexOf("getConnections") > finish.indexOf("bindInstallation"));
+  assert.ok(finish.indexOf("readyOrganizationAfterSetup") > finish.indexOf("bindInstallation"));
+  assert.equal(actions.includes("export async function GET"), false);
+});

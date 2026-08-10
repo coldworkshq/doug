@@ -1,10 +1,12 @@
 import datetime as _dt
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import BigInteger, create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from doug import ingest, outcome_queue, reader, store
 from doug.api import app
@@ -716,6 +718,484 @@ def test_upsert_installation_does_not_raise_when_two_racers_insert_the_same_id(
         rows = conn.execute(select(store.installations)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["installation_id"] == INSTALL and rows[0]["state"] == "active"
+
+
+def test_installations_carries_a_unique_workos_org_id(tmp_path, monkeypatch):
+    """One WorkOS organization maps to exactly one installation. Without the
+    unique constraint, two installations could claim the same org and a
+    session would resolve to whichever row the database returned first."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/d.db")
+    cols = {c.name: c for c in store.installations.columns}
+    assert "workos_org_id" in cols, "column missing"
+    assert cols["workos_org_id"].unique is True, "must be unique"
+    assert cols["workos_org_id"].nullable is True, "existing rows have no org yet"
+
+
+def test_installations_carries_a_non_unique_installer_id(tmp_path, monkeypatch):
+    """One GitHub user can install Doug on many accounts/orgs — a unique
+    constraint here would make every install after their first one fail."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/d.db")
+    cols = {c.name: c for c in store.installations.columns}
+    assert "installed_by_github_user_id" in cols, "column missing"
+    assert cols["installed_by_github_user_id"].unique is not True, "must not be unique"
+    assert cols["installed_by_github_user_id"].nullable is True
+    assert isinstance(cols["installed_by_github_user_id"].type, BigInteger)
+
+
+def test_consumed_install_flows_is_a_digest_only_create_all_table(tmp_path, monkeypatch):
+    """The browser nonce is an authentication factor during the flow. The
+    ledger needs only its one-way lookup key; persisting the nonce itself
+    would turn a database read into a replay credential."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+
+    cols = {column.name: column for column in store.consumed_install_flows.columns}
+    assert set(cols) == {
+        "nonce_digest",
+        "workos_user_id",
+        "installation_id",
+        "consumed_at",
+    }
+    assert cols["nonce_digest"].primary_key is True
+    assert "consumed_install_flows" in inspect(create_engine(url)).get_table_names()
+
+
+def test_install_flow_lock_engine_is_bounded_cached_and_disposed_on_url_change(
+    monkeypatch,
+):
+    assert store.INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS == 240
+
+    class FakeEngine:
+        def __init__(self, url):
+            self.url = url
+            self.disposed = 0
+
+        def dispose(self):
+            self.disposed += 1
+
+    built = []
+
+    def build(url, **options):
+        engine = FakeEngine(url)
+        built.append((engine, options))
+        return engine
+
+    monkeypatch.setattr(store, "create_engine", build)
+    monkeypatch.setattr(store, "_install_flow_lock_engine", None, raising=False)
+    monkeypatch.setattr(store, "_install_flow_lock_engine_url", None, raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/first")
+
+    first = store._get_install_flow_lock_engine()
+    assert store._get_install_flow_lock_engine() is first
+    assert built == [
+        (
+            first,
+            {
+                "pool_pre_ping": True,
+                "pool_size": 1,
+                "max_overflow": 0,
+                "pool_timeout": 240,
+            },
+        )
+    ]
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/second")
+    second = store._get_install_flow_lock_engine()
+    assert second is not first
+    assert first.disposed == 1
+    assert built[1] == (
+        second,
+        {
+            "pool_pre_ping": True,
+            "pool_size": 1,
+            "max_overflow": 0,
+            "pool_timeout": 240,
+        },
+    )
+
+    monkeypatch.delenv("DATABASE_URL")
+    assert store._get_install_flow_lock_engine() is None
+    assert second.disposed == 1
+
+
+def test_install_flow_lock_checkout_timeout_becomes_the_named_store_error(
+    monkeypatch,
+):
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError("purpose pool exhausted")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    with pytest.raises(
+        store.InstallFlowLockUnavailable,
+        match="^install flow temporarily unavailable$",
+    ) as raised:
+        with store.install_flow_bind_lock("0" * 64, 1001):
+            pytest.fail("checkout exhaustion must not enter the authority body")
+
+    assert isinstance(raised.value.__cause__, SQLAlchemyTimeoutError)
+
+
+def test_install_flow_lock_checkout_does_not_hide_unrelated_errors(monkeypatch):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("programmer bug")
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: BrokenEngine())
+
+    with pytest.raises(RuntimeError, match="^programmer bug$"):
+        with store.install_flow_bind_lock("0" * 64, 1001):
+            pytest.fail("a failed checkout must not enter the authority body")
+
+
+def test_direct_installation_bind_lock_uses_only_the_purpose_lock_pool(
+    monkeypatch,
+):
+    """A slow advisory wait and the WorkOS work inside the lock must not
+    occupy a connection needed by normal ledger reads and writes."""
+    events = []
+
+    class RecordingConnection:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+        def execution_options(self, **options):
+            events.append(("options", options))
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, statement, params):
+            events.append((str(statement), params["key"]))
+
+    class LockEngine:
+        def connect(self):
+            return RecordingConnection()
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: LockEngine())
+
+    def main_pool_forbidden():
+        raise AssertionError("direct bind lock reached the main ledger pool")
+
+    monkeypatch.setattr(store, "_get_engine", main_pool_forbidden)
+    with pytest.raises(RuntimeError, match="body failure"):
+        with store.installation_bind_lock(1001):
+            events.append(("body", None))
+            raise RuntimeError("body failure")
+
+    assert events == [
+        ("options", {"isolation_level": "AUTOCOMMIT"}),
+        ("SELECT pg_advisory_lock(:key)", 1001),
+        ("body", None),
+        ("SELECT pg_advisory_unlock(:key)", 1001),
+    ]
+
+
+def test_direct_installation_bind_lock_checkout_timeout_is_named(monkeypatch):
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError("purpose pool exhausted with a secret")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    with pytest.raises(
+        store.InstallationBindLockUnavailable,
+        match="^installation bind temporarily unavailable$",
+    ) as raised:
+        with store.installation_bind_lock(1001):
+            pytest.fail("checkout exhaustion must not enter the authority body")
+
+    assert isinstance(raised.value.__cause__, SQLAlchemyTimeoutError)
+
+
+def test_direct_installation_bind_lock_checkout_does_not_hide_unrelated_errors(
+    monkeypatch,
+):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("programmer bug")
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: BrokenEngine())
+
+    with pytest.raises(RuntimeError, match="^programmer bug$"):
+        with store.installation_bind_lock(1001):
+            pytest.fail("a failed checkout must not enter the authority body")
+
+
+def test_combined_install_flow_lock_uses_only_lock_pool_and_releases_in_reverse(
+    monkeypatch,
+):
+    digest = hashlib.sha256(b"combined-lock-call-site").hexdigest()
+    nonce_key = store._install_flow_advisory_key(digest)
+    events = []
+
+    class RecordingConnection:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+        def execution_options(self, **options):
+            events.append(("options", options))
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, statement, params):
+            events.append((str(statement), params["key"]))
+
+    class LockEngine:
+        def connect(self):
+            return RecordingConnection()
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: LockEngine())
+
+    def main_pool_forbidden():
+        raise AssertionError("combined lock reached the main ledger pool")
+
+    monkeypatch.setattr(store, "_get_engine", main_pool_forbidden)
+    with pytest.raises(RuntimeError, match="body failure"):
+        with store.install_flow_bind_lock(digest, 1001):
+            events.append(("body", None))
+            raise RuntimeError("body failure")
+
+    assert events == [
+        ("options", {"isolation_level": "AUTOCOMMIT"}),
+        ("SELECT pg_advisory_lock(:key)", nonce_key),
+        ("SELECT pg_advisory_lock(:key)", 1001),
+        ("body", None),
+        ("SELECT pg_advisory_unlock(:key)", 1001),
+        ("SELECT pg_advisory_unlock(:key)", nonce_key),
+    ]
+    assert nonce_key < 0
+
+
+def test_install_flow_consumption_is_inserted_before_the_authority_write(
+    tmp_path, monkeypatch
+):
+    """If the authority write happened first, a crash in between would bind
+    an installation while leaving its replay credential reusable. Both writes
+    belong to one transaction, with consumption first."""
+    from sqlalchemy.engine import Connection
+
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    raw_nonce = b"raw-install-flow-nonce-32-byte!"
+    digest = hashlib.sha256(raw_nonce).hexdigest()
+    statements = []
+    real_execute = Connection.execute
+
+    def record_execute(self, statement, *args, **kwargs):
+        statements.append(str(statement))
+        return real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "execute", record_execute)
+    result = store.consume_install_flow_and_bind(
+        digest,
+        "user_01ABC",
+        INSTALL,
+        "org_01ABC",
+        now=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    assert result == "bound"
+    insert_at = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO consumed_install_flows")
+    )
+    update_at = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("UPDATE installations")
+    )
+    assert insert_at < update_at
+    with create_engine(url).connect() as conn:
+        [consumed] = conn.execute(select(store.consumed_install_flows)).mappings().all()
+        bound = conn.execute(
+            select(store.installations.c.workos_org_id).where(
+                store.installations.c.installation_id == INSTALL
+            )
+        ).scalar_one()
+    assert consumed["nonce_digest"] == digest
+    assert consumed["workos_user_id"] == "user_01ABC"
+    assert consumed["installation_id"] == INSTALL
+    assert bound == "org_01ABC"
+    assert raw_nonce not in (tmp_path / "doug.db").read_bytes()
+
+
+def test_install_flow_bind_conflict_rolls_back_the_consumption(tmp_path, monkeypatch):
+    """A nonce is spent only by a successful authority write. If the target
+    WorkOS organization belongs to another installation, both the attempted
+    consumption and bind must roll back so the legitimate retry is possible."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    store.upsert_installation(INSTALL + 1, "other", "Organization", "active")
+    assert store.bind_installation_org(INSTALL + 1, "org_taken") == "org_taken"
+    digest = hashlib.sha256(b"conflicting-flow").hexdigest()
+
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_taken"
+        )
+        == "conflict"
+    )
+    assert store.install_flow_consumption(digest) is None
+    assert store.installation_bind_row(INSTALL)["workos_org_id"] is None
+
+
+def test_same_flow_replay_returns_success_without_a_second_authority_write(
+    tmp_path, monkeypatch
+):
+    """A network retry after a successful response was lost is safe, but it
+    must stop at the consumed record rather than repeat the bind side effect."""
+    from sqlalchemy.engine import Connection
+
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    digest = hashlib.sha256(b"one-flow").hexdigest()
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "bound"
+    )
+    statements = []
+    real_execute = Connection.execute
+
+    def record_execute(self, statement, *args, **kwargs):
+        statements.append(str(statement))
+        return real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "execute", record_execute)
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "replay"
+    )
+    assert not any(statement.startswith("UPDATE installations") for statement in statements)
+    assert not any(
+        statement.startswith("INSERT INTO consumed_install_flows")
+        for statement in statements
+    )
+
+
+def test_consumed_nonce_cannot_be_replayed_for_another_subject_or_installation(
+    tmp_path, monkeypatch
+):
+    """The digest is globally single-use. Replaying it with different
+    authority claims is an attack, not idempotency."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    store.upsert_installation(INSTALL + 1, "other", "Organization", "active")
+    digest = hashlib.sha256(b"identity-bound-flow").hexdigest()
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "bound"
+    )
+
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_attacker", INSTALL, "org_01ABC"
+        )
+        == "mismatch"
+    )
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL + 1, "org_other"
+        )
+        == "mismatch"
+    )
+    assert store.installation_bind_row(INSTALL + 1)["workos_org_id"] is None
+
+
+def test_upsert_installation_records_the_installer_on_first_insert(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(
+        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
+    )
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] == 42
+
+
+def test_upsert_installation_default_omits_the_installer(tmp_path, monkeypatch):
+    """Callers that pass no installer (every existing call site) must still
+    insert cleanly, with the column left NULL."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] is None
+
+
+def test_upsert_installation_leaves_the_installer_untouched_when_not_given(
+    tmp_path, monkeypatch
+):
+    """Suspend/unsuspend/deleted deliveries call upsert_installation with no
+    installer to report; that must not blank out the one recorded at install
+    time — the bind endpoint (Task 5) needs it to survive every state change
+    in between."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(
+        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
+    )
+    store.upsert_installation(INSTALL, "drewjst", "User", "suspended")
+    with create_engine(url).connect() as conn:
+        rows = conn.execute(select(store.installations)).mappings().all()
+    assert rows[0]["installed_by_github_user_id"] == 42
+    assert rows[0]["state"] == "suspended"
+
+
+def test_session_entitlement_lookup_uses_both_user_and_installation(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.replace_session_entitlements(
+        "user_selected", [(INSTALL, [11]), (INSTALL + 1, [22])]
+    )
+    store.replace_session_entitlements("user_other", [(INSTALL, [12])])
+
+    selected = store.session_entitlement_for("user_selected", INSTALL)
+
+    assert selected is not None
+    assert selected["installation_id"] == INSTALL
+    assert selected["repo_ids"] == frozenset({11})
+    assert store.session_entitlement_for("user_missing", INSTALL) is None
+
+
+def test_session_connection_projection_intersects_claims_with_live_rows(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "acme", "Organization", "active")
+    store.set_installation_repos(
+        INSTALL, [(11, "acme/one"), (12, "acme/two")], replace=True
+    )
+    store.replace_session_entitlements("user_selected", [(INSTALL, [11, 999])])
+    with store._get_engine().begin() as conn:
+        conn.execute(
+            store.installations.update()
+            .where(store.installations.c.installation_id == INSTALL)
+            .values(workos_org_id="org_acme")
+        )
+
+    rows = store.session_connections_for("user_selected")
+
+    assert len(rows) == 1
+    assert rows[0]["organization_id"] == "org_acme"
+    assert rows[0]["claimed_repo_ids"] == frozenset({11, 999})
+    assert rows[0]["repositories"] == [{"id": 11, "full_name": "acme/one"}]
 
 
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
@@ -1656,6 +2136,37 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
     assert store.run_history()[0]["outcome_14"] is None
 
 
+def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(
+    tmp_path, monkeypatch
+):
+    """Same display repo/PR is not identity. A session row must not borrow the
+    newest outcome from another installation or a sibling repository id."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "shared/repo", 7, "reader", VERDICT,
+        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for installation_id, github_repo_id, kind in (
+            (101, 11, "clean"),
+            (202, 11, "revert"),
+            (101, 12, "hotfix"),
+        ):
+            conn.execute(store.outcomes.insert().values(
+                repo="shared/repo", pr_number=7, kind=kind, window_days=14,
+                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
+                github_repo_id=github_repo_id, installation_id=installation_id,
+            ))
+
+    rows = store.run_history(
+        installation_id=101, repo_ids=frozenset({11})
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["outcome_14"] == "clean"
+
+
 # --- run_detail (the forensic bundle for one run) ---
 
 
@@ -1737,6 +2248,48 @@ def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatc
     assert detail["outcomes"][0]["kind"] == "clean"
     assert [j["window_days"] for j in detail["outcome_jobs"]] == [60]
     assert detail["outcome_jobs"][0]["status"] == "pending"
+
+
+def test_run_detail_scopes_outcomes_and_jobs_to_the_verdict_identity(
+    tmp_path, monkeypatch
+):
+    """Same display repo/PR and even the same numeric repo id can exist under
+    another installation. Child evidence must use the verdict's full identity
+    before any row is assembled."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "shared/repo", 7, "reader", VERDICT,
+        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for installation_id, github_repo_id, kind, window in (
+            (101, 11, "clean", 14),
+            (202, 11, "revert", 60),
+            (101, 12, "hotfix", 30),
+        ):
+            conn.execute(store.outcomes.insert().values(
+                repo="shared/repo", pr_number=7, kind=kind, window_days=window,
+                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
+                github_repo_id=github_repo_id, installation_id=installation_id,
+            ))
+            conn.execute(store.outcome_jobs.insert().values(
+                installation_id=installation_id, github_repo_id=github_repo_id,
+                pr_number=7, merge_commit_sha=str(window) * 20,
+                merged_at=datetime(2026, 8, 3, tzinfo=UTC), base_ref="main",
+                window_days=window, due_at=datetime(2026, 10, 2, tzinfo=UTC),
+                status="pending", created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            ))
+
+    detail = store.run_detail(
+        vid, installation_id=101, repo_ids=frozenset({11})
+    )
+
+    assert detail is not None
+    assert [(row["kind"], row["window_days"]) for row in detail["outcomes"]] == [
+        ("clean", 14)
+    ]
+    assert [row["window_days"] for row in detail["outcome_jobs"]] == [14]
 
 
 def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatch):

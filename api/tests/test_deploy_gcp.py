@@ -46,30 +46,92 @@ def test_web_deploy_runs_as_doug_web_sa():
     assert "compute@developer.gserviceaccount.com" not in body
 
 
-def test_setup_creates_doug_web_sa_and_binds_it_no_secrets():
-    """doug-web serves only the unauthenticated showcase queue, so it needs
-    NO secret at all. This pin is what stops the operator token being
-    quietly reintroduced to a --allow-unauthenticated service."""
+def test_setup_creates_doug_web_sa_and_binds_only_its_front_door_secrets(tmp_path):
+    """The public service gets AuthKit's four values and the purpose-scoped
+    flow signer. Any API/operator secret expands its blast radius."""
     setup = _function_body("setup")
     assert "service-accounts create doug-web-sa" in setup
     after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
         "service-accounts create doug-console-sa", 1
     )[0]
-    assert "doug-api-token" not in after_web
-    assert "secretAccessor" not in after_web
-    assert "doug-database-url" not in after_web
-    assert "doug-github-app-key" not in after_web
-    assert "doug-anthropic-key" not in after_web
     assert "roles/cloudsql.client" not in after_web
+    lines = _run_gcp(tmp_path, "setup")
+    web_bindings = [
+        line
+        for line in lines
+        if line.startswith("secrets add-iam-policy-binding")
+        and "doug-web-sa@doug-prod0.iam.gserviceaccount.com" in line
+    ]
+    assert web_bindings == [
+        "secrets add-iam-policy-binding doug-workos-client-id --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
+        "secrets add-iam-policy-binding doug-workos-api-key --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
+        "secrets add-iam-policy-binding doug-workos-cookie-password --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
+        "secrets add-iam-policy-binding doug-workos-redirect-uri --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
+        "secrets add-iam-policy-binding doug-install-flow-secret --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
+    ]
 
 
-def test_web_deploy_carries_no_secrets():
-    """The deploy flag is a second, independent way the credential could
-    return — setup()'s binding and web()'s --set-secrets must BOTH stay
-    clean or the service holds a token again."""
-    body = _function_body("web")
-    assert "--set-secrets" not in body
-    assert "DOUG_API_TOKEN" not in body
+def test_web_deploy_carries_only_its_front_door_secrets_and_plain_slug(tmp_path):
+    """The runtime binding is independent of IAM. Sending an API/operator
+    secret to this --allow-unauthenticated service leaks it even if the web
+    service account cannot read it."""
+    lines = _run_gcp(tmp_path, "web")
+    [deploy] = [line for line in lines if line.startswith("run deploy doug-web")]
+    expected_secrets = (
+        "WORKOS_CLIENT_ID=doug-workos-client-id:latest,"
+        "WORKOS_API_KEY=doug-workos-api-key:latest,"
+        "WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,"
+        "NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest,"
+        "DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest"
+    )
+    secret_argument = deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
+    assert secret_argument == expected_secrets
+    assert (
+        "--set-env-vars "
+        "DOUG_API_URL=,WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review"
+        in deploy
+    )
+
+
+def test_setup_generates_the_install_flow_secret_and_binds_exact_api_allowlist(tmp_path):
+    """Both services must share one dedicated signer; no operator or provider
+    credential may be substituted for it, and setup must bind it to the API
+    identity rather than relying on project-wide access."""
+    lines = _run_gcp(tmp_path, "setup")
+    assert "secrets create doug-install-flow-secret --data-file=- --project doug-prod0" in lines
+    api_bindings = [
+        line
+        for line in lines
+        if line.startswith("secrets add-iam-policy-binding")
+        and "doug-api-sa@doug-prod0.iam.gserviceaccount.com" in line
+    ]
+    expected_secrets = [
+        "doug-database-url",
+        "doug-api-token",
+        "doug-anthropic-key",
+        "doug-webhook-secret",
+        "doug-github-app-key",
+        "doug-token-pepper",
+        "doug-workos-api-key",
+        "doug-workos-client-id",
+        "doug-install-flow-secret",
+    ]
+    assert api_bindings == [
+        f"secrets add-iam-policy-binding {secret} --project doug-prod0 "
+        "--member=serviceAccount:doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor"
+        for secret in expected_secrets
+    ]
 
 
 def test_api_deploy_carries_the_showcase_repo():
@@ -218,7 +280,8 @@ for argument in "$@"; do
   esac
   previous=$argument
 done
-if [ "$1 $2 $3 $4" = "run services describe doug-api" ]; then
+if [ "$1 $2 $3 $4" = "run services describe doug-api" ] \
+    || [ "$1 $2 $3 $4" = "run services describe doug-web" ]; then
   case "$format" in
     json)
       printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]}}'
@@ -227,6 +290,11 @@ if [ "$1 $2 $3 $4" = "run services describe doug-api" ]; then
       printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'
       ;;
   esac
+  exit 0
+fi
+if [ "$1 $2 $3 $4" = "sql instances describe doug-ledger" ] \
+    && [ "$format" = "value(state)" ]; then
+  printf '%s\n' 'RUNNABLE'
   exit 0
 fi
 if [ "$1 $2 $3" = "scheduler jobs describe" ]; then
@@ -642,3 +710,47 @@ def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
         if line.startswith(f"iam service-accounts describe {scheduler}")
     ]
     assert len(describes) == 2
+
+
+def test_api_deploy_carries_exact_secret_allowlist_including_flow_signer(tmp_path):
+    """The completion endpoint needs the shared signer, but no web session
+    cookie secret. Exactness prevents future credentials drifting in."""
+    lines = _run_gcp(tmp_path, "deploy")
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    expected = (
+        "DATABASE_URL=doug-database-url:latest,"
+        "DOUG_API_TOKEN=doug-api-token:latest,"
+        "ANTHROPIC_API_KEY=doug-anthropic-key:latest,"
+        "GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,"
+        "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,"
+        "DOUG_TOKEN_PEPPER=doug-token-pepper:latest,"
+        "WORKOS_API_KEY=doug-workos-api-key:latest,"
+        "WORKOS_CLIENT_ID=doug-workos-client-id:latest,"
+        "DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest"
+    )
+    actual = api_deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
+    assert actual == expected
+    assert "DOUG_GITHUB_APP_SLUG" not in api_deploy
+
+
+def test_setup_keeps_workos_identity_secrets_off_the_console_service_account():
+    """A --set-secrets flag without a matching secretAccessor binding fails at
+    runtime on the first request, long after the deploy went green. The web
+    service gets AuthKit's four values (pinned above); the operator console
+    needs none of them and must not inherit identity-data access."""
+    setup = _function_body("setup")
+    assert "doug-workos-api-key" in setup
+    assert "doug-workos-client-id" in setup
+    after_console = setup.split("service-accounts create doug-console-sa", 1)[1]
+    assert "doug-workos-api-key" not in after_console
+    assert "doug-workos-client-id" not in after_console
+    assert "doug-workos-cookie-password" not in after_console
+    assert "doug-workos-redirect-uri" not in after_console
+    after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
+        "service-accounts create doug-console-sa", 1
+    )[0]
+    assert "doug-workos-api-key" in after_web
+    assert "doug-workos-client-id" in after_web
+    assert "doug-workos-api-key" not in _function_body("console")

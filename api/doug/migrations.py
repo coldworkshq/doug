@@ -265,6 +265,26 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
         ),
     ),
     (
+        9,
+        (
+            # Front Door Phase 1a. Tasks 4-8 resolve a session's tenant by
+            # this column; Task 5's bind endpoint proves "you are the person
+            # who installed Doug here" by matching the second one. Both NULL
+            # on every existing row, including the operator's own install.
+            "ALTER TABLE installations ADD COLUMN workos_org_id VARCHAR(255)",
+            "ALTER TABLE installations ADD COLUMN installed_by_github_user_id BIGINT",
+            # A unique INDEX rather than a table constraint: sqlite (which
+            # the suite runs on) cannot add a UNIQUE column constraint via
+            # ALTER TABLE. IF NOT EXISTS matches every other CREATE INDEX in
+            # this file (see module docstring) and additionally means this
+            # is harmless if it ever runs against a fresh database, where
+            # create_all() already gave the column its own UNIQUE constraint
+            # under a different, engine-generated name.
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_installations_workos_org_id "
+            "ON installations (workos_org_id)",
+        ),
+    ),
+    (
         10,
         (
             # Forward only: the base GitHub reported when historical jobs

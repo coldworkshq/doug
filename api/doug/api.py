@@ -1,5 +1,6 @@
 """HTTP surface. Routes stay thin: the product lives in features.py and scoring.py."""
 
+import hashlib
 import hmac
 import json
 import os
@@ -20,13 +21,17 @@ from starlette.concurrency import run_in_threadpool
 from . import (
     __version__,
     app_auth,
+    entitlements,
     ingest,
+    install_flow,
     outcome_queue,
     precision,
     reader,
+    session_auth,
     store,
     tenancy,
     worker,
+    workos_client,
 )
 from .models import (
     Band,
@@ -374,6 +379,7 @@ def queue(
     threshold: float | None = None,
     repo: str | None = None,
     x_doug_token: str = Header(""),
+    authorization: str = Header(""),
 ) -> QueueResponse:
     """The review queue: real PR titles, authors and reader rationales, on
     a service deployed --allow-unauthenticated, so this stays token-gated.
@@ -391,12 +397,25 @@ def queue(
         raise HTTPException(status_code=503, detail="DOUG_API_TOKEN not configured")
     installation_id: int | None = None
     repo_ids: frozenset[int] | None = None
-    ctx: tenancy.TokenContext | None = None
-    if not hmac.compare_digest(x_doug_token, expected):
-        try:
-            ctx = tenancy.resolve(x_doug_token)
-        except tenancy.KeysNotConfigured as e:
-            raise HTTPException(status_code=503, detail="token verification not configured") from e
+    ctx: tenancy.TokenContext | tenancy.SessionContext | None = None
+    # Operator identity is this comparison, explicitly — never inferred from
+    # ctx staying None. A future session credential that never produces a
+    # TokenContext must not silently inherit the operator's unscoped ?repo=
+    # name lookup below just by also leaving ctx as None.
+    is_operator = hmac.compare_digest(x_doug_token, expected)
+    if not is_operator:
+        if authorization.strip():
+            try:
+                ctx = session_auth.resolve_session(authorization)
+            except session_auth.SessionAuthNotConfigured as e:
+                raise HTTPException(status_code=503, detail="session auth not configured") from e
+        else:
+            try:
+                ctx = tenancy.resolve(x_doug_token)
+            except tenancy.KeysNotConfigured as e:
+                raise HTTPException(
+                    status_code=503, detail="token verification not configured"
+                ) from e
         if ctx is None:
             raise HTTPException(status_code=401, detail="bad token")
         # Scope gate: every key mints with queue:read today, but the scopes
@@ -425,7 +444,7 @@ def queue(
     if store.enabled():
         items = _rows_to_items(
             store.latest_reviews(
-                repo=repo if ctx is None else None,  # operator keeps the display filter
+                repo=repo if is_operator else None,  # operator keeps the display filter
                 installation_id=installation_id,
                 repo_ids=repo_ids,
             )
@@ -742,6 +761,7 @@ def pr_receipt(
     pr_number: int,
     repo: str,
     x_doug_token: str = Header(""),
+    authorization: str = Header(""),
 ) -> ReceiptResponse:
     """One PR's evidentiary record.
 
@@ -786,12 +806,18 @@ def pr_receipt(
 
     installation_id: int | None = None
     if not hmac.compare_digest(x_doug_token, expected):
-        try:
-            ctx = tenancy.resolve(x_doug_token)
-        except tenancy.KeysNotConfigured as e:
-            raise HTTPException(
-                status_code=503, detail="token verification not configured"
-            ) from e
+        if authorization.strip():
+            try:
+                ctx = session_auth.resolve_session(authorization)
+            except session_auth.SessionAuthNotConfigured as e:
+                raise HTTPException(status_code=503, detail="session auth not configured") from e
+        else:
+            try:
+                ctx = tenancy.resolve(x_doug_token)
+            except tenancy.KeysNotConfigured as e:
+                raise HTTPException(
+                    status_code=503, detail="token verification not configured"
+                ) from e
         if ctx is None or "receipt:read" not in ctx.scopes:
             raise HTTPException(status_code=401, detail="bad token")
         installation_id = ctx.installation_id
@@ -904,6 +930,11 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
     row = store.run_detail(verdict_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    return _run_detail_response(row)
+
+
+def _run_detail_response(row: dict) -> RunDetailResponse:
+    """Serialize one already-authorized run row for either route family."""
     return RunDetailResponse(
         verdict_id=row["id"],
         repo=row["repo"],
@@ -935,6 +966,73 @@ def run_detail(verdict_id: int, x_doug_token: str = Header("")) -> RunDetailResp
         outcomes=[RunOutcome(**o) for o in row["outcomes"]],
         outcome_jobs=[RunOutcomeJob(**j) for j in row["outcome_jobs"]],
     )
+
+
+def _session_read_context(authorization: str, scope: str) -> tenancy.SessionContext:
+    try:
+        ctx = session_auth.resolve_session(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if ctx is None or scope not in ctx.scopes:
+        raise HTTPException(status_code=401, detail="bad session")
+    return ctx
+
+
+@app.get("/v1/sessions/runs")
+def session_runs(
+    limit: int = 100,
+    offset: int = 0,
+    repo: str = "all",
+    tenant: str | None = None,
+    authorization: str = Header(""),
+) -> RunListResponse:
+    """Run history inside the one installation selected in this session."""
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must not be negative")
+    if tenant is not None:
+        raise HTTPException(status_code=422, detail="tenant selection is not supported")
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    ctx = _session_read_context(authorization, "queue:read")
+    effective = ctx.repo_ids
+    if repo != "all":
+        live = {
+            full_name: repo_id
+            for repo_id, full_name in store.active_repos(ctx.installation_id)
+        }
+        repo_id = live.get(repo)
+        if repo_id is None or repo_id not in effective:
+            raise _not_found()
+        effective = frozenset({repo_id})
+    rows = store.run_history(
+        limit=limit,
+        offset=offset,
+        installation_id=ctx.installation_id,
+        repo_ids=effective,
+    )
+    return RunListResponse(
+        items=[_run_item(row) for row in rows], limit=limit, offset=offset
+    )
+
+
+@app.get("/v1/sessions/runs/{verdict_id}")
+def session_run_detail(
+    verdict_id: int, authorization: str = Header("")
+) -> RunDetailResponse:
+    """One run, scoped in SQL before any evidence is assembled."""
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    ctx = _session_read_context(authorization, "queue:read")
+    row = store.run_detail(
+        verdict_id,
+        installation_id=ctx.installation_id,
+        repo_ids=ctx.repo_ids,
+    )
+    if row is None:
+        raise _not_found()
+    return _run_detail_response(row)
 
 
 @app.get("/v1/health")
@@ -1269,6 +1367,404 @@ def revoke_token(
     raise _not_found()
 
 
+class BindRequest(BaseModel):
+    """The whole request body. ONE field, and that is the security property.
+
+    An earlier design took a `workos_org_id` from the caller, which made org
+    squatting possible: post a victim's org id against your own installation
+    before they bind, and Task 1's UNIQUE index blocks their real bind
+    permanently. The organization is now derived from the installation id
+    (workos_client.external_id_for), so the attack has nothing to say rather
+    than being defended against. Anything else a client sends is ignored.
+    """
+
+    installation_id: int
+
+
+def _session_subject(authorization: str) -> str:
+    try:
+        claims = session_auth.verify_session_claims(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if claims is None:
+        raise HTTPException(status_code=401, detail="bad session")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        raise HTTPException(status_code=401, detail="bad session")
+    return workos_user_id
+
+
+def _prove_installer(installation_id: int, workos_user_id: str) -> tuple[dict, str]:
+    """Task 5's authority proof, shared by both bind entrances."""
+    row = store.installation_bind_row(installation_id)
+    if row is None or row["installed_by_github_user_id"] is None:
+        raise _not_found()
+    try:
+        idp_id = workos_client.github_user_id_for(workos_user_id)
+    except workos_client.WorkOSNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="workos not configured") from exc
+    except workos_client.WorkOSError as exc:
+        raise HTTPException(status_code=503, detail="workos unavailable") from exc
+    if idp_id is None:
+        raise _not_found()
+    claimed = str(idp_id).strip()
+    if not claimed.isdigit():
+        print(
+            f"doug: bind refused — WorkOS idp_id is not a numeric GitHub user id. "
+            f"Received {claimed!r} for installation {installation_id}. If this is the "
+            f"real GitHub identity format, the comparison in api._prove_installer "
+            f"needs updating; nothing binds until it is.",
+            file=sys.stderr,
+        )
+        raise _not_found()
+    if claimed != str(row["installed_by_github_user_id"]).strip():
+        raise _not_found()
+    return row, claimed
+
+
+def _current_proved_row(installation_id: int, row: dict, claimed: str) -> dict:
+    current = store.installation_bind_row(installation_id) or row
+    if claimed != str(current["installed_by_github_user_id"] or "").strip():
+        raise _not_found()
+    return current
+
+
+def _ensure_workos_binding(
+    installation_id: int, workos_user_id: str, current: dict
+) -> str:
+    external_id = workos_client.external_id_for(installation_id)
+    bound = current["workos_org_id"]
+    try:
+        if bound is not None:
+            organization_id = workos_client.find_organization(external_id)
+            if organization_id != bound:
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+        else:
+            organization_id = workos_client.ensure_organization(
+                name=current["account_login"] or external_id, external_id=external_id
+            )
+        workos_client.ensure_membership(workos_user_id, organization_id)
+    except workos_client.WorkOSNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="workos not configured") from exc
+    except workos_client.WorkOSError as exc:
+        raise HTTPException(status_code=503, detail="workos unavailable") from exc
+    return organization_id
+
+
+@app.post("/v1/installations/bind", status_code=204)
+def bind_installation(body: BindRequest, authorization: str = Header("")) -> Response:
+    """Bind a GitHub App installation to a WorkOS organization.
+
+    THE PROOF IS AUTHORITY, NOT VISIBILITY, and the difference is the whole
+    endpoint. Setup-URL parameters are attacker-supplied and no GitHub
+    redirect need ever occur, so an attacker holding `:read` on one repo sees
+    a victim's installation_id in their own GET /user/installations and can
+    post it here. A membership check would PASS — the installation genuinely
+    is in their list — and hand them the tenant.
+
+    What is required instead is that the signed-in user's GitHub id equals
+    `installations.installed_by_github_user_id`, the `sender.id` of the
+    `installation.created` webhook (Task 1). That proves something narrower
+    and more relevant than org-admin — *you are the person who installed Doug
+    here* — with no new App permission and no re-acceptance by existing
+    tenants. Org-admin was rejected on evidence, not preference:
+    tenancy.verify_org_admin's membership hop needs organization Members:read
+    for a user-to-server token, which Doug does not hold and cannot add
+    without forcing every installation to re-accept permissions.
+
+    ITS LIMIT IS REAL AND STATED HERE RATHER THAN PAPERED OVER: it only works
+    for installations created after Task 1 shipped. Rows predating it carry
+    NULL — including the operator's own 150424894, populated by webhook
+    redelivery under MT0 — and they CANNOT self-bind. NULL never compares
+    equal to anything here; a fail-open would let any signed-in stranger
+    claim every legacy tenant at once. Those need a deliberate operator bind
+    or a one-off backfill.
+
+    THE ORDER BELOW IS LOAD-BEARING, same posture as tenancy.verify_admin's:
+    the session, then the ledger row (free, local), then the identity hop
+    (one WorkOS read), then the comparison — and only after all of that does
+    anything get CREATED. A caller who proves nothing leaves no organization,
+    no membership, and no row behind.
+
+    Every authority failure is the same 404, mirroring dispense_token: a
+    caller cannot tell "exists but refused" from "does not exist". The two
+    exceptions are deployment faults (503, named, per api.py:391's idiom) and
+    a live installation already bound elsewhere (409) — which is only ever
+    seen by someone who has ALREADY proved they installed it.
+
+    `installations.state` is deliberately not gated: binding a suspended or
+    deleted installation grants nothing, because tenancy.live_scope refuses
+    every read against one.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    workos_user_id = _session_subject(authorization)
+    installation_id = body.installation_id
+    try:
+        with store.installation_bind_lock(installation_id):
+            row, claimed = _prove_installer(installation_id, workos_user_id)
+            current = _current_proved_row(installation_id, row, claimed)
+            organization_id = _ensure_workos_binding(
+                installation_id, workos_user_id, current
+            )
+            written = store.bind_installation_org(installation_id, organization_id)
+            if written != organization_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+    except store.InstallationBindLockUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="installation bind temporarily unavailable"
+        ) from exc
+    print(
+        f"doug: bound installation {installation_id} to organization {organization_id}",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
+
+
+def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
+    """Spend a signed installation flow after independently proving authority."""
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    workos_user_id = _session_subject(authorization)
+    installation_id = body["installation_id"]
+    token = body["flow_token"]
+    if (
+        isinstance(installation_id, bool)
+        or not isinstance(installation_id, int)
+        or installation_id <= 0
+        or not isinstance(token, str)
+        or not token
+    ):
+        raise _not_found()
+    try:
+        flow = install_flow.verify_install_flow(
+            token,
+            expected_subject=workos_user_id,
+            expected_installation_id=installation_id,
+        )
+    except install_flow.InstallFlowConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except install_flow.InstallFlowError as exc:
+        raise _not_found() from exc
+    nonce_digest = hashlib.sha256(flow.nonce).hexdigest()
+
+    try:
+        with store.install_flow_bind_lock(nonce_digest, installation_id):
+            consumed = store.install_flow_consumption(nonce_digest)
+            if consumed is not None:
+                if (
+                    consumed["workos_user_id"] == workos_user_id
+                    and consumed["installation_id"] == installation_id
+                ):
+                    return Response(status_code=204)
+                raise _not_found()
+
+            row, claimed = _prove_installer(installation_id, workos_user_id)
+            current = _current_proved_row(installation_id, row, claimed)
+            organization_id = _ensure_workos_binding(
+                installation_id, workos_user_id, current
+            )
+            result = store.consume_install_flow_and_bind(
+                nonce_digest,
+                workos_user_id,
+                installation_id,
+                organization_id,
+            )
+            if result == "mismatch":
+                raise _not_found()
+            if result == "conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+    except store.InstallFlowLockUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="install flow temporarily unavailable"
+        ) from exc
+    print(
+        f"doug: completed install flow for installation {installation_id} "
+        f"and organization {organization_id}",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
+
+
+COMPLETE_INSTALL_FLOW_MAX_BODY_BYTES = 4096
+
+
+async def _read_complete_install_flow_body(request: Request) -> bytes:
+    """Buffer at most the route's small, fixed proof envelope."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > COMPLETE_INSTALL_FLOW_MAX_BODY_BYTES:
+            raise _not_found()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@app.post("/v1/installations/bind/complete", status_code=204)
+async def complete_install_flow(
+    request: Request, authorization: str = Header("")
+) -> Response:
+    """Parse the opaque proof internally, then move blocking authority work off-loop."""
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise _not_found()
+    try:
+        body = json.loads(await _read_complete_install_flow_body(request))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise _not_found() from None
+    if not isinstance(body, dict) or set(body) != {"installation_id", "flow_token"}:
+        raise _not_found()
+    return await run_in_threadpool(_complete_install_flow_sync, body, authorization)
+
+
+class EntitlementsRequest(BaseModel):
+    """The provider that authenticated this sign-in, and the token it issued.
+
+    NOTHING HERE NAMES A USER, and that is the security property — the same
+    one BindRequest has for organization ids. The scope is written for the
+    JWT's `sub`; a body-supplied user id would let any signed-in caller
+    overwrite anyone else's entitlements, and since a scope is what a later
+    read is checked against, that is writing yourself into their tenant.
+    Extra fields are ignored (pydantic's default), so a body carrying one
+    changes nothing.
+
+    NEITHER FIELD IS REQUIRED, which is not laxity: it keeps the token out of
+    a 422. FastAPI's validation error carries the offending input, and for a
+    MISSING field pydantic reports the WHOLE BODY as that input — measured
+    2026-08-10 — so a required `provider` would echo the token straight back
+    to the caller in the error body. With defaults, no 'missing' error can
+    fire, and the handler refuses an empty pair itself with a detail string
+    built from nothing the caller sent.
+    """
+
+    provider: str = ""
+    token: str = ""
+
+
+@app.get("/v1/sessions/connections")
+def session_connections(authorization: str = Header("")) -> dict:
+    """The signed-in user's current repository connections.
+
+    Claims-only authentication is intentional: an orgless session is the
+    normal first visit and must be able to discover several selectable
+    installations.  Stored scope is still intersected with live ledger rows;
+    a connection with no readable repository disappears rather than becoming
+    an installation-wide sentinel.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    workos_user_id = _session_subject(authorization)
+    connections = []
+    for row in store.session_connections_for(workos_user_id):
+        if entitlements.is_stale(row["derived_at"]) or not row["repositories"]:
+            continue
+        account_login = row["account_login"]
+        connections.append(
+            {
+                "provider": "github",
+                "installation_id": row["installation_id"],
+                "organization_id": row["organization_id"],
+                "account_login": account_login,
+                "account_type": row["account_type"],
+                "status": "ready" if row["organization_id"] else "setup_required",
+                "label": (
+                    "Lema — separate product"
+                    if isinstance(account_login, str) and account_login.lower() == "lemahq"
+                    else None
+                ),
+                "repositories": row["repositories"],
+            }
+        )
+    return {"connections": connections}
+
+
+@app.post("/v1/sessions/entitlements", status_code=204)
+def record_entitlements(
+    body: EntitlementsRequest, authorization: str = Header("")
+) -> Response:
+    """Derive what this signed-in user may see, and store the conclusion.
+
+    WHY THIS ENDPOINT EXISTS AT ALL. `authkit-nextjs` hands the provider's
+    `oauthTokens` to `handleAuth`'s `onSuccess` and nowhere else — `withAuth()`
+    does not return them and the session does not carry them. The dashboard
+    runs on a LATER request, when the GitHub token is gone. So the browser
+    posts it here once, at sign-in, and what survives the request is the
+    derived scope: `installation_id` plus explicit repo ids. THE TOKEN IS
+    NEVER STORED, LOGGED, RETURNED, OR PLACED IN AN EXCEPTION MESSAGE
+    (entitlements.py's property 2, tested end to end).
+
+    AUTHENTICATED WITH verify_session_claims, NOT resolve_session, and the
+    difference is what makes this reachable. resolve_session fails closed
+    without an `org_id` claim, which a first-time user does not have — an
+    organization is created when they bind, and binding is not what this is.
+    The weaker check proves WHO is signed in, which is exactly and only what
+    is needed to write a row keyed on them.
+
+    A DERIVATION IS THE WHOLE ANSWER, NOT A DELTA. store.replace_session_
+    entitlements deletes what was there first, so a scope can shrink when a
+    tenant removes Doug from a repo. That is also why an upstream failure
+    must never reach the write: an empty derivation is a legitimate answer
+    that ERASES rows, so a rejected token (401 — the caller signs in again)
+    and an outage (503 — the caller tries later) both raise past it rather
+    than being read as "entitled to nothing".
+
+    ITS LIMIT, stated rather than papered over: replacement is per USER, not
+    per provider, because these rows carry no provider column. GitHub is the
+    only source of tenants today, so nothing can be lost; the first time a
+    second SOURCE of entitlement exists, this needs a provider column or one
+    provider's derivation will erase another's.
+
+    Stored scope is a claim, never authority. tenancy.live_scope intersects
+    it against the live ledger on every read, so a suspended installation or
+    a removed repo is refused immediately regardless of what is written here;
+    entitlements.TTL bounds the rest.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+
+    try:
+        claims = session_auth.verify_session_claims(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if claims is None:
+        raise HTTPException(status_code=401, detail="bad session")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        raise HTTPException(status_code=401, detail="bad session")
+
+    if not body.provider or not body.token:
+        raise HTTPException(status_code=400, detail="provider and token are required")
+
+    try:
+        tenants = entitlements.derive(body.provider, body.token)
+    except entitlements.EntitlementsNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="github app not configured") from exc
+    except entitlements.ProviderTokenRejected as exc:
+        # Checked before ProviderError — it is a subclass, and the caller can
+        # act on this one: sign in again, rather than try later.
+        raise HTTPException(status_code=401, detail="provider token rejected") from exc
+    except entitlements.ProviderError as exc:
+        raise HTTPException(status_code=503, detail="provider unavailable") from exc
+
+    store.replace_session_entitlements(workos_user_id, tenants)
+    print(
+        f"doug: recorded entitlements for {workos_user_id}: {len(tenants)} installation(s), "
+        f"{sum(len(t.repo_ids) for t in tenants)} repo(s)",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
+
+
 class PatternRow(BaseModel):
     pattern: str
     prs: int
@@ -1398,11 +1894,22 @@ def _repo_list(raw) -> list[tuple[int, str]]:
 def _record_installation(payload: dict, action: str) -> None:
     inst = payload["installation"]
     account = _obj(inst.get("account"))
+    # Only `created` names an installer — suspend/unsuspend/deleted name
+    # whoever performed THAT action, which is a different fact and must not
+    # overwrite it (store.upsert_installation already refuses to write a
+    # None over an existing value, but this keeps a *wrong* id from ever
+    # being offered in the first place). A missing or non-int sender
+    # (older redeliveries, synthetic payloads) is recorded as None rather
+    # than raised: an installation row is more important than who's on it.
+    sender_id = _obj(payload.get("sender")).get("id")
     store.upsert_installation(
         inst["id"],
         _text(account.get("login"), store.installations.c.account_login) or "",
         _text(account.get("type"), store.installations.c.account_type) or "",
         INSTALLATION_STATES[action],
+        installed_by_github_user_id=(
+            sender_id if action == "created" and isinstance(sender_id, int) else None
+        ),
     )
     if action == "created":
         # Marks what this installation covers and never un-marks. `created`

@@ -1,16 +1,34 @@
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
-from doug import api, app_auth, ingest, outcome_queue, store, tenancy, worker
+from doug import (
+    api,
+    app_auth,
+    entitlements,
+    ingest,
+    install_flow,
+    outcome_queue,
+    session_auth,
+    store,
+    tenancy,
+    worker,
+    workos_client,
+)
 from doug.api import app
 from doug.models import Band, JobItem, Reason, Verdict
 
@@ -482,6 +500,61 @@ def test_installation_created_records_the_account_and_its_repos(tmp_path, monkey
     # it inside the same task — see the dedicated test below, and the one
     # after it for the terms this call passes.
     assert kicks == [(150424894, "reconcile"), "drain"]
+
+
+def test_installation_created_records_the_installer(tmp_path, monkeypatch):
+    """Task 5's bind endpoint proves "you are the person who installed Doug
+    here" by matching this column against the signed-in GitHub user — it has
+    to come from the one action that actually names an installer."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [],
+            "sender": {"id": 42, "login": "drewjst"},
+        },
+    )
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] == 42
+
+
+def test_installation_created_tolerates_a_missing_sender(tmp_path, monkeypatch):
+    """Older redeliveries and synthetic payloads can omit or malform sender.
+    The installation row is more important than who's on it, so this must
+    record the installation rather than raise."""
+    _hook_env(tmp_path, monkeypatch)
+    r = _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert r.status_code == 202
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] is None
+
+
+def test_suspend_does_not_overwrite_the_recorded_installer(tmp_path, monkeypatch):
+    """suspend/unsuspend/deleted deliveries name whoever performed THAT
+    action, not who installed Doug — passing their sender through would
+    misattribute Task 5's bind proof to the wrong person."""
+    _hook_env(tmp_path, monkeypatch)
+    _webhook(
+        "installation",
+        {
+            "action": "created",
+            "installation": INSTALLATION,
+            "repositories": [],
+            "sender": {"id": 42, "login": "drewjst"},
+        },
+    )
+    _webhook(
+        "installation",
+        {
+            "action": "suspend",
+            "installation": INSTALLATION,
+            "sender": {"id": 99, "login": "someone-else"},
+        },
+    )
+    assert _table(tmp_path, store.installations)[0]["installed_by_github_user_id"] == 42
 
 
 def test_uninstall_then_reinstall_converges_on_the_smaller_repo_set(tmp_path, monkeypatch):
@@ -2211,6 +2284,95 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
+def test_queue_operator_repo_filter_reaches_store_as_a_name(tmp_path, monkeypatch):
+    """The operator's ?repo= is a NAME lookup across every installation, and
+    only the operator may reach it. Operator-ness must be an explicit flag
+    (is_operator), not the absence of a TokenContext — a future credential
+    type that never produces a ctx must not silently inherit this."""
+    _api_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get(
+        "/v1/queue", params={"repo": "drewjst/doug"},
+        headers={"X-Doug-Token": "operator-secret"},
+    )
+    assert r.status_code == 200
+    assert calls == [{"repo": "drewjst/doug", "installation_id": None, "repo_ids": None}]
+
+
+def test_queue_tenant_repo_restriction_never_reaches_store_as_a_name(tmp_path, monkeypatch):
+    """A resolved tenant token's repo restriction must arrive as repo_ids —
+    scoped ids checked against the key's live selection — and NEVER as the
+    `repo=` name lookup, which searches every installation. Pins the fix at
+    api.py:428: `repo=repo if is_operator else None` must stay tied to the
+    explicit operator flag, not to `ctx is None`."""
+    token = _tenant(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894, github_repo_id=1)
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get(
+        "/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token},
+    )
+    assert r.status_code == 200
+    assert calls == [{"repo": None, "installation_id": 150424894, "repo_ids": frozenset({1})}]
+
+
+def test_queue_unresolvable_token_401s_before_touching_store(tmp_path, monkeypatch):
+    """A caller who is neither the operator nor a resolvable token must 401
+    and never reach store.latest_reviews at all — this pins api.py:400,
+    which must stay untouched by the is_operator refactor (it means 'this
+    token did not resolve', not 'this caller is the operator')."""
+    _tenant(tmp_path, monkeypatch)
+    calls: list[dict] = []
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "doug_nope"})
+    assert r.status_code == 401
+    assert calls == []
+
+
+def test_queue_latest_reviews_call_site_keys_the_repo_filter_on_is_operator():
+    """Narrow structural pin on ONLY the store.latest_reviews call site's
+    `repo=` argument — not a substring search over the whole function body,
+    which legitimately still contains `ctx is None` at api.py:400 (an
+    unresolved-token check, not an operator check).
+
+    This guard exists because, with exactly one credential type in the
+    system today, `ctx is None` and `is_operator` are PROVABLY behaviourally
+    identical at this call site (ctx is only ever assigned inside the
+    `not is_operator` branch, and unresolved tokens 401 before reaching this
+    line) — so no behavioural test, however thorough, can distinguish a
+    regression back to `repo=repo if ctx is None else None` from the fixed
+    `is_operator` form. Confirmed by temporarily reverting the call site and
+    re-running the behavioural tests above: they stayed green. Task 4 adding
+    a second credential type is exactly what would make that regression
+    observable behaviourally — this guard stands in until then.
+    """
+    src = inspect.getsource(api.queue)
+    start = src.index("store.latest_reviews(")
+    call = src[start : src.index(")", start)]
+    repo_line = next(line for line in call.splitlines() if "repo=" in line)
+    assert repo_line.strip().startswith("repo=repo if is_operator else None")
+
+
 @pytest.mark.parametrize("path", ["/v1/patterns", "/v1/score/read", "/v1/runs", "/v1/runs/1"])
 def test_tenant_token_404s_on_operator_only_endpoints(tmp_path, monkeypatch, path):
     """A valid credential pointed at an endpoint that is not theirs learns
@@ -3245,3 +3407,1643 @@ def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
     # caller-controlled key could have grown to 50 entries.
     assert isinstance(api._showcase_cache, tuple)
     assert len(api._showcase_cache) == 2
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/installations/bind — authority, not visibility.
+#
+# No test below performs network I/O. The session is a real RS256 JWT minted
+# locally against a generated key (session_auth._jwks is monkeypatched, the
+# same way tests/test_session_auth.py does it), and every WorkOS call goes
+# through workos_client._request, replaced here by a STATEFUL fake: it
+# remembers the organizations it created and the memberships it was asked
+# for, so idempotency and "nothing was created" are observed facts rather
+# than assumptions about a stub.
+
+_BIND_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_BIND_OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+class _BindJWKS:
+    """Stands in for jwt.PyJWKClient — only .key is ever read."""
+
+    class _Key:
+        def __init__(self, key):
+            self.key = key
+
+    def get_signing_key_from_jwt(self, token):
+        return self._Key(_BIND_KEY.public_key())
+
+
+def _use_bind_jwks(monkeypatch):
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_01ABC")
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+
+
+class _FakeWorkOS:
+    """Stateful stand-in for workos_client._request.
+
+    `idp_id` is what GET /identities reports for the signed-in user — the
+    value the installer check compares. `orgs` maps external_id -> org id and
+    starts empty, so the first bind genuinely creates and the second
+    genuinely finds.
+    """
+
+    def __init__(
+        self,
+        idp_id: str | None = "777",
+        orgs: dict[str, str] | None = None,
+        identities: list[dict] | None = None,
+    ):
+        self.idp_id = idp_id
+        self.identities = identities
+        self.orgs = dict(orgs or {})
+        self.memberships: list[tuple[str, str]] = []
+        self.calls: list[str] = []
+
+    def __call__(self, method, path, *, json=None):
+        self.calls.append(f"{method} {path}")
+        if method == "GET" and path.endswith("/identities"):
+            if self.identities is not None:
+                return httpx.Response(200, json=self.identities)
+            if self.idp_id is None:
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200, json=[{"idp_id": self.idp_id, "type": "OAuth", "provider": "GithubOAuth"}]
+            )
+        if method == "GET" and path.startswith("/organizations/external_id/"):
+            external_id = path.rsplit("/", 1)[1]
+            if external_id in self.orgs:
+                return httpx.Response(200, json={"id": self.orgs[external_id]})
+            return httpx.Response(404, json={"code": "entity_not_found"})
+        if method == "POST" and path == "/organizations":
+            external_id = json["external_id"]
+            self.orgs.setdefault(external_id, f"org_for_{external_id}")
+            return httpx.Response(201, json={"id": self.orgs[external_id]})
+        if method == "POST" and path == "/user_management/organization_memberships":
+            self.memberships.append((json["user_id"], json["organization_id"]))
+            return httpx.Response(201, json={"id": "om_01"})
+        raise AssertionError(f"unexpected WorkOS call: {method} {path}")
+
+    def creates(self) -> list[str]:
+        return [c for c in self.calls if c.startswith("POST")]
+
+
+def _bind_env(
+    monkeypatch,
+    idp_id: str | None = "777",
+    orgs=None,
+    identities: list[dict] | None = None,
+) -> _FakeWorkOS:
+    fake = _FakeWorkOS(idp_id=idp_id, orgs=orgs, identities=identities)
+    monkeypatch.setattr(workos_client, "_request", fake)
+    _use_bind_jwks(monkeypatch)
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
+    return fake
+
+
+def _session(key=_BIND_KEY, sub="user_01ABC", org_id: str | None = None) -> dict:
+    now = int(time.time())
+    claims = {
+        "iss": "https://auth.workos.com",
+        "sub": sub,
+        "client_id": "client_01ABC",
+        "iat": now,
+        "exp": now + 300,
+    }
+    if org_id is not None:
+        claims["org_id"] = org_id
+    token = jwt.encode(
+        claims,
+        key,
+        algorithm="RS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _installed(installation_id: int, installer: int | None, *, org_id: str | None = None):
+    store.upsert_installation(
+        installation_id,
+        "drewjst",
+        "Organization",
+        "active",
+        installed_by_github_user_id=installer,
+    )
+    if org_id is not None:
+        engine = store._get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                store.installations.update()
+                .where(store.installations.c.installation_id == installation_id)
+                .values(workos_org_id=org_id)
+            )
+
+
+def _bound_org(installation_id: int) -> str | None:
+    engine = store._get_engine()
+    with engine.connect() as conn:
+        return conn.execute(
+            select(store.installations.c.workos_org_id).where(
+                store.installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+
+
+def _bind(client, installation_id: int, **extra):
+    return client.post(
+        "/v1/installations/bind",
+        json={"installation_id": installation_id, **extra},
+        headers=_session(),
+    )
+
+
+_FLOW_SECRET = "install-flow-api-test-secret-32-bytes"
+
+
+def _flow_token(
+    installation_id: int = 1001,
+    *,
+    sub: str = "user_01ABC",
+    nonce: bytes = b"\x01" * 32,
+    expires_at: int | None = None,
+):
+    return install_flow.seal_install_flow(
+        nonce=nonce,
+        expires_at=expires_at or int(time.time()) + 300,
+        subject=sub,
+        installation_id=installation_id,
+        pkce_retried=False,
+        secret=_FLOW_SECRET,
+    )
+
+
+def _tamper_flow_token(token: str) -> str:
+    replacement = "A" if token[-1] != "A" else "B"
+    tampered = token[:-1] + replacement
+    assert tampered != token
+    return tampered
+
+
+def _complete_flow(
+    client,
+    installation_id: int,
+    token: str,
+    *,
+    sub: str = "user_01ABC",
+):
+    return client.post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": installation_id, "flow_token": token},
+        headers=_session(sub=sub),
+    )
+
+
+def test_api_tamper_helper_changes_tokens_ending_in_either_candidate_character():
+    assert _tamper_flow_token("tokenA") == "tokenB"
+    assert _tamper_flow_token("tokenB") == "tokenA"
+
+
+def test_install_flow_completion_verifies_session_signature_expiry_subject_and_id(
+    tmp_path, monkeypatch
+):
+    """The Setup URL is attacker-callable. A valid WorkOS session and every
+    signed flow field must agree before even the installer identity read."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    valid = _flow_token()
+    cases = [
+        (_tamper_flow_token(valid), "user_01ABC", 1001),
+        (_flow_token(expires_at=int(time.time()) - 1), "user_01ABC", 1001),
+        (valid, "user_attacker", 1001),
+        (valid, "user_01ABC", 1002),
+    ]
+
+    for token, sub, installation_id in cases:
+        response = _complete_flow(client, installation_id, token, sub=sub)
+        assert response.status_code == 404
+        assert response.json() == {"detail": "not found"}
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+    assert store.install_flow_consumption(hashlib.sha256(b"\x01" * 32).hexdigest()) is None
+
+
+def test_install_flow_completion_requires_a_workos_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": 1001, "flow_token": _flow_token()},
+    )
+
+    assert response.status_code == 401
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_pre_auth_flow_without_a_bound_subject_cannot_complete(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = install_flow.seal_install_flow(
+        nonce=b"\x03" * 32,
+        expires_at=int(time.time()) + 300,
+        subject=None,
+        installation_id=1001,
+        pkce_retried=False,
+        secret=_FLOW_SECRET,
+    )
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "not found"}
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_reuses_installer_proof_and_non_enumerating_refusal(
+    tmp_path, monkeypatch
+):
+    """A Doug account does not require GitHub. Only repository connection
+    does: a session with no linked GitHub identity gets the same refusal as
+    any other failed installer-authority proof."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id=None)
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+
+    response = _complete_flow(TestClient(app), 1001, _flow_token())
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "not found"}
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_binds_and_persists_only_the_nonce_digest(
+    tmp_path, monkeypatch, capsys
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = _flow_token()
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+    digest = hashlib.sha256(b"\x01" * 32).hexdigest()
+    assert store.install_flow_consumption(digest)["workos_user_id"] == "user_01ABC"
+    assert token not in capsys.readouterr().err
+    assert fake.memberships == [("user_01ABC", "org_for_gh-inst-1001")]
+
+
+def test_exact_flow_replay_skips_every_workos_and_authority_side_effect(
+    tmp_path, monkeypatch
+):
+    """A lost 204 may be retried. The durable consumption is the stop sign:
+    success is idempotent without another identity read, membership write, or
+    installation bind."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    token = _flow_token()
+    assert _complete_flow(client, 1001, token).status_code == 204
+    fake.calls.clear()
+
+    def no_second_bind(*args, **kwargs):
+        raise AssertionError("replay reached the authority write")
+
+    monkeypatch.setattr(store, "consume_install_flow_and_bind", no_second_bind)
+    replay = _complete_flow(client, 1001, token)
+
+    assert replay.status_code == 204
+    assert fake.calls == []
+
+
+def test_spent_flow_replayed_for_another_subject_is_refused_before_workos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    nonce = b"\x02" * 32
+    assert _complete_flow(client, 1001, _flow_token(nonce=nonce)).status_code == 204
+    fake.calls.clear()
+
+    replay = _complete_flow(
+        client,
+        1001,
+        _flow_token(sub="user_attacker", nonce=nonce),
+        sub="user_attacker",
+    )
+
+    assert replay.status_code == 404
+    assert fake.calls == []
+
+
+def test_install_flow_completion_parses_untrusted_bodies_without_fastapi_echo(
+    tmp_path, monkeypatch
+):
+    """FastAPI's model errors include rejected input. The flow token is a
+    browser-held proof, so every wrong media type/shape/syntax is refused by
+    Doug's constant response rather than by a framework-generated 422."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    marker = "flow-token-marker-that-must-not-echo"
+    cases = [
+        ("application/json", json.dumps(marker)),
+        ("application/json", json.dumps([marker])),
+        ("text/plain", marker),
+        ("application/x-www-form-urlencoded", f"flow_token={marker}"),
+        ("application/json", f'{{"flow_token":"{marker}"'),
+        ("application/json", json.dumps({"flow_token": marker})),
+    ]
+
+    client = TestClient(app)
+    for content_type, content in cases:
+        response = client.post(
+            "/v1/installations/bind/complete",
+            content=content,
+            headers={**_session(), "Content-Type": content_type},
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "not found"}
+        assert marker not in response.text
+
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_rejects_chunked_body_over_4096_before_json_or_core(
+    monkeypatch,
+):
+    marker = "over-limit-flow-marker-that-must-not-echo"
+    payload = json.dumps(
+        {"installation_id": 1001, "flow_token": marker + "x" * 4096}
+    ).encode()
+    assert len(payload) > 4096
+    parsed_lengths: list[int] = []
+    core_calls = []
+    real_loads = api.json.loads
+
+    def recording_loads(value):
+        parsed_lengths.append(len(value))
+        return real_loads(value)
+
+    def forbidden_core(*args):
+        core_calls.append(args)
+        return api.Response(status_code=204)
+
+    monkeypatch.setattr(api.json, "loads", recording_loads)
+    monkeypatch.setattr(api, "_complete_install_flow_sync", forbidden_core)
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        content=iter((payload[:2048], payload[2048:])),
+        headers={"Authorization": "Bearer marker", "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 404
+    # Do not call response.json(): api.json is the stdlib module, so the
+    # monkeypatch deliberately observes every json.loads call in this process.
+    assert response.text == '{"detail":"not found"}'
+    assert marker not in response.text
+    assert parsed_lengths == []
+    assert core_calls == []
+
+
+def test_install_flow_completion_parses_exactly_4096_bounded_bytes(monkeypatch):
+    token = "bounded-token"
+    compact = json.dumps(
+        {"installation_id": 1001, "flow_token": token}, separators=(",", ":")
+    ).encode()
+    payload = compact + b" " * (4096 - len(compact))
+    assert len(payload) == 4096
+    parsed_lengths: list[int] = []
+    core_calls = []
+    real_loads = api.json.loads
+
+    def recording_loads(value):
+        parsed_lengths.append(len(value))
+        return real_loads(value)
+
+    def successful_core(body, authorization):
+        core_calls.append((body, authorization))
+        return api.Response(status_code=204)
+
+    monkeypatch.setattr(api.json, "loads", recording_loads)
+    monkeypatch.setattr(api, "_complete_install_flow_sync", successful_core)
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        content=payload,
+        headers={"Authorization": "Bearer bounded", "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 204
+    assert parsed_lengths == [4096]
+    assert core_calls == [
+        ({"installation_id": 1001, "flow_token": token}, "Bearer bounded")
+    ]
+
+
+def test_install_flow_configuration_fault_is_named_before_workos(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    token = _flow_token()
+    client = TestClient(app)
+
+    for configured_secret in (None, "short-secret"):
+        if configured_secret is None:
+            monkeypatch.delenv("DOUG_INSTALL_FLOW_SECRET", raising=False)
+        else:
+            monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", configured_secret)
+        response = _complete_flow(client, 1001, token)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "install flow not configured"}
+        assert token not in response.text
+
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_lock_checkout_exhaustion_is_token_safe_503_before_workos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = _flow_token()
+    bind_calls = []
+
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError(f"purpose pool exhausted for {token}")
+
+    def forbidden_bind(*args, **kwargs):
+        bind_calls.append((args, kwargs))
+        return "bound"
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+    monkeypatch.setattr(store, "consume_install_flow_and_bind", forbidden_bind)
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "install flow temporarily unavailable"}
+    assert token not in response.text
+    assert fake.calls == []
+    assert bind_calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_moves_blocking_authority_work_off_the_event_loop(
+    tmp_path, monkeypatch
+):
+    """The async route must parse its own untrusted bytes, then hand every
+    database/WorkOS operation to a worker thread."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    seen: dict[str, str] = {}
+    real_read_body = api._read_complete_install_flow_body
+
+    async def marked_read_body(request):
+        seen["loop"] = threading.current_thread().name
+        return await real_read_body(request)
+
+    def marked_enabled():
+        seen["ledger"] = threading.current_thread().name
+        return False
+
+    monkeypatch.setattr(api, "_read_complete_install_flow_body", marked_read_body)
+    monkeypatch.setattr(store, "enabled", marked_enabled)
+    assert inspect.iscoroutinefunction(api.complete_install_flow)
+
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": 1001, "flow_token": _flow_token()},
+        headers=_session(),
+    )
+
+    assert response.status_code == 503
+    assert seen["loop"] and seen["ledger"]
+    assert seen["ledger"] != seen["loop"]
+
+
+def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(
+    tmp_path, monkeypatch
+):
+    """The nonce is global authority, not installation-local authority. Two
+    signed flows carrying one nonce but different installation ids must be
+    serialized before either caller crosses the WorkOS boundary."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    nonce = b"\x09" * 32
+    tokens = {1001: _flow_token(1001, nonce=nonce), 1002: _flow_token(1002, nonce=nonce)}
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release_first = threading.Event()
+    count_lock = threading.Lock()
+    identity_calls = 0
+    real_request = fake
+
+    def gated_request(method, path, *, json=None):
+        nonlocal identity_calls
+        if method == "GET" and path.endswith("/identities"):
+            with count_lock:
+                identity_calls += 1
+                call_number = identity_calls
+            if call_number == 1:
+                first_entered.set()
+                assert release_first.wait(5), "coordinator never released first WorkOS call"
+            else:
+                second_entered.set()
+        return real_request(method, path, json=json)
+
+    monkeypatch.setattr(workos_client, "_request", gated_request)
+    results: dict[int, int] = {}
+    errors: list[BaseException] = []
+
+    def complete(installation_id):
+        try:
+            results[installation_id] = _complete_flow(
+                TestClient(app), installation_id, tokens[installation_id]
+            ).status_code
+        except BaseException as exc:  # surfaced on the coordinating test thread
+            errors.append(exc)
+
+    first = threading.Thread(target=complete, args=(1001,))
+    second = threading.Thread(target=complete, args=(1002,))
+    first.start()
+    assert first_entered.wait(5), "first caller never reached WorkOS"
+    second.start()
+    second_crossed_before_spend = second_entered.wait(0.5)
+    release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    assert second_crossed_before_spend is False
+    assert results == {1001: 204, 1002: 404}
+    assert identity_calls == 1
+    assert sum(_bound_org(i) is not None for i in (1001, 1002)) == 1
+    consumed = store.install_flow_consumption(hashlib.sha256(nonce).hexdigest())
+    assert consumed["installation_id"] == 1001
+
+
+def test_install_completions_do_not_starve_a_two_connection_main_pool(
+    tmp_path, monkeypatch
+):
+    """Session advisory locks must not occupy the ledger pool while WorkOS
+    and binding helpers need that same pool. Two connections is enough for
+    two concurrent completions when locking has its own bounded engine."""
+    url = _db(tmp_path, monkeypatch)
+    main_engine = create_engine(
+        url,
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=0.25,
+    )
+    store.metadata.create_all(main_engine)
+    monkeypatch.setattr(store, "_engine", main_engine)
+    monkeypatch.setattr(store, "_engine_url", url)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    tokens = {
+        1001: _flow_token(1001, nonce=b"\x11" * 32),
+        1002: _flow_token(1002, nonce=b"\x12" * 32),
+    }
+    first_workos_entered = threading.Event()
+    release_first = threading.Event()
+    request_lock = threading.Lock()
+    identity_calls = 0
+    real_request = fake
+
+    def gated_request(method, path, *, json=None):
+        nonlocal identity_calls
+        if method == "GET" and path.endswith("/identities"):
+            with request_lock:
+                identity_calls += 1
+                call_number = identity_calls
+            if call_number == 1:
+                first_workos_entered.set()
+                assert release_first.wait(5), "coordinator never released first flow"
+        return real_request(method, path, json=json)
+
+    monkeypatch.setattr(workos_client, "_request", gated_request)
+    results: dict[int, int] = {}
+    errors: list[BaseException] = []
+    finished = {installation_id: threading.Event() for installation_id in tokens}
+
+    def complete(installation_id):
+        try:
+            results[installation_id] = _complete_flow(
+                TestClient(app), installation_id, tokens[installation_id]
+            ).status_code
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished[installation_id].set()
+
+    first = threading.Thread(target=complete, args=(1001,))
+    second = threading.Thread(target=complete, args=(1002,))
+    try:
+        first.start()
+        assert first_workos_entered.wait(5), "first flow never reached WorkOS"
+        second.start()
+        second_finished_while_first_held_lock = finished[1002].wait(0.5)
+        release_first.set()
+        first.join(5)
+        second.join(5)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert second_finished_while_first_held_lock is False
+        assert errors == []
+        assert results == {1001: 204, 1002: 204}
+        assert _bound_org(1001) == "org_for_gh-inst-1001"
+        assert _bound_org(1002) == "org_for_gh-inst-1002"
+    finally:
+        main_engine.dispose()
+
+
+def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(
+    tmp_path, monkeypatch
+):
+    """The exact claimable-tenant attack. GET /user/installations answers on
+    :read, so visibility is NOT authority. A caller whose GitHub id does not
+    match installed_by_github_user_id must be refused even though the
+    installation is genuinely visible to them.
+
+    The first half is not decoration: it proves this caller, this session and
+    this ledger DO produce a 204 — so the refusal below can only come from
+    the one thing that changed, the recorded installer."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)  # installed by the signed-in user
+    _installed(1002, installer=999)  # someone else's, merely visible
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+
+    refused = _bind(client, 1002)
+    assert refused.status_code == 404
+    assert _bound_org(1002) is None
+    assert fake.memberships == [("user_01ABC", "org_for_gh-inst-1001")]
+
+
+def test_bind_refuses_an_installation_with_no_recorded_installer(tmp_path, monkeypatch):
+    """Pre-Task-1 rows carry NULL. NULL must never compare equal to anything —
+    a fail-open here would let ANY signed-in user claim every legacy tenant,
+    including the operator's own 150424894."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(150424894, installer=None)  # populated by MT0 webhook redelivery
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    spent = len(fake.calls)
+
+    refused = _bind(client, 150424894)
+    assert refused.status_code == 404
+    assert _bound_org(150424894) is None
+    # Cheapest-first, same posture as tenancy.verify_org_admin: a row that can
+    # never prove authority costs WorkOS nothing at all, not even the identity
+    # lookup.
+    assert fake.calls[spent:] == []
+
+
+def test_bind_is_idempotent_for_the_same_org(tmp_path, monkeypatch):
+    """installation.created is replayable via GitHub's Redeliver button."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204
+    assert _bind(client, 1001).status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+    # One organization, not two: the second bind found the first one's.
+    assert fake.creates().count("POST /organizations") == 1
+
+
+def test_bind_refuses_to_move_an_installation_to_a_different_org(tmp_path, monkeypatch):
+    """Re-binding a live installation to another organization is a takeover,
+    not an update.
+
+    Both installations below are bound already and both callers prove the same
+    authority; the ONLY difference is whether the bound org is the one this
+    installation's external_id resolves to."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777, org_id="org_manual")
+    _installed(1002, installer=777, org_id="org_for_gh-inst-1002")
+    _installed(1003, installer=777, org_id="org_ghost")
+    fake = _bind_env(
+        monkeypatch,
+        idp_id="777",
+        orgs={"gh-inst-1001": "org_canonical", "gh-inst-1002": "org_for_gh-inst-1002"},
+    )
+    client = TestClient(app)
+
+    assert _bind(client, 1002).status_code == 204  # already bound to its own org
+
+    refused = _bind(client, 1001)
+    assert refused.status_code == 409
+    assert _bound_org(1001) == "org_manual"
+    assert ("user_01ABC", "org_canonical") not in fake.memberships
+
+    # A row naming an organization its own external_id does not resolve to is
+    # inconsistent state, not a bind to complete — and refusing it must leave
+    # nothing behind, so no organization is created on the way to the 409.
+    assert _bind(client, 1003).status_code == 409
+    assert _bound_org(1003) == "org_ghost"
+    assert "POST /organizations" not in fake.calls
+
+
+def test_bind_refuses_a_non_numeric_idp_id_and_says_so(tmp_path, monkeypatch, capsys):
+    """idp_id's GitHub format is undocumented and unmeasured. If it is not the
+    numeric user id, bind must refuse AND log the value, so the first real
+    attempt is diagnosable in one query rather than silently denying."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="github|777")
+    client = TestClient(app)
+
+    refused = _bind(client, 1001)
+    assert refused.status_code == 404
+    assert _bound_org(1001) is None
+    assert fake.memberships == []
+    err = capsys.readouterr().err
+    assert "github|777" in err  # the value received, not just "refused"
+    assert "idp_id" in err
+
+    # Same route, same session, same row: only the format of idp_id changed.
+    _bind_env(monkeypatch, idp_id="777")
+    assert _bind(TestClient(app), 1001).status_code == 204
+
+
+def test_bind_never_calls_workos_when_the_installer_check_fails(tmp_path, monkeypatch):
+    """Authority first, side effects second: a refused caller must not create
+    an organization or a membership. Same cheapest-first, spend-nothing-on-a-
+    caller-who-proves-nothing posture as tenancy.verify_org_admin.
+
+    The identity lookup itself is a read and is allowed — it is what produces
+    the id being checked. What must not happen is a WRITE."""
+    _db(tmp_path, monkeypatch)
+    _installed(1002, installer=999)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1002).status_code == 404
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert fake.calls == ["GET /user_management/users/user_01ABC/identities"]
+
+    # The fake and the route DO reach WorkOS when authority holds — without
+    # this, "no POSTs" would pass even if bind were broken end to end.
+    _installed(1001, installer=777)
+    assert _bind(client, 1001).status_code == 204
+    assert fake.creates() == [
+        "POST /organizations",
+        "POST /user_management/organization_memberships",
+    ]
+
+
+@pytest.mark.parametrize(
+    "identities",
+    [
+        [{"idp_id": "777", "provider": "GithubOAuth"}],
+        [{"idp_id": "777", "type": "SSO", "provider": "GithubOAuth"}],
+        [{"idp_id": "777", "type": "OAuth"}],
+        [{"idp_id": "777", "type": "OAuth", "provider": "GoogleOAuth"}],
+        [
+            {"idp_id": "777", "type": "OAuth", "provider": "GithubOAuth"},
+            {"idp_id": "999", "type": "OAuth", "provider": "github"},
+        ],
+    ],
+    ids=[
+        "missing-type",
+        "wrong-type",
+        "missing-provider",
+        "other-provider",
+        "ambiguous-github-identities",
+    ],
+)
+def test_bind_rejects_numeric_ids_without_one_github_oauth_identity(
+    tmp_path, monkeypatch, identities
+):
+    """A coincidentally matching number in an unproved identity must never
+    cross either WorkOS write boundary or bind the ledger row."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, identities=identities)
+
+    response = _bind(TestClient(app), 1001)
+
+    assert response.status_code == 404
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert _bound_org(1001) is None
+
+
+def test_direct_bind_lock_checkout_exhaustion_is_token_safe_before_workos_or_write(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    secret = "purpose-pool-secret"
+
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError(f"purpose pool exhausted for {secret}")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    response = _bind(TestClient(app), 1001)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "installation bind temporarily unavailable"}
+    assert secret not in response.text
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_bind_ignores_a_client_supplied_workos_org_id(tmp_path, monkeypatch):
+    """The org id never crosses the wire. Accepting one is what made org
+    squatting possible — bind a victim's org id first and Task 1's UNIQUE
+    index blocks their real bind permanently — so the parameter was removed
+    rather than defended against."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001, workos_org_id="org_victim").status_code == 204
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+
+
+def test_bind_refuses_a_forged_session(tmp_path, monkeypatch):
+    """Signed with a key JWKS never reported. The endpoint verifies the
+    session itself; it does not trust the payload."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    forged = client.post(
+        "/v1/installations/bind",
+        json={"installation_id": 1001},
+        headers=_session(key=_BIND_OTHER_KEY),
+    )
+    assert forged.status_code == 401
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_bind_refuses_without_a_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _bind_env(monkeypatch, idp_id="777")
+    res = TestClient(app).post("/v1/installations/bind", json={"installation_id": 1001})
+    assert res.status_code == 401
+
+
+def test_bind_503s_when_session_auth_is_unconfigured(tmp_path, monkeypatch):
+    """WORKOS_CLIENT_ID missing is a deployment fault, not a forged token —
+    api.py:391's named-503 idiom, so it is diagnosable instead of looking
+    like every session being refused."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    # The REAL _jwks runs here — that is the point. Only its configuration is
+    # taken away, and the cached client is cleared so a previous test's
+    # instance cannot answer for it.
+    monkeypatch.setattr(workos_client, "_request", _FakeWorkOS())
+    monkeypatch.delenv("WORKOS_CLIENT_ID", raising=False)
+    monkeypatch.setattr(session_auth, "_jwks_client", None)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert res.json()["detail"] == "session auth not configured"
+
+
+def test_bind_503s_when_workos_is_unconfigured(tmp_path, monkeypatch):
+    """The API key is the other half of the same deployment promise."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _use_bind_jwks(monkeypatch)
+    monkeypatch.delenv("WORKOS_API_KEY", raising=False)
+
+    def _explode(*a, **k):
+        raise AssertionError("network reached without an API key")
+
+    monkeypatch.setattr(workos_client, "_send", _explode)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert _bound_org(1001) is None
+
+
+def test_bind_503s_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _bind_env(monkeypatch, idp_id="777")
+    res = TestClient(app).post(
+        "/v1/installations/bind", json={"installation_id": 1001}, headers=_session()
+    )
+    assert res.status_code == 503
+
+
+def test_bind_503s_when_workos_is_unreachable(tmp_path, monkeypatch):
+    """An outage is not a failed identity check. A 404 here would tell a real
+    installer their proof was wrong during someone else's incident."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _use_bind_jwks(monkeypatch)
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
+
+    def _down(method, url, *, headers, json):
+        raise httpx.ConnectError("workos: connection refused")
+
+    # Patched at the transport seam, not at _request: the translation from
+    # httpx's exception tree to WorkOSError is the thing under test here.
+    monkeypatch.setattr(workos_client, "_send", _down)
+    res = _bind(TestClient(app), 1001)
+    assert res.status_code == 503
+    assert _bound_org(1001) is None
+
+
+def test_bind_re_proves_the_installer_against_the_row_it_writes(tmp_path, monkeypatch):
+    """The row read before the identity hop is a snapshot taken across a
+    network call. An uninstall and reinstall by someone else inside that
+    window rewrites installed_by_github_user_id, and binding on the stale
+    fact would hand this tenant to the previous installer. The proof is
+    repeated against the row read under the lock — the same row the write
+    lands on."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    client = TestClient(app)
+
+    assert _bind(client, 1001).status_code == 204  # the unraced path still binds
+
+    real = store.installation_bind_row
+    reads: list[int] = []
+
+    def _reinstalled_midway(installation_id: int):
+        row = real(installation_id)
+        reads.append(installation_id)
+        if row is not None and reads.count(installation_id) > 1:
+            # The reinstall lands between the two reads: same installation,
+            # a different person's id on it now.
+            return {**row, "installed_by_github_user_id": 999}
+        return row
+
+    monkeypatch.setattr(store, "installation_bind_row", _reinstalled_midway)
+    refused = _bind(client, 1002)
+    assert refused.status_code == 404
+    assert _bound_org(1002) is None
+    assert ("user_01ABC", "org_for_gh-inst-1002") not in fake.memberships
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/sessions/entitlements — persist the scope, never the credential.
+#
+# No test below performs network I/O. The session is the same locally minted
+# RS256 JWT the bind tests use, and every GitHub call goes through
+# entitlements._send — this module's ONE network boundary — replaced here by a
+# fake that records the headers it was given, so "the token reached GitHub and
+# nothing else" is an observed fact rather than an assumption about a stub.
+
+# Doug's own GitHub App id, as api/deploy/gcp.sh sets it in both services.
+_DOUG_APP_ID = "4450932"
+# Distinctive on purpose: every "this must not appear" assertion below greps
+# for this exact string in a response body, a log, a table dump, and the
+# database file itself.
+_PROVIDER_TOKEN = "ghu_never_persist_me"
+
+
+class _FakeGitHubUser:
+    """Stands in for entitlements._send. Answers one page of installations and
+    one page of repositories per installation, or a status override."""
+
+    def __init__(self, tenants: dict[int, list[int]], status: dict | None = None):
+        self.tenants = tenants
+        self.status = status or {}
+        self.headers: list[dict] = []
+        self.paths: list[str] = []
+
+    def __call__(self, url, *, headers, params):
+        path = url[len(entitlements.GITHUB_API) :]
+        self.paths.append(path)
+        self.headers.append(headers)
+        if path in self.status:
+            return httpx.Response(self.status[path], json={"message": "no"})
+        if path == "/user/installations":
+            return httpx.Response(
+                200,
+                json={
+                    "installations": [
+                        {"id": i, "app_id": int(_DOUG_APP_ID), "repository_selection": "selected"}
+                        for i in self.tenants
+                    ]
+                },
+            )
+        installation_id = int(path.split("/")[3])
+        return httpx.Response(
+            200,
+            json={
+                "repositories": [
+                    {"id": r, "full_name": f"drewjst/repo{r}"}
+                    for r in self.tenants[installation_id]
+                ]
+            },
+        )
+
+
+def _entitlement_env(monkeypatch, tenants=None, status=None) -> _FakeGitHubUser:
+    fake = _FakeGitHubUser({1001: [11, 12]} if tenants is None else tenants, status)
+    monkeypatch.setattr(entitlements, "_send", fake)
+    _use_bind_jwks(monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", _DOUG_APP_ID)
+    return fake
+
+
+def _record(client, **body):
+    return client.post(
+        "/v1/sessions/entitlements",
+        json={"provider": "GithubOAuth", "token": _PROVIDER_TOKEN, **body},
+        headers=_session(),
+    )
+
+
+def _scope(workos_user_id: str) -> list[tuple[int, frozenset]]:
+    return [
+        (row["installation_id"], row["repo_ids"])
+        for row in store.session_entitlements_for(workos_user_id)
+    ]
+
+
+def _entitlement_rows_text() -> str:
+    """Every column of every row, as text — so "the token is not stored" is
+    asserted against the whole table, not against the columns a reader
+    remembered to check."""
+    with store._get_engine().connect() as conn:
+        return "\n".join(str(tuple(r)) for r in conn.execute(select(store.session_entitlements)))
+
+
+def test_entitlements_are_written_for_the_jwt_subject_not_a_body_supplied_user(
+    tmp_path, monkeypatch
+):
+    """The security test. A body-supplied user id would let any signed-in
+    caller write another user's scope — and since a scope is what a later
+    read is checked against, writing someone else's is writing yourself into
+    their tenant.
+
+    The caller below names a victim in every field a body could plausibly use.
+    The first assertion is not decoration: it proves this caller, this session
+    and this ledger DO produce a real row, so the victim's empty scope can
+    only come from where the key was read.
+    """
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = _record(
+        client,
+        workos_user_id="user_VICTIM",
+        user_id="user_VICTIM",
+        sub="user_VICTIM",
+        installation_id=1001,
+    )
+    assert res.status_code == 204
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+    assert _scope("user_VICTIM") == []
+
+
+def test_the_provider_token_is_never_stored_logged_or_returned(tmp_path, monkeypatch, capsys):
+    """No credential at rest. The token arrives, does its one job, and is
+    gone — the row that outlives it is the conclusion it proved.
+
+    Checked in all four places it could survive: the response body, the
+    stored row, stderr, and the database file itself (bytes, so a token
+    written to some OTHER table would be caught too).
+    """
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = _record(client)
+    assert res.status_code == 204
+
+    # It genuinely travelled to GitHub, and the derivation genuinely landed —
+    # without both, "absent everywhere" would pass on an endpoint that never
+    # used the token at all.
+    assert fake.headers[0]["Authorization"] == f"Bearer {_PROVIDER_TOKEN}"
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+    assert _PROVIDER_TOKEN not in res.text
+    assert _PROVIDER_TOKEN not in str(res.headers), "a header is a response too"
+    assert _PROVIDER_TOKEN not in _entitlement_rows_text()
+    assert _PROVIDER_TOKEN.encode() not in (tmp_path / "doug.db").read_bytes()
+    err = capsys.readouterr().err
+    assert "user_01ABC" in err, "the derivation is logged at all"
+    assert _PROVIDER_TOKEN not in err
+
+
+def test_a_first_time_user_with_no_organization_can_record_entitlements(tmp_path, monkeypatch):
+    """A stranger's first sign-in has no org_id — that claim appears only once
+    an organization is selected. Authenticating with resolve_session here
+    would be circular: it fails closed without org_id, so the endpoint that
+    exists to give a new user their scope could never be reached by one."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    assert _record(client).status_code == 204
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+    # The same session, through the stricter resolver, is refused — which is
+    # what makes the 204 above evidence about WHICH check the route runs.
+    assert (
+        session_auth.resolve_session(_session()["Authorization"]) is None
+    )
+
+
+# GET /v1/sessions/connections is the orgless landing read. It projects only
+# stored conclusions and current ledger liveness; no provider credential is
+# available on this later request.
+
+
+def _connection_install(
+    installation_id: int,
+    login: str,
+    account_type: str,
+    repos: list[tuple[int, str]],
+    *,
+    org_id: str | None = None,
+    state: str = "active",
+):
+    store.upsert_installation(installation_id, login, account_type, state)
+    store.set_installation_repos(installation_id, repos, replace=False)
+    if org_id is not None:
+        with store._get_engine().begin() as conn:
+            conn.execute(
+                store.installations.update()
+                .where(store.installations.c.installation_id == installation_id)
+                .values(workos_org_id=org_id)
+            )
+
+
+def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {"connections": []}
+
+
+def test_connections_project_several_installations_and_explicit_live_repos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(
+        101,
+        "drewjst",
+        "User",
+        [(11, "drewjst/doug"), (12, "drewjst/notes")],
+        org_id="org_user",
+    )
+    _connection_install(
+        202,
+        "LemaHQ",
+        "Organization",
+        [(21, "lemahq/lema"), (22, "lemahq/lema-verify")],
+        org_id="org_lema",
+    )
+    store.replace_session_entitlements("user_01ABC", [(101, [11, 12]), (202, [21, 22])])
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connections": [
+            {
+                "provider": "github",
+                "installation_id": 101,
+                "organization_id": "org_user",
+                "account_login": "drewjst",
+                "account_type": "User",
+                "status": "ready",
+                "label": None,
+                "repositories": [
+                    {"id": 11, "full_name": "drewjst/doug"},
+                    {"id": 12, "full_name": "drewjst/notes"},
+                ],
+            },
+            {
+                "provider": "github",
+                "installation_id": 202,
+                "organization_id": "org_lema",
+                "account_login": "LemaHQ",
+                "account_type": "Organization",
+                "status": "ready",
+                "label": "Lema — separate product",
+                "repositories": [
+                    {"id": 21, "full_name": "lemahq/lema"},
+                    {"id": 22, "full_name": "lemahq/lema-verify"},
+                ],
+            },
+        ]
+    }
+
+
+def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(101, "coldworkshq", "Organization", [(11, "coldworkshq/coldworks")])
+    _connection_install(202, "gone", "Organization", [(22, "gone/private")], state="suspended")
+    _connection_install(
+        303, "shrunk", "Organization", [(33, "shrunk/removed")], org_id="org_shrunk"
+    )
+    store.set_installation_repos(303, [(33, "shrunk/removed")], replace=False, state="removed")
+    store.replace_session_entitlements(
+        "user_01ABC", [(101, [11]), (202, [22]), (303, [33]), (404, [44])]
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json()["connections"] == [
+        {
+            "provider": "github",
+            "installation_id": 101,
+            "organization_id": None,
+            "account_login": "coldworkshq",
+            "account_type": "Organization",
+            "status": "setup_required",
+            "label": None,
+            "repositories": [{"id": 11, "full_name": "coldworkshq/coldworks"}],
+        }
+    ]
+
+
+def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(
+        101,
+        "acme",
+        "Organization",
+        [(11, "acme/repo11")],
+        org_id="org_acme",
+    )
+    store.replace_session_entitlements(
+        "user_01ABC",
+        [(101, [11])],
+        now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {"connections": []}
+
+
+def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    _use_bind_jwks(monkeypatch)
+    _connection_install(
+        101,
+        "acme",
+        "Organization",
+        [(repo_id, f"acme/repo{repo_id}") for repo_id in repos],
+        org_id="org_acme",
+    )
+    store.replace_session_entitlements("user_01ABC", [(101, claim)])
+    return _session(org_id="org_acme")
+
+
+def test_session_queue_uses_only_the_selected_users_explicit_repos(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
+    _seed_verdict(repo="acme/repo12", pr_number=12, installation_id=101, github_repo_id=12)
+    _seed_verdict(repo="other/repo11", pr_number=99, installation_id=202, github_repo_id=11)
+
+    response = TestClient(app).get("/v1/queue", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["pr"]["number"] for item in response.json()["items"]] == [11]
+    assert (
+        TestClient(app)
+        .get("/v1/queue?repo=acme/repo12", headers=headers)
+        .json()
+        == {"detail": "not found"}
+    )
+
+
+def test_session_queue_orgless_and_present_bad_bearer_fail_without_key_fallback(
+    tmp_path, monkeypatch
+):
+    _session_scope(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    tenant_key = tenancy.mint_key(
+        101,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="acme",
+    ).token
+
+    orgless = TestClient(app).get("/v1/queue", headers=_session())
+    bad_bearer = TestClient(app).get(
+        "/v1/queue",
+        headers={"Authorization": "Bearer forged", "X-Doug-Token": tenant_key},
+    )
+
+    assert orgless.status_code == 401
+    assert bad_bearer.status_code == 401
+
+
+@pytest.mark.parametrize("failure", ["stale", "suspended"])
+def test_session_queue_refuses_dead_stored_scope(tmp_path, monkeypatch, failure):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    if failure == "stale":
+        store.replace_session_entitlements(
+            "user_01ABC",
+            [(101, [11])],
+            now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+        )
+    else:
+        store.upsert_installation(101, "acme", "Organization", "suspended")
+
+    response = TestClient(app).get("/v1/queue", headers=headers)
+
+    assert response.status_code == 401
+
+
+def test_session_receipt_scopes_before_assembly_and_hides_cross_tenant_existence(
+    tmp_path, monkeypatch
+):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
+    _seed_verdict(repo="acme/repo12", pr_number=12, installation_id=101, github_repo_id=12)
+
+    own = TestClient(app).get(
+        "/v1/prs/11/receipt?repo=acme/repo11", headers=headers
+    )
+    sibling = TestClient(app).get(
+        "/v1/prs/12/receipt?repo=acme/repo12", headers=headers
+    )
+    absent = TestClient(app).get(
+        "/v1/prs/999/receipt?repo=acme/repo12", headers=headers
+    )
+
+    assert own.status_code == 200
+    assert sibling.status_code == 404
+    assert sibling.json() == absent.json() == {"detail": "not found"}
+
+
+def test_session_run_history_never_crosses_installations_or_the_explicit_repo_set(
+    tmp_path, monkeypatch
+):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    own = store.save_review(
+        "acme/repo11",
+        11,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 11},
+        installation_id=101,
+        github_repo_id=11,
+    )
+    store.save_review(
+        "acme/repo12",
+        12,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 12},
+        installation_id=101,
+        github_repo_id=12,
+    )
+    store.save_review(
+        "other/repo11",
+        99,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 99},
+        installation_id=202,
+        github_repo_id=11,
+    )
+
+    response = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
+
+    assert response.status_code == 200
+    assert [row["verdict_id"] for row in response.json()["items"]] == [own]
+    assert TestClient(app).get("/v1/sessions/runs?tenant=all", headers=headers).status_code == 422
+
+
+def test_session_run_detail_is_query_scoped_and_uses_one_uniform_404(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    own = store.save_review(
+        "acme/repo11", 11, "reader", VERDICT,
+        installation_id=101, github_repo_id=11,
+    )
+    sibling = store.save_review(
+        "acme/repo12", 12, "reader", VERDICT,
+        installation_id=101, github_repo_id=12,
+    )
+    cross = store.save_review(
+        "other/repo11", 99, "reader", VERDICT,
+        installation_id=202, github_repo_id=11,
+    )
+
+    visible = TestClient(app).get(f"/v1/sessions/runs/{own}", headers=headers)
+    refusals = [
+        TestClient(app).get(f"/v1/sessions/runs/{value}", headers=headers)
+        for value in (sibling, cross, 999999)
+    ]
+
+    assert visible.status_code == 200
+    assert all(response.status_code == 404 for response in refusals)
+    assert {json.dumps(response.json(), sort_keys=True) for response in refusals} == {
+        json.dumps({"detail": "not found"}, sort_keys=True)
+    }
+
+
+def test_session_bearer_remains_refused_on_operator_run_routes(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+
+    assert TestClient(app).get("/v1/runs", headers=headers).status_code == 401
+    assert TestClient(app).get("/v1/runs/1", headers=headers).status_code == 401
+
+
+def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):
+    """Signed with a key JWKS never reported. Nothing is derived and nothing
+    is written — a forged session must not even spend a GitHub call."""
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    forged = client.post(
+        "/v1/sessions/entitlements",
+        json={"provider": "GithubOAuth", "token": _PROVIDER_TOKEN},
+        headers=_session(key=_BIND_OTHER_KEY),
+    )
+    assert forged.status_code == 401
+    assert fake.paths == []
+    assert _scope("user_01ABC") == []
+
+    # The same route, the same body, a real session: 204. Without this the
+    # assertions above would pass on a route that refused everyone.
+    assert _record(client).status_code == 204
+
+
+def test_entitlements_refuse_without_a_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    res = TestClient(app).post(
+        "/v1/sessions/entitlements", json={"provider": "github", "token": _PROVIDER_TOKEN}
+    )
+    assert res.status_code == 401
+
+
+def test_entitlements_503_when_session_auth_is_unconfigured(tmp_path, monkeypatch):
+    """WORKOS_CLIENT_ID missing is a deployment fault, not a forged token —
+    api.py:391's named-503 idiom, same as bind's."""
+    _db(tmp_path, monkeypatch)
+    # The REAL _jwks runs here — that is the point, so _entitlement_env's
+    # stub is deliberately not used. Only its configuration is taken away,
+    # and the cached client is cleared so a previous test's instance cannot
+    # answer for it. It raises before any network call.
+    monkeypatch.setattr(entitlements, "_send", _FakeGitHubUser({1001: [11, 12]}))
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", _DOUG_APP_ID)
+    monkeypatch.delenv("WORKOS_CLIENT_ID", raising=False)
+    monkeypatch.setattr(session_auth, "_jwks_client", None)
+
+    res = _record(TestClient(app))
+    assert res.status_code == 503
+    assert res.json()["detail"] == "session auth not configured"
+
+
+def test_entitlements_503_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _entitlement_env(monkeypatch)
+    assert _record(TestClient(app)).status_code == 503
+
+
+def test_entitlements_503_when_the_github_app_id_is_missing(tmp_path, monkeypatch):
+    """Without it, Doug cannot tell its own installations from every other
+    app's in the caller's list. Storing an empty scope instead would look
+    exactly like "you have no tenants" and never recover."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    monkeypatch.delenv("DOUG_GITHUB_APP_ID", raising=False)
+
+    res = _record(TestClient(app))
+    assert res.status_code == 503
+    assert res.json()["detail"] == "github app not configured"
+    assert _scope("user_01ABC") == []
+
+
+def test_a_rejected_provider_token_401s_and_leaves_the_stored_scope_alone(tmp_path, monkeypatch):
+    """An expired token is the caller's to fix, so it is a 401 and not a 503.
+    What it must NEVER be is an empty derivation: that answer gets stored, and
+    storing it would erase a live tenant's scope on the strength of a stale
+    credential."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+    assert _record(client).status_code == 204
+
+    _entitlement_env(monkeypatch, status={"/user/installations": 401})
+    assert _record(client).status_code == 401
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+
+def test_a_provider_outage_503s_and_leaves_the_stored_scope_alone(tmp_path, monkeypatch):
+    """Same rule from the other side: GitHub being down is not proof that
+    this user is entitled to nothing."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+    assert _record(client).status_code == 204
+
+    def _down(url, *, headers, params):
+        raise httpx.ConnectError("github: connection refused")
+
+    monkeypatch.setattr(entitlements, "_send", _down)
+    assert _record(client).status_code == 503
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+
+def test_a_body_missing_the_provider_is_refused_without_echoing_the_token(tmp_path, monkeypatch):
+    """MEASURED (2026-08-10), not assumed: FastAPI's validation error carries
+    the offending input, and for a MISSING field pydantic reports the WHOLE
+    BODY as that input — so a required `provider` would echo the token
+    straight back to the caller in a 422. Defaults on both fields make that
+    error unreachable; the handler refuses the empty pair itself."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = client.post(
+        "/v1/sessions/entitlements",
+        json={"token": _PROVIDER_TOKEN},
+        headers=_session(),
+    )
+    assert res.status_code == 400
+    assert _PROVIDER_TOKEN not in res.text
+    assert _scope("user_01ABC") == []
+
+    # A body with a provider and no token is the same refusal, and the full
+    # pair still works — so the 400 is about what is missing, not about the
+    # route being broken.
+    assert client.post(
+        "/v1/sessions/entitlements", json={"provider": "github"}, headers=_session()
+    ).status_code == 400
+    assert _record(client).status_code == 204
+
+
+def test_an_unknown_provider_records_no_tenants_rather_than_failing(tmp_path, monkeypatch):
+    """Reachable the moment a second WorkOS connection exists. Someone who
+    signed in without GitHub sees nothing, and gets a 204 rather than a 500 —
+    they signed in successfully, they simply have no tenants."""
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    assert _record(client, provider="GoogleOAuth").status_code == 204
+    assert _scope("user_01ABC") == []
+    assert fake.paths == [], "an unknown provider must not spend a GitHub call"

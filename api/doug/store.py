@@ -22,6 +22,8 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
@@ -42,11 +44,13 @@ from sqlalchemy import (
     func,
     inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from . import migrations
 from .models import Band, Verdict
@@ -189,6 +193,20 @@ installations = Table(
     Column("account_type", String(20)),  # User | Organization
     Column("state", String(20), nullable=False),  # active | suspended | deleted
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # The WorkOS Organization bound to this installation (Front Door Phase
+    # 1a). NULL for every row that predates it — including the operator's
+    # own install, which was populated by webhook redelivery (MT0) and has
+    # no WorkOS identity. Unique so a session's org_id resolves to exactly
+    # one tenant.
+    Column("workos_org_id", String(255), nullable=True, unique=True),
+    # The GitHub user the `installation.created` webhook named as sender —
+    # the only action that actually names an installer, as opposed to
+    # whoever performed a later suspend/unsuspend/deleted. The bind
+    # endpoint (Task 5) proves "you are the person who installed Doug here"
+    # by matching this column. Not unique: one GitHub user can install Doug
+    # on many accounts/orgs. NULL for every row created before this column,
+    # and for any `created` delivery whose sender was missing or malformed.
+    Column("installed_by_github_user_id", BigInteger, nullable=True),
 )
 
 installation_repos = Table(
@@ -228,6 +246,48 @@ installation_tokens = Table(
     Column("expires_at", DateTime(timezone=True)),  # NULL = durable
     Column("revoked_at", DateTime(timezone=True)),  # soft revoke; rows never deleted
     Column("last_used_at", DateTime(timezone=True)),
+)
+
+# What a signed-in user is entitled to, derived from their identity provider
+# at sign-in (entitlements.py) and kept so a later request can answer "which
+# repos may this person see" without a provider credential. The credential
+# itself is NEVER here: these rows are the conclusion it proved, and they
+# expire on their own (entitlements.TTL) whether or not the session does.
+#
+# Keyed on the WORKOS user id, never a GitHub one. Login is deliberately not
+# narrowed to GitHub, so a provider's user id would be the wrong key the
+# first time a second connection exists — and the wrong key is a migration,
+# not a patch.
+#
+# A NEW table, so create_all owns it and there is no DDL in migrations.py —
+# same reasoning migration 6 records for installation_tokens.
+session_entitlements = Table(
+    "session_entitlements",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("workos_user_id", String(255), nullable=False, index=True),
+    Column("installation_id", BigInteger, nullable=False),
+    # TEXT holding a JSON array of ints — identical on sqlite and Postgres.
+    # Nothing queries into the array (it is written and read whole), so the
+    # portable spelling costs nothing.
+    Column("repo_ids", Text, nullable=False),
+    Column("derived_at", DateTime(timezone=True), nullable=False),
+    # Re-deriving must replace rather than accumulate: one row per user per
+    # installation, so a scope can shrink.
+    UniqueConstraint("workos_user_id", "installation_id", name="uq_session_entitlement"),
+)
+
+# A successful GitHub installation flow spends its nonce exactly once. Only
+# the SHA-256 digest is durable: the raw nonce remains a browser-held proof
+# until it is verified, never a replay credential recoverable from the DB.
+# This is a new table, so create_all owns it; no migration is needed.
+consumed_install_flows = Table(
+    "consumed_install_flows",
+    metadata,
+    Column("nonce_digest", String(64), primary_key=True),
+    Column("workos_user_id", String(255), nullable=False),
+    Column("installation_id", BigInteger, nullable=False),
+    Column("consumed_at", DateTime(timezone=True), nullable=False),
 )
 
 installation_token_repos = Table(
@@ -372,6 +432,27 @@ _engine = None
 # DATABASE_URL — and rebuilt the engine, pool and all, on every call.
 _engine_url = None
 _engine_lock = threading.Lock()
+_install_flow_lock_engine = None
+_install_flow_lock_engine_url = None
+_install_flow_lock_engine_lock = threading.Lock()
+# A serialized WorkOS bind can legitimately exceed SQLAlchemy's 30-second
+# default. Four minutes leaves one minute inside Cloud Run's 300-second API
+# request envelope for the authority work after a waiting flow gets the lock.
+INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS = 240
+
+
+class InstallFlowLockUnavailable(RuntimeError):
+    """The purpose lock pool could not admit this install flow in time."""
+
+
+class InstallationBindLockUnavailable(RuntimeError):
+    """The purpose lock pool could not admit this direct bind in time."""
+
+
+def _install_flow_advisory_key(nonce_digest: str) -> int:
+    """Map a SHA-256 digest into Postgres's negative signed-bigint namespace."""
+    positive = int(nonce_digest[:16], 16) & ((1 << 63) - 1)
+    return -(positive + 1)
 
 
 def _get_existing_schema_engine():
@@ -380,6 +461,35 @@ def _get_existing_schema_engine():
     if not url:
         return None
     return create_engine(url, pool_pre_ping=True)
+
+
+def _get_install_flow_lock_engine():
+    """Return the one-connection engine reserved for install-flow locks."""
+    global _install_flow_lock_engine, _install_flow_lock_engine_url
+    url = os.environ.get("DATABASE_URL")
+    with _install_flow_lock_engine_lock:
+        if not url:
+            if _install_flow_lock_engine is not None:
+                _install_flow_lock_engine.dispose()
+            _install_flow_lock_engine = None
+            _install_flow_lock_engine_url = None
+            return None
+        if (
+            _install_flow_lock_engine is None
+            or _install_flow_lock_engine_url != url
+        ):
+            engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                pool_size=1,
+                max_overflow=0,
+                pool_timeout=INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS,
+            )
+            if _install_flow_lock_engine is not None:
+                _install_flow_lock_engine.dispose()
+            _install_flow_lock_engine = engine
+            _install_flow_lock_engine_url = url
+        return _install_flow_lock_engine
 
 
 def _get_engine():
@@ -737,10 +847,21 @@ def save_external_review(
 
 
 def upsert_installation(
-    installation_id: int, account_login: str, account_type: str, state: str
+    installation_id: int,
+    account_login: str,
+    account_type: str,
+    state: str,
+    installed_by_github_user_id: int | None = None,
 ) -> None:
     """Record an installation's current state. Never deletes: a suspended or
-    deleted installation is a state the verdicts it produced still point at."""
+    deleted installation is a state the verdicts it produced still point at.
+
+    installed_by_github_user_id is install-time identity, not per-call state:
+    the caller passes it only from a `created` delivery (see api._record_
+    installation) and otherwise leaves it as None, which is why a None here
+    is left OUT of the update values rather than written as NULL — a later
+    suspend/unsuspend/deleted call has no installer to report and must not
+    blank out the one already on the row."""
     engine = _get_engine()
     if engine is None:
         return
@@ -750,6 +871,8 @@ def upsert_installation(
         "state": state,
         "updated_at": datetime.now(UTC),
     }
+    if installed_by_github_user_id is not None:
+        values["installed_by_github_user_id"] = installed_by_github_user_id
     with engine.connect() as conn:
         row = conn.execute(
             select(installations.c.id).where(installations.c.installation_id == installation_id)
@@ -1240,14 +1363,23 @@ def _verdict_bundle(conn, v) -> dict:
     }
 
 
-def _load_verdict_row(conn, verdict_id: int):
+def _load_verdict_row(
+    conn,
+    verdict_id: int,
+    *,
+    installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
+):
     """The raw `verdicts` row for one id, or None. Shared by every by-id
     lookup so the query itself lives in exactly one place — find_verdict_by_id
     and run_detail both start here, each still checking the None case itself,
     before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
-    return conn.execute(
-        select(verdicts).where(verdicts.c.id == verdict_id).limit(1)
-    ).mappings().first()
+    query = select(verdicts).where(verdicts.c.id == verdict_id)
+    if installation_id is not None:
+        query = query.where(verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
+    return conn.execute(query.limit(1)).mappings().first()
 
 
 def find_verdict_by_identity(
@@ -1637,7 +1769,12 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
     return {"latest_verdict": latest_verdict, "merges": merges}
 
 
-def run_detail(verdict_id: int) -> dict | None:
+def run_detail(
+    verdict_id: int,
+    *,
+    installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
+) -> dict | None:
     """Everything the console's forensic page shows for one run.
 
     _verdict_bundle deliberately omits provenance — it renders a check run,
@@ -1650,7 +1787,12 @@ def run_detail(verdict_id: int) -> dict | None:
     if engine is None:
         return None
     with engine.connect() as conn:
-        v = _load_verdict_row(conn, verdict_id)
+        v = _load_verdict_row(
+            conn,
+            verdict_id,
+            installation_id=installation_id,
+            repo_ids=repo_ids,
+        )
         if v is None:
             return None
         detail = _verdict_bundle(conn, v)
@@ -1702,6 +1844,8 @@ def run_detail(verdict_id: int) -> dict | None:
             }
             for row in conn.execute(
                 select(outcomes)
+                .where(outcomes.c.installation_id == v["installation_id"])
+                .where(outcomes.c.github_repo_id == v["github_repo_id"])
                 .where(outcomes.c.repo == v["repo"])
                 .where(outcomes.c.pr_number == v["pr_number"])
                 .order_by(outcomes.c.window_days)
@@ -1716,6 +1860,7 @@ def run_detail(verdict_id: int) -> dict | None:
             }
             for row in conn.execute(
                 select(outcome_jobs)
+                .where(outcome_jobs.c.installation_id == v["installation_id"])
                 .where(outcome_jobs.c.github_repo_id == v["github_repo_id"])
                 .where(outcome_jobs.c.pr_number == v["pr_number"])
                 .order_by(outcome_jobs.c.window_days)
@@ -1854,6 +1999,7 @@ def run_history(
     offset: int = 0,
     repo: str | None = None,
     installation_id: int | None = None,
+    repo_ids: frozenset[int] | None = None,
     include_untenanted: bool = False,
 ) -> list[dict]:
     """Verdict HISTORY, newest first — every run, not one row per PR.
@@ -1886,6 +2032,8 @@ def run_history(
         query = query.where(verdicts.c.repo == repo)
     if installation_id is not None:
         query = query.where(verdicts.c.installation_id == installation_id)
+    if repo_ids is not None:
+        query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
     query = (
         query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
         .limit(limit)
@@ -1977,14 +2125,22 @@ def run_history(
         # The difference is deliberate: outcome_14 is a single list-column
         # value here, so there is no caller-side reduction to defer to.
         keys = {(r["repo"], r["pr_number"]) for r in rows}
+        outcome_query = (
+            select(outcomes)
+            .where(outcomes.c.window_days == 14)
+            .where(outcomes.c.repo.in_({k[0] for k in keys}))
+            .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
+        )
+        if installation_id is not None:
+            outcome_query = outcome_query.where(
+                outcomes.c.installation_id == installation_id
+            )
+        if repo_ids is not None:
+            outcome_query = outcome_query.where(outcomes.c.github_repo_id.in_(repo_ids))
         outcome_by_pr = {
             (row["repo"], row["pr_number"]): row["kind"]
             for row in conn.execute(
-                select(outcomes)
-                .where(outcomes.c.window_days == 14)
-                .where(outcomes.c.repo.in_({k[0] for k in keys}))
-                .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
-                .order_by(outcomes.c.id)
+                outcome_query.order_by(outcomes.c.id)
             ).mappings()
         }
 
@@ -2274,6 +2430,532 @@ def active_installations() -> list[int]:
                 )
             )
         ]
+
+
+def installation_state(installation_id: int) -> str | None:
+    """This installation's current state, or None when there is no row (or
+    storage is disabled). The single-column sibling of active_installations:
+    that lists every 'active' id, this reads one id's state regardless of
+    what it is — the caller (tenancy.live_scope) decides what counts as
+    serviceable."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        return conn.execute(
+            select(installations.c.state).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+
+
+def installation_id_for_workos_org(org_id: str) -> int | None:
+    """The installation bound to this WorkOS Organization, or None when
+    nothing is bound to it (or storage is disabled). workos_org_id is
+    UNIQUE, so at most one row can ever match — a session's org_id resolves
+    to exactly one tenant, never a pick-one-of-many. The write side (binding
+    an installation to an org) is Task 5's endpoint; this is only the read
+    side session_auth.resolve_session needs to turn a verified org_id claim
+    into an installation_id."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        result = conn.execute(
+            select(installations.c.installation_id).where(
+                installations.c.workos_org_id == org_id
+            )
+        ).scalar_one_or_none()
+    return int(result) if result is not None else None
+
+
+def installation_bind_row(installation_id: int) -> dict | None:
+    """The facts the bind endpoint decides on, or None when there is no such
+    installation (or storage is disabled).
+
+    One row rather than three lookups so "no installation" and "an
+    installation whose installer is NULL" stay distinguishable in the code
+    that refuses them. They are the same answer to a caller and two different
+    facts to an operator: the second is a pre-Task-1 tenant that can still be
+    rescued by hand, the first is nothing at all.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    installations.c.installed_by_github_user_id,
+                    installations.c.workos_org_id,
+                    installations.c.account_login,
+                    installations.c.state,
+                ).where(installations.c.installation_id == installation_id)
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row is not None else None
+
+
+@contextmanager
+def installation_bind_lock(installation_id: int):
+    """Serialise binding one installation, across instances.
+
+    Find-or-create at WorkOS and the bind write under it are a read-then-write
+    pair spanning a network call, so two instances handling a double-clicked
+    bind can interleave. A Postgres advisory lock keyed on the installation id
+    makes the pair atomic between them.
+
+    POSTGRES ONLY, and the dialect guard is deliberate rather than incidental:
+    sqlite has no advisory locks and every test here runs sqlite (the trap
+    docs/REVIEWING.md:141-143 records), so under sqlite this yields
+    immediately and correctness rests entirely on bind_installation_org's
+    compare-and-set below. The lock narrows a window; the CAS is what closes
+    it. Neither is trusted to do the other's job.
+
+    The purpose-built one-connection lock engine keeps both the advisory wait
+    and the WorkOS/ledger work inside the lock off the normal ledger pool.
+    Checkout is bounded and becomes a named error; unrelated failures remain
+    visible. AUTOCOMMIT plus a session-scoped lock released in `finally` means
+    no transaction is held idle across the HTTP calls.
+
+    The key is the positive installation id itself. Install-flow nonce locks
+    use only negative bigint keys, so the two authority namespaces cannot
+    collide.
+    """
+    engine = _get_install_flow_lock_engine()
+    if engine is None:
+        yield
+        return
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise InstallationBindLockUnavailable(
+            "installation bind temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
+        if conn.dialect.name != "postgresql":
+            yield
+            return
+        key = {"key": int(installation_id)}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), key)
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+
+
+@contextmanager
+def install_flow_bind_lock(nonce_digest: str, installation_id: int):
+    """Serialize one nonce and installation without occupying the ledger pool.
+
+    One purpose-built connection holds both session locks in a fixed order.
+    PostgreSQL uses a negative nonce key followed by the positive installation
+    id and releases them in reverse. SQLite has no advisory locks, but holding
+    the engine's sole connection still provides bounded per-instance
+    serialization for the authority work guarded by this context.
+    """
+    engine = _get_install_flow_lock_engine()
+    if engine is None:
+        yield
+        return
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise InstallFlowLockUnavailable(
+            "install flow temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
+        if conn.dialect.name != "postgresql":
+            yield
+            return
+        nonce_key = {"key": _install_flow_advisory_key(nonce_digest)}
+        installation_key = {"key": int(installation_id)}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), nonce_key)
+        try:
+            conn.execute(text("SELECT pg_advisory_lock(:key)"), installation_key)
+            try:
+                yield
+            finally:
+                conn.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), installation_key
+                )
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), nonce_key)
+
+
+def bind_installation_org(installation_id: int, org_id: str) -> str | None:
+    """Bind an installation to a WorkOS organization; report what the row says
+    afterwards.
+
+    Compare-and-set, never a blind write: the UPDATE fires only while
+    workos_org_id IS NULL, and the value returned is re-read from the row, not
+    assumed from the rowcount. The caller compares it against the organization
+    it resolved and refuses when they differ — which makes idempotency
+    (equal: 204) and takeover (different: refused) the same check, and keeps
+    it correct when two binds race, because the loser reads the winner's value
+    instead of its own.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                update(installations)
+                .where(
+                    (installations.c.installation_id == installation_id)
+                    & (installations.c.workos_org_id.is_(None))
+                )
+                .values(workos_org_id=org_id)
+            )
+    except IntegrityError:
+        # workos_org_id is UNIQUE: this organization already belongs to a
+        # DIFFERENT installation. Not this caller's to take — fall through and
+        # report what the row actually says, which the caller then refuses.
+        pass
+    with engine.connect() as conn:
+        return conn.execute(
+            select(installations.c.workos_org_id).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+
+
+class _InstallFlowBindConflict(Exception):
+    pass
+
+
+def install_flow_consumption(nonce_digest: str) -> dict | None:
+    """Return the spent-flow identity tuple, never any raw nonce material."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    consumed_install_flows.c.workos_user_id,
+                    consumed_install_flows.c.installation_id,
+                    consumed_install_flows.c.consumed_at,
+                ).where(consumed_install_flows.c.nonce_digest == nonce_digest)
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    return {
+        "workos_user_id": row["workos_user_id"],
+        "installation_id": int(row["installation_id"]),
+        "consumed_at": _as_utc(row["consumed_at"]),
+    }
+
+
+def consume_install_flow_and_bind(
+    nonce_digest: str,
+    workos_user_id: str,
+    installation_id: int,
+    org_id: str,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Atomically spend a verified flow and write its installation authority.
+
+    The caller holds install_flow_bind_lock and has already performed the
+    WorkOS identity and organization operations. This transaction re-checks
+    the nonce, inserts its digest BEFORE the authority update, and commits
+    both together. Results are `bound`, exact `replay`, identity `mismatch`,
+    or database/authority `conflict`.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return "conflict"
+    stamped = now or datetime.now(UTC)
+    try:
+        with engine.begin() as conn:
+            existing = (
+                conn.execute(
+                    select(
+                        consumed_install_flows.c.workos_user_id,
+                        consumed_install_flows.c.installation_id,
+                    ).where(consumed_install_flows.c.nonce_digest == nonce_digest)
+                )
+                .mappings()
+                .first()
+            )
+            if existing is not None:
+                if (
+                    existing["workos_user_id"] == workos_user_id
+                    and int(existing["installation_id"]) == installation_id
+                ):
+                    return "replay"
+                return "mismatch"
+
+            conn.execute(
+                consumed_install_flows.insert(),
+                {
+                    "nonce_digest": nonce_digest,
+                    "workos_user_id": workos_user_id,
+                    "installation_id": installation_id,
+                    "consumed_at": stamped,
+                },
+            )
+            current = conn.execute(
+                select(installations.c.workos_org_id).where(
+                    installations.c.installation_id == installation_id
+                )
+            ).scalar_one_or_none()
+            if current is None:
+                conn.execute(
+                    update(installations)
+                    .where(
+                        (installations.c.installation_id == installation_id)
+                        & (installations.c.workos_org_id.is_(None))
+                    )
+                    .values(workos_org_id=org_id)
+                )
+                current = conn.execute(
+                    select(installations.c.workos_org_id).where(
+                        installations.c.installation_id == installation_id
+                    )
+                ).scalar_one_or_none()
+            if current != org_id:
+                raise _InstallFlowBindConflict
+    except (IntegrityError, _InstallFlowBindConflict):
+        return "conflict"
+    return "bound"
+
+
+def replace_session_entitlements(
+    workos_user_id: str,
+    tenants: Iterable[tuple[int, Iterable[int]]],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Record everything this WorkOS user is entitled to, replacing whatever
+    was recorded before.
+
+    REPLACE, NOT MERGE, and that is the security property. A scope that only
+    ever grew would be a scope that never shrank: the repo a tenant removed
+    Doug from would stay in this user's claim for as long as they kept
+    signing in. Deriving nothing is an answer too — it clears the rows — so
+    the delete runs whether or not there is anything to insert, in the same
+    transaction, and a reader never sees the gap between them.
+
+    Only the CONCLUSION is stored. The provider token that proved it is the
+    caller's business and is never passed to this function, let alone
+    written (entitlements.py's property 2).
+
+    TRIED TWICE, because the replacement is a delete-then-insert pair and two
+    sign-ins for the same user can interleave. Under Postgres read-committed
+    the second transaction's DELETE cannot see the first's uncommitted rows,
+    so it removes nothing and then collides on uq_session_entitlement. That
+    is "already done, not failed" — the same case upsert_installation handles
+    for its own insert race — and the retry's DELETE runs against the
+    winner's now-committed rows. A collision that survives the retry is not a
+    race and is raised: returning success on a scope that was never written
+    would leave an empty dashboard with no error anywhere.
+
+    `now` is a test seam for ageing a row past entitlements.TTL, same shape
+    as record_deep_read's. Production always passes the wall clock.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return
+    stamped = now or datetime.now(UTC)
+    # Keyed by installation so a provider that reported one twice collapses
+    # here instead of raising on the unique constraint. The constraint is
+    # still the authority; this only keeps a malformed upstream response from
+    # becoming a 500 on someone's sign-in.
+    rows = [
+        {
+            "workos_user_id": workos_user_id,
+            "installation_id": installation_id,
+            "repo_ids": json.dumps(repo_ids),
+            "derived_at": stamped,
+        }
+        for installation_id, repo_ids in {
+            int(installation_id): sorted({int(r) for r in repo_ids})
+            for installation_id, repo_ids in tenants
+        }.items()
+    ]
+    for attempt in (1, 2):
+        try:
+            _write_session_entitlements(engine, workos_user_id, rows)
+            return
+        except IntegrityError:
+            if attempt == 2:
+                raise
+
+
+def _write_session_entitlements(engine, workos_user_id: str, rows: list[dict]) -> None:
+    """One replacement, in one transaction: the delete runs whether or not
+    there is anything to insert, and a reader never sees the gap between
+    them. Its own function so the race above has a seam a test can collide —
+    sqlite serialises writers and can never produce the interleaving."""
+    with engine.begin() as conn:
+        conn.execute(
+            session_entitlements.delete().where(
+                session_entitlements.c.workos_user_id == workos_user_id
+            )
+        )
+        if rows:
+            conn.execute(session_entitlements.insert(), rows)
+
+
+def _stored_repo_ids(raw: str | None) -> frozenset[int]:
+    """The repo ids out of one stored row. Anything unreadable is an EMPTY
+    scope, never a missing filter: tenancy.live_scope refuses an empty claim,
+    so a corrupted row shows its owner nothing instead of showing them
+    everything."""
+    try:
+        decoded = json.loads(raw or "[]")
+    except ValueError:
+        return frozenset()
+    if not isinstance(decoded, list):
+        return frozenset()
+    return frozenset(int(r) for r in decoded if isinstance(r, int))
+
+
+def session_entitlements_for(workos_user_id: str) -> list[dict]:
+    """This user's derived entitlements — one dict per installation, with the
+    repo ids as a frozenset and derived_at as aware UTC.
+
+    The read side of replace_session_entitlements. repo_ids comes back in the
+    shape tenancy.live_scope takes (frozenset[int]), because the ONLY correct
+    thing to do with these rows is intersect them against the live ledger:
+    they are what GitHub said at sign-in, not what Doug's ledger says now.
+    Staleness is entitlements.is_stale(derived_at)'s call, not this
+    function's — reading a stale row is how a caller learns it is stale.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                session_entitlements.c.installation_id,
+                session_entitlements.c.repo_ids,
+                session_entitlements.c.derived_at,
+            )
+            .where(session_entitlements.c.workos_user_id == workos_user_id)
+            .order_by(session_entitlements.c.installation_id)
+        ).all()
+    return [
+        {
+            "installation_id": int(row.installation_id),
+            "repo_ids": _stored_repo_ids(row.repo_ids),
+            "derived_at": _as_utc(row.derived_at),
+        }
+        for row in rows
+    ]
+
+
+def session_entitlement_for(
+    workos_user_id: str, installation_id: int
+) -> dict | None:
+    """One user's claim for one selected installation.
+
+    The two-column predicate is the authority boundary.  Reading all rows and
+    joining them in Python makes an accidental union across installations or
+    users much easier; the selected WorkOS organization has already resolved
+    to exactly one installation before this lookup runs.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    session_entitlements.c.installation_id,
+                    session_entitlements.c.repo_ids,
+                    session_entitlements.c.derived_at,
+                ).where(
+                    session_entitlements.c.workos_user_id == workos_user_id,
+                    session_entitlements.c.installation_id == installation_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+    if row is None:
+        return None
+    return {
+        "installation_id": int(row["installation_id"]),
+        "repo_ids": _stored_repo_ids(row["repo_ids"]),
+        "derived_at": _as_utc(row["derived_at"]),
+    }
+
+
+def session_connections_for(workos_user_id: str) -> list[dict]:
+    """Connection facts for this user, before freshness is applied.
+
+    Only active installations and active repository rows join.  The stored
+    claim remains explicit ids and is intersected here; display names never
+    become authority.  The caller owns the time-dependent staleness decision
+    so this projection stays deterministic under tests.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    joined = session_entitlements.join(
+        installations,
+        session_entitlements.c.installation_id == installations.c.installation_id,
+    ).outerjoin(
+        installation_repos,
+        (installation_repos.c.installation_id == installations.c.installation_id)
+        & (installation_repos.c.state == "active"),
+    )
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                select(
+                    session_entitlements.c.installation_id,
+                    session_entitlements.c.repo_ids,
+                    session_entitlements.c.derived_at,
+                    installations.c.workos_org_id,
+                    installations.c.account_login,
+                    installations.c.account_type,
+                    installation_repos.c.github_repo_id,
+                    installation_repos.c.full_name,
+                )
+                .select_from(joined)
+                .where(
+                    session_entitlements.c.workos_user_id == workos_user_id,
+                    installations.c.state == "active",
+                )
+                .order_by(
+                    session_entitlements.c.installation_id,
+                    installation_repos.c.github_repo_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+    projected: dict[int, dict] = {}
+    for row in rows:
+        installation_id = int(row["installation_id"])
+        connection = projected.setdefault(
+            installation_id,
+            {
+                "installation_id": installation_id,
+                "organization_id": row["workos_org_id"],
+                "account_login": row["account_login"],
+                "account_type": row["account_type"],
+                "derived_at": _as_utc(row["derived_at"]),
+                "claimed_repo_ids": _stored_repo_ids(row["repo_ids"]),
+                "repositories": [],
+            },
+        )
+        repo_id = row["github_repo_id"]
+        if repo_id is not None and int(repo_id) in connection["claimed_repo_ids"]:
+            connection["repositories"].append(
+                {"id": int(repo_id), "full_name": row["full_name"]}
+            )
+    return list(projected.values())
 
 
 def active_repos(installation_id: int) -> list[tuple[int, str]]:
