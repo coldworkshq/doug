@@ -7,7 +7,7 @@ import test from "node:test";
 globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 register("./node-next-loader.mjs", import.meta.url);
 
-async function withEntitlementServer(run) {
+async function withEntitlementServer(run, { status = 204, delayMs = 0 } = {}) {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = "";
@@ -18,8 +18,16 @@ async function withEntitlementServer(run) {
       headers: request.headers,
       body,
     });
-    response.writeHead(204);
-    response.end();
+    const finish = () => {
+      response.writeHead(status);
+      response.end();
+    };
+    if (delayMs > 0) {
+      const timer = setTimeout(finish, delayMs);
+      response.once("close", () => clearTimeout(timer));
+    } else {
+      finish();
+    }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
@@ -101,6 +109,64 @@ test("callback entitlement derivation sends the provider token only in the serve
       token: providerToken,
     });
   });
+});
+
+test("a transient entitlement API failure does not turn a valid sign-in into a callback failure", async () => {
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async (requests) => {
+    const errors = [];
+    const oldConsoleError = console.error;
+    console.error = (...args) => errors.push(args.join(" "));
+    try {
+      await recordProviderEntitlements({
+        accessToken: "workos-session-token-canary",
+        authenticationMethod: "GitHubOAuth",
+        oauthTokens: { accessToken: "provider-token-canary" },
+      });
+    } finally {
+      console.error = oldConsoleError;
+    }
+    assert.equal(requests.length, 1);
+    assert.deepEqual(errors, [
+      "doug: entitlement refresh failed; authentication succeeded; stored scope unchanged (HTTP 503)",
+    ]);
+    assert.equal(errors[0].includes("workos-session-token-canary"), false);
+    assert.equal(errors[0].includes("provider-token-canary"), false);
+  }, { status: 503 });
+});
+
+test("a hung entitlement API cannot hold the sign-in callback until the platform timeout", async () => {
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async (requests) => {
+    let deadline;
+    const errors = [];
+    const oldConsoleError = console.error;
+    console.error = (...args) => errors.push(args.join(" "));
+    try {
+      await Promise.race([
+        recordProviderEntitlements({
+          accessToken: "workos-session-timeout-canary",
+          authenticationMethod: "GitHubOAuth",
+          oauthTokens: { accessToken: "provider-token-timeout-canary" },
+        }),
+        new Promise((_, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error("entitlement callback exceeded its deadline")),
+            3_500,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+      console.error = oldConsoleError;
+    }
+    assert.equal(requests.length, 1);
+    assert.deepEqual(errors, [
+      "doug: entitlement refresh failed; authentication succeeded; stored scope unchanged (TimeoutError)",
+    ]);
+    assert.equal(errors[0].includes("workos-session-timeout-canary"), false);
+    assert.equal(errors[0].includes("provider-token-timeout-canary"), false);
+  }, { delayMs: 5_000 });
 });
 
 test("sign-out delegates to AuthKit from a server action instead of a browser GET", async () => {

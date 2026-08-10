@@ -398,6 +398,9 @@ deploy() {
   # from anywhere else.
   #
   # WORKOS_CLIENT_ID and WORKOS_API_KEY reach the api and NOTHING else.
+  # Production currently uses WorkOS's hosted issuer. A custom AuthKit domain
+  # also changes the access-token `iss`; that rollout must add WORKOS_ISSUER to
+  # this service's env at the same time or session verification will fail closed.
   # doug-web is --allow-unauthenticated and holds no credential at all (see
   # setup); the console talks to this service over HTTP. The client id is not
   # secret, but it lives in Secret Manager beside the key so the front door

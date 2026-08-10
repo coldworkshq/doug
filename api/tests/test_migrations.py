@@ -143,6 +143,39 @@ def test_unapplied_migrations_uses_exact_membership_not_contiguous_versions():
     assert migrations.unapplied_migrations(plan, applied) == [(9, ("nine",))]
 
 
+def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
+    """Production may already carry migration 10 because main reserved 9 for
+    this branch. apply() must use exact ledger membership, not max(version),
+    so the reserved migration still alters the older installations table and
+    records 9 after 10 exists."""
+    engine = create_engine(f"sqlite:///{tmp_path}/gap-after-10.db")
+    migrations.schema_migrations.create(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL)"
+        )
+        conn.execute(
+            migrations.schema_migrations.insert(),
+            [
+                {"version": version, "applied_at": datetime.now(UTC)}
+                for version in [1, 2, 3, 4, 5, 6, 7, 8, 10]
+            ],
+        )
+
+    assert migrations.apply(engine) == [9]
+    assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
+    indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
+    assert indexes["ix_installations_workos_org_id"].get("unique")
+    with engine.connect() as conn:
+        versions = {
+            row[0] for row in conn.execute(select(migrations.schema_migrations.c.version))
+        }
+    assert versions == set(ALL_VERSIONS)
+
+
 def test_migration_001_declares_the_same_columns_as_the_verdicts_table(tmp_path):
     """The App columns are written down twice — in store.verdicts, which is
     what a fresh database gets, and in migration 001, which is what production

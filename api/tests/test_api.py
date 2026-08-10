@@ -3435,6 +3435,11 @@ class _BindJWKS:
         return self._Key(_BIND_KEY.public_key())
 
 
+def _use_bind_jwks(monkeypatch):
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_01ABC")
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+
+
 class _FakeWorkOS:
     """Stateful stand-in for workos_client._request.
 
@@ -3492,14 +3497,20 @@ def _bind_env(
 ) -> _FakeWorkOS:
     fake = _FakeWorkOS(idp_id=idp_id, orgs=orgs, identities=identities)
     monkeypatch.setattr(workos_client, "_request", fake)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
     return fake
 
 
 def _session(key=_BIND_KEY, sub="user_01ABC", org_id: str | None = None) -> dict:
     now = int(time.time())
-    claims = {"iss": "https://auth.workos.com", "sub": sub, "iat": now, "exp": now + 300}
+    claims = {
+        "iss": "https://auth.workos.com",
+        "sub": sub,
+        "client_id": "client_01ABC",
+        "iat": now,
+        "exp": now + 300,
+    }
     if org_id is not None:
         claims["org_id"] = org_id
     token = jwt.encode(
@@ -4347,7 +4358,7 @@ def test_bind_503s_when_workos_is_unconfigured(tmp_path, monkeypatch):
     """The API key is the other half of the same deployment promise."""
     _db(tmp_path, monkeypatch)
     _installed(1001, installer=777)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     monkeypatch.delenv("WORKOS_API_KEY", raising=False)
 
     def _explode(*a, **k):
@@ -4373,7 +4384,7 @@ def test_bind_503s_when_workos_is_unreachable(tmp_path, monkeypatch):
     installer their proof was wrong during someone else's incident."""
     _db(tmp_path, monkeypatch)
     _installed(1001, installer=777)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     monkeypatch.setenv("WORKOS_API_KEY", "sk_test")
 
     def _down(method, url, *, headers, json):
@@ -4479,7 +4490,7 @@ class _FakeGitHubUser:
 def _entitlement_env(monkeypatch, tenants=None, status=None) -> _FakeGitHubUser:
     fake = _FakeGitHubUser({1001: [11, 12]} if tenants is None else tenants, status)
     monkeypatch.setattr(entitlements, "_send", fake)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     monkeypatch.setenv("DOUG_GITHUB_APP_ID", _DOUG_APP_ID)
     return fake
 
@@ -4612,7 +4623,7 @@ def _connection_install(
 
 def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
 
     response = TestClient(app).get("/v1/sessions/connections", headers=_session())
 
@@ -4624,7 +4635,7 @@ def test_connections_project_several_installations_and_explicit_live_repos(
     tmp_path, monkeypatch
 ):
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     _connection_install(
         101,
         "drewjst",
@@ -4678,7 +4689,7 @@ def test_connections_project_several_installations_and_explicit_live_repos(
 
 def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     _connection_install(101, "coldworkshq", "Organization", [(11, "coldworkshq/coldworks")])
     _connection_install(202, "gone", "Organization", [(22, "gone/private")], state="suspended")
     _connection_install(
@@ -4708,7 +4719,7 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
 
 def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     _connection_install(
         101,
         "acme",
@@ -4731,7 +4742,7 @@ def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
 def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
-    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    _use_bind_jwks(monkeypatch)
     _connection_install(
         101,
         "acme",

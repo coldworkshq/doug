@@ -44,6 +44,7 @@ class _FakeJWKSClient:
 
 
 def _use_fake_jwks(monkeypatch, key=_PUBLIC_KEY):
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_01ABC")
     monkeypatch.setattr(session_auth, "_jwks", lambda: _FakeJWKSClient(key))
 
 
@@ -180,6 +181,31 @@ def test_tampered_signature_is_refused(tmp_path, monkeypatch):
     assert session_auth.resolve_session(f"Bearer {forged}") is None
 
 
+def test_valid_signature_from_a_different_workos_application_is_refused(monkeypatch):
+    """A per-client JWKS URL is not itself a client claim check. If WorkOS
+    ever serves a signing key across applications, a token for another app
+    must still fail before bind or tenant resolution can use its subject."""
+    _use_fake_jwks(monkeypatch)
+    valid = _token()
+    claims = session_auth.verify_session_claims(f"Bearer {valid}")
+    assert claims is not None
+    assert claims["client_id"] == "client_01ABC"
+
+    wrong_client = _token(client_id="client_other")
+    assert session_auth.verify_session_claims(f"Bearer {wrong_client}") is None
+
+
+def test_valid_signature_from_an_untrusted_issuer_is_refused(monkeypatch):
+    """Signature and client identity are necessary but not sufficient: the
+    claims must also come from Doug's configured AuthKit issuer, rather than
+    merely carrying a WorkOS-shaped payload."""
+    _use_fake_jwks(monkeypatch)
+    assert session_auth.verify_session_claims(f"Bearer {_token()}") is not None
+
+    wrong_issuer = _token(iss="https://attacker.example")
+    assert session_auth.verify_session_claims(f"Bearer {wrong_issuer}") is None
+
+
 def test_session_scopes_cannot_exceed_the_enumerated_set():
     """A session has no scopes of its own. Synthesising them is inventing
     authority; the set is fixed and pinned."""
@@ -199,6 +225,32 @@ def test_missing_workos_client_id_raises_configuration_exception(monkeypatch):
         session_auth.resolve_session(f"Bearer {token}")
 
 
+def test_jwks_cache_is_keyed_by_the_current_workos_client_id(monkeypatch):
+    """A warm process must never keep using the first application's JWKS if
+    its configuration changes. The cached object and its URL are one unit."""
+    created = []
+
+    class _Client:
+        def __init__(self, url):
+            self.url = url
+            created.append(url)
+
+    monkeypatch.setattr(session_auth, "PyJWKClient", _Client)
+    monkeypatch.setattr(session_auth, "_jwks_client", None)
+    monkeypatch.setattr(session_auth, "_jwks_client_id", None, raising=False)
+
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_first")
+    first = session_auth._jwks()
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_second")
+    second = session_auth._jwks()
+
+    assert first is not second
+    assert created == [
+        "https://api.workos.com/sso/jwks/client_first",
+        "https://api.workos.com/sso/jwks/client_second",
+    ]
+
+
 def test_jwks_outage_and_forged_token_are_logged_differently(monkeypatch, capsys):
     """RULING 4: a WorkOS outage must not look identical to an attacker's
     garbage in the logs, or the first production outage is undiagnosable.
@@ -208,6 +260,7 @@ def test_jwks_outage_and_forged_token_are_logged_differently(monkeypatch, capsys
         def get_signing_key_from_jwt(self, token):
             raise ConnectionError("workos jwks: connection refused")
 
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_01ABC")
     monkeypatch.setattr(session_auth, "_jwks", lambda: _BoomJWKS())
     outage_token = _token(org_id="org_123")
     assert session_auth.resolve_session(f"Bearer {outage_token}") is None

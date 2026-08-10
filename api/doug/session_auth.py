@@ -7,7 +7,8 @@ apply the same liveness and repo intersection (tenancy.py's SessionContext
 docstring).
 
 AuthKit access tokens carry no `aud` claim and no GitHub user id (verified
-against a live token, see the Task 4 report). `org_id` is present only when
+against a live token, see the Task 4 report), so provenance is pinned with
+the token's issuer and exact `client_id` instead. `org_id` is present only when
 the caller has an organization selected — ABSENT on a normal first sign-in,
 not an edge case — so its absence is read as "no tenant yet", never as
 license to guess one.
@@ -23,7 +24,18 @@ from . import entitlements, store, tenancy
 
 SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read")
 
+# WorkOS documents api.workos.com as the default access-token issuer; Doug's
+# live AuthKit receipt used auth.workos.com. Custom AuthKit domains must be
+# pinned explicitly with WORKOS_ISSUER instead of widening this allowlist.
+_DEFAULT_WORKOS_ISSUERS = (
+    "https://api.workos.com",
+    "https://api.workos.com/",
+    "https://auth.workos.com",
+    "https://auth.workos.com/",
+)
+
 _jwks_client: PyJWKClient | None = None
+_jwks_client_id: str | None = None
 
 
 class SessionAuthNotConfigured(Exception):
@@ -33,21 +45,38 @@ class SessionAuthNotConfigured(Exception):
     session (which would look identical to a forged token)."""
 
 
+def _client_id() -> str:
+    client_id = os.environ.get("WORKOS_CLIENT_ID")
+    if not client_id:
+        raise SessionAuthNotConfigured()
+    return client_id
+
+
+def _issuers() -> tuple[str, ...]:
+    configured = os.environ.get("WORKOS_ISSUER")
+    if not configured:
+        return _DEFAULT_WORKOS_ISSUERS
+    normalized = configured.rstrip("/")
+    return (normalized, f"{normalized}/")
+
+
 def _jwks() -> PyJWKClient:
-    """The JWKS client, built once and cached. The URL shape is WorkOS's
-    documented per-client JWKS endpoint; the WorkOS Python SDK is not a
-    repo dependency and adding it for one URL string is not warranted."""
-    global _jwks_client
-    if _jwks_client is None:
-        client_id = os.environ.get("WORKOS_CLIENT_ID")
-        if not client_id:
-            raise SessionAuthNotConfigured()
+    """The JWKS client, cached together with the client id that selected it.
+
+    The URL shape is WorkOS's documented per-client JWKS endpoint; the WorkOS
+    Python SDK is not a repo dependency and adding it for one URL string is
+    not warranted.
+    """
+    global _jwks_client, _jwks_client_id
+    client_id = _client_id()
+    if _jwks_client is None or _jwks_client_id != client_id:
         _jwks_client = PyJWKClient(f"https://api.workos.com/sso/jwks/{client_id}")
+        _jwks_client_id = client_id
     return _jwks_client
 
 
 def verify_session_claims(bearer: str) -> dict | None:
-    """Verify an AuthKit JWT's signature and expiry, and return its claims.
+    """Verify an AuthKit JWT's signature, expiry, issuer, and client id.
 
     Deliberately weaker than resolve_session: it proves WHO is signed in and
     says nothing about what they may see. Bind needs exactly this, because it
@@ -59,7 +88,7 @@ def verify_session_claims(bearer: str) -> dict | None:
     Two separate try/except blocks on purpose, each with its own log line —
     same shape as tenancy.verify_admin's caller-check / installation-lookup
     split. A JWKS lookup failure (network outage, or WorkOS not returning a
-    matching key) and a token that fails decode/signature/exp verification
+    matching key) and a token that fails claim/signature/expiry verification
     are different operational events: the first means Doug's own
     configuration or WorkOS itself is unwell, the second means someone
     presented a bad credential. Collapsing them into one bare `except` would
@@ -71,6 +100,7 @@ def verify_session_claims(bearer: str) -> dict | None:
     token = bearer[7:] if bearer.lower().startswith("bearer ") else bearer
 
     try:
+        client_id = _client_id()
         signing_key = _jwks().get_signing_key_from_jwt(token).key
     except SessionAuthNotConfigured:
         raise
@@ -83,9 +113,16 @@ def verify_session_claims(bearer: str) -> dict | None:
         return None
 
     try:
-        return jwt.decode(
-            token, signing_key, algorithms=["RS256"], options={"require": ["exp"]}
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            issuer=_issuers(),
+            options={"require": ["exp"]},
         )
+        if claims.get("client_id") != client_id:
+            raise jwt.InvalidTokenError("unexpected client_id claim")
+        return claims
     except Exception as e:  # noqa: BLE001 — any failure here is "not a valid token"
         print(
             f"doug: session auth denied at token verification "
