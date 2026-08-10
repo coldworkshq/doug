@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import BigInteger, create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from doug import ingest, outcome_queue, reader, store
 from doug.api import app
@@ -762,6 +763,8 @@ def test_consumed_install_flows_is_a_digest_only_create_all_table(tmp_path, monk
 def test_install_flow_lock_engine_is_bounded_cached_and_disposed_on_url_change(
     monkeypatch,
 ):
+    assert store.INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS == 240
+
     class FakeEngine:
         def __init__(self, url):
             self.url = url
@@ -785,7 +788,15 @@ def test_install_flow_lock_engine_is_bounded_cached_and_disposed_on_url_change(
     first = store._get_install_flow_lock_engine()
     assert store._get_install_flow_lock_engine() is first
     assert built == [
-        (first, {"pool_pre_ping": True, "pool_size": 1, "max_overflow": 0})
+        (
+            first,
+            {
+                "pool_pre_ping": True,
+                "pool_size": 1,
+                "max_overflow": 0,
+                "pool_timeout": 240,
+            },
+        )
     ]
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://db/second")
@@ -794,12 +805,50 @@ def test_install_flow_lock_engine_is_bounded_cached_and_disposed_on_url_change(
     assert first.disposed == 1
     assert built[1] == (
         second,
-        {"pool_pre_ping": True, "pool_size": 1, "max_overflow": 0},
+        {
+            "pool_pre_ping": True,
+            "pool_size": 1,
+            "max_overflow": 0,
+            "pool_timeout": 240,
+        },
     )
 
     monkeypatch.delenv("DATABASE_URL")
     assert store._get_install_flow_lock_engine() is None
     assert second.disposed == 1
+
+
+def test_install_flow_lock_checkout_timeout_becomes_the_named_store_error(
+    monkeypatch,
+):
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError("purpose pool exhausted")
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+
+    with pytest.raises(
+        store.InstallFlowLockUnavailable,
+        match="^install flow temporarily unavailable$",
+    ) as raised:
+        with store.install_flow_bind_lock("0" * 64, 1001):
+            pytest.fail("checkout exhaustion must not enter the authority body")
+
+    assert isinstance(raised.value.__cause__, SQLAlchemyTimeoutError)
+
+
+def test_install_flow_lock_checkout_does_not_hide_unrelated_errors(monkeypatch):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("programmer bug")
+
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: BrokenEngine())
+
+    with pytest.raises(RuntimeError, match="^programmer bug$"):
+        with store.install_flow_bind_lock("0" * 64, 1001):
+            pytest.fail("a failed checkout must not enter the authority body")
 
 
 def test_combined_install_flow_lock_uses_only_lock_pool_and_releases_in_reverse(

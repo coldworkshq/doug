@@ -738,7 +738,13 @@ identity matching the webhook-recorded installer.
 6. A new-table-only `consumed_install_flows` record stores the SHA-256 nonce
    digest, WorkOS user id, installation id, and consumed time; raw nonces are
    never stored. Before any WorkOS call, a purpose-built lock engine using the
-   same `DATABASE_URL` reserves one connection (`pool_size=1`, no overflow).
+   same `DATABASE_URL` reserves one connection (`pool_size=1`, no overflow,
+   `pool_timeout=240`). The four-minute wait gives valid serialized WorkOS work
+   headroom beyond SQLAlchemy's 30-second default while leaving 60 seconds in
+   Cloud Run's 300-second API request envelope. Checkout exhaustion is
+   translated narrowly to a constant, token-safe
+   `503 install flow temporarily unavailable` before WorkOS or binding work;
+   unrelated connection/programmer errors are not hidden.
    One AUTOCOMMIT connection acquires the negative nonce advisory key and then
    the positive installation key, releases them in reverse, and never touches
    the normal ledger pool. Body reads/writes and WorkOS-backed helpers continue
@@ -799,8 +805,10 @@ identity matching the webhook-recorded installer.
       URL/browser-readable cookie; remove the global nonce lock; restore
       framework body validation; treat a missing signing secret as forged
       input; remove the signed one-shot PKCE bit; route locks through the main
-      pool; disable the 4,096-byte limit; make a tamper helper a no-op; grant
-      either service an extra secret. Each named test must fail, then restore.
+      pool; restore the lock pool's default 30-second checkout or let its raw
+      timeout escape; disable the 4,096-byte limit; make a tamper helper a
+      no-op; grant either service an extra secret. Each named test must fail,
+      then restore.
 - [ ] 8. Run `cd api && uv run pytest && uv run ruff check .`, root deploy
       syntax, and `cd web && npm test && npm run lint && npm run build`; commit
       only explicit Task 8 paths.

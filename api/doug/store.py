@@ -50,6 +50,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from . import migrations
 from .models import Band, Verdict
@@ -434,6 +435,14 @@ _engine_lock = threading.Lock()
 _install_flow_lock_engine = None
 _install_flow_lock_engine_url = None
 _install_flow_lock_engine_lock = threading.Lock()
+# A serialized WorkOS bind can legitimately exceed SQLAlchemy's 30-second
+# default. Four minutes leaves one minute inside Cloud Run's 300-second API
+# request envelope for the authority work after a waiting flow gets the lock.
+INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS = 240
+
+
+class InstallFlowLockUnavailable(RuntimeError):
+    """The purpose lock pool could not admit this install flow in time."""
 
 
 def _install_flow_advisory_key(nonce_digest: str) -> int:
@@ -470,6 +479,7 @@ def _get_install_flow_lock_engine():
                 pool_pre_ping=True,
                 pool_size=1,
                 max_overflow=0,
+                pool_timeout=INSTALL_FLOW_LOCK_POOL_TIMEOUT_SECONDS,
             )
             if _install_flow_lock_engine is not None:
                 _install_flow_lock_engine.dispose()
@@ -2505,7 +2515,13 @@ def install_flow_bind_lock(nonce_digest: str, installation_id: int):
     if engine is None:
         yield
         return
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise InstallFlowLockUnavailable(
+            "install flow temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
         if conn.dialect.name != "postgresql":
             yield
             return

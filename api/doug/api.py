@@ -1460,34 +1460,39 @@ def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
         raise _not_found() from exc
     nonce_digest = hashlib.sha256(flow.nonce).hexdigest()
 
-    with store.install_flow_bind_lock(nonce_digest, installation_id):
-        consumed = store.install_flow_consumption(nonce_digest)
-        if consumed is not None:
-            if (
-                consumed["workos_user_id"] == workos_user_id
-                and consumed["installation_id"] == installation_id
-            ):
-                return Response(status_code=204)
-            raise _not_found()
+    try:
+        with store.install_flow_bind_lock(nonce_digest, installation_id):
+            consumed = store.install_flow_consumption(nonce_digest)
+            if consumed is not None:
+                if (
+                    consumed["workos_user_id"] == workos_user_id
+                    and consumed["installation_id"] == installation_id
+                ):
+                    return Response(status_code=204)
+                raise _not_found()
 
-        row, claimed = _prove_installer(installation_id, workos_user_id)
-        current = _current_proved_row(installation_id, row, claimed)
-        organization_id = _ensure_workos_binding(
-            installation_id, workos_user_id, current
-        )
-        result = store.consume_install_flow_and_bind(
-            nonce_digest,
-            workos_user_id,
-            installation_id,
-            organization_id,
-        )
-        if result == "mismatch":
-            raise _not_found()
-        if result == "conflict":
-            raise HTTPException(
-                status_code=409,
-                detail="installation is bound to another organization",
+            row, claimed = _prove_installer(installation_id, workos_user_id)
+            current = _current_proved_row(installation_id, row, claimed)
+            organization_id = _ensure_workos_binding(
+                installation_id, workos_user_id, current
             )
+            result = store.consume_install_flow_and_bind(
+                nonce_digest,
+                workos_user_id,
+                installation_id,
+                organization_id,
+            )
+            if result == "mismatch":
+                raise _not_found()
+            if result == "conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+    except store.InstallFlowLockUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="install flow temporarily unavailable"
+        ) from exc
     print(
         f"doug: completed install flow for installation {installation_id} "
         f"and organization {organization_id}",

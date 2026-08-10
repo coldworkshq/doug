@@ -277,6 +277,10 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    the positive installation key, while all ledger reads and writes continue
    through the normal pool. It releases both locks in reverse order. SQLite
    holds that sole purpose connection for bounded per-instance serialization.
+   Pool checkout waits up to an explicit 240 seconds — leaving 60 seconds
+   inside Cloud Run's 300-second API envelope — rather than SQLAlchemy's
+   too-short 30-second default. Checkout exhaustion becomes the same token-safe
+   `503 install flow temporarily unavailable` before WorkOS or binding work.
    The successful bind transaction inserts the consumption before its
    authority write, and both commit or roll back together. A same-flow retry
    may return idempotent success but must not repeat WorkOS or binding side

@@ -14,6 +14,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from doug import (
     api,
@@ -3852,6 +3853,39 @@ def test_install_flow_configuration_fault_is_named_before_workos(tmp_path, monke
         assert token not in response.text
 
     assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_lock_checkout_exhaustion_is_token_safe_503_before_workos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = _flow_token()
+    bind_calls = []
+
+    class ExhaustedEngine:
+        def connect(self):
+            raise SQLAlchemyTimeoutError(f"purpose pool exhausted for {token}")
+
+    def forbidden_bind(*args, **kwargs):
+        bind_calls.append((args, kwargs))
+        return "bound"
+
+    monkeypatch.setattr(
+        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
+    )
+    monkeypatch.setattr(store, "consume_install_flow_and_bind", forbidden_bind)
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "install flow temporarily unavailable"}
+    assert token not in response.text
+    assert fake.calls == []
+    assert bind_calls == []
     assert _bound_org(1001) is None
 
 
