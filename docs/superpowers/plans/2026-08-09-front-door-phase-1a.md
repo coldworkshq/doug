@@ -815,17 +815,176 @@ identity matching the webhook-recorded installer.
 
 ---
 
-### Task 9: `/dashboard`
+### Task 9: `/dashboard` — the signed-in, session-scoped console
 
-**Files:** `web/app/dashboard/page.tsx`, `web/lib/session-api.ts` (both new)
+> **DESIGN LOCK, Andrew 2026-08-10.** WorkOS is the Doug account. GitHub is
+> an optional repository connection, never a prerequisite for identity or a
+> future non-repository workflow. One person may hold several GitHub App
+> installations; one User or Organization installation may carry several
+> repositories. Team-derived repository access is deferred, and when it lands
+> it must still resolve to explicit repo ids. `lemahq` is shown, not hidden,
+> with the exact label **"Lema — separate product"**. Lema and Doug PR histories
+> never join unless a future, explicit repo-linking model is designed.
+>
+> **VISUAL LOCK, Andrew 2026-08-10.** Stay close to
+> `workspace/mockups/console.html`: forensic-ledger paper surface, tight dot
+> grid, sticky compact scope bar, mono controls, hairline rules, dense run
+> table, and asymmetric evidence drill-down. Preserve its color semantics:
+> flag `#c93a2b`, clear `#177a50`, chrome-only orange `#d1571e`, neutral
+> coverage ramp, Bricolage headings, Geist body, Geist Mono data. The coverage
+> ruler is the signature element. Do not turn this into rounded SaaS cards.
 
-**Never reuse `web/lib/api.ts` for tenant fetches.** Its `inflight`/`last` (`:116-118`) are module-global and key-less — deliberately, for the public page. A tenant fetch sharing that module would serve one tenant's data to the next visitor. Session fetches are cacheless or keyed by org, pinned by a test.
+#### Why the original two-file task is unbuildable
 
-- Lists the user's installations from `GET /user/installations`, each with per-user `repo_ids` from `GET /user/installations/{id}/repositories`. **`repository_selection` varies** (`drewjst`=`selected`, `lemahq`=`all`) — handle both.
-- **Decide what to do about `lemahq`.** It is visible to the operator and will appear as a tenant. Correct per the model, but it collides with "Doug and lema are separate products." Show, hide, or label — deliberately, and record the choice.
-- Orgless state renders AuthKit's own organization picker. **Do not hand-roll one** — AuthKit hosts it and auto-selects on a single membership.
+The provider token exists only during AuthKit `onSuccess`. Task 7a deliberately
+stores the derived scope and discards the token, so a later dashboard request
+cannot call `GET /user/installations`; doing so would require persisting a live
+GitHub user credential, which Andrew rejected. Task 4 also explicitly delivered
+`session_auth.resolve_session` with **no route wiring**. Today `/v1/queue` and
+the receipt route accept only operator/tenant keys. A page plus fetch helper has
+no authenticated tenant data source.
 
-- [ ] Steps: render test, implement, `npm test`/`lint`/`build`, commit.
+Task 9 therefore includes the smallest API surface that makes the approved UI
+truthful. It does not weaken the existing operator console routes.
+
+#### Files
+
+**API**
+
+- Modify: `api/doug/session_auth.py`
+- Modify: `api/doug/store.py`
+- Modify: `api/doug/api.py`
+- Modify: `api/tests/test_session_auth.py`
+- Modify: `api/tests/test_store.py`
+- Modify: `api/tests/test_api.py`
+
+**Web**
+
+- Create: `web/app/dashboard/page.tsx`
+- Create: `web/app/dashboard/actions.ts`
+- Create: `web/app/dashboard/dashboard.module.css`
+- Create: `web/lib/session-api.ts`
+- Create: `web/lib/session-api.test.mjs`
+- Create: `web/lib/dashboard-model.ts`
+- Create: `web/lib/dashboard-model.test.mjs`
+- Create: `web/lib/dashboard-contract.test.mjs`
+
+#### Authority model
+
+1. Replace `resolve_session(bearer, claimed_repo_ids)` with
+   `resolve_session(bearer)`. After verifying the JWT, it reads `sub` and
+   `org_id`, maps the org to one installation, then looks up that WorkOS user's
+   stored entitlement for that exact installation. The caller can no longer
+   supply a repo claim. A missing, stale, empty, wrong-user, wrong-installation,
+   inactive, or no-longer-live claim fails closed.
+2. One browser session selects one WorkOS organization/installation. There is
+   **no "tenant all"** state. Switching the tenant uses AuthKit's supported
+   `switchToOrganization`/refresh-token path and a POST Server Action. The
+   action re-reads the signed-in user's connection list before switching; a
+   forged hidden `organization_id` is refused even though WorkOS also checks
+   membership.
+3. `repo=all` means all live repo ids in the selected user's stored claim for
+   the selected installation. A named repo is a filter inside that set. It is
+   never a selector across installations.
+4. `GET /v1/sessions/connections` uses claims-only authentication because an
+   orgless first session is expected. It returns only this WorkOS user's stored,
+   fresh, live-intersected repository connections. Each connection carries:
+   `provider=github`, installation id, WorkOS org id or null, account login,
+   account type (`User` or `Organization`), and explicit repositories. Both
+   GitHub `repository_selection=all` and `selected` were already normalized to
+   explicit ids by Task 7a; this route never calls GitHub and never recreates an
+   installation-wide sentinel.
+5. An active entitlement whose installation is not yet WorkOS-bound may appear
+   as `setup_required` with `organization_id=null`; it can be labelled but not
+   selected. Suspended/deleted installations and removed/out-of-claim repos do
+   not appear as readable connections.
+6. A signed-in WorkOS user with no GitHub identity receives
+   `{connections: []}`, not an authentication failure. The empty state says:
+   **"You're in. Connect GitHub only when you want Doug to review
+   repositories."** The CTA goes to `/install/start`.
+7. Extend `/v1/queue` and `/v1/prs/{pr_number}/receipt` with an Authorization
+   session branch. Credential precedence is exact operator token, then a
+   non-empty WorkOS bearer, then a tenant key. A present-but-bad bearer cannot
+   fall through to another credential. Existing operator behavior and uniform
+   401/404 no-existence leaks stay unchanged.
+8. Add separate session routes `GET /v1/sessions/runs` and
+   `GET /v1/sessions/runs/{verdict_id}`. The existing `/v1/runs*` routes remain
+   operator-only permanently. The store applies installation and repo-id
+   predicates **inside** the history/detail query; it does not assemble another
+   tenant's forensics and filter afterward. Missing and out-of-scope detail are
+   the same 404/body.
+9. Session list/detail models may reuse the operator run response shapes; the
+   authority and route stay separate. Filters are URL state: repo, band, tier,
+   low coverage, and error. Only repo is sent to the API; presentation filters
+   reduce already-scoped rows locally.
+
+#### Surface
+
+```text
+┌ doug  DASHBOARD ─ [tenant coldworkshq ▾] [repo all ▾] ───── account · sign out ┐
+├ Queue ─ Repositories later ─ Evidence later                                    ┤
+│ /runs  Verdict history for this connected space                                │
+│ [all] [needs you] [cleared] [reader] [deterministic] [coverage < 50%]           │
+│ score │ pull request                    │ band │ tier │ read │ outcome │ age      │
+│  0.81 │ coldworkshq/coldworks #54 ...  │ ...                                  │
+│ ...                                                                            │
+│ /runs/1071  selected run evidence                                               │
+│ timeline facts available │ coverage ruler + read + findings + outcomes          │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- The selector lists several installations for one person and several repos
+  inside one installation. It never offers a cross-installation aggregate.
+- `lemahq` renders as its own selector entry with
+  **"Lema — separate product"**. Selecting it changes the whole WorkOS tenant;
+  its rows never sit beside another installation's rows.
+- A User installation and an Organization installation use the same data
+  shape. `account_type` supplies the honest label; no team semantics are
+  inferred from an Organization row.
+- The run table and evidence pane render only fields actually present. The
+  reference mockup's illustrative job timeline, health numbers, or patch-char
+  segment weights must not be fabricated when the session response lacks them.
+- Desktop stays dense like the reference. Below 900px the table becomes a
+  horizontally scrollable ledger and the evidence columns stack; controls
+  remain keyboard-visible and reduced-motion disables row entrance animation.
+
+#### TDD and verification
+
+- [ ] 1. Write failing `session_auth` tests proving repo claims come only from
+      `(JWT sub, selected installation)` storage, stale/wrong-user claims fail,
+      and multiple installations for one user never union. Run red.
+- [ ] 2. Implement the resolver change. Mutate it to use another user's row,
+      ignore staleness, and union installations; each named test must fail.
+- [ ] 3. Add failing connection-route tests for zero, one, and multiple
+      installations; User and Organization accounts; multiple repos; selected
+      vs all normalization; unbound label-only state; suspended/removed repos;
+      and exact `lemahq` separation data. Implement store projection and route.
+- [ ] 4. Add failing caller-level queue/receipt tests for one selected org,
+      two repos, one-repo user scope, orgless, stale, suspended, forged, and
+      cross-tenant existence parity. Implement the session branches.
+- [ ] 5. Add failing session-run list/detail tests. Pin query-level
+      installation/repo predicates, uniform 404, no `tenant all`, and unchanged
+      refusal on operator `/v1/runs*`. Implement.
+- [ ] 6. Add `session-api.ts` tests proving `cache: "no-store"`, WorkOS bearer
+      placement, no fixture fallback, bounded timeout, exact shape rejection,
+      and token-safe errors. It must not import or reuse `web/lib/api.ts`.
+- [ ] 7. Add dashboard-model and source-contract tests for URL filters,
+      percentage/ruler honesty, multi-installation/multi-repo selectors,
+      POST-only switch/sign-out, provider-neutral empty copy, exact Lema label,
+      and absence of a cross-tenant `all` option. Run red, implement, green.
+- [ ] 8. Render the console-derived surface. Run `npm test`, lint, build, then
+      use the local browser at desktop and mobile widths. Compare screenshots
+      against `workspace/mockups/console.html`; fix overflow, hierarchy, focus,
+      empty, one-connection, multiple-connection, selected-run, and dark-theme
+      failures. The dashboard itself remains the reference's light forensic
+      ledger; no forced dark conversion.
+- [ ] 9. Mutation proofs: caller-supplied repo ids; another user's entitlement;
+      stale acceptance; `tenant all`; cross-installation history; detail
+      post-filtering; global tenant cache; GET state change; hidden `lemahq`;
+      mixed Lema/Doug rows; and fixture fallback. Restore after each.
+- [ ] 10. Run `cd api && uv run pytest && uv run ruff check .`, root deploy
+      syntax, and `cd web && npm test && npm run lint && npm run build`; commit
+      only explicit Task 9 paths.
 
 ---
 

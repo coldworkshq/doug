@@ -226,14 +226,16 @@ installations: `drewjst` is **`selected`**, `lemahq` is **`all`**. So
 install, and the session's `repo_ids` must come from that call intersected with
 `store.active_repos` — never assumed to be everything the installation covers.
 
-### A tenant you may not want to show
+### A separate product that is shown but never joined
 
 The probe confirmed **`lemahq` (installation 151500529) is visible to the
-operator's GitHub user**, so a signed-in dashboard will list it as one of their
-tenants. That is *correct* under this entitlement model — they do administer it
-— but it collides with the standing decision that Doug and lema are separate
-products and lema is never Doug's tenant. Decide deliberately whether the
-dashboard shows it, hides it, or labels it. It must not appear by accident.
+operator's GitHub user**, so a signed-in dashboard lists it as a separately
+selectable connection. Andrew's 2026-08-10 ruling is explicit: show it with the
+label **"Lema — separate product"**. A WorkOS session still selects exactly one
+installation, so Lema PRs never appear beside another Doug tenant's PRs. There
+is no implicit relationship between Lema and Doug repositories. Joining their
+history later would require a new, explicit repo-linking model and its own
+authority and provenance contract.
 
 ## 3. Install and bind
 
@@ -432,7 +434,13 @@ works" needs orgs that only the bind step provisions.
   signed single-use nonce cookie, installer proof, combined nonce-plus-install
   lock on a separate one-connection engine, org ensure, membership provisioning
   and **teardown**.
-- `/dashboard` with the welcome/IOU block, tenant-scoped queue, and receipts.
+- `/dashboard` derived from the approved forensic-ledger console mockup, with a
+  WorkOS-selected installation, explicit repo selector inside that installation,
+  dense scoped run history, and a selected-run evidence/receipt pane. One user
+  may have several installations and each installation may have several repos;
+  the surface never aggregates installations. A no-GitHub user still has a Doug
+  account and receives an optional repository-connect action rather than an
+  authentication failure.
 
 **Session fetch helpers must not reuse `web/lib/api.ts`.** `inflight` and
 `last` (`:116-118`) are module-global and key-less — deliberately, for the
