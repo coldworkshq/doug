@@ -2317,6 +2317,26 @@ def installation_state(installation_id: int) -> str | None:
         ).scalar_one_or_none()
 
 
+def installation_id_for_workos_org(org_id: str) -> int | None:
+    """The installation bound to this WorkOS Organization, or None when
+    nothing is bound to it (or storage is disabled). workos_org_id is
+    UNIQUE, so at most one row can ever match — a session's org_id resolves
+    to exactly one tenant, never a pick-one-of-many. The write side (binding
+    an installation to an org) is Task 5's endpoint; this is only the read
+    side session_auth.resolve_session needs to turn a verified org_id claim
+    into an installation_id."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        result = conn.execute(
+            select(installations.c.installation_id).where(
+                installations.c.workos_org_id == org_id
+            )
+        ).scalar_one_or_none()
+    return int(result) if result is not None else None
+
+
 def active_repos(installation_id: int) -> list[tuple[int, str]]:
     """(github_repo_id, full_name) for this installation's active repos.
 
