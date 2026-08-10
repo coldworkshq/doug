@@ -195,6 +195,12 @@ setup() {
   # adjudicator-setup directly: setup() rotates the SQL password above.
   adjudicator_setup
 
+  # Node web/console images push to Artifact Registry repo `doug`. Create it
+  # here (privileged path), never in web()/console(): CI's deployer only has
+  # artifactregistry.writer, which cannot repositories.create — creating in
+  # the deploy path would make the first post-merge web deploy fail.
+  ensure_node_artifact_repo
+
   # Grant yourself the ability to invoke the gated console:
   #   gcloud run services add-iam-policy-binding doug-console --project "$PROJECT" \
   #     --region "$REGION" --member="user:YOUR@EMAIL" --role=roles/run.invoker
@@ -450,6 +456,11 @@ schedule() {
 # can only see the app directory, so it cannot `npm ci` against the root
 # lockfile. Build the image from REPO_ROOT via Cloud Build, then deploy
 # that image. The Dockerfile path is relative to the monorepo root.
+#
+# The Artifact Registry repo `doug` is created in setup() only. CI's
+# doug-deployer already has cloudbuild.builds.editor + artifactregistry.writer
+# + iam.serviceAccountUser (setup-cicd.sh) — enough to submit and push once
+# the repo exists, not enough to create it.
 ensure_node_artifact_repo() {
   gcloud artifacts repositories describe doug \
     --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
@@ -458,6 +469,17 @@ ensure_node_artifact_repo() {
       --location="$REGION" \
       --project="$PROJECT" \
       --description="Doug Node service images"
+}
+
+require_node_artifact_repo() {
+  if gcloud artifacts repositories describe doug \
+      --location="$REGION" --project="$PROJECT" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "ERROR: Artifact Registry repo 'doug' is missing in $PROJECT/$REGION." >&2
+  echo "Run: PROJECT=$PROJECT REGION=$REGION $0 setup" >&2
+  echo "(or: gcloud artifacts repositories create doug --repository-format=docker --location=$REGION --project=$PROJECT)" >&2
+  return 1
 }
 
 build_node_image() {
@@ -469,7 +491,7 @@ build_node_image() {
   # streams build logs to stdout by default; --suppress-logs + >&2 keep the
   # captured value a single clean tag.
   local dockerfile=$1 name=$2 image tag
-  ensure_node_artifact_repo >&2
+  require_node_artifact_repo >&2
   tag=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
   image="${REGION}-docker.pkg.dev/${PROJECT}/doug/${name}:${tag}"
   gcloud builds submit "$REPO_ROOT" \

@@ -158,7 +158,11 @@ def test_node_deploys_build_images_from_the_monorepo_root():
     assert 'gcloud builds submit "$REPO_ROOT"' in build
     # stdout is captured as the image tag — submit logs must not land there.
     assert "--suppress-logs" in build
-    assert "ensure_node_artifact_repo >&2" in build
+    # Repo create is setup-only; deploy must fail closed if the repo is missing.
+    assert "require_node_artifact_repo >&2" in build
+    assert "ensure_node_artifact_repo" not in build
+    setup = _function_body("setup")
+    assert "ensure_node_artifact_repo" in setup
 
 
 def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
@@ -173,6 +177,19 @@ def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
         return [line for line in text.splitlines() if line and not line.startswith("#")]
 
     assert body(dockerignore) == body(gcloudignore)
+
+
+def test_api_deploy_source_is_api_dir_not_repo_root():
+    """Root .gcloudignore excludes `api/`. That is safe only because the
+    API deploy uploads from inside api/ (`--source .` after cd API_DIR),
+    so gcloud resolves api/.gcloudignore — not the root file."""
+    deploy = _function_body("deploy")
+    assert "--source ." in deploy
+    assert "--source .." not in deploy
+    assert "--source ../api" not in deploy
+    # The script cds to API_DIR before the case dispatch; pin that the
+    # deploy body never rebinds CWD to the repo root.
+    assert "cd \"$REPO_ROOT\"" not in deploy
 
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:

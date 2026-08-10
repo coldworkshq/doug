@@ -10,25 +10,29 @@ COPY console ./console
 COPY web/package.json ./web/
 # npm workspaces + `npm ci` skips optional native bindings of nested deps
 # (npm/cli#4828). Direct optionalDependencies cover CI (gnu); Alpine still
-# needs an explicit musl install. TARGETARCH is BuildKit-only — fall back
-# to uname so a legacy builder on arm64 does not silently grab x64 wheels.
+# needs an explicit musl install. Versions are read from console/package.json
+# so they cannot drift from the optionalDependencies pins.
+# TARGETARCH is BuildKit-only — fall back to uname so a legacy builder on
+# arm64 does not silently grab x64 wheels.
 ARG TARGETARCH=
 RUN npm ci \
  && arch="${TARGETARCH}" \
  && if [ -z "$arch" ]; then \
       case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac; \
     fi \
- && case "$arch" in \
-      arm64) NATIVE="@tailwindcss/oxide-linux-arm64-musl lightningcss-linux-arm64-musl" ;; \
-      *)     NATIVE="@tailwindcss/oxide-linux-x64-musl lightningcss-linux-x64-musl" ;; \
-    esac \
- && npm install --no-save --workspace=web --workspace=console $NATIVE \
+ && case "$arch" in arm64) cpu=arm64 ;; *) cpu=x64 ;; esac \
+ && oxide_v=$(node -p "require('./console/package.json').optionalDependencies['@tailwindcss/oxide-linux-'+'${cpu}'+'-musl']") \
+ && lcss_v=$(node -p "require('./console/package.json').optionalDependencies['lightningcss-linux-'+'${cpu}'+'-musl']") \
+ && npm install --no-save --workspace=web --workspace=console \
+      "@tailwindcss/oxide-linux-${cpu}-musl@${oxide_v}" \
+      "lightningcss-linux-${cpu}-musl@${lcss_v}" \
  && npm run build --workspace=console
 
 FROM ${NODE_IMAGE}
 WORKDIR /app
 ENV NODE_ENV=production
 # outputFileTracingRoot is the monorepo root, so standalone nests under console/.
+# public/ is not inside standalone — copy it beside server.js explicitly.
 COPY --from=builder /app/console/.next/standalone ./
 COPY --from=builder /app/console/.next/static ./console/.next/static
 COPY --from=builder /app/console/public ./console/public

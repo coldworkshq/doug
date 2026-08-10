@@ -53,6 +53,12 @@ docker build -f web/Dockerfile -t doug-web .
 docker build -f console/Dockerfile -t doug-console .
 # Prod path: api/deploy/gcp.sh web|console builds via Cloud Build, then
 # gcloud run deploy --image …
+#
+# Before the first Node image deploy, create the Artifact Registry repo
+# (or re-run setup): PROJECT=doug-prod0 ./api/deploy/gcp.sh setup
+#
+# console is IAM-gated and not in CI — after a root lockfile / Dockerfile
+# change, rebuild it with: PROJECT=doug-prod0 ./api/deploy/gcp.sh console
 ```
 
 ## Status
