@@ -14,6 +14,7 @@ so an already-applied ALTER is a no-op there and must not raise. Anything
 else propagates.
 """
 
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Integer, MetaData, Table, select
@@ -340,15 +341,21 @@ def _run(engine, statement: str) -> None:
             raise
 
 
+def unapplied_migrations(
+    plan: Sequence[tuple[int, tuple[str, ...]]], applied_versions: Iterable[int]
+) -> list[tuple[int, tuple[str, ...]]]:
+    """Return plan entries whose exact version is absent from the ledger."""
+    done = set(applied_versions)
+    return [(version, statements) for version, statements in plan if version not in done]
+
+
 def apply(engine) -> list[int]:
     """Run every unapplied migration in order. Returns the versions applied."""
     schema_migrations.create(engine, checkfirst=True)
     with engine.connect() as conn:
         done = {r[0] for r in conn.execute(select(schema_migrations.c.version))}
     applied: list[int] = []
-    for version, statements in MIGRATIONS:
-        if version in done:
-            continue
+    for version, statements in unapplied_migrations(MIGRATIONS, done):
         for statement in statements:
             _run(engine, statement)
         try:

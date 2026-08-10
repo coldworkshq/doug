@@ -4,8 +4,16 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from doug import reader, review, store
+from doug import example_pack_capture, reader, review, store
 from doug.api import app
+from doug.example_pack import (
+    CaptureScopeV0,
+    ExamplePackV0,
+    FileExamplePackStore,
+    NameVersionV0,
+    PackScopeV0,
+    canonical_json_bytes,
+)
 from doug.models import Band, PRMetadata
 
 PAYLOAD = {
@@ -75,6 +83,42 @@ INTENT_PAYLOAD = {**PAYLOAD, "intent_alignment": 90, "deviation_findings": []}
 DOCS = [SimpleNamespace(id="ADR-1", title="t", body="b")]
 
 
+def _capture_scope() -> CaptureScopeV0:
+    return CaptureScopeV0(
+        run_id_prefix="review-job:9:claim:1",
+        scope=PackScopeV0(
+            installation_id=10,
+            github_repository_id=20,
+            repository_full_name="owner/repo",
+            pull_number=7,
+            admitted_base_sha="base-sha",
+            admitted_head_sha="head-sha",
+        ),
+        read_order="tiered",
+        input_policy_version="reader-input-v0",
+        coverage_policy_version="reader-coverage-v0",
+        verifier_versions=(NameVersionV0(name="settle", version="v0"),),
+        tool_versions=(NameVersionV0(name="anthropic-sdk", version="0.70.0"),),
+    )
+
+
+def _enable_capture(monkeypatch, root):
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(root))
+
+
+def _captured_packs(root) -> list[ExamplePackV0]:
+    directory = root / "packs/sha256"
+    return [
+        ExamplePackV0.model_validate_json(path.read_bytes())
+        for path in sorted(directory.iterdir())
+    ]
+
+
+def _blob(root, reference) -> bytes:
+    return (root / "blobs/sha256" / reference.sha256).read_bytes()
+
+
 def _pr(**kw) -> PRMetadata:
     base = dict(number=7, title="Add cache", author="dev", files=["cache.py"])
     base.update(kw)
@@ -111,6 +155,344 @@ def test_read_diff_truncates_at_budget():
 def test_read_diff_raises_on_refusal():
     with pytest.raises(reader.ReaderError):
         reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(stop_reason="refusal"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [PAYLOAD, {**PAYLOAD, "risk_score": 5, "findings": []}],
+    ids=["findings", "zero-findings"],
+)
+def test_read_diff_captures_exact_request_output_and_success(
+    tmp_path, monkeypatch, payload
+):
+    _enable_capture(monkeypatch, tmp_path)
+    client = FakeClient(payload=payload, usage=(321, 45))
+    diff = "+ authorization is source text, not a request header"
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        returned = reader.read_diff(_pr(), diff, scope=SCOPE, client=client)
+
+    (pack,) = _captured_packs(tmp_path)
+    assert pack.capture_status == "captured"
+    assert pack.failure is None
+    assert pack.parsed_output == returned.model_dump(mode="json")
+    assert pack.usage.model_dump() == {"input_tokens": 321, "output_tokens": 45}
+    assert pack.latency_ms >= 0
+    assert _blob(tmp_path, pack.request) == canonical_json_bytes(client.messages.last_kwargs)
+    assert _blob(tmp_path, pack.evidence) == diff.encode()
+    assert _blob(tmp_path, pack.raw_output) == json.dumps(payload).encode()
+    assert len(pack.findings) == len(payload["findings"])
+    assert b"sdk_client" not in pack.canonical_bytes()
+    assert b'"headers"' not in _blob(tmp_path, pack.request)
+
+
+def test_read_diff_captures_partial_status_and_exact_coverage(tmp_path, monkeypatch):
+    _enable_capture(monkeypatch, tmp_path)
+    diff = reader.diff_chunk(
+        "large.py", "modified", 1, 0, "+" + "x" * reader.DIFF_BUDGET
+    )
+    pr = _pr(changed_files=2, files_dropped=["binary.dat"])
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        reader.read_diff(pr, diff, scope=SCOPE, client=FakeClient())
+
+    (pack,) = _captured_packs(tmp_path)
+    expected = reader.coverage(
+        diff, changed_files=pr.changed_files, files_dropped=pr.files_dropped
+    )
+    assert pack.capture_status == "partial"
+    assert pack.coverage.model_dump(mode="json") == expected.model_dump(mode="json")
+
+
+def test_read_diff_captures_transport_stop_parse_and_spend_failures(
+    tmp_path, monkeypatch
+):
+    terminals = tmp_path / "terminals"
+    terminals.mkdir()
+
+    transport_root = terminals / "transport"
+    _enable_capture(monkeypatch, transport_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError, match="RuntimeError: transport down"):
+            reader.read_diff(
+                _pr(), "+ x", scope=SCOPE, client=RaisingClient(RuntimeError("transport down"))
+            )
+    (transport,) = _captured_packs(transport_root)
+    assert transport.capture_status == "failed"
+    assert transport.failure.phase == "transport"
+    assert transport.model_call_made
+    assert transport.request is not None
+    assert transport.raw_output is None
+
+    stop_root = terminals / "stop"
+    _enable_capture(monkeypatch, stop_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError, match="read stopped with refusal"):
+            reader.read_diff(
+                _pr(), "+ x", scope=SCOPE, client=FakeClient(stop_reason="refusal")
+            )
+    (stopped,) = _captured_packs(stop_root)
+    assert stopped.failure.phase == "stop_reason"
+    assert stopped.raw_output is not None
+    assert _blob(stop_root, stopped.raw_output) == json.dumps(PAYLOAD).encode()
+
+    parse_root = terminals / "parse"
+    _enable_capture(monkeypatch, parse_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError, match="unparseable reader output"):
+            reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(payload=None))
+    (unparseable,) = _captured_packs(parse_root)
+    assert unparseable.failure.phase == "parse"
+    assert unparseable.raw_output is not None
+    assert _blob(parse_root, unparseable.raw_output) == b""
+
+    capped_root = terminals / "capped"
+    _enable_capture(monkeypatch, capped_root)
+    monkeypatch.setattr(store, "record_deep_read", lambda scope, cap: False)
+    client = FakeClient()
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.SpendCapExceeded):
+            reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+    (capped,) = _captured_packs(capped_root)
+    assert capped.failure.phase == "preflight"
+    assert capped.fallback_state == "spend_capped"
+    assert not capped.model_call_made
+    assert capped.request is None
+    assert client.messages.calls == 0
+
+
+def test_client_construction_failures_are_captured_without_changing_exception(
+    tmp_path, monkeypatch
+):
+    def fail_client():
+        raise RuntimeError("client initialization failed")
+
+    monkeypatch.setattr(reader, "_client", fail_client)
+
+    risk_root = tmp_path / "risk"
+    _enable_capture(monkeypatch, risk_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(RuntimeError, match="client initialization failed"):
+            reader.read_diff(_pr(), "+ x", scope=SCOPE)
+    (risk,) = _captured_packs(risk_root)
+    assert risk.capture_status == "failed"
+    assert risk.failure.phase == "preflight"
+    assert not risk.model_call_made
+    assert risk.request is None
+
+    intent_root = tmp_path / "intent"
+    _enable_capture(monkeypatch, intent_root)
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(RuntimeError, match="client initialization failed"):
+            reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE)
+    (intent,) = _captured_packs(intent_root)
+    assert intent.capture_status == "failed"
+    assert intent.failure.phase == "preflight"
+    assert not intent.model_call_made
+    assert intent.request is None
+
+
+def test_transport_failure_capture_never_persists_exception_headers_or_secrets(
+    tmp_path, monkeypatch
+):
+    _enable_capture(monkeypatch, tmp_path)
+    unsafe = RuntimeError(
+        "response headers={'authorization': 'Bearer secret-token', "
+        "'cookie': 'session-secret'}"
+    )
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError) as raised:
+            reader.read_diff(_pr(), "+ x", scope=SCOPE, client=RaisingClient(unsafe))
+
+    assert "secret-token" in str(raised.value), "live error behavior is unchanged"
+    (pack,) = _captured_packs(tmp_path)
+    captured = pack.canonical_bytes().lower()
+    assert b"secret-token" not in captured
+    assert b"session-secret" not in captured
+    assert b"authorization" not in captured
+    assert pack.failure.error_type == "RuntimeError"
+
+
+def test_risk_and_intent_captures_have_distinct_instruments(tmp_path, monkeypatch):
+    _enable_capture(monkeypatch, tmp_path)
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
+        reader.read_with_decisions(
+            _pr(),
+            "+ x",
+            DOCS,
+            scope=SCOPE,
+            client=FakeClient(payload=INTENT_PAYLOAD),
+        )
+
+    packs = {pack.attempt_kind: pack for pack in _captured_packs(tmp_path)}
+    assert set(packs) == {"risk", "intent"}
+    assert packs["risk"].run_id == "review-job:9:claim:1:risk"
+    assert packs["intent"].run_id == "review-job:9:claim:1:intent"
+    assert packs["risk"].instrument_id != packs["intent"].instrument_id
+    assert (
+        packs["risk"].instrument_manifest.system_prompt_sha256
+        != packs["intent"].instrument_manifest.system_prompt_sha256
+    )
+    assert (
+        packs["risk"].instrument_manifest.output_schema_sha256
+        != packs["intent"].instrument_manifest.output_schema_sha256
+    )
+
+
+def test_disabled_capture_writes_nothing_and_preserves_exact_sdk_kwargs(
+    tmp_path, monkeypatch
+):
+    sentinel = tmp_path / "disabled"
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(sentinel))
+    client = FakeClient()
+    pr = _pr()
+    diff = "+ x"
+
+    reader.read_diff(pr, diff, scope=SCOPE, client=client)
+
+    assert client.messages.last_kwargs == {
+        "model": reader.MODEL,
+        "max_tokens": reader.MAX_TOKENS,
+        "output_config": {
+            "effort": reader.EFFORT,
+            "format": {"type": "json_schema", "schema": reader.SCHEMA},
+        },
+        "system": reader.SYSTEM,
+        "messages": [{"role": "user", "content": reader._user_text(pr, diff)}],
+    }
+    assert not sentinel.exists()
+
+
+@pytest.mark.parametrize("attempt_kind", ["risk", "intent"])
+def test_disabled_capture_never_canonicalizes_the_full_request(
+    monkeypatch, attempt_kind
+):
+    """Default-off instrumentation must not inspect or serialize the prompt."""
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    canonicalized: list[object] = []
+    real_canonical = example_pack_capture.canonical_json_bytes
+
+    def observe_canonicalization(value):
+        canonicalized.append(value)
+        return real_canonical(value)
+
+    monkeypatch.setattr(
+        example_pack_capture, "canonical_json_bytes", observe_canonicalization
+    )
+    client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
+
+    if attempt_kind == "risk":
+        returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+    else:
+        returned = reader.read_with_decisions(
+            _pr(), "+ x", DOCS, scope=SCOPE, client=client
+        )
+
+    assert returned.risk_score == 62
+    assert client.messages.calls == 1
+    assert canonicalized == []
+
+
+@pytest.mark.parametrize("attempt_kind", ["risk", "intent"])
+def test_request_capture_serialization_failure_cannot_change_the_live_read(
+    tmp_path, monkeypatch, capsys, attempt_kind
+):
+    """The SDK call remains authoritative when optional capture cannot serialize."""
+    _enable_capture(monkeypatch, tmp_path)
+
+    def fail_canonicalization(_value):
+        raise RuntimeError("request capture unavailable")
+
+    monkeypatch.setattr(
+        example_pack_capture, "canonical_json_bytes", fail_canonicalization
+    )
+    client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        if attempt_kind == "risk":
+            returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+        else:
+            returned = reader.read_with_decisions(
+                _pr(), "+ x", DOCS, scope=SCOPE, client=client
+            )
+
+    assert returned.risk_score == 62
+    assert client.messages.calls == 1
+    expected_schema = reader.SCHEMA if attempt_kind == "risk" else reader.INTENT_SCHEMA
+    expected_system = (
+        reader.SYSTEM if attempt_kind == "risk" else reader.DECISION_INTENT_SYSTEM
+    )
+    expected_content = (
+        reader._user_text(_pr(), "+ x")
+        if attempt_kind == "risk"
+        else reader._intent_text(_pr(), "+ x", DOCS)
+    )
+    assert client.messages.last_kwargs == {
+        "model": reader.MODEL,
+        "max_tokens": reader.MAX_TOKENS,
+        "output_config": {
+            "effort": reader.EFFORT,
+            "format": {"type": "json_schema", "schema": expected_schema},
+        },
+        "system": expected_system,
+        "messages": [{"role": "user", "content": expected_content}],
+    }
+    assert not (tmp_path / "packs").exists()
+    diagnostics = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if "example-pack" in line
+    ]
+    assert len(diagnostics) == 1
+    assert "example-pack capture failed" in diagnostics[0]
+    assert "RuntimeError" in diagnostics[0]
+
+
+class _FailingPackStore(FileExamplePackStore):
+    def put_pack(self, pack):
+        raise RuntimeError("pack sink unavailable")
+
+
+def test_capture_storage_failure_cannot_change_successful_reader_result(
+    tmp_path, monkeypatch, capsys
+):
+    sink = _FailingPackStore(tmp_path)
+    _enable_capture(monkeypatch, tmp_path)
+    monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
+    client = FakeClient()
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+
+    assert returned == reader.ReaderVerdict.model_validate(PAYLOAD)
+    assert client.messages.last_kwargs["system"] == reader.SYSTEM
+    error = capsys.readouterr().err
+    assert "example-pack capture failed" in error
+    assert "RuntimeError" in error
+
+
+def test_capture_storage_failure_cannot_replace_transport_reader_error(
+    tmp_path, monkeypatch, capsys
+):
+    sink = _FailingPackStore(tmp_path)
+    _enable_capture(monkeypatch, tmp_path)
+    monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        with pytest.raises(reader.ReaderError) as raised:
+            reader.read_diff(
+                _pr(), "+ x", scope=SCOPE, client=RaisingClient(TimeoutError("original"))
+            )
+
+    assert str(raised.value) == "TimeoutError: original"
+    error = capsys.readouterr().err
+    assert "example-pack capture failed" in error
+    assert "RuntimeError" in error
 
 
 def test_verdict_mapping_and_threshold():
