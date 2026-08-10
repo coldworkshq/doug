@@ -1,0 +1,30 @@
+{
+  "schema_version": "reconstructed-verifier-regression-v0",
+  "source_pr": 78,
+  "exact_replay": false,
+  "migration_probe": {
+    "available_versions": [1, 2, 3, 4, 5, 6, 7, 8, 10, 9],
+    "applied_versions": [1, 2, 3, 4, 5, 6, 7, 8, 10],
+    "expected_unapplied_versions": [9]
+  },
+  "accepted_contracts": {
+    "silent-work-drop": {
+      "path": "docs/superpowers/specs/2026-08-10-review-job-base-sha-design.md",
+      "line_start": 27,
+      "line_end": 38,
+      "reason": "The accepted fail-closed contract makes missing base identity operator-visible and preserves the webhook response."
+    },
+    "retry-exhaustion": {
+      "path": "docs/superpowers/specs/2026-08-10-review-job-base-sha-design.md",
+      "line_start": 35,
+      "line_end": 39,
+      "reason": "The accepted stale-head contract raises before superseding the only durable job when replacement identity is incomplete."
+    }
+  },
+  "findings": [
+    {"rule": "reader:api-contract-change"},
+    {"rule": "reader:migration-version-conflict"},
+    {"rule": "reader:silent-work-drop", "accepted_contract_ref": "silent-work-drop"},
+    {"rule": "reader:retry-exhaustion", "accepted_contract_ref": "retry-exhaustion"}
+  ]
+}
