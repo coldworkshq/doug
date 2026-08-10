@@ -307,7 +307,7 @@ function NoConnection({ userLabel }: { userLabel: string }) {
       <p className={styles.route}>/account</p>
       <h1>{userLabel}, you&apos;re in.</h1>
       <p>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
-      <Link href="/install/start" className={styles.primaryAction}>Connect GitHub</Link>
+      <Link href="/install/start" prefetch={false} className={styles.primaryAction}>Connect GitHub</Link>
     </main>
   );
 }
@@ -356,7 +356,7 @@ export default async function DashboardPage({
           </label>
           <button type="submit" className={styles.scopeSubmit}>filter</button>
         </form>}
-        <Link href="/install/start" className={styles.connectRepositories}>Connect repositories</Link>
+        <Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>
         <div className={styles.account}>
           <span>{user.email}</span>
           <form action={signOutAction}><button type="submit">sign out</button></form>

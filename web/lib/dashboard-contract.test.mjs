@@ -68,7 +68,7 @@ test("coverage, outcomes, and select focus use honest visual semantics", async (
 
 test("repository connection and every pending setup remain reachable in all dashboard states", async () => {
   const page = await readFile(pageUrl, "utf8");
-  const connectMarkup = '<Link href="/install/start" className={styles.connectRepositories}>Connect repositories</Link>';
+  const connectMarkup = '<Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>';
   const connect = page.indexOf(connectMarkup);
   const stateBranches = page.indexOf("connections.length === 0");
   const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
@@ -78,6 +78,18 @@ test("repository connection and every pending setup remain reachable in all dash
   assert.match(page, /action=\{finishSetupAction\}/);
   assert.match(page, /name="installation_id"/);
   assert.match(page, />finish setup<\/button>/);
+});
+
+test("state-mutating install links disable Next prefetch", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const installLinks = [...page.matchAll(/<Link\b[^>]*>/g)]
+    .map((match) => match[0])
+    .filter((markup) => markup.includes('href="/install/start"'));
+
+  assert.equal(installLinks.length, 2);
+  for (const markup of installLinks) {
+    assert.match(markup, /\bprefetch=\{false\}/);
+  }
 });
 
 test("finish setup is a POST-only exact pre-bind and post-bind server action", async () => {
