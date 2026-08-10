@@ -12,6 +12,8 @@ import base64
 import json
 import os
 import re
+import select
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +27,7 @@ API_SOURCE = API_ROOT / "doug" / "api.py"
 RESPONSE_SECRET = "server-response-body-must-stay-private"
 
 
-def _jwt(payload: dict[str, str], signature: str) -> str:
+def _jwt(payload: dict[str, object], signature: str) -> str:
     def encode(value: object) -> str:
         raw = json.dumps(value, separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -52,7 +54,8 @@ def proof_env() -> dict[str, str]:
         "ONE_REPO_FORBIDDEN": "alpha/forbidden",
         "ORGLESS_SESSION_JWT": _jwt({"sub": "user-orgless"}, "orgless-signature"),
         "EXPIRED_SESSION_JWT": _jwt(
-            {"sub": "user-expired", "org_id": "org-a"}, "expired-signature"
+            {"sub": "user-shared", "org_id": "org-a", "exp": 1},
+            "expired-signature",
         ),
         "UNMAPPED_ORG_SESSION_JWT": _jwt(
             {"sub": "user-unmapped", "org_id": "org-unmapped"},
@@ -62,6 +65,9 @@ def proof_env() -> dict[str, str]:
             {"sub": "user-read-only"}, "read-only-signature"
         ),
         "READ_ONLY_INSTALLATION_ID": "303",
+        "DOUG_SESSION_PROOF_ACK": (
+            "I ACCEPT SCORE SPEND AND DISPOSABLE BIND 303"
+        ),
     }
 
 
@@ -78,6 +84,8 @@ output = None
 data = ""
 headers = []
 url = ""
+connect_timeout = None
+max_time = None
 i = 0
 while i < len(args):
     arg = args[i]
@@ -94,6 +102,12 @@ while i < len(args):
         i += 2
     elif arg == "-d":
         data = args[i + 1]
+        i += 2
+    elif arg == "--connect-timeout":
+        connect_timeout = args[i + 1]
+        i += 2
+    elif arg == "--max-time":
+        max_time = args[i + 1]
         i += 2
     elif arg.startswith("https://"):
         url = arg
@@ -191,6 +205,10 @@ elif parsed.path == "/v1/sessions/runs":
         if repo == "all":
             if a_all_count == 2:
                 status = 200 if mode == "suspended_success" else 401
+            elif mode == "never_restore" and a_all_count >= 3:
+                status = 401
+            elif mode == "delayed_restore" and a_all_count == 3:
+                status = 401
             else:
                 status = 200
                 body = run_body(
@@ -235,6 +253,8 @@ elif parsed.path == "/v1/sessions/runs":
                 )
         else:
             status = 404
+            if mode == "forbidden_body_mismatch" and repo == os.environ["ONE_REPO_FORBIDDEN"]:
+                body = {"detail": "different-denial-envelope"}
     elif kind == "orgless":
         status = 200 if mode == "orgless_data_success" else 401
         if status == 200:
@@ -251,6 +271,9 @@ elif parsed.path == "/v1/installations/bind" and method == "POST":
     if mode == "bind_success":
         status = 204
         Path(os.environ["FAKE_BIND_STATE"]).touch()
+    elif mode == "bind_hidden_side_effect":
+        status = 404
+        Path(os.environ["FAKE_WORKOS_SIDE_EFFECT"]).touch()
     else:
         status = 404
 elif parsed.path in {
@@ -262,6 +285,20 @@ elif parsed.path in {
     "/v1/patterns",
 }:
     status = 401
+    if parsed.path == "/v1/score/read":
+        try:
+            score_body = json.loads(data)
+        except json.JSONDecodeError:
+            score_body = None
+        if score_body != {
+            "pr": {
+                "number": 1,
+                "title": "session-isolation-proof",
+                "author": "proof",
+            },
+            "diff": "",
+        }:
+            status = 422
     if mode == "operator_route_success" and parsed.path == "/v1/health":
         status = 200
 
@@ -271,24 +308,25 @@ record = {
     "kind": kind,
     "status": status,
     "output": output,
+    "connect_timeout": connect_timeout,
+    "max_time": max_time,
     "header_names": sorted(header_names),
     "data": data,
 }
 with log_path.open("a") as stream:
     stream.write(json.dumps(record, sort_keys=True) + "\n")
 Path(output).write_text(json.dumps(body))
-print(status, end="")
+print(status, end="", flush=True)
 '''
 
 
-def _run_proof(
+def _proof_process_env(
     tmp_path: Path,
     proof_env: dict[str, str],
     *,
     mode: str = "success",
     overrides: dict[str, str | None] | None = None,
-    stdin: str | None = None,
-) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+) -> tuple[dict[str, str], Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_curl = fake_bin / "curl"
@@ -303,6 +341,7 @@ def _run_proof(
             "FAKE_MODE": mode,
             "FAKE_CURL_LOG": str(log),
             "FAKE_BIND_STATE": str(tmp_path / "bound"),
+            "FAKE_WORKOS_SIDE_EFFECT": str(tmp_path / "workos-side-effect"),
             "FAKE_RESPONSE_SECRET": RESPONSE_SECRET,
         }
     )
@@ -311,6 +350,20 @@ def _run_proof(
             env.pop(name, None)
         else:
             env[name] = value
+    return env, log
+
+
+def _run_proof(
+    tmp_path: Path,
+    proof_env: dict[str, str],
+    *,
+    mode: str = "success",
+    overrides: dict[str, str | None] | None = None,
+    stdin: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+    env, log = _proof_process_env(
+        tmp_path, proof_env, mode=mode, overrides=overrides
+    )
     completed = subprocess.run(
         [str(SCRIPT)],
         cwd=API_ROOT,
@@ -349,6 +402,10 @@ def test_success_proves_nine_gates_without_leaking_secrets(
     assert len([line for line in lines if line.startswith("PASS  gate ")]) == 9
     assert not [line for line in lines if line.startswith("FAIL  gate ")]
     assert "9 passed, 0 failed" in _combined(completed)
+    assert "CONTROLLED-ADVERSARIAL PROBE" in _combined(completed)
+    assert "ACKNOWLEDGEMENT IS NOT PRODUCTION APPROVAL" in _combined(completed)
+    assert "read-only" not in _combined(completed).lower()
+    assert proof_env["DOUG_SESSION_PROOF_ACK"] not in _combined(completed)
     assert RESPONSE_SECRET not in _combined(completed)
     for secret in [*proof_env.values(), RESPONSE_SECRET]:
         if "JWT" not in secret and not secret.count(".") == 2:
@@ -364,6 +421,8 @@ def test_success_proves_nine_gates_without_leaking_secrets(
     response_files = {str(item["output"]) for item in requests}
     assert len(response_files) == 1
     assert not Path(response_files.pop()).exists()
+    assert {item["connect_timeout"] for item in requests} == {"5"}
+    assert {item["max_time"] for item in requests} == {"20"}
 
 
 @pytest.mark.parametrize(
@@ -412,6 +471,13 @@ def test_each_hostile_boundary_fails_only_its_named_gate(
     "overrides",
     [
         {"A_SESSION_JWT": None},
+        {"DOUG_SESSION_PROOF_ACK": None},
+        {"DOUG_SESSION_PROOF_ACK": "I ACCEPT SCORE SPEND"},
+        {
+            "DOUG_SESSION_PROOF_ACK": (
+                "I ACCEPT SCORE SPEND AND DISPOSABLE BIND 999"
+            )
+        },
         {"DOUG_URL": "http://doug-proof.test"},
         {"DOUG_URL": "https://doug-proof.test/"},
         {"DOUG_URL": "https://user@doug-proof.test"},
@@ -422,6 +488,54 @@ def test_each_hostile_boundary_fails_only_its_named_gate(
         {"READ_ONLY_INSTALLATION_ID": "-3"},
         {"A_INSTALLATION_ID": "202"},
         {"ORGLESS_SESSION_JWT": "not-a-jwt"},
+        {
+            "ORGLESS_SESSION_JWT": _jwt(
+                {"sub": "user-orgless", "org_id": "org-a"},
+                "orgless-with-org",
+            )
+        },
+        {"ORGLESS_SESSION_JWT": _jwt({"sub": ""}, "orgless-empty-sub")},
+        {
+            "UNMAPPED_ORG_SESSION_JWT": _jwt(
+                {"sub": "user-unmapped"}, "unmapped-without-org"
+            )
+        },
+        {
+            "UNMAPPED_ORG_SESSION_JWT": _jwt(
+                {"sub": "user-unmapped", "org_id": "org-a"},
+                "unmapped-a-org",
+            )
+        },
+        {
+            "UNMAPPED_ORG_SESSION_JWT": _jwt(
+                {"sub": "user-unmapped", "org_id": "org-b"},
+                "unmapped-b-org",
+            )
+        },
+        {
+            "EXPIRED_SESSION_JWT": _jwt(
+                {"sub": "user-shared", "org_id": "org-a", "exp": 4_102_444_800},
+                "expired-future",
+            )
+        },
+        {
+            "EXPIRED_SESSION_JWT": _jwt(
+                {"sub": "wrong-user", "org_id": "org-a", "exp": 1},
+                "expired-wrong-sub",
+            )
+        },
+        {
+            "EXPIRED_SESSION_JWT": _jwt(
+                {"sub": "user-shared", "org_id": "org-b", "exp": 1},
+                "expired-wrong-org",
+            )
+        },
+        {
+            "EXPIRED_SESSION_JWT": _jwt(
+                {"sub": "user-shared", "org_id": "org-a", "exp": "old"},
+                "expired-string-exp",
+            )
+        },
         {
             "B_SESSION_JWT": _jwt(
                 {"sub": "different-user", "org_id": "org-b"}, "wrong-sub"
@@ -515,23 +629,165 @@ def test_operator_inventory_is_derived_from_api_and_exercised_with_bearer_only(
         set(item["header_names"]) <= {"authorization", "content-type"}
         for item in requests
     )
+    score_probe = next(
+        item for item in requests[start:end] if item["path"] == "/v1/score/read"
+    )
+    assert json.loads(str(score_probe["data"])) == {
+        "pr": {"number": 1, "title": "session-isolation-proof", "author": "proof"},
+        "diff": "",
+    }
 
 
-def test_wrong_suspend_confirmation_fails_and_still_requires_restore_cleanup(
+def test_confirmation_typos_retry_without_making_an_api_request(
     tmp_path: Path, proof_env: dict[str, str]
 ) -> None:
-    """A typo at the human boundary cannot be accepted or skip cleanup evidence."""
+    """A typo cannot advance either human boundary or trigger its next read."""
     completed, requests = _run_proof(
         tmp_path,
         proof_env,
-        stdin=f"WRONG\nRESTORED {proof_env['A_INSTALLATION_ID']}\n",
+        stdin=(
+            "WRONG\n"
+            f"SUSPENDED {proof_env['A_INSTALLATION_ID']}\n"
+            "STILL WRONG\n"
+            f"RESTORED {proof_env['A_INSTALLATION_ID']}\n"
+        ),
     )
 
-    assert completed.returncode != 0
-    assert "FAIL  gate 5 " in _combined(completed)
+    assert completed.returncode == 0, _combined(completed)
+    assert _combined(completed).count("reason=confirmation-retry") == 2
     a_reads = [
         item["status"]
         for item in requests
         if item["kind"] == "a" and item["path"] == "/v1/sessions/runs?repo=all"
     ]
-    assert a_reads[-1] == 200
+    assert a_reads == [200, 200, 401, 200]
+
+
+def test_failed_restore_check_loops_until_a_nonempty_scoped_read_succeeds(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """A literal restore claim alone cannot clear the suspended cleanup state."""
+    installation_id = proof_env["A_INSTALLATION_ID"]
+    completed, requests = _run_proof(
+        tmp_path,
+        proof_env,
+        mode="delayed_restore",
+        stdin=(
+            f"SUSPENDED {installation_id}\n"
+            f"RESTORED {installation_id}\n"
+            f"RESTORED {installation_id}\n"
+        ),
+    )
+
+    assert completed.returncode == 0, _combined(completed)
+    assert "reason=restoration-not-observed" in _combined(completed)
+    a_reads = [
+        item["status"]
+        for item in requests
+        if item["kind"] == "a" and item["path"] == "/v1/sessions/runs?repo=all"
+    ]
+    assert a_reads == [200, 200, 401, 401, 200]
+
+
+def test_eof_after_suspension_exits_with_unresolved_restoration_warning(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """Closed stdin cannot turn an unverified restoration into normal completion."""
+    completed, _ = _run_proof(
+        tmp_path,
+        proof_env,
+        stdin=f"SUSPENDED {proof_env['A_INSTALLATION_ID']}\n",
+    )
+
+    assert completed.returncode != 0
+    assert "RESTORATION REQUIRED" in _combined(completed)
+    assert "reason=input-ended" in _combined(completed)
+    assert "EXIT GATE: PROVEN" not in _combined(completed)
+
+
+@pytest.mark.parametrize(
+    ("signal_number", "signal_name"),
+    [(signal.SIGINT, "INT"), (signal.SIGTERM, "TERM")],
+)
+def test_signal_after_suspension_warns_that_restoration_is_unresolved(
+    tmp_path: Path,
+    proof_env: dict[str, str],
+    signal_number: signal.Signals,
+    signal_name: str,
+) -> None:
+    """INT and TERM cannot silently abandon a confirmed suspension."""
+    env, _ = _proof_process_env(tmp_path, proof_env)
+    process = subprocess.Popen(
+        [str(SCRIPT)],
+        cwd=API_ROOT,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdin is not None
+    assert process.stderr is not None
+    process.stdin.write(f"SUSPENDED {proof_env['A_INSTALLATION_ID']}\n")
+    process.stdin.flush()
+    stderr_before_signal = ""
+    while "type exactly: RESTORED" not in stderr_before_signal:
+        ready, _, _ = select.select([process.stderr], [], [], 5)
+        assert ready, "proof never reached the restoration boundary"
+        stderr_before_signal += process.stderr.readline()
+
+    os.kill(process.pid, signal_number)
+    stdout_after, stderr_after = process.communicate(timeout=5)
+    output = stdout_after + stderr_before_signal + stderr_after
+
+    assert process.returncode != 0
+    assert "RESTORATION REQUIRED" in output
+    assert f"reason=signal-{signal_name}" in output
+    assert "EXIT GATE: PROVEN" not in output
+
+
+def test_fake_that_never_restores_cannot_reach_a_successful_exit(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """Repeated 401 cleanup reads keep the exit gate unresolved and nonzero."""
+    installation_id = proof_env["A_INSTALLATION_ID"]
+    completed, _ = _run_proof(
+        tmp_path,
+        proof_env,
+        mode="never_restore",
+        stdin=(
+            f"SUSPENDED {installation_id}\n"
+            f"RESTORED {installation_id}\n"
+        ),
+    )
+
+    assert completed.returncode != 0
+    assert "RESTORATION REQUIRED" in _combined(completed)
+    assert "reason=input-ended" in _combined(completed)
+    assert "EXIT GATE: PROVEN" not in _combined(completed)
+
+
+def test_forbidden_repo_denial_must_match_absent_repo_canonical_body(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """A distinct denial envelope is an existence leak even when both statuses are 404."""
+    completed, _ = _run_proof(tmp_path, proof_env, mode="forbidden_body_mismatch")
+    output = _combined(completed)
+
+    assert completed.returncode != 0
+    assert "FAIL  gate 3 " in output
+    assert len([line for line in output.splitlines() if line.startswith("FAIL  gate ")]) == 1
+    assert RESPONSE_SECRET not in output
+    assert "different-denial-envelope" not in output
+
+
+def test_denied_bind_acknowledges_unobservable_hidden_workos_side_effect(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """A 404 brackets Doug state but cannot prove WorkOS stayed untouched."""
+    completed, _ = _run_proof(tmp_path, proof_env, mode="bind_hidden_side_effect")
+
+    assert completed.returncode == 0, _combined(completed)
+    assert (tmp_path / "workos-side-effect").exists()
+    assert "CONTROLLED-ADVERSARIAL PROBE" in _combined(completed)
+    assert "DISPOSABLE" in proof_env["DOUG_SESSION_PROOF_ACK"]

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Production-executable proof for the WorkOS session front door.
+# Production-executable controlled-adversarial proof for the WorkOS front door.
 #
-# This script is read-only. It accepts short-lived WorkOS access tokens,
-# sends them only as Authorization bearer values, and never prints response
-# bodies. The operator performs the one suspension/restore mutation by hand
-# and confirms each webhook delivery before the script makes the next read.
+# This script can spend model budget at Gate 8 and can bind a disposable
+# installation if the authorization boundary under test is broken at Gate 9.
+# Its acknowledgement is not approval to run it against production. It accepts
+# short-lived WorkOS access tokens, sends them only as Authorization bearer
+# values, and never prints response bodies.
 
 set -u
 set -o pipefail
@@ -34,7 +35,7 @@ for required_name in \
   B_SESSION_JWT B_INSTALLATION_ID \
   ONE_REPO_SESSION_JWT ONE_REPO_ALLOWED ONE_REPO_FORBIDDEN \
   ORGLESS_SESSION_JWT EXPIRED_SESSION_JWT UNMAPPED_ORG_SESSION_JWT \
-  READ_ONLY_SESSION_JWT READ_ONLY_INSTALLATION_ID
+  READ_ONLY_SESSION_JWT READ_ONLY_INSTALLATION_ID DOUG_SESSION_PROOF_ACK
 do
   require_value "$required_name"
 done
@@ -49,6 +50,9 @@ for id_name in A_INSTALLATION_ID B_INSTALLATION_ID READ_ONLY_INSTALLATION_ID; do
 done
 [ "$A_INSTALLATION_ID" != "$B_INSTALLATION_ID" ] \
   || preflight_fail "A and B installation ids must differ"
+[ "$DOUG_SESSION_PROOF_ACK" = \
+  "I ACCEPT SCORE SPEND AND DISPOSABLE BIND $READ_ONLY_INSTALLATION_ID" ] \
+  || preflight_fail "DOUG_SESSION_PROOF_ACK must exactly acknowledge the disposable fixture"
 
 for jwt_name in \
   A_SESSION_JWT B_SESSION_JWT ONE_REPO_SESSION_JWT ORGLESS_SESSION_JWT \
@@ -86,6 +90,25 @@ jwt_claim() {
     <<<"$normalized" 2>/dev/null
 }
 
+jwt_number_claim() {
+  local jwt=$1 claim=$2 payload normalized remainder
+  payload=${jwt#*.}
+  payload=${payload%%.*}
+  normalized=${payload//-/+}
+  normalized=${normalized//_/\/}
+  remainder=$(( ${#normalized} % 4 ))
+  if [ "$remainder" -eq 2 ]; then
+    normalized="${normalized}=="
+  elif [ "$remainder" -eq 3 ]; then
+    normalized="${normalized}="
+  elif [ "$remainder" -eq 1 ]; then
+    return 1
+  fi
+  jq -Rer --arg claim "$claim" \
+    '@base64d | fromjson | .[$claim] | numbers' \
+    <<<"$normalized" 2>/dev/null
+}
+
 A_SUB=$(jwt_claim "$A_SESSION_JWT" sub) \
   || preflight_fail "A session must carry a non-empty sub claim"
 A_ORG=$(jwt_claim "$A_SESSION_JWT" org_id) \
@@ -98,6 +121,21 @@ ONE_SUB=$(jwt_claim "$ONE_REPO_SESSION_JWT" sub) \
   || preflight_fail "one-repo session must carry a non-empty sub claim"
 ONE_ORG=$(jwt_claim "$ONE_REPO_SESSION_JWT" org_id) \
   || preflight_fail "one-repo session must carry a non-empty org_id claim"
+ORGLESS_SUB=$(jwt_claim "$ORGLESS_SESSION_JWT" sub) \
+  || preflight_fail "orgless session must carry a non-empty sub claim"
+if ORGLESS_ORG=$(jwt_claim "$ORGLESS_SESSION_JWT" org_id); then
+  preflight_fail "orgless session must not carry a usable org_id claim"
+fi
+UNMAPPED_SUB=$(jwt_claim "$UNMAPPED_ORG_SESSION_JWT" sub) \
+  || preflight_fail "unmapped session must carry a non-empty sub claim"
+UNMAPPED_ORG=$(jwt_claim "$UNMAPPED_ORG_SESSION_JWT" org_id) \
+  || preflight_fail "unmapped session must carry a non-empty org_id claim"
+EXPIRED_SUB=$(jwt_claim "$EXPIRED_SESSION_JWT" sub) \
+  || preflight_fail "expired session must carry a non-empty sub claim"
+EXPIRED_ORG=$(jwt_claim "$EXPIRED_SESSION_JWT" org_id) \
+  || preflight_fail "expired session must carry a non-empty org_id claim"
+EXPIRED_EXP=$(jwt_number_claim "$EXPIRED_SESSION_JWT" exp) \
+  || preflight_fail "expired session must carry a numeric exp claim"
 
 [ "$A_SUB" = "$B_SUB" ] \
   || preflight_fail "A and B sessions must carry the same sub claim"
@@ -107,16 +145,64 @@ ONE_ORG=$(jwt_claim "$ONE_REPO_SESSION_JWT" org_id) \
   || preflight_fail "one-repo session must carry A's org_id claim"
 [ "$ONE_SUB" != "$A_SUB" ] \
   || preflight_fail "one-repo session must carry a different sub claim"
+[ "$UNMAPPED_ORG" != "$A_ORG" ] && [ "$UNMAPPED_ORG" != "$B_ORG" ] \
+  || preflight_fail "unmapped session org_id must differ from A and B"
+[ "$EXPIRED_SUB" = "$A_SUB" ] \
+  || preflight_fail "expired session must carry A's sub claim"
+[ "$EXPIRED_ORG" = "$A_ORG" ] \
+  || preflight_fail "expired session must carry A's org_id claim"
+jq -ne --argjson exp "$EXPIRED_EXP" '$exp < now' >/dev/null 2>&1 \
+  || preflight_fail "expired session exp must be earlier than the current time"
 
-unset A_SUB A_ORG B_SUB B_ORG ONE_SUB ONE_ORG jwt_value id_value repo_value
+unset \
+  A_SUB A_ORG B_SUB B_ORG ONE_SUB ONE_ORG \
+  ORGLESS_SUB ORGLESS_ORG UNMAPPED_SUB UNMAPPED_ORG \
+  EXPIRED_SUB EXPIRED_ORG EXPIRED_EXP jwt_value id_value repo_value
+
+printf '%s\n' \
+  'CONTROLLED-ADVERSARIAL PROBE: Gate 8 may spend and Gate 9 may mutate a disposable fixture.' \
+  'ACKNOWLEDGEMENT IS NOT PRODUCTION APPROVAL.'
 
 RESPONSE_FILE=$(mktemp "${TMPDIR:-/tmp}/doug-session-proof.XXXXXX") \
   || preflight_fail "could not create response file"
-trap 'rm -f -- "$RESPONSE_FILE"' EXIT
+RESTORATION_REQUIRED=false
+RESTORATION_PROVEN=false
+RESTORATION_DIAGNOSTIC=false
+
+restoration_warning() { # restoration_warning <safe-reason>
+  local reason=$1
+  if [ "$RESTORATION_REQUIRED" = true ] \
+    && [ "$RESTORATION_PROVEN" != true ] \
+    && [ "$RESTORATION_DIAGNOSTIC" != true ]
+  then
+    printf 'RESTORATION REQUIRED gate=5 status=unverified reason=%s\n' "$reason" >&2
+    RESTORATION_DIAGNOSTIC=true
+  fi
+}
+
+cleanup() {
+  local result=$?
+  restoration_warning exit
+  rm -f -- "$RESPONSE_FILE"
+  trap - EXIT
+  exit "$result"
+}
+
+signal_exit() { # signal_exit <name> <status>
+  local signal_name=$1 status=$2
+  restoration_warning "signal-$signal_name"
+  trap - "$signal_name"
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'signal_exit INT 130' INT
+trap 'signal_exit TERM 143' TERM
 
 req() { # req <method> <path> <access-token> [json-body]
   local method=$1 path=$2 token=$3 data=${4-} result
   local curl_args=(
+    --connect-timeout 5 --max-time 20
     -sS -o "$RESPONSE_FILE" -w '%{http_code}' -X "$method"
     "$DOUG_URL$path" -H "Authorization: Bearer $token"
   )
@@ -215,12 +301,25 @@ g3_status="$g3_status,one-allowed:$code"
   || g3_ok=false
 req GET "/v1/sessions/runs?repo=$ONE_REPO_FORBIDDEN" "$ONE_REPO_SESSION_JWT"
 forbidden_code=$code
+forbidden_body_ok=false
+forbidden_canonical=""
+if forbidden_canonical=$(jq -cS . "$RESPONSE_FILE" 2>/dev/null); then
+  forbidden_body_ok=true
+fi
 req GET '/v1/sessions/runs?repo=__doug_isolation_proof__/absent' "$ONE_REPO_SESSION_JWT"
 absent_code=$code
+absent_body_ok=false
+absent_canonical=""
+if absent_canonical=$(jq -cS . "$RESPONSE_FILE" 2>/dev/null); then
+  absent_body_ok=true
+fi
 g3_status="$g3_status,forbidden:$forbidden_code,absent:$absent_code"
 [ "$forbidden_code" = 404 ] && [ "$absent_code" = 404 ] \
+  && [ "$forbidden_body_ok" = true ] && [ "$absent_body_ok" = true ] \
+  && [ "$forbidden_canonical" = "$absent_canonical" ] \
   || g3_ok=false
 gate 3 'one-repo member cannot widen its explicit scope' "$g3_ok" "$g3_status"
+unset forbidden_canonical absent_canonical
 
 # Gate 4: orgless is a valid claims-only state, never run-data authority.
 req GET '/v1/sessions/connections' "$ORGLESS_SESSION_JWT"
@@ -234,40 +333,69 @@ fi
 gate 4 'orgless discovery is valid but run data is refused' "$g4_ok" \
   "connections:$orgless_connections_code,runs:$orgless_runs_code"
 
-# Gate 5: the operator owns the mutation; the script proves the next reads.
+# Gate 5: the operator owns the mutation; the script proves the next reads and
+# will not return to normal execution while restoration remains unresolved.
 req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
 suspend_before_code=$code
 suspend_before_ok=false
 if [ "$code" = 200 ] && runs_are_scoped "$A_INSTALLATION_ID"; then
   suspend_before_ok=true
 fi
-printf 'Wait for installation.suspend delivery 202, then type exactly: SUSPENDED %s\n' \
-  "$A_INSTALLATION_ID" >&2
-suspend_confirmation=""
-read -r suspend_confirmation || true
 suspend_confirm_ok=false
-[ "$suspend_confirmation" = "SUSPENDED $A_INSTALLATION_ID" ] \
-  && suspend_confirm_ok=true
-
-# This is deliberately the very next API request after the confirmation.
-req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
-suspended_code=$code
-
-printf 'Wait for installation.unsuspend delivery 202, then type exactly: RESTORED %s\n' \
-  "$A_INSTALLATION_ID" >&2
-restore_confirmation=""
-read -r restore_confirmation || true
 restore_confirm_ok=false
-[ "$restore_confirmation" = "RESTORED $A_INSTALLATION_ID" ] \
-  && restore_confirm_ok=true
-
-# This is deliberately the very next API request after the confirmation and
-# is cleanup evidence even when an earlier subcheck failed.
-req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
-restored_code=$code
 restored_ok=false
-if [ "$code" = 200 ] && runs_are_scoped "$A_INSTALLATION_ID"; then
-  restored_ok=true
+suspended_code=not-run
+restored_code=not-run
+
+if [ "$suspend_before_ok" = true ]; then
+  while [ "$suspend_confirm_ok" != true ]; do
+    printf 'Wait for installation.suspend delivery 202, then type exactly: SUSPENDED %s\n' \
+      "$A_INSTALLATION_ID" >&2
+    suspend_confirmation=""
+    if ! read -r suspend_confirmation; then
+      printf 'gate=5 status=input-ended reason=confirmation-missing\n' >&2
+      break
+    fi
+    if [ "$suspend_confirmation" = "SUSPENDED $A_INSTALLATION_ID" ]; then
+      suspend_confirm_ok=true
+    else
+      printf 'gate=5 status=waiting reason=confirmation-retry\n' >&2
+    fi
+  done
+fi
+
+if [ "$suspend_confirm_ok" = true ]; then
+  RESTORATION_REQUIRED=true
+
+  # This is deliberately the very next API request after confirmation.
+  req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
+  suspended_code=$code
+
+  while [ "$restored_ok" != true ]; do
+    printf 'Wait for installation.unsuspend delivery 202, then type exactly: RESTORED %s\n' \
+      "$A_INSTALLATION_ID" >&2
+    restore_confirmation=""
+    if ! read -r restore_confirmation; then
+      restoration_warning input-ended
+      exit 1
+    fi
+    if [ "$restore_confirmation" != "RESTORED $A_INSTALLATION_ID" ]; then
+      printf 'gate=5 status=waiting reason=confirmation-retry\n' >&2
+      continue
+    fi
+    restore_confirm_ok=true
+
+    # This is deliberately the very next API request after confirmation.
+    req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
+    restored_code=$code
+    if [ "$code" = 200 ] && runs_are_scoped "$A_INSTALLATION_ID"; then
+      restored_ok=true
+      RESTORATION_PROVEN=true
+      RESTORATION_REQUIRED=false
+    else
+      printf 'gate=5 status=%s reason=restoration-not-observed\n' "$code" >&2
+    fi
+  done
 fi
 g5_ok=false
 if [ "$suspend_before_ok" = true ] \
@@ -335,7 +463,10 @@ for operator_route in "${OPERATOR_ROUTES[@]}"; do
 done
 gate 8 'session bearer is refused by every operator-only route' "$g8_ok" "$g8_status"
 
-# Gate 9: visibility is not installer authority and a refusal changes nothing.
+# Gate 9: visibility is not installer authority. The two discovery reads
+# bracket Doug's visible binding state. A 404 cannot prove that a broken bind
+# implementation caused no hidden WorkOS side effect; the acknowledged fixture
+# is disposable for exactly that reason.
 req GET '/v1/sessions/connections' "$READ_ONLY_SESSION_JWT"
 readonly_before_code=$code
 readonly_before_ok=false
@@ -358,12 +489,12 @@ if [ "$readonly_before_ok" = true ] \
 then
   g9_ok=true
 fi
-gate 9 'read-only discovery cannot bind or mutate installation state' "$g9_ok" \
+gate 9 'non-installer discovery cannot bind or visibly mutate Doug state' "$g9_ok" \
   "before:$readonly_before_code,bind:$readonly_bind_code,after:$readonly_after_code"
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 if [ "$FAIL" -eq 0 ]; then
-  printf 'EXIT GATE: PROVEN\n'
+  printf 'EXIT GATE: PROVEN BY CONTROLLED-ADVERSARIAL PROBE\n'
   exit 0
 fi
 printf 'EXIT GATE: NOT PROVEN\n'
