@@ -7,6 +7,7 @@ import {
   coverageView,
   dashboardFilters,
   filterRuns,
+  outcomeTone,
   repositoryOptions,
 } from "@/lib/dashboard-model";
 import {
@@ -192,7 +193,7 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
 
         <div className={styles.evidence}>
           <section className={styles.block}>
-            <h3>What the reader was given <span>reads #{detail.verdict_id}</span></h3>
+            <h3>What the reader was given <span>reader evidence</span></h3>
             {detail.coverage ? (
               <div className={styles.rulerPanel}>
                 <div className={styles.rulerTop}>
@@ -249,13 +250,19 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
           <section className={styles.block}>
             <h3>Outcome</h3>
             <div className={styles.outcomes}>
-              {detail.outcomes.map((outcome) => (
-                <div key={`${outcome.window_days}-${outcome.observed_at}`}>
+              {detail.outcomes.map((outcome) => {
+                const tone = outcomeTone(outcome.kind);
+                const toneClass = tone === "clear"
+                  ? styles.outcomeClear
+                  : tone === "flag"
+                    ? styles.outcomeFlag
+                    : styles.outcomeNeutral;
+                return <div key={`${outcome.window_days}-${outcome.observed_at}`}>
                   <span>{outcome.window_days ?? "?"}-day window</span>
-                  <strong>{outcome.kind}</strong>
+                  <strong className={toneClass}>{outcome.kind}</strong>
                   <small>observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
-                </div>
-              ))}
+                </div>;
+              })}
               {detail.outcomes.length === 0 && <p className={styles.emptyNote}>No outcome recorded yet.</p>}
             </div>
           </section>

@@ -1840,6 +1840,8 @@ def run_detail(
             }
             for row in conn.execute(
                 select(outcomes)
+                .where(outcomes.c.installation_id == v["installation_id"])
+                .where(outcomes.c.github_repo_id == v["github_repo_id"])
                 .where(outcomes.c.repo == v["repo"])
                 .where(outcomes.c.pr_number == v["pr_number"])
                 .order_by(outcomes.c.window_days)
@@ -1854,6 +1856,7 @@ def run_detail(
             }
             for row in conn.execute(
                 select(outcome_jobs)
+                .where(outcome_jobs.c.installation_id == v["installation_id"])
                 .where(outcome_jobs.c.github_repo_id == v["github_repo_id"])
                 .where(outcome_jobs.c.pr_number == v["pr_number"])
                 .order_by(outcome_jobs.c.window_days)
@@ -2118,14 +2121,22 @@ def run_history(
         # The difference is deliberate: outcome_14 is a single list-column
         # value here, so there is no caller-side reduction to defer to.
         keys = {(r["repo"], r["pr_number"]) for r in rows}
+        outcome_query = (
+            select(outcomes)
+            .where(outcomes.c.window_days == 14)
+            .where(outcomes.c.repo.in_({k[0] for k in keys}))
+            .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
+        )
+        if installation_id is not None:
+            outcome_query = outcome_query.where(
+                outcomes.c.installation_id == installation_id
+            )
+        if repo_ids is not None:
+            outcome_query = outcome_query.where(outcomes.c.github_repo_id.in_(repo_ids))
         outcome_by_pr = {
             (row["repo"], row["pr_number"]): row["kind"]
             for row in conn.execute(
-                select(outcomes)
-                .where(outcomes.c.window_days == 14)
-                .where(outcomes.c.repo.in_({k[0] for k in keys}))
-                .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
-                .order_by(outcomes.c.id)
+                outcome_query.order_by(outcomes.c.id)
             ).mappings()
         }
 

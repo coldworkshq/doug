@@ -106,3 +106,14 @@ test("selectors preserve installation boundaries and the exact Lema marker", asy
   ]);
   assert.equal(repositoryOptions(connections[0]).some((option) => option.value === "lemahq/lema"), false);
 });
+
+test("outcome tone follows the recorded result instead of treating every outcome as clear", async () => {
+  const { outcomeTone } = await import("./dashboard-model.ts?outcome-tone");
+  assert.equal(outcomeTone("clean"), "clear");
+  assert.equal(outcomeTone("clear"), "clear");
+  assert.equal(outcomeTone("revert"), "flag");
+  assert.equal(outcomeTone("hotfix"), "flag");
+  assert.equal(outcomeTone("scheduled"), "neutral");
+  assert.equal(outcomeTone("unknown-future-kind"), "neutral");
+  assert.equal(outcomeTone(null), "neutral");
+});

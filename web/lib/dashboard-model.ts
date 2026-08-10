@@ -103,3 +103,11 @@ export function repositoryOptions(connection: ConnectionLike) {
     })),
   ];
 }
+
+export type OutcomeTone = "clear" | "flag" | "neutral";
+
+export function outcomeTone(kind: string | null): OutcomeTone {
+  if (kind === "clean" || kind === "clear") return "clear";
+  if (kind === "revert" || kind === "hotfix") return "flag";
+  return "neutral";
+}

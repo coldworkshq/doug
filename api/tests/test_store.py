@@ -2057,6 +2057,37 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
     assert store.run_history()[0]["outcome_14"] is None
 
 
+def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(
+    tmp_path, monkeypatch
+):
+    """Same display repo/PR is not identity. A session row must not borrow the
+    newest outcome from another installation or a sibling repository id."""
+    _db(tmp_path, monkeypatch)
+    store.save_review(
+        "shared/repo", 7, "reader", VERDICT,
+        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for installation_id, github_repo_id, kind in (
+            (101, 11, "clean"),
+            (202, 11, "revert"),
+            (101, 12, "hotfix"),
+        ):
+            conn.execute(store.outcomes.insert().values(
+                repo="shared/repo", pr_number=7, kind=kind, window_days=14,
+                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
+                github_repo_id=github_repo_id, installation_id=installation_id,
+            ))
+
+    rows = store.run_history(
+        installation_id=101, repo_ids=frozenset({11})
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["outcome_14"] == "clean"
+
+
 # --- run_detail (the forensic bundle for one run) ---
 
 
@@ -2138,6 +2169,48 @@ def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatc
     assert detail["outcomes"][0]["kind"] == "clean"
     assert [j["window_days"] for j in detail["outcome_jobs"]] == [60]
     assert detail["outcome_jobs"][0]["status"] == "pending"
+
+
+def test_run_detail_scopes_outcomes_and_jobs_to_the_verdict_identity(
+    tmp_path, monkeypatch
+):
+    """Same display repo/PR and even the same numeric repo id can exist under
+    another installation. Child evidence must use the verdict's full identity
+    before any row is assembled."""
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "shared/repo", 7, "reader", VERDICT,
+        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+    )
+    engine = store._get_engine()
+    with engine.begin() as conn:
+        for installation_id, github_repo_id, kind, window in (
+            (101, 11, "clean", 14),
+            (202, 11, "revert", 60),
+            (101, 12, "hotfix", 30),
+        ):
+            conn.execute(store.outcomes.insert().values(
+                repo="shared/repo", pr_number=7, kind=kind, window_days=window,
+                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
+                github_repo_id=github_repo_id, installation_id=installation_id,
+            ))
+            conn.execute(store.outcome_jobs.insert().values(
+                installation_id=installation_id, github_repo_id=github_repo_id,
+                pr_number=7, merge_commit_sha=str(window) * 20,
+                merged_at=datetime(2026, 8, 3, tzinfo=UTC), base_ref="main",
+                window_days=window, due_at=datetime(2026, 10, 2, tzinfo=UTC),
+                status="pending", created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            ))
+
+    detail = store.run_detail(
+        vid, installation_id=101, repo_ids=frozenset({11})
+    )
+
+    assert detail is not None
+    assert [(row["kind"], row["window_days"]) for row in detail["outcomes"]] == [
+        ("clean", 14)
+    ]
+    assert [row["window_days"] for row in detail["outcome_jobs"]] == [14]
 
 
 def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatch):

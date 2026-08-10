@@ -38,6 +38,7 @@
 .switchControl { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--rule); border-radius: 5px; background: var(--card); font-family: var(--font-geist-mono); }
 .switchControl > span { color: var(--ink-muted); font-size: 9px; letter-spacing: .11em; text-transform: uppercase; }
 .switchControl select { max-width: 270px; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 11px; }
+.switchControl:focus-within { border-color: var(--chrome); outline: 2px solid color-mix(in srgb, var(--chrome) 35%, transparent); outline-offset: 2px; }
 .scopeSubmit { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 10px; cursor: pointer; }
 .scopeSubmit:hover, .scopeSubmit:focus-visible { border-color: var(--chrome); color: var(--ink); }
 .account { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 10px; }
@@ -117,7 +118,7 @@
 .rulerTop code { color: var(--ink); }
 .coverageRuler { position: relative; height: 28px; margin-top: 13px; border: 1px solid #d4d1c8; background: repeating-linear-gradient(135deg, #fff 0 3px, #eceae3 3px 4px); }
 .coverageRuler > span { display: block; height: 100%; background: #3d403c; }
-.coverageRuler > i { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--flag-data); }
+.coverageRuler > i { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ink-muted); }
 .rulerLegend { display: flex; gap: 18px; padding-top: 8px; color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 9px; }
 .rulerLegend i { display: inline-block; width: 10px; height: 8px; margin-right: 5px; border: 1px solid #d4d1c8; background: #3d403c; }
 .rulerLegend span:last-child i { background: repeating-linear-gradient(135deg, #fff 0 3px, #eceae3 3px 4px); }
@@ -136,7 +137,10 @@
 .outcomes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
 .outcomes > div { display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--rule); background: var(--card); }
 .outcomes span, .outcomes small { color: var(--ink-muted); font-family: var(--font-geist-mono); font-size: 9px; }
-.outcomes strong { margin: 4px 0; color: var(--clear-data); font-family: var(--font-geist-mono); font-size: 15px; }
+.outcomes strong { margin: 4px 0; font-family: var(--font-geist-mono); font-size: 15px; }
+.outcomeClear { color: var(--clear-data); }
+.outcomeFlag { color: var(--flag-data); }
+.outcomeNeutral { color: var(--ink-muted); }
 
 .emptyState, .chooseState { max-width: 760px; margin: 0 auto; padding: 110px 24px; }
 .emptyState h1, .chooseState h1 { margin-top: 18px; font-family: var(--font-bricolage); font-size: clamp(36px, 7vw, 64px); font-weight: 600; letter-spacing: -.05em; }

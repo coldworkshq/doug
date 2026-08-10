@@ -20,6 +20,12 @@ test("dashboard source keeps the forensic ledger copy and provider-neutral empty
   assert.equal(page.includes("illustrative"), false);
 });
 
+test("reader evidence never labels a verdict id as a read id", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  assert.equal(page.includes("reads #{detail.verdict_id}"), false);
+  assert.match(page, /What the reader was given <span>reader evidence<\/span>/);
+});
+
 test("organization switching and sign-out are POST server actions", async () => {
   const [page, actions] = await Promise.all([
     readFile(pageUrl, "utf8"),
@@ -44,4 +50,18 @@ test("the signed-in console stays on the reference light paper surface", async (
   assert.equal(css.includes(":global(.dark)"), false);
   assert.match(css, /--paper:\s*#fcfcfa/);
   assert.match(css, /max-width:\s*1440px/);
+});
+
+test("coverage, outcomes, and select focus use honest visual semantics", async () => {
+  const [page, css] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+  const cutMarker = css.match(/\.coverageRuler > i\s*\{[^}]+\}/)?.[0] ?? "";
+  assert.equal(cutMarker.includes("var(--flag-data)"), false);
+  assert.match(css, /\.outcomeClear\s*\{[^}]*var\(--clear-data\)/);
+  assert.match(css, /\.outcomeFlag\s*\{[^}]*var\(--flag-data\)/);
+  assert.match(css, /\.outcomeNeutral\s*\{[^}]*var\(--ink-muted\)/);
+  assert.match(page, /outcomeTone\(outcome\.kind\)/);
+  assert.match(css, /\.switchControl:focus-within\s*\{[^}]*(outline|box-shadow):/);
 });
