@@ -167,10 +167,20 @@ setup() {
     echo "not propagated yet — wait a minute and re-run setup." >&2
     exit 1
   fi
-  # doug-web binds NO secret. It serves only /v1/showcase/queue, which is
-  # unauthenticated and pinned by the API's own DOUG_SHOWCASE_REPO. A
-  # --allow-unauthenticated service holding an operator credential was the
-  # hole this closed; test_deploy_gcp.py pins it shut.
+  # doug-web remains public, but AuthKit needs exactly these four values to
+  # seal a session and complete its callback. They are intentionally bound
+  # here rather than sharing doug-api-sa: no API/operator credential belongs
+  # in an --allow-unauthenticated service.
+  for s in doug-workos-client-id doug-workos-api-key \
+           doug-workos-cookie-password doug-workos-redirect-uri; do
+    if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
+      echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
+      continue
+    fi
+    gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
+      --member="serviceAccount:$WEB_SA" \
+      --role=roles/secretmanager.secretAccessor >/dev/null
+  done
 
   # The default compute SA may still hold a leftover secretAccessor on
   # doug-api-token from before doug-web had its own identity. That is a
@@ -520,7 +530,9 @@ web() {
   local traffic_flags="" image
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # DOUG_API_URL is read at request time by the public pages' server
-  # components. No secrets: see setup()'s doug-web-sa block.
+  # components. AuthKit gets only its four secrets (see setup()'s
+  # doug-web-sa block); its cookie lifetime matches the eight-hour GitHub
+  # user-token lifetime rather than AuthKit's 400-day default.
   # --service-account: deploying without it silently falls back to the
   # default compute SA (roles/editor).
   image=$(build_node_image web/Dockerfile doug-web)
@@ -529,7 +541,8 @@ web() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
-    --set-env-vars "DOUG_API_URL=$(api_url)" \
+    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800" \
+    --set-secrets "WORKOS_CLIENT_ID=doug-workos-client-id:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
     $traffic_flags
   # The web deploy had no verification at all: Cloud Run's readiness probe

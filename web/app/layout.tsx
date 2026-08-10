@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Geist, Geist_Mono } from "next/font/google";
+import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
@@ -42,7 +43,7 @@ export default function RootLayout({
           defaultTheme="light"
           enableSystem={false}
         >
-          {children}
+          <AuthKitProvider>{children}</AuthKitProvider>
         </ThemeProvider>
       </body>
     </html>
