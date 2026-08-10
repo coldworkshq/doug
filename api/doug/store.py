@@ -276,6 +276,19 @@ session_entitlements = Table(
     UniqueConstraint("workos_user_id", "installation_id", name="uq_session_entitlement"),
 )
 
+# A successful GitHub installation flow spends its nonce exactly once. Only
+# the SHA-256 digest is durable: the raw nonce remains a browser-held proof
+# until it is verified, never a replay credential recoverable from the DB.
+# This is a new table, so create_all owns it; no migration is needed.
+consumed_install_flows = Table(
+    "consumed_install_flows",
+    metadata,
+    Column("nonce_digest", String(64), primary_key=True),
+    Column("workos_user_id", String(255), nullable=False),
+    Column("installation_id", BigInteger, nullable=False),
+    Column("consumed_at", DateTime(timezone=True), nullable=False),
+)
+
 installation_token_repos = Table(
     "installation_token_repos",
     metadata,
@@ -2478,6 +2491,111 @@ def bind_installation_org(installation_id: int, org_id: str) -> str | None:
                 installations.c.installation_id == installation_id
             )
         ).scalar_one_or_none()
+
+
+class _InstallFlowBindConflict(Exception):
+    pass
+
+
+def install_flow_consumption(nonce_digest: str) -> dict | None:
+    """Return the spent-flow identity tuple, never any raw nonce material."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    consumed_install_flows.c.workos_user_id,
+                    consumed_install_flows.c.installation_id,
+                    consumed_install_flows.c.consumed_at,
+                ).where(consumed_install_flows.c.nonce_digest == nonce_digest)
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    return {
+        "workos_user_id": row["workos_user_id"],
+        "installation_id": int(row["installation_id"]),
+        "consumed_at": _as_utc(row["consumed_at"]),
+    }
+
+
+def consume_install_flow_and_bind(
+    nonce_digest: str,
+    workos_user_id: str,
+    installation_id: int,
+    org_id: str,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Atomically spend a verified flow and write its installation authority.
+
+    The caller holds installation_bind_lock and has already performed the
+    WorkOS identity and organization operations. This transaction re-checks
+    the nonce, inserts its digest BEFORE the authority update, and commits
+    both together. Results are `bound`, exact `replay`, identity `mismatch`,
+    or database/authority `conflict`.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return "conflict"
+    stamped = now or datetime.now(UTC)
+    try:
+        with engine.begin() as conn:
+            existing = (
+                conn.execute(
+                    select(
+                        consumed_install_flows.c.workos_user_id,
+                        consumed_install_flows.c.installation_id,
+                    ).where(consumed_install_flows.c.nonce_digest == nonce_digest)
+                )
+                .mappings()
+                .first()
+            )
+            if existing is not None:
+                if (
+                    existing["workos_user_id"] == workos_user_id
+                    and int(existing["installation_id"]) == installation_id
+                ):
+                    return "replay"
+                return "mismatch"
+
+            conn.execute(
+                consumed_install_flows.insert(),
+                {
+                    "nonce_digest": nonce_digest,
+                    "workos_user_id": workos_user_id,
+                    "installation_id": installation_id,
+                    "consumed_at": stamped,
+                },
+            )
+            current = conn.execute(
+                select(installations.c.workos_org_id).where(
+                    installations.c.installation_id == installation_id
+                )
+            ).scalar_one_or_none()
+            if current is None:
+                conn.execute(
+                    update(installations)
+                    .where(
+                        (installations.c.installation_id == installation_id)
+                        & (installations.c.workos_org_id.is_(None))
+                    )
+                    .values(workos_org_id=org_id)
+                )
+                current = conn.execute(
+                    select(installations.c.workos_org_id).where(
+                        installations.c.installation_id == installation_id
+                    )
+                ).scalar_one_or_none()
+            if current != org_id:
+                raise _InstallFlowBindConflict
+    except (IntegrityError, _InstallFlowBindConflict):
+        return "conflict"
+    return "bound"
 
 
 def replace_session_entitlements(

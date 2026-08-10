@@ -20,6 +20,7 @@ from doug import (
     app_auth,
     entitlements,
     ingest,
+    install_flow,
     outcome_queue,
     session_auth,
     store,
@@ -3526,6 +3527,191 @@ def _bind(client, installation_id: int, **extra):
         json={"installation_id": installation_id, **extra},
         headers=_session(),
     )
+
+
+_FLOW_SECRET = "install-flow-api-test-secret-32-bytes"
+
+
+def _flow_token(
+    installation_id: int = 1001,
+    *,
+    sub: str = "user_01ABC",
+    nonce: bytes = b"\x01" * 32,
+    expires_at: int | None = None,
+):
+    return install_flow.seal_install_flow(
+        nonce=nonce,
+        expires_at=expires_at or int(time.time()) + 300,
+        subject=sub,
+        installation_id=installation_id,
+        secret=_FLOW_SECRET,
+    )
+
+
+def _complete_flow(
+    client,
+    installation_id: int,
+    token: str,
+    *,
+    sub: str = "user_01ABC",
+):
+    return client.post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": installation_id, "flow_token": token},
+        headers=_session(sub=sub),
+    )
+
+
+def test_install_flow_completion_verifies_session_signature_expiry_subject_and_id(
+    tmp_path, monkeypatch
+):
+    """The Setup URL is attacker-callable. A valid WorkOS session and every
+    signed flow field must agree before even the installer identity read."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    valid = _flow_token()
+    cases = [
+        (valid[:-1] + "A", "user_01ABC", 1001),
+        (_flow_token(expires_at=int(time.time()) - 1), "user_01ABC", 1001),
+        (valid, "user_attacker", 1001),
+        (valid, "user_01ABC", 1002),
+    ]
+
+    for token, sub, installation_id in cases:
+        response = _complete_flow(client, installation_id, token, sub=sub)
+        assert response.status_code == 404
+        assert response.json() == {"detail": "not found"}
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+    assert store.install_flow_consumption(hashlib.sha256(b"\x01" * 32).hexdigest()) is None
+
+
+def test_install_flow_completion_requires_a_workos_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": 1001, "flow_token": _flow_token()},
+    )
+
+    assert response.status_code == 401
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_pre_auth_flow_without_a_bound_subject_cannot_complete(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = install_flow.seal_install_flow(
+        nonce=b"\x03" * 32,
+        expires_at=int(time.time()) + 300,
+        subject=None,
+        installation_id=1001,
+        secret=_FLOW_SECRET,
+    )
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "not found"}
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_reuses_installer_proof_and_non_enumerating_refusal(
+    tmp_path, monkeypatch
+):
+    """A Doug account does not require GitHub. Only repository connection
+    does: a session with no linked GitHub identity gets the same refusal as
+    any other failed installer-authority proof."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id=None)
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+
+    response = _complete_flow(TestClient(app), 1001, _flow_token())
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "not found"}
+    assert fake.creates() == []
+    assert fake.memberships == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_binds_and_persists_only_the_nonce_digest(
+    tmp_path, monkeypatch, capsys
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    token = _flow_token()
+
+    response = _complete_flow(TestClient(app), 1001, token)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert _bound_org(1001) == "org_for_gh-inst-1001"
+    digest = hashlib.sha256(b"\x01" * 32).hexdigest()
+    assert store.install_flow_consumption(digest)["workos_user_id"] == "user_01ABC"
+    assert token not in capsys.readouterr().err
+    assert fake.memberships == [("user_01ABC", "org_for_gh-inst-1001")]
+
+
+def test_exact_flow_replay_skips_every_workos_and_authority_side_effect(
+    tmp_path, monkeypatch
+):
+    """A lost 204 may be retried. The durable consumption is the stop sign:
+    success is idempotent without another identity read, membership write, or
+    installation bind."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    token = _flow_token()
+    assert _complete_flow(client, 1001, token).status_code == 204
+    fake.calls.clear()
+
+    def no_second_bind(*args, **kwargs):
+        raise AssertionError("replay reached the authority write")
+
+    monkeypatch.setattr(store, "consume_install_flow_and_bind", no_second_bind)
+    replay = _complete_flow(client, 1001, token)
+
+    assert replay.status_code == 204
+    assert fake.calls == []
+
+
+def test_spent_flow_replayed_for_another_subject_is_refused_before_workos(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    client = TestClient(app)
+    nonce = b"\x02" * 32
+    assert _complete_flow(client, 1001, _flow_token(nonce=nonce)).status_code == 204
+    fake.calls.clear()
+
+    replay = _complete_flow(
+        client,
+        1001,
+        _flow_token(sub="user_attacker", nonce=nonce),
+        sub="user_attacker",
+    )
+
+    assert replay.status_code == 404
+    assert fake.calls == []
 
 
 def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(

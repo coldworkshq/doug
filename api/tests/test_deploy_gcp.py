@@ -46,10 +46,9 @@ def test_web_deploy_runs_as_doug_web_sa():
     assert "compute@developer.gserviceaccount.com" not in body
 
 
-def test_setup_creates_doug_web_sa_and_binds_only_its_workos_secrets(tmp_path):
-    """The public showcase is still anonymous, but AuthKit needs exactly its
-    four runtime values. A web identity that can read any API/operator secret
-    turns the public service into a credential boundary violation."""
+def test_setup_creates_doug_web_sa_and_binds_only_its_front_door_secrets(tmp_path):
+    """The public service gets AuthKit's four values and the purpose-scoped
+    flow signer. Any API/operator secret expands its blast radius."""
     setup = _function_body("setup")
     assert "service-accounts create doug-web-sa" in setup
     after_web = setup.split("service-accounts create doug-web-sa", 1)[1].split(
@@ -76,10 +75,13 @@ def test_setup_creates_doug_web_sa_and_binds_only_its_workos_secrets(tmp_path):
         "secrets add-iam-policy-binding doug-workos-redirect-uri --project doug-prod0 "
         "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
         "--role=roles/secretmanager.secretAccessor",
+        "secrets add-iam-policy-binding doug-install-flow-secret --project doug-prod0 "
+        "--member=serviceAccount:doug-web-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor",
     ]
 
 
-def test_web_deploy_carries_only_its_workos_secrets(tmp_path):
+def test_web_deploy_carries_only_its_front_door_secrets_and_plain_slug(tmp_path):
     """The runtime binding is independent of IAM. Sending an API/operator
     secret to this --allow-unauthenticated service leaks it even if the web
     service account cannot read it."""
@@ -89,11 +91,47 @@ def test_web_deploy_carries_only_its_workos_secrets(tmp_path):
         "WORKOS_CLIENT_ID=doug-workos-client-id:latest,"
         "WORKOS_API_KEY=doug-workos-api-key:latest,"
         "WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,"
-        "NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest"
+        "NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest,"
+        "DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest"
     )
     secret_argument = deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
     assert secret_argument == expected_secrets
-    assert "--set-env-vars DOUG_API_URL=,WORKOS_COOKIE_MAX_AGE=28800" in deploy
+    assert (
+        "--set-env-vars "
+        "DOUG_API_URL=,WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review"
+        in deploy
+    )
+
+
+def test_setup_generates_the_install_flow_secret_and_binds_exact_api_allowlist(tmp_path):
+    """Both services must share one dedicated signer; no operator or provider
+    credential may be substituted for it, and setup must bind it to the API
+    identity rather than relying on project-wide access."""
+    lines = _run_gcp(tmp_path, "setup")
+    assert "secrets create doug-install-flow-secret --data-file=- --project doug-prod0" in lines
+    api_bindings = [
+        line
+        for line in lines
+        if line.startswith("secrets add-iam-policy-binding")
+        and "doug-api-sa@doug-prod0.iam.gserviceaccount.com" in line
+    ]
+    expected_secrets = [
+        "doug-database-url",
+        "doug-api-token",
+        "doug-anthropic-key",
+        "doug-webhook-secret",
+        "doug-github-app-key",
+        "doug-token-pepper",
+        "doug-workos-api-key",
+        "doug-workos-client-id",
+        "doug-install-flow-secret",
+    ]
+    assert api_bindings == [
+        f"secrets add-iam-policy-binding {secret} --project doug-prod0 "
+        "--member=serviceAccount:doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/secretmanager.secretAccessor"
+        for secret in expected_secrets
+    ]
 
 
 def test_api_deploy_carries_the_showcase_repo():
@@ -674,17 +712,27 @@ def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
     assert len(describes) == 2
 
 
-def test_api_deploy_carries_the_workos_secrets(tmp_path):
-    """The bind endpoint cannot prove anything without WORKOS_API_KEY, and
-    session_auth cannot build a JWKS URL without WORKOS_CLIENT_ID — a
-    deployment missing either 503s the whole front door. They reach the
-    service only through this flag."""
+def test_api_deploy_carries_exact_secret_allowlist_including_flow_signer(tmp_path):
+    """The completion endpoint needs the shared signer, but no web session
+    cookie secret. Exactness prevents future credentials drifting in."""
     lines = _run_gcp(tmp_path, "deploy")
     [api_deploy] = [
         line for line in lines if line.startswith("run deploy doug-api --source .")
     ]
-    assert "WORKOS_API_KEY=doug-workos-api-key:latest" in api_deploy
-    assert "WORKOS_CLIENT_ID=doug-workos-client-id:latest" in api_deploy
+    expected = (
+        "DATABASE_URL=doug-database-url:latest,"
+        "DOUG_API_TOKEN=doug-api-token:latest,"
+        "ANTHROPIC_API_KEY=doug-anthropic-key:latest,"
+        "GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,"
+        "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,"
+        "DOUG_TOKEN_PEPPER=doug-token-pepper:latest,"
+        "WORKOS_API_KEY=doug-workos-api-key:latest,"
+        "WORKOS_CLIENT_ID=doug-workos-client-id:latest,"
+        "DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest"
+    )
+    actual = api_deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
+    assert actual == expected
+    assert "DOUG_GITHUB_APP_SLUG" not in api_deploy
 
 
 def test_setup_keeps_workos_identity_secrets_off_the_console_service_account():

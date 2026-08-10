@@ -1,4 +1,5 @@
 import datetime as _dt
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -738,6 +739,166 @@ def test_installations_carries_a_non_unique_installer_id(tmp_path, monkeypatch):
     assert cols["installed_by_github_user_id"].unique is not True, "must not be unique"
     assert cols["installed_by_github_user_id"].nullable is True
     assert isinstance(cols["installed_by_github_user_id"].type, BigInteger)
+
+
+def test_consumed_install_flows_is_a_digest_only_create_all_table(tmp_path, monkeypatch):
+    """The browser nonce is an authentication factor during the flow. The
+    ledger needs only its one-way lookup key; persisting the nonce itself
+    would turn a database read into a replay credential."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+
+    cols = {column.name: column for column in store.consumed_install_flows.columns}
+    assert set(cols) == {
+        "nonce_digest",
+        "workos_user_id",
+        "installation_id",
+        "consumed_at",
+    }
+    assert cols["nonce_digest"].primary_key is True
+    assert "consumed_install_flows" in inspect(create_engine(url)).get_table_names()
+
+
+def test_install_flow_consumption_is_inserted_before_the_authority_write(
+    tmp_path, monkeypatch
+):
+    """If the authority write happened first, a crash in between would bind
+    an installation while leaving its replay credential reusable. Both writes
+    belong to one transaction, with consumption first."""
+    from sqlalchemy.engine import Connection
+
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    raw_nonce = b"raw-install-flow-nonce-32-byte!"
+    digest = hashlib.sha256(raw_nonce).hexdigest()
+    statements = []
+    real_execute = Connection.execute
+
+    def record_execute(self, statement, *args, **kwargs):
+        statements.append(str(statement))
+        return real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "execute", record_execute)
+    result = store.consume_install_flow_and_bind(
+        digest,
+        "user_01ABC",
+        INSTALL,
+        "org_01ABC",
+        now=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    assert result == "bound"
+    insert_at = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO consumed_install_flows")
+    )
+    update_at = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("UPDATE installations")
+    )
+    assert insert_at < update_at
+    with create_engine(url).connect() as conn:
+        [consumed] = conn.execute(select(store.consumed_install_flows)).mappings().all()
+        bound = conn.execute(
+            select(store.installations.c.workos_org_id).where(
+                store.installations.c.installation_id == INSTALL
+            )
+        ).scalar_one()
+    assert consumed["nonce_digest"] == digest
+    assert consumed["workos_user_id"] == "user_01ABC"
+    assert consumed["installation_id"] == INSTALL
+    assert bound == "org_01ABC"
+    assert raw_nonce not in (tmp_path / "doug.db").read_bytes()
+
+
+def test_install_flow_bind_conflict_rolls_back_the_consumption(tmp_path, monkeypatch):
+    """A nonce is spent only by a successful authority write. If the target
+    WorkOS organization belongs to another installation, both the attempted
+    consumption and bind must roll back so the legitimate retry is possible."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    store.upsert_installation(INSTALL + 1, "other", "Organization", "active")
+    assert store.bind_installation_org(INSTALL + 1, "org_taken") == "org_taken"
+    digest = hashlib.sha256(b"conflicting-flow").hexdigest()
+
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_taken"
+        )
+        == "conflict"
+    )
+    assert store.install_flow_consumption(digest) is None
+    assert store.installation_bind_row(INSTALL)["workos_org_id"] is None
+
+
+def test_same_flow_replay_returns_success_without_a_second_authority_write(
+    tmp_path, monkeypatch
+):
+    """A network retry after a successful response was lost is safe, but it
+    must stop at the consumed record rather than repeat the bind side effect."""
+    from sqlalchemy.engine import Connection
+
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    digest = hashlib.sha256(b"one-flow").hexdigest()
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "bound"
+    )
+    statements = []
+    real_execute = Connection.execute
+
+    def record_execute(self, statement, *args, **kwargs):
+        statements.append(str(statement))
+        return real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "execute", record_execute)
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "replay"
+    )
+    assert not any(statement.startswith("UPDATE installations") for statement in statements)
+    assert not any(
+        statement.startswith("INSERT INTO consumed_install_flows")
+        for statement in statements
+    )
+
+
+def test_consumed_nonce_cannot_be_replayed_for_another_subject_or_installation(
+    tmp_path, monkeypatch
+):
+    """The digest is globally single-use. Replaying it with different
+    authority claims is an attack, not idempotency."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALL, "drewjst", "User", "active")
+    store.upsert_installation(INSTALL + 1, "other", "Organization", "active")
+    digest = hashlib.sha256(b"identity-bound-flow").hexdigest()
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL, "org_01ABC"
+        )
+        == "bound"
+    )
+
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_attacker", INSTALL, "org_01ABC"
+        )
+        == "mismatch"
+    )
+    assert (
+        store.consume_install_flow_and_bind(
+            digest, "user_01ABC", INSTALL + 1, "org_other"
+        )
+        == "mismatch"
+    )
+    assert store.installation_bind_row(INSTALL + 1)["workos_org_id"] is None
 
 
 def test_upsert_installation_records_the_installer_on_first_insert(tmp_path, monkeypatch):

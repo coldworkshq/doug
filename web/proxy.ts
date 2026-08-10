@@ -4,5 +4,5 @@ export default authkitProxy();
 
 // This must remain literal: Next statically analyzes proxy configuration.
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: ["/dashboard/:path*", "/install/start", "/install/callback"],
 };

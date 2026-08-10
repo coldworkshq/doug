@@ -34,7 +34,7 @@ async function withEntitlementServer(run) {
   }
 }
 
-test("AuthKit proxy leaves the public homepage and showcase queue outside session handling", async () => {
+test("AuthKit proxy injects optional callback session state without gating public pages", async () => {
   const { config } = await import("../proxy.ts");
   const { unstable_doesMiddlewareMatch } = await import("next/experimental/testing/server.js");
   const matches = (url) => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
@@ -42,6 +42,8 @@ test("AuthKit proxy leaves the public homepage and showcase queue outside sessio
   assert.equal(matches("/"), false);
   assert.equal(matches("/queue"), false);
   assert.equal(matches("/dashboard"), true);
+  assert.equal(matches("/install/start"), true);
+  assert.equal(matches("/install/callback"), true);
 });
 
 test("a successful callback without an upstream provider token leaves the API untouched", async () => {

@@ -1,5 +1,6 @@
 """HTTP surface. Routes stay thin: the product lives in features.py and scoring.py."""
 
+import hashlib
 import hmac
 import json
 import os
@@ -9,6 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
+from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -22,6 +24,7 @@ from . import (
     app_auth,
     entitlements,
     ingest,
+    install_flow,
     outcome_queue,
     precision,
     reader,
@@ -1291,6 +1294,90 @@ class BindRequest(BaseModel):
     installation_id: int
 
 
+class CompleteInstallFlowRequest(BaseModel):
+    """Only the installation and opaque flow proof cross the web/API seam.
+
+    `Any` is deliberate here. Pydantic's 422 body can include rejected input;
+    validating manually keeps an invalid flow token out of an echoed error.
+    """
+
+    installation_id: Any = None
+    flow_token: Any = None
+
+
+def _session_subject(authorization: str) -> str:
+    try:
+        claims = session_auth.verify_session_claims(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if claims is None:
+        raise HTTPException(status_code=401, detail="bad session")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        raise HTTPException(status_code=401, detail="bad session")
+    return workos_user_id
+
+
+def _prove_installer(installation_id: int, workos_user_id: str) -> tuple[dict, str]:
+    """Task 5's authority proof, shared by both bind entrances."""
+    row = store.installation_bind_row(installation_id)
+    if row is None or row["installed_by_github_user_id"] is None:
+        raise _not_found()
+    try:
+        idp_id = workos_client.github_user_id_for(workos_user_id)
+    except workos_client.WorkOSNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="workos not configured") from exc
+    except workos_client.WorkOSError as exc:
+        raise HTTPException(status_code=503, detail="workos unavailable") from exc
+    if idp_id is None:
+        raise _not_found()
+    claimed = str(idp_id).strip()
+    if not claimed.isdigit():
+        print(
+            f"doug: bind refused — WorkOS idp_id is not a numeric GitHub user id. "
+            f"Received {claimed!r} for installation {installation_id}. If this is the "
+            f"real GitHub identity format, the comparison in api._prove_installer "
+            f"needs updating; nothing binds until it is.",
+            file=sys.stderr,
+        )
+        raise _not_found()
+    if claimed != str(row["installed_by_github_user_id"]).strip():
+        raise _not_found()
+    return row, claimed
+
+
+def _current_proved_row(installation_id: int, row: dict, claimed: str) -> dict:
+    current = store.installation_bind_row(installation_id) or row
+    if claimed != str(current["installed_by_github_user_id"] or "").strip():
+        raise _not_found()
+    return current
+
+
+def _ensure_workos_binding(
+    installation_id: int, workos_user_id: str, current: dict
+) -> str:
+    external_id = workos_client.external_id_for(installation_id)
+    bound = current["workos_org_id"]
+    try:
+        if bound is not None:
+            organization_id = workos_client.find_organization(external_id)
+            if organization_id != bound:
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
+        else:
+            organization_id = workos_client.ensure_organization(
+                name=current["account_login"] or external_id, external_id=external_id
+            )
+        workos_client.ensure_membership(workos_user_id, organization_id)
+    except workos_client.WorkOSNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="workos not configured") from exc
+    except workos_client.WorkOSError as exc:
+        raise HTTPException(status_code=503, detail="workos unavailable") from exc
+    return organization_id
+
+
 @app.post("/v1/installations/bind", status_code=204)
 def bind_installation(body: BindRequest, authorization: str = Header("")) -> Response:
     """Bind a GitHub App installation to a WorkOS organization.
@@ -1338,112 +1425,84 @@ def bind_installation(body: BindRequest, authorization: str = Header("")) -> Res
     """
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-
-    # 1. Who is signed in. Nothing else about them is asserted — bind runs
-    #    BEFORE any organization exists, so resolve_session (which fails
-    #    closed without org_id) would be circular here.
-    try:
-        claims = session_auth.verify_session_claims(authorization)
-    except session_auth.SessionAuthNotConfigured as exc:
-        raise HTTPException(status_code=503, detail="session auth not configured") from exc
-    if claims is None:
-        raise HTTPException(status_code=401, detail="bad session")
-    workos_user_id = claims.get("sub")
-    if not isinstance(workos_user_id, str) or not workos_user_id:
-        raise HTTPException(status_code=401, detail="bad session")
-
+    workos_user_id = _session_subject(authorization)
     installation_id = body.installation_id
-
-    # 2. The ledger row, before any WorkOS call: an installation with no
-    #    recorded installer can never prove authority, so it costs WorkOS
-    #    nothing at all — not even the identity read.
-    row = store.installation_bind_row(installation_id)
-    if row is None or row["installed_by_github_user_id"] is None:
-        raise _not_found()
-
-    # 3. The identity hop. A read, not a write — it produces the id being
-    #    checked in step 4.
-    try:
-        idp_id = workos_client.github_user_id_for(workos_user_id)
-    except workos_client.WorkOSNotConfigured as exc:
-        raise HTTPException(status_code=503, detail="workos not configured") from exc
-    except workos_client.WorkOSError as exc:
-        # An outage is not a failed proof. Refusing here would tell a real
-        # installer their credentials were wrong during someone else's
-        # incident, and they would have no way to tell the difference.
-        raise HTTPException(status_code=503, detail="workos unavailable") from exc
-    if idp_id is None:
-        raise _not_found()
-
-    # 4. The comparison, as normalised strings.
-    #
-    #    idp_id's format for a GitHub connection is UNDOCUMENTED and was never
-    #    measured — WorkOS documents it only as "a unique identifier from the
-    #    external provider", with a Microsoft example. The inference is that
-    #    it is the numeric GitHub user id. If that inference is wrong, EVERY
-    #    bind fails, so the value is logged rather than silently denied: one
-    #    log query then diagnoses it instead of a permanent, invisible refusal.
-    claimed = str(idp_id).strip()
-    if not claimed.isdigit():
-        print(
-            f"doug: bind refused — WorkOS idp_id is not a numeric GitHub user id. "
-            f"Received {claimed!r} for installation {installation_id}. If this is the "
-            f"real GitHub identity format, the comparison in api.bind_installation "
-            f"needs updating; nothing binds until it is.",
-            file=sys.stderr,
-        )
-        raise _not_found()
-    if claimed != str(row["installed_by_github_user_id"]).strip():
-        raise _not_found()
-
-    # 5. Authority is proved. Only now may anything be created.
+    row, claimed = _prove_installer(installation_id, workos_user_id)
     with store.installation_bind_lock(installation_id):
-        # Re-read inside the lock: a peer bind may have committed between
-        # step 2 and here, and the value that matters is the current one.
-        current = store.installation_bind_row(installation_id) or row
-        # And re-prove against it. Step 4 checked a snapshot taken before a
-        # network call; an uninstall and reinstall by someone else inside that
-        # window rewrites installed_by_github_user_id, and binding on the
-        # stale fact would hand this tenant to the previous installer. The
-        # `or ""` keeps a row that became NULL refusing rather than raising.
-        if claimed != str(current["installed_by_github_user_id"] or "").strip():
-            raise _not_found()
-        external_id = workos_client.external_id_for(installation_id)
-        bound = current["workos_org_id"]
-        try:
-            if bound is not None:
-                # Already bound: resolve WITHOUT creating. Moving a live
-                # installation to another organization is a takeover, not an
-                # update, and this branch refuses it — so it must also leave
-                # nothing behind, or every refusal would orphan a fresh
-                # organization at WorkOS. A missing one refuses too: a row
-                # naming an organization its own external_id does not resolve
-                # to is inconsistent state, not a bind to complete.
-                organization_id = workos_client.find_organization(external_id)
-                if organization_id != bound:
-                    raise HTTPException(
-                        status_code=409, detail="installation is bound to another organization"
-                    )
-            else:
-                organization_id = workos_client.ensure_organization(
-                    name=current["account_login"] or external_id, external_id=external_id
-                )
-            workos_client.ensure_membership(workos_user_id, organization_id)
-        except workos_client.WorkOSNotConfigured as exc:
-            raise HTTPException(status_code=503, detail="workos not configured") from exc
-        except workos_client.WorkOSError as exc:
-            raise HTTPException(status_code=503, detail="workos unavailable") from exc
-
+        current = _current_proved_row(installation_id, row, claimed)
+        organization_id = _ensure_workos_binding(
+            installation_id, workos_user_id, current
+        )
         written = store.bind_installation_org(installation_id, organization_id)
         if written != organization_id:
-            # The row already carried a different organization, or this one
-            # belongs to another installation (workos_org_id is UNIQUE). Both
-            # are the same refusal: this bind did not happen.
             raise HTTPException(
                 status_code=409, detail="installation is bound to another organization"
             )
     print(
         f"doug: bound installation {installation_id} to organization {organization_id}",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
+
+
+@app.post("/v1/installations/bind/complete", status_code=204)
+def complete_install_flow(
+    body: CompleteInstallFlowRequest, authorization: str = Header("")
+) -> Response:
+    """Spend a signed installation flow after independently proving authority."""
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    workos_user_id = _session_subject(authorization)
+    installation_id = body.installation_id
+    token = body.flow_token
+    if (
+        isinstance(installation_id, bool)
+        or not isinstance(installation_id, int)
+        or installation_id <= 0
+        or not isinstance(token, str)
+        or not token
+    ):
+        raise _not_found()
+    try:
+        flow = install_flow.verify_install_flow(
+            token,
+            expected_subject=workos_user_id,
+            expected_installation_id=installation_id,
+        )
+    except install_flow.InstallFlowError as exc:
+        raise _not_found() from exc
+    nonce_digest = hashlib.sha256(flow.nonce).hexdigest()
+
+    with store.installation_bind_lock(installation_id):
+        consumed = store.install_flow_consumption(nonce_digest)
+        if consumed is not None:
+            if (
+                consumed["workos_user_id"] == workos_user_id
+                and consumed["installation_id"] == installation_id
+            ):
+                return Response(status_code=204)
+            raise _not_found()
+
+        row, claimed = _prove_installer(installation_id, workos_user_id)
+        current = _current_proved_row(installation_id, row, claimed)
+        organization_id = _ensure_workos_binding(
+            installation_id, workos_user_id, current
+        )
+        result = store.consume_install_flow_and_bind(
+            nonce_digest,
+            workos_user_id,
+            installation_id,
+            organization_id,
+        )
+        if result == "mismatch":
+            raise _not_found()
+        if result == "conflict":
+            raise HTTPException(
+                status_code=409, detail="installation is bound to another organization"
+            )
+    print(
+        f"doug: completed install flow for installation {installation_id} "
+        f"and organization {organization_id}",
         file=sys.stderr,
     )
     return Response(status_code=204)

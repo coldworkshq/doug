@@ -77,6 +77,12 @@ setup() {
     | gcloud secrets create doug-token-pepper --data-file=- --project "$PROJECT" 2>/dev/null \
     || echo "doug-token-pepper secret exists; leaving it"
 
+  # Purpose-scoped signer shared by doug-web and doug-api for the 30-minute
+  # installation flow. It is not the AuthKit cookie key or an operator token.
+  openssl rand -hex 32 | tr -d '\n' \
+    | gcloud secrets create doug-install-flow-secret --data-file=- --project "$PROJECT" 2>/dev/null \
+    || echo "doug-install-flow-secret secret exists; leaving it"
+
   STATE=$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT" \
     --format='value(state)' 2>/dev/null || echo CREATING)
   if [ "$STATE" != "RUNNABLE" ]; then
@@ -140,7 +146,8 @@ setup() {
   # binds read access and WARNs while they are missing.
   for s in doug-database-url doug-api-token doug-anthropic-key \
            doug-webhook-secret doug-github-app-key doug-token-pepper \
-           doug-workos-api-key doug-workos-client-id; do
+           doug-workos-api-key doug-workos-client-id \
+           doug-install-flow-secret; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -172,7 +179,8 @@ setup() {
   # here rather than sharing doug-api-sa: no API/operator credential belongs
   # in an --allow-unauthenticated service.
   for s in doug-workos-client-id doug-workos-api-key \
-           doug-workos-cookie-password doug-workos-redirect-uri; do
+           doug-workos-cookie-password doug-workos-redirect-uri \
+           doug-install-flow-secret; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -401,7 +409,7 @@ deploy() {
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest" \
     --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
@@ -530,7 +538,8 @@ web() {
   local traffic_flags="" image
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # DOUG_API_URL is read at request time by the public pages' server
-  # components. AuthKit gets only its four secrets (see setup()'s
+  # components. AuthKit gets its four secrets plus the purpose-scoped install
+  # flow signer (see setup()'s
   # doug-web-sa block); its cookie lifetime matches the eight-hour GitHub
   # user-token lifetime rather than AuthKit's 400-day default.
   # --service-account: deploying without it silently falls back to the
@@ -541,8 +550,8 @@ web() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
-    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800" \
-    --set-secrets "WORKOS_CLIENT_ID=doug-workos-client-id:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest" \
+    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review" \
+    --set-secrets "WORKOS_CLIENT_ID=doug-workos-client-id:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
     $traffic_flags
   # The web deploy had no verification at all: Cloud Run's readiness probe

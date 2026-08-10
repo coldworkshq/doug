@@ -8,11 +8,14 @@ export async function resolve(specifier, context, nextResolve) {
     // a no-op instead of loading the whole session stack in bare Node.
     return {
       shortCircuit: true,
-      url: "data:text/javascript,export const authkitProxy = () => () => new Response(); export const signOut = async () => { globalThis.__workosSignOutCalls = (globalThis.__workosSignOutCalls ?? 0) + 1; }; export const handleAuth = (options) => { globalThis.__workosHandleAuthOptions = options; return async () => new Response(); };",
+      url: "data:text/javascript,export const authkitProxy = () => () => new Response(); export const signOut = async () => { globalThis.__workosSignOutCalls = (globalThis.__workosSignOutCalls ?? 0) + 1; }; export const handleAuth = (options) => { globalThis.__workosHandleAuthOptions = options; return async () => new Response(); }; export const withAuth = async (options = {}) => { globalThis.__workosWithAuthOptions = [...(globalThis.__workosWithAuthOptions ?? []), options]; return globalThis.__workosAuth ?? { user: null }; }; export const getSignInUrl = async (options = {}) => { globalThis.__workosSignInCalls = [...(globalThis.__workosSignInCalls ?? []), options]; return globalThis.__workosSignInUrl ?? 'https://auth.workos.test/authorize'; };",
     };
   }
   if (specifier === "@/lib/entitlements") {
     return nextResolve(new URL("../../../lib/entitlements.ts", context.parentURL).href, context);
+  }
+  if (specifier === "@/lib/install-flow") {
+    return nextResolve(new URL("../../../lib/install-flow.ts", context.parentURL).href, context);
   }
   try {
     return await nextResolve(specifier, context);
