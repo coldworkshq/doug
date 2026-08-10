@@ -18,10 +18,64 @@ already durable, so a failure there must not cost the job that already
 succeeded.
 """
 
+import os
+import platform
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
-from . import app_auth, check_run, ingest, reader, review, store
+from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
+from .example_pack import CaptureScopeV0, NameVersionV0, PackScopeV0
 from .models import Band, Reason, Verdict
+
+_EXAMPLE_PACK_VERIFIER_VERSIONS = (
+    NameVersionV0(name="import-settlement", version="v0"),
+    NameVersionV0(name="schema-settlement", version="v0"),
+)
+
+
+def _tool_version(distribution: str) -> str:
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return "unavailable"
+
+
+def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
+    """Build only evidence-backed identity; never invent a missing base."""
+    base_sha = job.get("base_sha")
+    head_sha = job.get("head_sha")
+    if not isinstance(base_sha, str) or not base_sha:
+        return None
+    if not isinstance(head_sha, str) or not head_sha:
+        return None
+    return CaptureScopeV0(
+        run_id_prefix=(
+            f"review-job:{job['id']}:claim:{job['claim_generation']}"
+        ),
+        scope=PackScopeV0(
+            installation_id=job["installation_id"],
+            github_repository_id=job["github_repo_id"],
+            repository_full_name=job["repo_full_name"],
+            pull_number=job["pr_number"],
+            admitted_base_sha=base_sha,
+            admitted_head_sha=head_sha,
+        ),
+        read_order=review.READ_ORDER,
+        input_policy_version=reader.INPUT_POLICY_VERSION,
+        coverage_policy_version=reader.COVERAGE_POLICY_VERSION,
+        verifier_versions=_EXAMPLE_PACK_VERIFIER_VERSIONS,
+        tool_versions=(
+            NameVersionV0(name="anthropic-sdk", version=_tool_version("anthropic")),
+            NameVersionV0(name="pydantic", version=_tool_version("pydantic")),
+            NameVersionV0(name="python", version=platform.python_version()),
+        ),
+        application_revision=os.environ.get("DOUG_APPLICATION_REVISION") or None,
+        runtime_revision=(
+            os.environ.get("DOUG_RUNTIME_REVISION")
+            or os.environ.get("K_REVISION")
+            or None
+        ),
+    )
 
 
 def _replay_recorded(
@@ -179,10 +233,18 @@ def process_job(job: dict) -> int | None:
     def resolve(path: str) -> str | None:
         return review.head_file_text(gh, owner, name, job["head_sha"], path)
 
-    tier, verdict, rv, cov = review.score_one(
-        meta, diff, scope=scope, resolve_file=resolve, resolve_schema=store.columns_of
+    pack_context = example_pack_capture.capture_scope_if_enabled(
+        lambda: _example_pack_scope(job),
+        run_id_prefix=(
+            f"review-job:{job.get('id', 'unknown')}:"
+            f"claim:{job.get('claim_generation', 'unknown')}"
+        ),
     )
-    intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
+    with pack_context:
+        tier, verdict, rv, cov = review.score_one(
+            meta, diff, scope=scope, resolve_file=resolve, resolve_schema=store.columns_of
+        )
+        intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):
         verdict.reasons.append(

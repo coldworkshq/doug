@@ -123,6 +123,24 @@ def test_apply_reports_only_newly_applied_versions(tmp_path):
     assert migrations.apply(engine) == []
 
 
+def test_unapplied_migrations_uses_exact_membership_not_contiguous_versions():
+    plan = [
+        (1, ("one",)),
+        (2, ("two",)),
+        (3, ("three",)),
+        (4, ("four",)),
+        (5, ("five",)),
+        (6, ("six",)),
+        (7, ("seven",)),
+        (8, ("eight",)),
+        (10, ("ten",)),
+        (9, ("nine",)),
+    ]
+    applied = {1, 2, 3, 4, 5, 6, 7, 8, 10}
+
+    assert migrations.unapplied_migrations(plan, applied) == [(9, ("nine",))]
+
+
 def test_migration_001_declares_the_same_columns_as_the_verdicts_table(tmp_path):
     """The App columns are written down twice — in store.verdicts, which is
     what a fresh database gets, and in migration 001, which is what production

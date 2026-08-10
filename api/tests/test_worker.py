@@ -6,13 +6,25 @@ scoring, intent read, check run) and assert on what survives in the
 ledger, because the ledger row is the product — the check run is a copy.
 """
 
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine, select
 
-from doug import app_auth, check_run, ingest, reader, review, store, worker
+from doug import (
+    app_auth,
+    check_run,
+    example_pack_capture,
+    ingest,
+    reader,
+    review,
+    store,
+    worker,
+)
+from doug.example_pack import ExamplePackV0, FileExamplePackStore
 from doug.models import Band, PRMetadata, Reason, Verdict
 
 JOB = dict(
@@ -154,6 +166,53 @@ def _wire(
     return posted
 
 
+class _ReaderMessages:
+    def __init__(self):
+        self.calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=json.dumps(RV.model_dump()))],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=1200, output_tokens=340),
+        )
+
+
+class _ReaderClient:
+    def __init__(self):
+        self.messages = _ReaderMessages()
+
+
+def _wire_real_reader(monkeypatch, *, heads=None, bases=None):
+    posted: list[dict] = []
+    gh = _gh(heads, bases)
+    client = _ReaderClient()
+    monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
+    monkeypatch.setattr(review, "fetch_pr", lambda gh, o, r, n: (_pr(), "+ x"))
+    monkeypatch.setattr(reader, "_client", lambda: client)
+    monkeypatch.setenv("DOUG_READER", "1")
+    monkeypatch.delenv("DOUG_INTENT_INSTALLATIONS", raising=False)
+    monkeypatch.setattr(
+        check_run,
+        "post",
+        lambda gh, o, r, sha, title, summary: posted.append(
+            dict(owner=o, repo=r, head_sha=sha, title=title, summary=summary)
+        ),
+    )
+    return posted, client
+
+
+def _captured_packs(root) -> list[ExamplePackV0]:
+    directory = root / "packs/sha256"
+    if not directory.is_dir():
+        return []
+    return [
+        ExamplePackV0.model_validate_json(path.read_bytes())
+        for path in sorted(directory.iterdir())
+    ]
+
+
 def _rows(url, table):
     with create_engine(url).connect() as conn:
         return [dict(r) for r in conn.execute(select(table)).mappings()]
@@ -192,6 +251,224 @@ def test_process_job_persists_with_the_app_identity_columns(tmp_path, monkeypatc
     assert v["repo"] == "drewjst/doug" and v["pr_number"] == 7
     assert v["tier"] == "reader" and v["model"] == reader.MODEL
     assert j["id"] == job_id and j["status"] == "done" and j["verdict_id"] == verdict_id
+
+
+def test_process_job_scopes_capture_to_claimed_job_identity(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    capture_root = tmp_path / "packs"
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(capture_root))
+    monkeypatch.setenv("DOUG_APPLICATION_REVISION", "app-revision")
+    monkeypatch.setenv("DOUG_RUNTIME_REVISION", "runtime-revision")
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (pack,) = _captured_packs(capture_root)
+    assert pack.run_id == f"review-job:{job_id}:claim:1:risk"
+    assert pack.scope.installation_id == JOB["installation_id"]
+    assert pack.scope.github_repository_id == JOB["github_repo_id"]
+    assert pack.scope.repository_full_name == JOB["repo_full_name"]
+    assert pack.scope.pull_number == JOB["pr_number"]
+    assert pack.scope.admitted_base_sha == JOB["base_sha"]
+    assert pack.scope.admitted_head_sha == JOB["head_sha"]
+    assert pack.instrument_manifest.application_revision == "app-revision"
+    assert pack.instrument_manifest.runtime_revision == "runtime-revision"
+    assert pack.instrument_manifest.read_order == review.READ_ORDER
+    assert pack.instrument_manifest.input_policy_version == reader.INPUT_POLICY_VERSION
+    assert pack.instrument_manifest.coverage_policy_version == reader.COVERAGE_POLICY_VERSION
+    assert client.messages.calls == 1
+    (job,) = _rows(url, store.review_jobs)
+    assert job["status"] == "done" and job["verdict_id"] == verdict_id
+    assert len(posted) == 1
+
+
+def test_capture_revision_identity_uses_only_explicit_runtime_inputs(monkeypatch):
+    job = {
+        **JOB,
+        "id": 9,
+        "claim_generation": 3,
+    }
+    monkeypatch.delenv("DOUG_APPLICATION_REVISION", raising=False)
+    monkeypatch.delenv("DOUG_RUNTIME_REVISION", raising=False)
+    monkeypatch.delenv("K_REVISION", raising=False)
+    monkeypatch.setenv("GITHUB_SHA", "developer-checkout-must-not-be-used")
+
+    local = worker._example_pack_scope(job)
+
+    assert local.application_revision is None
+    assert local.runtime_revision is None
+
+    monkeypatch.setenv("K_REVISION", "cloud-run-revision")
+    cloud_run = worker._example_pack_scope(job)
+    assert cloud_run.runtime_revision == "cloud-run-revision"
+
+    monkeypatch.setenv("DOUG_RUNTIME_REVISION", "explicit-runtime")
+    explicit = worker._example_pack_scope(job)
+    assert explicit.runtime_revision == "explicit-runtime"
+
+
+def test_capture_scope_never_fabricates_a_missing_admitted_base():
+    assert worker._example_pack_scope(
+        {**JOB, "id": 9, "claim_generation": 1, "base_sha": None}
+    ) is None
+
+
+def test_retry_claim_generation_creates_distinct_stable_run_ids(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _wire_real_reader(monkeypatch)
+    capture_root = tmp_path / "packs"
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(capture_root))
+    job_id = ingest.enqueue(**JOB)
+    first_claim = ingest.claim()
+    real_save = store.save_review
+
+    def fail_after_read(*args, **kwargs):
+        raise RuntimeError("after read")
+
+    monkeypatch.setattr(store, "save_review", fail_after_read)
+
+    with pytest.raises(RuntimeError, match="after read"):
+        worker.process_job(first_claim)
+    assert ingest.fail(
+        job_id, "after read", claim_generation=first_claim["claim_generation"]
+    )
+
+    monkeypatch.setattr(store, "save_review", real_save)
+    second_claim = ingest.claim()
+    assert second_claim["claim_generation"] == 2
+    worker.process_job(second_claim)
+
+    assert {pack.run_id for pack in _captured_packs(capture_root)} == {
+        f"review-job:{job_id}:claim:1:risk",
+        f"review-job:{job_id}:claim:2:risk",
+    }
+
+
+def test_existing_verdict_replay_creates_no_example_pack(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    capture_root = tmp_path / "packs"
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(capture_root))
+    job_id = ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    verdict_id = store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        model=reader.MODEL,
+        prompt_hash=reader.PROMPT_HASH,
+        diff_budget=reader.DIFF_BUDGET,
+        read_order=review.READ_ORDER,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV,
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+
+    assert claimed["id"] == job_id
+    assert worker.process_job(claimed) == verdict_id
+    assert _captured_packs(capture_root) == []
+
+
+class _FailingPackStore(FileExamplePackStore):
+    def put_pack(self, pack):
+        raise RuntimeError("capture storage unavailable")
+
+
+def test_capture_failure_cannot_fail_the_worker_delivery(
+    tmp_path, monkeypatch, capsys
+):
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    sink = _FailingPackStore(tmp_path / "failing-packs")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(sink.root))
+    monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (verdict,) = _rows(url, store.verdicts)
+    (job,) = _rows(url, store.review_jobs)
+    assert verdict["id"] == verdict_id
+    assert job["id"] == job_id and job["status"] == "done"
+    assert job["verdict_id"] == verdict_id
+    assert client.messages.calls == 1
+    assert len(posted) == 1
+    assert "example-pack capture failed" in capsys.readouterr().err
+
+
+def test_disabled_capture_does_not_build_a_worker_scope(tmp_path, monkeypatch):
+    """Default-off capture cannot add validation or metadata work to a job."""
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    monkeypatch.setattr(
+        worker,
+        "_example_pack_scope",
+        lambda _job: pytest.fail("disabled capture built a worker scope"),
+    )
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "done"
+    assert job["verdict_id"] == verdict_id
+    assert client.messages.calls == 1
+    assert len(posted) == 1
+
+
+def test_worker_scope_construction_failure_cannot_fail_delivery(
+    tmp_path, monkeypatch, capsys
+):
+    """An enabled optional sink cannot turn malformed capture metadata into job loss."""
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    capture_root = tmp_path / "packs"
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(capture_root))
+
+    def fail_scope(_job):
+        raise ValueError("invalid optional capture scope")
+
+    capture_metadata_calls = 0
+
+    def fail_capture_metadata(_pr, _diff):
+        nonlocal capture_metadata_calls
+        capture_metadata_calls += 1
+        raise RuntimeError("capture metadata should have been suppressed")
+
+    monkeypatch.setattr(worker, "_example_pack_scope", fail_scope)
+    monkeypatch.setattr(reader, "_capture_coverage", fail_capture_metadata)
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "done"
+    assert job["verdict_id"] == verdict_id
+    assert client.messages.calls == 1
+    assert len(posted) == 1
+    assert _captured_packs(capture_root) == []
+    assert capture_metadata_calls == 0
+    diagnostics = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if "example-pack" in line
+    ]
+    assert len(diagnostics) == 1
+    assert "example-pack capture failed" in diagnostics[0]
+    assert "ValueError" in diagnostics[0]
 
 
 def test_the_reader_tier_records_the_coverage_it_read_at(tmp_path, monkeypatch):
