@@ -367,6 +367,92 @@ def test_disabled_capture_writes_nothing_and_preserves_exact_sdk_kwargs(
     assert not sentinel.exists()
 
 
+@pytest.mark.parametrize("attempt_kind", ["risk", "intent"])
+def test_disabled_capture_never_canonicalizes_the_full_request(
+    monkeypatch, attempt_kind
+):
+    """Default-off instrumentation must not inspect or serialize the prompt."""
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    canonicalized: list[object] = []
+    real_canonical = example_pack_capture.canonical_json_bytes
+
+    def observe_canonicalization(value):
+        canonicalized.append(value)
+        return real_canonical(value)
+
+    monkeypatch.setattr(
+        example_pack_capture, "canonical_json_bytes", observe_canonicalization
+    )
+    client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
+
+    if attempt_kind == "risk":
+        returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+    else:
+        returned = reader.read_with_decisions(
+            _pr(), "+ x", DOCS, scope=SCOPE, client=client
+        )
+
+    assert returned.risk_score == 62
+    assert client.messages.calls == 1
+    assert canonicalized == []
+
+
+@pytest.mark.parametrize("attempt_kind", ["risk", "intent"])
+def test_request_capture_serialization_failure_cannot_change_the_live_read(
+    tmp_path, monkeypatch, capsys, attempt_kind
+):
+    """The SDK call remains authoritative when optional capture cannot serialize."""
+    _enable_capture(monkeypatch, tmp_path)
+
+    def fail_canonicalization(_value):
+        raise RuntimeError("request capture unavailable")
+
+    monkeypatch.setattr(
+        example_pack_capture, "canonical_json_bytes", fail_canonicalization
+    )
+    client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
+
+    with example_pack_capture.capture_scope(_capture_scope()):
+        if attempt_kind == "risk":
+            returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+        else:
+            returned = reader.read_with_decisions(
+                _pr(), "+ x", DOCS, scope=SCOPE, client=client
+            )
+
+    assert returned.risk_score == 62
+    assert client.messages.calls == 1
+    expected_schema = reader.SCHEMA if attempt_kind == "risk" else reader.INTENT_SCHEMA
+    expected_system = (
+        reader.SYSTEM if attempt_kind == "risk" else reader.DECISION_INTENT_SYSTEM
+    )
+    expected_content = (
+        reader._user_text(_pr(), "+ x")
+        if attempt_kind == "risk"
+        else reader._intent_text(_pr(), "+ x", DOCS)
+    )
+    assert client.messages.last_kwargs == {
+        "model": reader.MODEL,
+        "max_tokens": reader.MAX_TOKENS,
+        "output_config": {
+            "effort": reader.EFFORT,
+            "format": {"type": "json_schema", "schema": expected_schema},
+        },
+        "system": expected_system,
+        "messages": [{"role": "user", "content": expected_content}],
+    }
+    assert not (tmp_path / "packs").exists()
+    diagnostics = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if "example-pack" in line
+    ]
+    assert len(diagnostics) == 1
+    assert "example-pack capture failed" in diagnostics[0]
+    assert "RuntimeError" in diagnostics[0]
+
+
 class _FailingPackStore(FileExamplePackStore):
     def put_pack(self, pack):
         raise RuntimeError("pack sink unavailable")
@@ -376,6 +462,7 @@ def test_capture_storage_failure_cannot_change_successful_reader_result(
     tmp_path, monkeypatch, capsys
 ):
     sink = _FailingPackStore(tmp_path)
+    _enable_capture(monkeypatch, tmp_path)
     monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
     client = FakeClient()
 
@@ -393,6 +480,7 @@ def test_capture_storage_failure_cannot_replace_transport_reader_error(
     tmp_path, monkeypatch, capsys
 ):
     sink = _FailingPackStore(tmp_path)
+    _enable_capture(monkeypatch, tmp_path)
     monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
 
     with example_pack_capture.capture_scope(_capture_scope()):

@@ -592,12 +592,19 @@ def _record_attempt(
     fallback_state: str,
     system: str,
     schema: dict,
+    request_error_type: str | None = None,
 ) -> None:
     """One best-effort boundary: no capture error may escape into a read."""
+    if (
+        not example_pack_capture.capture_requested()
+        or example_pack_capture.capture_suppressed()
+    ):
+        return
     try:
         example_pack_capture.record_attempt(
             attempt_kind=attempt_kind,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             evidence_bytes=diff.encode("utf-8"),
             raw_output_bytes=raw_output_bytes,
             parsed_output=parsed_output,
@@ -686,7 +693,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         "system": SYSTEM,
         "messages": [{"role": "user", "content": _user_text(pr, diff)}],
     }
-    request_bytes = canonical_json_bytes(request)
+    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(request)
     try:
         response = client.messages.create(**request)
     except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
@@ -695,6 +702,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=None,
             parsed_output=None,
             response=None,
@@ -721,6 +729,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=raw_output_bytes,
             parsed_output=None,
             response=response,
@@ -741,6 +750,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=raw_output_bytes,
             parsed_output=None,
             response=response,
@@ -757,6 +767,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         pr=pr,
         diff=diff,
         request_bytes=request_bytes,
+        request_error_type=request_error_type,
         raw_output_bytes=raw_output_bytes,
         parsed_output=verdict.model_dump(mode="json"),
         response=response,
@@ -854,7 +865,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         "system": DECISION_INTENT_SYSTEM,
         "messages": [{"role": "user", "content": _intent_text(pr, diff, docs)}],
     }
-    request_bytes = canonical_json_bytes(request)
+    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(request)
     try:
         response = client.messages.create(**request)
     except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception
@@ -863,6 +874,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=None,
             parsed_output=None,
             response=None,
@@ -884,6 +896,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=raw_output_bytes,
             parsed_output=None,
             response=response,
@@ -904,6 +917,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
             pr=pr,
             diff=diff,
             request_bytes=request_bytes,
+            request_error_type=request_error_type,
             raw_output_bytes=raw_output_bytes,
             parsed_output=None,
             response=response,
@@ -920,6 +934,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         pr=pr,
         diff=diff,
         request_bytes=request_bytes,
+        request_error_type=request_error_type,
         raw_output_bytes=raw_output_bytes,
         parsed_output=verdict.model_dump(mode="json"),
         response=response,

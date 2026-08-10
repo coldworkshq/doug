@@ -21,7 +21,6 @@ succeeded.
 import os
 import platform
 import sys
-from contextlib import nullcontext
 from importlib.metadata import PackageNotFoundError, version
 
 from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
@@ -234,11 +233,12 @@ def process_job(job: dict) -> int | None:
     def resolve(path: str) -> str | None:
         return review.head_file_text(gh, owner, name, job["head_sha"], path)
 
-    pack_scope = _example_pack_scope(job)
-    pack_context = (
-        example_pack_capture.capture_scope(pack_scope)
-        if pack_scope is not None
-        else nullcontext()
+    pack_context = example_pack_capture.capture_scope_if_enabled(
+        lambda: _example_pack_scope(job),
+        run_id_prefix=(
+            f"review-job:{job.get('id', 'unknown')}:"
+            f"claim:{job.get('claim_generation', 'unknown')}"
+        ),
     )
     with pack_context:
         tier, verdict, rv, cov = review.score_one(

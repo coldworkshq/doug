@@ -389,6 +389,8 @@ def test_capture_failure_cannot_fail_the_worker_delivery(
     url = _db(tmp_path, monkeypatch)
     posted, client = _wire_real_reader(monkeypatch)
     sink = _FailingPackStore(tmp_path / "failing-packs")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(sink.root))
     monkeypatch.setattr(example_pack_capture, "configured_store", lambda environ=None: sink)
     job_id = ingest.enqueue(**JOB)
 
@@ -402,6 +404,71 @@ def test_capture_failure_cannot_fail_the_worker_delivery(
     assert client.messages.calls == 1
     assert len(posted) == 1
     assert "example-pack capture failed" in capsys.readouterr().err
+
+
+def test_disabled_capture_does_not_build_a_worker_scope(tmp_path, monkeypatch):
+    """Default-off capture cannot add validation or metadata work to a job."""
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    monkeypatch.setattr(
+        worker,
+        "_example_pack_scope",
+        lambda _job: pytest.fail("disabled capture built a worker scope"),
+    )
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "done"
+    assert job["verdict_id"] == verdict_id
+    assert client.messages.calls == 1
+    assert len(posted) == 1
+
+
+def test_worker_scope_construction_failure_cannot_fail_delivery(
+    tmp_path, monkeypatch, capsys
+):
+    """An enabled optional sink cannot turn malformed capture metadata into job loss."""
+    url = _db(tmp_path, monkeypatch)
+    posted, client = _wire_real_reader(monkeypatch)
+    capture_root = tmp_path / "packs"
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_CAPTURE", "1")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(capture_root))
+
+    def fail_scope(_job):
+        raise ValueError("invalid optional capture scope")
+
+    capture_metadata_calls = 0
+
+    def fail_capture_metadata(_pr, _diff):
+        nonlocal capture_metadata_calls
+        capture_metadata_calls += 1
+        raise RuntimeError("capture metadata should have been suppressed")
+
+    monkeypatch.setattr(worker, "_example_pack_scope", fail_scope)
+    monkeypatch.setattr(reader, "_capture_coverage", fail_capture_metadata)
+    job_id = ingest.enqueue(**JOB)
+
+    verdict_id = worker.process_job(ingest.claim())
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["id"] == job_id and job["status"] == "done"
+    assert job["verdict_id"] == verdict_id
+    assert client.messages.calls == 1
+    assert len(posted) == 1
+    assert _captured_packs(capture_root) == []
+    assert capture_metadata_calls == 0
+    diagnostics = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if "example-pack" in line
+    ]
+    assert len(diagnostics) == 1
+    assert "example-pack capture failed" in diagnostics[0]
+    assert "ValueError" in diagnostics[0]
 
 
 def test_the_reader_tier_records_the_coverage_it_read_at(tmp_path, monkeypatch):

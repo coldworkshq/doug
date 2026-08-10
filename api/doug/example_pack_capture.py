@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -23,6 +23,7 @@ from .example_pack import (
     NameVersionV0,
     UsageV0,
     WholeInstrumentManifestV0,
+    canonical_json_bytes,
     parsed_finding_values,
     sha256_hex,
 )
@@ -43,6 +44,25 @@ class CaptureResultV0(FrozenModel):
 _CAPTURE_SCOPE: ContextVar[CaptureScopeV0 | None] = ContextVar(
     "doug_example_pack_capture_scope", default=None
 )
+_CAPTURE_SUPPRESSED: ContextVar[str | None] = ContextVar(
+    "doug_example_pack_capture_suppressed", default=None
+)
+
+
+def capture_requested(environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether both explicit opt-in settings are present."""
+
+    values = os.environ if environ is None else environ
+    return (
+        values.get("DOUG_EXAMPLE_PACK_CAPTURE") == "1"
+        and bool(values.get("DOUG_EXAMPLE_PACK_DIR"))
+    )
+
+
+def capture_suppressed() -> bool:
+    """Return whether this context already reported a scope-construction failure."""
+
+    return _CAPTURE_SUPPRESSED.get() is not None
 
 
 def current_scope() -> CaptureScopeV0 | None:
@@ -58,17 +78,61 @@ def capture_scope(scope: CaptureScopeV0) -> Iterator[None]:
         _CAPTURE_SCOPE.reset(token)
 
 
+@contextmanager
+def capture_scope_if_enabled(
+    scope_factory: Callable[[], CaptureScopeV0 | None], *, run_id_prefix: str
+) -> Iterator[None]:
+    """Build optional worker identity lazily without exposing capture failures."""
+
+    if not capture_requested():
+        yield
+        return
+    try:
+        scope = scope_factory()
+    except Exception as exc:  # noqa: BLE001 - capture cannot break a job
+        error_type = type(exc).__name__[:120]
+        _diagnostic(
+            f"doug: example-pack capture failed run_id={run_id_prefix} "
+            f"error={error_type}"
+        )
+        token = _CAPTURE_SUPPRESSED.set(error_type)
+        try:
+            yield
+        finally:
+            _CAPTURE_SUPPRESSED.reset(token)
+        return
+    if scope is None:
+        yield
+        return
+    with capture_scope(scope):
+        yield
+
+
+def prepare_request_bytes(value: object) -> tuple[bytes | None, str | None]:
+    """Canonicalize only capture-eligible requests and contain any failure."""
+
+    if (
+        not capture_requested()
+        or current_scope() is None
+        or capture_suppressed()
+    ):
+        return None, None
+    try:
+        return canonical_json_bytes(value), None
+    except Exception as exc:  # noqa: BLE001 - capture cannot break a read
+        return None, type(exc).__name__[:120]
+
+
 def configured_store(
     environ: Mapping[str, str] | None = None,
 ) -> FileExamplePackStore | None:
     """Return the explicitly enabled local sink without creating it."""
 
     values = os.environ if environ is None else environ
-    if values.get("DOUG_EXAMPLE_PACK_CAPTURE") != "1":
+    if not capture_requested(values):
         return None
     configured = values.get("DOUG_EXAMPLE_PACK_DIR")
-    if not configured:
-        return None
+    assert configured is not None  # capture_requested requires a non-empty value
     root = Path(configured)
     if not root.is_absolute():
         raise CaptureConfigurationError("DOUG_EXAMPLE_PACK_DIR must be absolute")
@@ -102,9 +166,15 @@ def record_attempt(
     diff_budget: int,
     store: ExamplePackStore | None = None,
     captured_at: datetime | None = None,
+    request_error_type: str | None = None,
 ) -> CaptureResultV0:
     """Append one terminal attempt, never changing the reader's outcome."""
 
+    suppressed_error = _CAPTURE_SUPPRESSED.get()
+    if suppressed_error is not None:
+        return CaptureResultV0(
+            enabled=True, captured=False, error_type=suppressed_error
+        )
     scope = current_scope()
     try:
         sink = configured_store() if store is None else store
@@ -121,6 +191,14 @@ def record_attempt(
         return CaptureResultV0(enabled=True, captured=False, error_type="MissingCaptureScope")
 
     run_id = f"{scope.run_id_prefix}:{attempt_kind}"
+    if request_error_type is not None:
+        _diagnostic(
+            f"doug: example-pack capture failed run_id={run_id} "
+            f"error={request_error_type[:120]}"
+        )
+        return CaptureResultV0(
+            enabled=True, captured=False, error_type=request_error_type[:120]
+        )
     try:
         request_ref = (
             sink.put_blob(request_bytes, media_type="application/json")
