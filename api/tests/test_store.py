@@ -759,6 +759,19 @@ def test_consumed_install_flows_is_a_digest_only_create_all_table(tmp_path, monk
     assert "consumed_install_flows" in inspect(create_engine(url)).get_table_names()
 
 
+def test_install_flow_nonce_lock_has_a_bounded_local_pool_and_negative_pg_namespace():
+    """Attacker-selected nonces cannot allocate one immortal process lock
+    apiece, and their Postgres advisory keys cannot collide with the positive
+    installation-id namespace."""
+    digests = [hashlib.sha256(str(i).encode()).hexdigest() for i in range(4096)]
+    local_locks = {id(store._install_flow_local_lock(digest)) for digest in digests}
+    advisory_keys = [store._install_flow_advisory_key(digest) for digest in digests]
+
+    assert 1 < len(local_locks) <= 256
+    assert all(-(2**63) <= key < 0 for key in advisory_keys)
+    assert store._install_flow_advisory_key(digests[0]) == advisory_keys[0]
+
+
 def test_install_flow_consumption_is_inserted_before_the_authority_write(
     tmp_path, monkeypatch
 ):

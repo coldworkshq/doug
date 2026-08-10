@@ -121,17 +121,35 @@ def test_flow_verification_refuses_every_untrusted_boundary(
         )
 
 
-def test_missing_secret_and_errors_never_echo_sensitive_flow_material(monkeypatch):
+def test_missing_or_short_secret_is_a_named_token_safe_configuration_fault(monkeypatch):
     monkeypatch.delenv("DOUG_INSTALL_FLOW_SECRET", raising=False)
     secret = "secret-that-must-not-appear"
     raw_nonce = "raw-nonce-that-must-not-appear"
     bad_token = f"{FIXTURE_TOKEN}.{raw_nonce}.{secret}"
 
-    with pytest.raises(install_flow.InstallFlowError) as caught:
-        install_flow.verify_install_flow(bad_token)
+    for configured_secret in (None, "short-secret"):
+        with pytest.raises(install_flow.InstallFlowConfigurationError) as caught:
+            install_flow.verify_install_flow(bad_token, secret=configured_secret)
 
-    message = str(caught.value)
-    assert message == "invalid install flow"
-    assert FIXTURE_TOKEN not in message
-    assert raw_nonce not in message
-    assert secret not in message
+        message = str(caught.value)
+        assert message == "install flow not configured"
+        assert FIXTURE_TOKEN not in message
+        assert raw_nonce not in message
+        assert secret not in message
+
+
+def test_setup_generated_64_hex_secret_is_accepted():
+    secret = "a" * 64
+    token = install_flow.seal_install_flow(
+        nonce=FIXTURE_NONCE,
+        expires_at=2_000_000_000,
+        subject="user_01ABC",
+        installation_id=1001,
+        secret=secret,
+    )
+
+    flow = install_flow.verify_install_flow(
+        token, now=1_999_999_999, secret=secret
+    )
+
+    assert flow.installation_id == 1001

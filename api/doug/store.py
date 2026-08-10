@@ -431,6 +431,20 @@ _engine = None
 # DATABASE_URL — and rebuilt the engine, pool and all, on every call.
 _engine_url = None
 _engine_lock = threading.Lock()
+# Nonce values are attacker-selected. A fixed pool bounds process memory while
+# still ensuring every equal digest takes the same in-process lock. Postgres
+# adds the cross-instance half in install_flow_lock below.
+_INSTALL_FLOW_LOCAL_LOCKS = tuple(threading.Lock() for _ in range(64))
+
+
+def _install_flow_local_lock(nonce_digest: str):
+    return _INSTALL_FLOW_LOCAL_LOCKS[int(nonce_digest, 16) % len(_INSTALL_FLOW_LOCAL_LOCKS)]
+
+
+def _install_flow_advisory_key(nonce_digest: str) -> int:
+    """Map a SHA-256 digest into Postgres's negative signed-bigint namespace."""
+    positive = int(nonce_digest[:16], 16) & ((1 << 63) - 1)
+    return -(positive + 1)
 
 
 def _get_existing_schema_engine():
@@ -2434,10 +2448,9 @@ def installation_bind_lock(installation_id: int):
     guards makes HTTP calls, and holding an open transaction idle across them
     is what keeps a vacuum from reclaiming rows for as long as WorkOS is slow.
 
-    The key is the installation id itself. This is the only advisory lock in
-    the codebase, so the bigint space is unshared and there is nothing to
-    collide with — a second user of pg_advisory_lock must namespace against
-    this one.
+    The key is the positive installation id itself. Install-flow nonce locks
+    use only negative bigint keys, so the two authority namespaces cannot
+    collide.
     """
     engine = _get_engine()
     if engine is None:
@@ -2453,6 +2466,33 @@ def installation_bind_lock(installation_id: int):
             yield
         finally:
             conn.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+
+
+@contextmanager
+def install_flow_lock(nonce_digest: str):
+    """Serialize one flow nonce before any external authority call.
+
+    The fixed local stripe prevents same-process races on sqlite and bounds
+    attacker-driven lock allocation. A negative Postgres advisory key extends
+    the same digest lock across service instances without colliding with the
+    positive installation-id lock namespace.
+    """
+    local_lock = _install_flow_local_lock(nonce_digest)
+    with local_lock:
+        engine = _get_engine()
+        if engine is None:
+            yield
+            return
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            if conn.dialect.name != "postgresql":
+                yield
+                return
+            key = {"key": _install_flow_advisory_key(nonce_digest)}
+            conn.execute(text("SELECT pg_advisory_lock(:key)"), key)
+            try:
+                yield
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(:key)"), key)
 
 
 def bind_installation_org(installation_id: int, org_id: str) -> str | None:

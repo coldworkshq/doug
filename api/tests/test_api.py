@@ -3714,6 +3714,162 @@ def test_spent_flow_replayed_for_another_subject_is_refused_before_workos(
     assert fake.calls == []
 
 
+def test_install_flow_completion_parses_untrusted_bodies_without_fastapi_echo(
+    tmp_path, monkeypatch
+):
+    """FastAPI's model errors include rejected input. The flow token is a
+    browser-held proof, so every wrong media type/shape/syntax is refused by
+    Doug's constant response rather than by a framework-generated 422."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    marker = "flow-token-marker-that-must-not-echo"
+    cases = [
+        ("application/json", json.dumps(marker)),
+        ("application/json", json.dumps([marker])),
+        ("text/plain", marker),
+        ("application/x-www-form-urlencoded", f"flow_token={marker}"),
+        ("application/json", f'{{"flow_token":"{marker}"'),
+        ("application/json", json.dumps({"flow_token": marker})),
+    ]
+
+    client = TestClient(app)
+    for content_type, content in cases:
+        response = client.post(
+            "/v1/installations/bind/complete",
+            content=content,
+            headers={**_session(), "Content-Type": content_type},
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "not found"}
+        assert marker not in response.text
+
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_configuration_fault_is_named_before_workos(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    token = _flow_token()
+    client = TestClient(app)
+
+    for configured_secret in (None, "short-secret"):
+        if configured_secret is None:
+            monkeypatch.delenv("DOUG_INSTALL_FLOW_SECRET", raising=False)
+        else:
+            monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", configured_secret)
+        response = _complete_flow(client, 1001, token)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "install flow not configured"}
+        assert token not in response.text
+
+    assert fake.calls == []
+    assert _bound_org(1001) is None
+
+
+def test_install_flow_completion_moves_blocking_authority_work_off_the_event_loop(
+    tmp_path, monkeypatch
+):
+    """The async route must parse its own untrusted bytes, then hand every
+    database/WorkOS operation to a worker thread."""
+    from starlette.requests import Request as StarletteRequest
+
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    seen: dict[str, str] = {}
+    real_body = StarletteRequest.body
+
+    async def marked_body(request):
+        seen["loop"] = threading.current_thread().name
+        return await real_body(request)
+
+    def marked_enabled():
+        seen["ledger"] = threading.current_thread().name
+        return False
+
+    monkeypatch.setattr(StarletteRequest, "body", marked_body)
+    monkeypatch.setattr(store, "enabled", marked_enabled)
+    assert inspect.iscoroutinefunction(api.complete_install_flow)
+
+    response = TestClient(app).post(
+        "/v1/installations/bind/complete",
+        json={"installation_id": 1001, "flow_token": _flow_token()},
+        headers=_session(),
+    )
+
+    assert response.status_code == 503
+    assert seen["loop"] and seen["ledger"]
+    assert seen["ledger"] != seen["loop"]
+
+
+def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(
+    tmp_path, monkeypatch
+):
+    """The nonce is global authority, not installation-local authority. Two
+    signed flows carrying one nonce but different installation ids must be
+    serialized before either caller crosses the WorkOS boundary."""
+    _db(tmp_path, monkeypatch)
+    _installed(1001, installer=777)
+    _installed(1002, installer=777)
+    fake = _bind_env(monkeypatch, idp_id="777")
+    monkeypatch.setenv("DOUG_INSTALL_FLOW_SECRET", _FLOW_SECRET)
+    nonce = b"\x09" * 32
+    tokens = {1001: _flow_token(1001, nonce=nonce), 1002: _flow_token(1002, nonce=nonce)}
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release_first = threading.Event()
+    count_lock = threading.Lock()
+    identity_calls = 0
+    real_request = fake
+
+    def gated_request(method, path, *, json=None):
+        nonlocal identity_calls
+        if method == "GET" and path.endswith("/identities"):
+            with count_lock:
+                identity_calls += 1
+                call_number = identity_calls
+            if call_number == 1:
+                first_entered.set()
+                assert release_first.wait(5), "coordinator never released first WorkOS call"
+            else:
+                second_entered.set()
+        return real_request(method, path, json=json)
+
+    monkeypatch.setattr(workos_client, "_request", gated_request)
+    results: dict[int, int] = {}
+    errors: list[BaseException] = []
+
+    def complete(installation_id):
+        try:
+            results[installation_id] = _complete_flow(
+                TestClient(app), installation_id, tokens[installation_id]
+            ).status_code
+        except BaseException as exc:  # surfaced on the coordinating test thread
+            errors.append(exc)
+
+    first = threading.Thread(target=complete, args=(1001,))
+    second = threading.Thread(target=complete, args=(1002,))
+    first.start()
+    assert first_entered.wait(5), "first caller never reached WorkOS"
+    second.start()
+    second_crossed_before_spend = second_entered.wait(0.5)
+    release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    assert second_crossed_before_spend is False
+    assert results == {1001: 204, 1002: 404}
+    assert identity_calls == 1
+    assert sum(_bound_org(i) is not None for i in (1001, 1002)) == 1
+    consumed = store.install_flow_consumption(hashlib.sha256(nonce).hexdigest())
+    assert consumed["installation_id"] == 1001
+
+
 def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(
     tmp_path, monkeypatch
 ):

@@ -10,7 +10,6 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
-from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -1294,17 +1293,6 @@ class BindRequest(BaseModel):
     installation_id: int
 
 
-class CompleteInstallFlowRequest(BaseModel):
-    """Only the installation and opaque flow proof cross the web/API seam.
-
-    `Any` is deliberate here. Pydantic's 422 body can include rejected input;
-    validating manually keeps an invalid flow token out of an echoed error.
-    """
-
-    installation_id: Any = None
-    flow_token: Any = None
-
-
 def _session_subject(authorization: str) -> str:
     try:
         claims = session_auth.verify_session_claims(authorization)
@@ -1445,16 +1433,13 @@ def bind_installation(body: BindRequest, authorization: str = Header("")) -> Res
     return Response(status_code=204)
 
 
-@app.post("/v1/installations/bind/complete", status_code=204)
-def complete_install_flow(
-    body: CompleteInstallFlowRequest, authorization: str = Header("")
-) -> Response:
+def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
     """Spend a signed installation flow after independently proving authority."""
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
     workos_user_id = _session_subject(authorization)
-    installation_id = body.installation_id
-    token = body.flow_token
+    installation_id = body["installation_id"]
+    token = body["flow_token"]
     if (
         isinstance(installation_id, bool)
         or not isinstance(installation_id, int)
@@ -1469,11 +1454,13 @@ def complete_install_flow(
             expected_subject=workos_user_id,
             expected_installation_id=installation_id,
         )
+    except install_flow.InstallFlowConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except install_flow.InstallFlowError as exc:
         raise _not_found() from exc
     nonce_digest = hashlib.sha256(flow.nonce).hexdigest()
 
-    with store.installation_bind_lock(installation_id):
+    with store.install_flow_lock(nonce_digest):
         consumed = store.install_flow_consumption(nonce_digest)
         if consumed is not None:
             if (
@@ -1483,29 +1470,48 @@ def complete_install_flow(
                 return Response(status_code=204)
             raise _not_found()
 
-        row, claimed = _prove_installer(installation_id, workos_user_id)
-        current = _current_proved_row(installation_id, row, claimed)
-        organization_id = _ensure_workos_binding(
-            installation_id, workos_user_id, current
-        )
-        result = store.consume_install_flow_and_bind(
-            nonce_digest,
-            workos_user_id,
-            installation_id,
-            organization_id,
-        )
-        if result == "mismatch":
-            raise _not_found()
-        if result == "conflict":
-            raise HTTPException(
-                status_code=409, detail="installation is bound to another organization"
+        with store.installation_bind_lock(installation_id):
+            row, claimed = _prove_installer(installation_id, workos_user_id)
+            current = _current_proved_row(installation_id, row, claimed)
+            organization_id = _ensure_workos_binding(
+                installation_id, workos_user_id, current
             )
+            result = store.consume_install_flow_and_bind(
+                nonce_digest,
+                workos_user_id,
+                installation_id,
+                organization_id,
+            )
+            if result == "mismatch":
+                raise _not_found()
+            if result == "conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="installation is bound to another organization",
+                )
     print(
         f"doug: completed install flow for installation {installation_id} "
         f"and organization {organization_id}",
         file=sys.stderr,
     )
     return Response(status_code=204)
+
+
+@app.post("/v1/installations/bind/complete", status_code=204)
+async def complete_install_flow(
+    request: Request, authorization: str = Header("")
+) -> Response:
+    """Parse the opaque proof internally, then move blocking authority work off-loop."""
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise _not_found()
+    try:
+        body = json.loads(await request.body())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise _not_found() from None
+    if not isinstance(body, dict) or set(body) != {"installation_id", "flow_token"}:
+        raise _not_found()
+    return await run_in_threadpool(_complete_install_flow_sync, body, authorization)
 
 
 class EntitlementsRequest(BaseModel):

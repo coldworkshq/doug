@@ -18,14 +18,27 @@ type VerifyOptions = {
 
 const fields = ["exp", "installation_id", "nonce", "sub", "v"];
 
+export class InstallFlowConfigurationError extends Error {
+  constructor() {
+    super("install flow not configured");
+    this.name = "InstallFlowConfigurationError";
+  }
+}
+
 function invalid(): Error {
   return new Error("invalid install flow");
 }
 
 function resolveSecret(secret?: string): string {
   const value = secret ?? process.env.DOUG_INSTALL_FLOW_SECRET;
-  if (!value) throw invalid();
+  if (!value || Buffer.byteLength(value, "utf8") < 32) {
+    throw new InstallFlowConfigurationError();
+  }
   return value;
+}
+
+export function assertInstallFlowConfigured(): void {
+  resolveSecret();
 }
 
 function decodeBase64Url(value: unknown): Buffer {
@@ -70,6 +83,7 @@ export function sealInstallFlow({
   installationId,
   secret,
 }: SealOptions): string {
+  const signingSecret = resolveSecret(secret);
   const payload = {
     v: 1,
     nonce: Buffer.from(nonce).toString("base64url"),
@@ -79,19 +93,20 @@ export function sealInstallFlow({
   };
   parsePayload(payload);
   const segment = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = createHmac("sha256", resolveSecret(secret))
+  const signature = createHmac("sha256", signingSecret)
     .update(segment)
     .digest("base64url");
   return `${segment}.${signature}`;
 }
 
 export function verifyInstallFlow(token: string, options: VerifyOptions = {}): InstallFlow {
+  const signingSecret = resolveSecret(options.secret);
   try {
     const parts = token.split(".");
     if (parts.length !== 2) throw invalid();
     const [segment, suppliedSignature] = parts;
     const signature = decodeBase64Url(suppliedSignature);
-    const expectedSignature = createHmac("sha256", resolveSecret(options.secret))
+    const expectedSignature = createHmac("sha256", signingSecret)
       .update(segment)
       .digest();
     if (signature.length !== expectedSignature.length || !timingSafeEqual(signature, expectedSignature)) {

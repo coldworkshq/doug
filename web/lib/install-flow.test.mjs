@@ -4,7 +4,11 @@ import { createHmac } from "node:crypto";
 import { register } from "node:module";
 import test from "node:test";
 
-import { sealInstallFlow, verifyInstallFlow } from "./install-flow.ts";
+import {
+  InstallFlowConfigurationError,
+  sealInstallFlow,
+  verifyInstallFlow,
+} from "./install-flow.ts";
 
 globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 register("./node-next-loader.mjs", import.meta.url);
@@ -114,22 +118,38 @@ test("verification refuses tamper, expiry, identity swaps, and malformed nonces"
   }
 });
 
-test("missing-secret errors never echo token, nonce, or secret material", () => {
+test("missing or short secrets are named configuration faults without sensitive material", () => {
   const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
   delete process.env.DOUG_INSTALL_FLOW_SECRET;
   const secret = "secret-that-must-not-appear";
   const rawNonce = "raw-nonce-that-must-not-appear";
   const badToken = `${FIXTURE_TOKEN}.${rawNonce}.${secret}`;
   try {
-    assert.throws(
-      () => verifyInstallFlow(badToken),
-      (error) => {
-        assert.equal(error.message, "invalid install flow");
-        assert.equal(error.message.includes(FIXTURE_TOKEN), false);
-        assert.equal(error.message.includes(rawNonce), false);
-        assert.equal(error.message.includes(secret), false);
-        return true;
-      },
+    for (const configuredSecret of [undefined, "short-secret"]) {
+      assert.throws(
+        () => verifyInstallFlow(badToken, { secret: configuredSecret }),
+        (error) => {
+          assert.equal(error instanceof InstallFlowConfigurationError, true);
+          assert.equal(error.message, "install flow not configured");
+          assert.equal(error.message.includes(FIXTURE_TOKEN), false);
+          assert.equal(error.message.includes(rawNonce), false);
+          assert.equal(error.message.includes(secret), false);
+          return true;
+        },
+      );
+    }
+
+    const setupSecret = "a".repeat(64);
+    const setupToken = sealInstallFlow({
+      nonce: FIXTURE_NONCE,
+      expiresAt: 2_000_000_000,
+      subject: "user_01ABC",
+      installationId: 1001,
+      secret: setupSecret,
+    });
+    assert.equal(
+      verifyInstallFlow(setupToken, { now: 1_999_999_999, secret: setupSecret }).installationId,
+      1001,
     );
   } finally {
     if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
@@ -143,10 +163,11 @@ function routeToken({
   subject = "user_01ABC",
   installationId = 1001,
   nonce = Uint8Array.from({ length: 32 }, () => 7),
+  expiresAt = Math.floor(Date.now() / 1000) + 1800,
 } = {}) {
   return sealInstallFlow({
     nonce,
-    expiresAt: Math.floor(Date.now() / 1000) + 1800,
+    expiresAt,
     subject,
     installationId,
     secret: ROUTE_SECRET,
@@ -187,7 +208,8 @@ test("install start explicitly requires WorkOS and creates the human-TTL HttpOnl
     assert.match(setCookie, /doug_install_flow=/);
     assert.match(setCookie, /HttpOnly/i);
     assert.match(setCookie, /SameSite=lax/i);
-    assert.match(setCookie, /Path=\/install/i);
+    assert.match(setCookie, /Path=\//i);
+    assert.doesNotMatch(setCookie, /Path=\/install/i);
     assert.match(setCookie, /Max-Age=1800/i);
     assert.match(setCookie, /Secure/i);
     const flow = verifyInstallFlow(cookieValue(response), { secret: ROUTE_SECRET });
@@ -226,7 +248,8 @@ test("GitHub-first callback stores installation state, signs in, and resumes wit
     const coldCookie = cold.headers.get("set-cookie");
     assert.match(coldCookie, /HttpOnly/i);
     assert.match(coldCookie, /SameSite=lax/i);
-    assert.match(coldCookie, /Path=\/install/i);
+    assert.match(coldCookie, /Path=\//i);
+    assert.doesNotMatch(coldCookie, /Path=\/install/i);
     assert.match(coldCookie, /Max-Age=1800/i);
     const pendingToken = cookieValue(cold);
     const pending = verifyInstallFlow(pendingToken, { secret: ROUTE_SECRET });
@@ -312,6 +335,8 @@ test("callback refuses changed subject or installation without contacting the AP
 });
 
 test("request waits for an admin and update re-consents without ever binding", async () => {
+  const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     throw new Error("setup_action reached bind");
@@ -338,6 +363,8 @@ test("request waits for an admin and update re-consents without ever binding", a
     assert.match(update.headers.get("set-cookie"), /Max-Age=0/i);
   } finally {
     globalThis.fetch = oldFetch;
+    if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
   }
 });
 
@@ -420,6 +447,158 @@ test("temporary API failure preserves the flow for a safe retry", async () => {
     assert.equal(response.headers.get("set-cookie"), null);
   } finally {
     globalThis.fetch = oldFetch;
+    if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
+  }
+});
+
+test("an expired AuthKit PKCE callback renews only from a valid pending install flow", async () => {
+  const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
+  globalThis.__workosSignInCalls = [];
+  globalThis.__workosSignInUrl = "https://auth.workos.test/renewed-pkce";
+  const { CallbackError } = await import("@workos-inc/authkit-nextjs");
+  globalThis.__workosCallbackError = new CallbackError(
+    "marker-that-must-not-escape",
+    "missing_pkce_cookie",
+  );
+  try {
+    const { GET } = await import("../app/auth/callback/route.ts?install-flow-pkce-recovery");
+    const token = routeToken();
+    const response = await GET(
+      await nextRequest(
+        "https://doug.example/auth/callback?code=code-marker&state=state-marker",
+        token,
+      ),
+    );
+
+    assert.equal(response.status, 307);
+    assert.equal(response.headers.get("location"), "https://auth.workos.test/renewed-pkce");
+    assert.deepEqual(globalThis.__workosSignInCalls, [{ returnTo: "/install/callback" }]);
+    assert.equal(response.headers.get("location").includes(token), false);
+    assert.equal((await response.text()).includes("marker-that-must-not-escape"), false);
+    assert.equal(
+      response.headers.get("set-cookie")?.includes("doug_install_flow") ?? false,
+      false,
+    );
+  } finally {
+    delete globalThis.__workosCallbackError;
+    if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
+  }
+});
+
+test("PKCE recovery refuses stale, malformed, unrelated, and lookalike callback failures", async () => {
+  const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
+  const { CallbackError } = await import("@workos-inc/authkit-nextjs");
+  const { GET } = await import("../app/auth/callback/route.ts?install-flow-pkce-negative");
+  const marker = "callback-secret-marker";
+  const cases = [
+    [new CallbackError(marker, "missing_pkce_cookie"), undefined],
+    [new CallbackError(marker, "missing_pkce_cookie"), `${marker}.not-a-flow`],
+    [
+      new CallbackError(marker, "missing_pkce_cookie"),
+      routeToken({ expiresAt: Math.floor(Date.now() / 1000) - 1 }),
+    ],
+    [new CallbackError(marker, "missing_pkce_cookie"), routeToken({ installationId: null })],
+    [new CallbackError(marker, "oauth_state_mismatch"), routeToken()],
+    [Object.assign(new Error(marker), { code: "missing_pkce_cookie" }), routeToken()],
+  ];
+  try {
+    for (const [error, token] of cases) {
+      globalThis.__workosSignInCalls = [];
+      globalThis.__workosCallbackError = error;
+      const response = await GET(
+        await nextRequest(
+          `https://doug.example/auth/callback?code=${marker}&state=${marker}`,
+          token,
+        ),
+      );
+      assert.equal(response.status, 400);
+      assert.equal(await response.text(), "Authentication could not be completed.");
+      assert.deepEqual(globalThis.__workosSignInCalls, []);
+      assert.equal(response.headers.get("location"), null);
+      assert.equal(
+        response.headers.get("set-cookie")?.includes("doug_install_flow") ?? false,
+        false,
+      );
+    }
+  } finally {
+    delete globalThis.__workosCallbackError;
+    if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
+  }
+});
+
+test("install routes report a configuration fault without clearing a valid browser flow", async () => {
+  const old = {
+    secret: process.env.DOUG_INSTALL_FLOW_SECRET,
+    slug: process.env.DOUG_GITHUB_APP_SLUG,
+  };
+  const token = routeToken();
+  process.env.DOUG_INSTALL_FLOW_SECRET = "short-secret";
+  process.env.DOUG_GITHUB_APP_SLUG = "dougs-review";
+  globalThis.__workosAuth = { user: { id: "user_01ABC" }, accessToken: "workos-jwt" };
+  globalThis.__workosWithAuthOptions = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("configuration fault reached the API");
+  };
+  try {
+    const start = await import("../app/install/start/route.ts");
+    const callback = await import("../app/install/callback/route.ts");
+    const responses = [
+      await start.GET(),
+      await callback.GET(
+        await nextRequest("https://doug.example/install/callback", token),
+      ),
+    ];
+    for (const response of responses) {
+      assert.equal(response.status, 503);
+      assert.equal(
+        await response.text(),
+        "Repository setup is temporarily unavailable. Please retry.",
+      );
+      assert.equal(response.headers.get("set-cookie"), null);
+    }
+    assert.deepEqual(globalThis.__workosWithAuthOptions, []);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (old.secret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = old.secret;
+    if (old.slug === undefined) delete process.env.DOUG_GITHUB_APP_SLUG;
+    else process.env.DOUG_GITHUB_APP_SLUG = old.slug;
+  }
+});
+
+test("PKCE recovery reports configuration unavailability without consuming the browser flow", async () => {
+  const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  const token = routeToken();
+  process.env.DOUG_INSTALL_FLOW_SECRET = "short-secret";
+  globalThis.__workosSignInCalls = [];
+  const { CallbackError } = await import("@workos-inc/authkit-nextjs");
+  globalThis.__workosCallbackError = new CallbackError(
+    "marker-that-must-not-escape",
+    "missing_pkce_cookie",
+  );
+  try {
+    const { GET } = await import("../app/auth/callback/route.ts?install-flow-config-fault");
+    const response = await GET(
+      await nextRequest("https://doug.example/auth/callback?code=x&state=y", token),
+    );
+    assert.equal(response.status, 503);
+    assert.equal(
+      await response.text(),
+      "Repository setup is temporarily unavailable. Please retry.",
+    );
+    assert.deepEqual(globalThis.__workosSignInCalls, []);
+    assert.equal(
+      response.headers.get("set-cookie")?.includes("doug_install_flow") ?? false,
+      false,
+    );
+  } finally {
+    delete globalThis.__workosCallbackError;
     if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
     else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
   }

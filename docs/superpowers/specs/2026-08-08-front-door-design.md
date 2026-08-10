@@ -113,7 +113,9 @@ throws E900 if both files exist.
 
 `handleAuth({ baseURL })` is **required** here: the SDK needs it wherever the
 container hostname differs from the request host, which is Cloud Run exactly.
-Omitting it makes callbacks redirect wrong.
+Omitting it makes callbacks redirect wrong. The installed SDK also requires
+`/install/callback` to pass through `authkitProxy()` so `withAuth()` receives
+its injected headers; matching the route does not make it session-required.
 
 Sign-out is a **POST server action**, never a GET route.
 
@@ -240,8 +242,8 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    server component. Confirm against the installed SDK's README at
    implementation time and follow the README, not this paragraph.
 2. Signed in with no installations → "Install Doug".
-3. `/install/start` sets a **30-minute signed HttpOnly cookie** holding a
-   single-use nonce bound to the WorkOS user, then redirects to
+3. `/install/start` sets a **30-minute signed HttpOnly, SameSite=Lax, Path=/
+   cookie** holding a single-use nonce bound to the WorkOS user, then redirects to
    `github.com/apps/<slug>/installations/new`.
 4. GitHub → the App's **Setup URL** → `/install/callback?installation_id=…`
 
@@ -254,12 +256,22 @@ dashboard shows it, hides it, or labels it. It must not appear by accident.
    arrival path needs the same cookie anyway, the two entrances collapse into
    one code path.
 
+   AuthKit's installed PKCE proof remains capped at 600 seconds. If an inbox
+   round-trip outlives it, `/auth/callback` recovers only a real
+   `missing_pkce_cookie` callback error with a still-valid signed install flow
+   carrying an installation id, then starts a fresh provider-neutral sign-in
+   attempt returning to `/install/callback`. No other callback error loops.
+
 5. **Consume the nonce** (single-use; burn its digest in API storage, not just
    compare it in web memory). Doug-web and doug-api share a dedicated install
-   flow HMAC secret; it is not the AuthKit cookie key. The successful bind
-   transaction inserts the consumption before its authority write, and both
-   commit or roll back together. A same-flow retry may return idempotent
-   success but must not repeat WorkOS or binding side effects.
+   flow HMAC secret; it is not the AuthKit cookie key. Missing or
+   shorter-than-32-byte keys are named configuration faults. The API parses
+   the JSON body internally, then runs its blocking core off the event loop.
+   A nonce-digest lock is acquired before WorkOS globally across installation
+   ids, using bounded local stripes and negative Postgres advisory keys. The
+   successful bind transaction inserts the consumption before its authority
+   write, and both commit or roll back together. A same-flow retry may return
+   idempotent success but must not repeat WorkOS or binding side effects.
 6. **Prove authority, not visibility.** Match the signed-in WorkOS user's
    linked GitHub identity to `installations.installed_by_github_user_id`, the
    sender recorded by the `installation.created` webhook. Task 5 rejected the
@@ -403,9 +415,9 @@ works" needs orgs that only the bind step provisions.
 - The migration; `is_operator: bool`; the shared liveness/repo-intersection
   helper; JWKS verification; the session branch at `api.py:326`; the new
   installation-by-org query.
-- `/install/start`, `/install/callback`, signed single-use nonce cookie,
-  org-admin proof, advisory-locked org ensure, membership provisioning and
-  **teardown**.
+- `/install/start`, matcher-included/no-session-tolerant `/install/callback`,
+  signed single-use nonce cookie, installer proof, globally nonce-locked then
+  installation-locked org ensure, membership provisioning and **teardown**.
 - `/dashboard` with the welcome/IOU block, tenant-scoped queue, and receipts.
 
 **Session fetch helpers must not reuse `web/lib/api.ts`.** `inflight` and

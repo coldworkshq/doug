@@ -20,6 +20,13 @@ class InstallFlowError(ValueError):
         super().__init__("invalid install flow")
 
 
+class InstallFlowConfigurationError(RuntimeError):
+    """The shared signing key is absent or below its security floor."""
+
+    def __init__(self) -> None:
+        super().__init__("install flow not configured")
+
+
 @dataclass(frozen=True)
 class InstallFlow:
     nonce: bytes
@@ -30,8 +37,8 @@ class InstallFlow:
 
 def _secret(value: str | None) -> bytes:
     resolved = value if value is not None else os.getenv("DOUG_INSTALL_FLOW_SECRET")
-    if not isinstance(resolved, str) or not resolved:
-        raise InstallFlowError
+    if not isinstance(resolved, str) or len(resolved.encode()) < 32:
+        raise InstallFlowConfigurationError
     return resolved.encode()
 
 
@@ -81,6 +88,7 @@ def seal_install_flow(
     installation_id: int | None = None,
     secret: str | None = None,
 ) -> str:
+    signing_secret = _secret(secret)
     payload = {
         "v": 1,
         "nonce": _b64encode(nonce),
@@ -90,7 +98,9 @@ def seal_install_flow(
     }
     _valid_payload(payload)
     segment = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
-    signature = _b64encode(hmac.new(_secret(secret), segment.encode(), hashlib.sha256).digest())
+    signature = _b64encode(
+        hmac.new(signing_secret, segment.encode(), hashlib.sha256).digest()
+    )
     return f"{segment}.{signature}"
 
 
@@ -102,6 +112,7 @@ def verify_install_flow(
     expected_installation_id: int | None = None,
     secret: str | None = None,
 ) -> InstallFlow:
+    signing_secret = _secret(secret)
     try:
         if not isinstance(token, str):
             raise InstallFlowError
@@ -111,7 +122,7 @@ def verify_install_flow(
         segment, supplied_signature = parts
         signature = _b64decode(supplied_signature)
         expected_signature = hmac.new(
-            _secret(secret), segment.encode(), hashlib.sha256
+            signing_secret, segment.encode(), hashlib.sha256
         ).digest()
         if not hmac.compare_digest(signature, expected_signature):
             raise InstallFlowError

@@ -3,7 +3,12 @@ import { randomBytes } from "node:crypto";
 import { getSignInUrl, withAuth } from "@workos-inc/authkit-nextjs";
 import { type NextRequest, NextResponse } from "next/server";
 
-import { sealInstallFlow, verifyInstallFlow } from "@/lib/install-flow";
+import {
+  InstallFlowConfigurationError,
+  assertInstallFlowConfigured,
+  sealInstallFlow,
+  verifyInstallFlow,
+} from "@/lib/install-flow";
 
 const FLOW_COOKIE = "doug_install_flow";
 const FLOW_MAX_AGE = 1800;
@@ -12,7 +17,7 @@ function cookieOptions(maxAge: number) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    path: "/install",
+    path: "/",
     maxAge,
     secure: process.env.NODE_ENV === "production",
   };
@@ -46,6 +51,10 @@ function invalidFlow(): NextResponse {
   return clearFlow(message("This repository connection could not be verified.", 400));
 }
 
+function unavailable(): NextResponse {
+  return message("Repository setup is temporarily unavailable. Please retry.", 503);
+}
+
 function queryInstallationId(request: NextRequest): number | null | undefined {
   const values = request.nextUrl.searchParams.getAll("installation_id");
   if (values.length === 0) return undefined;
@@ -55,6 +64,12 @@ function queryInstallationId(request: NextRequest): number | null | undefined {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  try {
+    assertInstallFlowConfigured();
+  } catch (error) {
+    if (error instanceof InstallFlowConfigurationError) return unavailable();
+    throw error;
+  }
   const setupAction = request.nextUrl.searchParams.get("setup_action");
   if (setupAction === "request") {
     return clearFlow(
@@ -125,7 +140,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return setFlow(NextResponse.redirect(signInUrl), token);
   }
   if (!auth.accessToken) {
-    return message("Repository setup is temporarily unavailable. Please retry.", 503);
+    return unavailable();
   }
 
   const completedToken = sealInstallFlow({
@@ -149,7 +164,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }),
     });
   } catch {
-    return message("Repository setup is temporarily unavailable. Please retry.", 503);
+    return unavailable();
   }
 
   if (response.status === 204) {
@@ -168,5 +183,5 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (response.status === 409) {
     return clearFlow(message("This repository connection is already assigned.", 409));
   }
-  return message("Repository setup is temporarily unavailable. Please retry.", 503);
+  return unavailable();
 }

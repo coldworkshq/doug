@@ -686,6 +686,7 @@ identity matching the webhook-recorded installer.
 - `web/lib/node-next-loader.mjs`
 - `web/app/install/start/route.ts` (new)
 - `web/app/install/callback/route.ts` (new)
+- `web/app/auth/callback/route.ts`
 - `web/proxy.ts`
 - `api/deploy/gcp.sh`
 - `api/tests/test_deploy_gcp.py`
@@ -693,24 +694,33 @@ identity matching the webhook-recorded installer.
 **Resolved mechanism:**
 1. `DOUG_INSTALL_FLOW_SECRET` is a dedicated HMAC secret shared only by
    doug-web and doug-api. It is not `WORKOS_COOKIE_PASSWORD`, an operator/API
-   token, or a provider credential. `DOUG_GITHUB_APP_SLUG=dougs-review` is a
-   non-secret web setting.
+   token, or a provider credential. Missing or shorter-than-32-byte values are
+   a named, token-safe configuration fault, not a forged-flow refusal.
+   `DOUG_GITHUB_APP_SLUG=dougs-review` is a non-secret web setting.
 2. `/install/start` requires a WorkOS session, creates 32 random bytes of
    nonce, and sets `doug_install_flow`: signed, HttpOnly, SameSite=Lax,
-   production-Secure, path `/install`, 30-minute max age. Its payload is
+   production-Secure, path `/`, 30-minute max age. The root path is scoped to
+   this one signed cookie so `/auth/callback` can recover an expired PKCE
+   attempt; it does not widen AuthKit's own cookie. Its payload is
    versioned and carries `nonce`, `exp`, the WorkOS `sub`, and later the
    installation id. Redirect to
    `https://github.com/apps/dougs-review/installations/new`; send no GitHub
    `state` parameter.
-3. `/install/callback` stays outside the AuthKit proxy because a GitHub-first
-   install has no Doug session. It validates a positive integer installation
-   id, puts it into the signed flow cookie, and, without a session, returns
-   through AuthKit to the same callback. The cookie, not AuthKit's ten-minute
-   PKCE state, owns the 30-minute inbox/new-tab lifetime.
+3. `/install/callback` is included in the AuthKit proxy matcher because the
+   installed 4.3.1 SDK's `withAuth()` requires proxy-injected headers, but the
+   route itself remains no-session tolerant for a GitHub-first install. It
+   validates a positive integer installation id, puts it into the signed flow
+   cookie, and, without a session, returns through AuthKit to the same
+   callback. AuthKit's PKCE proof keeps its installed 600-second cap. A real
+   `CallbackError` with `missing_pkce_cookie` may start a fresh PKCE attempt
+   only when `/auth/callback` can verify the still-unexpired signed flow and
+   its installation id; all other errors are constant, non-looping failures.
 4. With a session, the callback seals the current WorkOS `sub` into the flow
    and server-to-server POSTs `{installation_id, flow_token}` to the new API
    endpoint using the WorkOS access token. Neither token reaches browser JS,
-   a URL, a log, or localStorage.
+   a URL, a log, or localStorage. The API route reads and JSON-parses the
+   request itself so FastAPI/Pydantic cannot echo rejected token input, then
+   sends its blocking database and WorkOS core through `run_in_threadpool`.
 5. The API independently verifies the WorkOS JWT plus HMAC version,
    signature, expiry, subject, installation id, and nonce shape. It then
    reuses Task 5's exact installer-identity proof. A user with no linked
@@ -719,9 +729,12 @@ identity matching the webhook-recorded installer.
    setup** state, never as a failure to hold a Doug account.
 6. A new-table-only `consumed_install_flows` record stores the SHA-256 nonce
    digest, WorkOS user id, installation id, and consumed time; raw nonces are
-   never stored. Under the existing installation advisory lock, a successful
-   bind checks for an earlier consumption, performs idempotent WorkOS setup,
-   then in one database transaction inserts the consumption **before** the
+   never stored. Before any WorkOS call, an outer nonce-digest lock checks
+   durable consumption globally: fixed local stripes bound attacker-driven
+   allocation and negative Postgres bigint advisory keys namespace it away
+   from positive installation locks. Under that lock and then the existing
+   installation lock, a successful bind performs idempotent WorkOS setup,
+   then in one database transaction inserts consumption **before** the
    installation authority write. Both DB writes commit or roll back together.
    A same-user/same-install replay may return success but must execute no
    WorkOS or binding side effect; any mismatched replay is refused.
@@ -729,8 +742,8 @@ identity matching the webhook-recorded installer.
    state without calling bind. `setup_action=update` never calls bind: it
    clears the flow and sends the user through AuthKit with `prompt=consent`
    and `returnTo=/dashboard`, so Task 7b's callback re-derives GitHub scope.
-8. Expand the proxy matcher only to `/install/start`; `/`, `/queue`, and
-   `/install/callback` remain excluded. Expand the exact deploy allowlists so
+8. Expand the proxy matcher to `/install/start` and `/install/callback`; `/`
+   and `/queue` remain excluded. Expand the exact deploy allowlists so
    doug-web has its four AuthKit secrets plus only the flow secret, doug-api
    has the same flow secret, and the web receives the slug as plain env.
 
@@ -738,6 +751,9 @@ identity matching the webhook-recorded installer.
 
 - **No `state` param.** GitHub does not document propagating `state` to a Setup URL — its docs name only `installation_id`, and warn that *"bad actors can hit this URL with a spoofed `installation_id`."* Use a signed HttpOnly cookie, which the cold-arrival path needs anyway, collapsing both entrances into one code path.
 - **Nonce is single-use** — burn it in storage, not merely compare it. The earlier draft's nonce was decorative and replayable until `exp`.
+- **The inbox window does not weaken PKCE.** AuthKit's verifier remains capped
+  at 600 seconds; the signed 30-minute flow can authorize a fresh,
+  provider-neutral sign-in attempt after the old verifier expires.
 - `setup_action=update` fires whenever anyone edits repo selection: treat as re-derive-scope, **never** as bind.
 - `setup_action=request` produces **no installation at all** (org admin must approve) — land on an explanatory "waiting for your admin" state, not an error.
 
@@ -751,20 +767,26 @@ identity matching the webhook-recorded installer.
       replay refusal, and raw-nonce absence; run them red, implement, green.
 - [ ] 4. Extract Task 5's session/authority/bind core without weakening its
       existing endpoint. Add failing caller-level API tests proving the new
-      endpoint uses every verification boundary and that replay skips WorkOS;
-      run red, implement, run the old and new bind suites green.
+      endpoint internally parses every body shape without token echo, moves
+      blocking authority work off the event loop, uses every verification
+      boundary, locks a nonce across installation ids before WorkOS, and that
+      replay skips WorkOS; run red, implement, run the old and new bind suites
+      green.
 - [ ] 5. Add failing route tests for start, cold arrival/resume, subject
       mismatch, request, update, GitHub-identity-required, upstream outage,
-      cookie attributes/TTL, matcher exclusions, token placement, and success
-      redirect; run red, implement, green.
+      cookie attributes/TTL/root path, matcher exclusions, missing-PKCE
+      recovery and its negative controls, configuration faults, token
+      placement, and success redirect; run red, implement, green.
 - [ ] 6. Add failing exact IAM/runtime/env deploy pins, run red, update setup
       and deploy, then run them green plus `bash -n api/deploy/gcp.sh`.
 - [ ] 7. Mutate each load-bearing boundary independently: broaden matcher;
       shorten cookie to redirect scale; omit HMAC/subject/id/expiry checks;
       make nonce comparison-only; move consumption after the authority write;
       let replay call WorkOS; bind on `update` or `request`; put a token in a
-      URL/browser-readable cookie; grant either service an extra secret. Each
-      named test must fail, then restore.
+      URL/browser-readable cookie; remove the global nonce lock; restore
+      framework body validation; treat a missing signing secret as forged
+      input; grant either service an extra secret. Each named test must fail,
+      then restore.
 - [ ] 8. Run `cd api && uv run pytest && uv run ruff check .`, root deploy
       syntax, and `cd web && npm test && npm run lint && npm run build`; commit
       only explicit Task 8 paths.
