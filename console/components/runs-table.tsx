@@ -7,6 +7,15 @@ import { useMemo, useState } from "react";
 import { BandChip } from "@/components/band-chip";
 import { CoverageBar } from "@/components/coverage-bar";
 import { FacetBar } from "@/components/facet-bar";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { RunSummary } from "@/lib/api";
 import {
   FACET_KEYS,
@@ -18,7 +27,14 @@ import {
   serializeFacets,
 } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
+import {
+  DEFAULT_PAGE_SIZE,
+  pageRangeLabel,
+  pageSlice,
+  parsePage,
+} from "@/lib/paging";
 import { jobDuration, relativeAge, utcTimestamp } from "@/lib/runs";
+import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import {
   type SortKey,
   type SortState,
@@ -96,19 +112,39 @@ export function RunsTable({
   );
 
   const sort = useMemo(() => parseSort(searchParams.get("sort")), [searchParams]);
+  const query = useMemo(
+    () => normalizeQuery(searchParams.get("q")),
+    [searchParams],
+  );
+  const page = useMemo(() => parsePage(searchParams.get("page")), [searchParams]);
 
-  const filtering = Object.values(selection).some((values) => values && values.length > 0);
+  const facetFiltering = Object.values(selection).some(
+    (values) => values && values.length > 0,
+  );
+  const filtering = facetFiltering || query.length > 0;
 
   // Facets are built from the FULL fetched set, so a pill's count does not
   // change as other pills are pressed. Recomputing them against the
   // filtered set would zero out every unselected option the moment one
   // selection excluded it, which reads as "no such runs exist" rather than
-  // "you have filtered them out".
+  // "you have filtered them out". Search and paging do not affect counts.
   const facets = useMemo(() => buildFacets(runs), [runs]);
 
   const groups = useMemo(
-    () => sortGroups(groupRunsByPr(filterRuns(runs, selection), atCap), sort),
-    [runs, selection, atCap, sort],
+    () =>
+      sortGroups(
+        groupRunsByPr(
+          filterRunsByQuery(filterRuns(runs, selection), query),
+          atCap,
+        ),
+        sort,
+      ),
+    [runs, selection, query, atCap, sort],
+  );
+
+  const pageWindow = useMemo(
+    () => pageSlice(groups, page, DEFAULT_PAGE_SIZE),
+    [groups, page],
   );
 
   const shown = useMemo(
@@ -116,29 +152,44 @@ export function RunsTable({
     [groups],
   );
 
-  /** One writer for every URL-borne piece of view state. Both callers go
-   *  through it so a sort can never drop the filters, or a filter the sort.
+  /** One writer for every URL-borne piece of view state. Callers go through
+   *  it so a sort can never drop the filters, or a filter the sort.
    *  `repo`/`tenant` survive untouched: they are the server's scope, and
-   *  rewriting them here would change what is fetched. */
-  function writeView(nextSelection: FacetSelection, nextSortState: SortState) {
+   *  rewriting them here would change what is fetched.
+   *  Changing facets / sort / search resets `page` to 1 unless the caller
+   *  is the pager itself. */
+  function writeView(next: {
+    selection: FacetSelection;
+    sort: SortState;
+    query: string;
+    page: number;
+  }) {
     const params = new URLSearchParams(searchParams);
 
-    const serialized = serializeFacets(nextSelection);
-    // Iterate FACET_KEYS rather than a literal list — a second copy of the
-    // key set is a copy that can drift, and a facet missing from it would
-    // silently never be cleared from the URL.
+    const serialized = serializeFacets(next.selection);
     for (const key of FACET_KEYS) {
       const value = serialized[key];
       if (value === undefined) params.delete(key);
       else params.set(key, value);
     }
 
-    const sortParam = serializeSort(nextSortState);
+    const sortParam = serializeSort(next.sort);
     if (sortParam === null) params.delete("sort");
     else params.set("sort", sortParam);
 
-    const query = params.toString();
-    window.history.pushState(null, "", query ? `${pathname}?${query}` : pathname);
+    const q = normalizeQuery(next.query);
+    if (q === "") params.delete("q");
+    else params.set("q", q);
+
+    if (next.page <= 1) params.delete("page");
+    else params.set("page", String(next.page));
+
+    const queryString = params.toString();
+    window.history.pushState(
+      null,
+      "",
+      queryString ? `${pathname}?${queryString}` : pathname,
+    );
   }
 
   function toggleFacet(key: FacetKey, value: string) {
@@ -146,7 +197,12 @@ export function RunsTable({
     const next = current.includes(value)
       ? current.filter((v) => v !== value)
       : [...current, value];
-    writeView({ ...selection, [key]: next }, sort);
+    writeView({
+      selection: { ...selection, [key]: next },
+      sort,
+      query,
+      page: 1,
+    });
   }
 
   function toggleGroup(key: string) {
@@ -170,21 +226,44 @@ export function RunsTable({
         totalFetched={runs.length}
         atCap={atCap}
         onToggle={toggleFacet}
-        onClear={() => writeView({}, sort)}
+        onClear={() => writeView({ selection: {}, sort, query, page: 1 })}
       />
 
-      <p className="mono flex items-center gap-3 py-5 text-[10.5px] uppercase tracking-[.16em] text-muted-foreground">
-        Runs — verdict history {scopeLabel}
-        <span className="h-px flex-1 bg-border" />
-        <CountLine
-          shown={shown}
-          total={runs.length}
-          groups={groups.length}
-          limit={limit}
-          atCap={atCap}
-          filtering={filtering}
+      <div className="flex flex-wrap items-center gap-3 py-5">
+        <p className="mono flex min-w-0 flex-1 items-center gap-3 text-[10.5px] uppercase tracking-[.16em] text-muted-foreground">
+          Runs — verdict history {scopeLabel}
+          <span className="h-px flex-1 bg-border" />
+          <CountLine
+            shown={shown}
+            total={runs.length}
+            groups={groups.length}
+            limit={limit}
+            atCap={atCap}
+            filtering={filtering}
+          />
+        </p>
+        <label className="sr-only" htmlFor="runs-search">
+          Search runs
+        </label>
+        <Input
+          id="runs-search"
+          type="search"
+          placeholder="Search repo, PR, title…"
+          defaultValue={query}
+          key={query}
+          className="mono h-8 w-full max-w-xs text-xs"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            const value = (event.target as HTMLInputElement).value;
+            writeView({ selection, sort, query: value, page: 1 });
+          }}
+          onBlur={(event) => {
+            const value = event.target.value;
+            if (normalizeQuery(value) === query) return;
+            writeView({ selection, sort, query: value, page: 1 });
+          }}
         />
-      </p>
+      </div>
 
       {groups.length === 0 ? (
         // An empty result under a filter and an empty ledger are different
@@ -195,69 +274,141 @@ export function RunsTable({
             : "No runs in this scope."}
         </p>
       ) : (
-        <table className="w-full table-fixed border-collapse">
-          <thead>
-            <tr>
-              {COLUMNS.map((column) => (
-                <th
-                  key={column.label}
-                  // px-2.5 matches the cells below. Without it the
-                  // right-aligned "score" heading butted straight into
-                  // "pull request" and the two read as one word.
-                  aria-sort={
-                    column.sort === undefined
-                      ? undefined
-                      : sort.key === column.sort
-                        ? sort.dir === "asc"
-                          ? "ascending"
-                          : "descending"
-                        : "none"
-                  }
-                  className={`mono border-b border-border px-2.5 pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground ${column.cls}`}
-                >
-                  {column.sort === undefined ? (
-                    column.label
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => writeView(selection, nextSort(sort, column.sort as SortKey))}
-                      className={
-                        "inline-flex items-center gap-1 uppercase tracking-[.13em] hover:text-foreground " +
-                        (sort.key === column.sort ? "text-foreground" : "")
-                      }
-                    >
-                      {column.label}
-                      <span aria-hidden className="text-[9px] opacity-70">
-                        {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
-                      </span>
-                    </button>
-                  )}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {groups.map((group) => {
-              const open = expanded.has(group.key);
-              return (
-                <RunRows
-                  key={group.key}
-                  group={group}
-                  open={open}
-                  filtering={filtering}
-                  tenant={tenant}
-                  onToggle={() => toggleGroup(group.key)}
-                />
-              );
-            })}
-          </tbody>
-        </table>
+        <>
+          <Table className="table-fixed border-collapse">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                {COLUMNS.map((column) => (
+                  <TableHead
+                    key={column.label}
+                    // px-2.5 matches the cells below. Without it the
+                    // right-aligned "score" heading butted straight into
+                    // "pull request" and the two read as one word.
+                    aria-sort={
+                      column.sort === undefined
+                        ? undefined
+                        : sort.key === column.sort
+                          ? sort.dir === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                    }
+                    className={`mono h-auto border-b border-border px-2.5 pb-[7px] text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground ${column.cls}`}
+                  >
+                    {column.sort === undefined ? (
+                      column.label
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          writeView({
+                            selection,
+                            sort: nextSort(sort, column.sort as SortKey),
+                            query,
+                            page: 1,
+                          })
+                        }
+                        className={
+                          "inline-flex items-center gap-1 uppercase tracking-[.13em] hover:text-foreground " +
+                          (sort.key === column.sort ? "text-foreground" : "")
+                        }
+                      >
+                        {column.label}
+                        <span aria-hidden className="text-[9px] opacity-70">
+                          {sort.key === column.sort
+                            ? sort.dir === "desc"
+                              ? "▾"
+                              : "▴"
+                            : "▿"}
+                        </span>
+                      </button>
+                    )}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pageWindow.items.map((group) => {
+                const open = expanded.has(group.key);
+                return (
+                  <RunRows
+                    key={group.key}
+                    group={group}
+                    open={open}
+                    filtering={filtering}
+                    tenant={tenant}
+                    onToggle={() => toggleGroup(group.key)}
+                  />
+                );
+              })}
+            </TableBody>
+          </Table>
+
+          <Pager
+            label={pageRangeLabel(pageWindow)}
+            page={pageWindow.page}
+            pageCount={pageWindow.pageCount}
+            onPage={(nextPage) =>
+              writeView({ selection, sort, query, page: nextPage })
+            }
+          />
+        </>
       )}
     </>
   );
 }
 
-/** Both numbers in every branch are ones this component actually holds.
+function Pager({
+  label,
+  page,
+  pageCount,
+  onPage,
+}: {
+  label: string;
+  page: number;
+  pageCount: number;
+  onPage: (page: number) => void;
+}) {
+  if (pageCount <= 1) {
+    return (
+      <p className="mono mt-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+        Showing {label}
+      </p>
+    );
+  }
+  return (
+    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+      <span>
+        Showing {label}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+      <button
+        type="button"
+        disabled={page <= 1}
+        onClick={() => onPage(page - 1)}
+        className="rounded-md border border-border px-2 py-1 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Prev
+      </button>
+      <span>
+        Page {page} / {pageCount}
+      </span>
+      <button
+        type="button"
+        disabled={page >= pageCount}
+        onClick={() => onPage(page + 1)}
+        className="rounded-md border border-border px-2 py-1 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+/** Filter/fetched totals, not the viewport. After paging, the pager below
+ *  the table is what states "showing X–Y of Z"; this line answers how many
+ *  runs survived facets/search across the whole fetched set — the same
+ *  honesty rule the facet pills use.
  *
  *  `total` is the fetched set and `shown` is what survived the filter; at
  *  the cap neither is a count of the scope, which is why "latest {limit}"
@@ -335,7 +486,7 @@ function RunRows({
 
   return (
     <>
-      <tr className="border-b border-border/50 hover:bg-muted/40">
+      <TableRow className="border-b border-border/50 hover:bg-muted/40">
         <RunCells
           run={group.latest}
           tenant={tenant}
@@ -357,12 +508,15 @@ function RunRows({
             ) : null
           }
         />
-      </tr>
+      </TableRow>
       {open &&
         group.children.map((child) => (
-          <tr key={child.verdict_id} className="border-b border-border/40 bg-muted/25">
+          <TableRow
+            key={child.verdict_id}
+            className="border-b border-border/40 bg-muted/25"
+          >
             <RunCells run={child} tenant={tenant} indented />
-          </tr>
+          </TableRow>
         ))}
     </>
   );
@@ -395,7 +549,7 @@ function RunCells({
 
   return (
     <>
-      <td className="h-[34px] px-2.5 text-right">
+      <TableCell className="h-[34px] px-2.5 text-right">
         <span
           className={
             "mono text-[14.5px] font-semibold " +
@@ -404,8 +558,8 @@ function RunCells({
         >
           {run.score.toFixed(2)}
         </span>
-      </td>
-      <td className="h-[34px] min-w-0 px-2.5">
+      </TableCell>
+      <TableCell className="h-[34px] min-w-0 px-2.5 whitespace-normal">
         {indented ? (
           // A child row's repo, number and title are its parent's, verbatim
           // — rendering them again three rows deep is repetition, not
@@ -465,15 +619,17 @@ function RunCells({
           </Link>
         </div>
         )}
-      </td>
-      <td className="h-[34px] px-2.5">
+      </TableCell>
+      <TableCell className="h-[34px] px-2.5">
         <BandChip band={run.band} />
-      </td>
-      <td className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">{run.tier}</td>
-      <td className="h-[34px] px-2.5">
+      </TableCell>
+      <TableCell className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">
+        {run.tier}
+      </TableCell>
+      <TableCell className="h-[34px] px-2.5">
         <CoverageBar coverage={run.coverage} changedFiles={run.changed_files} />
-      </td>
-      <td className="mono h-[34px] px-2.5 text-xs">
+      </TableCell>
+      <TableCell className="mono h-[34px] px-2.5 text-xs">
         {run.outcome_14 === null ? (
           <span className="text-muted-foreground">◷ pending</span>
         ) : run.outcome_14 === "clean" ? (
@@ -481,11 +637,13 @@ function RunCells({
         ) : (
           <span className="data-flag font-semibold">↩ {run.outcome_14}</span>
         )}
-      </td>
-      <td className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">{jobLabel}</td>
-      <td className="mono h-[34px] px-2.5 text-right text-[11px] text-muted-foreground">
+      </TableCell>
+      <TableCell className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">
+        {jobLabel}
+      </TableCell>
+      <TableCell className="mono h-[34px] px-2.5 text-right text-[11px] text-muted-foreground">
         {relativeAge(run.scored_at)}
-      </td>
+      </TableCell>
     </>
   );
 }

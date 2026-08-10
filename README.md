@@ -36,18 +36,29 @@ Diff size is deliberately de-weighted. It predicts poorly once the rest are cont
 
 - `api/` — Python 3.14 + FastAPI, managed with uv. The routing core: `doug/features.py` (PR metadata → feature vector, pure) and `doug/scoring.py` (features → verdict, as named weighted rules). `GET /v1/queue` serves a scored demo queue; `POST /webhooks/github` is an HMAC-verified stub until the Live Gate phase.
 - `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing page and `/queue`, the scored review queue. Reads the live API when it's up, falls back to a bundled fixture when it isn't.
+- `console/` — Operator console (Next.js). Shares the root npm workspaces lockfile with `web/`.
 
 ```sh
 make dev    # API on :8000, web on :3000
-make test   # API test suite
+make test   # API + Node workspace tests
 make lint   # ruff + eslint
+npm ci      # install web + console from the root lockfile
 ```
 
-Both services ship Dockerfiles built for Cloud Run (respect `PORT`, scale to zero):
+Services ship Dockerfiles built for Cloud Run (respect `PORT`, scale to zero). The API still uses an app-dir build context; Node apps must be built from the monorepo root because of npm workspaces:
 
 ```sh
 gcloud run deploy doug-api --source api
-gcloud run deploy doug-web --source web --set-env-vars DOUG_API_URL=<api url>
+docker build -f web/Dockerfile -t doug-web .
+docker build -f console/Dockerfile -t doug-console .
+# Prod path: api/deploy/gcp.sh web|console builds via Cloud Build, then
+# gcloud run deploy --image …
+#
+# Before the first Node image deploy, create the Artifact Registry repo
+# (or re-run setup): PROJECT=doug-prod0 ./api/deploy/gcp.sh setup
+#
+# console is IAM-gated and not in CI — after a root lockfile / Dockerfile
+# change, rebuild it with: PROJECT=doug-prod0 ./api/deploy/gcp.sh console
 ```
 
 ## Status

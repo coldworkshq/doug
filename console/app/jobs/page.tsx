@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { JobsTable } from "@/components/jobs-table";
 import { Shell } from "@/components/shell";
 import { getHealth, getJobs, isError } from "@/lib/api";
@@ -93,10 +95,22 @@ export default async function JobsPage({
         </a>
       </div>
 
-      {[
-        { key: "review", title: "Review lane", result: review, cap: caps.review },
-        { key: "outcome", title: "Outcome lane (adjudicator)", result: outcome, cap: caps.outcome },
-      ].map(({ key, title, result, cap }) =>
+      {(
+        [
+          {
+            key: "review",
+            title: "Review lane",
+            result: review,
+            cap: caps.review,
+          },
+          {
+            key: "outcome",
+            title: "Outcome lane (adjudicator)",
+            result: outcome,
+            cap: caps.outcome,
+          },
+        ] as const
+      ).map(({ key, title, result, cap }) =>
         isError(result) ? (
           // Never a number, never an empty table. An unreachable API and a
           // lane with no unhealthy jobs are different facts.
@@ -110,15 +124,17 @@ export default async function JobsPage({
             <p className="mt-1 text-muted-foreground">{result.error}</p>
           </div>
         ) : (
-          <JobsTable
-            key={key}
-            title={title}
-            jobs={result.items}
-            atCap={result.items.length >= result.limit}
-            limit={result.limit}
-            maxAttempts={cap}
-            asOf={asOf}
-          />
+          <Suspense key={key} fallback={null}>
+            <JobsTable
+              title={title}
+              jobs={result.items}
+              atCap={result.items.length >= result.limit}
+              limit={result.limit}
+              maxAttempts={cap}
+              asOf={asOf}
+              urlKey={key}
+            />
+          </Suspense>
         ),
       )}
     </Shell>
