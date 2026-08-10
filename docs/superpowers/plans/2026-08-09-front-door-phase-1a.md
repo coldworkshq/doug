@@ -990,19 +990,148 @@ truthful. It does not weaken the existing operator console routes.
 
 ### Task 10: The exit gate
 
-**Files:** `api/deploy/prove-session-isolation.sh` (new)
+**Files:**
 
-A sibling to `prove-isolation.sh`, executable against prod — that script earned its place catching the pepper-newline and GC'd-client defects unit tests could not.
+- `api/deploy/prove-session-isolation.sh` (new)
+- `api/tests/test_prove_session_isolation_script.py` (new)
 
-- [ ] 1. A session with org A selected returns only A's rows.
-- [ ] 2. Same session, org B selected, returns only B's rows.
-- [ ] 3. **A member with access to ONE repo in an org sees only that repo's rows.** The earlier draft's gate omitted this and would have passed with the MT1 regression present — 1 and 2 test org-vs-org and never member-vs-member.
-- [ ] 4. Orgless JWT → refused.
-- [ ] 5. Suspended installation → refused on the **next** request.
-- [ ] 6. Tampered/expired JWT → refused.
-- [ ] 7. `org_id` mapping to no installation → refused.
-- [ ] 8. A valid session JWT gets 401/404 on **every** operator route.
-- [ ] 9. A bind attempt for an installation the caller can read but not administer → refused.
+A sibling to `prove-isolation.sh`, executable against production. That older
+script earned its place by catching pepper-newline and collected-client defects
+that unit tests did not. This task builds and reviews the proof executable; it
+does **not** deploy it or run it against production. Deployment, cold install,
+WorkOS/GitHub setup, suspension, and the proof run remain production mutations
+behind Andrew's explicit confirmation.
+
+#### Authority and fixtures
+
+The script accepts short-lived WorkOS access tokens, never cookies or provider
+tokens, through environment variables. It never prints them or writes them to
+disk. All tenant reads send only `Authorization: Bearer ...`; using
+`X-Doug-Token` here would test the old installation-key path instead of the
+front door.
+
+Required inputs, validated before the first HTTP request:
+
+```
+DOUG_URL                         https API origin, no trailing slash
+A_SESSION_JWT                   one user with organization A selected
+A_INSTALLATION_ID               A's live installation
+B_SESSION_JWT                   the same user with organization B selected
+B_INSTALLATION_ID               B's live installation; different from A
+ONE_REPO_SESSION_JWT            another A member, explicit one-repo scope
+ONE_REPO_ALLOWED                full name with at least one stored run
+ONE_REPO_FORBIDDEN              other A repo with at least one stored run
+ORGLESS_SESSION_JWT             valid WorkOS session with no org_id
+EXPIRED_SESSION_JWT             genuinely expired WorkOS access token
+UNMAPPED_ORG_SESSION_JWT        valid org_id with no Doug installation mapping
+READ_ONLY_SESSION_JWT           can discover an active unbound installation,
+                                 but is not its recorded installer
+READ_ONLY_INSTALLATION_ID       that active unbound installation
+```
+
+A is deliberately the multi-repo fixture: its token must see both
+`ONE_REPO_ALLOWED` and `ONE_REPO_FORBIDDEN`. `ONE_REPO_SESSION_JWT` must have a
+different `sub`, the same `org_id`, and an entitlement containing only the
+allowed repo. A and B must decode to the same non-empty `sub` and different
+non-empty `org_id` claims; the API, not the local decode, remains the authority
+because both JWTs must also pass server verification and return scoped rows.
+
+`READ_ONLY_INSTALLATION_ID` must appear in the read-only user's claims-only
+`/v1/sessions/connections` response as `setup_required`, with at least one
+repository. That proves visibility before the refused bind and proves no bind
+occurred afterward. A pre-bound or empty connection is a fixture error, never a
+pass.
+
+#### Script mechanics and safety
+
+- Use `set -u` plus `pipefail`, `curl`, `jq`, one `mktemp` response file, and an
+  exact trap that removes only that file. Do not use a shared fixed `/tmp` path.
+- Validate HTTPS origin, positive integer ids, JWT three-segment shape, required
+  commands, distinct A/B installation ids, and every required value before any
+  request. The test harness may still use an `https://*.test` origin.
+- A request helper captures status/body without `set -e` aborting the remaining
+  proof. Diagnostics print gate/status/reason only, never response bodies,
+  headers, tokens, or caller-supplied secrets.
+- Each numbered contract below contributes exactly one aggregate PASS/FAIL, so
+  a successful run ends `9 passed, 0 failed`. Subchecks are not counted as
+  extra gates. Any failure exits nonzero after safe restoration handling.
+- The script itself performs no GitHub, WorkOS, database, deployment, bind, or
+  suspension mutation. Gate 5 pauses for a human to make and later reverse the
+  GitHub App suspension. The prompts require literal
+  `SUSPENDED ${A_INSTALLATION_ID}` and `RESTORED ${A_INSTALLATION_ID}`
+  confirmations. No callback or arbitrary shell hook may be accepted.
+- Before typing the suspension confirmation, the operator must wait for the
+  GitHub `installation.suspend` delivery to return 202. The script then makes
+  exactly the next API read. Before the restore confirmation, the operator must
+  wait for the `installation.unsuspend` delivery to return 202. The final 200,
+  non-empty read is cleanup evidence and guards against an expired token being
+  mistaken for isolation.
+
+#### Nine gates
+
+1. `GET /v1/sessions/runs?repo=all` with A returns 200, a non-empty list, and
+   every row names only `A_INSTALLATION_ID`.
+2. The same read with B returns 200, a non-empty list, and only
+   `B_INSTALLATION_ID`; A/B ids differ while decoded `sub` matches and `org_id`
+   differs. No display-name heuristic is accepted.
+3. A can read a non-empty `ONE_REPO_FORBIDDEN` result. The one-repo member's
+   `repo=all` and explicit allowed result are non-empty and contain only A's
+   installation plus `ONE_REPO_ALLOWED`; its explicit forbidden request is the
+   same 404 as an absent repo. The member has A's org claim and a different
+   user claim.
+4. The orgless token proves it is structurally valid by receiving 200 from the
+   claims-only connection discovery, then receives 401 on session run data.
+5. A succeeds immediately before suspension. After the exact human confirmation
+   described above, the next request is 401. After the exact restore
+   confirmation, the same token again receives 200 with non-empty A-only rows.
+6. A mechanically tampered copy of A's token and the independently captured
+   expired token each receive 401. Tampering changes a significant signature
+   character, not an unused base64 padding bit.
+7. The unmapped-org token receives 200 from claims-only connection discovery and
+   401 from session run data. This distinguishes a verified-but-unmapped
+   session from junk.
+8. A's valid session receives only 401/404 from every current operator-only
+   route: `POST /v1/score/read` with a valid request body, `GET /v1/runs`,
+   `GET /v1/runs/1`, `GET /v1/health`, `GET /v1/jobs`, and
+   `GET /v1/patterns`. A source-inventory test derives the `_operator_only`
+   callers from `api.py` and fails when this list drifts.
+9. Before bind, the read-only connection is visible, non-empty, and
+   `setup_required`. `POST /v1/installations/bind` with exactly its installation
+   id receives 404. The same connection remains `setup_required` afterward.
+
+#### TDD and verification
+
+- [ ] 1. Write a subprocess test harness that places a deterministic fake
+      `curl` first on `PATH`, generates structurally valid dummy JWTs, feeds the
+      two exact suspend/restore confirmations on stdin, and models the nine
+      production boundaries. Run it red because the script does not exist.
+- [ ] 2. Add a success test requiring exit 0, exactly nine PASS lines,
+      `9 passed, 0 failed`, no token value in output, a suspend-before-refuse
+      request and a restore-after-refuse request.
+- [ ] 3. Parameterize nine hostile fake-server modes: A row leak, B row leak,
+      one-repo leak, orgless data success, suspended next-read success,
+      invalid-token success (both tampered and expired are wrongly accepted),
+      unmapped-org success, one operator-route success, and bind success/state
+      mutation. Each must make only its named gate fail and the script exit
+      nonzero.
+- [ ] 4. Add preflight tests proving a missing/malformed input makes zero HTTP
+      calls, and an output-safety test proving success and failure logs contain
+      none of the supplied token strings or response bodies.
+- [ ] 5. Parse `api.py` with Python AST in the inventory test. Collect decorated
+      route functions whose body calls `_operator_only`; assert the exact
+      method/path set equals the script's six-entry operator list. Public,
+      dual-authority, GitHub-management, and session routes must not appear.
+- [ ] 6. Implement the shell proof with exactly the mechanics and gates above.
+      Run `bash -n` and the focused test file green.
+- [ ] 7. Mutation proof: independently weaken each numbered gate's decisive
+      predicate/accepted status in the script, clear caches as relevant, and
+      observe the corresponding hostile-mode test fail before restoring it.
+      Do not count a fake-server violation test alone as mutation evidence.
+- [ ] 8. Run `cd api && uv run pytest -q && uv run ruff check .`,
+      `bash -n deploy/prove-session-isolation.sh`, root deploy syntax,
+      `cd web && npm test && npm run lint && npm run build`, and
+      `git diff --check`. Commit only the two Task 10 files after an independent
+      review. Do not run the script against production in this task.
 
 ---
 
