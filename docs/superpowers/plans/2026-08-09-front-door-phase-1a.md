@@ -999,14 +999,15 @@ A sibling to `prove-isolation.sh`, executable against production. That older
 script earned its place by catching pepper-newline and collected-client defects
 that unit tests did not. This task builds and reviews the proof executable; it
 does **not** deploy it or run it against production. Deployment, cold install,
-WorkOS/GitHub setup, suspension, and the proof run remain production mutations
-behind Andrew's explicit confirmation.
+WorkOS/GitHub setup, suspension, the model-spend authorization probe, the bind
+authorization probe, and the proof run remain production mutations behind
+Andrew's explicit confirmation.
 
 #### Authority and fixtures
 
 The script accepts short-lived WorkOS access tokens, never cookies or provider
 tokens, through environment variables. It never prints them or writes them to
-disk. All tenant reads send only `Authorization: Bearer ...`; using
+disk. All tenant requests send only `Authorization: Bearer ...`; using
 `X-Doug-Token` here would test the old installation-key path instead of the
 front door.
 
@@ -1027,6 +1028,8 @@ UNMAPPED_ORG_SESSION_JWT        valid org_id with no Doug installation mapping
 READ_ONLY_SESSION_JWT           can discover an active unbound installation,
                                  but is not its recorded installer
 READ_ONLY_INSTALLATION_ID       that active unbound installation
+DOUG_SESSION_PROOF_ACK          literal acknowledgement of the model-spend and
+                                 disposable-bind probes for that installation
 ```
 
 A is deliberately the multi-repo fixture: its token must see both
@@ -1036,11 +1039,19 @@ allowed repo. A and B must decode to the same non-empty `sub` and different
 non-empty `org_id` claims; the API, not the local decode, remains the authority
 because both JWTs must also pass server verification and return scoped rows.
 
-`READ_ONLY_INSTALLATION_ID` must appear in the read-only user's claims-only
+`READ_ONLY_INSTALLATION_ID` is a **disposable production fixture** and must
+appear in the read-only user's claims-only
 `/v1/sessions/connections` response as `setup_required`, with at least one
-repository. That proves visibility before the refused bind and proves no bind
-occurred afterward. A pre-bound or empty connection is a fixture error, never a
-pass.
+repository. That proves visibility before the refused bind and proves no Doug
+binding occurred afterward. A pre-bound or empty connection is a fixture
+error, never a pass. If the authorization boundary is broken, the probe may
+create WorkOS state or bind this installation before it detects the failure;
+there is no honest read-only way to test a mutating endpoint's denial. The
+fixture therefore needs an operator-owned cleanup plan, and the script requires
+the literal acknowledgement
+`I ACCEPT SCORE SPEND AND DISPOSABLE BIND ${READ_ONLY_INSTALLATION_ID}` before
+the first request. This acknowledgement does not replace Andrew's separate
+approval to run against production.
 
 #### Script mechanics and safety
 
@@ -1049,15 +1060,18 @@ pass.
 - Validate HTTPS origin, positive integer ids, JWT three-segment shape, required
   commands, distinct A/B installation ids, and every required value before any
   request. The test harness may still use an `https://*.test` origin.
-- A request helper captures status/body without `set -e` aborting the remaining
-  proof. Diagnostics print gate/status/reason only, never response bodies,
-  headers, tokens, or caller-supplied secrets.
+- A request helper uses explicit connection and total timeouts and captures
+  status/body without `set -e` aborting the remaining proof. Diagnostics print
+  gate/status/reason only, never response bodies, headers, tokens, or
+  caller-supplied secrets.
 - Each numbered contract below contributes exactly one aggregate PASS/FAIL, so
   a successful run ends `9 passed, 0 failed`. Subchecks are not counted as
   extra gates. Any failure exits nonzero after safe restoration handling.
-- The script itself performs no GitHub, WorkOS, database, deployment, bind, or
-  suspension mutation. Gate 5 pauses for a human to make and later reverse the
-  GitHub App suspension. The prompts require literal
+- The script never calls GitHub, WorkOS, a database, or a deployment API
+  directly. It is nevertheless a **controlled-adversarial production probe**,
+  not read-only: Gate 8 sends a valid body to the model-spending route, Gate 9
+  calls bind expecting denial, and Gate 5 pauses for a human to make and later
+  reverse the GitHub App suspension. The prompts require literal
   `SUSPENDED ${A_INSTALLATION_ID}` and `RESTORED ${A_INSTALLATION_ID}`
   confirmations. No callback or arbitrary shell hook may be accepted.
 - Before typing the suspension confirmation, the operator must wait for the
@@ -1065,7 +1079,11 @@ pass.
   exactly the next API read. Before the restore confirmation, the operator must
   wait for the `installation.unsuspend` delivery to return 202. The final 200,
   non-empty read is cleanup evidence and guards against an expired token being
-  mistaken for isolation.
+  mistaken for isolation. Confirmation typos are retried. Once suspension is
+  confirmed, normal completion is impossible until restoration is both
+  confirmed and observed as a non-empty A-only 200; failed restore checks loop
+  back to the restore prompt. EXIT/INT/TERM diagnostics say restoration is
+  still required whenever that proof has not completed.
 
 #### Nine gates
 
@@ -1077,8 +1095,8 @@ pass.
 3. A can read a non-empty `ONE_REPO_FORBIDDEN` result. The one-repo member's
    `repo=all` and explicit allowed result are non-empty and contain only A's
    installation plus `ONE_REPO_ALLOWED`; its explicit forbidden request is the
-   same 404 as an absent repo. The member has A's org claim and a different
-   user claim.
+   same status **and canonical JSON body** as an absent repo. The member has A's
+   org claim and a different user claim.
 4. The orgless token proves it is structurally valid by receiving 200 from the
    claims-only connection discovery, then receives 401 on session run data.
 5. A succeeds immediately before suspension. After the exact human confirmation
@@ -1086,7 +1104,10 @@ pass.
    confirmation, the same token again receives 200 with non-empty A-only rows.
 6. A mechanically tampered copy of A's token and the independently captured
    expired token each receive 401. Tampering changes a significant signature
-   character, not an unused base64 padding bit.
+   character, not an unused base64 padding bit. Preflight requires the expired
+   token to name A's same `sub` and `org_id` and carry a numeric `exp` earlier
+   than the current time; an arbitrary three-segment junk value is not an
+   expiration fixture.
 7. The unmapped-org token receives 200 from claims-only connection discovery and
    401 from session run data. This distinguishes a verified-but-unmapped
    session from junk.
@@ -1115,14 +1136,18 @@ pass.
       mutation. Each must make only its named gate fail and the script exit
       nonzero.
 - [ ] 4. Add preflight tests proving a missing/malformed input makes zero HTTP
-      calls, and an output-safety test proving success and failure logs contain
+      calls, including wrong acknowledgement and wrong orgless/unmapped/expired
+      claims. Add an output-safety test proving success and failure logs contain
       none of the supplied token strings or response bodies.
 - [ ] 5. Parse `api.py` with Python AST in the inventory test. Collect decorated
       route functions whose body calls `_operator_only`; assert the exact
       method/path set equals the script's six-entry operator list. Public,
       dual-authority, GitHub-management, and session routes must not appear.
 - [ ] 6. Implement the shell proof with exactly the mechanics and gates above.
-      Run `bash -n` and the focused test file green.
+      Add tests for forbidden/absent body equality, bounded curl arguments,
+      confirmation typos, delayed restoration, EOF/signal restoration warnings,
+      and the rule that no successful exit is possible while the fake remains
+      suspended. Run `bash -n` and the focused test file green.
 - [ ] 7. Mutation proof: independently weaken each numbered gate's decisive
       predicate/accepted status in the script, clear caches as relevant, and
       observe the corresponding hostile-mode test fail before restoring it.
