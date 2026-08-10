@@ -330,7 +330,9 @@ receipt correct end-to-end; scoreboard rendering live counts; then one full webh
 
 - [ ] 90-day replay productized: harvest/replay against an installation, `source='replay'`,
   structurally excluded from prospective counters; replay panel on the scoreboard, visually distinct
-- [ ] Install/welcome: the dated IOU + merge-volume projection ("N≥30 lands ~<date>")
+- [ ] Install/welcome: the dated IOU + first-adjudication date + projection of when the
+  preregistered two-sided interval may first become decidable; scheduled publications
+  continue on schedule at any N and may remain "not yet decidable — a count, not a rate"
 - [ ] **The 3 prospect interviews**, pitched off the live dogfood scoreboard + a replay of *their*
   public repo where possible — THESIS.md standing kill criterion: **2 of 3 "that's not right" halts productization**; outcome recorded either way
 
@@ -452,7 +454,7 @@ GC'd mid-call-chain (#52) — an executable gate earns its keep.
 | MCP garden service (`doug.check`, AGENTS.md fragment export) | adjudicated rows ≥ min-n on ≥1 tenant | design-lock T4, addendum A3 |
 | Tenant dashboard (WorkOS, tenancy steps 3–4) | **PULLED FORWARD 2026-08-08 ahead of its trigger** — see note below | `2026-08-08-front-door-design.md` |
 | Evidence refinery (offline council) | enough adjudicated data to mine; becomes the panel-experiment harness | addendum A1 |
-| Live specialist panel — **pre-registered experiment** | refinery harness ready; bar: beats single-read on flagged-band outcome capture | addendum G1 |
+| Live specialist panel — **pre-registered experiment** | refinery harness ready; paired shadow PR-level review-quality gate beats a compute-matched grounded reader; separate surfaced canary required before downstream causal claims | addendum G1 |
 | Champion–challenger shadow models | model price/retirement event, or matured outcome set | addendum A2 |
 | Staging GCP project | tenant #2 or first deploy-caused incident | design-lock open risk 1 |
 | Derangement **positive control** (decision records) | pre-registered before any further intent investment; passes → deviations believed, fails → pull the stream | HANDOFF 2026-07-31 |
