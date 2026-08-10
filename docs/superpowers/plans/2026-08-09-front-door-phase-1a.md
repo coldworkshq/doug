@@ -917,6 +917,15 @@ truthful. It does not weaken the existing operator console routes.
    authority and route stay separate. Filters are URL state: repo, band, tier,
    low coverage, and error. Only repo is sent to the API; presentation filters
    reduce already-scoped rows locally.
+10. Multi-install support must be reachable, not merely representable. A
+    `Connect repositories` link to `/install/start` remains visible with zero,
+    one, or many existing connections. Every `setup_required` connection is
+    surfaced even while another connection is selected, with a POST Server
+    Action that re-reads the signed-in user's connection list, accepts only an
+    exact visible setup-required installation id, calls the authority-checked
+    `/v1/installations/bind` route with the WorkOS bearer, re-reads the now-ready
+    connection, and switches to its server-returned organization id. No caller
+    supplies an organization id and no provider token reaches the browser.
 
 #### Surface
 
@@ -935,6 +944,10 @@ truthful. It does not weaken the existing operator console routes.
 
 - The selector lists several installations for one person and several repos
   inside one installation. It never offers a cross-installation aggregate.
+- `Connect repositories` stays available in the dashboard chrome after the
+  first connection. Setup-required rows remain visible beside a selected ready
+  connection and carry an authority-checked `finish setup` POST action; they
+  are never stranded as static labels.
 - `lemahq` renders as its own selector entry with
   **"Lema — separate product"**. Selecting it changes the whole WorkOS tenant;
   its rows never sit beside another installation's rows.
@@ -971,7 +984,9 @@ truthful. It does not weaken the existing operator console routes.
 - [ ] 7. Add dashboard-model and source-contract tests for URL filters,
       percentage/ruler honesty, multi-installation/multi-repo selectors,
       POST-only switch/sign-out, provider-neutral empty copy, exact Lema label,
-      and absence of a cross-tenant `all` option. Run red, implement, green.
+      absence of a cross-tenant `all` option, always-reachable new connection,
+      and recovery of an exact visible setup-required installation without a
+      caller-supplied org id. Run red, implement, green.
 - [ ] 8. Render the console-derived surface. Run `npm test`, lint, build, then
       use the local browser at desktop and mobile widths. Compare screenshots
       against `workspace/mockups/console.html`; fix overflow, hierarchy, focus,
