@@ -1,0 +1,34 @@
+# gcloud builds submit honors .gcloudignore (else .gitignore), not
+# .dockerignore. Keep this in lockstep with .dockerignore so the Cloud Build
+# upload matches the context CI and local `docker build -f … .` exercise.
+.git
+.github
+.worktrees
+.claude
+.superpowers
+**/node_modules
+**/.next
+**/__pycache__
+**/.venv
+**/venv
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+api
+docs
+data
+out
+reports
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+HANDOFF.md
+README.md
+LICENSE.md
+Makefile
+**/*.md
+!web/package.json
+!console/package.json

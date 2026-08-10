@@ -463,15 +463,21 @@ ensure_node_artifact_repo() {
 build_node_image() {
   # $1 = Dockerfile relative to REPO_ROOT (web/Dockerfile | console/Dockerfile)
   # $2 = image name under the doug Artifact Registry repo (doug-web | doug-console)
+  #
+  # Callers capture stdout as the image tag (`image=$(build_node_image …)`),
+  # so every noisy command here must write to stderr. gcloud builds submit
+  # streams build logs to stdout by default; --suppress-logs + >&2 keep the
+  # captured value a single clean tag.
   local dockerfile=$1 name=$2 image tag
-  ensure_node_artifact_repo
+  ensure_node_artifact_repo >&2
   tag=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
   image="${REGION}-docker.pkg.dev/${PROJECT}/doug/${name}:${tag}"
   gcloud builds submit "$REPO_ROOT" \
     --project "$PROJECT" \
     --config="$SCRIPT_DIR/cloudbuild-node.yaml" \
     --substitutions="_IMAGE=${image},_DOCKERFILE=${dockerfile}" \
-    --timeout=1200s
+    --timeout=1200s \
+    --suppress-logs >&2
   printf '%s\n' "$image"
 }
 

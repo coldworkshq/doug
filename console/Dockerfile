@@ -9,10 +9,16 @@ COPY package.json package-lock.json ./
 COPY console ./console
 COPY web/package.json ./web/
 # npm workspaces + `npm ci` skips optional native bindings of nested deps
-# (npm/cli#4828). Install the Alpine musl bindings for this TARGETARCH after.
-ARG TARGETARCH
+# (npm/cli#4828). Direct optionalDependencies cover CI (gnu); Alpine still
+# needs an explicit musl install. TARGETARCH is BuildKit-only — fall back
+# to uname so a legacy builder on arm64 does not silently grab x64 wheels.
+ARG TARGETARCH=
 RUN npm ci \
- && case "$TARGETARCH" in \
+ && arch="${TARGETARCH}" \
+ && if [ -z "$arch" ]; then \
+      case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac; \
+    fi \
+ && case "$arch" in \
       arm64) NATIVE="@tailwindcss/oxide-linux-arm64-musl lightningcss-linux-arm64-musl" ;; \
       *)     NATIVE="@tailwindcss/oxide-linux-x64-musl lightningcss-linux-x64-musl" ;; \
     esac \

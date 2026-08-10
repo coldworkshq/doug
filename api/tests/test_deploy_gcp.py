@@ -156,6 +156,23 @@ def test_node_deploys_build_images_from_the_monorepo_root():
     build = _function_body("build_node_image")
     assert "cloudbuild-node.yaml" in build
     assert 'gcloud builds submit "$REPO_ROOT"' in build
+    # stdout is captured as the image tag — submit logs must not land there.
+    assert "--suppress-logs" in build
+    assert "ensure_node_artifact_repo >&2" in build
+
+
+def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
+    """gcloud builds submit ignores via .gcloudignore, not .dockerignore.
+    The two files must stay paired or Cloud Build uploads a different
+    context than the docker builds CI already exercised."""
+    root = Path(__file__).resolve().parents[2]
+    dockerignore = (root / ".dockerignore").read_text()
+    gcloudignore = (root / ".gcloudignore").read_text()
+    # Strip comment lines — the gcloud file carries an extra why-header.
+    def body(text: str) -> list[str]:
+        return [line for line in text.splitlines() if line and not line.startswith("#")]
+
+    assert body(dockerignore) == body(gcloudignore)
 
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:

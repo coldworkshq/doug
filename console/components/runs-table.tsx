@@ -405,7 +405,10 @@ function Pager({
   );
 }
 
-/** Both numbers in every branch are ones this component actually holds.
+/** Filter/fetched totals, not the viewport. After paging, the pager below
+ *  the table is what states "showing X–Y of Z"; this line answers how many
+ *  runs survived facets/search across the whole fetched set — the same
+ *  honesty rule the facet pills use.
  *
  *  `total` is the fetched set and `shown` is what survived the filter; at
  *  the cap neither is a count of the scope, which is why "latest {limit}"

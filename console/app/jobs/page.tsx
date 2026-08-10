@@ -95,10 +95,22 @@ export default async function JobsPage({
         </a>
       </div>
 
-      {[
-        { key: "review", title: "Review lane", result: review, cap: caps.review },
-        { key: "outcome", title: "Outcome lane (adjudicator)", result: outcome, cap: caps.outcome },
-      ].map(({ key, title, result, cap }) =>
+      {(
+        [
+          {
+            key: "review",
+            title: "Review lane",
+            result: review,
+            cap: caps.review,
+          },
+          {
+            key: "outcome",
+            title: "Outcome lane (adjudicator)",
+            result: outcome,
+            cap: caps.outcome,
+          },
+        ] as const
+      ).map(({ key, title, result, cap }) =>
         isError(result) ? (
           // Never a number, never an empty table. An unreachable API and a
           // lane with no unhealthy jobs are different facts.
@@ -120,7 +132,7 @@ export default async function JobsPage({
               limit={result.limit}
               maxAttempts={cap}
               asOf={asOf}
-              urlKey={key as "review" | "outcome"}
+              urlKey={key}
             />
           </Suspense>
         ),
