@@ -1,0 +1,16 @@
+{
+  "name": "doug-monorepo",
+  "private": true,
+  "workspaces": [
+    "web",
+    "console"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=web",
+    "dev:console": "npm run dev --workspace=console",
+    "build:web": "npm run build --workspace=web",
+    "build:console": "npm run build --workspace=console",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

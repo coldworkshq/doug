@@ -1,0 +1,40 @@
+# gcloud builds submit (Node images from REPO_ROOT) honors .gcloudignore
+# (else .gitignore), not .dockerignore. Keep this in lockstep with
+# .dockerignore so the Cloud Build upload matches the context CI and local
+# `docker build -f … .` exercise.
+#
+# This file is ONLY consulted when the upload top-level is the repo root
+# (gcp.sh build_node_image). API deploys use `cd api && --source .`, so
+# they resolve api/.gcloudignore and are unaffected by the `api` exclude
+# below — see test_api_deploy_source_is_api_dir_not_repo_root.
+.git
+.github
+.worktrees
+.claude
+.superpowers
+**/node_modules
+**/.next
+**/__pycache__
+**/.venv
+**/venv
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+api
+docs
+data
+out
+reports
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+HANDOFF.md
+README.md
+LICENSE.md
+Makefile
+**/*.md
+!web/package.json
+!console/package.json

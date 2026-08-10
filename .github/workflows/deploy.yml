@@ -74,6 +74,11 @@ jobs:
             if echo "$files" | grep -qx \
               'docs/design/outcome-loop/publication-preregistration.md'; then api=true; fi
             if echo "$files" | grep -q '^web/'; then web=true; fi
+            # Root workspace lockfile / manifests / Node image build path
+            # all change what doug-web ships, even with no web/ file touch.
+            if echo "$files" | grep -qxE 'package(-lock)?\.json'; then web=true; fi
+            if echo "$files" | grep -qxE \
+              'api/deploy/(gcp\.sh|cloudbuild-node\.yaml)'; then web=true; fi
           fi
           echo "api=$api" >> "$GITHUB_OUTPUT"
           echo "web=$web" >> "$GITHUB_OUTPUT"
@@ -157,19 +162,16 @@ jobs:
     needs: [changes, api]
     if: ${{ !cancelled() && !failure() && needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm run build
+      - run: npm run lint --workspace=web
+      - run: npm run build --workspace=web
       - name: Check federation is configured
         env:
           PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
@@ -193,8 +195,10 @@ jobs:
       # homepage (the readiness probe only proves the server binds its
       # port), promote on 200. A web build that 500s every route now goes
       # red without ever serving.
+      # gcp.sh builds the web image from the monorepo root (workspaces),
+      # then deploys that image — no more --source ../web.
       - name: Deploy
-        working-directory: api # gcp.sh builds ../web, and runs from here
+        working-directory: api
         run: bash deploy/gcp.sh web
         env:
           PROJECT: ${{ env.PROJECT }}

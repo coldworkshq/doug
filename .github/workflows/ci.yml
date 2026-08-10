@@ -30,20 +30,17 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - run: npm run lint --workspace=web
+      - run: npm test --workspace=web
+      - run: npm run build --workspace=web
 
   # doug-console is a separate app (console/) from doug-web, with its own
   # lib tests — nothing above exercises it. It is deliberately not wired
@@ -53,27 +50,24 @@ jobs:
   # holding the unscoped operator credential.
   console:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: console
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm test
-      - run: npm run lint
-      - run: npm run build
+      - run: npm test --workspace=console
+      - run: npm run lint --workspace=console
+      - run: npm run build --workspace=console
 
   # The images that actually serve prod are otherwise built for the first
-  # time *during* the prod deploy (gcloud run deploy --source) — a broken
-  # Dockerfile or base-image regression surfaced there, mid-merge, and
-  # nowhere earlier. Building them here catches that at PR time. Bases are
-  # digest-pinned in the Dockerfiles, so this exercises the same layers the
-  # deploy will.
+  # time *during* the prod deploy — a broken Dockerfile or base-image
+  # regression surfaced there, mid-merge, and nowhere earlier. Building
+  # them here catches that at PR time. Bases are digest-pinned in the
+  # Dockerfiles, so this exercises the same layers the deploy will.
+  # Node apps use root context + -f Dockerfile (npm workspaces).
   api-image:
     runs-on: ubuntu-latest
     steps:
@@ -84,16 +78,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: docker build web
+      - run: docker build -f web/Dockerfile .
 
-  # console/Dockerfile is byte-identical to web/Dockerfile, but that's
-  # exactly why this can't be skipped: both Docker failures this branch hit
-  # (a package.json missing an `overrides` block, breaking `npm ci` from a
-  # clean checkout; console/public/ not existing, breaking the final COPY)
-  # were specific to the console build context, not the shared Dockerfile
-  # text, and neither api-image nor web-image above could have caught them.
+  # console/Dockerfile mirrors web's root-context pattern, but that's
+  # exactly why this can't be skipped: prior failures (missing overrides,
+  # missing console/public/) were specific to the console package graph
+  # and neither api-image nor web-image could have caught them.
   console-image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: docker build console
+      - run: docker build -f console/Dockerfile .

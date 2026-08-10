@@ -141,6 +141,57 @@ def test_web_deploy_is_still_the_only_public_service():
     assert "--source ../console" not in _function_body("web")
 
 
+def test_node_deploys_build_images_from_the_monorepo_root():
+    """npm workspaces put the lockfile at the repo root; Cloud Run
+    `--source ../web` cannot see it. Both Node deploys must build via
+    Cloud Build from REPO_ROOT, then `gcloud run deploy --image`."""
+    web = _function_body("web")
+    console = _function_body("console")
+    assert "build_node_image web/Dockerfile doug-web" in web
+    assert "build_node_image console/Dockerfile doug-console" in console
+    assert "--source ../web" not in web
+    assert "--source ../console" not in console
+    assert "--image \"$image\"" in web
+    assert "--image \"$image\"" in console
+    build = _function_body("build_node_image")
+    assert "cloudbuild-node.yaml" in build
+    assert 'gcloud builds submit "$REPO_ROOT"' in build
+    # stdout is captured as the image tag — submit logs must not land there.
+    assert "--suppress-logs" in build
+    # Repo create is setup-only; deploy must fail closed if the repo is missing.
+    assert "require_node_artifact_repo >&2" in build
+    assert "ensure_node_artifact_repo" not in build
+    setup = _function_body("setup")
+    assert "ensure_node_artifact_repo" in setup
+
+
+def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
+    """gcloud builds submit ignores via .gcloudignore, not .dockerignore.
+    The two files must stay paired or Cloud Build uploads a different
+    context than the docker builds CI already exercised."""
+    root = Path(__file__).resolve().parents[2]
+    dockerignore = (root / ".dockerignore").read_text()
+    gcloudignore = (root / ".gcloudignore").read_text()
+    # Strip comment lines — the gcloud file carries an extra why-header.
+    def body(text: str) -> list[str]:
+        return [line for line in text.splitlines() if line and not line.startswith("#")]
+
+    assert body(dockerignore) == body(gcloudignore)
+
+
+def test_api_deploy_source_is_api_dir_not_repo_root():
+    """Root .gcloudignore excludes `api/`. That is safe only because the
+    API deploy uploads from inside api/ (`--source .` after cd API_DIR),
+    so gcloud resolves api/.gcloudignore — not the root file."""
+    deploy = _function_body("deploy")
+    assert "--source ." in deploy
+    assert "--source .." not in deploy
+    assert "--source ../api" not in deploy
+    # The script cds to API_DIR before the case dispatch; pin that the
+    # deploy body never rebinds CWD to the repo root.
+    assert "cd \"$REPO_ROOT\"" not in deploy
+
+
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
     """Deterministic external boundaries: record argv, fake Cloud Run state,
     and report that the Scheduler resource does not exist yet."""
