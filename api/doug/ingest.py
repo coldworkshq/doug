@@ -109,9 +109,16 @@ def enqueue(
     pr_number: int,
     head_sha: str,
     *,
+    base_sha: str,
     trigger: Trigger = "live",
 ) -> int | None:
-    """Queue one head SHA for review. None means this SHA needs no new work.
+    """Queue one observed base/head pair. None means this head needs no new work.
+
+    `base_sha` is captured evidence, not yet part of paid-work identity: the
+    unique constraint remains head-only until verdicts, diffs, receipts and
+    outcomes can move to pair identity together. A duplicate therefore keeps
+    the first admitted base, while a row actually revived below takes the new
+    observation that describes the work it is pending to perform.
 
     A collision on the unique index is not automatically a duplicate. The
     index carries no status column, so a row that ended 'failed' or
@@ -143,6 +150,10 @@ def enqueue(
     gets reviewed: GitHub does not order deliveries, so worker.process_job
     re-checks the PR's real head before paying for a read.
     """
+    if not isinstance(base_sha, str) or not base_sha:
+        # The column is nullable solely so pre-migration rows remain honest.
+        # New work must never use that historical-unknown state.
+        raise ValueError("base_sha is required for new review work")
     engine = _engine()
     try:
         with engine.begin() as conn:
@@ -155,6 +166,7 @@ def enqueue(
                         "github_repo_id": github_repo_id,
                         "repo_full_name": repo_full_name,
                         "pr_number": pr_number,
+                        "base_sha": base_sha,
                         "head_sha": head_sha,
                         "status": "pending",
                         "attempts": 0,
@@ -176,7 +188,7 @@ def enqueue(
         if not _is_dedupe_collision(e):
             raise
         return _revive(
-            engine, installation_id, github_repo_id, pr_number, head_sha, trigger
+            engine, installation_id, github_repo_id, pr_number, head_sha, base_sha, trigger
         )
 
 
@@ -186,6 +198,7 @@ def _revive(
     github_repo_id: int,
     pr_number: int,
     head_sha: str,
+    base_sha: str,
     trigger: Trigger,
 ) -> int | None:
     """Return a queued-but-unreviewed row to pending, or None if there is none.
@@ -263,6 +276,7 @@ def _revive(
                 started_at=None,
                 finished_at=None,
                 verdict_id=None,
+                base_sha=base_sha,
             )
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()

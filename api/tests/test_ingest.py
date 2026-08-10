@@ -10,6 +10,7 @@ from doug.models import Band, Reason, Verdict
 INSTALL = 150424894
 REPO_ID = 900001
 REPO = "drewjst/doug"
+BASE_SHA = "0" * 40
 
 VERDICT = Verdict(
     score=0.4,
@@ -23,6 +24,12 @@ def _db(tmp_path, monkeypatch) -> str:
     url = f"sqlite:///{tmp_path}/doug.db"
     monkeypatch.setenv("DATABASE_URL", url)
     return url
+
+
+def _enqueue(*args, base_sha=BASE_SHA, **kwargs):
+    """Keep lifecycle tests explicit about the new admission evidence without
+    repeating an irrelevant base literal in every head-only scenario."""
+    return ingest.enqueue(*args, base_sha=base_sha, **kwargs)
 
 
 def _jobs(url: str) -> list[dict]:
@@ -66,15 +73,83 @@ def _claim_and_fail(job_id, error: str) -> None:
     assert ingest.fail(job_id, error, claim_generation=claimed["claim_generation"])
 
 
+def test_enqueue_persists_the_event_time_base_and_claim_exposes_it(tmp_path, monkeypatch):
+    """The queue is the durable boundary between GitHub admission and the
+    worker. Dropping the base here makes later comparison evidence impossible
+    to reconstruct after the target branch moves."""
+    url = _db(tmp_path, monkeypatch)
+
+    job_id = _enqueue(
+        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=BASE_SHA
+    )
+
+    assert _jobs(url)[0]["base_sha"] == BASE_SHA
+    claimed = ingest.claim()
+    assert claimed["id"] == job_id
+    assert claimed["base_sha"] == BASE_SHA
+
+
+@pytest.mark.parametrize("base_sha", [None, ""])
+def test_enqueue_rejects_an_unknown_base_for_new_work(tmp_path, monkeypatch, base_sha):
+    """Nullable storage is reserved for historical rows. A new caller that
+    forgets the base must fail before it creates a present-day unknown."""
+    url = _db(tmp_path, monkeypatch)
+    assert store.enabled()
+
+    with pytest.raises(ValueError, match="base_sha"):
+        ingest.enqueue(
+            INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=base_sha
+        )
+
+    assert _jobs(url) == []
+
+
+def test_same_head_with_a_different_base_keeps_head_only_deduplication(
+    tmp_path, monkeypatch
+):
+    """Capture-only does not quietly redefine paid-work identity. Until
+    verdicts, diffs, receipts, and outcomes move together, a base change at
+    the same head remains one job and retains the first admitted base."""
+    url = _db(tmp_path, monkeypatch)
+    first = _enqueue(
+        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40
+    )
+
+    duplicate = _enqueue(
+        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40
+    )
+
+    assert duplicate is None
+    assert [(j["id"], j["base_sha"]) for j in _jobs(url)] == [(first, "1" * 40)]
+
+
+def test_revive_replaces_the_base_with_the_new_admission_observation(tmp_path, monkeypatch):
+    """A revived row represents work admitted again, not an immutable record
+    of the failed attempt. Its base must describe the work now pending."""
+    url = _db(tmp_path, monkeypatch)
+    job_id = _enqueue(
+        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40
+    )
+    claimed = ingest.claim()
+    assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
+
+    revived = _enqueue(
+        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40
+    )
+
+    assert revived == job_id
+    assert _jobs(url)[0]["base_sha"] == "2" * 40
+
+
 def test_enqueue_suppresses_a_redelivered_push(tmp_path, monkeypatch):
     """GitHub delivers at least once, not exactly once, and a duplicate that
     got through would buy a second model read of a diff already queued. The
     unique index is the guard; enqueue reports the suppression as None rather
     than inventing a job id."""
     url = _db(tmp_path, monkeypatch)
-    first = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    first = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     assert first is not None
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
     assert [j["id"] for j in _jobs(url)] == [first]
 
 
@@ -83,8 +158,8 @@ def test_a_new_head_sha_supersedes_the_pending_job_it_replaces(tmp_path, monkeyp
     intermediate SHA costs five model reads to describe a tree nobody will
     merge, so only the newest pending SHA survives."""
     url = _db(tmp_path, monkeypatch)
-    old = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
-    new = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+    old = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    new = _enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
     by_id = {j["id"]: j for j in _jobs(url)}
     assert by_id[old]["status"] == "superseded"
     assert by_id[new]["status"] == "pending"
@@ -95,11 +170,11 @@ def test_a_finished_job_is_never_superseded(tmp_path, monkeypatch):
     for and its verdict is in the ledger; rewriting its status would make the
     row lie about what happened."""
     url = _db(tmp_path, monkeypatch)
-    done = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    done = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == done
     assert ingest.complete(done, None, claim_generation=claimed["claim_generation"])
-    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+    _enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
     assert {j["id"]: j["status"] for j in _jobs(url)}[done] == "done"
 
 
@@ -107,8 +182,8 @@ def test_claim_takes_the_oldest_pending_job_and_marks_it_running(tmp_path, monke
     """Two drains must never take the same job, so a claim is a write, not a
     read. Oldest-first keeps one busy repo from starving another."""
     url = _db(tmp_path, monkeypatch)
-    first = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
-    second = ingest.enqueue(INSTALL, REPO_ID, REPO, 8, "b" * 40)
+    first = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    second = _enqueue(INSTALL, REPO_ID, REPO, 8, "b" * 40)
 
     job = ingest.claim()
     assert job["id"] == first
@@ -130,7 +205,7 @@ def test_fail_re_pends_below_the_cap_and_gives_up_at_it(tmp_path, monkeypatch):
     times is broken, and a job that retried forever would spend real money
     doing it."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
 
     queued_at = {j["id"]: j for j in _jobs(url)}[job_id]["enqueued_at"]
     _claim_and_fail(job_id, "read timed out")
@@ -154,7 +229,7 @@ def test_fail_truncates_the_error(tmp_path, monkeypatch):
     """Anthropic and githubkit both raise exceptions carrying whole request
     bodies. One job must not be able to write a megabyte into the queue."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     _claim_and_fail(job_id, "x" * 5000)
     assert len({j["id"]: j for j in _jobs(url)}[job_id]["error"]) == 500
 
@@ -164,7 +239,7 @@ def test_complete_records_the_verdict_the_job_produced(tmp_path, monkeypatch):
     caused; without it, "did this push get reviewed?" is unanswerable."""
     url = _db(tmp_path, monkeypatch)
     verdict_id = store.save_review(REPO, 7, "deterministic", VERDICT, source="app")
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
 
     claimed = ingest.claim()
     assert claimed["id"] == job_id
@@ -182,7 +257,7 @@ def test_enqueue_without_a_ledger_refuses_loudly(tmp_path, monkeypatch):
     nothing."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
-        ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+        _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
 
 
 def test_a_failed_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
@@ -197,13 +272,13 @@ def test_a_failed_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
     the cooloff bounds how often a poison PR can re-arm, and is tested in its
     own right below."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "credentials missing")
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "failed"
     _age_finished_at(url, job_id, seconds=ingest.FAILED_REVIVE_COOLOFF_SECONDS + 60)
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
     assert row["error"] is None and row["finished_at"] is None
@@ -219,11 +294,11 @@ def test_a_superseded_job_is_revived_by_a_later_enqueue(tmp_path, monkeypatch):
     race can be the PR's real head. The worker re-enqueues whatever head it
     finds, and that call has to be able to bring the row back."""
     url = _db(tmp_path, monkeypatch)
-    first = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
-    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+    first = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    _enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
     assert {j["id"]: j for j in _jobs(url)}[first]["status"] == "superseded"
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == first
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == first
     assert {j["id"]: j for j in _jobs(url)}[first]["status"] == "pending"
 
 
@@ -232,14 +307,14 @@ def test_running_and_finished_jobs_are_never_revived(tmp_path, monkeypatch):
     Reviving in-flight or completed work is exactly the duplicate spend the
     unique index exists to prevent."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "running"
 
     assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) is None
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "done"
 
 
@@ -249,10 +324,10 @@ def test_a_replayed_older_delivery_leaves_the_newer_job_pending(tmp_path, monkey
     collided on its own row, leaving the PR with nothing pending and no
     further delivery coming to fix it."""
     url = _db(tmp_path, monkeypatch)
-    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
-    newer = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
+    _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    newer = _enqueue(INSTALL, REPO_ID, REPO, 7, "b" * 40)
 
-    ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)  # the replay
+    _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)  # the replay
     assert {j["id"]: j["status"] for j in _jobs(url)}[newer] == "pending"
 
 
@@ -262,7 +337,7 @@ def test_release_returns_a_claimed_job_without_charging_an_attempt(tmp_path, mon
     attempted, and charging it would retire a healthy PR after three drains
     that never touched it."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     queued_at = {j["id"]: j for j in _jobs(url)}[job_id]["enqueued_at"]
     claimed = ingest.claim()
     assert claimed["id"] == job_id
@@ -282,7 +357,7 @@ def test_supersede_retires_a_job_whose_sha_is_no_longer_the_head(tmp_path, monke
     went wrong. Revivable, so a force-push back to this SHA re-queues the row
     instead of colliding with it forever."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
 
@@ -291,7 +366,7 @@ def test_supersede_retires_a_job_whose_sha_is_no_longer_the_head(tmp_path, monke
     assert row["status"] == "superseded" and row["finished_at"] is not None
     assert row["verdict_id"] is None
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 
 
@@ -302,7 +377,7 @@ def test_reclaim_stalled_re_pends_a_running_job_past_its_lease(tmp_path, monkeyp
     claim back into reviewable work, and it must not charge the crash as an
     attempt against the job."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     queued_at = {j["id"]: j for j in _jobs(url)}[job_id]["enqueued_at"]
     ingest.claim()
     _age_started_at(url, job_id, seconds=ingest.STALL_LEASE_SECONDS + 1)
@@ -321,7 +396,7 @@ def test_reclaim_stalled_leaves_a_fresh_claim_strictly_alone(tmp_path, monkeypat
     same model read of the same SHA. Only claims older than the lease are
     fair game."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     ingest.claim()
 
     assert ingest.reclaim_stalled() == 0
@@ -338,7 +413,7 @@ def test_a_reclaimed_job_rejoins_the_ordinary_lifecycle(tmp_path, monkeypatch):
     failed job. This is the guarantee the module docstring now promises in
     place of the durability claim it used to overstate."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     ingest.claim()
     _age_started_at(url, job_id, seconds=ingest.STALL_LEASE_SECONDS + 1)
     ingest.reclaim_stalled()
@@ -351,7 +426,7 @@ def test_a_reclaimed_job_rejoins_the_ordinary_lifecycle(tmp_path, monkeypatch):
             claimed = ingest.claim()
             assert claimed["id"] == job_id
         assert ingest.fail(job_id, "still broken", claim_generation=claimed["claim_generation"])
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
 
 
 def test_reclaim_stalled_is_a_no_op_when_storage_is_disabled(monkeypatch):
@@ -404,7 +479,7 @@ def test_complete_clears_a_stale_error_from_earlier_failed_attempts(tmp_path, mo
     a reader checking why a PR wasn't reviewed would be told about a problem
     that no longer exists."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
     assert ingest.fail(job_id, "transient timeout", claim_generation=claimed["claim_generation"])
@@ -428,7 +503,7 @@ def test_a_late_complete_after_reclaim_cannot_finish_under_a_second_claim(
     Fencing on status='running' alone is not enough once B has claimed; the
     holder's claim_generation is the generation token."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     first = ingest.claim()
     assert first["id"] == job_id
     _age_started_at(url, job_id, seconds=ingest.STALL_LEASE_SECONDS + 1)
@@ -450,7 +525,7 @@ def test_a_late_fail_after_reclaim_cannot_burn_a_second_claim(tmp_path, monkeypa
     """Mirror of the complete fence: a stale fail() must not increment
     attempts on a row someone else is now holding."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     first = ingest.claim()
     assert first["id"] == job_id
     _age_started_at(url, job_id, seconds=ingest.STALL_LEASE_SECONDS + 1)
@@ -472,7 +547,7 @@ def test_terminals_are_no_ops_unless_the_job_is_running(tmp_path, monkeypatch):
     row has no holder; mutating it would let a stale worker finish work that
     was reclaimed or never claimed."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     assert ingest.complete(job_id, None, claim_generation=0) is False
     assert ingest.fail(job_id, "nope", claim_generation=0) is False
     assert ingest.release(job_id, claim_generation=0) is False
@@ -488,7 +563,7 @@ def test_reclaim_stalled_revives_a_running_row_with_null_started_at(
     missing lease timestamp would otherwise sit immortal — the silent
     never-reviewed SHA reclaim was added to prevent."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     ingest.claim()
     with create_engine(url).begin() as conn:
         conn.execute(
@@ -509,7 +584,7 @@ def test_a_revived_job_clears_a_stray_verdict_id(tmp_path, monkeypatch):
     it reachable, rather than trusting it by omission."""
     url = _db(tmp_path, monkeypatch)
     verdict_id = store.save_review(REPO, 7, "deterministic", VERDICT, source="app")
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
     assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
@@ -520,7 +595,7 @@ def test_a_revived_job_clears_a_stray_verdict_id(tmp_path, monkeypatch):
             .values(verdict_id=verdict_id)
         )
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["verdict_id"] is None
 
@@ -557,7 +632,7 @@ def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(
     for it.
     """
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "reader exploded")
     row = {j["id"]: j for j in _jobs(url)}[job_id]
@@ -566,7 +641,7 @@ def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(
     # NULL-finished_at escape hatch.
     assert row["status"] == "failed" and row["finished_at"] is not None
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
 
@@ -582,12 +657,12 @@ def test_a_reconcile_sweep_does_not_re_arm_a_job_that_just_burned_its_attempts(
     retrying a poison PR every ninety seconds forever is not.
     """
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "reader exploded")
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "failed"
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") is None
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") is None
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "failed" and row["attempts"] == 3
 
@@ -599,7 +674,7 @@ def test_a_reconcile_sweep_revives_a_failed_job_once_its_cooloff_has_passed(
     outage — wiped credentials, a provider down — has to heal on a later
     restart, which is the whole reason revive exists."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "reader exploded")
 
@@ -611,7 +686,7 @@ def test_a_reconcile_sweep_revives_a_failed_job_once_its_cooloff_has_passed(
             .values(finished_at=stale)
         )
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
 
@@ -633,7 +708,7 @@ def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(
     to abandon a customer's PR, so the sweep heals it.
     """
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "reader exploded")
     # Stand in for however the row lost its finish time; what matters is that a
@@ -647,7 +722,7 @@ def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "failed" and row["finished_at"] is None
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0
 
@@ -660,19 +735,19 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     instruction reaches the queue as a delivery or is re-derived by the startup
     sweep; making it wait an hour would be a bug, not a saving."""
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == job_id
     assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "superseded"
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcile") == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 
     claimed = ingest.claim()
     assert claimed["id"] == job_id
     assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40) == job_id
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 
 
@@ -698,7 +773,7 @@ def test_the_cooloff_hold_is_reportable_and_only_for_a_row_actually_holding(
     # and not this query's.
     ident = (INSTALL, REPO_ID, 7, "a" * 40)
 
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     assert ingest.cooloff_hold_remaining(*ident) is None  # pending: a plain dedupe
     claimed = ingest.claim()
     assert ingest.cooloff_hold_remaining(*ident) is None  # running: still not a hold
@@ -757,7 +832,7 @@ def test_an_unrecognized_trigger_falls_open_to_the_live_terms(tmp_path, monkeypa
     has to.
     """
     url = _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40)
     for _ in range(3):
         _claim_and_fail(job_id, "reader exploded")
     row = {j["id"]: j for j in _jobs(url)}[job_id]
@@ -766,6 +841,6 @@ def test_an_unrecognized_trigger_falls_open_to_the_live_terms(tmp_path, monkeypa
     # NULL-finished_at escape hatch cannot account for the result below.
     assert row["status"] == "failed" and row["finished_at"] is not None
 
-    assert ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcille") == job_id
+    assert _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, trigger="reconcille") == job_id
     row = {j["id"]: j for j in _jobs(url)}[job_id]
     assert row["status"] == "pending" and row["attempts"] == 0

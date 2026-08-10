@@ -1787,7 +1787,8 @@ def _enqueue_pull_request(payload: dict) -> int | None:
         # calls the two one gate. Reading a missing key as "not a draft"
         # made them disagree.
         return None
-    base = _obj(_obj(pr.get("base")).get("repo"))
+    base_ref = _obj(pr.get("base"))
+    base = _obj(base_ref.get("repo"))
     head = _obj(pr.get("head"))
     base_id = base.get("id")
     # head.repo is null when the fork was deleted, which fails this the same
@@ -1806,14 +1807,15 @@ def _enqueue_pull_request(payload: dict) -> int | None:
         return None
     number = pr.get("number")
     full_name = _text(base.get("full_name"), store.review_jobs.c.repo_full_name)
+    base_sha = _text(base_ref.get("sha"), store.review_jobs.c.base_sha)
     head_sha = _text(head.get("sha"), store.review_jobs.c.head_sha)
-    if not isinstance(number, int) or not full_name or not head_sha:
+    if not isinstance(number, int) or not full_name or not base_sha or not head_sha:
         # Signed, past both gates, and still missing something the job row
         # IS: which PR, which repo by name, which commit. Logged and 202'd
         # rather than raised, for the reason _record_merge gives below.
         print(
             f"doug: pull_request #{pr.get('number')} carried no usable "
-            "number/base.repo.full_name/head.sha; not enqueued",
+            "number/base.repo.full_name/base.sha/head.sha; not enqueued",
             file=sys.stderr,
         )
         return None
@@ -1823,6 +1825,7 @@ def _enqueue_pull_request(payload: dict) -> int | None:
         full_name,
         number,
         head_sha,
+        base_sha=base_sha,
     )
 
 

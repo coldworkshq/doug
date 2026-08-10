@@ -10,6 +10,12 @@ from doug import ingest, outcome_queue, reader, store
 from doug.api import app
 from doug.models import Band, PRMetadata, Reason, Verdict
 
+BASE_SHA = "0" * 40
+
+
+def _enqueue(*args, base_sha=BASE_SHA, **kwargs):
+    return ingest.enqueue(*args, base_sha=base_sha, **kwargs)
+
 RV = reader.ReaderVerdict.model_validate(
     {
         "risk_score": 62,
@@ -2121,7 +2127,7 @@ def test_job_health_excludes_superseded_from_every_count(tmp_path, monkeypatch):
     single easiest way to make the strip cry wolf, so it must appear in no
     count at all."""
     _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    job_id = _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
 
@@ -2142,7 +2148,7 @@ def test_job_health_does_not_report_a_retried_job_as_freshly_pending(
     reports a twice-failed job as brand new — blind to exactly the jobs most
     likely to be in trouble. oldest_pending_at must see attempts = 0 only."""
     _db(tmp_path, monkeypatch)
-    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
 
@@ -2166,7 +2172,7 @@ def test_job_health_measures_each_lane_against_its_own_lease(
     _db(tmp_path, monkeypatch)
     twenty_min_ago = _dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=20)
 
-    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     _force_started_at(store.review_jobs, claimed["id"], twenty_min_ago)
 
@@ -2239,8 +2245,8 @@ def test_job_health_timestamps_are_all_timezone_aware(tmp_path, monkeypatch):
 
     # A fresh pending job (oldest_pending_at) and a retried one
     # (oldest_retry_at) in the review lane.
-    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
-    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    _enqueue(99, 1, "o/r", 7, "a" * 40)
+    _enqueue(99, 1, "o/r", 8, "b" * 40)
     claimed = ingest.claim()
     ingest.fail(claimed["id"], "boom", claim_generation=claimed["claim_generation"])
 
@@ -2289,7 +2295,7 @@ def test_job_health_scopes_by_repo(tmp_path, monkeypatch):
     store.set_installation_repos(99, [(1, "o/a"), (2, "o/b")], replace=True)
 
     # Repo A: one stalled review claim, one overdue outcome window.
-    ingest.enqueue(99, 1, "o/a", 7, "a" * 40)
+    _enqueue(99, 1, "o/a", 7, "a" * 40)
     claimed_a = ingest.claim()
     _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
     store.enqueue_outcome_jobs(
@@ -2297,7 +2303,7 @@ def test_job_health_scopes_by_repo(tmp_path, monkeypatch):
     )
 
     # Repo B: the same unhealthy shapes. Must not leak into o/a's scoped view.
-    ingest.enqueue(99, 2, "o/b", 8, "b" * 40)
+    _enqueue(99, 2, "o/b", 8, "b" * 40)
     claimed_b = ingest.claim()
     _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
     store.enqueue_outcome_jobs(
@@ -2321,14 +2327,14 @@ def test_job_health_scopes_by_installation(tmp_path, monkeypatch):
     now = _dt.datetime.now(_dt.UTC)
     twenty_min_ago = now - _dt.timedelta(minutes=20)
 
-    ingest.enqueue(11, 1, "o/a", 7, "a" * 40)
+    _enqueue(11, 1, "o/a", 7, "a" * 40)
     claimed_a = ingest.claim()
     _force_started_at(store.review_jobs, claimed_a["id"], twenty_min_ago)
     store.enqueue_outcome_jobs(
         11, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main", window_days=(14,)
     )
 
-    ingest.enqueue(22, 2, "o/b", 8, "b" * 40)
+    _enqueue(22, 2, "o/b", 8, "b" * 40)
     claimed_b = ingest.claim()
     _force_started_at(store.review_jobs, claimed_b["id"], twenty_min_ago)
     store.enqueue_outcome_jobs(
@@ -2353,11 +2359,11 @@ def test_job_rows_defaults_to_unhealthy_only(tmp_path, monkeypatch):
     AMBER states and nothing else."""
     _db(tmp_path, monkeypatch)
     # One healthy done job.
-    done_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    done_id = _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.complete(done_id, None, claim_generation=claimed["claim_generation"])
     # One failed job: three attempts exhausts ingest.MAX_ATTEMPTS.
-    ingest.enqueue(99, 1, "o/r", 8, "b" * 40)
+    _enqueue(99, 1, "o/r", 8, "b" * 40)
     for _ in range(ingest.MAX_ATTEMPTS):
         c = ingest.claim()
         ingest.fail(c["id"], "boom", claim_generation=c["claim_generation"])
@@ -2371,7 +2377,7 @@ def test_job_rows_defaults_to_unhealthy_only(tmp_path, monkeypatch):
 def test_job_rows_never_returns_superseded_as_unhealthy(tmp_path, monkeypatch):
     """Same reason job_health excludes it: nothing went wrong."""
     _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    job_id = _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
 
@@ -2386,7 +2392,7 @@ def test_job_rows_shows_everything_when_unhealthy_only_is_off(
     """'The job I expected does not exist at all' is a real diagnosis, and
     only a complete list reaches it."""
     _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    job_id = _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
 
@@ -2406,7 +2412,7 @@ def test_job_rows_carries_the_derived_flag_it_was_selected_by(
     against a lease constant it would have to hold locally — which is how the
     list and the strip drift apart."""
     _db(tmp_path, monkeypatch)
-    ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     _force_started_at(
         store.review_jobs,
@@ -2472,7 +2478,7 @@ def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(
     unlinkable does not mean unhealthy. Surfacing it as a failure would
     invent an incident out of Doug correctly declining to review."""
     _db(tmp_path, monkeypatch)
-    job_id = ingest.enqueue(99, 1, "o/r", 7, "a" * 40)
+    job_id = _enqueue(99, 1, "o/r", 7, "a" * 40)
     claimed = ingest.claim()
     ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
 

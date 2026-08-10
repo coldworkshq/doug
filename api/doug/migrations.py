@@ -283,6 +283,15 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ON installations (workos_org_id)",
         ),
     ),
+    (
+        10,
+        (
+            # Forward only: the base GitHub reported when historical jobs
+            # were admitted is unknowable after the target branch moves.
+            # Version 9 is reserved by front-door-phase-1.
+            "ALTER TABLE review_jobs ADD COLUMN base_sha VARCHAR(64)",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

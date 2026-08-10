@@ -297,6 +297,9 @@ review_jobs = Table(
     Column("github_repo_id", BigInteger, nullable=False),
     Column("repo_full_name", String(200), nullable=False),  # display only
     Column("pr_number", Integer, nullable=False),
+    # Forward-only event-time evidence. Historical rows stay NULL because
+    # the target branch may have moved and its old base cannot be inferred.
+    Column("base_sha", String(64)),
     Column("head_sha", String(64), nullable=False),
     # pending | running | done | failed | superseded
     Column("status", String(12), nullable=False, index=True),
@@ -2999,4 +3002,3 @@ def revoke_all_installation_tokens(installation_id: int) -> int:
             .values(revoked_at=datetime.now(UTC))
         )
     return result.rowcount
-

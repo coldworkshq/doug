@@ -134,10 +134,21 @@ def process_job(job: dict) -> int | None:
     # still said the old SHA. That mislabels a read rather than losing one,
     # which is worse: the verdict looks like evidence about a commit it
     # never saw. The SHA that overtook this one gets its own job.
-    current = gh.rest.pulls.get(
+    current_pr = gh.rest.pulls.get(
         owner=owner, repo=name, pull_number=job["pr_number"]
-    ).parsed_data.head.sha
+    ).parsed_data
+    current = getattr(getattr(current_pr, "head", None), "sha", None)
+    if not isinstance(current, str) or not current:
+        raise RuntimeError("GitHub pull response carried no usable head.sha")
     if current != job["head_sha"]:
+        current_base = getattr(getattr(current_pr, "base", None), "sha", None)
+        if not isinstance(current_base, str) or not current_base:
+            # Do not retire the only durable job until its replacement has a
+            # complete captured identity. drain's ordinary failure path keeps
+            # this claim retryable.
+            raise RuntimeError(
+                "GitHub pull response carried no usable base.sha for stale-head replacement"
+            )
         ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         ingest.enqueue(
             job["installation_id"],
@@ -145,6 +156,7 @@ def process_job(job: dict) -> int | None:
             job["repo_full_name"],
             job["pr_number"],
             current,
+            base_sha=current_base,
         )
         # No verdict named here, because none was reached: this job opened
         # nothing. A line that carried a tier or a score would be describing
@@ -473,6 +485,14 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
             head_sha = getattr(getattr(p, "head", None), "sha", None)
             if not isinstance(head_sha, str):
                 continue
+            base = getattr(p, "base", None)
+            base_sha = getattr(base, "sha", None)
+            if not isinstance(base_sha, str) or not base_sha:
+                print(
+                    f"doug: reconcile skipped {full_name}#{p.number} (missing base.sha)",
+                    file=sys.stderr,
+                )
+                continue
             # installation_repos' full_name can go stale: a repo can be
             # deleted and its name picked up by an unrelated one. repo_id
             # (github_repo_id) is the fact the store's tenancy actually keys
@@ -481,7 +501,7 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
             # than the one this installation was granted — reviewing it
             # under this installation's identity would be wrong, not just
             # imprecise.
-            base_id = getattr(getattr(getattr(p, "base", None), "repo", None), "id", None)
+            base_id = getattr(getattr(base, "repo", None), "id", None)
             if base_id != repo_id:
                 print(
                     f"doug: reconcile skipped {full_name}#{p.number} "
@@ -506,7 +526,13 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
             # window rather than one per restart. A live caller revives it at
             # once instead.
             job_id = ingest.enqueue(
-                installation_id, repo_id, full_name, p.number, head_sha, trigger=trigger
+                installation_id,
+                repo_id,
+                full_name,
+                p.number,
+                head_sha,
+                base_sha=base_sha,
+                trigger=trigger,
             )
             if job_id is not None:
                 count += 1
