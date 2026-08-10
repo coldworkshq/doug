@@ -554,19 +554,111 @@ they are a real hole, not a nicety, and Phase 1a's exit gate does not cover them
 
 ---
 
-### Task 7: AuthKit in `web/`
+### Task 7a: Entitlement derivation and storage (API side)
 
-**Files:** `web/package.json`, `web/proxy.ts` (new), `web/app/auth/callback/route.ts` (new), `web/app/layout.tsx`, `web/app/auth/actions.ts` (new), `api/deploy/gcp.sh`
+> **WHY THIS TASK EXISTS — a gap the original plan never addressed.** Verified
+> against the installed SDK's README: `authkit-nextjs` exposes the provider's
+> `oauthTokens` **only** inside `handleAuth`'s `onSuccess`, at sign-in.
+> `withAuth()` does not return them and the session does not persist them. The
+> dashboard runs on a *later* request, so the GitHub token is gone by the time
+> the entitlement model needs it. The gate proved the token **works**; nobody
+> checked it was still **reachable**.
+>
+> **DECIDED (Andrew, 2026-08-10): persist the derived scope, never the token**,
+> and **do not narrow login to GitHub** — "at some point doug might have stuff
+> that is more than just github". GitHub is today's *source* of entitlement,
+> not an assumption baked into the session layer.
+
+**Files:** `api/doug/entitlements.py` (new), `api/doug/store.py`, `api/doug/migrations.py`, `api/doug/api.py`, `api/tests/test_entitlements.py` (new), `api/tests/test_api.py`
+
+**Interfaces:**
+- Produces: `session_entitlements` rows; `entitlements.derive(provider, token)`; `POST /v1/sessions/entitlements`; `entitlements.is_stale(derived_at)`.
+
+**Three properties that are the whole point:**
+
+1. **Provider-neutral by construction.** Storage keys on the **WorkOS user id**, never a GitHub user id. Derivation dispatches on a provider name; GitHub is one deriver. Adding a second source later means adding a function, not reshaping sessions.
+2. **No credential at rest.** The provider token arrives in the request, is used, and is discarded. It is never stored, never logged, never returned, and never placed in an exception message.
+3. **Staleness has a hard ceiling.** `WORKOS_COOKIE_MAX_AGE` defaults to **~400 days**, so "bounded by session lifetime" is meaningless at the default. Scope carries `derived_at` and **expires after 8 hours** — matching the GitHub token TTL the gate measured, so this costs nothing in freshness versus storing the token.
+
+**What is NOT stale, and must not be overstated in comments:** Task 3's `live_scope` still intersects every read against the live ledger, so a suspended installation or a removed repo is caught immediately. Only **GitHub-side access revocation** goes stale.
+
+- [ ] **Step 1: Read the real migration number — do not trust this plan**
+
+```bash
+cd api && python3 -c "
+import re; s=open('doug/migrations.py').read()
+n=[int(m) for m in re.findall(r'^\s{4}\(\s*(\d+),', s, re.M)]
+print('present:', sorted(n)); print('NEXT FREE:', max(n)+1)"
+```
+
+Task 1 took 9. **This trap has fired four times in this repo.** Use what it prints.
+
+- [ ] **Step 2: Failing tests first**
+
+```python
+def test_entitlement_scope_is_keyed_on_the_workos_user_not_a_github_id():
+    """Login is not necessarily GitHub. Keying storage on a provider's user id
+    would have to be migrated the first time a second connection exists."""
+
+
+def test_scope_older_than_the_ttl_is_stale():
+    """WORKOS_COOKIE_MAX_AGE defaults to ~400 days, so the cookie cannot be the
+    ceiling. 8h matches the measured GitHub token TTL."""
+
+
+def test_derivation_with_no_github_identity_yields_no_tenants_and_does_not_raise():
+    """Reachable the moment a second connection exists. A user who signed in
+    without GitHub sees nothing; they must not get a 500."""
+
+
+def test_selected_and_all_repository_selection_both_resolve_to_explicit_repo_ids():
+    """Measured: drewjst=selected, lemahq=all. Never assume 'all'."""
+
+
+def test_the_provider_token_is_never_stored_logged_or_returned():
+    """Assert on the stored row, the response body, and captured stderr."""
+
+
+def test_entitlements_are_written_for_the_jwt_subject_not_a_body_supplied_user():
+    """The security test. A body-supplied user id would let any signed-in
+    caller write another user's scope."""
+```
+
+No test may reach the network — stub the GitHub calls, following Task 4's pattern.
+
+- [ ] **Step 3: Implement**
+
+- Migration adds `session_entitlements`: `workos_user_id` (String(255), indexed), `installation_id` (BigInteger), `repo_ids` (TEXT holding a JSON array of ints — portable across SQLite and Postgres), `derived_at` (DateTime with timezone). **Unique on `(workos_user_id, installation_id)`**; re-deriving replaces rather than accumulates.
+- `entitlements.derive(provider, token)` dispatches by provider name. The GitHub deriver calls `GET /user/installations` (keeping only Doug's `app_id`), then `GET /user/installations/{id}/repositories` per installation, **paginating**, and returns explicit repo ids for **both** `repository_selection` values. An unknown provider returns `[]` — never raises.
+- `POST /v1/sessions/entitlements` authenticates with `session_auth.verify_session_claims` (**not** `resolve_session` — no org exists yet for a first-time user), takes `{"provider": str, "token": str}`, derives, and writes keyed on `claims["sub"]`. Returns 204. `SessionAuthNotConfigured` → named 503, per `api.py`'s idiom.
+
+- [ ] **Step 4: Suite + lint + commit**
+
+```bash
+cd api && uv run pytest -q 2>&1 | tail -2 && uv run ruff check .
+```
+
+---
+
+### Task 7b: AuthKit in `web/`
+
+**Files:** `web/package.json`, `package-lock.json` (**repo root** — see below), `web/proxy.ts` (new), `web/app/auth/callback/route.ts` (new), `web/app/auth/actions.ts` (new), `web/app/layout.tsx`, `api/deploy/gcp.sh`, `api/tests/test_deploy_gcp.py`
+
+**Post-merge layout facts — the plan predates `#76` and was wrong about these:**
+- `web/package-lock.json` **no longer exists**. There is a **root** `package.json` with `workspaces: ["web", "console"]` and a **root** `package-lock.json`. Adding the dependency regenerates the **root** lockfile.
+- `web/Dockerfile` now builds **from the repo root** and runs `npm ci` there. **No Dockerfile change is needed** — do not edit it.
 
 **Non-negotiables, each already paid for once:**
-- **Next 16.2.12 → `proxy.ts` with `authkitProxy()`.** `middleware.ts` is deprecated and Next 16 throws E900 if both exist.
-- **The matcher must EXCLUDE `/` and `/queue`.** `doug-web` is the only service with staged traffic and `promote_if_healthy` on `/` (`gcp.sh:466`); a broken cookie password must not be able to take down marketing.
-- **`handleAuth({ baseURL })` is required** — Cloud Run's container hostname differs from the request host, and without it callbacks redirect wrong.
-- **Sign-out is a POST server action**, never a GET route.
-- **`@workos-inc/authkit-nextjs` must be added and the lockfile regenerated**, or `web-image` goes red: `web/Dockerfile` runs `npm ci` from the lockfile.
-- **New secrets** (`WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD`): Secret Manager entries, an `add-iam-policy-binding` for `doug-web-sa` in `setup()` (pattern at `gcp.sh:165-171`), and `--set-secrets` on `web()`. Phase 0 deliberately left `doug-web` holding nothing; this is the considered re-add, and `test_deploy_gcp.py`'s "no secrets" pin must be updated to "only the WORKOS_* secrets" rather than deleted.
+- **Next 16.2.12 → `proxy.ts` with `authkitProxy()`.** `middleware.ts` is deprecated and Next 16 throws E900 if both exist. Read `node_modules/next/dist/docs/` after installing.
+- **The matcher must EXCLUDE `/` and `/queue`.** Confirmed still true post-merge: `web()` ends with `promote_if_healthy "$WEB_SERVICE" /`, so a broken cookie password on `/` would **fail the deploy**.
+- **`handleAuth({ baseURL })` is required** — Cloud Run's container hostname differs from the request host.
+- **Sign-out is a POST server action** (`signOut()` inside a `'use server'` form action), never a GET route.
+- **FOUR env vars, not three.** The plan omits one: `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD`, **and `NEXT_PUBLIC_WORKOS_REDIRECT_URI`**.
+- **Set `WORKOS_COOKIE_MAX_AGE` deliberately.** It defaults to ~400 days.
+- **`onSuccess` posts the provider token to Task 7a's endpoint**, then discards it. It must **never** write it to a cookie, a log, or `localStorage`. A sign-in with no `oauthTokens` (no GitHub identity) proceeds normally with no tenants.
+- **Invert, do not delete, the two web-secret pins.** `test_setup_creates_doug_web_sa_and_binds_it_no_secrets` and `test_web_deploy_carries_no_secrets` currently assert `--set-secrets` is absent from `web()`. They become "only the `WORKOS_*` secrets" — Phase 0 used exactly this inversion and a reviewer proved the pins non-vacuous by re-injecting each one.
 
-- [ ] Steps: add deps + lockfile, proxy with the exclusion, callback route, provider, sign-out action, deploy config + test updates, `npm test`/`lint`/`build`, `bash -n`, commit.
+- [ ] Steps: add the dep + regenerate the **root** lockfile; `proxy.ts` with the exclusion; callback route with `baseURL` + `onSuccess`; sign-out action; provider in layout; secrets in `setup()` and `web()`; invert both pins; `npm test` / `npm run lint` / `npm run build`; `bash -n deploy/gcp.sh`; commit.
 
 ---
 
