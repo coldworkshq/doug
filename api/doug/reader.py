@@ -25,9 +25,18 @@ import hashlib
 import os
 import re
 import sys
+import time
 
 from pydantic import BaseModel, Field
 
+from . import example_pack_capture
+from .example_pack import (
+    CoverageV0,
+    FailureV0,
+    NameVersionV0,
+    UsageV0,
+    canonical_json_bytes,
+)
 from .models import Band, Reason, Verdict
 
 MODEL = "claude-opus-5"
@@ -41,6 +50,12 @@ EFFORT = "medium"
 DIFF_BUDGET = 100_000
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
 DEFAULT_READ_TIMEOUT_S = 120  # seconds, whole read incl. retries' backoff
+INPUT_POLICY_VERSION = "reader-input-v0"
+COVERAGE_POLICY_VERSION = "reader-coverage-v0"
+INFERENCE_PARAMETERS = (
+    NameVersionV0(name="temperature", version="not-specified-provider-default"),
+    NameVersionV0(name="top_p", version="not-specified-provider-default"),
+)
 
 SYSTEM = (
     "You are reviewing a single pull request diff from a large production "
@@ -522,22 +537,146 @@ def truncation_reason(cov: Coverage) -> Reason | None:
     return Reason(rule="read-truncated", label=label, weight=0.0)
 
 
+def _capture_coverage(pr, diff: str) -> CoverageV0:
+    observed = coverage(
+        diff,
+        changed_files=getattr(pr, "changed_files", None),
+        files_dropped=getattr(pr, "files_dropped", None),
+    )
+    return CoverageV0(
+        diff_chars=observed.diff_chars,
+        sent_chars=observed.sent_chars,
+        files_sent=observed.files_sent,
+        files_unseen=tuple(observed.files_unseen),
+        file_cut=observed.file_cut,
+        changed_files=observed.changed_files,
+        files_dropped=tuple(observed.files_dropped),
+    )
+
+
+def _capture_usage(response) -> UsageV0:
+    usage = getattr(response, "usage", None)
+    return UsageV0(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+    )
+
+
+def _failure(phase: str, exc: BaseException) -> FailureV0:
+    detail = f"{type(exc).__name__}: {exc}"[:500] or type(exc).__name__
+    return FailureV0(phase=phase, error_type=type(exc).__name__[:120], detail=detail)
+
+
+def _record_attempt(
+    *,
+    attempt_kind: str,
+    pr,
+    diff: str,
+    request_bytes: bytes | None,
+    raw_output_bytes: bytes | None,
+    parsed_output: dict | None,
+    response,
+    started_ns: int,
+    model_call_made: bool,
+    failure: FailureV0 | None,
+    fallback_state: str,
+    system: str,
+    schema: dict,
+) -> None:
+    """One best-effort boundary: no capture error may escape into a read."""
+    try:
+        example_pack_capture.record_attempt(
+            attempt_kind=attempt_kind,
+            request_bytes=request_bytes,
+            evidence_bytes=diff.encode("utf-8"),
+            raw_output_bytes=raw_output_bytes,
+            parsed_output=parsed_output,
+            coverage=_capture_coverage(pr, diff),
+            usage=(
+                _capture_usage(response)
+                if response is not None
+                else UsageV0(input_tokens=None, output_tokens=None)
+            ),
+            latency_ms=max(0, (time.monotonic_ns() - started_ns) // 1_000_000),
+            model_call_made=model_call_made,
+            failure=failure,
+            fallback_state=fallback_state,
+            provider="anthropic",
+            model=MODEL,
+            max_output_tokens=MAX_TOKENS,
+            effort=EFFORT,
+            inference_parameters=INFERENCE_PARAMETERS,
+            system_prompt_bytes=system.encode("utf-8"),
+            output_schema_bytes=canonical_json_bytes(schema),
+            diff_budget=DIFF_BUDGET,
+        )
+    except Exception as exc:  # noqa: BLE001 - defense in depth around capture
+        active = example_pack_capture.current_scope()
+        run_id = (
+            f"{active.run_id_prefix}:{attempt_kind}" if active is not None else "unscoped"
+        )
+        print(
+            f"doug: example-pack capture failed run_id={run_id} "
+            f"error={type(exc).__name__}",
+            file=sys.stderr,
+        )
+
+
 def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
     """The risk read. `scope` is who pays for it, and is required rather
     than defaulted: a default is how the next caller silently becomes
     un-metered, which is the bug this cap exists to close."""
-    _charge(scope)
+    started_ns = time.monotonic_ns()
+    try:
+        _charge(scope)
+    except SpendCapExceeded as exc:
+        _record_attempt(
+            attempt_kind="risk",
+            pr=pr,
+            diff=diff,
+            request_bytes=None,
+            raw_output_bytes=None,
+            parsed_output=None,
+            response=None,
+            started_ns=started_ns,
+            model_call_made=False,
+            failure=_failure("preflight", exc),
+            fallback_state="spend_capped",
+            system=SYSTEM,
+            schema=SCHEMA,
+        )
+        raise
     if client is None:
         client = _client()
+    request = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "output_config": {
+            "effort": EFFORT,
+            "format": {"type": "json_schema", "schema": SCHEMA},
+        },
+        "system": SYSTEM,
+        "messages": [{"role": "user", "content": _user_text(pr, diff)}],
+    }
+    request_bytes = canonical_json_bytes(request)
     try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
-            system=SYSTEM,
-            messages=[{"role": "user", "content": _user_text(pr, diff)}],
-        )
+        response = client.messages.create(**request)
     except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
+        _record_attempt(
+            attempt_kind="risk",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=None,
+            parsed_output=None,
+            response=None,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("transport", e),
+            fallback_state="deterministic_expected",
+            system=SYSTEM,
+            schema=SCHEMA,
+        )
         # Anything the SDK raises — billing, rate limit, timeout, 5xx — is a
         # failed read, and this module's contract is that a failed read falls
         # back loudly rather than propagating. Letting these escape meant one
@@ -545,13 +684,62 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         # because the workflow step is continue-on-error.
         raise ReaderError(f"{type(e).__name__}: {e}") from e
     _report_cost(response, kind="risk", scope=scope, pr=pr)
-    if response.stop_reason != "end_turn":
-        raise ReaderError(f"read stopped with {response.stop_reason}")
     text = next((b.text for b in response.content if b.type == "text"), "")
+    raw_output_bytes = text.encode("utf-8")
+    if response.stop_reason != "end_turn":
+        exc = ReaderError(f"read stopped with {response.stop_reason}")
+        _record_attempt(
+            attempt_kind="risk",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=raw_output_bytes,
+            parsed_output=None,
+            response=response,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("stop_reason", exc),
+            fallback_state="deterministic_expected",
+            system=SYSTEM,
+            schema=SCHEMA,
+        )
+        raise exc
     try:
-        return ReaderVerdict.model_validate_json(text)
+        verdict = ReaderVerdict.model_validate_json(text)
     except ValueError as e:
-        raise ReaderError(f"unparseable reader output: {e}") from e
+        exc = ReaderError(f"unparseable reader output: {e}")
+        _record_attempt(
+            attempt_kind="risk",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=raw_output_bytes,
+            parsed_output=None,
+            response=response,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("parse", exc),
+            fallback_state="deterministic_expected",
+            system=SYSTEM,
+            schema=SCHEMA,
+        )
+        raise exc from e
+    _record_attempt(
+        attempt_kind="risk",
+        pr=pr,
+        diff=diff,
+        request_bytes=request_bytes,
+        raw_output_bytes=raw_output_bytes,
+        parsed_output=verdict.model_dump(mode="json"),
+        response=response,
+        started_ns=started_ns,
+        model_call_made=True,
+        failure=None,
+        fallback_state="none",
+        system=SYSTEM,
+        schema=SCHEMA,
+    )
+    return verdict
 
 
 class DeviationFinding(BaseModel):
@@ -588,27 +776,115 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
     """
     if not docs:
         raise ReaderError("no decision records to read against")
-    _charge(scope)
+    started_ns = time.monotonic_ns()
+    try:
+        _charge(scope)
+    except SpendCapExceeded as exc:
+        _record_attempt(
+            attempt_kind="intent",
+            pr=pr,
+            diff=diff,
+            request_bytes=None,
+            raw_output_bytes=None,
+            parsed_output=None,
+            response=None,
+            started_ns=started_ns,
+            model_call_made=False,
+            failure=_failure("preflight", exc),
+            fallback_state="spend_capped",
+            system=DECISION_INTENT_SYSTEM,
+            schema=INTENT_SCHEMA,
+        )
+        raise
     if client is None:
         client = _client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        output_config={
+    request = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "output_config": {
             "effort": EFFORT,
             "format": {"type": "json_schema", "schema": INTENT_SCHEMA},
         },
-        system=DECISION_INTENT_SYSTEM,
-        messages=[{"role": "user", "content": _intent_text(pr, diff, docs)}],
-    )
-    _report_cost(response, kind="intent", scope=scope, pr=pr)
-    if response.stop_reason != "end_turn":
-        raise ReaderError(f"intent read stopped with {response.stop_reason}")
-    text = next((b.text for b in response.content if b.type == "text"), "")
+        "system": DECISION_INTENT_SYSTEM,
+        "messages": [{"role": "user", "content": _intent_text(pr, diff, docs)}],
+    }
+    request_bytes = canonical_json_bytes(request)
     try:
-        return IntentReaderVerdict.model_validate_json(text)
+        response = client.messages.create(**request)
+    except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception
+        _record_attempt(
+            attempt_kind="intent",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=None,
+            parsed_output=None,
+            response=None,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("transport", exc),
+            fallback_state="intent_unavailable",
+            system=DECISION_INTENT_SYSTEM,
+            schema=INTENT_SCHEMA,
+        )
+        raise
+    _report_cost(response, kind="intent", scope=scope, pr=pr)
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    raw_output_bytes = text.encode("utf-8")
+    if response.stop_reason != "end_turn":
+        exc = ReaderError(f"intent read stopped with {response.stop_reason}")
+        _record_attempt(
+            attempt_kind="intent",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=raw_output_bytes,
+            parsed_output=None,
+            response=response,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("stop_reason", exc),
+            fallback_state="intent_unavailable",
+            system=DECISION_INTENT_SYSTEM,
+            schema=INTENT_SCHEMA,
+        )
+        raise exc
+    try:
+        verdict = IntentReaderVerdict.model_validate_json(text)
     except ValueError as e:
-        raise ReaderError(f"unparseable intent output: {e}") from e
+        exc = ReaderError(f"unparseable intent output: {e}")
+        _record_attempt(
+            attempt_kind="intent",
+            pr=pr,
+            diff=diff,
+            request_bytes=request_bytes,
+            raw_output_bytes=raw_output_bytes,
+            parsed_output=None,
+            response=response,
+            started_ns=started_ns,
+            model_call_made=True,
+            failure=_failure("parse", exc),
+            fallback_state="intent_unavailable",
+            system=DECISION_INTENT_SYSTEM,
+            schema=INTENT_SCHEMA,
+        )
+        raise exc from e
+    _record_attempt(
+        attempt_kind="intent",
+        pr=pr,
+        diff=diff,
+        request_bytes=request_bytes,
+        raw_output_bytes=raw_output_bytes,
+        parsed_output=verdict.model_dump(mode="json"),
+        response=response,
+        started_ns=started_ns,
+        model_call_made=True,
+        failure=None,
+        fallback_state="none",
+        system=DECISION_INTENT_SYSTEM,
+        schema=INTENT_SCHEMA,
+    )
+    return verdict
 
 
 def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Verdict:
