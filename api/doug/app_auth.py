@@ -16,8 +16,20 @@ import os
 from githubkit import AppAuthStrategy, AppInstallationAuthStrategy, GitHub
 
 
+def app_id() -> str | None:
+    """Doug's GitHub App id, or None when this deployment has none.
+
+    Its own accessor because entitlements.py needs the id WITHOUT the private
+    key: telling Doug's installations apart from every other app's in a
+    caller's GET /user/installations is a fact about the app, not a
+    credential, and requiring the PEM for it would tie an identity read to a
+    secret it does not use. One place knows the variable's name.
+    """
+    return os.environ.get("DOUG_GITHUB_APP_ID")
+
+
 def enabled() -> bool:
-    return bool(os.environ.get("DOUG_GITHUB_APP_ID") and os.environ.get("GITHUB_APP_PRIVATE_KEY"))
+    return bool(app_id() and os.environ.get("GITHUB_APP_PRIVATE_KEY"))
 
 
 def _credentials() -> tuple[str, str]:

@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, select
 from doug import (
     api,
     app_auth,
+    entitlements,
     ingest,
     outcome_queue,
     session_auth,
@@ -3774,3 +3775,307 @@ def test_bind_re_proves_the_installer_against_the_row_it_writes(tmp_path, monkey
     assert refused.status_code == 404
     assert _bound_org(1002) is None
     assert ("user_01ABC", "org_for_gh-inst-1002") not in fake.memberships
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/sessions/entitlements — persist the scope, never the credential.
+#
+# No test below performs network I/O. The session is the same locally minted
+# RS256 JWT the bind tests use, and every GitHub call goes through
+# entitlements._send — this module's ONE network boundary — replaced here by a
+# fake that records the headers it was given, so "the token reached GitHub and
+# nothing else" is an observed fact rather than an assumption about a stub.
+
+# Doug's own GitHub App id, as api/deploy/gcp.sh sets it in both services.
+_DOUG_APP_ID = "4450932"
+# Distinctive on purpose: every "this must not appear" assertion below greps
+# for this exact string in a response body, a log, a table dump, and the
+# database file itself.
+_PROVIDER_TOKEN = "ghu_never_persist_me"
+
+
+class _FakeGitHubUser:
+    """Stands in for entitlements._send. Answers one page of installations and
+    one page of repositories per installation, or a status override."""
+
+    def __init__(self, tenants: dict[int, list[int]], status: dict | None = None):
+        self.tenants = tenants
+        self.status = status or {}
+        self.headers: list[dict] = []
+        self.paths: list[str] = []
+
+    def __call__(self, url, *, headers, params):
+        path = url[len(entitlements.GITHUB_API) :]
+        self.paths.append(path)
+        self.headers.append(headers)
+        if path in self.status:
+            return httpx.Response(self.status[path], json={"message": "no"})
+        if path == "/user/installations":
+            return httpx.Response(
+                200,
+                json={
+                    "installations": [
+                        {"id": i, "app_id": int(_DOUG_APP_ID), "repository_selection": "selected"}
+                        for i in self.tenants
+                    ]
+                },
+            )
+        installation_id = int(path.split("/")[3])
+        return httpx.Response(
+            200,
+            json={
+                "repositories": [
+                    {"id": r, "full_name": f"drewjst/repo{r}"}
+                    for r in self.tenants[installation_id]
+                ]
+            },
+        )
+
+
+def _entitlement_env(monkeypatch, tenants=None, status=None) -> _FakeGitHubUser:
+    fake = _FakeGitHubUser({1001: [11, 12]} if tenants is None else tenants, status)
+    monkeypatch.setattr(entitlements, "_send", fake)
+    monkeypatch.setattr(session_auth, "_jwks", lambda: _BindJWKS())
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", _DOUG_APP_ID)
+    return fake
+
+
+def _record(client, **body):
+    return client.post(
+        "/v1/sessions/entitlements",
+        json={"provider": "GithubOAuth", "token": _PROVIDER_TOKEN, **body},
+        headers=_session(),
+    )
+
+
+def _scope(workos_user_id: str) -> list[tuple[int, frozenset]]:
+    return [
+        (row["installation_id"], row["repo_ids"])
+        for row in store.session_entitlements_for(workos_user_id)
+    ]
+
+
+def _entitlement_rows_text() -> str:
+    """Every column of every row, as text — so "the token is not stored" is
+    asserted against the whole table, not against the columns a reader
+    remembered to check."""
+    with store._get_engine().connect() as conn:
+        return "\n".join(str(tuple(r)) for r in conn.execute(select(store.session_entitlements)))
+
+
+def test_entitlements_are_written_for_the_jwt_subject_not_a_body_supplied_user(
+    tmp_path, monkeypatch
+):
+    """The security test. A body-supplied user id would let any signed-in
+    caller write another user's scope — and since a scope is what a later
+    read is checked against, writing someone else's is writing yourself into
+    their tenant.
+
+    The caller below names a victim in every field a body could plausibly use.
+    The first assertion is not decoration: it proves this caller, this session
+    and this ledger DO produce a real row, so the victim's empty scope can
+    only come from where the key was read.
+    """
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = _record(
+        client,
+        workos_user_id="user_VICTIM",
+        user_id="user_VICTIM",
+        sub="user_VICTIM",
+        installation_id=1001,
+    )
+    assert res.status_code == 204
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+    assert _scope("user_VICTIM") == []
+
+
+def test_the_provider_token_is_never_stored_logged_or_returned(tmp_path, monkeypatch, capsys):
+    """No credential at rest. The token arrives, does its one job, and is
+    gone — the row that outlives it is the conclusion it proved.
+
+    Checked in all four places it could survive: the response body, the
+    stored row, stderr, and the database file itself (bytes, so a token
+    written to some OTHER table would be caught too).
+    """
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = _record(client)
+    assert res.status_code == 204
+
+    # It genuinely travelled to GitHub, and the derivation genuinely landed —
+    # without both, "absent everywhere" would pass on an endpoint that never
+    # used the token at all.
+    assert fake.headers[0]["Authorization"] == f"Bearer {_PROVIDER_TOKEN}"
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+    assert _PROVIDER_TOKEN not in res.text
+    assert _PROVIDER_TOKEN not in str(res.headers), "a header is a response too"
+    assert _PROVIDER_TOKEN not in _entitlement_rows_text()
+    assert _PROVIDER_TOKEN.encode() not in (tmp_path / "doug.db").read_bytes()
+    err = capsys.readouterr().err
+    assert "user_01ABC" in err, "the derivation is logged at all"
+    assert _PROVIDER_TOKEN not in err
+
+
+def test_a_first_time_user_with_no_organization_can_record_entitlements(tmp_path, monkeypatch):
+    """A stranger's first sign-in has no org_id — that claim appears only once
+    an organization is selected. Authenticating with resolve_session here
+    would be circular: it fails closed without org_id, so the endpoint that
+    exists to give a new user their scope could never be reached by one."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    assert _record(client).status_code == 204
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+    # The same session, through the stricter resolver, is refused — which is
+    # what makes the 204 above evidence about WHICH check the route runs.
+    assert (
+        session_auth.resolve_session(_session()["Authorization"], frozenset({11})) is None
+    )
+
+
+def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):
+    """Signed with a key JWKS never reported. Nothing is derived and nothing
+    is written — a forged session must not even spend a GitHub call."""
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    forged = client.post(
+        "/v1/sessions/entitlements",
+        json={"provider": "GithubOAuth", "token": _PROVIDER_TOKEN},
+        headers=_session(key=_BIND_OTHER_KEY),
+    )
+    assert forged.status_code == 401
+    assert fake.paths == []
+    assert _scope("user_01ABC") == []
+
+    # The same route, the same body, a real session: 204. Without this the
+    # assertions above would pass on a route that refused everyone.
+    assert _record(client).status_code == 204
+
+
+def test_entitlements_refuse_without_a_session(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    res = TestClient(app).post(
+        "/v1/sessions/entitlements", json={"provider": "github", "token": _PROVIDER_TOKEN}
+    )
+    assert res.status_code == 401
+
+
+def test_entitlements_503_when_session_auth_is_unconfigured(tmp_path, monkeypatch):
+    """WORKOS_CLIENT_ID missing is a deployment fault, not a forged token —
+    api.py:391's named-503 idiom, same as bind's."""
+    _db(tmp_path, monkeypatch)
+    # The REAL _jwks runs here — that is the point, so _entitlement_env's
+    # stub is deliberately not used. Only its configuration is taken away,
+    # and the cached client is cleared so a previous test's instance cannot
+    # answer for it. It raises before any network call.
+    monkeypatch.setattr(entitlements, "_send", _FakeGitHubUser({1001: [11, 12]}))
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", _DOUG_APP_ID)
+    monkeypatch.delenv("WORKOS_CLIENT_ID", raising=False)
+    monkeypatch.setattr(session_auth, "_jwks_client", None)
+
+    res = _record(TestClient(app))
+    assert res.status_code == 503
+    assert res.json()["detail"] == "session auth not configured"
+
+
+def test_entitlements_503_without_a_ledger(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _entitlement_env(monkeypatch)
+    assert _record(TestClient(app)).status_code == 503
+
+
+def test_entitlements_503_when_the_github_app_id_is_missing(tmp_path, monkeypatch):
+    """Without it, Doug cannot tell its own installations from every other
+    app's in the caller's list. Storing an empty scope instead would look
+    exactly like "you have no tenants" and never recover."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    monkeypatch.delenv("DOUG_GITHUB_APP_ID", raising=False)
+
+    res = _record(TestClient(app))
+    assert res.status_code == 503
+    assert res.json()["detail"] == "github app not configured"
+    assert _scope("user_01ABC") == []
+
+
+def test_a_rejected_provider_token_401s_and_leaves_the_stored_scope_alone(tmp_path, monkeypatch):
+    """An expired token is the caller's to fix, so it is a 401 and not a 503.
+    What it must NEVER be is an empty derivation: that answer gets stored, and
+    storing it would erase a live tenant's scope on the strength of a stale
+    credential."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+    assert _record(client).status_code == 204
+
+    _entitlement_env(monkeypatch, status={"/user/installations": 401})
+    assert _record(client).status_code == 401
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+
+def test_a_provider_outage_503s_and_leaves_the_stored_scope_alone(tmp_path, monkeypatch):
+    """Same rule from the other side: GitHub being down is not proof that
+    this user is entitled to nothing."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+    assert _record(client).status_code == 204
+
+    def _down(url, *, headers, params):
+        raise httpx.ConnectError("github: connection refused")
+
+    monkeypatch.setattr(entitlements, "_send", _down)
+    assert _record(client).status_code == 503
+    assert _scope("user_01ABC") == [(1001, frozenset({11, 12}))]
+
+
+def test_a_body_missing_the_provider_is_refused_without_echoing_the_token(tmp_path, monkeypatch):
+    """MEASURED (2026-08-10), not assumed: FastAPI's validation error carries
+    the offending input, and for a MISSING field pydantic reports the WHOLE
+    BODY as that input — so a required `provider` would echo the token
+    straight back to the caller in a 422. Defaults on both fields make that
+    error unreachable; the handler refuses the empty pair itself."""
+    _db(tmp_path, monkeypatch)
+    _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    res = client.post(
+        "/v1/sessions/entitlements",
+        json={"token": _PROVIDER_TOKEN},
+        headers=_session(),
+    )
+    assert res.status_code == 400
+    assert _PROVIDER_TOKEN not in res.text
+    assert _scope("user_01ABC") == []
+
+    # A body with a provider and no token is the same refusal, and the full
+    # pair still works — so the 400 is about what is missing, not about the
+    # route being broken.
+    assert client.post(
+        "/v1/sessions/entitlements", json={"provider": "github"}, headers=_session()
+    ).status_code == 400
+    assert _record(client).status_code == 204
+
+
+def test_an_unknown_provider_records_no_tenants_rather_than_failing(tmp_path, monkeypatch):
+    """Reachable the moment a second WorkOS connection exists. Someone who
+    signed in without GitHub sees nothing, and gets a 204 rather than a 500 —
+    they signed in successfully, they simply have no tenants."""
+    _db(tmp_path, monkeypatch)
+    fake = _entitlement_env(monkeypatch)
+    client = TestClient(app)
+
+    assert _record(client, provider="GoogleOAuth").status_code == 204
+    assert _scope("user_01ABC") == []
+    assert fake.paths == [], "an unknown provider must not spend a GitHub call"

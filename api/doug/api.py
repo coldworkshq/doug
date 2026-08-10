@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from . import (
     __version__,
     app_auth,
+    entitlements,
     ingest,
     outcome_queue,
     precision,
@@ -1443,6 +1444,107 @@ def bind_installation(body: BindRequest, authorization: str = Header("")) -> Res
             )
     print(
         f"doug: bound installation {installation_id} to organization {organization_id}",
+        file=sys.stderr,
+    )
+    return Response(status_code=204)
+
+
+class EntitlementsRequest(BaseModel):
+    """The provider that authenticated this sign-in, and the token it issued.
+
+    NOTHING HERE NAMES A USER, and that is the security property — the same
+    one BindRequest has for organization ids. The scope is written for the
+    JWT's `sub`; a body-supplied user id would let any signed-in caller
+    overwrite anyone else's entitlements, and since a scope is what a later
+    read is checked against, that is writing yourself into their tenant.
+    Extra fields are ignored (pydantic's default), so a body carrying one
+    changes nothing.
+
+    NEITHER FIELD IS REQUIRED, which is not laxity: it keeps the token out of
+    a 422. FastAPI's validation error carries the offending input, and for a
+    MISSING field pydantic reports the WHOLE BODY as that input — measured
+    2026-08-10 — so a required `provider` would echo the token straight back
+    to the caller in the error body. With defaults, no 'missing' error can
+    fire, and the handler refuses an empty pair itself with a detail string
+    built from nothing the caller sent.
+    """
+
+    provider: str = ""
+    token: str = ""
+
+
+@app.post("/v1/sessions/entitlements", status_code=204)
+def record_entitlements(
+    body: EntitlementsRequest, authorization: str = Header("")
+) -> Response:
+    """Derive what this signed-in user may see, and store the conclusion.
+
+    WHY THIS ENDPOINT EXISTS AT ALL. `authkit-nextjs` hands the provider's
+    `oauthTokens` to `handleAuth`'s `onSuccess` and nowhere else — `withAuth()`
+    does not return them and the session does not carry them. The dashboard
+    runs on a LATER request, when the GitHub token is gone. So the browser
+    posts it here once, at sign-in, and what survives the request is the
+    derived scope: `installation_id` plus explicit repo ids. THE TOKEN IS
+    NEVER STORED, LOGGED, RETURNED, OR PLACED IN AN EXCEPTION MESSAGE
+    (entitlements.py's property 2, tested end to end).
+
+    AUTHENTICATED WITH verify_session_claims, NOT resolve_session, and the
+    difference is what makes this reachable. resolve_session fails closed
+    without an `org_id` claim, which a first-time user does not have — an
+    organization is created when they bind, and binding is not what this is.
+    The weaker check proves WHO is signed in, which is exactly and only what
+    is needed to write a row keyed on them.
+
+    A DERIVATION IS THE WHOLE ANSWER, NOT A DELTA. store.replace_session_
+    entitlements deletes what was there first, so a scope can shrink when a
+    tenant removes Doug from a repo. That is also why an upstream failure
+    must never reach the write: an empty derivation is a legitimate answer
+    that ERASES rows, so a rejected token (401 — the caller signs in again)
+    and an outage (503 — the caller tries later) both raise past it rather
+    than being read as "entitled to nothing".
+
+    ITS LIMIT, stated rather than papered over: replacement is per USER, not
+    per provider, because these rows carry no provider column. GitHub is the
+    only source of tenants today, so nothing can be lost; the first time a
+    second SOURCE of entitlement exists, this needs a provider column or one
+    provider's derivation will erase another's.
+
+    Stored scope is a claim, never authority. tenancy.live_scope intersects
+    it against the live ledger on every read, so a suspended installation or
+    a removed repo is refused immediately regardless of what is written here;
+    entitlements.TTL bounds the rest.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+
+    try:
+        claims = session_auth.verify_session_claims(authorization)
+    except session_auth.SessionAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="session auth not configured") from exc
+    if claims is None:
+        raise HTTPException(status_code=401, detail="bad session")
+    workos_user_id = claims.get("sub")
+    if not isinstance(workos_user_id, str) or not workos_user_id:
+        raise HTTPException(status_code=401, detail="bad session")
+
+    if not body.provider or not body.token:
+        raise HTTPException(status_code=400, detail="provider and token are required")
+
+    try:
+        tenants = entitlements.derive(body.provider, body.token)
+    except entitlements.EntitlementsNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="github app not configured") from exc
+    except entitlements.ProviderTokenRejected as exc:
+        # Checked before ProviderError — it is a subclass, and the caller can
+        # act on this one: sign in again, rather than try later.
+        raise HTTPException(status_code=401, detail="provider token rejected") from exc
+    except entitlements.ProviderError as exc:
+        raise HTTPException(status_code=503, detail="provider unavailable") from exc
+
+    store.replace_session_entitlements(workos_user_id, tenants)
+    print(
+        f"doug: recorded entitlements for {workos_user_id}: {len(tenants)} installation(s), "
+        f"{sum(len(t.repo_ids) for t in tenants)} repo(s)",
         file=sys.stderr,
     )
     return Response(status_code=204)

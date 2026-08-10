@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -244,6 +245,35 @@ installation_tokens = Table(
     Column("expires_at", DateTime(timezone=True)),  # NULL = durable
     Column("revoked_at", DateTime(timezone=True)),  # soft revoke; rows never deleted
     Column("last_used_at", DateTime(timezone=True)),
+)
+
+# What a signed-in user is entitled to, derived from their identity provider
+# at sign-in (entitlements.py) and kept so a later request can answer "which
+# repos may this person see" without a provider credential. The credential
+# itself is NEVER here: these rows are the conclusion it proved, and they
+# expire on their own (entitlements.TTL) whether or not the session does.
+#
+# Keyed on the WORKOS user id, never a GitHub one. Login is deliberately not
+# narrowed to GitHub, so a provider's user id would be the wrong key the
+# first time a second connection exists — and the wrong key is a migration,
+# not a patch.
+#
+# A NEW table, so create_all owns it and there is no DDL in migrations.py —
+# same reasoning migration 6 records for installation_tokens.
+session_entitlements = Table(
+    "session_entitlements",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("workos_user_id", String(255), nullable=False, index=True),
+    Column("installation_id", BigInteger, nullable=False),
+    # TEXT holding a JSON array of ints — identical on sqlite and Postgres.
+    # Nothing queries into the array (it is written and read whole), so the
+    # portable spelling costs nothing.
+    Column("repo_ids", Text, nullable=False),
+    Column("derived_at", DateTime(timezone=True), nullable=False),
+    # Re-deriving must replace rather than accumulate: one row per user per
+    # installation, so a scope can shrink.
+    UniqueConstraint("workos_user_id", "installation_id", name="uq_session_entitlement"),
 )
 
 installation_token_repos = Table(
@@ -2445,6 +2475,110 @@ def bind_installation_org(installation_id: int, org_id: str) -> str | None:
                 installations.c.installation_id == installation_id
             )
         ).scalar_one_or_none()
+
+
+def replace_session_entitlements(
+    workos_user_id: str,
+    tenants: Iterable[tuple[int, Iterable[int]]],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Record everything this WorkOS user is entitled to, replacing whatever
+    was recorded before.
+
+    REPLACE, NOT MERGE, and that is the security property. A scope that only
+    ever grew would be a scope that never shrank: the repo a tenant removed
+    Doug from would stay in this user's claim for as long as they kept
+    signing in. Deriving nothing is an answer too — it clears the rows — so
+    the delete runs whether or not there is anything to insert, in the same
+    transaction, and a reader never sees the gap between them.
+
+    Only the CONCLUSION is stored. The provider token that proved it is the
+    caller's business and is never passed to this function, let alone
+    written (entitlements.py's property 2).
+
+    `now` is a test seam for ageing a row past entitlements.TTL, same shape
+    as record_deep_read's. Production always passes the wall clock.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return
+    stamped = now or datetime.now(UTC)
+    # Keyed by installation so a provider that reported one twice collapses
+    # here instead of raising on the unique constraint. The constraint is
+    # still the authority; this only keeps a malformed upstream response from
+    # becoming a 500 on someone's sign-in.
+    by_installation = {
+        int(installation_id): sorted({int(r) for r in repo_ids})
+        for installation_id, repo_ids in tenants
+    }
+    with engine.begin() as conn:
+        conn.execute(
+            session_entitlements.delete().where(
+                session_entitlements.c.workos_user_id == workos_user_id
+            )
+        )
+        if by_installation:
+            conn.execute(
+                session_entitlements.insert(),
+                [
+                    {
+                        "workos_user_id": workos_user_id,
+                        "installation_id": installation_id,
+                        "repo_ids": json.dumps(repo_ids),
+                        "derived_at": stamped,
+                    }
+                    for installation_id, repo_ids in by_installation.items()
+                ],
+            )
+
+
+def _stored_repo_ids(raw: str | None) -> frozenset[int]:
+    """The repo ids out of one stored row. Anything unreadable is an EMPTY
+    scope, never a missing filter: tenancy.live_scope refuses an empty claim,
+    so a corrupted row shows its owner nothing instead of showing them
+    everything."""
+    try:
+        decoded = json.loads(raw or "[]")
+    except ValueError:
+        return frozenset()
+    if not isinstance(decoded, list):
+        return frozenset()
+    return frozenset(int(r) for r in decoded if isinstance(r, int))
+
+
+def session_entitlements_for(workos_user_id: str) -> list[dict]:
+    """This user's derived entitlements — one dict per installation, with the
+    repo ids as a frozenset and derived_at as aware UTC.
+
+    The read side of replace_session_entitlements. repo_ids comes back in the
+    shape tenancy.live_scope takes (frozenset[int]), because the ONLY correct
+    thing to do with these rows is intersect them against the live ledger:
+    they are what GitHub said at sign-in, not what Doug's ledger says now.
+    Staleness is entitlements.is_stale(derived_at)'s call, not this
+    function's — reading a stale row is how a caller learns it is stale.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                session_entitlements.c.installation_id,
+                session_entitlements.c.repo_ids,
+                session_entitlements.c.derived_at,
+            )
+            .where(session_entitlements.c.workos_user_id == workos_user_id)
+            .order_by(session_entitlements.c.installation_id)
+        ).all()
+    return [
+        {
+            "installation_id": int(row.installation_id),
+            "repo_ids": _stored_repo_ids(row.repo_ids),
+            "derived_at": _as_utc(row.derived_at),
+        }
+        for row in rows
+    ]
 
 
 def active_repos(installation_id: int) -> list[tuple[int, str]]:
