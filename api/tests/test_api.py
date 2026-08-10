@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import threading
 from datetime import UTC, datetime, timedelta
@@ -2234,6 +2235,95 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
                 headers={"x-doug-token": minted.token},
             ).status_code == 200
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
+
+
+def test_queue_operator_repo_filter_reaches_store_as_a_name(tmp_path, monkeypatch):
+    """The operator's ?repo= is a NAME lookup across every installation, and
+    only the operator may reach it. Operator-ness must be an explicit flag
+    (is_operator), not the absence of a TokenContext — a future credential
+    type that never produces a ctx must not silently inherit this."""
+    _api_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get(
+        "/v1/queue", params={"repo": "drewjst/doug"},
+        headers={"X-Doug-Token": "operator-secret"},
+    )
+    assert r.status_code == 200
+    assert calls == [{"repo": "drewjst/doug", "installation_id": None, "repo_ids": None}]
+
+
+def test_queue_tenant_repo_restriction_never_reaches_store_as_a_name(tmp_path, monkeypatch):
+    """A resolved tenant token's repo restriction must arrive as repo_ids —
+    scoped ids checked against the key's live selection — and NEVER as the
+    `repo=` name lookup, which searches every installation. Pins the fix at
+    api.py:428: `repo=repo if is_operator else None` must stay tied to the
+    explicit operator flag, not to `ctx is None`."""
+    token = _tenant(tmp_path, monkeypatch)
+    store.set_installation_repos(150424894, [(1, "drewjst/doug")], replace=True)
+    _seed_verdict(repo="drewjst/doug", pr_number=1, installation_id=150424894, github_repo_id=1)
+    calls: list[dict] = []
+    real = store.latest_reviews
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get(
+        "/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token},
+    )
+    assert r.status_code == 200
+    assert calls == [{"repo": None, "installation_id": 150424894, "repo_ids": frozenset({1})}]
+
+
+def test_queue_unresolvable_token_401s_before_touching_store(tmp_path, monkeypatch):
+    """A caller who is neither the operator nor a resolvable token must 401
+    and never reach store.latest_reviews at all — this pins api.py:400,
+    which must stay untouched by the is_operator refactor (it means 'this
+    token did not resolve', not 'this caller is the operator')."""
+    _tenant(tmp_path, monkeypatch)
+    calls: list[dict] = []
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(store, "latest_reviews", spy)
+    r = client.get("/v1/queue", headers={"X-Doug-Token": "doug_nope"})
+    assert r.status_code == 401
+    assert calls == []
+
+
+def test_queue_latest_reviews_call_site_keys_the_repo_filter_on_is_operator():
+    """Narrow structural pin on ONLY the store.latest_reviews call site's
+    `repo=` argument — not a substring search over the whole function body,
+    which legitimately still contains `ctx is None` at api.py:400 (an
+    unresolved-token check, not an operator check).
+
+    This guard exists because, with exactly one credential type in the
+    system today, `ctx is None` and `is_operator` are PROVABLY behaviourally
+    identical at this call site (ctx is only ever assigned inside the
+    `not is_operator` branch, and unresolved tokens 401 before reaching this
+    line) — so no behavioural test, however thorough, can distinguish a
+    regression back to `repo=repo if ctx is None else None` from the fixed
+    `is_operator` form. Confirmed by temporarily reverting the call site and
+    re-running the behavioural tests above: they stayed green. Task 4 adding
+    a second credential type is exactly what would make that regression
+    observable behaviourally — this guard stands in until then.
+    """
+    src = inspect.getsource(api.queue)
+    start = src.index("store.latest_reviews(")
+    call = src[start : src.index(")", start)]
+    repo_line = next(line for line in call.splitlines() if "repo=" in line)
+    assert repo_line.strip().startswith("repo=repo if is_operator else None")
 
 
 @pytest.mark.parametrize("path", ["/v1/patterns", "/v1/score/read", "/v1/runs", "/v1/runs/1"])

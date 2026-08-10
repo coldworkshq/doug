@@ -392,7 +392,12 @@ def queue(
     installation_id: int | None = None
     repo_ids: frozenset[int] | None = None
     ctx: tenancy.TokenContext | None = None
-    if not hmac.compare_digest(x_doug_token, expected):
+    # Operator identity is this comparison, explicitly — never inferred from
+    # ctx staying None. A future session credential that never produces a
+    # TokenContext must not silently inherit the operator's unscoped ?repo=
+    # name lookup below just by also leaving ctx as None.
+    is_operator = hmac.compare_digest(x_doug_token, expected)
+    if not is_operator:
         try:
             ctx = tenancy.resolve(x_doug_token)
         except tenancy.KeysNotConfigured as e:
@@ -425,7 +430,7 @@ def queue(
     if store.enabled():
         items = _rows_to_items(
             store.latest_reviews(
-                repo=repo if ctx is None else None,  # operator keeps the display filter
+                repo=repo if is_operator else None,  # operator keeps the display filter
                 installation_id=installation_id,
                 repo_ids=repo_ids,
             )
