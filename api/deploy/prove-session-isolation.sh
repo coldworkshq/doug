@@ -348,13 +348,17 @@ suspended_code=not-run
 restored_code=not-run
 
 if [ "$suspend_before_ok" = true ]; then
+  RESTORATION_REQUIRED=true
+  printf '%s\n' \
+    'INHERENT LIMIT gate=5 status=armed reason=SIGKILL, terminal loss, or operator disappearance require manual recovery' \
+    >&2
   while [ "$suspend_confirm_ok" != true ]; do
     printf 'Wait for installation.suspend delivery 202, then type exactly: SUSPENDED %s\n' \
       "$A_INSTALLATION_ID" >&2
     suspend_confirmation=""
     if ! read -r suspend_confirmation; then
-      printf 'gate=5 status=input-ended reason=confirmation-missing\n' >&2
-      break
+      restoration_warning input-ended
+      exit 1
     fi
     if [ "$suspend_confirmation" = "SUSPENDED $A_INSTALLATION_ID" ]; then
       suspend_confirm_ok=true
@@ -365,8 +369,6 @@ if [ "$suspend_before_ok" = true ]; then
 fi
 
 if [ "$suspend_confirm_ok" = true ]; then
-  RESTORATION_REQUIRED=true
-
   # This is deliberately the very next API request after confirmation.
   req GET '/v1/sessions/runs?repo=all' "$A_SESSION_JWT"
   suspended_code=$code

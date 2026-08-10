@@ -203,7 +203,9 @@ elif parsed.path == "/v1/sessions/runs":
     )
     if kind == "a":
         if repo == "all":
-            if a_all_count == 2:
+            if mode == "pre_suspend_failure" and a_all_count == 1:
+                status = 500
+            elif a_all_count == 2:
                 status = 200 if mode == "suspended_success" else 401
             elif mode == "never_restore" and a_all_count >= 3:
                 status = 401
@@ -389,6 +391,49 @@ def _run_proof(
 
 def _combined(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout + completed.stderr
+
+
+def _signal_at_prompt(
+    tmp_path: Path,
+    proof_env: dict[str, str],
+    *,
+    prompt: str,
+    signal_number: signal.Signals,
+    stdin_before_prompt: str = "",
+) -> tuple[int, str, list[dict[str, object]]]:
+    env, log = _proof_process_env(tmp_path, proof_env)
+    process = subprocess.Popen(
+        [str(SCRIPT)],
+        cwd=API_ROOT,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stderr is not None
+    if stdin_before_prompt:
+        process.stdin.write(stdin_before_prompt.encode())
+        process.stdin.flush()
+    prompt_bytes = prompt.encode()
+    stderr_before_signal = b""
+    while prompt_bytes not in stderr_before_signal:
+        ready, _, _ = select.select([process.stderr], [], [], 5)
+        assert ready, f"proof never reached prompt: {prompt}"
+        chunk = os.read(process.stderr.fileno(), 4096)
+        assert chunk, f"proof exited before prompt: {prompt}"
+        stderr_before_signal += chunk
+
+    os.kill(process.pid, signal_number)
+    stdout_after, stderr_after = process.communicate(timeout=5)
+    requests = (
+        [json.loads(line) for line in log.read_text().splitlines() if line]
+        if log.exists()
+        else []
+    )
+    assert process.returncode is not None
+    output = stdout_after + stderr_before_signal + stderr_after
+    return process.returncode, output.decode(errors="replace"), requests
 
 
 def test_success_proves_nine_gates_without_leaking_secrets(
@@ -705,6 +750,77 @@ def test_eof_after_suspension_exits_with_unresolved_restoration_warning(
     assert "EXIT GATE: PROVEN" not in _combined(completed)
 
 
+def test_eof_at_suspend_prompt_warns_and_executes_no_later_gate(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """The human instruction itself arms recovery before confirmation exists."""
+    completed, requests = _run_proof(tmp_path, proof_env, stdin="")
+    output = _combined(completed)
+
+    assert completed.returncode != 0
+    assert "RESTORATION REQUIRED" in output
+    assert "reason=input-ended" in output
+    assert "SIGKILL" in completed.stderr
+    assert "terminal loss" in completed.stderr
+    assert "operator disappearance" in completed.stderr
+    assert "manual recovery" in completed.stderr
+    assert completed.stderr.index("SIGKILL") < completed.stderr.index(
+        "type exactly: SUSPENDED"
+    )
+    assert not any(
+        item["kind"] in {"tampered", "expired", "unmapped", "read_only"}
+        for item in requests
+    )
+    assert all(f"gate {number}" not in output for number in range(6, 10))
+
+
+@pytest.mark.parametrize(
+    ("signal_number", "signal_name"),
+    [(signal.SIGINT, "INT"), (signal.SIGTERM, "TERM")],
+)
+def test_signal_at_suspend_prompt_warns_and_executes_no_later_gate(
+    tmp_path: Path,
+    proof_env: dict[str, str],
+    signal_number: signal.Signals,
+    signal_name: str,
+) -> None:
+    """INT and TERM at the first mutation instruction cannot exit silently."""
+    returncode, output, requests = _signal_at_prompt(
+        tmp_path,
+        proof_env,
+        prompt="type exactly: SUSPENDED",
+        signal_number=signal_number,
+    )
+
+    assert returncode != 0
+    assert "RESTORATION REQUIRED" in output
+    assert f"reason=signal-{signal_name}" in output
+    assert "SIGKILL" in output
+    assert not any(
+        item["kind"] in {"tampered", "expired", "unmapped", "read_only"}
+        for item in requests
+    )
+    assert all(f"gate {number}" not in output for number in range(6, 10))
+
+
+def test_failed_pre_suspend_read_never_arms_or_prints_mutation_instruction(
+    tmp_path: Path, proof_env: dict[str, str]
+) -> None:
+    """Without a clean A read, the proof gives the human no suspension instruction."""
+    completed, _ = _run_proof(
+        tmp_path,
+        proof_env,
+        mode="pre_suspend_failure",
+        stdin="",
+    )
+    output = _combined(completed)
+
+    assert completed.returncode != 0
+    assert "type exactly: SUSPENDED" not in output
+    assert "RESTORATION REQUIRED" not in output
+    assert "SIGKILL" not in output
+
+
 @pytest.mark.parametrize(
     ("signal_number", "signal_name"),
     [(signal.SIGINT, "INT"), (signal.SIGTERM, "TERM")],
@@ -716,31 +832,15 @@ def test_signal_after_suspension_warns_that_restoration_is_unresolved(
     signal_name: str,
 ) -> None:
     """INT and TERM cannot silently abandon a confirmed suspension."""
-    env, _ = _proof_process_env(tmp_path, proof_env)
-    process = subprocess.Popen(
-        [str(SCRIPT)],
-        cwd=API_ROOT,
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    returncode, output, _ = _signal_at_prompt(
+        tmp_path,
+        proof_env,
+        prompt="type exactly: RESTORED",
+        signal_number=signal_number,
+        stdin_before_prompt=f"SUSPENDED {proof_env['A_INSTALLATION_ID']}\n",
     )
-    assert process.stdin is not None
-    assert process.stderr is not None
-    process.stdin.write(f"SUSPENDED {proof_env['A_INSTALLATION_ID']}\n")
-    process.stdin.flush()
-    stderr_before_signal = ""
-    while "type exactly: RESTORED" not in stderr_before_signal:
-        ready, _, _ = select.select([process.stderr], [], [], 5)
-        assert ready, "proof never reached the restoration boundary"
-        stderr_before_signal += process.stderr.readline()
 
-    os.kill(process.pid, signal_number)
-    stdout_after, stderr_after = process.communicate(timeout=5)
-    output = stdout_after + stderr_before_signal + stderr_after
-
-    assert process.returncode != 0
+    assert returncode != 0
     assert "RESTORATION REQUIRED" in output
     assert f"reason=signal-{signal_name}" in output
     assert "EXIT GATE: PROVEN" not in output
