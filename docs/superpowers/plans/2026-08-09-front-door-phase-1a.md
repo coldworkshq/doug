@@ -1080,10 +1080,13 @@ approval to run against production.
   wait for the `installation.unsuspend` delivery to return 202. The final 200,
   non-empty read is cleanup evidence and guards against an expired token being
   mistaken for isolation. Confirmation typos are retried. Once suspension is
-  confirmed, normal completion is impossible until restoration is both
-  confirmed and observed as a non-empty A-only 200; failed restore checks loop
-  back to the restore prompt. EXIT/INT/TERM diagnostics say restoration is
-  still required whenever that proof has not completed.
+  possible (before the script first instructs the human to act), conservatively
+  arm restoration-required state. EOF exits immediately with that warning;
+  INT/TERM do the same. Normal completion is impossible until restoration is
+  both confirmed and observed as a non-empty A-only 200; failed restore checks
+  loop back to the restore prompt. The pre-mutation warning must state the
+  inherent limit: SIGKILL, terminal loss, or operator disappearance cannot be
+  repaired by this shell process and require manual recovery.
 
 #### Nine gates
 
@@ -1146,8 +1149,9 @@ approval to run against production.
 - [ ] 6. Implement the shell proof with exactly the mechanics and gates above.
       Add tests for forbidden/absent body equality, bounded curl arguments,
       confirmation typos, delayed restoration, EOF/signal restoration warnings,
-      and the rule that no successful exit is possible while the fake remains
-      suspended. Run `bash -n` and the focused test file green.
+      pre-confirmation EOF/INT/TERM, and the rule that no successful exit is
+      possible while the fake remains suspended. Run `bash -n` and the focused
+      test file green.
 - [ ] 7. Mutation proof: independently weaken each numbered gate's decisive
       predicate/accepted status in the script, clear caches as relevant, and
       observe the corresponding hostile-mode test fail before restoring it.
