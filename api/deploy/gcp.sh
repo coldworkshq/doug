@@ -265,11 +265,34 @@ example_pack_setup() {
       --project "$PROJECT" 2>/dev/null \
     || echo "doug-example-pack-token secret exists; leaving it"
 
-  gcloud storage buckets create "gs://$bucket" \
-    --project "$PROJECT" --location="$REGION" \
-    --default-storage-class=STANDARD \
-    --uniform-bucket-level-access --public-access-prevention 2>/dev/null \
-    || echo "evidence bucket $bucket exists; leaving it"
+  if ! gcloud storage buckets create "gs://$bucket" \
+      --project "$PROJECT" --location="$REGION" \
+      --default-storage-class=STANDARD \
+      --uniform-bucket-level-access --public-access-prevention 2>/dev/null; then
+    echo "evidence bucket create did not succeed; verifying the existing bucket"
+  fi
+  if ! gcloud storage buckets describe "gs://$bucket" \
+      --project "$PROJECT" --format=json \
+      | python3 -c '
+import json
+import sys
+
+bucket = json.load(sys.stdin)
+region = sys.argv[1]
+iam = bucket.get("iamConfiguration", {})
+uniform = iam.get("uniformBucketLevelAccess", {})
+if bucket.get("location", "").lower() != region.lower():
+    raise SystemExit("bucket location does not match REGION")
+if bucket.get("storageClass") != "STANDARD":
+    raise SystemExit("bucket storage class is not STANDARD")
+if uniform.get("enabled") is not True:
+    raise SystemExit("uniform bucket-level access is not enabled")
+if iam.get("publicAccessPrevention") != "enforced":
+    raise SystemExit("public access prevention is not enforced")
+' "$REGION"; then
+    echo "ERROR: evidence bucket is absent or does not satisfy the private-bucket contract." >&2
+    return 1
+  fi
 
   lifecycle_file=$(mktemp)
   printf '%s\n' \
@@ -312,32 +335,50 @@ validate_example_pack_enablement() {
 
   [[ "$DOUG_EXAMPLE_PACK_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] \
     || { echo "ERROR: invalid evidence bucket name." >&2; return 1; }
-  [[ "$DOUG_EXAMPLE_PACK_COHORT" =~ ^[A-Za-z0-9._-]+$ ]] \
-    || { echo "ERROR: invalid cohort id." >&2; return 1; }
-  [[ "$DOUG_EXAMPLE_PACK_INSTALLATION_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
-    || { echo "ERROR: installation ids must be comma-separated integers." >&2; return 1; }
-  [[ "$DOUG_EXAMPLE_PACK_REPOSITORY_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
-    || { echo "ERROR: repository ids must be comma-separated integers." >&2; return 1; }
   [[ "$DOUG_EXAMPLE_PACK_ADJUDICATOR" =~ ^[A-Za-z0-9._-]+$ ]] \
     || { echo "ERROR: invalid adjudicator id." >&2; return 1; }
   [[ "$DOUG_APPLICATION_REVISION" =~ ^[0-9a-f]{40}$ ]] \
     || { echo "ERROR: application revision must be a full lowercase Git SHA." >&2; return 1; }
 
   python3 - "$DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT" \
-    "$DOUG_EXAMPLE_PACK_CAPTURE_UNTIL" <<'PY'
+    "$DOUG_EXAMPLE_PACK_CAPTURE_UNTIL" \
+    "$DOUG_EXAMPLE_PACK_COHORT" \
+    "$DOUG_EXAMPLE_PACK_INSTALLATION_IDS" \
+    "$DOUG_EXAMPLE_PACK_REPOSITORY_IDS" <<'PY'
 from datetime import datetime
 import re
 import sys
 
 pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 try:
-    start, end = (datetime.fromisoformat(value.replace("Z", "+00:00")) for value in sys.argv[1:])
+    start, end = (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for value in sys.argv[1:3]
+    )
 except ValueError as error:
     raise SystemExit(f"ERROR: invalid capture timestamp: {error}") from error
-if not all(pattern.fullmatch(value) for value in sys.argv[1:]):
+if not all(pattern.fullmatch(value) for value in sys.argv[1:3]):
     raise SystemExit("ERROR: capture timestamps must be second-precision UTC RFC3339 values.")
 if end <= start:
     raise SystemExit("ERROR: capture end must be after capture start.")
+
+cohort_pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+if cohort_pattern.fullmatch(sys.argv[3]) is None:
+    raise SystemExit("ERROR: invalid cohort id.")
+
+def numeric_ids(raw: str, name: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(part.strip()) for part in raw.split(",") if part.strip())
+    except ValueError as error:
+        raise SystemExit(f"ERROR: {name} must contain numeric IDs.") from error
+    if not values or any(value <= 0 for value in values):
+        raise SystemExit(f"ERROR: {name} must contain positive numeric IDs.")
+    if len(values) != len(set(values)):
+        raise SystemExit(f"ERROR: {name} must contain unique IDs.")
+    return tuple(sorted(values))
+
+numeric_ids(sys.argv[4], "installation ids")
+numeric_ids(sys.argv[5], "repository ids")
 PY
 
   source_root=${DOUG_EXAMPLE_PACK_SOURCE_ROOT:-$REPO_ROOT}
@@ -354,9 +395,9 @@ PY
   fi
 }
 
-# Opt-in is an explicit, reversible service update. The normal deploy and
-# console commands intentionally do not carry this configuration: CI remains
-# independent of the privileged evidence lane and fails closed after deploys.
+# Opt-in is an explicit, reversible service update. Normal deploys preserve
+# only the existing read configuration and purpose token. They omit capture
+# admission, so CI remains independent of privileged setup and closes writes.
 example_pack_enable() {
   validate_example_pack_enablement
   local env_vars
@@ -458,6 +499,60 @@ service_exists() {
   gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1
 }
 
+# Return only the purpose-scoped binding needed to keep stored cohorts readable
+# across an ordinary deployment. Capture admission settings are intentionally
+# excluded, so a normal deploy always closes writes while preserving review.
+existing_example_pack_binding() { # $1 service, $2 read|token
+  gcloud run services describe "$1" \
+    --project "$PROJECT" --region "$REGION" --format=json \
+    | python3 -c '
+import json
+import re
+import sys
+
+service = json.load(sys.stdin)
+mode = sys.argv[1]
+containers = service.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+entries = containers[0].get("env", []) if containers else []
+plain = {entry.get("name"): entry.get("value") for entry in entries if "value" in entry}
+token_entry = next(
+    (entry for entry in entries if entry.get("name") == "DOUG_EXAMPLE_PACK_TOKEN"),
+    None,
+)
+required = (
+    "DOUG_EXAMPLE_PACK_BUCKET",
+    "DOUG_EXAMPLE_PACK_COHORT",
+    "DOUG_EXAMPLE_PACK_ADJUDICATOR",
+)
+if token_entry is None:
+    if mode == "token" or not any(plain.get(name) for name in required):
+        raise SystemExit(0)
+    raise SystemExit("incomplete Example Pack read binding")
+secret_ref = (token_entry or {}).get("valueFrom", {}).get("secretKeyRef", {})
+secret_name = secret_ref.get("name", "").rsplit("/", 1)[-1]
+secret_version = secret_ref.get("key", "")
+if secret_name != "doug-example-pack-token" or re.fullmatch(r"(?:latest|[1-9][0-9]*)", secret_version) is None:
+    raise SystemExit(1)
+token = f"DOUG_EXAMPLE_PACK_TOKEN={secret_name}:{secret_version}"
+if mode == "token":
+    print(token)
+    raise SystemExit(0)
+if mode != "read":
+    raise SystemExit(2)
+if not any(plain.get(name) for name in required):
+    raise SystemExit(0)
+if any(not plain.get(name) for name in required):
+    raise SystemExit("incomplete Example Pack read binding")
+if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", plain[required[0]]) is None:
+    raise SystemExit(1)
+if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", plain[required[1]]) is None:
+    raise SystemExit(1)
+if re.fullmatch(r"[A-Za-z0-9._-]+", plain[required[2]]) is None:
+    raise SystemExit(1)
+print(",".join(f"{name}={plain[name]}" for name in required))
+' "$2"
+}
+
 candidate_url() {
   gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" --format=json \
     | python3 -c "
@@ -517,14 +612,20 @@ compute_prereg_hash() {
 
 deploy() {
   preregistration_preflight
-  local traffic_flags="" prereg_hash
-  service_exists "$SERVICE" && traffic_flags="--no-traffic --tag candidate"
+  local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
+  if service_exists "$SERVICE"; then
+    traffic_flags="--no-traffic --tag candidate"
+    example_pack_env=$(existing_example_pack_binding "$SERVICE" read)
+    if [ -n "$example_pack_env" ]; then
+      example_pack_secret=$(existing_example_pack_binding "$SERVICE" token)
+    fi
+  fi
   prereg_hash=$(compute_prereg_hash)
   # Both tiers are configured here on purpose: --set-env-vars replaces the
-  # whole env block, so anything set out-of-band is wiped by the next deploy.
-  # That cuts both ways for the intent allowlist below — an installation
-  # opted in by hand on the console does not survive a deploy, so opting one
-  # in means editing this line.
+  # whole env block. The only out-of-band exception is the validated,
+  # read-only Example Pack binding above. An installation opted into intent
+  # by hand still does not survive a deploy, so opting one in means editing
+  # this line.
   #
   # --no-cpu-throttling: the drain runs *after* the response is written
   # (BackgroundTasks) and again in the startup reconcile thread. Under
@@ -565,8 +666,8 @@ deploy() {
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
@@ -726,7 +827,10 @@ console() {
   # --no-allow-unauthenticated, so an unauthenticated curl from this script
   # gets 403 no matter how healthy the revision is. A failing console is an
   # operator inconvenience, not an outage — the tradeoff web() cannot make.
-  local image
+  local image example_pack_secret=""
+  if service_exists "$CONSOLE_SERVICE"; then
+    example_pack_secret=$(existing_example_pack_binding "$CONSOLE_SERVICE" token)
+  fi
   image=$(build_node_image console/Dockerfile doug-console)
   gcloud run deploy "$CONSOLE_SERVICE" \
     --image "$image" \
@@ -734,7 +838,7 @@ console() {
     --no-allow-unauthenticated \
     --service-account "doug-console-sa@$PROJECT.iam.gserviceaccount.com" \
     --set-env-vars "DOUG_API_URL=$(api_url)" \
-    --set-secrets "DOUG_API_TOKEN=doug-api-token:latest" \
+    --set-secrets "DOUG_API_TOKEN=doug-api-token:latest${example_pack_secret:+,$example_pack_secret}" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60
   echo "console deployed. Reach it with:"
   echo "  gcloud run services proxy $CONSOLE_SERVICE --project $PROJECT --region $REGION"

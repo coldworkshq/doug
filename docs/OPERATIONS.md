@@ -19,10 +19,12 @@ cd api
 ./deploy/gcp.sh example-pack-setup
 ```
 
-This creates the purpose token if absent, creates or reuses the bucket, applies
-a 90-day lifecycle, and grants `doug-api-sa` only object creator and viewer.
-It grants `doug-console-sa` access to the purpose token, not to the bucket.
-Capture remains off.
+This creates the purpose token if absent, creates or reuses the bucket only
+after verifying its region, STANDARD storage class, uniform bucket-level
+access, and enforced public-access prevention, then applies a 90-day lifecycle.
+It grants `doug-api-sa` only object creator and viewer. It grants
+`doug-console-sa` access to the purpose token, not to the bucket. Capture
+remains off.
 
 Before enabling, inspect the receipts rather than relying on command success:
 
@@ -65,10 +67,13 @@ invalid/reversed UTC window before calling Cloud Run. It updates only the API
 with capture configuration, while both API and console receive the separate
 Example Pack token. The console gets no capture flag or storage permission.
 
-An ordinary API or console deployment replaces its configured secrets/env and
-therefore fails this lane closed. While a cohort is open, re-run
-`example-pack-enable` after either deployment. This keeps merge-to-main CI from
-depending on privileged evidence resources.
+An ordinary API deployment preserves an existing cohort's bucket, cohort ID,
+adjudicator, and purpose-token binding; an ordinary console deployment
+preserves only the purpose-token binding. Neither deploy carries capture
+admission settings, so ordinary deploys close new evidence writes while stored
+cohorts remain readable. If capture must continue inside the approved window,
+re-run `example-pack-enable` with the full validated contract. Merge-to-main CI
+still performs no bucket, IAM, secret creation, or audit-policy mutation.
 
 Reach the hosted workbench through the existing IAM proxy:
 

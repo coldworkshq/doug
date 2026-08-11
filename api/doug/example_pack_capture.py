@@ -331,6 +331,12 @@ def record_attempt(
             enabled=True, captured=False, error_type=suppressed_error
         )
     scope = current_scope()
+    if store is None and scope is None and os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"):
+        if not capture_requested():
+            return CaptureResultV0(enabled=False, captured=False)
+        return CaptureResultV0(
+            enabled=True, captured=False, error_type="MissingCaptureScope"
+        )
     hosted = _HOSTED_CONFIG.get()
     if hosted is None and os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"):
         try:

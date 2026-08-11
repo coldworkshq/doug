@@ -144,7 +144,7 @@ sizes are bounded, and validation stops before evaluating an invalid or
 oversized cohort. A cohort contains at most 500 packs.
 
 The purpose API is separate from Doug's existing operator API token. Every
-route requires `Authorization: Bearer $DOUG_EXAMPLE_PACK_TOKEN`:
+route requires `X-Doug-Example-Pack-Token: $DOUG_EXAMPLE_PACK_TOKEN`:
 
 ```text
 GET  /v1/example-pack-cohorts
