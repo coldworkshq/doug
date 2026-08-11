@@ -1,5 +1,6 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { DougLogo } from "@/components/doug-logo";
@@ -318,8 +319,9 @@ export default async function DashboardPage({
   searchParams: Promise<DashboardParams>;
 }) {
   const params = await searchParams;
-  const auth = await withAuth({ ensureSignedIn: true });
+  const auth = await withAuth();
   const { user, accessToken, organizationId } = auth;
+  if (!user || !accessToken) redirect("/sign-in");
   const { connections } = await getConnections(accessToken);
   const current = connections.find(
     (connection) => connection.organization_id === organizationId && connection.status === "ready",
