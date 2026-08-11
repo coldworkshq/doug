@@ -45,6 +45,9 @@ class _FakeJWKSClient:
 
 def _use_fake_jwks(monkeypatch, key=_PUBLIC_KEY):
     monkeypatch.setenv("WORKOS_CLIENT_ID", "client_01ABC")
+    # An ambient WORKOS_ISSUER (gcp.sh reserves it for custom-domain rollout)
+    # would silently reroute every issuer assertion through the pin branch.
+    monkeypatch.delenv("WORKOS_ISSUER", raising=False)
     monkeypatch.setattr(session_auth, "_jwks", lambda: _FakeJWKSClient(key))
 
 
@@ -206,19 +209,95 @@ def test_valid_signature_from_an_untrusted_issuer_is_refused(monkeypatch):
     assert session_auth.verify_session_claims(f"Bearer {wrong_issuer}") is None
 
 
-def test_application_scoped_issuer_is_pinned_to_configured_client(monkeypatch):
-    """WorkOS application tokens use a client-scoped hosted issuer.
-
-    Accept the issuer for this exact application, but never turn the hosted
-    path into a wildcard that would admit a token from another application.
-    """
+def test_application_scoped_issuer_is_accepted_for_any_issuing_application(monkeypatch):
+    """The client id in a hosted application issuer names the ENVIRONMENT'S
+    DEFAULT APPLICATION — the issuing authority — which Doug cannot know from
+    its own configuration. PR #85 pinned it to WORKOS_CLIENT_ID and production
+    kept rejecting real sessions whose issuer named a different (default)
+    application. Which application a token is FOR is the `client_id` claim,
+    pinned exactly in the test below this one; the issuer check only asserts
+    a WorkOS AuthKit origin."""
     _use_fake_jwks(monkeypatch)
 
-    current_application = _token(iss="https://api.workos.com/user_management/client_01ABC")
-    assert session_auth.verify_session_claims(f"Bearer {current_application}") is not None
+    own_application = _token(iss="https://api.workos.com/user_management/client_01ABC")
+    assert session_auth.verify_session_claims(f"Bearer {own_application}") is not None
 
-    other_application = _token(iss="https://api.workos.com/user_management/client_other")
+    default_application = _token(iss="https://api.workos.com/user_management/client_01DEFAULT")
+    assert session_auth.verify_session_claims(f"Bearer {default_application}") is not None
+
+    # Doug has live receipts from BOTH hosted bases (api. and auth.), so the
+    # application path is accepted on either — pinning one host would just
+    # re-run this incident on the other.
+    auth_host = _token(iss="https://auth.workos.com/user_management/client_01DEFAULT")
+    assert session_auth.verify_session_claims(f"Bearer {auth_host}") is not None
+
+
+def test_a_token_for_another_application_is_refused_by_its_client_id_claim(monkeypatch):
+    """The other-application refusal the old issuer pin claimed to provide,
+    proven where it actually lives: a token issued through the same hosted
+    issuer but FOR a different application carries that application's
+    `client_id` claim, and the exact-match check refuses it."""
+    _use_fake_jwks(monkeypatch)
+
+    other_application = _token(
+        iss="https://api.workos.com/user_management/client_01DEFAULT",
+        client_id="client_other",
+    )
     assert session_auth.verify_session_claims(f"Bearer {other_application}") is None
+
+
+def test_issuer_structure_is_still_a_pin_not_a_wildcard(monkeypatch):
+    """Structural acceptance covers exactly the WorkOS hosted shape. A
+    foreign host carrying the same path, a truncated path, or a non-string
+    iss stays refused even with a valid signature and client_id claim."""
+    _use_fake_jwks(monkeypatch)
+
+    for issuer in (
+        "https://evil.example/user_management/client_01ABC",
+        "https://api.workos.com/user_management/",
+        "https://api.workos.com/user_management/client_01ABC/extra",
+        "http://api.workos.com/user_management/client_01ABC",
+        "https://api.workos.com.evil.example/user_management/client_01ABC",
+    ):
+        rejected = _token(iss=issuer)
+        assert session_auth.verify_session_claims(f"Bearer {rejected}") is None, issuer
+
+    # PyJWT's encoder refuses a non-string iss, so this shape can only come
+    # from a hand-crafted token — pin the guard at the unit that enforces it.
+    assert session_auth._issuer_allowed(12345) is False
+
+
+def test_issuer_rejection_names_the_offending_issuer_in_the_log(monkeypatch, capsys):
+    """PyJWT's InvalidIssuerError says only 'Invalid issuer', which left two
+    production 401 rounds undiagnosable — the deploy-observe loop was the only
+    way to learn what `iss` WorkOS actually sends. The denial line must carry
+    the rejected value (a URL, never a secret; the token itself stays out of
+    the logs, pinned by the existing logging tests)."""
+    _use_fake_jwks(monkeypatch)
+    rejected = _token(iss="https://attacker.example")
+    assert session_auth.verify_session_claims(f"Bearer {rejected}") is None
+    err = capsys.readouterr().err
+    assert "https://attacker.example" in err
+    assert rejected not in err
+
+
+def test_configured_workos_issuer_narrows_acceptance_to_that_origin(monkeypatch):
+    """WORKOS_ISSUER exists for custom AuthKit domains and is a PIN: once
+    set, neither the hosted bases nor the structural application shape is
+    accepted any longer — only the configured origin, with or without a
+    trailing slash."""
+    _use_fake_jwks(monkeypatch)
+    monkeypatch.setenv("WORKOS_ISSUER", "https://auth.doug.example")
+
+    pinned = _token(iss="https://auth.doug.example")
+    assert session_auth.verify_session_claims(f"Bearer {pinned}") is not None
+    pinned_slash = _token(iss="https://auth.doug.example/")
+    assert session_auth.verify_session_claims(f"Bearer {pinned_slash}") is not None
+
+    hosted_base = _token()  # iss=https://auth.workos.com, valid without the pin
+    assert session_auth.verify_session_claims(f"Bearer {hosted_base}") is None
+    application = _token(iss="https://api.workos.com/user_management/client_01ABC")
+    assert session_auth.verify_session_claims(f"Bearer {application}") is None
 
 
 def test_session_scopes_cannot_exceed_the_enumerated_set():
