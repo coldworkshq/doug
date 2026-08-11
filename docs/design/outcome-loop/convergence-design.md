@@ -64,11 +64,24 @@ schema change, no migration.
 ## Per-finding classification (amendment, 2026-08-11 — see the amendment log)
 
 `classify(prior_findings, later_findings, later_reasons, later_read)` returns
-one entry per input row: the row itself, which side it came from, its state
-(`persisted` / `resolved` / `new` / `unknown` / `excluded`), and, for `unknown`,
-the reason. `compare` is defined as the aggregate of exactly this list, so the
-counts a receipt shows and the labels a human grades are the same
-classification, computed once.
+one entry per input row: the row itself, which side it came from, its state,
+and, for `unknown`, the reason. `compare` is defined as the aggregate of exactly
+this list, so the counts a receipt shows and the labels a human grades are the
+same classification, computed once.
+
+| state | side | meaning |
+| --- | --- | --- |
+| `persisted` | prior | rule 1 — the identity is still there |
+| `resolved` | prior | rule 5 |
+| `unknown` | either | rules 2–4, with the reason attached |
+| `excluded` | either | not a reader finding (`from_rule` is None) |
+| `new` | later | first appearance of a complete identity |
+| `matched` | later | the later occurrence that made a prior row `persisted` |
+
+`matched` exists only so every input row gets exactly one entry; a persisted
+finding is counted once, on the prior side. Each count in `ConvergenceReport` is
+the number of entries in the corresponding state, `unknown` broken down by
+reason — no state is counted twice and none is dropped.
 
 Where an identity appears `p` times before and `l` times after with `p > l`, the
 first `l` prior rows in input order are `persisted` and the remainder run rules
@@ -186,3 +199,10 @@ a receipt shows. One classification path, two views of it.
 
 No rule, order, identity key, bar, or floor changed. Recorded before the
 implementation, per the pre-registration discipline.
+
+**2026-08-11, same task — the state set gained `matched`.** The amendment above
+first listed five states, which cannot give one entry per input row: a later
+finding that keeps a prior one alive is an input row with no state of its own,
+and reusing `persisted` for it would double every persisted finding in any count
+taken over the list. `matched` names that row and is counted nowhere. Recorded
+before implementing, same discipline.
