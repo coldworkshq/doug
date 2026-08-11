@@ -273,7 +273,7 @@ example_pack_setup() {
 
   lifecycle_file=$(mktemp)
   printf '%s\n' \
-    '{"rule":[{"action":{"type":"Delete"},"condition":{"age":90}}]}' \
+    '{"rule":[{"action":{"type":"Delete"},"condition":{"age":90,"matchesPrefix":["cohorts/"]}}]}' \
     > "$lifecycle_file"
   if ! gcloud storage buckets update "gs://$bucket" \
       --project "$PROJECT" --lifecycle-file="$lifecycle_file"; then

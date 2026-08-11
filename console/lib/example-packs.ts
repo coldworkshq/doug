@@ -689,6 +689,10 @@ export function memberAttemptLabel(attempt: AttemptSummary): string {
     : "non-member attempt";
 }
 
+export function completedIdentityLabel(identity: CompletedJobIdentity): string {
+  return `${identity.repository_full_name} #${identity.pull_number} · installation ${identity.installation_id} · repo ${identity.github_repository_id} · ${identity.admitted_base_sha.slice(0, 12)} → ${identity.admitted_head_sha.slice(0, 12)}`;
+}
+
 /** React receives captured material only as children. Keeping this identity
  * function at the rendering seam makes any future escaping/transformation a
  * tested contract change; callers must never route the value through HTML. */

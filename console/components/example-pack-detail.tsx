@@ -21,8 +21,25 @@ function currentFor(detail: PackDetail, findingId: string): ExampleAdjudication 
 export function ExamplePackDetailView({ cohortId, detail }: { cohortId: string; detail: PackDetail }) {
   const { pack } = detail;
   return (
-    <div className="grid gap-8 pb-16 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
-      <section className="evidence-seam min-w-0 pl-6">
+    <>
+      <section className="mb-7 border-y border-border py-4">
+        <h2 className="font-heading text-base font-semibold tracking-tight">Evidence receipts</h2>
+        <dl className="mono mt-3 grid gap-x-5 gap-y-3 text-[10px] sm:grid-cols-2 lg:grid-cols-4">
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">admitted base → head</dt><dd className="mt-1 break-all">{pack.scope.admitted_base_sha} → {pack.scope.admitted_head_sha}</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">captured / latency</dt><dd className="mt-1">{pack.captured_at} · {pack.latency_ms} ms</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">coverage</dt><dd className="mt-1">{pack.coverage.sent_chars} / {pack.coverage.diff_chars} chars · {pack.coverage.files_sent} files sent</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">usage</dt><dd className="mt-1">{pack.usage.input_tokens ?? "—"} in · {pack.usage.output_tokens ?? "—"} out</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">instrument</dt><dd className="mt-1 break-all">{pack.instrument_id}</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">fallback</dt><dd className="mt-1">{pack.fallback_state.replaceAll("_", " ")}</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">file cut / dropped</dt><dd className="mt-1">{pack.coverage.file_cut ?? "none"} · {pack.coverage.files_dropped.length} dropped</dd></div>
+          <div><dt className="uppercase tracking-[.1em] text-muted-foreground">failure</dt><dd className={`mt-1 ${pack.failure ? "data-flag" : "text-muted-foreground"}`}>{pack.failure ? `${pack.failure.phase} · ${pack.failure.error_type} · ${pack.failure.detail}` : "none"}</dd></div>
+        </dl>
+      </section>
+      <div className="grid gap-8 pb-16 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
+        <section className="evidence-seam min-w-0 pl-6">
+        <ExactBlock label="Whole instrument manifest">
+          {JSON.stringify(pack.instrument_manifest, null, 2)}
+        </ExactBlock>
         <ExactBlock label="Exact request">
           {detail.request === null ? "No model request was made." : JSON.stringify(detail.request, null, 2)}
         </ExactBlock>
@@ -33,9 +50,9 @@ export function ExamplePackDetailView({ cohortId, detail }: { cohortId: string; 
         <ExactBlock label="Parsed output">
           {pack.parsed_output === null ? "No parsed output." : JSON.stringify(pack.parsed_output, null, 2)}
         </ExactBlock>
-      </section>
+        </section>
 
-      <aside className="min-w-0">
+        <aside className="min-w-0">
         <h2 className="font-heading text-lg font-semibold tracking-tight">Finding docket</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           Each judgment appends a receipt. Corrections name the head visible on this page.
@@ -70,7 +87,8 @@ export function ExamplePackDetailView({ cohortId, detail }: { cohortId: string; 
             })}
           </div>
         )}
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </>
   );
 }

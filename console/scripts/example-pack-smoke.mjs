@@ -69,11 +69,20 @@ async function main() {
   assert(listHtml.includes("100.0%") && listHtml.includes("N=1"), "list omitted denominator-bearing scorecard");
   assert(listHtml.includes(PACK_HASH), "list omitted exact pack link");
 
+  const blocked = await fetch(`http://127.0.0.1:${consolePort}/example-packs?cohort=blocked-missing`);
+  const blockedHtml = await blocked.text();
+  assert(blocked.status === 200, `blocked cohort returned ${blocked.status}`);
+  assert(blockedHtml.includes("Scorecards blocked"), "blocked cohort omitted its scorecard boundary");
+  assert(blockedHtml.includes("drewjst/doug #81"), "blocked cohort omitted the exact missing identity");
+  assert(!blockedHtml.includes("100.0%"), "blocked cohort rendered a plausible rate");
+
   const detailUrl = `http://127.0.0.1:${consolePort}/example-packs/${PACK_HASH}?cohort=complete-docket`;
   const detail = await fetch(detailUrl);
   const detailHtml = await detail.text();
   assert(detail.status === 200, `detail returned ${detail.status}`);
   assert(detailHtml.includes("Finding docket"), "detail omitted adjudication docket");
+  assert(detailHtml.includes("Evidence receipts"), "detail omitted capture receipts");
+  assert(detailHtml.includes("Whole instrument manifest"), "detail omitted instrument identity");
   assert(!detailHtml.includes("<script>alert('fixture')</script>"), "captured script reached HTML as executable markup");
   assert(detailHtml.includes("&lt;script&gt;"), "captured script was not rendered as escaped text");
 

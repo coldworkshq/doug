@@ -1,4 +1,4 @@
-import { cohortMetric, type CohortDetail } from "@/lib/example-packs";
+import { cohortMetric, completedIdentityLabel, type CohortDetail } from "@/lib/example-packs";
 
 function Fact({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
@@ -15,11 +15,11 @@ export function ExamplePackSummary({ cohort }: { cohort: CohortDetail }) {
   const extra = cohort.completeness.extra.length;
   return (
     <>
-      <dl className="grid gap-y-4 border-y border-border py-4 sm:grid-cols-2 lg:grid-cols-5">
+      <dl className="grid gap-y-4 border-y border-border py-4 sm:grid-cols-2 lg:grid-cols-4">
         <Fact
-          label="availability"
+          label="capture / availability"
           value={cohort.availability.status}
-          note={cohort.availability.reason ?? "evidence set validated"}
+          note={`${cohort.manifest.capture_started_at.slice(0, 10)} → ${cohort.manifest.capture_until.slice(0, 10)} UTC · ${cohort.availability.reason ?? "evidence set validated"}`}
         />
         <Fact
           label="eligible / member"
@@ -36,17 +36,44 @@ export function ExamplePackSummary({ cohort }: { cohort: CohortDetail }) {
           value={String(cohort.instruments.length)}
           note="never pooled across revisions"
         />
-        <Fact
-          label="window"
-          value={`${cohort.manifest.capture_started_at.slice(0, 10)} → ${cohort.manifest.capture_until.slice(0, 10)}`}
-          note="half-open UTC admission"
-        />
       </dl>
 
       <div className="mt-5 space-y-3">
         {cohort.availability.status === "incomplete" && (
           <div className="mono border-l-2 border-[var(--flag)] bg-[color-mix(in_srgb,var(--flag)_5%,transparent)] px-3 py-2 text-xs text-[var(--flag)]">
             Scorecards blocked: {missing} completed job{missing === 1 ? " is" : "s are"} missing a member pack.
+          </div>
+        )}
+        {(missing > 0 || extra > 0) && (
+          <div className="grid gap-4 border-b border-border pb-4 md:grid-cols-2">
+            <section>
+              <h2 className="mono text-[9px] uppercase tracking-[.12em] text-muted-foreground">missing completed identities</h2>
+              {cohort.completeness.missing.length === 0 ? (
+                <p className="mono mt-2 text-[10px] text-muted-foreground">none</p>
+              ) : (
+                <ul className="mt-2 space-y-1">
+                  {cohort.completeness.missing.map((identity) => (
+                    <li key={completedIdentityLabel(identity)} className="mono break-words text-[10px] data-flag">
+                      {completedIdentityLabel(identity)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+            <section>
+              <h2 className="mono text-[9px] uppercase tracking-[.12em] text-muted-foreground">extra member identities</h2>
+              {cohort.completeness.extra.length === 0 ? (
+                <p className="mono mt-2 text-[10px] text-muted-foreground">none</p>
+              ) : (
+                <ul className="mt-2 space-y-1">
+                  {cohort.completeness.extra.map((identity) => (
+                    <li key={completedIdentityLabel(identity)} className="mono break-words text-[10px] text-muted-foreground">
+                      {completedIdentityLabel(identity)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           </div>
         )}
         {cohort.instruments.map((instrument) => {

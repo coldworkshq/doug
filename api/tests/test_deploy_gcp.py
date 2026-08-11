@@ -248,6 +248,7 @@ def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilitie
     assert len(secret_bindings) == 2
     assert any("doug-api-sa@" in line for line in secret_bindings)
     assert any("doug-console-sa@" in line for line in secret_bindings)
+    assert '"matchesPrefix":["cohorts/"]' in GCP
 
 
 def _clean_source_repo(tmp_path: Path) -> tuple[Path, str]:

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   adjudicationActionMessage,
   cohortMetric,
+  completedIdentityLabel,
   formatExamplePackRate,
   memberAttemptLabel,
   parseAdjudicationInput,
@@ -294,5 +295,19 @@ test("stale adjudication is an explicit correction-needed state", () => {
   assert.equal(
     adjudicationActionMessage("/adjudications → HTTP 503"),
     "Adjudication was not recorded. /adjudications → HTTP 503",
+  );
+});
+
+test("missing capture identities retain every durable join field", () => {
+  assert.equal(
+    completedIdentityLabel({
+      installation_id: 11,
+      github_repository_id: 22,
+      repository_full_name: "drewjst/doug",
+      pull_number: 81,
+      admitted_base_sha: "1".repeat(40),
+      admitted_head_sha: "2".repeat(40),
+    }),
+    `drewjst/doug #81 · installation 11 · repo 22 · ${"1".repeat(12)} → ${"2".repeat(12)}`,
   );
 });

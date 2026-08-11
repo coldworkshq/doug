@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-10  
 **Status:** Approved direction, corrected by verification pass  
-**Base:** `origin/main` at `bc287501466d89da5b7f0d8e591bd4b0157e5e1d`  
+**Base:** `origin/main` at `fd20ba8245d2e08be66a54f297874e220259fa1b`
 **Scope:** Automatic dogfood-only risk capture, private hosted evidence storage,
 operator adjudication, and scorecards in the existing IAM-gated `doug-console`
 
@@ -43,8 +43,10 @@ The work is complete when:
 - `doug-console` can inspect exact captured evidence, append or explicitly
   supersede adjudications, and render the cohort metrics and controls;
 - zero-finding, partial, and failed member packs remain in the denominators;
-- invalid, incomplete, expired, oversized, or unreachable evidence renders as
-  unavailable, never as an empty or partial cohort;
+- invalid, retention-expired, oversized, or unreachable evidence renders as
+  unavailable, never as an empty or partial cohort; incomplete capture renders
+  exact missing identities and no scorecard, while a closed window stops only
+  new writes;
 - no WorkOS code, session route, tenant dashboard, public route, or database
   schema changes;
 - the PR makes no production mutation. Bucket creation, IAM changes, audit-log
@@ -311,7 +313,7 @@ POST /v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}/findings/{finding_id
 GET  /v1/example-pack-cohorts/{cohort_id}/results
 ```
 
-The list endpoint returns manifest and availability only. Cohort detail returns
+The list endpoint returns manifest, availability, and completeness. Cohort detail returns
 member/non-member attempt summaries, capture-completeness receipt, adjudication
 coverage, and scorecards partitioned by `instrument_id`. Pack detail returns the
 validated pack, exact evidence diff, exact selected raw output, canonical request
@@ -339,10 +341,11 @@ Named failures map as follows:
 - unknown cohort: 404;
 - capture window closed: reads and adjudication remain available, capture stops;
 - evidence service misconfigured: 503;
-- invalid, incomplete, or retention-expired cohort: 409 with a bounded reason;
+- invalid or retention-expired cohort detail: 409 with a bounded reason;
+- incomplete cohort: 200 with exact missing identities and no scorecards;
 - more than 500 packs: 413;
 - stale adjudication form: 409;
-- token missing or wrong: 403;
+- request token missing or wrong: 403; purpose-token configuration absent: 503;
 - unknown cohort, pack, or finding: 404.
 
 No response includes a credential, GCS URL, signed URL, bucket name, exception
