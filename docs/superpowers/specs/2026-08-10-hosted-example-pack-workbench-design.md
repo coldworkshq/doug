@@ -259,13 +259,22 @@ a non-member attempt and cannot replace the denominator row.
 First-persisted means failed, partial, captured-with-zero-findings, or captured
 with findings. It never means first successful model answer.
 
-Membership does not prove capture completeness. For the cohort window, the API
-also queries completed `review_jobs` whose stable `enqueued_at` falls in
-`[capture_started_at, capture_until)` for the allowlisted identities and compares
-their `(installation_id, github_repo_id, pr_number, base_sha, head_sha)` identity
-with stored members. `enqueued_at` is the admission boundary: a queued job cannot
-vanish merely because it ran after the capture window, and retries cannot move it
-into or out of the cohort by rewriting a start time. The response carries:
+Membership does not prove capture completeness. `review_jobs.enqueued_at` cannot
+be the cohort boundary: Doug deliberately rewrites it when a failed job returns
+to the back of the queue. The API instead forms the durable completed-job set as
+the union of:
+
+- completed allowlisted jobs whose terminal attempt's `started_at` falls in
+  `[capture_started_at, capture_until)`; and
+- completed allowlisted jobs whose immutable job ID is named by a cohort
+  membership record, even when their terminal retry completed after the window.
+
+Membership records therefore carry `review_job_id` as well as the exact pack
+hash and run ID. The API compares the completed-job set's
+`(installation_id, github_repo_id, pr_number, base_sha, head_sha)` identities with
+stored members. This preserves a job first captured inside the window even when
+its terminal retry starts later, without changing queue ordering or adding a
+database column. The response carries:
 
 - completed eligible job count;
 - member count;
@@ -279,7 +288,12 @@ attempt inventory and are labeled; they do not erase a successfully captured
 reader attempt.
 
 This is a completed-job coverage receipt, not proof that every pre-reader worker
-failure was captured. The console states that boundary literally.
+failure was captured. One narrower limitation also remains explicit: without an
+attempt-history table, an earlier failed attempt whose evidence write also failed
+cannot be reconstructed if its terminal retry starts after the capture window.
+The rollout drains the allowlisted review queue before cohort closure to prevent
+that boundary from silently selecting a row out. The console states both limits
+literally.
 
 ## Decision 6: API surface
 
@@ -418,8 +432,9 @@ Tests encode the reasons these boundaries exist:
    failures cannot change the reader return, worker result, verdict, or check run.
 4. **Membership:** first persisted failed/partial/zero/finding pack wins; later
    retries remain non-members; no success-only selection is possible.
-5. **Completeness:** a completed review job without a member blocks all
-   scorecards; an extra member is labeled; invalid references and duplicate
+5. **Completeness:** a terminal attempt started in-window without a member blocks
+   all scorecards; a completed membership-linked retry remains in-scope after the
+   window; an extra member is labeled; invalid references and duplicate
    identities fail the cohort.
 6. **Instrument partition:** two instrument IDs produce two scorecards with
    separate N and can never appear in one aggregate.
@@ -464,7 +479,10 @@ receipts in order:
 7. one synthetic or controlled automatic pack, immutable-object verification,
    and audit-log write receipt;
 8. console proxy smoke showing that pack and one append-only adjudication;
-9. capture enabled for the bounded cohort window.
+9. capture enabled for the bounded cohort window;
+10. the allowlisted review queue observed drained before the capture window is
+    closed, so no failed in-window attempt can become an unknowable post-window
+    terminal retry.
 
 The initial target is 20-30 unique member identities. Reaching the target does
 not validate the model. It produces a reviewable dogfood cohort and a measured
