@@ -220,6 +220,11 @@ def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilitie
         and "--lifecycle-file=" in line
         for line in lines
     )
+    assert any(
+        line.startswith("storage buckets describe gs://doug-private-evidence")
+        and "--raw" in line
+        for line in lines
+    )
     bucket_bindings = [
         line
         for line in lines
@@ -493,6 +498,7 @@ printf '%s\\n' "$*" >> "$GCLOUD_LOG"
 printf '%s\\n' "$PWD" >> "$GCLOUD_CWD_LOG"
 previous=
 format=
+raw=0
 for argument in "$@"; do
   if [ "$previous" = "--args" ] && [ "${argument#-}" != "$argument" ]; then
     printf '%s\\n' 'ERROR: argument --args: expected one argument' >&2
@@ -500,6 +506,7 @@ for argument in "$@"; do
   fi
   case "$argument" in
     --format=*) format=${argument#--format=} ;;
+    --raw) raw=1 ;;
   esac
   previous=$argument
 done
@@ -508,6 +515,11 @@ if [ "$1 $2 $3" = "storage buckets create" ] \\
   exit 1
 fi
 if [ "$1 $2 $3" = "storage buckets describe" ]; then
+  if [ "$raw" != "1" ]; then
+    printf '%s%s\\n' '{"location":"us-central1","storage_class":"STANDARD",' \\
+      '"public_access_prevention":"enforced","uniform_bucket_level_access":true}'
+    exit 0
+  fi
   if [ "${GCLOUD_UNSAFE_EXAMPLE_PACK_BUCKET:-}" = "1" ]; then
     printf '%s%s%s\\n' '{"location":"EUROPE-WEST1","storageClass":"NEARLINE",' \\
       '"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},' \\

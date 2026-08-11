@@ -272,7 +272,7 @@ example_pack_setup() {
     echo "evidence bucket create did not succeed; verifying the existing bucket"
   fi
   if ! gcloud storage buckets describe "gs://$bucket" \
-      --project "$PROJECT" --format=json \
+      --project "$PROJECT" --raw --format=json \
       | python3 -c '
 import json
 import sys
