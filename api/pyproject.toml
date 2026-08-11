@@ -12,6 +12,7 @@ dependencies = [
     # githubkit pulls it in; a dependency this codebase calls directly must be
     # declared, or an unrelated githubkit change can uninstall it.
     "httpx>=0.28.1",
+    "google-cloud-storage>=3.13.1",
     "psycopg[binary]>=3.3.4",
     "pyjwt[crypto]>=2.13.0",
     "sqlalchemy>=2.0.51",
