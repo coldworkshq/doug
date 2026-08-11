@@ -135,7 +135,15 @@ console refuses (report §4.1):
    (`console/lib/runs.ts:28-35`) with unknown-denominator and rounding
    guards. Adopt the console's semantics wholesale (one shared module).
 3. Outcome tone divergence: web maps `revert|hotfix→flag` else neutral;
-   console maps `clean→clear`, everything else→flag. Adopt console's.
+   console maps `clean→clear`, everything else→flag. ~~Adopt console's.~~
+   **SUPERSEDED 2026-08-11 during execution** — the premise (vocabulary
+   agreement) was false: production writes `{revert, clean, censored}`
+   (adjudicate.py's OutcomeKind; hotfix deliberately never written, §10),
+   and the console's binary rule paints `censored` — an UNOBSERVED
+   outcome — in the miss colour with the revert glyph. Ruled mapping,
+   both surfaces: `clean→clear`, `censored→neutral`, any other non-null
+   →flag, null→neutral. Console correction + stale store.py:124 comment
+   are a logged follow-up (task list), outside Lane 1 Phase A.
 4. Type `RunDetail.pr` (currently `Record<string, unknown>`,
    `session-api.ts:61`) so `changed_files`/`files_dropped`/`author`/
    `head_sha` become renderable; mirror `console/lib/api.ts:62-79`.
