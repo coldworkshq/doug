@@ -62,8 +62,13 @@ export async function resolve(specifier, context, nextResolve) {
     if (specifier.startsWith("next/")) return nextResolve(`${specifier}.js`, context);
     // Lib-to-lib imports are written extensionless in app source because
     // Next's bundler resolves them (`lib/api.ts` does it too). Node needs the
-    // real file.
-    if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    // real file. Extensionless specifiers ONLY: appending .ts to a failing
+    // "./foo.mjs" would report "./foo.mjs.ts not found" and mask the real
+    // error (Doug PR #90 review, reader:tooling-resolution-fallback).
+    if (
+      (specifier.startsWith("./") || specifier.startsWith("../")) &&
+      !/\.[a-zA-Z]+$/.test(specifier)
+    ) {
       return nextResolve(`${specifier}.ts`, context);
     }
     throw error;
