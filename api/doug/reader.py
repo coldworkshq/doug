@@ -693,7 +693,9 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         "system": SYSTEM,
         "messages": [{"role": "user", "content": _user_text(pr, diff)}],
     }
-    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(request)
+    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(
+        request, attempt_kind="risk"
+    )
     try:
         response = client.messages.create(**request)
     except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
@@ -865,7 +867,9 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         "system": DECISION_INTENT_SYSTEM,
         "messages": [{"role": "user", "content": _intent_text(pr, diff, docs)}],
     }
-    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(request)
+    request_bytes, request_error_type = example_pack_capture.prepare_request_bytes(
+        request, attempt_kind="intent"
+    )
     try:
         response = client.messages.create(**request)
     except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception

@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field, ValidationError
+
 from .example_pack import (
     CapturedFindingV0,
     CaptureScopeV0,
@@ -27,6 +29,11 @@ from .example_pack import (
     parsed_finding_values,
     sha256_hex,
 )
+from .example_pack_gcs import GcsObjectStore, StorageBudget
+from .example_pack_hosted import (
+    CohortManifestV0,
+    HostedExamplePackRepository,
+)
 
 
 class CaptureConfigurationError(ValueError):
@@ -38,7 +45,27 @@ class CaptureResultV0(FrozenModel):
     captured: bool
     pack_hash: str | None = None
     path: str | None = None
+    member: bool | None = None
     error_type: str | None = None
+
+
+class HostedCaptureConfigV0(FrozenModel):
+    bucket: str = Field(min_length=1)
+    manifest: CohortManifestV0
+    adjudicator: str = Field(min_length=1)
+
+    def eligible(
+        self,
+        *,
+        installation_id: int,
+        github_repository_id: int,
+        now: datetime,
+    ) -> bool:
+        return (
+            installation_id in self.manifest.installation_ids
+            and github_repository_id in self.manifest.github_repository_ids
+            and self.manifest.capture_started_at <= now < self.manifest.capture_until
+        )
 
 
 _CAPTURE_SCOPE: ContextVar[CaptureScopeV0 | None] = ContextVar(
@@ -47,15 +74,108 @@ _CAPTURE_SCOPE: ContextVar[CaptureScopeV0 | None] = ContextVar(
 _CAPTURE_SUPPRESSED: ContextVar[str | None] = ContextVar(
     "doug_example_pack_capture_suppressed", default=None
 )
+_HOSTED_CONFIG: ContextVar[HostedCaptureConfigV0 | None] = ContextVar(
+    "doug_example_pack_hosted_config", default=None
+)
 
 
 def capture_requested(environ: Mapping[str, str] | None = None) -> bool:
-    """Return whether both explicit opt-in settings are present."""
+    """Return whether opt-in and one storage target are present."""
 
     values = os.environ if environ is None else environ
     return (
         values.get("DOUG_EXAMPLE_PACK_CAPTURE") == "1"
-        and bool(values.get("DOUG_EXAMPLE_PACK_DIR"))
+        and bool(
+            values.get("DOUG_EXAMPLE_PACK_DIR")
+            or values.get("DOUG_EXAMPLE_PACK_BUCKET")
+        )
+    )
+
+
+def _utc_timestamp(value: str, *, name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise CaptureConfigurationError(f"{name} must be a UTC RFC3339 timestamp") from None
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+        raise CaptureConfigurationError(f"{name} must be UTC")
+    return parsed
+
+
+def _numeric_ids(value: str, *, name: str) -> tuple[int, ...]:
+    try:
+        parts = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    except ValueError:
+        raise CaptureConfigurationError(f"{name} must contain numeric IDs") from None
+    if not parts or any(isinstance(part, bool) or part <= 0 for part in parts):
+        raise CaptureConfigurationError(f"{name} must contain positive numeric IDs")
+    if len(parts) != len(set(parts)):
+        raise CaptureConfigurationError(f"{name} must contain unique IDs")
+    return tuple(sorted(parts))
+
+
+def configured_hosted_capture(
+    environ: Mapping[str, str] | None = None,
+) -> HostedCaptureConfigV0 | None:
+    values = os.environ if environ is None else environ
+    if values.get("DOUG_EXAMPLE_PACK_CAPTURE") != "1":
+        return None
+    local = values.get("DOUG_EXAMPLE_PACK_DIR")
+    bucket = values.get("DOUG_EXAMPLE_PACK_BUCKET")
+    if local and bucket:
+        raise CaptureConfigurationError(
+            "DOUG_EXAMPLE_PACK_DIR and DOUG_EXAMPLE_PACK_BUCKET are mutually exclusive"
+        )
+    if not bucket:
+        return None
+
+    required = (
+        "DOUG_EXAMPLE_PACK_COHORT",
+        "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT",
+        "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL",
+        "DOUG_EXAMPLE_PACK_INSTALLATION_IDS",
+        "DOUG_EXAMPLE_PACK_REPOSITORY_IDS",
+        "DOUG_APPLICATION_REVISION",
+        "DOUG_EXAMPLE_PACK_ADJUDICATOR",
+    )
+    missing = [name for name in required if not values.get(name)]
+    if missing:
+        raise CaptureConfigurationError(f"missing hosted capture setting {missing[0]}")
+
+    try:
+        manifest = CohortManifestV0(
+            cohort_id=values["DOUG_EXAMPLE_PACK_COHORT"],
+            capture_started_at=_utc_timestamp(
+                values["DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT"],
+                name="DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT",
+            ),
+            capture_until=_utc_timestamp(
+                values["DOUG_EXAMPLE_PACK_CAPTURE_UNTIL"],
+                name="DOUG_EXAMPLE_PACK_CAPTURE_UNTIL",
+            ),
+            installation_ids=_numeric_ids(
+                values["DOUG_EXAMPLE_PACK_INSTALLATION_IDS"],
+                name="DOUG_EXAMPLE_PACK_INSTALLATION_IDS",
+            ),
+            github_repository_ids=_numeric_ids(
+                values["DOUG_EXAMPLE_PACK_REPOSITORY_IDS"],
+                name="DOUG_EXAMPLE_PACK_REPOSITORY_IDS",
+            ),
+            application_revision=values["DOUG_APPLICATION_REVISION"],
+        )
+    except ValidationError as exc:
+        field = str(exc.errors()[0]["loc"][0])
+        setting = {
+            "cohort_id": "DOUG_EXAMPLE_PACK_COHORT",
+            "application_revision": "DOUG_APPLICATION_REVISION",
+        }.get(field, field)
+        raise CaptureConfigurationError(
+            f"invalid hosted capture setting {setting}"
+        ) from None
+    return HostedCaptureConfigV0(
+        bucket=bucket,
+        manifest=manifest,
+        adjudicator=values["DOUG_EXAMPLE_PACK_ADJUDICATOR"],
     )
 
 
@@ -80,7 +200,12 @@ def capture_scope(scope: CaptureScopeV0) -> Iterator[None]:
 
 @contextmanager
 def capture_scope_if_enabled(
-    scope_factory: Callable[[], CaptureScopeV0 | None], *, run_id_prefix: str
+    scope_factory: Callable[[], CaptureScopeV0 | None],
+    *,
+    run_id_prefix: str,
+    installation_id: int | None = None,
+    github_repository_id: int | None = None,
+    now: datetime | None = None,
 ) -> Iterator[None]:
     """Build optional worker identity lazily without exposing capture failures."""
 
@@ -88,6 +213,19 @@ def capture_scope_if_enabled(
         yield
         return
     try:
+        hosted = configured_hosted_capture()
+        if hosted is not None:
+            if installation_id is None or github_repository_id is None:
+                yield
+                return
+            observed_at = now or datetime.now(UTC)
+            if not hosted.eligible(
+                installation_id=installation_id,
+                github_repository_id=github_repository_id,
+                now=observed_at,
+            ):
+                yield
+                return
         scope = scope_factory()
     except Exception as exc:  # noqa: BLE001 - capture cannot break a job
         error_type = type(exc).__name__[:120]
@@ -104,17 +242,29 @@ def capture_scope_if_enabled(
     if scope is None:
         yield
         return
-    with capture_scope(scope):
+    scope_token = _CAPTURE_SCOPE.set(scope)
+    hosted_token = _HOSTED_CONFIG.set(hosted)
+    try:
         yield
+    finally:
+        _HOSTED_CONFIG.reset(hosted_token)
+        _CAPTURE_SCOPE.reset(scope_token)
 
 
-def prepare_request_bytes(value: object) -> tuple[bytes | None, str | None]:
+def prepare_request_bytes(
+    value: object, *, attempt_kind: Literal["risk", "intent"] = "risk"
+) -> tuple[bytes | None, str | None]:
     """Canonicalize only capture-eligible requests and contain any failure."""
 
     if (
         not capture_requested()
         or current_scope() is None
         or capture_suppressed()
+    ):
+        return None, None
+    if attempt_kind == "intent" and (
+        _HOSTED_CONFIG.get() is not None
+        or bool(os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"))
     ):
         return None, None
     try:
@@ -125,18 +275,23 @@ def prepare_request_bytes(value: object) -> tuple[bytes | None, str | None]:
 
 def configured_store(
     environ: Mapping[str, str] | None = None,
-) -> FileExamplePackStore | None:
-    """Return the explicitly enabled local sink without creating it."""
+) -> FileExamplePackStore | HostedExamplePackRepository | None:
+    """Return the explicit local or hosted sink, constructing it only now."""
 
     values = os.environ if environ is None else environ
     if not capture_requested(values):
         return None
+    hosted = configured_hosted_capture(values)
     configured = values.get("DOUG_EXAMPLE_PACK_DIR")
-    assert configured is not None  # capture_requested requires a non-empty value
-    root = Path(configured)
-    if not root.is_absolute():
-        raise CaptureConfigurationError("DOUG_EXAMPLE_PACK_DIR must be absolute")
-    return FileExamplePackStore(root)
+    if hosted is not None:
+        objects = GcsObjectStore(hosted.bucket, budget=StorageBudget(seconds=5.0))
+        return HostedExamplePackRepository(objects, hosted.manifest.cohort_id)
+    if configured:
+        root = Path(configured)
+        if not root.is_absolute():
+            raise CaptureConfigurationError("DOUG_EXAMPLE_PACK_DIR must be absolute")
+        return FileExamplePackStore(root)
+    return None
 
 
 def _diagnostic(message: str) -> None:
@@ -176,6 +331,16 @@ def record_attempt(
             enabled=True, captured=False, error_type=suppressed_error
         )
     scope = current_scope()
+    hosted = _HOSTED_CONFIG.get()
+    if hosted is None and os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"):
+        try:
+            hosted = configured_hosted_capture()
+        except Exception as exc:  # noqa: BLE001 - capture cannot break a review
+            return CaptureResultV0(
+                enabled=True, captured=False, error_type=type(exc).__name__
+            )
+    if hosted is not None and attempt_kind != "risk":
+        return CaptureResultV0(enabled=True, captured=False)
     try:
         sink = configured_store() if store is None else store
     except Exception as exc:  # noqa: BLE001 - capture cannot break a review
@@ -190,6 +355,24 @@ def record_attempt(
         )
         return CaptureResultV0(enabled=True, captured=False, error_type="MissingCaptureScope")
 
+    if hosted is not None:
+        if scope.review_job_id is None:
+            return CaptureResultV0(
+                enabled=True, captured=False, error_type="MissingReviewJobId"
+            )
+        if scope.application_revision != hosted.manifest.application_revision:
+            return CaptureResultV0(
+                enabled=True, captured=False, error_type="ApplicationRevisionMismatch"
+            )
+        if (
+            scope.scope.installation_id not in hosted.manifest.installation_ids
+            or scope.scope.github_repository_id
+            not in hosted.manifest.github_repository_ids
+        ):
+            return CaptureResultV0(
+                enabled=True, captured=False, error_type="CaptureIdentityNotAllowed"
+            )
+
     run_id = f"{scope.run_id_prefix}:{attempt_kind}"
     if request_error_type is not None:
         _diagnostic(
@@ -200,6 +383,10 @@ def record_attempt(
             enabled=True, captured=False, error_type=request_error_type[:120]
         )
     try:
+        if hosted is not None:
+            if not isinstance(sink, HostedExamplePackRepository):
+                raise CaptureConfigurationError("hosted capture requires hosted repository")
+            sink.ensure_manifest(hosted.manifest)
         request_ref = (
             sink.put_blob(request_bytes, media_type="application/json")
             if request_bytes is not None
@@ -276,11 +463,20 @@ def record_attempt(
             findings=findings,
         )
         path = sink.put_pack(pack)
+        member: bool | None = None
+        rendered_path: str | None = str(path)
+        if hosted is not None:
+            assert scope.review_job_id is not None
+            member = sink.put_membership(
+                pack, review_job_id=scope.review_job_id
+            ).member
+            rendered_path = None
         return CaptureResultV0(
             enabled=True,
             captured=True,
             pack_hash=pack.pack_hash,
-            path=str(path),
+            path=rendered_path,
+            member=member,
         )
     except Exception as exc:  # noqa: BLE001 - capture cannot break a review
         _diagnostic(f"doug: example-pack capture failed run_id={run_id} error={type(exc).__name__}")

@@ -138,6 +138,7 @@ class CaptureScopeV0(FrozenModel):
     """Task-local worker facts needed to build packs and instruments."""
 
     run_id_prefix: str = Field(min_length=1)
+    review_job_id: int | None = Field(default=None, gt=0)
     scope: PackScopeV0
     read_order: str = Field(min_length=1)
     input_policy_version: str = Field(min_length=1)

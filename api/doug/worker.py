@@ -52,6 +52,7 @@ def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
         run_id_prefix=(
             f"review-job:{job['id']}:claim:{job['claim_generation']}"
         ),
+        review_job_id=job["id"],
         scope=PackScopeV0(
             installation_id=job["installation_id"],
             github_repository_id=job["github_repo_id"],
@@ -239,6 +240,8 @@ def process_job(job: dict) -> int | None:
             f"review-job:{job.get('id', 'unknown')}:"
             f"claim:{job.get('claim_generation', 'unknown')}"
         ),
+        installation_id=job["installation_id"],
+        github_repository_id=job["github_repo_id"],
     )
     with pack_context:
         tier, verdict, rv, cov = review.score_one(
