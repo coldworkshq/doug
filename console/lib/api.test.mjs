@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getJobs, getRuns, isError } from "./api.ts";
+import {
+  getExamplePackCohorts,
+  getJobs,
+  getRuns,
+  isError,
+  postExamplePackAdjudication,
+} from "./api.ts";
 
 test("isError treats an API failure as an error, never as empty data", () => {
   // The console must never render a number when the API is unreachable.
@@ -80,6 +86,127 @@ test("getJobs sends installationId 0 as a real filter, never drops it as falsy",
       const result = await getJobs({ lane: "review", view: "unhealthy", installationId: 0 });
       assert.equal(isError(result), false);
       assert.match(requestedUrl, /(?:\?|&)installation_id=0(?:&|$)/);
+    },
+  );
+});
+
+const HASH = "a".repeat(64);
+
+function examplePackSummary() {
+  return {
+    cohort_id: "dogfood-2026-08",
+    manifest: {
+      schema_version: "example-pack-cohort-v0",
+      cohort_id: "dogfood-2026-08",
+      capture_started_at: "2026-08-10T18:00:00Z",
+      capture_until: "2026-08-17T18:00:00Z",
+      installation_ids: [11],
+      github_repository_ids: [22],
+      attempt_kinds: ["risk"],
+      finding_cap: 3,
+      raw_retention_days: 90,
+      application_revision: "c".repeat(40),
+    },
+    availability: { status: "empty", reason: "no attempts" },
+    completeness: {
+      completed_jobs: 0,
+      members: 0,
+      missing: [],
+      extra: [],
+      boundary: "terminal-start-or-membership-linked-v0",
+    },
+  };
+}
+
+function exampleAdjudication() {
+  return {
+    schema_version: "example-adjudication-v0",
+    adjudication_id: HASH,
+    pack_hash: HASH,
+    run_id: "review-job:9:claim:1:risk",
+    finding_id: HASH,
+    disposition: "unknown",
+    evidence: [],
+    verifier_receipts: [],
+    adjudicator: "andrew",
+    adjudicated_at: "2026-08-10T20:00:00Z",
+    supersedes: null,
+  };
+}
+
+test("Example Pack GET uses only the purpose token and no-store", () => {
+  const priorPurpose = process.env.DOUG_EXAMPLE_PACK_TOKEN;
+  const priorOperator = process.env.DOUG_API_TOKEN;
+  process.env.DOUG_EXAMPLE_PACK_TOKEN = "purpose-only-secret";
+  process.env.DOUG_API_TOKEN = "operator-secret";
+  let request;
+  return withFetch(
+    async (url, init) => {
+      request = { url: String(url), init };
+      return Response.json([examplePackSummary()]);
+    },
+    async () => {
+      try {
+        const result = await getExamplePackCohorts();
+        assert.equal(isError(result), false);
+        assert.equal(request.init.cache, "no-store");
+        assert.equal(request.init.headers["X-Doug-Example-Pack-Token"], "purpose-only-secret");
+        assert.equal(request.init.headers["X-Doug-Token"], undefined);
+        assert.equal(JSON.stringify(request).includes("operator-secret"), false);
+      } finally {
+        process.env.DOUG_EXAMPLE_PACK_TOKEN = priorPurpose;
+        process.env.DOUG_API_TOKEN = priorOperator;
+      }
+    },
+  );
+});
+
+test("Example Pack POST sends only validated adjudication fields", () => {
+  const priorPurpose = process.env.DOUG_EXAMPLE_PACK_TOKEN;
+  process.env.DOUG_EXAMPLE_PACK_TOKEN = "purpose-only-secret";
+  let sentBody;
+  return withFetch(
+    async (_url, init) => {
+      sentBody = JSON.parse(init.body);
+      return Response.json(exampleAdjudication());
+    },
+    async () => {
+      try {
+        const result = await postExamplePackAdjudication("cohort/id", HASH, HASH, {
+          disposition: "unknown",
+          evidence: [],
+          verifier_receipts: [],
+          expected_current_adjudication_id: null,
+        });
+        assert.equal(isError(result), false);
+        assert.deepEqual(Object.keys(sentBody).sort(), [
+          "disposition",
+          "evidence",
+          "expected_current_adjudication_id",
+          "verifier_receipts",
+        ]);
+      } finally {
+        process.env.DOUG_EXAMPLE_PACK_TOKEN = priorPurpose;
+      }
+    },
+  );
+});
+
+test("Example Pack failures never echo the purpose credential", () => {
+  const priorPurpose = process.env.DOUG_EXAMPLE_PACK_TOKEN;
+  process.env.DOUG_EXAMPLE_PACK_TOKEN = "must-not-leak";
+  return withFetch(
+    async () => {
+      throw new Error("transport carried must-not-leak");
+    },
+    async () => {
+      try {
+        const result = await getExamplePackCohorts();
+        assert.equal(isError(result), true);
+        assert.equal(result.error.includes("must-not-leak"), false);
+      } finally {
+        process.env.DOUG_EXAMPLE_PACK_TOKEN = priorPurpose;
+      }
     },
   );
 });

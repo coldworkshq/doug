@@ -18,6 +18,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -39,10 +40,12 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    and_,
     create_engine,
     exists,
     func,
     inspect,
+    or_,
     select,
     text,
     update,
@@ -332,6 +335,65 @@ review_jobs = Table(
     ),
 )
 
+
+def completed_example_pack_jobs(
+    *,
+    installation_ids: tuple[int, ...],
+    github_repository_ids: tuple[int, ...],
+    capture_started_at: datetime,
+    capture_until: datetime,
+    membership_job_ids: tuple[int, ...] = (),
+) -> list[dict]:
+    """Completed reader jobs in the immutable cohort coverage boundary.
+
+    ``enqueued_at`` is intentionally absent: fail() rewrites it when a retry
+    moves to the back of the queue. The terminal attempt's ``started_at`` is
+    stable after completion; immutable membership job IDs keep an in-window
+    earlier attempt connected when its terminal retry starts later.
+    """
+
+    if not installation_ids or not github_repository_ids:
+        return []
+    engine = _get_engine()
+    if engine is None:
+        return []
+    boundary = and_(
+        review_jobs.c.started_at.is_not(None),
+        review_jobs.c.started_at >= capture_started_at,
+        review_jobs.c.started_at < capture_until,
+    )
+    if membership_job_ids:
+        boundary = or_(boundary, review_jobs.c.id.in_(membership_job_ids))
+    query = (
+        select(review_jobs)
+        .where(
+            review_jobs.c.status == "done",
+            review_jobs.c.verdict_id.is_not(None),
+            review_jobs.c.base_sha.is_not(None),
+            review_jobs.c.head_sha.is_not(None),
+            review_jobs.c.installation_id.in_(installation_ids),
+            review_jobs.c.github_repo_id.in_(github_repository_ids),
+            boundary,
+        )
+        .order_by(review_jobs.c.id)
+    )
+    with engine.connect() as conn:
+        return [
+            {
+                "id": row["id"],
+                "installation_id": row["installation_id"],
+                "github_repository_id": row["github_repo_id"],
+                "repository_full_name": row["repo_full_name"],
+                "pull_number": row["pr_number"],
+                "admitted_base_sha": row["base_sha"],
+                "admitted_head_sha": row["head_sha"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+                "enqueued_at": row["enqueued_at"],
+            }
+            for row in conn.execute(query).mappings()
+        ]
+
 # Merged PRs waiting out their outcome-observation window before the M3
 # adjudicator scores them. Written when a pull_request 'closed' event is a
 # merge (Task 6's amendment); drained by the adjudicator once due_at
@@ -435,6 +497,8 @@ _engine_lock = threading.Lock()
 _install_flow_lock_engine = None
 _install_flow_lock_engine_url = None
 _install_flow_lock_engine_lock = threading.Lock()
+_example_pack_locks_guard = threading.Lock()
+_example_pack_locks: dict[int, threading.Lock] = {}
 # A serialized WorkOS bind can legitimately exceed SQLAlchemy's 30-second
 # default. Four minutes leaves one minute inside Cloud Run's 300-second API
 # request envelope for the authority work after a waiting flow gets the lock.
@@ -449,10 +513,56 @@ class InstallationBindLockUnavailable(RuntimeError):
     """The purpose lock pool could not admit this direct bind in time."""
 
 
+class ExamplePackLockUnavailable(RuntimeError):
+    """The adjudication lock cannot safely serialize a correction."""
+
+
 def _install_flow_advisory_key(nonce_digest: str) -> int:
     """Map a SHA-256 digest into Postgres's negative signed-bigint namespace."""
     positive = int(nonce_digest[:16], 16) & ((1 << 63) - 1)
     return -(positive + 1)
+
+
+def _example_pack_advisory_key(
+    cohort_id: str, pack_hash: str, finding_id: str
+) -> int:
+    payload = json.dumps(
+        [cohort_id, pack_hash, finding_id],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big", signed=True)
+
+
+@contextmanager
+def example_pack_adjudication_lock(
+    cohort_id: str, pack_hash: str, finding_id: str
+):
+    """Serialize read-current then create-correction across API instances."""
+
+    engine = _get_install_flow_lock_engine()
+    if engine is None:
+        raise ExamplePackLockUnavailable("adjudication lock is not configured")
+    key = _example_pack_advisory_key(cohort_id, pack_hash, finding_id)
+    if engine.dialect.name == "sqlite":
+        with _example_pack_locks_guard:
+            local_lock = _example_pack_locks.setdefault(key, threading.Lock())
+        with local_lock:
+            yield
+        return
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise ExamplePackLockUnavailable(
+            "adjudication lock temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
+        parameters = {"key": key}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), parameters)
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), parameters)
 
 
 def _get_existing_schema_engine():

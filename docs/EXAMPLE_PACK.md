@@ -1,13 +1,16 @@
 # Example Pack v0
 
-Example Pack v0 is a local, opt-in evidence path for Doug's existing reader. It
-records what an admitted worker attempt read, the exact request dictionary it
-gave the Anthropic SDK, the selected text output, the parsed output, coverage,
-usage, terminal state, and the complete instrument identity. It does not change
-the live verdict or authorize a new model, challenger, or promotion path.
+Example Pack v0 is an opt-in evidence path for Doug's existing reader. It can
+write to an operator-owned local directory or to the separately enabled hosted
+cohort store. It records what an admitted worker attempt read, the exact request
+dictionary it gave the Anthropic SDK, the selected text output, the parsed
+output, coverage, usage, terminal state, and the complete instrument identity.
+It does not change the live verdict or authorize a new model, challenger, or
+promotion path.
 
-No production capture, database table, object bucket, deployment setting, or
-retention system is enabled by this work.
+Hosted support adds code and explicit operator commands; it does not itself
+create a bucket, change a Cloud Run service, or start capture. The ordinary
+API, web, and console deploy paths remain independent of the evidence lane.
 
 ## Local dogfood setup
 
@@ -121,6 +124,56 @@ all referenced blob hashes and sizes, and adjudication pack/run/finding links.
 It stops nonzero on the first malformed, missing, non-canonical, or mismatched
 object. The command does not repair, delete, upload, or infer data.
 
+## Hosted cohort contract
+
+Hosted capture is admitted only when every condition is true:
+
+- `DOUG_EXAMPLE_PACK_CAPTURE` is exactly `1`;
+- the worker's installation and stable GitHub repository IDs are in the
+  configured allowlists;
+- the attempt begins within the half-open UTC window
+  `[DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT, DOUG_EXAMPLE_PACK_CAPTURE_UNTIL)`;
+- the configured application revision is an explicit full Git SHA; and
+- `DOUG_EXAMPLE_PACK_BUCKET` is configured instead of the local directory.
+
+The cohort manifest fixes that identity before the first pack is admitted.
+Hosted objects use generation-match preconditions, so the first canonical
+bytes at a path win. Rewriting identical bytes is idempotent; a different body
+at the same path is a collision. Storage reads, writes, listing, and response
+sizes are bounded, and validation stops before evaluating an invalid or
+oversized cohort. A cohort contains at most 500 packs.
+
+The purpose API is separate from Doug's existing operator API token. Every
+route requires `X-Doug-Example-Pack-Token: $DOUG_EXAMPLE_PACK_TOKEN`:
+
+```text
+GET  /v1/example-pack-cohorts
+GET  /v1/example-pack-cohorts/{cohort_id}
+GET  /v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}
+GET  /v1/example-pack-cohorts/{cohort_id}/results
+POST /v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}/findings/{finding_id}/adjudications
+```
+
+The pack response contains the exact request object, evidence text, selected
+raw output, parsed pack, and effective append-only adjudications. Conclusive
+adjudications require an evidence receipt, and a write names the head the
+reviewer observed. A concurrent or stale correction fails instead of silently
+overwriting another judgment. The server stamps the configured adjudicator;
+the browser cannot select one.
+
+Completeness is proved against durable review jobs, not inferred from the
+objects that happened to arrive. The eligible set is the union of:
+
+- allowlisted, verdict-backed jobs whose terminal `started_at` falls in the
+  cohort window; and
+- allowlisted jobs referenced by immutable cohort membership job IDs.
+
+This union survives ordinary retries, because `review_jobs.enqueued_at` is
+mutable. One boundary remains: an earlier attempt whose capture failed and
+whose terminal retry starts after the window cannot be reconstructed without a
+ledger migration. The rollout therefore stops admission, drains the queue, and
+checks that `missing` and `extra` are both empty before closing a cohort.
+
 ## Adjudication and evaluation
 
 Judgment is an append-only `ExampleAdjudicationV0` overlay. A correction names
@@ -151,24 +204,18 @@ produce two verified accepted-nonactionable findings.
 
 ## Retention and deletion
 
-The operator owns the local directory and its retention decision. Doug has no
-background cleanup, upload, repair, or legal-hold behavior. Remove a local pack
-directory only under the operator's own retention and incident-response policy;
-validation never deletes it.
+The operator owns the local directory and its retention decision. Hosted setup
+installs a 90-day bucket lifecycle rule, uniform bucket-level access, public
+access prevention, and object create/read capability only for `doug-api`.
+`doug-console` receives API responses and never receives bucket access. Neither
+validator repairs or deletes evidence.
 
-Production storage remains blocked until an explicit design and approval cover
-all of the following:
+Google Cloud Data Access audit logs are not enabled by the setup script; they
+are a project-wide policy decision and must be reviewed and enabled separately
+before treating access-log queries as evidence. Incident deletion is likewise
+not automated. Disable capture first, preserve access logs and immutable
+objects, then use a separately approved purge or legal-hold decision.
 
-- tenant authorization and repository isolation;
-- encryption and key management;
-- storage region;
-- retention periods;
-- deletion and legal-hold behavior;
-- access audit;
-- source-code data classification;
-- trusted application/runtime revision injection; and
-- incident response.
-
-The next permitted step is a separately authorized local dogfood run over
-20–30 consecutive future worker attempts, followed by validation of every
-object. That run is evidence collection, not model validation or promotion.
+See `docs/OPERATIONS.md` for the reviewed setup, enable, closure, and incident
+sequence. A hosted dogfood cohort is evidence collection, not model validation
+or promotion.

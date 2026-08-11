@@ -1,5 +1,19 @@
 import type { HealthPayload } from "./health";
 import type { RunCoverage } from "./runs";
+import {
+  parseAdjudicationInput,
+  parseExampleAdjudication,
+  parseExamplePackCohort,
+  parseExamplePackCohorts,
+  parseExamplePackDetail,
+  parseExamplePackResults,
+  type AdjudicationInput,
+  type CohortDetail,
+  type CohortResults,
+  type CohortSummary,
+  type ExampleAdjudication,
+  type PackDetail,
+} from "./example-packs.ts";
 
 export type Band = "cleared" | "flagged";
 
@@ -227,4 +241,79 @@ export async function getJobs(params: {
   }
   q.set("limit", String(params.limit ?? 100));
   return get<{ items: JobItem[]; limit: number; offset: number }>(`/v1/jobs?${q}`);
+}
+
+type ApiError = { error: string };
+
+async function examplePackRequest<T>(
+  path: string,
+  parse: (value: unknown) => T,
+  body?: AdjudicationInput,
+): Promise<T | ApiError> {
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        "X-Doug-Example-Pack-Token": process.env.DOUG_EXAMPLE_PACK_TOKEN ?? "",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!response.ok) return { error: `${path} → HTTP ${response.status}` };
+    return parse(await response.json());
+  } catch {
+    // Never include a thrown transport message here: request libraries may
+    // interpolate headers, and this purpose credential must not reach UI text.
+    return { error: `${path} → invalid or unavailable Example Pack response` };
+  }
+}
+
+function segment(value: string): string {
+  return encodeURIComponent(value);
+}
+
+export function getExamplePackCohorts(): Promise<CohortSummary[] | ApiError> {
+  return examplePackRequest("/v1/example-pack-cohorts", parseExamplePackCohorts);
+}
+
+export function getExamplePackCohort(cohortId: string): Promise<CohortDetail | ApiError> {
+  return examplePackRequest(
+    `/v1/example-pack-cohorts/${segment(cohortId)}`,
+    parseExamplePackCohort,
+  );
+}
+
+export function getExamplePackDetail(
+  cohortId: string,
+  packHash: string,
+): Promise<PackDetail | ApiError> {
+  return examplePackRequest(
+    `/v1/example-pack-cohorts/${segment(cohortId)}/packs/${segment(packHash)}`,
+    parseExamplePackDetail,
+  );
+}
+
+export function getExamplePackResults(cohortId: string): Promise<CohortResults | ApiError> {
+  return examplePackRequest(
+    `/v1/example-pack-cohorts/${segment(cohortId)}/results`,
+    parseExamplePackResults,
+  );
+}
+
+export function postExamplePackAdjudication(
+  cohortId: string,
+  packHash: string,
+  findingId: string,
+  input: unknown,
+): Promise<ExampleAdjudication | ApiError> {
+  const path = `/v1/example-pack-cohorts/${segment(cohortId)}/packs/${segment(packHash)}/findings/${segment(findingId)}/adjudications`;
+  let checked: AdjudicationInput;
+  try {
+    checked = parseAdjudicationInput(input);
+  } catch {
+    return Promise.resolve({ error: `${path} → invalid adjudication input` });
+  }
+  return examplePackRequest(path, parseExampleAdjudication, checked);
 }

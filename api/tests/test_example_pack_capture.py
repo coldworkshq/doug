@@ -17,17 +17,22 @@ from doug.example_pack import (
 from doug.example_pack_capture import (
     CaptureConfigurationError,
     capture_scope,
+    capture_scope_if_enabled,
+    configured_hosted_capture,
     configured_store,
     current_scope,
+    prepare_request_bytes,
     record_attempt,
 )
+from doug.example_pack_hosted import HostedExamplePackRepository
 
 NOW = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
 
 
-def _scope(pull_number: int) -> CaptureScopeV0:
+def _scope(pull_number: int, *, application_revision: str | None = None) -> CaptureScopeV0:
     return CaptureScopeV0(
         run_id_prefix=f"review-job:{pull_number}:claim:1",
+        review_job_id=pull_number,
         scope=PackScopeV0(
             installation_id=10 + pull_number,
             github_repository_id=20,
@@ -41,7 +46,49 @@ def _scope(pull_number: int) -> CaptureScopeV0:
         coverage_policy_version="reader-coverage-v0",
         verifier_versions=(NameVersionV0(name="settle", version="v0"),),
         tool_versions=(NameVersionV0(name="anthropic-sdk", version="0.70.0"),),
+        application_revision=application_revision,
     )
+
+
+class _MemoryObjects:
+    def __init__(self):
+        self.objects: dict[str, tuple[bytes, str]] = {}
+
+    def create(self, key: str, data: bytes, *, content_type: str) -> None:
+        existing = self.objects.get(key)
+        if existing is None:
+            self.objects[key] = (data, content_type)
+            return
+        if existing != (data, content_type):
+            from doug.example_pack import ContentCollisionError
+
+            raise ContentCollisionError("different bytes")
+
+    def read(self, key: str) -> bytes:
+        try:
+            return self.objects[key][0]
+        except KeyError:
+            raise FileNotFoundError(key) from None
+
+    def list(self, prefix: str) -> tuple[str, ...]:
+        return tuple(sorted(key for key in self.objects if key.startswith(prefix)))
+
+
+def _hosted_env(monkeypatch) -> None:
+    values = {
+        "DOUG_EXAMPLE_PACK_CAPTURE": "1",
+        "DOUG_EXAMPLE_PACK_BUCKET": "private-evidence",
+        "DOUG_EXAMPLE_PACK_COHORT": "doug-dogfood-2026-08",
+        "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT": "2026-08-10T17:00:00Z",
+        "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL": "2026-08-11T18:00:00Z",
+        "DOUG_EXAMPLE_PACK_INSTALLATION_IDS": "27",
+        "DOUG_EXAMPLE_PACK_REPOSITORY_IDS": "20",
+        "DOUG_APPLICATION_REVISION": "a" * 40,
+        "DOUG_EXAMPLE_PACK_ADJUDICATOR": "andrew",
+    }
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
 
 
 def test_capture_configuration_is_disabled_unless_both_settings_exist(tmp_path):
@@ -73,6 +120,107 @@ def test_capture_configuration_returns_file_store_for_explicit_absolute_root(tmp
 
     assert isinstance(store, FileExamplePackStore)
     assert store.root == tmp_path
+
+
+def test_local_and_hosted_targets_are_rejected_as_ambiguous(tmp_path):
+    with pytest.raises(CaptureConfigurationError, match="mutually exclusive"):
+        configured_store(
+            {
+                "DOUG_EXAMPLE_PACK_CAPTURE": "1",
+                "DOUG_EXAMPLE_PACK_DIR": str(tmp_path),
+                "DOUG_EXAMPLE_PACK_BUCKET": "private-evidence",
+            }
+        )
+
+
+def test_non_allowlisted_hosted_job_does_not_build_a_scope(monkeypatch):
+    _hosted_env(monkeypatch)
+
+    with capture_scope_if_enabled(
+        lambda: pytest.fail("foreign tenant built a capture scope"),
+        run_id_prefix="review-job:41:claim:1",
+        installation_id=18,
+        github_repository_id=20,
+        now=NOW,
+    ):
+        assert current_scope() is None
+
+
+def test_hosted_scope_without_numeric_worker_identity_yields_disabled(monkeypatch):
+    _hosted_env(monkeypatch)
+
+    with capture_scope_if_enabled(
+        lambda: pytest.fail("identity-free caller built a capture scope"),
+        run_id_prefix="unscoped",
+        now=NOW,
+    ):
+        assert current_scope() is None
+
+
+def test_dirty_application_revision_is_a_named_configuration_error(monkeypatch):
+    _hosted_env(monkeypatch)
+    monkeypatch.setenv("DOUG_APPLICATION_REVISION", "dirty")
+
+    with pytest.raises(CaptureConfigurationError, match="DOUG_APPLICATION_REVISION"):
+        configured_hosted_capture()
+
+
+def test_hosted_intent_request_is_not_canonicalized(monkeypatch):
+    _hosted_env(monkeypatch)
+    with capture_scope(_scope(17, application_revision="a" * 40)):
+        assert prepare_request_bytes({"kind": "intent"}, attempt_kind="intent") == (
+            None,
+            None,
+        )
+        assert prepare_request_bytes({"kind": "risk"}, attempt_kind="risk")[0] == (
+            b'{"kind":"risk"}'
+        )
+
+
+def test_hosted_risk_capture_writes_manifest_pack_and_membership(monkeypatch):
+    _hosted_env(monkeypatch)
+    objects = _MemoryObjects()
+    repository = HostedExamplePackRepository(objects, "doug-dogfood-2026-08")
+    request = canonical_json_bytes({"model": "m", "messages": []})
+    raw = canonical_json_bytes({"risk_score": 0, "rationale": "", "findings": []})
+
+    with capture_scope(_scope(17, application_revision="a" * 40)):
+        result = record_attempt(
+            attempt_kind="risk",
+            request_bytes=request,
+            evidence_bytes=b"diff",
+            raw_output_bytes=raw,
+            parsed_output={"risk_score": 0, "rationale": "", "findings": []},
+            coverage=CoverageV0(
+                diff_chars=4,
+                sent_chars=4,
+                files_sent=1,
+                files_unseen=(),
+            ),
+            usage=UsageV0(input_tokens=1, output_tokens=1),
+            latency_ms=1,
+            model_call_made=True,
+            failure=None,
+            fallback_state="none",
+            provider="anthropic",
+            model="m",
+            max_output_tokens=100,
+            effort="medium",
+            inference_parameters=(),
+            system_prompt_bytes=b"system",
+            output_schema_bytes=b"schema",
+            diff_budget=1000,
+            store=repository,
+            captured_at=NOW,
+        )
+
+    assert result.captured
+    assert result.member is True
+    assert result.path is None
+    validated = repository.validate()
+    assert validated.manifest.installation_ids == (27,)
+    assert validated.memberships[0].review_job_id == 17
+    assert validated.memberships[0].pack_hash == result.pack_hash
 
 
 def test_capture_scope_is_reset_and_isolated_between_threads():

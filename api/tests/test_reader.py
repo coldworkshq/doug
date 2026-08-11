@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -396,6 +397,47 @@ def test_disabled_capture_never_canonicalizes_the_full_request(
     assert returned.risk_score == 62
     assert client.messages.calls == 1
     assert canonicalized == []
+
+
+def test_non_allowlisted_hosted_reader_never_constructs_storage_client(monkeypatch):
+    """Admission must reject a foreign tenant before any GCS client work.
+
+    The worker still performs the live model read; capture is the optional lane.
+    Exercising the reader call site prevents a scope-only test from missing a
+    later ``record_attempt`` regression.
+    """
+    hosted = {
+        "DOUG_EXAMPLE_PACK_CAPTURE": "1",
+        "DOUG_EXAMPLE_PACK_BUCKET": "private-evidence",
+        "DOUG_EXAMPLE_PACK_COHORT": "doug-dogfood-2026-08",
+        "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT": "2026-08-10T17:00:00Z",
+        "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL": "2026-08-11T18:00:00Z",
+        "DOUG_EXAMPLE_PACK_INSTALLATION_IDS": "27",
+        "DOUG_EXAMPLE_PACK_REPOSITORY_IDS": "20",
+        "DOUG_APPLICATION_REVISION": "a" * 40,
+        "DOUG_EXAMPLE_PACK_ADJUDICATOR": "andrew",
+    }
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
+    for name, value in hosted.items():
+        monkeypatch.setenv(name, value)
+
+    def fail_storage(*_args, **_kwargs):
+        pytest.fail("foreign tenant constructed an Example Pack GCS client")
+
+    monkeypatch.setattr(example_pack_capture, "GcsObjectStore", fail_storage)
+    client = FakeClient()
+
+    with example_pack_capture.capture_scope_if_enabled(
+        lambda: pytest.fail("foreign tenant built a capture scope"),
+        run_id_prefix="review-job:41:claim:1",
+        installation_id=18,
+        github_repository_id=20,
+        now=datetime(2026, 8, 10, 18, 0, tzinfo=UTC),
+    ):
+        returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
+
+    assert returned.risk_score == 62
+    assert client.messages.calls == 1
 
 
 @pytest.mark.parametrize("attempt_kind", ["risk", "intent"])

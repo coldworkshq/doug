@@ -197,6 +197,234 @@ def test_setup_creates_doug_console_sa_and_binds_only_the_api_token():
     assert "roles/cloudsql.client" not in after
 
 
+def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilities(tmp_path):
+    lines = _run_gcp(
+        tmp_path,
+        "example-pack-setup",
+        {"DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence"},
+    )
+
+    assert any(
+        line.startswith("services enable storage.googleapis.com secretmanager.googleapis.com")
+        for line in lines
+    )
+    assert any(
+        line.startswith("storage buckets create gs://doug-private-evidence")
+        and "--location=us-central1" in line
+        and "--uniform-bucket-level-access" in line
+        and "--public-access-prevention" in line
+        for line in lines
+    )
+    assert any(
+        line.startswith("storage buckets update gs://doug-private-evidence")
+        and "--lifecycle-file=" in line
+        for line in lines
+    )
+    assert any(
+        line.startswith("storage buckets describe gs://doug-private-evidence")
+        and "--raw" in line
+        for line in lines
+    )
+    bucket_bindings = [
+        line
+        for line in lines
+        if line.startswith(
+            "storage buckets add-iam-policy-binding gs://doug-private-evidence"
+        )
+    ]
+    assert bucket_bindings == [
+        "storage buckets add-iam-policy-binding gs://doug-private-evidence "
+        "--project doug-prod0 --member=serviceAccount:"
+        "doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/storage.objectCreator",
+        "storage buckets add-iam-policy-binding gs://doug-private-evidence "
+        "--project doug-prod0 --member=serviceAccount:"
+        "doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/storage.objectViewer",
+    ]
+    assert not any("doug-console-sa" in line for line in bucket_bindings)
+    secret_bindings = [
+        line
+        for line in lines
+        if line.startswith(
+            "secrets add-iam-policy-binding doug-example-pack-token"
+        )
+    ]
+    assert len(secret_bindings) == 2
+    assert any("doug-api-sa@" in line for line in secret_bindings)
+    assert any("doug-console-sa@" in line for line in secret_bindings)
+    assert '"matchesPrefix":["cohorts/"]' in GCP
+
+
+def test_example_pack_setup_rejects_an_existing_bucket_with_unsafe_posture(tmp_path):
+    result, lines = _invoke_gcp(
+        tmp_path,
+        "example-pack-setup",
+        {
+            "DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence",
+            "GCLOUD_UNSAFE_EXAMPLE_PACK_BUCKET": "1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert any(
+        line.startswith("storage buckets describe gs://doug-private-evidence")
+        for line in lines
+    )
+    assert not any("storage buckets add-iam-policy-binding" in line for line in lines)
+
+
+def _clean_source_repo(tmp_path: Path) -> tuple[Path, str]:
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    (source / "receipt.txt").write_text("clean\n")
+    subprocess.run(["git", "add", "receipt.txt"], cwd=source, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Doug Test",
+            "-c",
+            "user.email=doug@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "clean source",
+        ],
+        cwd=source,
+        check=True,
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return source, revision
+
+
+def _example_pack_enable_env(source: Path, revision: str) -> dict[str, str]:
+    return {
+        "DOUG_EXAMPLE_PACK_SOURCE_ROOT": str(source),
+        "DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence",
+        "DOUG_EXAMPLE_PACK_COHORT": "doug-dogfood-2026-08",
+        "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT": "2026-08-10T18:00:00Z",
+        "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL": "2026-08-17T18:00:00Z",
+        "DOUG_EXAMPLE_PACK_INSTALLATION_IDS": "150424894",
+        "DOUG_EXAMPLE_PACK_REPOSITORY_IDS": "987654321",
+        "DOUG_EXAMPLE_PACK_ADJUDICATOR": "andrew",
+        "DOUG_APPLICATION_REVISION": revision,
+    }
+
+
+def test_example_pack_enable_updates_only_api_capture_and_both_purpose_secrets(tmp_path):
+    source, revision = _clean_source_repo(tmp_path)
+    lines = _run_gcp(
+        tmp_path,
+        "example-pack-enable",
+        {
+            "DOUG_EXAMPLE_PACK_SOURCE_ROOT": str(source),
+            "DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence",
+            "DOUG_EXAMPLE_PACK_COHORT": "doug-dogfood-2026-08",
+            "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT": "2026-08-10T18:00:00Z",
+            "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL": "2026-08-17T18:00:00Z",
+            "DOUG_EXAMPLE_PACK_INSTALLATION_IDS": "150424894",
+            "DOUG_EXAMPLE_PACK_REPOSITORY_IDS": "987654321",
+            "DOUG_EXAMPLE_PACK_ADJUDICATOR": "andrew",
+            "DOUG_APPLICATION_REVISION": revision,
+        },
+    )
+
+    updates = [line for line in lines if line.startswith("run services update")]
+    assert len(updates) == 2
+    [api_update] = [line for line in updates if line.startswith("run services update doug-api")]
+    [console_update] = [
+        line for line in updates if line.startswith("run services update doug-console")
+    ]
+    assert "DOUG_EXAMPLE_PACK_CAPTURE=1" in api_update
+    assert "DOUG_EXAMPLE_PACK_BUCKET=doug-private-evidence" in api_update
+    assert f"DOUG_APPLICATION_REVISION={revision}" in api_update
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in api_update
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in console_update
+    assert "DOUG_EXAMPLE_PACK_CAPTURE" not in console_update
+
+
+def test_example_pack_enable_fails_before_cloud_mutation_when_contract_is_incomplete(tmp_path):
+    result, lines = _invoke_gcp(
+        tmp_path,
+        "example-pack-enable",
+        {"DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence"},
+    )
+
+    assert result.returncode != 0
+    assert not [line for line in lines if line.startswith("run services update")]
+
+
+def test_example_pack_enable_rejects_runtime_invalid_identity_before_cloud_mutation(
+    tmp_path,
+):
+    source, revision = _clean_source_repo(tmp_path)
+    invalid_values = (
+        ("DOUG_EXAMPLE_PACK_COHORT", "Doug.Dogfood"),
+        ("DOUG_EXAMPLE_PACK_COHORT", "a" * 64),
+        ("DOUG_EXAMPLE_PACK_INSTALLATION_IDS", "0"),
+        ("DOUG_EXAMPLE_PACK_REPOSITORY_IDS", "987654321,987654321"),
+    )
+
+    for index, (name, value) in enumerate(invalid_values):
+        case_root = tmp_path / f"invalid-{index}"
+        case_root.mkdir()
+        env = _example_pack_enable_env(source, revision)
+        env[name] = value
+        result, lines = _invoke_gcp(case_root, "example-pack-enable", env)
+
+        assert result.returncode != 0, f"{name}={value!r} was accepted"
+        assert lines == []
+
+
+def test_api_deploy_preserves_closed_cohort_reads_without_reenabling_capture(tmp_path):
+    lines = _run_gcp(
+        tmp_path,
+        "deploy",
+        {"GCLOUD_EXAMPLE_PACK_CONFIG": "1"},
+    )
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+
+    assert "DOUG_EXAMPLE_PACK_BUCKET=doug-private-evidence" in api_deploy
+    assert "DOUG_EXAMPLE_PACK_COHORT=doug-dogfood-2026-08" in api_deploy
+    assert "DOUG_EXAMPLE_PACK_ADJUDICATOR=andrew" in api_deploy
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in api_deploy
+    assert "DOUG_EXAMPLE_PACK_CAPTURE" not in api_deploy
+
+
+def test_console_deploy_preserves_existing_example_pack_purpose_token(tmp_path):
+    lines = _run_gcp(
+        tmp_path,
+        "console",
+        {"GCLOUD_EXAMPLE_PACK_CONFIG": "1"},
+    )
+    [console_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-console")
+    ]
+
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in console_deploy
+    assert "DOUG_EXAMPLE_PACK_BUCKET" not in console_deploy
+    assert "DOUG_EXAMPLE_PACK_CAPTURE" not in console_deploy
+
+
+def test_example_pack_disable_changes_only_the_capture_flag(tmp_path):
+    lines = _run_gcp(tmp_path, "example-pack-disable")
+    updates = [line for line in lines if line.startswith("run services update")]
+    assert updates == [
+        "run services update doug-api --project doug-prod0 --region us-central1 "
+        "--update-env-vars DOUG_EXAMPLE_PACK_CAPTURE=0"
+    ]
+
+
 def test_web_deploy_is_still_the_only_public_service():
     """Guard against the console being folded back into web()."""
     assert "--allow-unauthenticated" in _function_body("web")
@@ -270,6 +498,7 @@ printf '%s\\n' "$*" >> "$GCLOUD_LOG"
 printf '%s\\n' "$PWD" >> "$GCLOUD_CWD_LOG"
 previous=
 format=
+raw=0
 for argument in "$@"; do
   if [ "$previous" = "--args" ] && [ "${argument#-}" != "$argument" ]; then
     printf '%s\\n' 'ERROR: argument --args: expected one argument' >&2
@@ -277,14 +506,41 @@ for argument in "$@"; do
   fi
   case "$argument" in
     --format=*) format=${argument#--format=} ;;
+    --raw) raw=1 ;;
   esac
   previous=$argument
 done
+if [ "$1 $2 $3" = "storage buckets create" ] \\
+    && [ "${GCLOUD_UNSAFE_EXAMPLE_PACK_BUCKET:-}" = "1" ]; then
+  exit 1
+fi
+if [ "$1 $2 $3" = "storage buckets describe" ]; then
+  if [ "$raw" != "1" ]; then
+    printf '%s%s\\n' '{"location":"us-central1","storage_class":"STANDARD",' \\
+      '"public_access_prevention":"enforced","uniform_bucket_level_access":true}'
+    exit 0
+  fi
+  if [ "${GCLOUD_UNSAFE_EXAMPLE_PACK_BUCKET:-}" = "1" ]; then
+    printf '%s%s%s\\n' '{"location":"EUROPE-WEST1","storageClass":"NEARLINE",' \\
+      '"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},' \\
+      '"publicAccessPrevention":"inherited"}}'
+  else
+    printf '%s%s%s\\n' '{"location":"US-CENTRAL1","storageClass":"STANDARD",' \\
+      '"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},' \\
+      '"publicAccessPrevention":"enforced"}}'
+  fi
+  exit 0
+fi
 if [ "$1 $2 $3 $4" = "run services describe doug-api" ] \
-    || [ "$1 $2 $3 $4" = "run services describe doug-web" ]; then
+    || [ "$1 $2 $3 $4" = "run services describe doug-web" ] \\
+    || [ "$1 $2 $3 $4" = "run services describe doug-console" ]; then
   case "$format" in
     json)
-      printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]}}'
+      if [ "${GCLOUD_EXAMPLE_PACK_CONFIG:-}" = "1" ]; then
+        printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"DOUG_EXAMPLE_PACK_CAPTURE","value":"1"},{"name":"DOUG_EXAMPLE_PACK_BUCKET","value":"doug-private-evidence"},{"name":"DOUG_EXAMPLE_PACK_COHORT","value":"doug-dogfood-2026-08"},{"name":"DOUG_EXAMPLE_PACK_ADJUDICATOR","value":"andrew"},{"name":"DOUG_EXAMPLE_PACK_TOKEN","valueFrom":{"secretKeyRef":{"name":"doug-example-pack-token","key":"latest"}}}]}]}}}}'
+      else
+        printf '%s\\n' '{"status":{"traffic":[{"tag":"candidate","url":"https://candidate.invalid"}]}}'
+      fi
       ;;
     'value(spec.template.spec.containers[0].image)')
       printf '%s\\n' 'us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/doug-api@sha256:abc123'

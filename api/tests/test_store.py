@@ -1,6 +1,8 @@
 import datetime as _dt
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,6 +60,111 @@ def _utc(dt: datetime) -> datetime:
     """sqlite hands a DateTime(timezone=True) column back naive; Postgres
     hands it back aware. The stored instant is UTC either way."""
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def test_example_pack_completed_jobs_use_terminal_start_and_membership_not_mutable_enqueue(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    engine = store._get_engine()
+    started = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            store.review_jobs.insert(),
+            [
+                {
+                    "id": 901,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 1,
+                    "base_sha": "a" * 40,
+                    "head_sha": "b" * 40,
+                    "status": "done",
+                    "attempts": 2,
+                    "claim_generation": 3,
+                    "enqueued_at": started + timedelta(days=30),
+                    "started_at": started,
+                    "finished_at": started + timedelta(minutes=1),
+                    "verdict_id": 1001,
+                },
+                {
+                    "id": 902,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 2,
+                    "base_sha": "c" * 40,
+                    "head_sha": "d" * 40,
+                    "status": "done",
+                    "attempts": 3,
+                    "claim_generation": 4,
+                    "enqueued_at": started + timedelta(days=2),
+                    "started_at": started + timedelta(days=2),
+                    "finished_at": started + timedelta(days=2, minutes=1),
+                    "verdict_id": 1002,
+                },
+                {
+                    "id": 903,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 3,
+                    "base_sha": "e" * 40,
+                    "head_sha": "f" * 40,
+                    "status": "done",
+                    "attempts": 1,
+                    "claim_generation": 1,
+                    "enqueued_at": started,
+                    "started_at": started + timedelta(days=2),
+                    "finished_at": started + timedelta(days=2, minutes=1),
+                    "verdict_id": 1003,
+                },
+            ],
+        )
+
+    rows = store.completed_example_pack_jobs(
+        installation_ids=(10,),
+        github_repository_ids=(20,),
+        capture_started_at=started - timedelta(hours=1),
+        capture_until=started + timedelta(hours=1),
+        membership_job_ids=(902,),
+    )
+
+    assert [row["id"] for row in rows] == [901, 902]
+    assert _utc(rows[0]["enqueued_at"]) == started + timedelta(days=30)
+
+
+def test_example_pack_adjudication_lock_serializes_one_finding_on_sqlite(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    first_entered = Event()
+    release_first = Event()
+    second_started = Event()
+    second_entered = Event()
+
+    def first():
+        with store.example_pack_adjudication_lock("c1", "a" * 64, "b" * 64):
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+
+    def second():
+        assert first_entered.wait(timeout=2)
+        second_started.set()
+        with store.example_pack_adjudication_lock("c1", "a" * 64, "b" * 64):
+            second_entered.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(first)
+        second_future = pool.submit(second)
+        assert second_started.wait(timeout=2)
+        assert not second_entered.is_set()
+        release_first.set()
+        first_future.result(timeout=2)
+        second_future.result(timeout=2)
+
+    assert second_entered.is_set()
 
 
 def test_disabled_without_database_url(monkeypatch):

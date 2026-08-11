@@ -138,6 +138,7 @@ class CaptureScopeV0(FrozenModel):
     """Task-local worker facts needed to build packs and instruments."""
 
     run_id_prefix: str = Field(min_length=1)
+    review_job_id: int | None = Field(default=None, gt=0)
     scope: PackScopeV0
     read_order: str = Field(min_length=1)
     input_policy_version: str = Field(min_length=1)
@@ -391,9 +392,9 @@ class StoreValidationV0(FrozenModel):
 class ExamplePackStore(Protocol):
     def put_blob(self, data: bytes, *, media_type: str) -> ContentRefV0: ...
 
-    def put_pack(self, pack: ExamplePackV0) -> Path: ...
+    def put_pack(self, pack: ExamplePackV0) -> Path | str: ...
 
-    def put_adjudication(self, adjudication: ExampleAdjudicationV0) -> Path: ...
+    def put_adjudication(self, adjudication: ExampleAdjudicationV0) -> Path | str: ...
 
     def validate(self) -> StoreValidationV0: ...
 

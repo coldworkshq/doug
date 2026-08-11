@@ -10,18 +10,20 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import resources
+from typing import Literal
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from githubkit.webhooks import verify as verify_webhook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import (
     __version__,
     app_auth,
     entitlements,
+    example_pack_service,
     ingest,
     install_flow,
     outcome_queue,
@@ -33,6 +35,10 @@ from . import (
     worker,
     workos_client,
 )
+from .example_pack import EvidenceReceiptV0, VerifierReceiptV0
+from .example_pack_capture import CaptureConfigurationError
+from .example_pack_gcs import GcsObjectStore, ObjectStoreError, StorageBudget
+from .example_pack_hosted import CohortTooLarge
 from .models import (
     Band,
     HealthResponse,
@@ -304,6 +310,139 @@ def _operator_only(x_doug_token: str) -> None:
     except tenancy.KeysNotConfigured as e:
         raise HTTPException(status_code=503, detail="token verification not configured") from e
     raise HTTPException(status_code=401, detail="bad token")
+
+
+def _example_pack_only(x_doug_example_pack_token: str) -> None:
+    expected = os.environ.get("DOUG_EXAMPLE_PACK_TOKEN")
+    if not expected:
+        raise HTTPException(
+            status_code=503, detail="DOUG_EXAMPLE_PACK_TOKEN not configured"
+        )
+    if not hmac.compare_digest(x_doug_example_pack_token, expected):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _example_pack_service() -> example_pack_service.ExamplePackService:
+    bucket = os.environ.get("DOUG_EXAMPLE_PACK_BUCKET")
+    cohort_id = os.environ.get("DOUG_EXAMPLE_PACK_COHORT")
+    if not bucket or not cohort_id:
+        raise CaptureConfigurationError("hosted Example Pack reads are not configured")
+    try:
+        objects = GcsObjectStore(
+            bucket,
+            budget=StorageBudget(seconds=8.0),
+        )
+    except ObjectStoreError:
+        raise
+    except Exception as exc:
+        raise ObjectStoreError(
+            f"object storage failed: {type(exc).__name__}"
+        ) from None
+    return example_pack_service.ExamplePackService(objects, cohort_ids=(cohort_id,))
+
+
+def _example_pack_call(action):
+    try:
+        return action()
+    except (example_pack_service.UnknownCohortError, example_pack_service.UnknownPackError,
+            example_pack_service.UnknownFindingError) as exc:
+        raise HTTPException(status_code=404, detail="not found") from exc
+    except CohortTooLarge as exc:
+        raise HTTPException(status_code=413, detail="cohort exceeds pack limit") from exc
+    except example_pack_service.StaleAdjudicationError as exc:
+        raise HTTPException(status_code=409, detail="stale adjudication") from exc
+    except example_pack_service.AdjudicationContractError as exc:
+        raise HTTPException(status_code=422, detail="adjudication requires receipt") from exc
+    except (CaptureConfigurationError, ObjectStoreError, store.ExamplePackLockUnavailable) as exc:
+        raise HTTPException(status_code=503, detail="Example Pack service unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="cohort evidence is invalid") from exc
+
+
+class ExamplePackAdjudicationRequest(BaseModel):
+    disposition: Literal[
+        "disproved",
+        "verified_actionable",
+        "verified_accepted_nonactionable",
+        "unknown",
+    ]
+    evidence: tuple[EvidenceReceiptV0, ...] = ()
+    verifier_receipts: tuple[VerifierReceiptV0, ...] = ()
+    expected_current_adjudication_id: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+@app.get("/v1/example-pack-cohorts")
+def example_pack_cohorts(
+    x_doug_example_pack_token: str = Header(""),
+):
+    _example_pack_only(x_doug_example_pack_token)
+    return _example_pack_call(lambda: _example_pack_service().list_cohorts())
+
+
+@app.get("/v1/example-pack-cohorts/{cohort_id}")
+def example_pack_cohort(
+    cohort_id: str,
+    x_doug_example_pack_token: str = Header(""),
+):
+    _example_pack_only(x_doug_example_pack_token)
+    return _example_pack_call(
+        lambda: _example_pack_service().cohort_detail(cohort_id)
+    )
+
+
+@app.get("/v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}")
+def example_pack_detail(
+    cohort_id: str,
+    pack_hash: str,
+    x_doug_example_pack_token: str = Header(""),
+):
+    _example_pack_only(x_doug_example_pack_token)
+    return _example_pack_call(
+        lambda: _example_pack_service().pack_detail(cohort_id, pack_hash)
+    )
+
+
+@app.get("/v1/example-pack-cohorts/{cohort_id}/results")
+def example_pack_results(
+    cohort_id: str,
+    x_doug_example_pack_token: str = Header(""),
+):
+    _example_pack_only(x_doug_example_pack_token)
+    return _example_pack_call(lambda: _example_pack_service().results(cohort_id))
+
+
+@app.post(
+    "/v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}/"
+    "findings/{finding_id}/adjudications"
+)
+def example_pack_adjudicate(
+    cohort_id: str,
+    pack_hash: str,
+    finding_id: str,
+    body: ExamplePackAdjudicationRequest,
+    x_doug_example_pack_token: str = Header(""),
+):
+    _example_pack_only(x_doug_example_pack_token)
+    adjudicator = os.environ.get("DOUG_EXAMPLE_PACK_ADJUDICATOR")
+    if not adjudicator:
+        raise HTTPException(
+            status_code=503,
+            detail="DOUG_EXAMPLE_PACK_ADJUDICATOR not configured",
+        )
+    return _example_pack_call(
+        lambda: _example_pack_service().adjudicate(
+            cohort_id,
+            pack_hash,
+            finding_id,
+            disposition=body.disposition,
+            evidence=body.evidence,
+            verifier_receipts=body.verifier_receipts,
+            expected_current_adjudication_id=body.expected_current_adjudication_id,
+            adjudicator=adjudicator,
+        )
+    )
 
 
 def _rows_to_items(rows: list[dict]) -> list[QueueItem]:
