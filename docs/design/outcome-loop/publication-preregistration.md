@@ -1,11 +1,11 @@
 # Publication pre-registration — the outcome loop
 
-**Status:** LOCKED v8 — 2026-08-07
+**Status:** LOCKED v9 — 2026-08-11
 **Roadmap:** M3 item 7 · **Mitigation:** design-lock altitude O3 (`design-lock.md:61`)
 **Companion:** `60-day-backfill-runbook.md` — the production catch-up is a hard
 operational gate before the first 14-day publication (`design-lock.md:47`). The
 runbook and this lock are built on `m3-60-day-backfill`; neither the catch-up nor
-the v8 hash deployment has occurred in production.
+the v9 hash deployment has occurred in production.
 
 **Changelog.** v1 failed review: the miss rate was not computable, the censoring
 arithmetic ran opposite to its own stated direction, "within the window" had no
@@ -27,7 +27,18 @@ two-sided decidability rule, the cadence, and the attempts ceiling. **v8 changes
 the mechanism, not the published metric:** future merges permanently receive the
 14- and 60-day rows in one atomic write, and one guarded historical
 `INSERT ... SELECT` fills only missing 60-day siblings. The metric, windows,
-censoring, cadence, and denominator are unchanged.
+censoring, cadence, and denominator are unchanged. **v9 adds one disclosure** —
+§2.7's `remediated_clears` and `remediated_revert_count`, published beside the
+cleared rate as §3 requires. Nothing is removed, no denominator moves, and
+§2.1's governing rule is untouched: the cleared band still contains exactly
+what it contained under v8, now with a count of how much of it was repaired
+after a flag. §12's free list is cadence-only and does not cover a disclosure
+addition, so this is not claimed as free; it is permitted by §12's general
+rule that *amendments are permitted; silent ones are not*, and it is
+unbounded because §12 restricts only the shrinking direction — this direction
+adds disclosure and can only widen what a reader sees. Zero adjudicated rows
+existed when v9 was locked, so no published row was ever governed by v8 and
+no two-hash publication is created by this amendment.
 
 ---
 
@@ -304,6 +315,23 @@ rather than sell it.
 | Non-merged PRs | none needed — `_record_merge` returns before writing (`api.py:1041-1045`) | Structural. |
 | 90-day replay | **⚠ UNRESOLVED** | `outcome_jobs` has **no `source` column**. v1 specified `source='replay'`; it is unexecutable. The replay path does not appear to write `outcome_jobs` today. M4 must keep it that way and say so in code, or add a discriminator. §11. |
 
+### 2.7 Remediated clears
+
+A governing-cleared PR (§2.1) is a **remediated clear** when any earlier
+verdict on the same identity `(installation_id, github_repo_id, pr_number)`
+with `tier = 'reader'` and `scored_at <= merged_at` has `band = 'flagged'`.
+§2.1's governing rule is unchanged — the PR stays in the cleared band and in
+`N_at_risk` — but its count publishes beside the rate as `remediated_clears`,
+with `remediated_revert_count`: a disclosure, never a comparator, exactly as
+§2.4 treats `unverdicted_merges`. The cleared band otherwise pools two
+populations — never-flagged PRs and flagged-then-repaired ones — with
+different expected revert rates, and a pooled rate with no bucket lets
+remediation quietly reshape the published population. Not hypothetical:
+PR #49 on `drewjst/doug` (reviewed twice, five findings, all fixed, merged
+cleared) is already in the band §1 commits to publishing. The rows needed
+are already retained — verdicts are append-only and carry `band` and
+`scored_at` — so this is a publication-time query, not a schema change.
+
 ---
 
 ## 3. The published metric
@@ -344,6 +372,8 @@ Published together, never separately:
 | `censoring_rate` | §3 |
 | `unverdicted_merges` | §2.4, **by bucket** |
 | `unverdicted_revert_count` | §2.4, by bucket — a disclosure, never a comparator |
+| `remediated_clears` | §2.7 — count of governing-cleared PRs with an earlier flagged reader verdict |
+| `remediated_revert_count` | §2.7 — their reverts; a disclosure, never a comparator |
 | `partial_read_share` | §5 |
 | `pending` / `failed` | §6.2's second table — job states, not dispositions |
 | label-noise estimates | §9, **both directions** |
@@ -817,7 +847,7 @@ not run on this implementation branch. A carried product requirement, from rulin
      `claim_generation`, making a crashed Job reclaimable without letting a stale
      holder publish over a newer claim.
 10. **`prereg_hash` stored per adjudicated row** in `outcomes.detail` (§12). The
-    deploy guard for this v8 lock is built on `m3-60-day-backfill`; its hash is not
+    deploy guard for this v9 lock is built on `m3-60-day-backfill`; its hash is not
     live until the Task 7 deploy.
 
 **Required of `adjudicate.py`:** exactly one classification row per job (§2.3);
