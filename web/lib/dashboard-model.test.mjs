@@ -10,7 +10,7 @@ const rows = [
     repo: "acme/one",
     band: "flagged",
     tier: "reader",
-    coverage: { diff_chars: 100, sent_chars: 49, files_sent: 2, files_unseen: ["b"], file_cut: "b" },
+    coverage: { diff_chars: 100, sent_chars: 49, files_sent: 1, files_unseen: ["b"], file_cut: "b" },
     changed_files: 4,
     job: { error: null },
   },
@@ -47,24 +47,40 @@ test("URL filters compose over already scoped rows without inventing a tenant se
 
 test("coverage percentage and file ruler use only real denominators", async () => {
   const { coverageView } = await import("./dashboard-model.ts?coverage");
+  // The denominator is GitHub's changed_files (1 of 4 = 25%), never the chars
+  // ratio (49 of 100) the dashboard used to print while the console printed
+  // files — the divergence this view exists to end.
   assert.deepEqual(coverageView(rows[0]), {
-    percent: 49,
+    percent: 25,
+    kind: "known",
+    label: "25%",
     chars: "49 of 100 chars",
-    files: "2 of 4 files",
+    files: "1 of 4 files",
     unseen: ["b"],
     fileCut: "b",
   });
   assert.deepEqual(coverageView(rows[1]), {
     percent: null,
+    kind: "no-read",
+    label: "—",
     chars: null,
     files: null,
     unseen: [],
     fileCut: null,
   });
-  assert.equal(
-    coverageView({ ...rows[0], coverage: { ...rows[0].coverage, diff_chars: 0 } }).percent,
-    null,
-  );
+  // A missing denominator is "unknown", never a fabricated 100% or 0%.
+  const unknown = coverageView({ ...rows[0], changed_files: null });
+  assert.equal(unknown.percent, null);
+  assert.equal(unknown.kind, "unknown-denominator");
+  assert.equal(unknown.label, "—");
+});
+
+test("capSuffix marks a full page as a cap, never as a total", async () => {
+  const { capSuffix } = await import("./dashboard-model.ts?cap-suffix");
+  assert.equal(capSuffix(500, 500), " · latest 500");
+  assert.equal(capSuffix(501, 500), " · latest 500");
+  assert.equal(capSuffix(499, 500), "");
+  assert.equal(capSuffix(0, 500), "");
 });
 
 test("selectors preserve installation boundaries and the exact Lema marker", async () => {
@@ -109,12 +125,21 @@ test("selectors preserve installation boundaries and the exact Lema marker", asy
 
 test("outcome tone follows the recorded result instead of treating every outcome as clear", async () => {
   const { outcomeTone } = await import("./dashboard-model.ts?outcome-tone");
+  // The production vocabulary is exactly revert | clean | censored
+  // (api/doug/adjudicate.py's OutcomeKind); the column also permits hotfix,
+  // which the adjudicator deliberately never writes.
   assert.equal(outcomeTone("clean"), "clear");
-  assert.equal(outcomeTone("clear"), "clear");
   assert.equal(outcomeTone("revert"), "flag");
   assert.equal(outcomeTone("hotfix"), "flag");
-  assert.equal(outcomeTone("scheduled"), "neutral");
-  assert.equal(outcomeTone("unknown-future-kind"), "neutral");
+  // Censored = the PR left the risk set unobserved (merged off the default
+  // branch, or no clone reachable). Blindness is not a miss, so it never
+  // takes the flag colour reserved for real ones.
+  assert.equal(outcomeTone("censored"), "neutral");
+  // An unrecognised kind flags. Silently neutralising it is how a genuinely
+  // bad new outcome would arrive on the dashboard looking like nothing.
+  assert.equal(outcomeTone("graded-miss"), "flag");
+  assert.equal(outcomeTone("unknown-future-kind"), "flag");
+  // No outcome recorded yet is the one honest neutral.
   assert.equal(outcomeTone(null), "neutral");
 });
 

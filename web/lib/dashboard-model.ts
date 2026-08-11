@@ -1,3 +1,5 @@
+import { coverageLabel, coveragePercent } from "./coverage";
+
 type FilterableRun = {
   verdict_id: number;
   repo: string;
@@ -42,19 +44,27 @@ export function dashboardFilters(values: SearchValues): DashboardFilters {
 
 export function coverageView(run: Pick<FilterableRun, "coverage" | "changed_files">) {
   const read = run.coverage;
+  const result = coveragePercent(read, run.changed_files);
+  const percent = result.kind === "known" ? result.pct : null;
+  const label = coverageLabel(result);
   if (!read) {
-    return { percent: null, chars: null, files: null, unseen: [], fileCut: null };
+    return { percent, kind: result.kind, label, chars: null, files: null, unseen: [], fileCut: null };
   }
-  const percent = read.diff_chars > 0
-    ? Math.max(0, Math.min(100, Math.round((read.sent_chars / read.diff_chars) * 100)))
-    : null;
   return {
     percent,
+    kind: result.kind,
+    label,
     chars: `${read.sent_chars.toLocaleString("en-US")} of ${read.diff_chars.toLocaleString("en-US")} chars`,
     files: run.changed_files === null ? null : `${read.files_sent} of ${run.changed_files} files`,
     unseen: read.files_unseen,
     fileCut: read.file_cut,
   };
+}
+
+/** Suffix for the run-count line: at the fetch cap, say so — a capped page
+ *  presented as a total is the lie the console's CountLine exists to refuse. */
+export function capSuffix(fetched: number, limit: number): string {
+  return fetched >= limit ? ` · latest ${limit}` : "";
 }
 
 export function filterRuns<T extends FilterableRun>(
@@ -66,8 +76,8 @@ export function filterRuns<T extends FilterableRun>(
     if (filters.band !== "all" && row.band !== filters.band) return false;
     if (filters.tier !== "all" && row.tier !== filters.tier) return false;
     if (filters.lowCoverage) {
-      const percent = coverageView(row).percent;
-      if (percent === null || percent >= 50) return false;
+      const result = coveragePercent(row.coverage, row.changed_files);
+      if (!(result.kind === "known" && result.low)) return false;
     }
     if (filters.hasError && !row.job?.error) return false;
     return true;
@@ -106,10 +116,25 @@ export function repositoryOptions(connection: ConnectionLike) {
 
 export type OutcomeTone = "clear" | "flag" | "neutral";
 
+/** One tone rule over the vocabulary the adjudicator actually writes —
+ *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The
+ *  column also permits `hotfix`, which the adjudicator never writes because
+ *  §10 of docs/design/outcome-loop/publication-preregistration.md rules that a
+ *  hotfix is not a miss and that no detector here can tell one repairing this
+ *  PR from one merely following it; it still flags if a row ever carries it.
+ *
+ *  `censored` is neutral, not flagged: it records that the PR left the risk
+ *  set UNOBSERVED — the merge landed off the branch the treeless clone can
+ *  see, or no clone was reachable at all. Painting a non-observation in the
+ *  miss colour is the honesty failure this rule exists to refuse.
+ *
+ *  Everything else flags, including kinds this build has never heard of: an
+ *  allowlist here is what let a genuinely bad outcome arrive looking neutral. */
 export function outcomeTone(kind: string | null): OutcomeTone {
-  if (kind === "clean" || kind === "clear") return "clear";
-  if (kind === "revert" || kind === "hotfix") return "flag";
-  return "neutral";
+  if (kind === null) return "neutral";
+  if (kind === "clean") return "clear";
+  if (kind === "censored") return "neutral";
+  return "flag";
 }
 
 type SetupConnectionLike = {

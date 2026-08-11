@@ -171,6 +171,86 @@ test("run list rejects a malformed nested job before the page dereferences it", 
   }
 });
 
+// Every field of api/doug/models.py's PRMetadata, in that model's order. The
+// API always serializes the whole model (api.py's _with_url returns PRMetadata,
+// so pydantic fills the defaults), which is what lets the validator be exact.
+const validPr = {
+  number: 7,
+  title: "Fix cache",
+  author: "octocat",
+  author_type: "human",
+  additions: 12,
+  deletions: 3,
+  files: ["src/cache.ts"],
+  approvals: 1,
+  approval_latency_s: 3600,
+  days_since_last_human_commit: 2,
+  files_added: 1,
+  files_modified: 0,
+  url: "https://github.com/acme/one/pull/7",
+  head_sha: "abc123",
+  changed_files: 4,
+  files_dropped: ["vendor/blob.bin"],
+};
+
+function detailBody(pr) {
+  return {
+    verdict_id: 1, repo: "acme/one", pr_number: 7, installation_id: 101,
+    github_repo_id: 11, pr, scored_at: "2026-08-10T10:00:00Z", tier: "reader",
+    prompt_hash: null, model: null, source: "app", head_sha: null, risk_score: null,
+    rationale: null, score: 0.2, band: "cleared", threshold: 0.62, coverage: null,
+    reasons: [], deviations: [], intent_alignment: null, intent_refs: [], job: null,
+    outcomes: [], outcome_jobs: [],
+  };
+}
+
+test("run detail validates PR metadata field-for-field against the API model", async () => {
+  const oldFetch = globalThis.fetch;
+  try {
+    const { getSessionRun, SessionApiError } = await import("./session-api.ts?pr-metadata");
+
+    globalThis.fetch = async () => new Response(JSON.stringify(detailBody(validPr)));
+    assert.deepEqual((await getSessionRun("secret", 1)).pr, validPr);
+
+    globalThis.fetch = async () => new Response(JSON.stringify(detailBody(null)));
+    assert.equal((await getSessionRun("secret", 1)).pr, null);
+
+    // An unexpected key is the deploy-order signal web must not render past.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(detailBody({ ...validPr, merged_by: "octocat" })));
+    await assert.rejects(getSessionRun("secret", 1), SessionApiError);
+
+    for (const missing of ["author", "head_sha", "files_dropped", "changed_files"]) {
+      const partial = { ...validPr };
+      delete partial[missing];
+      globalThis.fetch = async () => new Response(JSON.stringify(detailBody(partial)));
+      await assert.rejects(getSessionRun("secret", 1), SessionApiError);
+    }
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+test("getSessionRuns requests an explicit limit and offset", async () => {
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ items: [], limit: 500, offset: 0 }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const { getSessionRuns } = await import("./session-api.ts?run-limit");
+    await getSessionRuns("token");
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /\/v1\/sessions\/runs\?repo=all&limit=500&offset=0$/);
+});
+
 test("run detail rejects malformed rendered findings", async () => {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({

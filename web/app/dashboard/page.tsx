@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { signOutAction } from "@/app/auth/actions";
 import { DougLogo } from "@/components/doug-logo";
 import {
+  capSuffix,
   coverageView,
   dashboardFilters,
   filterRuns,
@@ -136,13 +137,13 @@ function FilterChip({
 
 function CoverageCell({ run }: { run: RunSummary }) {
   const view = coverageView(run);
-  if (view.percent === null) return <span className={styles.muted}>no read</span>;
+  if (view.kind === "no-read") return <span className={styles.muted}>no read</span>;
   return (
     <div className={styles.coverageCell} title={view.chars ?? undefined}>
       <span className={styles.miniRuler}>
-        <span style={{ width: `${view.percent}%` }} />
+        <span style={{ width: `${view.percent ?? 0}%` }} />
       </span>
-      <span>{view.percent}%</span>
+      <span>{view.label}</span>
     </div>
   );
 }
@@ -227,11 +228,11 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             {detail.coverage ? (
               <div className={styles.rulerPanel}>
                 <div className={styles.rulerTop}>
-                  <strong>{view.percent === null ? "—" : `${view.percent}%`}</strong>
+                  <strong>{view.label}</strong>
                   <span>{[view.files, view.chars].filter(Boolean).join(" · ")}</span>
                   {view.fileCut && <span>cut at <code>{view.fileCut}</code></span>}
                 </div>
-                <div className={styles.coverageRuler} aria-label={view.percent === null ? "coverage unknown" : `${view.percent}% of diff sent`}>
+                <div className={styles.coverageRuler} aria-label={view.percent === null ? "coverage unknown" : `${view.label} of changed files read`}>
                   {view.percent !== null && <span style={{ width: `${view.percent}%` }} />}
                   {view.percent !== null && <i style={{ left: `${view.percent}%` }} />}
                 </div>
@@ -329,12 +330,14 @@ export default async function DashboardPage({
   const userLabel = user.firstName || user.email || "You";
 
   let rows: RunSummary[] = [];
+  let capNote = "";
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
   const filters = dashboardFilters(params);
   if (current) {
     const response = await getSessionRuns(accessToken, filters.repo);
     rows = filterRuns(response.items, filters);
+    capNote = capSuffix(response.items.length, response.limit);
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
       ? response.items.find((run) => run.verdict_id === selectedId) ?? null
@@ -390,7 +393,7 @@ export default async function DashboardPage({
               <FilterChip active={filters.tier === "deterministic"} target={href(params, { tier: filters.tier === "deterministic" ? null : "deterministic" })}>deterministic</FilterChip>
               <FilterChip active={filters.lowCoverage} target={href(params, { coverage: filters.lowCoverage ? null : "low" })}>coverage &lt; 50%</FilterChip>
               <FilterChip active={filters.hasError} target={href(params, { error: filters.hasError ? null : "yes" })}>has error</FilterChip>
-              <span className={styles.count}><b>{rows.length}</b> runs · filters live in the URL</span>
+              <span className={styles.count}><b>{rows.length}</b> runs{capNote} · filters live in the URL</span>
             </div>
             <RunTable rows={rows} params={params} />
           </section>
