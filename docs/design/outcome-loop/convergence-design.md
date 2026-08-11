@@ -61,6 +61,21 @@ in the sample (probe precedent: 276 slugs over 395 findings).
 Not in score() (structural test); no new read; derived at query time — no
 schema change, no migration.
 
+## Per-finding classification (amendment, 2026-08-11 — see the amendment log)
+
+`classify(prior_findings, later_findings, later_reasons, later_read)` returns
+one entry per input row: the row itself, which side it came from, its state
+(`persisted` / `resolved` / `new` / `unknown` / `excluded`), and, for `unknown`,
+the reason. `compare` is defined as the aggregate of exactly this list, so the
+counts a receipt shows and the labels a human grades are the same
+classification, computed once.
+
+Where an identity appears `p` times before and `l` times after with `p > l`, the
+first `l` prior rows in input order are `persisted` and the remainder run rules
+3–5. The choice is arbitrary — the rows are indistinguishable under an identity
+that carries no line number — but it is fixed so the same ledger always yields
+the same labels.
+
 ---
 
 The sections above are the pre-registration. Everything below pins the details
@@ -154,3 +169,20 @@ strings and the label grammar; changing either emitter must break that test.
 
 Phase 1 is $0 — ledger reads only. No paid probe is pre-registered here; one
 would have to be added to this note before it ran.
+
+## Amendment log
+
+**2026-08-11, during Task 3 Step 1 — added `classify`.** The note as first
+written pre-registered bar 1 (`resolved` precision on a hand-labelled sample)
+against an interface that returns counts only. Precision needs to know *which*
+prior findings were called `resolved` so a human can mark each one
+actually-fixed or not; counts cannot be labelled. The bar was therefore
+unmeasurable as pre-registered.
+
+The alternative — the evaluation script re-deriving classifications from these
+rules on its own — was rejected: a second implementation would grade labels the
+shipped classifier never produced, and the bar would then say nothing about what
+a receipt shows. One classification path, two views of it.
+
+No rule, order, identity key, bar, or floor changed. Recorded before the
+implementation, per the pre-registration discipline.
