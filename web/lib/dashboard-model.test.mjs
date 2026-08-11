@@ -67,6 +67,14 @@ test("coverage percentage and file ruler use only real denominators", async () =
   );
 });
 
+test("capSuffix marks a full page as a cap, never as a total", async () => {
+  const { capSuffix } = await import("./dashboard-model.ts?cap-suffix");
+  assert.equal(capSuffix(500, 500), " · latest 500");
+  assert.equal(capSuffix(501, 500), " · latest 500");
+  assert.equal(capSuffix(499, 500), "");
+  assert.equal(capSuffix(0, 500), "");
+});
+
 test("selectors preserve installation boundaries and the exact Lema marker", async () => {
   const { connectionOptions, repositoryOptions } = await import(
     "./dashboard-model.ts?selectors"

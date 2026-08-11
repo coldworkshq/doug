@@ -171,6 +171,26 @@ test("run list rejects a malformed nested job before the page dereferences it", 
   }
 });
 
+test("getSessionRuns requests an explicit limit and offset", async () => {
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ items: [], limit: 500, offset: 0 }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const { getSessionRuns } = await import("./session-api.ts?run-limit");
+    await getSessionRuns("token");
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /\/v1\/sessions\/runs\?repo=all&limit=500&offset=0$/);
+});
+
 test("run detail rejects malformed rendered findings", async () => {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({

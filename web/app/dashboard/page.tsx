@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { signOutAction } from "@/app/auth/actions";
 import { DougLogo } from "@/components/doug-logo";
 import {
+  capSuffix,
   coverageView,
   dashboardFilters,
   filterRuns,
@@ -329,12 +330,14 @@ export default async function DashboardPage({
   const userLabel = user.firstName || user.email || "You";
 
   let rows: RunSummary[] = [];
+  let capNote = "";
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
   const filters = dashboardFilters(params);
   if (current) {
     const response = await getSessionRuns(accessToken, filters.repo);
     rows = filterRuns(response.items, filters);
+    capNote = capSuffix(response.items.length, response.limit);
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
       ? response.items.find((run) => run.verdict_id === selectedId) ?? null
@@ -390,7 +393,7 @@ export default async function DashboardPage({
               <FilterChip active={filters.tier === "deterministic"} target={href(params, { tier: filters.tier === "deterministic" ? null : "deterministic" })}>deterministic</FilterChip>
               <FilterChip active={filters.lowCoverage} target={href(params, { coverage: filters.lowCoverage ? null : "low" })}>coverage &lt; 50%</FilterChip>
               <FilterChip active={filters.hasError} target={href(params, { error: filters.hasError ? null : "yes" })}>has error</FilterChip>
-              <span className={styles.count}><b>{rows.length}</b> runs · filters live in the URL</span>
+              <span className={styles.count}><b>{rows.length}</b> runs{capNote} · filters live in the URL</span>
             </div>
             <RunTable rows={rows} params={params} />
           </section>

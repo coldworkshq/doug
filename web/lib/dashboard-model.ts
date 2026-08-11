@@ -57,6 +57,12 @@ export function coverageView(run: Pick<FilterableRun, "coverage" | "changed_file
   };
 }
 
+/** Suffix for the run-count line: at the fetch cap, say so — a capped page
+ *  presented as a total is the lie the console's CountLine exists to refuse. */
+export function capSuffix(fetched: number, limit: number): string {
+  return fetched >= limit ? ` · latest ${limit}` : "";
+}
+
 export function filterRuns<T extends FilterableRun>(
   rows: T[],
   filters: DashboardFilters,

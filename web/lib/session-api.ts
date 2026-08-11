@@ -310,13 +310,18 @@ export async function bindInstallation(
   }
 }
 
+/** The API's accepted maximum: `/v1/sessions/runs` rejects anything outside
+ *  1..500 with a 422 (api.py). Sending no limit at all takes the route's
+ *  default of 100, which the page then printed as if it were the total. */
+const SESSION_RUNS_LIMIT = 500;
+
 export async function getSessionRuns(
   accessToken: string,
   repo = "all",
 ): Promise<RunListResponse> {
   const message = "Doug could not load the run ledger.";
   const body = await sessionJson(
-    `/v1/sessions/runs?repo=${encodeURIComponent(repo)}`,
+    `/v1/sessions/runs?repo=${encodeURIComponent(repo)}&limit=${SESSION_RUNS_LIMIT}&offset=0`,
     accessToken,
     message,
   );
