@@ -7,14 +7,16 @@ apply the same liveness and repo intersection (tenancy.py's SessionContext
 docstring).
 
 AuthKit access tokens carry no `aud` claim and no GitHub user id (verified
-against a live token, see the Task 4 report), so provenance is pinned with
-the token's issuer and exact `client_id` instead. `org_id` is present only when
-the caller has an organization selected — ABSENT on a normal first sign-in,
-not an edge case — so its absence is read as "no tenant yet", never as
-license to guess one.
+against a live token, see the Task 4 report), so provenance is pinned by the
+signature against Doug's client-scoped JWKS plus the exact `client_id` claim;
+the issuer is additionally required to be a WorkOS AuthKit origin. `org_id`
+is present only when the caller has an organization selected — ABSENT on a
+normal first sign-in, not an edge case — so its absence is read as "no tenant
+yet", never as license to guess one.
 """
 
 import os
+import re
 import sys
 
 import jwt
@@ -25,15 +27,31 @@ from . import entitlements, store, tenancy
 SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read")
 
 # WorkOS documents api.workos.com as the legacy access-token issuer; Doug's
-# earlier live AuthKit receipt used auth.workos.com. Current hosted tokens may
-# instead scope the issuer to the default application. That path is derived
-# from Doug's exact configured client id below, never accepted as a wildcard.
-# Custom AuthKit domains must still be pinned explicitly with WORKOS_ISSUER.
+# earlier live AuthKit receipt used auth.workos.com. Current hosted tokens
+# scope the issuer to an application: the client id in that issuer PATH names
+# the ENVIRONMENT'S DEFAULT APPLICATION — the issuing authority — which is not
+# derivable from Doug's own configuration. PR #85 derived it from
+# WORKOS_CLIENT_ID and production kept rejecting real sessions, because which
+# application a token is FOR is the `client_id` CLAIM, not the issuer suffix.
+# So the hosted application issuer is validated structurally below
+# (_APPLICATION_ISSUER), while the claim that actually pins the application
+# stays an exact match in verify_session_claims. A structural issuer admits
+# nothing by itself: the signature must already verify against Doug's
+# client-scoped JWKS, and the `client_id` claim must equal Doug's exactly.
+# Custom AuthKit domains must still be pinned explicitly with WORKOS_ISSUER,
+# which narrows acceptance to that single origin.
 _DEFAULT_WORKOS_ISSUERS = (
     "https://api.workos.com",
     "https://api.workos.com/",
     "https://auth.workos.com",
     "https://auth.workos.com/",
+)
+
+# Both hosted bases can carry the application path: Doug has live receipts
+# from each base host, so pinning one would just re-run this incident on the
+# other. fullmatch anchors both ends; no \A/\Z needed.
+_APPLICATION_ISSUER = re.compile(
+    r"https://(api|auth)\.workos\.com/user_management/client_[0-9A-Za-z]+/?"
 )
 
 _jwks_client: PyJWKClient | None = None
@@ -54,13 +72,16 @@ def _client_id() -> str:
     return client_id
 
 
-def _issuers() -> tuple[str, ...]:
+def _issuer_allowed(issuer: object) -> bool:
     configured = os.environ.get("WORKOS_ISSUER")
+    if not isinstance(issuer, str):
+        return False
     if configured:
         normalized = configured.rstrip("/")
-        return (normalized, f"{normalized}/")
-    application_issuer = f"https://api.workos.com/user_management/{_client_id()}"
-    return (*_DEFAULT_WORKOS_ISSUERS, application_issuer, f"{application_issuer}/")
+        return issuer in (normalized, f"{normalized}/")
+    if issuer in _DEFAULT_WORKOS_ISSUERS:
+        return True
+    return _APPLICATION_ISSUER.fullmatch(issuer) is not None
 
 
 def _jwks() -> PyJWKClient:
@@ -120,9 +141,14 @@ def verify_session_claims(bearer: str) -> dict | None:
             token,
             signing_key,
             algorithms=["RS256"],
-            issuer=_issuers(),
-            options={"require": ["exp"]},
+            options={"require": ["exp", "iss"]},
         )
+        if not _issuer_allowed(claims.get("iss")):
+            # The offending value goes into the message on purpose. PyJWT's
+            # own InvalidIssuerError says only "Invalid issuer", which left
+            # two production 401 rounds undiagnosable — the log line below
+            # carries this message, and an issuer is a URL, never a secret.
+            raise jwt.InvalidIssuerError(f"untrusted issuer {claims.get('iss')!r}")
         if claims.get("client_id") != client_id:
             raise jwt.InvalidTokenError("unexpected client_id claim")
         return claims
