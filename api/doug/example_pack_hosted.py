@@ -180,6 +180,12 @@ class HostedExamplePackRepository:
         self.objects.create(key, checked.canonical_bytes(), content_type="application/json")
         return key
 
+    def read_blob(self, ref: ContentRefV0) -> bytes:
+        """Read one validated content address without exposing its location."""
+
+        self._validate_ref(ref)
+        return self.objects.read(self._key("blobs", ref.sha256))
+
     def put_membership(
         self, pack: ExamplePackV0, *, review_job_id: int
     ) -> MembershipClaimV0:

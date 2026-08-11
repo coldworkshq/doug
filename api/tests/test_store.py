@@ -60,6 +60,79 @@ def _utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def test_example_pack_completed_jobs_use_terminal_start_and_membership_not_mutable_enqueue(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    engine = store._get_engine()
+    started = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            store.review_jobs.insert(),
+            [
+                {
+                    "id": 901,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 1,
+                    "base_sha": "a" * 40,
+                    "head_sha": "b" * 40,
+                    "status": "done",
+                    "attempts": 2,
+                    "claim_generation": 3,
+                    "enqueued_at": started + timedelta(days=30),
+                    "started_at": started,
+                    "finished_at": started + timedelta(minutes=1),
+                    "verdict_id": 1001,
+                },
+                {
+                    "id": 902,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 2,
+                    "base_sha": "c" * 40,
+                    "head_sha": "d" * 40,
+                    "status": "done",
+                    "attempts": 3,
+                    "claim_generation": 4,
+                    "enqueued_at": started + timedelta(days=2),
+                    "started_at": started + timedelta(days=2),
+                    "finished_at": started + timedelta(days=2, minutes=1),
+                    "verdict_id": 1002,
+                },
+                {
+                    "id": 903,
+                    "installation_id": 10,
+                    "github_repo_id": 20,
+                    "repo_full_name": "owner/repo",
+                    "pr_number": 3,
+                    "base_sha": "e" * 40,
+                    "head_sha": "f" * 40,
+                    "status": "done",
+                    "attempts": 1,
+                    "claim_generation": 1,
+                    "enqueued_at": started,
+                    "started_at": started + timedelta(days=2),
+                    "finished_at": started + timedelta(days=2, minutes=1),
+                    "verdict_id": 1003,
+                },
+            ],
+        )
+
+    rows = store.completed_example_pack_jobs(
+        installation_ids=(10,),
+        github_repository_ids=(20,),
+        capture_started_at=started - timedelta(hours=1),
+        capture_until=started + timedelta(hours=1),
+        membership_job_ids=(902,),
+    )
+
+    assert [row["id"] for row in rows] == [901, 902]
+    assert _utc(rows[0]["enqueued_at"]) == started + timedelta(days=30)
+
+
 def test_disabled_without_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert not store.enabled()
