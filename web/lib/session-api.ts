@@ -52,13 +52,38 @@ export type RunSummary = {
 
 export type RunListResponse = { items: RunSummary[]; limit: number; offset: number };
 
+/** Mirrors api/doug/models.py's PRMetadata field-for-field. The API always
+ *  sends the whole model (api.py's `_with_url` returns a PRMetadata, so
+ *  pydantic fills every default), which is what lets `prMetadata` below
+ *  demand an exact key set. `author` has no default there, which is why `pr`
+ *  is nullable rather than ever synthesized: a row with no pr_meta has no
+ *  author to guess. */
+export type PRMetadata = {
+  number: number;
+  title: string;
+  author: string;
+  author_type: "human" | "agent";
+  additions: number;
+  deletions: number;
+  files: string[];
+  approvals: number;
+  approval_latency_s: number | null;
+  days_since_last_human_commit: number | null;
+  files_added: number | null;
+  files_modified: number | null;
+  url: string | null;
+  head_sha: string | null;
+  changed_files: number | null;
+  files_dropped: string[];
+};
+
 export type RunDetail = Record<string, unknown> & {
   verdict_id: number;
   repo: string;
   pr_number: number;
   installation_id: number | null;
   github_repo_id: number | null;
-  pr: Record<string, unknown> | null;
+  pr: PRMetadata | null;
   scored_at: string;
   tier: string;
   prompt_hash: string | null;
@@ -105,6 +130,32 @@ function nullableString(value: unknown): value is string | null {
 
 function nullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function stringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+const PR_METADATA_KEYS = [
+  "number", "title", "author", "author_type", "additions", "deletions", "files",
+  "approvals", "approval_latency_s", "days_since_last_human_commit", "files_added",
+  "files_modified", "url", "head_sha", "changed_files", "files_dropped",
+] as const;
+
+function prMetadata(value: unknown): value is PRMetadata {
+  return (
+    record(value) && exact(value, PR_METADATA_KEYS) &&
+    Number.isInteger(value.number) && typeof value.title === "string" &&
+    typeof value.author === "string" &&
+    (value.author_type === "human" || value.author_type === "agent") &&
+    Number.isInteger(value.additions) && Number.isInteger(value.deletions) &&
+    stringList(value.files) && Number.isInteger(value.approvals) &&
+    nullableNumber(value.approval_latency_s) &&
+    nullableNumber(value.days_since_last_human_commit) &&
+    nullableNumber(value.files_added) && nullableNumber(value.files_modified) &&
+    nullableString(value.url) && nullableString(value.head_sha) &&
+    nullableNumber(value.changed_files) && stringList(value.files_dropped)
+  );
 }
 
 function repository(value: unknown): value is { id: number; full_name: string } {
@@ -243,7 +294,7 @@ function isRunDetail(value: unknown): value is RunDetail {
     record(value) && exact(value, RUN_DETAIL_KEYS) && Number.isInteger(value.verdict_id) &&
     typeof value.repo === "string" && Number.isInteger(value.pr_number) &&
     nullableNumber(value.installation_id) && nullableNumber(value.github_repo_id) &&
-    (value.pr === null || record(value.pr)) && typeof value.scored_at === "string" &&
+    (value.pr === null || prMetadata(value.pr)) && typeof value.scored_at === "string" &&
     typeof value.tier === "string" && nullableString(value.prompt_hash) &&
     nullableString(value.model) && nullableString(value.source) && nullableString(value.head_sha) &&
     nullableNumber(value.risk_score) && nullableString(value.rationale) &&
