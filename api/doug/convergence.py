@@ -42,6 +42,27 @@ _NOTICE_HEADER_SEP = " — "
 _NOTICE_SEGMENT_SEP = "; "
 
 
+PERSISTED = "persisted"
+RESOLVED = "resolved"
+NEW = "new"
+UNKNOWN = "unknown"
+EXCLUDED = "excluded"
+MATCHED = "matched"
+
+
+@dataclass(frozen=True)
+class Classification:
+    """One input row's fate. `matched` is the later occurrence that kept a
+    prior finding alive — it exists so every row gets exactly one entry, and
+    it is counted nowhere; the finding it matches is counted once, on the
+    prior side."""
+
+    side: str  # prior | later
+    finding: dict
+    state: str
+    unknown_reason: str | None = None
+
+
 @dataclass(frozen=True)
 class ConvergenceReport:
     """Counts over one consecutive verdict pair. `unknown` carries only the
@@ -82,51 +103,94 @@ def compare(
     same table, read only for settlement notices; `later_read` is its `reads`
     row (`files_unseen`, `file_cut`, `files_dropped`, `changed_files`) or None.
     """
+    states: Counter[str] = Counter()
     unknown: Counter[str] = Counter()
-    prior = _identities(prior_findings, unknown)
-    later = _identities(later_findings, unknown)
-
-    resolved = persisted = 0
-    for identity, count in prior.items():
-        matched = min(count, later[identity])
-        persisted += matched
-        for _ in range(count - matched):
-            reason = _abstention(identity, later_reasons, later_read)
-            if reason is None:
-                resolved += 1
-            else:
-                unknown[reason] += 1
-
-    new = sum(max(0, count - prior[identity]) for identity, count in later.items())
-
+    for entry in classify(prior_findings, later_findings, later_reasons, later_read):
+        states[entry.state] += 1
+        if entry.state == UNKNOWN:
+            unknown[entry.unknown_reason] += 1
     return ConvergenceReport(
-        resolved=resolved,
-        persisted=persisted,
-        new=new,
+        resolved=states[RESOLVED],
+        persisted=states[PERSISTED],
+        new=states[NEW],
         unknown=dict(unknown),
     )
 
 
-def _identities(rows: list[dict], unknown: Counter[str]) -> Counter[tuple[str, str]]:
-    """Reader findings as `(pattern, file)` counts.
+def classify(
+    prior_findings: list[dict],
+    later_findings: list[dict],
+    later_reasons: list[dict],
+    later_read: dict | None,
+) -> list[Classification]:
+    """One entry per input row, prior side first — the same classification
+    `compare` counts.
 
-    Non-reader rows (`from_rule` is None — the deterministic tier's own
-    vocabulary sharing this table) are excluded outright. A row with no file
-    has an incomplete identity: it takes no part in matching on either side,
-    so it can neither absorb a prior finding into `persisted` nor inflate
-    `new`.
+    Task 3 hand-labels these entries to measure `resolved` precision, which
+    counts alone cannot support. Re-deriving the labels anywhere else would
+    grade a classifier the receipt does not use.
     """
-    counts: Counter[tuple[str, str]] = Counter()
-    for row in rows:
-        pattern = from_rule(row["rule"])
-        if pattern is None:
-            continue
-        file = row["file"]
-        if file is None:
-            unknown[IDENTITY_INCOMPLETE] += 1
-            continue
-        counts[(pattern, file)] += 1
-    return counts
+    prior_counts = _identity_counts(prior_findings)
+    later_counts = _identity_counts(later_findings)
+    entries: list[Classification] = []
+
+    # Budgets, not per-row lookups: identity carries no line number, so `p`
+    # prior and `l` later occurrences of one identity can only be paired by
+    # count. The first min(p, l) prior rows in input order persist and the
+    # surplus runs rules 3-5 — arbitrary between indistinguishable rows, but
+    # fixed, so one ledger always yields one set of labels.
+    persisting = Counter(
+        {identity: min(count, later_counts[identity]) for identity, count in prior_counts.items()}
+    )
+    for row in prior_findings:
+        identity = _identity(row)
+        if identity is None:
+            entries.append(_unmatchable("prior", row))
+        elif persisting[identity] > 0:
+            persisting[identity] -= 1
+            entries.append(Classification("prior", row, PERSISTED))
+        else:
+            reason = _abstention(identity, later_reasons, later_read)
+            entries.append(
+                Classification("prior", row, RESOLVED if reason is None else UNKNOWN, reason)
+            )
+
+    matching = Counter(
+        {identity: min(count, prior_counts[identity]) for identity, count in later_counts.items()}
+    )
+    for row in later_findings:
+        identity = _identity(row)
+        if identity is None:
+            entries.append(_unmatchable("later", row))
+        elif matching[identity] > 0:
+            matching[identity] -= 1
+            entries.append(Classification("later", row, MATCHED))
+        else:
+            entries.append(Classification("later", row, NEW))
+
+    return entries
+
+
+def _identity(row: dict) -> tuple[str, str] | None:
+    """`(pattern, file)`, or None when the row cannot take part in matching."""
+    pattern = from_rule(row["rule"])
+    if pattern is None or row["file"] is None:
+        return None
+    return (pattern, row["file"])
+
+
+def _unmatchable(side: str, row: dict) -> Classification:
+    """Why a row has no identity: either it is not a reader finding at all
+    (the deterministic tier's own vocabulary shares this table), or its file
+    was lost at write time. The second is an abstention on either side — it
+    can neither absorb a prior finding into `persisted` nor inflate `new`."""
+    if from_rule(row["rule"]) is None:
+        return Classification(side, row, EXCLUDED)
+    return Classification(side, row, UNKNOWN, IDENTITY_INCOMPLETE)
+
+
+def _identity_counts(rows: list[dict]) -> Counter[tuple[str, str]]:
+    return Counter(identity for row in rows if (identity := _identity(row)) is not None)
 
 
 def _abstention(

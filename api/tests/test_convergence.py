@@ -266,6 +266,69 @@ def test_report_is_frozen():
         r.resolved = 99
 
 
+# --- per-finding classification (the note's amendment) ---------------------
+
+
+def test_classify_labels_every_row_on_both_sides():
+    """Bar 1 is resolved-PRECISION, so the evaluation has to know which prior
+    findings were called resolved. Counts cannot be hand-labelled."""
+    prior = [_f(), _f(rule="size-large")]
+    later = [_f(file="api/doug/store.py")]
+    rows = convergence.classify(prior, later, [], _read())
+    assert [(c.side, c.state, c.unknown_reason) for c in rows] == [
+        ("prior", "resolved", None),
+        ("prior", "excluded", None),
+        ("later", "new", None),
+    ]
+    assert rows[0].finding is prior[0]
+
+
+def test_classify_reports_the_abstention_reason_per_row():
+    rows = convergence.classify([_f(), _f(file=None)], [], [], _read(files_unseen=[FILE]))
+    assert [(c.state, c.unknown_reason) for c in rows] == [
+        ("unknown", "file-uncovered"),
+        ("unknown", "identity-incomplete"),
+    ]
+
+
+def test_classify_and_compare_are_one_classification():
+    """Two implementations would let the evaluation grade labels the shipped
+    counts never produced, and the bar would say nothing about the receipt."""
+    notice = _reason(
+        "settled-missing-import",
+        "Dropped 1 finding(s) disproved by runtime import at head — "
+        "api/doug/worker.py: error-handling-gap (['threading'])",
+    )
+    prior = [_f(), _f(), _f(file="api/doug/worker.py"), _f(file=None), _f(rule="size-large")]
+    later = [_f(), _f(file="api/doug/store.py")]
+    read = _read(files_unseen=["api/doug/api.py"])
+    rows = convergence.classify(prior, later, [notice], read)
+    report = convergence.compare(prior, later, [notice], read)
+
+    states = [c.state for c in rows]
+    assert states.count("resolved") == report.resolved
+    assert states.count("persisted") == report.persisted
+    assert states.count("new") == report.new
+    reasons = [c.unknown_reason for c in rows if c.state == "unknown"]
+    assert sorted(reasons) == sorted(
+        reason for reason, n in report.unknown.items() for _ in range(n)
+    )
+
+
+def test_duplicate_identity_persists_the_earlier_row():
+    """Arbitrary but fixed: with two indistinguishable prior rows and one
+    later, the same ledger must always yield the same labels."""
+    prior = [_f(label="first"), _f(label="second")]
+    rows = convergence.classify(prior, [_f(label="still-here")], [], _read())
+    assert [(c.finding["label"], c.state) for c in rows] == [
+        ("first", "persisted"),
+        ("second", "resolved"),
+        # counted nowhere — the finding it matches is counted once, on the
+        # prior side
+        ("still-here", "matched"),
+    ]
+
+
 # --- invariants ------------------------------------------------------------
 
 
