@@ -20,6 +20,7 @@ from doug.example_pack_eval import (
     evaluate_control_gates,
     resolve_adjudications,
     score_packs,
+    score_packs_by_instrument,
 )
 
 NOW = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
@@ -277,6 +278,31 @@ def test_duplicate_eligible_pr_identity_is_rejected():
 def test_non_risk_pack_is_rejected_from_pr_scorecard():
     with pytest.raises(EvaluationContractError, match="risk packs"):
         score_packs([_pack(attempt_kind="intent")], [], finding_cap=3)
+
+
+def test_scorecards_partition_whole_instruments_before_aggregation():
+    first = _pack(1, pull_number=1)
+    second_manifest = _manifest().model_copy(update={"pinned_model_id": "claude-opus-5-1"})
+    second_payload = _pack(1, pull_number=2).model_dump(
+        mode="python", exclude={"pack_hash", "instrument_manifest", "instrument_id"}
+    )
+    second = ExamplePackV0.build(
+        **second_payload,
+        instrument_manifest=second_manifest,
+        instrument_id=second_manifest.instrument_id(),
+    )
+
+    partitions = score_packs_by_instrument(
+        [second, first],
+        [_adjudication(first, "verified_actionable")],
+        finding_cap=3,
+    )
+
+    assert [partition.instrument_id for partition in partitions] == sorted(
+        [first.instrument_id, second.instrument_id]
+    )
+    assert [partition.scorecard.eligible_prs for partition in partitions] == [1, 1]
+    assert sum(partition.scorecard.validated_actionable for partition in partitions) == 1
 
 
 @pytest.mark.parametrize("finding_cap", [0, -1])

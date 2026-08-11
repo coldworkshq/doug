@@ -40,6 +40,11 @@ class ScorecardV0(FrozenModel):
         return self.unsupported / self.burden_denominator
 
 
+class InstrumentScorecardV0(FrozenModel):
+    instrument_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scorecard: ScorecardV0
+
+
 class ControlGateV0(FrozenModel):
     schema_version: str = "example-pack-control-gate-v0"
     null: ScorecardV0
@@ -198,6 +203,38 @@ def score_packs(
         verified_accepted_nonactionable=accepted,
         unsupported=unsupported,
     )
+
+
+def score_packs_by_instrument(
+    packs: Sequence[ExamplePackV0],
+    overlays: Sequence[ExampleAdjudicationV0],
+    *,
+    finding_cap: int,
+) -> tuple[InstrumentScorecardV0, ...]:
+    """Partition before scoring so whole-instrument revisions never mix."""
+
+    partitions: dict[str, list[ExamplePackV0]] = defaultdict(list)
+    for pack in packs:
+        partitions[pack.instrument_id].append(pack)
+
+    results: list[InstrumentScorecardV0] = []
+    for instrument_id in sorted(partitions):
+        selected = partitions[instrument_id]
+        pack_hashes = {pack.pack_hash for pack in selected}
+        selected_overlays = [
+            overlay for overlay in overlays if overlay.pack_hash in pack_hashes
+        ]
+        results.append(
+            InstrumentScorecardV0(
+                instrument_id=instrument_id,
+                scorecard=score_packs(
+                    selected,
+                    selected_overlays,
+                    finding_cap=finding_cap,
+                ),
+            )
+        )
+    return tuple(results)
 
 
 def null_control_scorecard(packs: Sequence[ExamplePackV0], *, finding_cap: int) -> ScorecardV0:
