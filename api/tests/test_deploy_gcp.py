@@ -663,6 +663,15 @@ def test_preregistration_change_refreshes_the_adjudicator_hash():
     assert "docs/design/outcome-loop/publication-preregistration.md" in change_filter
 
 
+def test_web_deploy_runs_the_auth_entry_smoke_after_promotion():
+    """A root-only 200 missed the production dashboard cookie crash and the
+    absent sign-in route. The deploy must invoke the executable smoke that
+    proves all three public front-door boundaries."""
+    workflow = DEPLOY_WORKFLOW.read_text()
+    web_confirmation = workflow.split("- name: Confirm the live URL after promotion", 2)[2]
+    assert 'bash web/scripts/smoke-auth-entry.sh "$url"' in web_confirmation
+
+
 def test_setup_owns_scheduler_and_adjudicator_identities():
     setup = _function_body("setup")
     assert "adjudicator_setup" in setup

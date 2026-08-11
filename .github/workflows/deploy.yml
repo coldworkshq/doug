@@ -207,7 +207,5 @@ jobs:
         run: |
           url=$(gcloud run services describe doug-web \
             --project "$PROJECT" --region "$REGION" --format='value(status.url)')
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url/")
-          echo "$url/ -> $code"
-          [ "$code" = "200" ] || exit 1
+          bash web/scripts/smoke-auth-entry.sh "$url"
           echo "web deployed: $url" >> "$GITHUB_STEP_SUMMARY"

@@ -13,6 +13,14 @@ export async function resolve(specifier, context, nextResolve) {
     const stub = `
       export { CallbackError } from ${JSON.stringify(errorsModule)};
       export const authkitProxy = () => () => new Response();
+      export const authkit = async () => ({
+        session: { user: null },
+        headers: new Headers(),
+        authorizationUrl: "https://auth.workos.test/authorize",
+      });
+      export const handleAuthkitProxy = (_request, _headers, options = {}) =>
+        options.redirect ? Response.redirect(options.redirect, 307) : new Response();
+      export const handleAuthkitHeaders = handleAuthkitProxy;
       export const signOut = async () => {
         globalThis.__workosSignOutCalls = (globalThis.__workosSignOutCalls ?? 0) + 1;
       };
@@ -44,6 +52,9 @@ export async function resolve(specifier, context, nextResolve) {
   }
   if (specifier === "@/lib/install-flow") {
     return nextResolve(new URL("../../../lib/install-flow.ts", context.parentURL).href, context);
+  }
+  if (specifier === "@/lib/auth-origin") {
+    return nextResolve(new URL("./auth-origin.ts", import.meta.url).href, context);
   }
   try {
     return await nextResolve(specifier, context);

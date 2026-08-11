@@ -87,6 +87,12 @@ export default async function Home() {
           >
             Queue
           </Link>
+          <Link
+            href="/sign-in"
+            className="rounded-full px-3 py-1 whitespace-nowrap transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            Sign in
+          </Link>
           <a
             href="https://github.com/drewjst/doug"
             className="rounded-full px-3 py-1 transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -142,17 +148,17 @@ export default async function Home() {
             style={{ animationDelay: "240ms" }}
           >
             <Link
-              href="/queue"
+              href="/sign-in"
               className="rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-transform hover:-translate-y-0.5"
+            >
+              Get started
+            </Link>
+            <Link
+              href="/queue"
+              className="panel rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               See the queue
             </Link>
-            <a
-              href="https://github.com/drewjst/doug"
-              className="panel rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              Read the thesis →
-            </a>
           </div>
         </div>
 

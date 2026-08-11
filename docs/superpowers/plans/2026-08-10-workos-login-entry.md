@@ -4,7 +4,7 @@
 
 **Goal:** Restore the approved sign-in-first front door so a person can create a Doug account without GitHub, reach hosted WorkOS AuthKit, and enter a protected dashboard without a Next.js render-time cookie failure.
 
-**Architecture:** A dedicated `GET /sign-in` Route Handler owns the PKCE-producing `getSignInUrl()` call because Next.js 16.3 permits cookie mutation there but not during Server Component rendering. The dashboard uses read-only `withAuth()` and sends an unauthenticated request to the local sign-in handler. The handler canonicalizes the request origin to the configured callback origin before creating PKCE state, so Cloud Run's two hostnames cannot split the verifier cookie from the callback.
+**Architecture:** A dedicated `GET /sign-in` Route Handler owns explicit account entry because Next.js 16.3 permits PKCE cookie mutation there but not during Server Component rendering. For a browser navigation to `/dashboard`, the AuthKit proxy redirects directly to WorkOS before rendering and forwards its PKCE cookie; the dashboard retains a read-only `withAuth()` fallback to `/sign-in`. A shared origin helper canonicalizes requests to the configured callback origin before creating PKCE state, so Cloud Run's two hostnames cannot split the verifier cookie from the callback.
 
 **Tech Stack:** Next.js 16.3 App Router, `@workos-inc/authkit-nextjs`, React 19, Node test runner, GitHub Actions, Google Cloud Run.
 
@@ -40,7 +40,8 @@ assert.equal(root.status, 200);
 assert.match(await root.text(), /href="\/sign-in"[^>]*>Sign in</);
 assert.match(rootHtml, /href="\/sign-in"[^>]*>Get started</);
 assert.equal(dashboard.status, 307);
-assert.equal(dashboard.headers.get("location"), `${origin}/sign-in`);
+assert.match(dashboard.headers.get("location"), /^https:\/\/api\.workos\.com\/user_management\/authorize\?/);
+assert.match(dashboard.headers.get("set-cookie"), /wos-auth-verifier/);
 assert.equal(signIn.status, 307);
 assert.match(signIn.headers.get("location"), /^https:\/\/api\.workos\.com\/user_management\/authorize\?/);
 assert.match(signIn.headers.get("set-cookie"), /wos-auth-verifier=/);
@@ -50,7 +51,7 @@ Send a request with an alternate `Host` header and prove `/sign-in` first redire
 
 - [ ] **Step 2: Add failing executable smoke-script tests**
 
-Use a controlled HTTP server to run `web/scripts/smoke-auth-entry.sh` against: (a) root 200, dashboard 307 to same-origin `/sign-in`, and sign-in 307 to WorkOS; and (b) the currently insufficient root-only 200 behavior. Assert (a) exits 0 without printing the WorkOS query string and (b) exits nonzero.
+Use a controlled HTTP server to run `web/scripts/smoke-auth-entry.sh` against: (a) root 200, dashboard 307 to WorkOS, and sign-in 307 to WorkOS; and (b) the currently insufficient root-only 200 behavior. Assert (a) exits 0 without printing the WorkOS query string and (b) exits nonzero.
 
 - [ ] **Step 3: Add a failing deployment smoke-contract test**
 
@@ -58,7 +59,7 @@ Extend `api/tests/test_deploy_gcp.py` to require the web deployment workflow to 
 
 ```text
 / -> 200
-/dashboard -> 307 with same-origin /sign-in location
+/dashboard -> 307 with https://api.workos.com/user_management/authorize location
 /sign-in -> 307 with https://api.workos.com/ or https://authkit.app/ authorization location
 ```
 
@@ -79,17 +80,23 @@ Expected: the real Next integration fails on missing `/sign-in`, absent landing 
 
 **Files:**
 - Create: `web/app/sign-in/route.ts`
+- Create: `web/lib/auth-origin.ts`
 - Modify: `web/app/dashboard/page.tsx`
+- Modify: `web/proxy.ts`
 
 **Interfaces:**
-- Consumes: `NEXT_PUBLIC_WORKOS_REDIRECT_URI`, `getSignInUrl({ returnTo: "/dashboard" })`, `withAuth()`, and Next's `redirect()`.
-- Produces: `GET /sign-in` and a dashboard guard that never mutates cookies during Server Component rendering.
+- Consumes: `NEXT_PUBLIC_WORKOS_REDIRECT_URI`, `getSignInUrl({ returnTo: "/dashboard" })`, AuthKit proxy headers, `withAuth()`, and Next's `redirect()`.
+- Produces: `GET /sign-in` plus a pre-render dashboard guard that forwards the AuthKit redirect and PKCE cookie.
 
 - [ ] **Step 1: Implement the minimal sign-in Route Handler**
 
 Read the redirect URI at request time with bracket access. Parse its origin; return `503 Sign-in is temporarily unavailable.` for missing or invalid configuration. If the request origin differs, return a 307 to `<canonical-origin>/sign-in` before calling AuthKit. On the canonical origin, call `getSignInUrl({ returnTo: "/dashboard" })` and redirect to the returned WorkOS URL.
 
-- [ ] **Step 2: Replace render-time sign-in with a local redirect**
+- [ ] **Step 2: Move unauthenticated dashboard initiation into the proxy**
+
+Compose the AuthKit proxy explicitly. On `/dashboard`, forward an unauthenticated browser document request to AuthKit's authorization URL with `handleAuthkitProxy()` so the SDK's PKCE cookie survives and React never renders the request. Canonicalize an alternate public origin before invoking AuthKit.
+
+- [ ] **Step 3: Retain a read-only dashboard fallback**
 
 Change the dashboard from:
 
@@ -99,7 +106,7 @@ const auth = await withAuth({ ensureSignedIn: true });
 
 to read-only `withAuth()`. If `user` or `accessToken` is absent, call `redirect("/sign-in")` before any session API request. Do not catch the redirect.
 
-- [ ] **Step 3: Run the focused tests and verify GREEN**
+- [ ] **Step 4: Run the focused tests and verify GREEN**
 
 Run the Task 1 focused commands. Expected: the sign-in and dashboard tests pass; the deployment workflow contract remains red until Task 4.
 
@@ -142,7 +149,7 @@ Expected: 0 failures, lint exit 0, build exit 0, and `/sign-in` listed as a dyna
 
 - [ ] **Step 1: Extend the post-promotion web check**
 
-Implement the already-tested script: request `/`, `/dashboard`, and `/sign-in` without following redirects; require root 200, dashboard 307 to `${url}/sign-in`, and sign-in 307 to a WorkOS-owned HTTPS authorization URL. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state. Replace the workflow's root-only curl with `bash web/scripts/smoke-auth-entry.sh "$url"`.
+Implement the already-tested script: request `/`, `/dashboard`, and `/sign-in` without following redirects and with browser document-request headers; require root 200 and both protected entry points to return 307 to the WorkOS authorization endpoint with an encoded callback equal to `${url}/auth/callback`. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state. Replace the workflow's root-only curl with `bash web/scripts/smoke-auth-entry.sh "$url"`.
 
 - [ ] **Step 2: Run the deployment contract and shell/YAML checks**
 
@@ -175,7 +182,7 @@ bash -n deploy/gcp.sh
 
 - [ ] **Step 2: Run a local production-server smoke test**
 
-Start the built Next server with non-secret test credentials and a loopback redirect URI. Verify `/` returns 200, `/dashboard` redirects to `/sign-in`, and `/sign-in` redirects to a real WorkOS authorization URL without logging the URL query.
+Start the built Next server with non-secret test credentials and a loopback redirect URI. Verify `/` returns 200 and both `/dashboard` and `/sign-in` redirect to a real WorkOS authorization URL without logging the URL query.
 
 - [ ] **Step 3: Review the exact diff and secret boundary**
 
