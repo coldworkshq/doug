@@ -17,7 +17,7 @@ export async function Shell({
   children,
 }: {
   scope: ShellScope;
-  active: "runs" | "jobs";
+  active: "runs" | "jobs" | "example-packs";
   children: React.ReactNode;
 }) {
   // Server-rendered per page load. No polling: the pages are already
@@ -63,9 +63,13 @@ export async function Shell({
         <span className="mono -mb-px cursor-not-allowed px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground/50">
           Repos <span className="text-[9px]">phase 2</span>
         </span>
-        <span className="mono -mb-px cursor-not-allowed px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground/50">
-          Evidence <span className="text-[9px]">phase 3</span>
-        </span>
+        <Link
+          href="/example-packs"
+          aria-current={active === "example-packs" ? "page" : undefined}
+          className="mono -mb-px border-b-2 border-transparent px-3 pt-2 pb-2 text-xs uppercase tracking-[.06em] text-muted-foreground aria-[current]:border-b-[var(--iridescent)] aria-[current]:font-semibold aria-[current]:text-foreground"
+        >
+          Example Packs
+        </Link>
       </nav>
       <main className="mx-auto max-w-[1440px] px-5">{children}</main>
     </div>

@@ -177,4 +177,21 @@
      track looks, not by hue. */
   .cov-track { background: #eceae3; }
   .cov-fill  { background: #3d403c; }
+
+  /* The evidence seam is provenance, not decoration: each exact artifact
+     attaches to one ordered rule, with the orange chrome colour never used
+     as a data verdict. */
+  .evidence-seam { position: relative; border-left: 1px solid var(--border); }
+  .evidence-step { position: relative; }
+  .evidence-step::before {
+    content: "";
+    position: absolute;
+    left: -1.78rem;
+    top: 1rem;
+    width: .52rem;
+    height: .52rem;
+    border: 2px solid var(--background);
+    border-radius: 999px;
+    background: var(--iridescent);
+  }
 }

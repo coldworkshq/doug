@@ -659,3 +659,45 @@ export function formatExamplePackRate(numerator: number, denominator: number): s
   if (denominator === 0) return null;
   return `${((numerator / denominator) * 100).toFixed(1)}% · N=${denominator}`;
 }
+
+export type CohortMetric =
+  | { kind: "rate"; label: string }
+  | { kind: "blocked"; label: "blocked — cohort incomplete" }
+  | { kind: "empty"; label: "no eligible PRs" }
+  | { kind: "unavailable"; label: "unavailable" };
+
+export function cohortMetric(
+  availability: CohortAvailabilityStatus,
+  numerator: number,
+  denominator: number,
+): CohortMetric {
+  if (availability === "incomplete") {
+    return { kind: "blocked", label: "blocked — cohort incomplete" };
+  }
+  if (availability !== "complete" && availability !== "empty") {
+    return { kind: "unavailable", label: "unavailable" };
+  }
+  const rate = formatExamplePackRate(numerator, denominator);
+  return rate === null
+    ? { kind: "empty", label: "no eligible PRs" }
+    : { kind: "rate", label: rate };
+}
+
+export function memberAttemptLabel(attempt: AttemptSummary): string {
+  return attempt.member
+    ? `member · job ${attempt.review_job_id}`
+    : "non-member attempt";
+}
+
+/** React receives captured material only as children. Keeping this identity
+ * function at the rendering seam makes any future escaping/transformation a
+ * tested contract change; callers must never route the value through HTML. */
+export function plainCapturedText(value: string): string {
+  return value;
+}
+
+export function adjudicationActionMessage(error: string): string {
+  return /→ HTTP 409$/.test(error)
+    ? "Evidence changed since this page loaded. Reload before correcting this finding."
+    : `Adjudication was not recorded. ${error}`;
+}

@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  adjudicationActionMessage,
+  cohortMetric,
   formatExamplePackRate,
+  memberAttemptLabel,
   parseAdjudicationInput,
   parseExampleAdjudication,
   parseExamplePackCohort,
   parseExamplePackCohorts,
   parseExamplePackDetail,
   parseExamplePackResults,
+  plainCapturedText,
 } from "./example-packs.ts";
 
 const HASH = "a".repeat(64);
@@ -251,4 +255,44 @@ test("every rendered rate includes its denominator and zero denominators stay em
   assert.equal(formatExamplePackRate(1, 2), "50.0% · N=2");
   assert.equal(formatExamplePackRate(0, 3), "0.0% · N=3");
   assert.equal(formatExamplePackRate(0, 0), null);
+});
+
+test("incomplete cohorts return blocked metrics with no plausible rate", () => {
+  assert.deepEqual(cohortMetric("incomplete", 1, 2), {
+    kind: "blocked",
+    label: "blocked — cohort incomplete",
+  });
+  assert.equal("rate" in cohortMetric("incomplete", 1, 2), false);
+  assert.deepEqual(cohortMetric("complete", 1, 2), {
+    kind: "rate",
+    label: "50.0% · N=2",
+  });
+  assert.deepEqual(cohortMetric("empty", 0, 0), {
+    kind: "empty",
+    label: "no eligible PRs",
+  });
+});
+
+test("member and non-member attempts never share a misleading label", () => {
+  assert.equal(memberAttemptLabel(attempt()), "member · job 9");
+  assert.equal(
+    memberAttemptLabel({ ...attempt(), member: false, review_job_id: null }),
+    "non-member attempt",
+  );
+});
+
+test("captured script markup remains exact plain-text data", () => {
+  const captured = "<script>alert('not executable')</script>";
+  assert.equal(plainCapturedText(captured), captured);
+});
+
+test("stale adjudication is an explicit correction-needed state", () => {
+  assert.equal(
+    adjudicationActionMessage("/adjudications → HTTP 409"),
+    "Evidence changed since this page loaded. Reload before correcting this finding.",
+  );
+  assert.equal(
+    adjudicationActionMessage("/adjudications → HTTP 503"),
+    "Adjudication was not recorded. /adjudications → HTTP 503",
+  );
 });
