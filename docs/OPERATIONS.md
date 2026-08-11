@@ -1,5 +1,110 @@
 # Operations runbook
 
+## Hosted Example Pack cohort
+
+This lane reuses the IAM-gated `doug-console` and the existing review worker. It
+does not alter WorkOS, AuthKit, browser sessions, login redirects, or the public
+web service. Every command below is explicit; normal `deploy`, `web`, and
+`console` commands neither provision nor enable capture.
+
+### One-time setup (requires explicit production approval)
+
+Choose a globally unique bucket in the same region as the API, then run:
+
+```bash
+export PROJECT=doug-prod0
+export REGION=us-central1
+export DOUG_EXAMPLE_PACK_BUCKET=<private-bucket-name>
+cd api
+./deploy/gcp.sh example-pack-setup
+```
+
+This creates the purpose token if absent, creates or reuses the bucket, applies
+a 90-day lifecycle, and grants `doug-api-sa` only object creator and viewer.
+It grants `doug-console-sa` access to the purpose token, not to the bucket.
+Capture remains off.
+
+Before enabling, inspect the receipts rather than relying on command success:
+
+```bash
+gcloud storage buckets describe "gs://$DOUG_EXAMPLE_PACK_BUCKET" \
+  --project "$PROJECT" --format=json
+gcloud storage buckets get-iam-policy "gs://$DOUG_EXAMPLE_PACK_BUCKET" \
+  --project "$PROJECT" --format=json
+gcloud secrets get-iam-policy doug-example-pack-token \
+  --project "$PROJECT" --format=json
+```
+
+Verify the location, uniform bucket-level access, public access prevention,
+lifecycle rule, and exact principals. Google Cloud Data Access logs are
+disabled by default for many services. Enabling them changes project-wide audit
+policy, so `example-pack-setup` deliberately does not do it. Review and apply
+that policy separately before the cohort if read/write audit queries are a
+required receipt.
+
+### Enable one bounded cohort
+
+Use a clean checkout of the exact revision being evaluated. Set explicit
+stable GitHub installation/repository IDs; names are not allowlist identity.
+
+```bash
+export DOUG_EXAMPLE_PACK_SOURCE_ROOT=/absolute/path/to/clean/checkout
+export DOUG_APPLICATION_REVISION=$(git -C "$DOUG_EXAMPLE_PACK_SOURCE_ROOT" rev-parse HEAD)
+export DOUG_EXAMPLE_PACK_BUCKET=<private-bucket-name>
+export DOUG_EXAMPLE_PACK_COHORT=doug-dogfood-YYYY-MM
+export DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT=YYYY-MM-DDTHH:MM:SSZ
+export DOUG_EXAMPLE_PACK_CAPTURE_UNTIL=YYYY-MM-DDTHH:MM:SSZ
+export DOUG_EXAMPLE_PACK_INSTALLATION_IDS=<numeric-id[,numeric-id]>
+export DOUG_EXAMPLE_PACK_REPOSITORY_IDS=<numeric-id[,numeric-id]>
+export DOUG_EXAMPLE_PACK_ADJUDICATOR=andrew
+./deploy/gcp.sh example-pack-enable
+```
+
+The command rejects a dirty checkout, a revision mismatch, invalid IDs, or an
+invalid/reversed UTC window before calling Cloud Run. It updates only the API
+with capture configuration, while both API and console receive the separate
+Example Pack token. The console gets no capture flag or storage permission.
+
+An ordinary API or console deployment replaces its configured secrets/env and
+therefore fails this lane closed. While a cohort is open, re-run
+`example-pack-enable` after either deployment. This keeps merge-to-main CI from
+depending on privileged evidence resources.
+
+Reach the hosted workbench through the existing IAM proxy:
+
+```bash
+gcloud run services proxy doug-console \
+  --project "$PROJECT" --region "$REGION"
+```
+
+### Close and verify a cohort
+
+At the window boundary, disable new capture, allow already admitted review jobs
+to finish, and inspect cohort completeness in the console:
+
+```bash
+./deploy/gcp.sh example-pack-disable
+```
+
+Do not treat a scorecard as a cohort result until availability is `complete`
+and both `missing` and `extra` are empty. The terminal-start-or-membership
+boundary handles normal retries, but it cannot reconstruct an earlier failed
+capture whose only terminal retry began after the window. Queue drain is the
+operational closure for that edge.
+
+If Data Access logging was separately enabled, preserve the cohort-window
+object create/read query and its query parameters as a rollout receipt. Do not
+claim an access-audit receipt from Admin Activity logs alone.
+
+### Incident response
+
+First stop new evidence writes with `example-pack-disable`. If containment
+requires revocation, remove the two bucket roles from `doug-api-sa` and revoke
+the purpose-token secret bindings. Preserve the bucket objects, Cloud Run
+revision/configuration, and available audit logs for investigation. Deletion,
+retention override, and legal hold are separate destructive decisions; no
+Example Pack command automates them.
+
 ## Tenant API keys
 
 ### Provisioning the pepper (one-time, BEFORE the first deploy)

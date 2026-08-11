@@ -197,6 +197,142 @@ def test_setup_creates_doug_console_sa_and_binds_only_the_api_token():
     assert "roles/cloudsql.client" not in after
 
 
+def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilities(tmp_path):
+    lines = _run_gcp(
+        tmp_path,
+        "example-pack-setup",
+        {"DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence"},
+    )
+
+    assert any(
+        line.startswith("services enable storage.googleapis.com secretmanager.googleapis.com")
+        for line in lines
+    )
+    assert any(
+        line.startswith("storage buckets create gs://doug-private-evidence")
+        and "--location=us-central1" in line
+        and "--uniform-bucket-level-access" in line
+        and "--public-access-prevention" in line
+        for line in lines
+    )
+    assert any(
+        line.startswith("storage buckets update gs://doug-private-evidence")
+        and "--lifecycle-file=" in line
+        for line in lines
+    )
+    bucket_bindings = [
+        line
+        for line in lines
+        if line.startswith(
+            "storage buckets add-iam-policy-binding gs://doug-private-evidence"
+        )
+    ]
+    assert bucket_bindings == [
+        "storage buckets add-iam-policy-binding gs://doug-private-evidence "
+        "--project doug-prod0 --member=serviceAccount:"
+        "doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/storage.objectCreator",
+        "storage buckets add-iam-policy-binding gs://doug-private-evidence "
+        "--project doug-prod0 --member=serviceAccount:"
+        "doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/storage.objectViewer",
+    ]
+    assert not any("doug-console-sa" in line for line in bucket_bindings)
+    secret_bindings = [
+        line
+        for line in lines
+        if line.startswith(
+            "secrets add-iam-policy-binding doug-example-pack-token"
+        )
+    ]
+    assert len(secret_bindings) == 2
+    assert any("doug-api-sa@" in line for line in secret_bindings)
+    assert any("doug-console-sa@" in line for line in secret_bindings)
+
+
+def _clean_source_repo(tmp_path: Path) -> tuple[Path, str]:
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    (source / "receipt.txt").write_text("clean\n")
+    subprocess.run(["git", "add", "receipt.txt"], cwd=source, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Doug Test",
+            "-c",
+            "user.email=doug@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "clean source",
+        ],
+        cwd=source,
+        check=True,
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return source, revision
+
+
+def test_example_pack_enable_updates_only_api_capture_and_both_purpose_secrets(tmp_path):
+    source, revision = _clean_source_repo(tmp_path)
+    lines = _run_gcp(
+        tmp_path,
+        "example-pack-enable",
+        {
+            "DOUG_EXAMPLE_PACK_SOURCE_ROOT": str(source),
+            "DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence",
+            "DOUG_EXAMPLE_PACK_COHORT": "doug-dogfood-2026-08",
+            "DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT": "2026-08-10T18:00:00Z",
+            "DOUG_EXAMPLE_PACK_CAPTURE_UNTIL": "2026-08-17T18:00:00Z",
+            "DOUG_EXAMPLE_PACK_INSTALLATION_IDS": "150424894",
+            "DOUG_EXAMPLE_PACK_REPOSITORY_IDS": "987654321",
+            "DOUG_EXAMPLE_PACK_ADJUDICATOR": "andrew",
+            "DOUG_APPLICATION_REVISION": revision,
+        },
+    )
+
+    updates = [line for line in lines if line.startswith("run services update")]
+    assert len(updates) == 2
+    [api_update] = [line for line in updates if line.startswith("run services update doug-api")]
+    [console_update] = [
+        line for line in updates if line.startswith("run services update doug-console")
+    ]
+    assert "DOUG_EXAMPLE_PACK_CAPTURE=1" in api_update
+    assert "DOUG_EXAMPLE_PACK_BUCKET=doug-private-evidence" in api_update
+    assert f"DOUG_APPLICATION_REVISION={revision}" in api_update
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in api_update
+    assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in console_update
+    assert "DOUG_EXAMPLE_PACK_CAPTURE" not in console_update
+
+
+def test_example_pack_enable_fails_before_cloud_mutation_when_contract_is_incomplete(tmp_path):
+    result, lines = _invoke_gcp(
+        tmp_path,
+        "example-pack-enable",
+        {"DOUG_EXAMPLE_PACK_BUCKET": "doug-private-evidence"},
+    )
+
+    assert result.returncode != 0
+    assert not [line for line in lines if line.startswith("run services update")]
+
+
+def test_example_pack_disable_changes_only_the_capture_flag(tmp_path):
+    lines = _run_gcp(tmp_path, "example-pack-disable")
+    updates = [line for line in lines if line.startswith("run services update")]
+    assert updates == [
+        "run services update doug-api --project doug-prod0 --region us-central1 "
+        "--update-env-vars DOUG_EXAMPLE_PACK_CAPTURE=0"
+    ]
+
+
 def test_web_deploy_is_still_the_only_public_service():
     """Guard against the console being folded back into web()."""
     assert "--allow-unauthenticated" in _function_body("web")

@@ -5,6 +5,9 @@
 # project with billing. Secrets go to Secret Manager, never into env specs.
 #
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh setup   # APIs, SQL, secrets, IAM
+#   PROJECT=doug-prod0 REGION=us-central1 DOUG_EXAMPLE_PACK_BUCKET=... ./deploy/gcp.sh example-pack-setup
+#   PROJECT=doug-prod0 REGION=us-central1 DOUG_EXAMPLE_PACK_...=... ./deploy/gcp.sh example-pack-enable
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh example-pack-disable
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator-setup # M3 IAM only
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator # deploy M3 Job
@@ -232,6 +235,156 @@ setup() {
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
   echo "setup done (check SQL instance state before first deploy)"
+}
+
+# One-purpose bootstrap for the hosted Example Pack lane. This is deliberately
+# separate from setup(): neither CI nor a normal Doug deployment should need
+# evidence-bucket administration privileges.
+example_pack_setup() {
+  local bucket api_sa console_sa lifecycle_file
+  bucket=${DOUG_EXAMPLE_PACK_BUCKET:?set DOUG_EXAMPLE_PACK_BUCKET}
+  api_sa="doug-api-sa@$PROJECT.iam.gserviceaccount.com"
+  console_sa="doug-console-sa@$PROJECT.iam.gserviceaccount.com"
+
+  gcloud services enable storage.googleapis.com secretmanager.googleapis.com \
+    --project "$PROJECT"
+
+  if ! gcloud iam service-accounts describe "$api_sa" \
+      --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: service account $api_sa does not exist; run setup first." >&2
+    return 1
+  fi
+  if ! gcloud iam service-accounts describe "$console_sa" \
+      --project "$PROJECT" >/dev/null 2>&1; then
+    echo "ERROR: service account $console_sa does not exist; run setup first." >&2
+    return 1
+  fi
+
+  openssl rand -hex 32 | tr -d '\n' \
+    | gcloud secrets create doug-example-pack-token --data-file=- \
+      --project "$PROJECT" 2>/dev/null \
+    || echo "doug-example-pack-token secret exists; leaving it"
+
+  gcloud storage buckets create "gs://$bucket" \
+    --project "$PROJECT" --location="$REGION" \
+    --default-storage-class=STANDARD \
+    --uniform-bucket-level-access --public-access-prevention 2>/dev/null \
+    || echo "evidence bucket $bucket exists; leaving it"
+
+  lifecycle_file=$(mktemp)
+  printf '%s\n' \
+    '{"rule":[{"action":{"type":"Delete"},"condition":{"age":90}}]}' \
+    > "$lifecycle_file"
+  if ! gcloud storage buckets update "gs://$bucket" \
+      --project "$PROJECT" --lifecycle-file="$lifecycle_file"; then
+    rm -f "$lifecycle_file"
+    return 1
+  fi
+  rm -f "$lifecycle_file"
+
+  # Capture and read both happen in doug-api. The console receives rendered
+  # API responses only and therefore gets no bucket capability.
+  gcloud storage buckets add-iam-policy-binding "gs://$bucket" \
+    --project "$PROJECT" --member="serviceAccount:$api_sa" \
+    --role=roles/storage.objectCreator
+  gcloud storage buckets add-iam-policy-binding "gs://$bucket" \
+    --project "$PROJECT" --member="serviceAccount:$api_sa" \
+    --role=roles/storage.objectViewer
+
+  for service_account in "$api_sa" "$console_sa"; do
+    gcloud secrets add-iam-policy-binding doug-example-pack-token \
+      --project "$PROJECT" --member="serviceAccount:$service_account" \
+      --role=roles/secretmanager.secretAccessor
+  done
+  echo "Example Pack storage and purpose token are ready; capture is still disabled."
+}
+
+validate_example_pack_enablement() {
+  local source_root actual_revision source_status
+  : "${DOUG_EXAMPLE_PACK_BUCKET:?set DOUG_EXAMPLE_PACK_BUCKET}"
+  : "${DOUG_EXAMPLE_PACK_COHORT:?set DOUG_EXAMPLE_PACK_COHORT}"
+  : "${DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT:?set DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT}"
+  : "${DOUG_EXAMPLE_PACK_CAPTURE_UNTIL:?set DOUG_EXAMPLE_PACK_CAPTURE_UNTIL}"
+  : "${DOUG_EXAMPLE_PACK_INSTALLATION_IDS:?set DOUG_EXAMPLE_PACK_INSTALLATION_IDS}"
+  : "${DOUG_EXAMPLE_PACK_REPOSITORY_IDS:?set DOUG_EXAMPLE_PACK_REPOSITORY_IDS}"
+  : "${DOUG_EXAMPLE_PACK_ADJUDICATOR:?set DOUG_EXAMPLE_PACK_ADJUDICATOR}"
+  : "${DOUG_APPLICATION_REVISION:?set DOUG_APPLICATION_REVISION}"
+
+  [[ "$DOUG_EXAMPLE_PACK_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] \
+    || { echo "ERROR: invalid evidence bucket name." >&2; return 1; }
+  [[ "$DOUG_EXAMPLE_PACK_COHORT" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || { echo "ERROR: invalid cohort id." >&2; return 1; }
+  [[ "$DOUG_EXAMPLE_PACK_INSTALLATION_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
+    || { echo "ERROR: installation ids must be comma-separated integers." >&2; return 1; }
+  [[ "$DOUG_EXAMPLE_PACK_REPOSITORY_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
+    || { echo "ERROR: repository ids must be comma-separated integers." >&2; return 1; }
+  [[ "$DOUG_EXAMPLE_PACK_ADJUDICATOR" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || { echo "ERROR: invalid adjudicator id." >&2; return 1; }
+  [[ "$DOUG_APPLICATION_REVISION" =~ ^[0-9a-f]{40}$ ]] \
+    || { echo "ERROR: application revision must be a full lowercase Git SHA." >&2; return 1; }
+
+  python3 - "$DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT" \
+    "$DOUG_EXAMPLE_PACK_CAPTURE_UNTIL" <<'PY'
+from datetime import datetime
+import re
+import sys
+
+pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+try:
+    start, end = (datetime.fromisoformat(value.replace("Z", "+00:00")) for value in sys.argv[1:])
+except ValueError as error:
+    raise SystemExit(f"ERROR: invalid capture timestamp: {error}") from error
+if not all(pattern.fullmatch(value) for value in sys.argv[1:]):
+    raise SystemExit("ERROR: capture timestamps must be second-precision UTC RFC3339 values.")
+if end <= start:
+    raise SystemExit("ERROR: capture end must be after capture start.")
+PY
+
+  source_root=${DOUG_EXAMPLE_PACK_SOURCE_ROOT:-$REPO_ROOT}
+  actual_revision=$(git -C "$source_root" rev-parse HEAD 2>/dev/null) \
+    || { echo "ERROR: Example Pack source root is not a Git checkout." >&2; return 1; }
+  source_status=$(git -C "$source_root" status --porcelain)
+  if [ -n "$source_status" ]; then
+    echo "ERROR: Example Pack source checkout is dirty; refusing capture." >&2
+    return 1
+  fi
+  if [ "$actual_revision" != "$DOUG_APPLICATION_REVISION" ]; then
+    echo "ERROR: DOUG_APPLICATION_REVISION does not match the source checkout." >&2
+    return 1
+  fi
+}
+
+# Opt-in is an explicit, reversible service update. The normal deploy and
+# console commands intentionally do not carry this configuration: CI remains
+# independent of the privileged evidence lane and fails closed after deploys.
+example_pack_enable() {
+  validate_example_pack_enablement
+  local env_vars
+  env_vars="^@^DOUG_EXAMPLE_PACK_CAPTURE=1"
+  env_vars+="@DOUG_EXAMPLE_PACK_BUCKET=$DOUG_EXAMPLE_PACK_BUCKET"
+  env_vars+="@DOUG_EXAMPLE_PACK_COHORT=$DOUG_EXAMPLE_PACK_COHORT"
+  env_vars+="@DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT=$DOUG_EXAMPLE_PACK_CAPTURE_STARTED_AT"
+  env_vars+="@DOUG_EXAMPLE_PACK_CAPTURE_UNTIL=$DOUG_EXAMPLE_PACK_CAPTURE_UNTIL"
+  env_vars+="@DOUG_EXAMPLE_PACK_INSTALLATION_IDS=$DOUG_EXAMPLE_PACK_INSTALLATION_IDS"
+  env_vars+="@DOUG_EXAMPLE_PACK_REPOSITORY_IDS=$DOUG_EXAMPLE_PACK_REPOSITORY_IDS"
+  env_vars+="@DOUG_EXAMPLE_PACK_ADJUDICATOR=$DOUG_EXAMPLE_PACK_ADJUDICATOR"
+  env_vars+="@DOUG_APPLICATION_REVISION=$DOUG_APPLICATION_REVISION"
+
+  gcloud run services update "$SERVICE" \
+    --project "$PROJECT" --region "$REGION" \
+    --update-env-vars "$env_vars" \
+    --update-secrets "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest"
+  gcloud run services update "$CONSOLE_SERVICE" \
+    --project "$PROJECT" --region "$REGION" \
+    --update-secrets "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest"
+  echo "Example Pack capture enabled for cohort $DOUG_EXAMPLE_PACK_COHORT."
+}
+
+example_pack_disable() {
+  gcloud run services update "$SERVICE" \
+    --project "$PROJECT" --region "$REGION" \
+    --update-env-vars DOUG_EXAMPLE_PACK_CAPTURE=0
+  echo "Example Pack capture disabled; stored evidence remains readable."
 }
 
 wait_for_service_account() {
@@ -597,13 +750,16 @@ api_url() {
     --format="value(status.url)"
 }
 
-case "${1:?setup|adjudicator-setup|deploy|adjudicator|schedule|web|console}" in
+case "${1:?setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|web|console}" in
   setup) setup ;;
+  example-pack-setup) example_pack_setup ;;
+  example-pack-enable) example_pack_enable ;;
+  example-pack-disable) example_pack_disable ;;
   adjudicator-setup) adjudicator_setup ;;
   deploy) deploy ;;
   adjudicator) adjudicator ;;
   schedule) schedule ;;
   web) web ;;
   console) console ;;
-  *) echo "usage: $0 setup|adjudicator-setup|deploy|adjudicator|schedule|web|console" >&2; exit 2 ;;
+  *) echo "usage: $0 setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|web|console" >&2; exit 2 ;;
 esac
