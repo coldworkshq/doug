@@ -1,6 +1,8 @@
 import datetime as _dt
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -131,6 +133,38 @@ def test_example_pack_completed_jobs_use_terminal_start_and_membership_not_mutab
 
     assert [row["id"] for row in rows] == [901, 902]
     assert _utc(rows[0]["enqueued_at"]) == started + timedelta(days=30)
+
+
+def test_example_pack_adjudication_lock_serializes_one_finding_on_sqlite(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    first_entered = Event()
+    release_first = Event()
+    second_started = Event()
+    second_entered = Event()
+
+    def first():
+        with store.example_pack_adjudication_lock("c1", "a" * 64, "b" * 64):
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+
+    def second():
+        assert first_entered.wait(timeout=2)
+        second_started.set()
+        with store.example_pack_adjudication_lock("c1", "a" * 64, "b" * 64):
+            second_entered.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(first)
+        second_future = pool.submit(second)
+        assert second_started.wait(timeout=2)
+        assert not second_entered.is_set()
+        release_first.set()
+        first_future.result(timeout=2)
+        second_future.result(timeout=2)
+
+    assert second_entered.is_set()
 
 
 def test_disabled_without_database_url(monkeypatch):

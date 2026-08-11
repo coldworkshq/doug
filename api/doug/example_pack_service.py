@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from contextlib import AbstractContextManager
+from datetime import UTC, datetime
 from typing import Literal, Self
 
 from pydantic import Field
 
 from . import store
 from .example_pack import (
+    EvidenceReceiptV0,
     ExampleAdjudicationV0,
     ExamplePackError,
     ExamplePackV0,
     FrozenModel,
+    VerifierReceiptV0,
     WholeInstrumentManifestV0,
 )
 from .example_pack_eval import (
@@ -40,6 +43,18 @@ class UnknownCohortError(LookupError):
 
 class UnknownPackError(LookupError):
     """The requested pack is not present in the validated cohort."""
+
+
+class UnknownFindingError(LookupError):
+    """The requested finding is not present in the validated pack."""
+
+
+class StaleAdjudicationError(RuntimeError):
+    """The caller observed an adjudication head that is no longer current."""
+
+
+class AdjudicationContractError(ValueError):
+    """An adjudication cannot support the disposition it claims."""
 
 
 class CompletedJobIdentityV0(FrozenModel):
@@ -164,6 +179,7 @@ class PackDetailV0(FrozenModel):
 
 
 CompletedJobs = Callable[..., Sequence[dict[str, object]]]
+AdjudicationLock = Callable[[str, str, str], AbstractContextManager[None]]
 
 
 class ExamplePackService:
@@ -173,10 +189,12 @@ class ExamplePackService:
         *,
         cohort_ids: tuple[str, ...],
         completed_jobs: CompletedJobs = store.completed_example_pack_jobs,
+        adjudication_lock: AdjudicationLock = store.example_pack_adjudication_lock,
     ):
         self._objects = objects
         self._cohort_ids = tuple(sorted(set(cohort_ids)))
         self._completed_jobs = completed_jobs
+        self._adjudication_lock = adjudication_lock
 
     def _repository(self, cohort_id: str) -> HostedExamplePackRepository:
         if cohort_id not in self._cohort_ids:
@@ -460,3 +478,55 @@ class ExamplePackService:
             ),
             effective_adjudications=adjudications,
         )
+
+    def adjudicate(
+        self,
+        cohort_id: str,
+        pack_hash: str,
+        finding_id: str,
+        *,
+        disposition: Literal[
+            "disproved",
+            "verified_actionable",
+            "verified_accepted_nonactionable",
+            "unknown",
+        ],
+        evidence: tuple[EvidenceReceiptV0, ...],
+        verifier_receipts: tuple[VerifierReceiptV0, ...],
+        expected_current_adjudication_id: str | None,
+        adjudicator: str,
+        adjudicated_at: datetime | None = None,
+    ) -> ExampleAdjudicationV0:
+        if disposition != "unknown" and not evidence and not verifier_receipts:
+            raise AdjudicationContractError(
+                "conclusive adjudication requires an evidence or verifier receipt"
+            )
+        with self._adjudication_lock(cohort_id, pack_hash, finding_id):
+            repository = self._repository(cohort_id)
+            cohort = repository.validate()
+            pack = next(
+                (candidate for candidate in cohort.packs if candidate.pack_hash == pack_hash),
+                None,
+            )
+            if pack is None:
+                raise UnknownPackError("unknown pack")
+            if finding_id not in {finding.finding_id for finding in pack.findings}:
+                raise UnknownFindingError("unknown finding")
+            effective = resolve_adjudications(cohort.adjudications)
+            current = effective.get((pack.pack_hash, pack.run_id, finding_id))
+            current_id = current.adjudication_id if current is not None else None
+            if expected_current_adjudication_id != current_id:
+                raise StaleAdjudicationError("stale adjudication head")
+            created = ExampleAdjudicationV0.build(
+                pack_hash=pack.pack_hash,
+                run_id=pack.run_id,
+                finding_id=finding_id,
+                disposition=disposition,
+                evidence=evidence,
+                verifier_receipts=verifier_receipts,
+                adjudicator=adjudicator,
+                adjudicated_at=adjudicated_at or datetime.now(UTC),
+                supersedes=current_id,
+            )
+            repository.put_adjudication(created)
+            return created

@@ -18,6 +18,7 @@ engine right after create_all(); a column added to the Table definition
 alone would appear in every test and in no production row.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -496,6 +497,8 @@ _engine_lock = threading.Lock()
 _install_flow_lock_engine = None
 _install_flow_lock_engine_url = None
 _install_flow_lock_engine_lock = threading.Lock()
+_example_pack_locks_guard = threading.Lock()
+_example_pack_locks: dict[int, threading.Lock] = {}
 # A serialized WorkOS bind can legitimately exceed SQLAlchemy's 30-second
 # default. Four minutes leaves one minute inside Cloud Run's 300-second API
 # request envelope for the authority work after a waiting flow gets the lock.
@@ -510,10 +513,56 @@ class InstallationBindLockUnavailable(RuntimeError):
     """The purpose lock pool could not admit this direct bind in time."""
 
 
+class ExamplePackLockUnavailable(RuntimeError):
+    """The adjudication lock cannot safely serialize a correction."""
+
+
 def _install_flow_advisory_key(nonce_digest: str) -> int:
     """Map a SHA-256 digest into Postgres's negative signed-bigint namespace."""
     positive = int(nonce_digest[:16], 16) & ((1 << 63) - 1)
     return -(positive + 1)
+
+
+def _example_pack_advisory_key(
+    cohort_id: str, pack_hash: str, finding_id: str
+) -> int:
+    payload = json.dumps(
+        [cohort_id, pack_hash, finding_id],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big", signed=True)
+
+
+@contextmanager
+def example_pack_adjudication_lock(
+    cohort_id: str, pack_hash: str, finding_id: str
+):
+    """Serialize read-current then create-correction across API instances."""
+
+    engine = _get_install_flow_lock_engine()
+    if engine is None:
+        raise ExamplePackLockUnavailable("adjudication lock is not configured")
+    key = _example_pack_advisory_key(cohort_id, pack_hash, finding_id)
+    if engine.dialect.name == "sqlite":
+        with _example_pack_locks_guard:
+            local_lock = _example_pack_locks.setdefault(key, threading.Lock())
+        with local_lock:
+            yield
+        return
+    try:
+        connection = engine.connect()
+    except SQLAlchemyTimeoutError as exc:
+        raise ExamplePackLockUnavailable(
+            "adjudication lock temporarily unavailable"
+        ) from exc
+    with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
+        parameters = {"key": key}
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), parameters)
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), parameters)
 
 
 def _get_existing_schema_engine():

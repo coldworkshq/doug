@@ -49,6 +49,111 @@ def test_healthz():
     assert r.json()["ok"] is True
 
 
+class _ExamplePackRouteService:
+    def list_cohorts(self):
+        return ({"cohort_id": "c1", "availability": {"status": "empty"}},)
+
+    def cohort_detail(self, cohort_id):
+        return {"cohort_id": cohort_id, "kind": "detail"}
+
+    def pack_detail(self, cohort_id, pack_hash):
+        return {"cohort_id": cohort_id, "pack_hash": pack_hash}
+
+    def results(self, cohort_id):
+        return {"cohort_id": cohort_id, "kind": "results"}
+
+    def adjudicate(self, cohort_id, pack_hash, finding_id, **kwargs):
+        return {
+            "cohort_id": cohort_id,
+            "pack_hash": pack_hash,
+            "finding_id": finding_id,
+            "adjudicator": kwargs["adjudicator"],
+            "disposition": kwargs["disposition"],
+        }
+
+
+def test_example_pack_routes_require_only_the_purpose_token(monkeypatch):
+    monkeypatch.setattr(api, "_example_pack_service", lambda: _ExamplePackRouteService())
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_TOKEN", "evidence-secret")
+    monkeypatch.setenv("DOUG_API_TOKEN", "operator-secret")
+
+    assert client.get("/v1/example-pack-cohorts").status_code == 403
+    assert (
+        client.get(
+            "/v1/example-pack-cohorts",
+            headers={"X-Doug-Example-Pack-Token": "operator-secret"},
+        ).status_code
+        == 403
+    )
+    response = client.get(
+        "/v1/example-pack-cohorts",
+        headers={"X-Doug-Example-Pack-Token": "evidence-secret"},
+    )
+    assert response.status_code == 200
+    assert response.json()[0]["cohort_id"] == "c1"
+
+
+def test_example_pack_routes_fail_closed_when_purpose_token_is_unconfigured(monkeypatch):
+    monkeypatch.setattr(api, "_example_pack_service", lambda: _ExamplePackRouteService())
+    monkeypatch.delenv("DOUG_EXAMPLE_PACK_TOKEN", raising=False)
+
+    response = client.get(
+        "/v1/example-pack-cohorts",
+        headers={"X-Doug-Example-Pack-Token": "anything"},
+    )
+
+    assert response.status_code == 503
+
+
+def test_example_pack_routes_cover_detail_pack_results_and_fixed_adjudicator(monkeypatch):
+    monkeypatch.setattr(api, "_example_pack_service", lambda: _ExamplePackRouteService())
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_TOKEN", "evidence-secret")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_ADJUDICATOR", "andrew")
+    headers = {"X-Doug-Example-Pack-Token": "evidence-secret"}
+
+    assert client.get("/v1/example-pack-cohorts/c1", headers=headers).json()["kind"] == "detail"
+    assert (
+        client.get("/v1/example-pack-cohorts/c1/packs/" + "a" * 64, headers=headers)
+        .json()["pack_hash"]
+        == "a" * 64
+    )
+    assert client.get("/v1/example-pack-cohorts/c1/results", headers=headers).json()[
+        "kind"
+    ] == "results"
+    response = client.post(
+        f"/v1/example-pack-cohorts/c1/packs/{'a' * 64}/findings/{'b' * 64}/adjudications",
+        headers=headers,
+        json={
+            "disposition": "unknown",
+            "evidence": [],
+            "verifier_receipts": [],
+            "expected_current_adjudication_id": None,
+            "adjudicator": "mallory",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["adjudicator"] == "andrew"
+
+
+def test_example_pack_storage_construction_failure_is_bounded_and_503(monkeypatch):
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_TOKEN", "evidence-secret")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_BUCKET", "private-evidence")
+    monkeypatch.setenv("DOUG_EXAMPLE_PACK_COHORT", "c1")
+
+    def fail_store(*_args, **_kwargs):
+        raise RuntimeError("credentials failed for gs://private-evidence/secret-object")
+
+    monkeypatch.setattr(api, "GcsObjectStore", fail_store)
+    response = client.get(
+        "/v1/example-pack-cohorts",
+        headers={"X-Doug-Example-Pack-Token": "evidence-secret"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Example Pack service unavailable"}
+    assert "private-evidence" not in response.text
+
+
 def test_score_endpoint():
     r = client.post(
         "/v1/score",
