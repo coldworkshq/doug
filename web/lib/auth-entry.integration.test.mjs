@@ -11,6 +11,7 @@ const NEXT_BIN = path.resolve(WEB_DIR, "../node_modules/next/dist/bin/next");
 const COOKIE_PASSWORD = "local-test-cookie-password-32-chars";
 
 let origin;
+let callbackOrigin;
 let serverProcess;
 let serverOutput = "";
 
@@ -63,6 +64,7 @@ before(async () => {
 
   const port = await availablePort();
   origin = `http://127.0.0.1:${port}`;
+  callbackOrigin = `https://127.0.0.1:${port}`;
   serverProcess = spawn(
     process.execPath,
     [NEXT_BIN, "start", "-H", "127.0.0.1", "-p", String(port)],
@@ -74,7 +76,7 @@ before(async () => {
         WORKOS_CLIENT_ID: "local-test-client",
         WORKOS_API_KEY: "local-test-api-key",
         WORKOS_COOKIE_PASSWORD: COOKIE_PASSWORD,
-        NEXT_PUBLIC_WORKOS_REDIRECT_URI: `${origin}/auth/callback`,
+        NEXT_PUBLIC_WORKOS_REDIRECT_URI: `${callbackOrigin}/auth/callback`,
         DOUG_API_URL: "http://127.0.0.1:9",
         DOUG_INSTALL_FLOW_SECRET: "local-test-install-flow-secret-32ch",
       },
@@ -103,7 +105,7 @@ test("the public landing page exposes provider-neutral account entry", async () 
   assert.match(html, /href="\/queue"/);
 });
 
-test("an unauthenticated dashboard request leaves rendering before AuthKit mutates cookies", async () => {
+test("an unauthenticated dashboard crosses TLS termination before rendering", async () => {
   const response = await fetch(`${origin}/dashboard`, {
     redirect: "manual",
     headers: { accept: "text/html" },
@@ -113,8 +115,8 @@ test("an unauthenticated dashboard request leaves rendering before AuthKit mutat
   assert.equal(response.status, 307);
   assert.equal(authorizationUrl.origin, "https://api.workos.com");
   assert.equal(authorizationUrl.pathname, "/user_management/authorize");
-  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), `${origin}/auth/callback`);
-  assert.match(response.headers.get("set-cookie") ?? "", /wos-auth-verifier(?:-[^=;]+)?=/);
+  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), `${callbackOrigin}/auth/callback`);
+  assert.match(response.headers.get("set-cookie") ?? "", /wos-auth-verifier(?:-[^=;]+)?=[^;]+;[^\r\n]*\bSecure\b/);
 });
 
 test("the canonical sign-in route mints PKCE in a Route Handler", async () => {
@@ -124,8 +126,8 @@ test("the canonical sign-in route mints PKCE in a Route Handler", async () => {
   assert.equal(response.status, 307);
   assert.equal(authorizationUrl.origin, "https://api.workos.com");
   assert.equal(authorizationUrl.pathname, "/user_management/authorize");
-  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), `${origin}/auth/callback`);
-  assert.match(response.headers.get("set-cookie") ?? "", /wos-auth-verifier(?:-[^=;]+)?=/);
+  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), `${callbackOrigin}/auth/callback`);
+  assert.match(response.headers.get("set-cookie") ?? "", /wos-auth-verifier(?:-[^=;]+)?=[^;]+;[^\r\n]*\bSecure\b/);
 });
 
 test("an alternate Cloud Run host canonicalizes before PKCE is minted", async () => {
@@ -138,7 +140,7 @@ test("an alternate Cloud Run host canonicalizes before PKCE is minted", async ()
   });
 
   assert.equal(response.status, 307);
-  assert.equal(response.headers.get("location"), `${origin}/sign-in`);
+  assert.equal(response.headers.get("location"), `${callbackOrigin}/sign-in`);
   assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /wos-auth-verifier(?:-[^=;]+)?=/);
 });
 

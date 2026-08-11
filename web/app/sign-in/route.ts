@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import {
   configuredWorkOSRedirectUri,
-  publicRequestOrigin,
+  requestHostMatches,
 } from "@/lib/auth-origin";
 
 const UNAVAILABLE = "Sign-in is temporarily unavailable.";
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   }
 
-  if (publicRequestOrigin(request) !== redirectUri.origin) {
+  if (!requestHostMatches(request, redirectUri)) {
     return NextResponse.redirect(new URL("/sign-in", redirectUri.origin));
   }
 

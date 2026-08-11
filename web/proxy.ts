@@ -2,11 +2,11 @@ import {
   authkit,
   handleAuthkitProxy,
 } from "@workos-inc/authkit-nextjs";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import {
   configuredWorkOSRedirectUri,
-  publicRequestOrigin,
+  requestHostMatches,
 } from "@/lib/auth-origin";
 
 const UNAVAILABLE = "Authentication is temporarily unavailable.";
@@ -20,7 +20,7 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
     });
   }
 
-  if (publicRequestOrigin(request) !== redirectUri.origin) {
+  if (!requestHostMatches(request, redirectUri)) {
     const canonical = new URL(
       `${request.nextUrl.pathname}${request.nextUrl.search}`,
       redirectUri.origin,
@@ -28,7 +28,14 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
     return NextResponse.redirect(canonical);
   }
 
-  const { session, headers, authorizationUrl } = await authkit(request, {
+  // Cloud Run terminates TLS before the container. Build the SDK-facing URL
+  // from the configured public origin so missing proxy protocol metadata can
+  // neither self-redirect forever nor downgrade the PKCE cookie's Secure bit.
+  const authRequest = new NextRequest(
+    new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, redirectUri.origin),
+    { method: request.method, headers: request.headers },
+  );
+  const { session, headers, authorizationUrl } = await authkit(authRequest, {
     redirectUri: redirectUri.toString(),
   });
   if (request.nextUrl.pathname.startsWith("/dashboard") && !session.user) {
@@ -38,10 +45,10 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-    return handleAuthkitProxy(request, headers, { redirect: authorizationUrl });
+    return handleAuthkitProxy(authRequest, headers, { redirect: authorizationUrl });
   }
 
-  return handleAuthkitProxy(request, headers);
+  return handleAuthkitProxy(authRequest, headers);
 }
 
 // This must remain literal: Next statically analyzes proxy configuration.

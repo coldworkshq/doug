@@ -57,6 +57,32 @@ test("the deploy smoke proves root, dashboard protection, and WorkOS entry witho
   });
 });
 
+test("the deploy smoke follows one same-app canonicalization hop", async () => {
+  await withServer((request, response) => {
+    const port = request.headers.host.split(":").at(-1);
+    const canonicalBase = `http://localhost:${port}`;
+    const onCanonicalHost = request.headers.host.startsWith("localhost:");
+    const callback = encodeURIComponent(`${canonicalBase}/auth/callback`);
+
+    if (request.url === "/") {
+      response.writeHead(200);
+    } else if (!onCanonicalHost && (request.url === "/dashboard" || request.url === "/sign-in")) {
+      response.writeHead(307, { location: `${canonicalBase}${request.url}` });
+    } else if (onCanonicalHost && (request.url === "/dashboard" || request.url === "/sign-in")) {
+      response.writeHead(307, {
+        location: `https://api.workos.com/user_management/authorize?redirect_uri=${callback}&state=canonical-state-must-not-be-logged`,
+      });
+    } else {
+      response.writeHead(404);
+    }
+    response.end();
+  }, async (baseUrl) => {
+    const result = await runSmoke(baseUrl);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /canonical-state-must-not-be-logged|state=/);
+  });
+});
+
 test("a WorkOS redirect with the wrong callback cannot pass the deploy smoke", async () => {
   await withServer((request, response) => {
     if (request.url === "/") {

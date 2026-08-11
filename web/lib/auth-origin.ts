@@ -20,16 +20,23 @@ export function configuredWorkOSRedirectUri(): URL | null {
   }
 }
 
-export function publicRequestOrigin(request: NextRequest): string | null {
+export function requestHostMatches(
+  request: NextRequest,
+  redirectUri: URL,
+): boolean {
   const host = firstForwardedValue(request.headers.get("x-forwarded-host"))
     ?? firstForwardedValue(request.headers.get("host"));
-  const protocol = firstForwardedValue(request.headers.get("x-forwarded-proto"))
-    ?? request.nextUrl.protocol.replace(/:$/, "");
-  if (!host || !(["http", "https"].includes(protocol))) return null;
+  if (!host) return false;
 
   try {
-    return new URL(`${protocol}://${host}`).origin;
+    const candidate = new URL(`${redirectUri.protocol}//${host}`);
+    return !candidate.username
+      && !candidate.password
+      && candidate.pathname === "/"
+      && !candidate.search
+      && !candidate.hash
+      && candidate.host === redirectUri.host;
   } catch {
-    return null;
+    return false;
   }
 }

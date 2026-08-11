@@ -4,7 +4,7 @@
 
 **Goal:** Restore the approved sign-in-first front door so a person can create a Doug account without GitHub, reach hosted WorkOS AuthKit, and enter a protected dashboard without a Next.js render-time cookie failure.
 
-**Architecture:** A dedicated `GET /sign-in` Route Handler owns explicit account entry because Next.js 16.3 permits PKCE cookie mutation there but not during Server Component rendering. For a browser navigation to `/dashboard`, the AuthKit proxy redirects directly to WorkOS before rendering and forwards its PKCE cookie; the dashboard retains a read-only `withAuth()` fallback to `/sign-in`. A shared origin helper canonicalizes requests to the configured callback origin before creating PKCE state, so Cloud Run's two hostnames cannot split the verifier cookie from the callback.
+**Architecture:** A dedicated `GET /sign-in` Route Handler owns explicit account entry because Next.js 16.3 permits PKCE cookie mutation there but not during Server Component rendering. For a browser navigation to `/dashboard`, the AuthKit proxy redirects directly to WorkOS before rendering and forwards its PKCE cookie; the dashboard retains a read-only `withAuth()` fallback to `/sign-in`. A shared host helper canonicalizes requests to the configured callback host without trusting proxy protocol metadata, so Cloud Run's two hostnames cannot split the verifier cookie from the callback or self-redirect after TLS termination.
 
 **Tech Stack:** Next.js 16.3 App Router, `@workos-inc/authkit-nextjs`, React 19, Node test runner, GitHub Actions, Google Cloud Run.
 
@@ -16,7 +16,7 @@
 - Auth initiation and `/auth/callback` must use the same canonical `*.run.app` origin.
 - No token, API key, cookie password, PKCE state, or upstream error body may enter HTML, logs, or test output.
 - Preserve the existing landing-page typography, color tokens, motion, and rounded-control vocabulary; this is an entry-point repair, not a redesign.
-- Production deployment remains gated on explicit user approval after the corrective PR merges.
+- Per accepted ADR-0009, merging to `main` is the deployment approval and automatically triggers the path-filtered Cloud Run deploy.
 
 ---
 
@@ -51,7 +51,7 @@ Send a request with an alternate `Host` header and prove `/sign-in` first redire
 
 - [ ] **Step 2: Add failing executable smoke-script tests**
 
-Use a controlled HTTP server to run `web/scripts/smoke-auth-entry.sh` against: (a) root 200, dashboard 307 to WorkOS, and sign-in 307 to WorkOS; and (b) the currently insufficient root-only 200 behavior. Assert (a) exits 0 without printing the WorkOS query string and (b) exits nonzero.
+Use a controlled HTTP server to run `web/scripts/smoke-auth-entry.sh` against: (a) root 200 with dashboard and sign-in redirecting to WorkOS directly; (b) the same healthy app reached through one canonical same-app hop; and (c) the currently insufficient root-only 200 behavior. Assert (a) and (b) exit 0 without printing the WorkOS query string and (c) exits nonzero.
 
 - [ ] **Step 3: Add a failing deployment smoke-contract test**
 
@@ -90,11 +90,11 @@ Expected: the real Next integration fails on missing `/sign-in`, absent landing 
 
 - [ ] **Step 1: Implement the minimal sign-in Route Handler**
 
-Read the redirect URI at request time with bracket access. Parse its origin; return `503 Sign-in is temporarily unavailable.` for missing or invalid configuration. If the request origin differs, return a 307 to `<canonical-origin>/sign-in` before calling AuthKit. On the canonical origin, call `getSignInUrl({ returnTo: "/dashboard" })` and redirect to the returned WorkOS URL.
+Read the redirect URI at request time with bracket access. Parse its origin; return `503 Sign-in is temporarily unavailable.` for missing or invalid configuration. If the public request host differs, return a 307 to `<canonical-origin>/sign-in` before calling AuthKit. Compare hosts using the configured protocol so missing or contradictory proxy protocol metadata cannot self-redirect the canonical host. On the canonical host, call `getSignInUrl({ returnTo: "/dashboard" })` and redirect to the returned WorkOS URL.
 
 - [ ] **Step 2: Move unauthenticated dashboard initiation into the proxy**
 
-Compose the AuthKit proxy explicitly. On `/dashboard`, forward an unauthenticated browser document request to AuthKit's authorization URL with `handleAuthkitProxy()` so the SDK's PKCE cookie survives and React never renders the request. Canonicalize an alternate public origin before invoking AuthKit.
+Compose the AuthKit proxy explicitly. On `/dashboard`, forward an unauthenticated browser document request to AuthKit's authorization URL with `handleAuthkitProxy()` so the SDK's PKCE cookie survives and React never renders the request. Canonicalize an alternate public host before invoking AuthKit, and reconstruct the SDK-facing request URL from the configured HTTPS origin so the PKCE cookie remains secure behind TLS termination.
 
 - [ ] **Step 3: Retain a read-only dashboard fallback**
 
@@ -149,7 +149,7 @@ Expected: 0 failures, lint exit 0, build exit 0, and `/sign-in` listed as a dyna
 
 - [ ] **Step 1: Extend the post-promotion web check**
 
-Implement the already-tested script: request `/`, `/dashboard`, and `/sign-in` without following redirects and with browser document-request headers; require root 200 and both protected entry points to return 307 to the WorkOS authorization endpoint with an encoded callback equal to `${url}/auth/callback`. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state. Replace the workflow's root-only curl with `bash web/scripts/smoke-auth-entry.sh "$url"`.
+Implement the already-tested script: request `/`, `/dashboard`, and `/sign-in` without automatically following redirects and with browser document-request headers. Require root 200. Allow either a direct WorkOS redirect or exactly one validated same-app canonicalization hop for both auth entry points, then require WorkOS's encoded callback to equal `<canonical-origin>/auth/callback`. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state. Replace the workflow's root-only curl with `bash web/scripts/smoke-auth-entry.sh "$url"`.
 
 - [ ] **Step 2: Run the deployment contract and shell/YAML checks**
 
@@ -192,6 +192,6 @@ Confirm no secrets or token-shaped fixtures entered the diff; verify `git diff -
 
 Use a concise commit and PR body that includes the production error, why the previous build-only gate missed it, the red/green regression receipts, and the explicit statement that GitHub remains optional.
 
-- [ ] **Step 5: Wait for CI and stop before production mutation**
+- [ ] **Step 5: Wait for CI and stop before merge**
 
-Do not merge or redeploy without Andrew's explicit approval. After approval, deploy web and verify the promoted service using the workflow receipts plus an interactive cold-user WorkOS login.
+Do not merge without Andrew's explicit approval. Under ADR-0009, that merge automatically deploys the web change; monitor the deploy workflow and verify the promoted service using its receipts plus an interactive cold-user WorkOS login.
