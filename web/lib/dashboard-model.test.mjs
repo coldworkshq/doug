@@ -125,12 +125,21 @@ test("selectors preserve installation boundaries and the exact Lema marker", asy
 
 test("outcome tone follows the recorded result instead of treating every outcome as clear", async () => {
   const { outcomeTone } = await import("./dashboard-model.ts?outcome-tone");
+  // The production vocabulary is exactly revert | clean | censored
+  // (api/doug/adjudicate.py's OutcomeKind); the column also permits hotfix,
+  // which the adjudicator deliberately never writes.
   assert.equal(outcomeTone("clean"), "clear");
-  assert.equal(outcomeTone("clear"), "clear");
   assert.equal(outcomeTone("revert"), "flag");
   assert.equal(outcomeTone("hotfix"), "flag");
-  assert.equal(outcomeTone("scheduled"), "neutral");
-  assert.equal(outcomeTone("unknown-future-kind"), "neutral");
+  // Censored = the PR left the risk set unobserved (merged off the default
+  // branch, or no clone reachable). Blindness is not a miss, so it never
+  // takes the flag colour reserved for real ones.
+  assert.equal(outcomeTone("censored"), "neutral");
+  // An unrecognised kind flags. Silently neutralising it is how a genuinely
+  // bad new outcome would arrive on the dashboard looking like nothing.
+  assert.equal(outcomeTone("graded-miss"), "flag");
+  assert.equal(outcomeTone("unknown-future-kind"), "flag");
+  // No outcome recorded yet is the one honest neutral.
   assert.equal(outcomeTone(null), "neutral");
 });
 

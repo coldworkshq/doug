@@ -116,10 +116,25 @@ export function repositoryOptions(connection: ConnectionLike) {
 
 export type OutcomeTone = "clear" | "flag" | "neutral";
 
+/** One tone rule over the vocabulary the adjudicator actually writes —
+ *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The
+ *  column also permits `hotfix`, which the adjudicator never writes because
+ *  §10 of docs/design/outcome-loop/publication-preregistration.md rules that a
+ *  hotfix is not a miss and that no detector here can tell one repairing this
+ *  PR from one merely following it; it still flags if a row ever carries it.
+ *
+ *  `censored` is neutral, not flagged: it records that the PR left the risk
+ *  set UNOBSERVED — the merge landed off the branch the treeless clone can
+ *  see, or no clone was reachable at all. Painting a non-observation in the
+ *  miss colour is the honesty failure this rule exists to refuse.
+ *
+ *  Everything else flags, including kinds this build has never heard of: an
+ *  allowlist here is what let a genuinely bad outcome arrive looking neutral. */
 export function outcomeTone(kind: string | null): OutcomeTone {
-  if (kind === "clean" || kind === "clear") return "clear";
-  if (kind === "revert" || kind === "hotfix") return "flag";
-  return "neutral";
+  if (kind === null) return "neutral";
+  if (kind === "clean") return "clear";
+  if (kind === "censored") return "neutral";
+  return "flag";
 }
 
 type SetupConnectionLike = {
