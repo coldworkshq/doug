@@ -56,6 +56,13 @@ resolved / (resolved + persisted), None when the denominator is 0.
 Slug drift recorded as a covariate: distinct raw slugs / distinct patterns
 in the sample (probe precedent: 276 slugs over 395 findings).
 
+**Labelable pair** (the term bar 1's STOP threshold counts): a consecutive
+reader-verdict pair whose *earlier* verdict carries at least one reader finding
+with a complete identity. Anything less has nothing for a human to grade — a
+pair of empty verdicts is not evidence that the classifier is right. Defined
+here rather than in the evaluation script so the STOP threshold cannot be
+loosened by redefining what it counts.
+
 ## Invariants
 
 Not in score() (structural test); no new read; derived at query time — no
@@ -206,3 +213,9 @@ finding that keeps a prior one alive is an input row with no state of its own,
 and reusing `persisted` for it would double every persisted finding in any count
 taken over the list. `matched` names that row and is counted nowhere. Recorded
 before implementing, same discipline.
+
+**2026-08-11, same task — defined "labelable pair".** Bar 1 STOPs below 10
+labelable pairs, but the note never said what makes a pair labelable, which
+would have left the threshold to whatever the evaluation script happened to
+count. Defined under the bars above, before the script was written. The
+threshold itself is unchanged.
