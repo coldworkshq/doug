@@ -23,39 +23,38 @@
 ### Task 1: Lock the Missing Runtime Contract
 
 **Files:**
-- Modify: `web/lib/authkit-shell.test.mjs`
-- Modify: `web/lib/node-next-loader.mjs`
+- Create: `web/lib/auth-entry.integration.test.mjs`
+- Create: `web/scripts/smoke-auth-entry.sh`
 - Modify: `api/tests/test_deploy_gcp.py`
 
 **Interfaces:**
-- Consumes: the AuthKit test loader's `getSignInUrl(options)` call recorder and Next's real `NextRequest`/`NextResponse` classes.
-- Produces: regression contracts for canonical sign-in, dashboard redirect ownership, landing-page entry controls, and deploy-time AuthKit reachability.
+- Consumes: a real local Next production server, a controlled HTTP server for smoke-script cases, and the production deploy workflow call site.
+- Produces: caller-level regression contracts for canonical sign-in, dashboard redirect ownership, landing-page entry controls, and deploy-time AuthKit reachability.
 
-- [ ] **Step 1: Add a failing Route Handler contract test**
+- [ ] **Step 1: Add a failing local Next integration test**
 
-Add a test that imports `web/app/sign-in/route.ts`, sets `NEXT_PUBLIC_WORKOS_REDIRECT_URI=https://doug.example/auth/callback`, and proves:
+Build and start the real Next app with non-secret test configuration on loopback. Prove:
 
 ```js
-const canonical = await GET(new NextRequest("https://doug.example/sign-in"));
-assert.equal(canonical.status, 307);
-assert.equal(canonical.headers.get("location"), "https://auth.workos.test/authorize");
-assert.deepEqual(globalThis.__workosSignInCalls, [{ returnTo: "/dashboard" }]);
-
-const alternate = await GET(new NextRequest("https://alternate.run.app/sign-in"));
-assert.equal(alternate.status, 307);
-assert.equal(alternate.headers.get("location"), "https://doug.example/sign-in");
-assert.deepEqual(globalThis.__workosSignInCalls, []);
+assert.equal(root.status, 200);
+assert.match(await root.text(), /href="\/sign-in"[^>]*>Sign in</);
+assert.match(rootHtml, /href="\/sign-in"[^>]*>Get started</);
+assert.equal(dashboard.status, 307);
+assert.equal(dashboard.headers.get("location"), `${origin}/sign-in`);
+assert.equal(signIn.status, 307);
+assert.match(signIn.headers.get("location"), /^https:\/\/api\.workos\.com\/user_management\/authorize\?/);
+assert.match(signIn.headers.get("set-cookie"), /wos-auth-verifier=/);
 ```
 
-Add a missing/invalid redirect configuration case that returns a constant 503 response without calling WorkOS.
+Send a request with an alternate `Host` header and prove `/sign-in` first redirects to the configured canonical origin rather than minting PKCE on the alternate host. Add missing/invalid redirect configuration cases that return a constant 503 response without a WorkOS redirect.
 
-- [ ] **Step 2: Add failing source-level boundary assertions**
+- [ ] **Step 2: Add failing executable smoke-script tests**
 
-Read `web/app/dashboard/page.tsx` and `web/app/page.tsx`. Assert that the dashboard calls read-only `withAuth()`, contains `redirect("/sign-in")`, and does not contain `ensureSignedIn`. Assert that the landing page exposes both visible **Sign in** and **Get started** links to `/sign-in` while retaining the public queue action.
+Use a controlled HTTP server to run `web/scripts/smoke-auth-entry.sh` against: (a) root 200, dashboard 307 to same-origin `/sign-in`, and sign-in 307 to WorkOS; and (b) the currently insufficient root-only 200 behavior. Assert (a) exits 0 without printing the WorkOS query string and (b) exits nonzero.
 
 - [ ] **Step 3: Add a failing deployment smoke-contract test**
 
-Extend `api/tests/test_deploy_gcp.py` to require the web deployment workflow to check all three receipts after promotion:
+Extend `api/tests/test_deploy_gcp.py` to require the web deployment workflow to invoke the tested smoke script after resolving the promoted service URL. The script itself checks all three receipts:
 
 ```text
 / -> 200
@@ -74,7 +73,7 @@ npm test --workspace=web -- --test-name-pattern='sign-in|landing|dashboard'
 cd api && uv run pytest -q tests/test_deploy_gcp.py
 ```
 
-Expected: failures name the missing `web/app/sign-in/route.ts`, absent landing actions, unsafe `ensureSignedIn`, and absent deploy receipts.
+Expected: the real Next integration fails on missing `/sign-in`, absent landing actions, and the dashboard's 200 error shell; smoke-script tests fail because the script is absent; the wiring pin fails because the workflow does not invoke it.
 
 ### Task 2: Add the Canonical WorkOS Entry and Safe Dashboard Guard
 
@@ -135,6 +134,7 @@ Expected: 0 failures, lint exit 0, build exit 0, and `/sign-in` listed as a dyna
 
 **Files:**
 - Modify: `.github/workflows/deploy.yml`
+- Create: `web/scripts/smoke-auth-entry.sh`
 
 **Interfaces:**
 - Consumes: the promoted Cloud Run service URL and `curl` response code/location output.
@@ -142,7 +142,7 @@ Expected: 0 failures, lint exit 0, build exit 0, and `/sign-in` listed as a dyna
 
 - [ ] **Step 1: Extend the post-promotion web check**
 
-After the existing root 200 check, request `/dashboard` without following redirects and require 307 to `${url}/sign-in`. Request `/sign-in` without following redirects and require 307 to a WorkOS-owned HTTPS authorization URL. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state.
+Implement the already-tested script: request `/`, `/dashboard`, and `/sign-in` without following redirects; require root 200, dashboard 307 to `${url}/sign-in`, and sign-in 307 to a WorkOS-owned HTTPS authorization URL. Print only status and origin/path-safe receipt text; do not print query strings because they contain PKCE state. Replace the workflow's root-only curl with `bash web/scripts/smoke-auth-entry.sh "$url"`.
 
 - [ ] **Step 2: Run the deployment contract and shell/YAML checks**
 
