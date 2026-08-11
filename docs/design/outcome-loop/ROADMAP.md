@@ -314,10 +314,16 @@ path, no cross-tenant read, no silent partial reads.
   right-censoring, cadence). `LOCKED v8`, the atomic dual-write, guarded catch-up CLI,
   deploy lock, and production runbook are built on `m3-60-day-backfill`; production is
   unchanged until the branch merges and Task 7 runs.
-  - [ ] **Task 7 production catch-up:** deploy the merged lock hash, capture the dry-run
-    count, pause the Scheduler, apply and verify the manifest, execute one manual Job,
-    pass the SQL/CLI audits, then resume the Scheduler. This remains a hard gate before
-    the first 14-day publication.
+  - [x] **Task 7 production catch-up: COMPLETE 2026-08-11.** Deploy pinned the v9
+    lock hash (`c8e30da3…60f2`) into the Job env; dry-run reported 44 missing
+    (42 `drewjst/doug`, 2 `lemahq/lema-verify`); apply inserted exactly 44 and the
+    manifest verified untouched; pre- and post-Job SQL audits returned zero rows on
+    all four invariants; manual execution `doug-adjudicator-srj97` completed with an
+    all-zero DrainSummary (nothing due before 2026-08-16 — so the first adjudicated
+    rows ever stamped will carry v9); final dry-run 0 missing / 0 mismatches /
+    0 orphans with eligible_14 = existing_60 = 66; Scheduler resumed ENABLED.
+    Receipt: `/tmp/doug-60-day-backfill-20260811T224751Z`, durable copy at
+    `workspace/research/task7-receipt-20260811T224751Z` (outside the repo).
 
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real

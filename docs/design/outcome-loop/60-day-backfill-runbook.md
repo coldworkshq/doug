@@ -1,7 +1,10 @@
 # Production runbook — 60-day outcome-job catch-up
 
-**Status:** Built on `m3-60-day-backfill`; not executed in production. Run only
-after this branch is merged to `main`, as the separately authorized Task 7.
+**Status:** EXECUTED IN PRODUCTION 2026-08-11 (Task 7) — success path §1-§4,
+§6-§9; receipt `workspace/research/task7-receipt-20260811T224751Z`. Two §6
+attempts aborted before psql ran (psql missing from PATH; artifacts preserved
+as `*.attempt1-no-psql`). Kept for any future environment; a re-run needs its
+own authorization and a fresh receipt directory.
 
 This is the one-time repair for historical registered-installation merges that
 have a 14-day `outcome_jobs` row but no 60-day sibling. Future merges receive
