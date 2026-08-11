@@ -206,6 +206,21 @@ def test_valid_signature_from_an_untrusted_issuer_is_refused(monkeypatch):
     assert session_auth.verify_session_claims(f"Bearer {wrong_issuer}") is None
 
 
+def test_application_scoped_issuer_is_pinned_to_configured_client(monkeypatch):
+    """WorkOS application tokens use a client-scoped hosted issuer.
+
+    Accept the issuer for this exact application, but never turn the hosted
+    path into a wildcard that would admit a token from another application.
+    """
+    _use_fake_jwks(monkeypatch)
+
+    current_application = _token(iss="https://api.workos.com/user_management/client_01ABC")
+    assert session_auth.verify_session_claims(f"Bearer {current_application}") is not None
+
+    other_application = _token(iss="https://api.workos.com/user_management/client_other")
+    assert session_auth.verify_session_claims(f"Bearer {other_application}") is None
+
+
 def test_session_scopes_cannot_exceed_the_enumerated_set():
     """A session has no scopes of its own. Synthesising them is inventing
     authority; the set is fixed and pinned."""

@@ -24,9 +24,11 @@ from . import entitlements, store, tenancy
 
 SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read")
 
-# WorkOS documents api.workos.com as the default access-token issuer; Doug's
-# live AuthKit receipt used auth.workos.com. Custom AuthKit domains must be
-# pinned explicitly with WORKOS_ISSUER instead of widening this allowlist.
+# WorkOS documents api.workos.com as the legacy access-token issuer; Doug's
+# earlier live AuthKit receipt used auth.workos.com. Current hosted tokens may
+# instead scope the issuer to the default application. That path is derived
+# from Doug's exact configured client id below, never accepted as a wildcard.
+# Custom AuthKit domains must still be pinned explicitly with WORKOS_ISSUER.
 _DEFAULT_WORKOS_ISSUERS = (
     "https://api.workos.com",
     "https://api.workos.com/",
@@ -54,10 +56,11 @@ def _client_id() -> str:
 
 def _issuers() -> tuple[str, ...]:
     configured = os.environ.get("WORKOS_ISSUER")
-    if not configured:
-        return _DEFAULT_WORKOS_ISSUERS
-    normalized = configured.rstrip("/")
-    return (normalized, f"{normalized}/")
+    if configured:
+        normalized = configured.rstrip("/")
+        return (normalized, f"{normalized}/")
+    application_issuer = f"https://api.workos.com/user_management/{_client_id()}"
+    return (*_DEFAULT_WORKOS_ISSUERS, application_issuer, f"{application_issuer}/")
 
 
 def _jwks() -> PyJWKClient:
