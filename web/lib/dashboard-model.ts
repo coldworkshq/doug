@@ -1,3 +1,5 @@
+import { coverageLabel, coveragePercent } from "./coverage";
+
 type FilterableRun = {
   verdict_id: number;
   repo: string;
@@ -42,14 +44,16 @@ export function dashboardFilters(values: SearchValues): DashboardFilters {
 
 export function coverageView(run: Pick<FilterableRun, "coverage" | "changed_files">) {
   const read = run.coverage;
+  const result = coveragePercent(read, run.changed_files);
+  const percent = result.kind === "known" ? result.pct : null;
+  const label = coverageLabel(result);
   if (!read) {
-    return { percent: null, chars: null, files: null, unseen: [], fileCut: null };
+    return { percent, kind: result.kind, label, chars: null, files: null, unseen: [], fileCut: null };
   }
-  const percent = read.diff_chars > 0
-    ? Math.max(0, Math.min(100, Math.round((read.sent_chars / read.diff_chars) * 100)))
-    : null;
   return {
     percent,
+    kind: result.kind,
+    label,
     chars: `${read.sent_chars.toLocaleString("en-US")} of ${read.diff_chars.toLocaleString("en-US")} chars`,
     files: run.changed_files === null ? null : `${read.files_sent} of ${run.changed_files} files`,
     unseen: read.files_unseen,
@@ -72,8 +76,8 @@ export function filterRuns<T extends FilterableRun>(
     if (filters.band !== "all" && row.band !== filters.band) return false;
     if (filters.tier !== "all" && row.tier !== filters.tier) return false;
     if (filters.lowCoverage) {
-      const percent = coverageView(row).percent;
-      if (percent === null || percent >= 50) return false;
+      const result = coveragePercent(row.coverage, row.changed_files);
+      if (!(result.kind === "known" && result.low)) return false;
     }
     if (filters.hasError && !row.job?.error) return false;
     return true;

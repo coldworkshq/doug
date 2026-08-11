@@ -60,6 +60,12 @@ export async function resolve(specifier, context, nextResolve) {
     return await nextResolve(specifier, context);
   } catch (error) {
     if (specifier.startsWith("next/")) return nextResolve(`${specifier}.js`, context);
+    // Lib-to-lib imports are written extensionless in app source because
+    // Next's bundler resolves them (`lib/api.ts` does it too). Node needs the
+    // real file.
+    if (specifier.startsWith("./") || specifier.startsWith("../")) {
+      return nextResolve(`${specifier}.ts`, context);
+    }
     throw error;
   }
 }
