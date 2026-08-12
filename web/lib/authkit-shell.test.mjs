@@ -272,11 +272,38 @@ test("a successful derivation leaves no failure signal behind", async () => {
   await withEntitlementServer(async (requests) => {
     await recordProviderEntitlements(CANARY, {
       ...QUICK,
-      cookieStore: async () => ({ set: (...args) => writes.push(args) }),
+      cookieStore: async () => ({
+        set: (...args) => writes.push(args),
+        delete: () => {},
+      }),
     });
     assert.equal(requests.length, 1);
   });
   assert.deepEqual(writes, [], "nothing failed, so the dashboard is told nothing");
+});
+
+test("a success withdraws a stale failure signal instead of letting it expire", async () => {
+  // Doug's PR 99 review, reader:stale-state-signal (real): the cookie was set
+  // on failure and only ever aged out (120s), so a fail-then-succeed sign-in
+  // kept telling the person their repositories could not be confirmed AFTER a
+  // derivation had just confirmed them. The callback is a Route Handler — the
+  // one place that CAN delete it — so success must withdraw it affirmatively.
+  const { recordProviderEntitlements, SCOPE_UNCONFIRMED_COOKIE } = await import(
+    "./entitlements.ts"
+  );
+  const writes = [];
+  const deletes = [];
+  await withEntitlementServer(async () => {
+    await recordProviderEntitlements(CANARY, {
+      ...QUICK,
+      cookieStore: async () => ({
+        set: (...args) => writes.push(args),
+        delete: (name) => deletes.push(name),
+      }),
+    });
+  });
+  assert.deepEqual(writes, [], "success writes no failure note");
+  assert.deepEqual(deletes, [SCOPE_UNCONFIRMED_COOKIE], "success withdraws any stale one");
 });
 
 test("neither a hostile cookie store nor a dead API can fail the sign-in", async () => {

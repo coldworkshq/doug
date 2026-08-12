@@ -9,6 +9,7 @@ type AuthSuccess = {
 
 type CookieWriter = {
   set: (name: string, value: string, options: Record<string, unknown>) => unknown;
+  delete: (name: string) => unknown;
 };
 
 /** Test seam, same shape and same rule as `store.replace_session_entitlements`'s
@@ -89,6 +90,26 @@ function sleep(ms: number): Promise<void> {
 /** Leave the dashboard something honest to render. Best-effort by construction:
  *  `cookies()` throws outside a request scope, and a sign-in must not fail
  *  because a hint could not be written. */
+/** Withdraw a stale failure note the moment a derivation succeeds. The
+ *  callback is a Route Handler — the ONE place that can delete a cookie
+ *  (the dashboard, a Server Component, cannot; that is why the note also
+ *  has a short maxAge). Without this, a fail-then-succeed sign-in kept
+ *  telling the person their repositories could not be confirmed for up to
+ *  two minutes AFTER a derivation had just confirmed them (Doug's PR 99
+ *  review, reader:stale-state-signal). Best-effort for the same reason as
+ *  markScopeUnconfirmed: sign-in never fails over cookie hygiene. */
+async function clearScopeUnconfirmed(
+  cookieStore: () => Promise<CookieWriter>,
+): Promise<void> {
+  try {
+    const store = await cookieStore();
+    store.delete(SCOPE_UNCONFIRMED_COOKIE);
+  } catch {
+    // Same rationale as markScopeUnconfirmed's catch: the failure that
+    // matters is already handled; this only affects dashboard phrasing.
+  }
+}
+
 async function markScopeUnconfirmed(
   cookieStore: () => Promise<CookieWriter>,
 ): Promise<void> {
@@ -133,6 +154,9 @@ export async function recordProviderEntitlements(
   data: AuthSuccess,
   limits: DerivationLimits = {},
 ): Promise<void> {
+  // No provider token (silent SSO, non-GitHub identity): no derivation was
+  // attempted, so any standing failure note still describes the latest real
+  // attempt — leave it to expire rather than withdrawing it unearned.
   if (!data.oauthTokens) return;
 
   const budgetMs = limits.budgetMs ?? ENTITLEMENT_BUDGET_MS;
@@ -142,7 +166,10 @@ export async function recordProviderEntitlements(
   const remaining = () => budgetMs - (Date.now() - started);
 
   const first = await attempt(data, budgetMs);
-  if (first === null) return;
+  if (first === null) {
+    await clearScopeUnconfirmed(cookieStore);
+    return;
+  }
 
   let attempts = 1;
   let last = first;
@@ -151,7 +178,10 @@ export async function recordProviderEntitlements(
     await sleep(backoffMs);
     attempts = 2;
     const second = await attempt(data, left);
-    if (second === null) return;
+    if (second === null) {
+      await clearScopeUnconfirmed(cookieStore);
+      return;
+    }
     last = second;
   }
 
