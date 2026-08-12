@@ -112,9 +112,20 @@ looked up in `fetched` before `applyLens` runs, so no lensed row can reach it.
 `components/threshold-gear.tsx`, `"use client"`. shadcn `Popover` + `Slider` +
 `Button`, wrapping a `method="GET" action="/dashboard"` form with the carried
 params as hidden inputs. **The form navigates, not a router call** — the lens
-lands in the URL, the page re-renders on the server, and the control works with
-JavaScript disabled. The client boundary exists only for popover open/closed and
-the slider's live readout.
+lands in the URL and the page re-renders on the server, so the lens is server
+state like every other filter and a shared link reproduces it exactly.
+
+Radix's `Popover` and `Slider` both require JavaScript, so the *gear* is a
+JS-only control. The *lens* is not: it is a query param the server reads, and
+the banner and its reset link below are server-rendered. Without JavaScript an
+active lens is still visible, still correct, and still clearable — only the
+composing control is missing. This is stated rather than papered over; a control
+that silently does nothing is the failure mode being avoided.
+
+The slider's value reaches the form through an explicit
+`<input type="hidden" name="threshold">` bound to the same state, not through
+Radix's own form bubbling — one visible mechanism rather than a dependency on a
+primitive's internals.
 
 Placement: beside the search box. When a lens is active the trigger carries a
 dot, and a banner sits above the table:
@@ -133,8 +144,21 @@ the two data colours and a view state is not a verdict.
 ## 2. Table
 
 `components/ui/table.tsx` installed from shadcn (`radix-nova`, already
-configured in `components.json`). `RunTable` renders through
-`Table`/`TableHeader`/`TableHead`/`TableRow`/`TableCell`.
+configured in `components.json`), then **adapted** — which is the point of
+shadcn's copy-in model. Two edits, both verified against the generated source:
+
+1. **Drop its `"use client"` directive.** Every one of the eight components is a
+   pure prop spread over an intrinsic element — no hooks, no handlers, no state.
+   The directive is boilerplate on the generated file, and keeping it would drag
+   a client boundary around the entire run ledger for styling that needs none.
+   `Popover` and `Slider` keep theirs; they are Radix primitives and genuinely
+   need it.
+2. **Let `Table` take a `containerClassName`.** It already renders its own
+   `overflow-x-auto` container div. Without this the bounded-height wrapper
+   becomes a second, nested scroll container inside the first, which is where
+   sticky headers break. The bound goes on the container shadcn already has.
+
+`RunTable` then renders through `Table`/`TableHeader`/`TableHead`/`TableRow`/`TableCell`.
 
 Everything already working is preserved: the three sortable columns and their
 carets (`lib/sorting.ts`, URL-driven), the per-PR `<tbody>` grouping, the
