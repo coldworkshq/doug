@@ -199,4 +199,93 @@ is wrong.
 
 # Part 2 — Results
 
-*(Filled in after Part 1 was committed. Empty at declaration time.)*
+## The draw (executed after Part 1 was committed at `bfa8c6b`)
+
+Python 3.9.6. Script and output preserved verbatim in the session scratchpad.
+
+| | frame | drawn | findings |
+| --- | --- | --- | --- |
+| bar 1 (seed 20260811, target 40) | 75 pairs / 265 findings | 13 pairs | **43** |
+| no-SHA probe (seed 20260812, target 10) | 26 pairs / 70 findings | 6 pairs | 12 |
+
+Bar-1 sample spans 11 distinct PRs: #90, #50 (×2 pairs), #43 (×2), #56, #69,
+#59, #48, #67, #39, #38, #75. All 26 head SHAs resolve locally.
+
+## Bar 2 — **PASS**, on real exposure, whole population
+
+Not sampled: the census ran over all 118 pairs and all 335 resolved-classified
+findings.
+
+| check | result |
+| --- | --- |
+| resolved findings whose `file` string-matches `files_unseen` / `files_dropped` / `file_cut` | **0** |
+| resolved findings in a pair with a missing read row (rule 3) | **0** |
+| `unknown(file-uncovered)` abstentions actually taken | **39**, across 22 pairs |
+
+The exposure is real, so this is a pass rather than a vacuous one: the
+classifier had 39 genuine opportunities to wrongly resolve an uncovered
+finding and took none of them.
+
+**Path-form half (bar 2(b)).** Part 1 declared this check over the bar-1
+sample; it was instead run over the whole population, which is strictly
+stronger. Across all 335 resolved findings, exactly **one** suspect: `drewjst/doug#42`,
+finding file `web/app/page.tsx` against coverage path `web/app/queue/page.tsx`.
+**Adjudicated FALSE** — distinct blobs on `origin/main`, a Next.js app-router
+basename collision between two genuinely different route files, not one file in
+two string forms. No true same-file mismatch exists in the run.
+
+**Correction to the design note's premise.** `reads.changed_files` is a COUNT
+(integer), not a path list — the only paths a read row carries are
+`files_unseen`, `files_dropped` and `file_cut`. Any future path-form check must
+use those three and not `changed_files`.
+
+## Bar 3 — **NO EVIDENCE** (not a pass)
+
+`findings_settled = 0` across all 118 pairs: zero exposures. As declared in
+Part 1 before scoring, a bar with no exposures has produced no evidence. Rule 4
+remains **construction-tested only**, by the unit tests and the
+settle.py↔convergence.py pinning test — a claim about the code, not about the
+ledger. Any document, receipt or MCP tool description asserting bar 3 passed is
+wrong.
+
+## Bar 1 — labelling in progress; interim evidence
+
+The mechanical half of the evidence is complete and is recorded here because it
+is what the labelling rests on.
+
+**Every one of the 13 drawn pairs is linear** — `from_head` is an ancestor of
+`to_head` in all 13. No rebases, so no file left the PR diff between the two
+verdicts; the diff only grew. This rules out the benign explanation that a
+finding's file stopped being reviewed.
+
+Against that: **26 of the 43 drawn findings sit on files that are byte-identical
+between the two verdict heads**, and **13 of those sit in pairs where no code
+changed anywhere at all** (only `docs/` or `HANDOFF.md`) — PR#48 (5), #39 (3),
+#38 (3), #43 v1043→1045 (2). A finding on unchanged code cannot have been
+fixed, so each such unit is `still-present` or `not-a-defect`, never `fixed`.
+
+Confirmed false-resolved so far, with documentary evidence rather than
+inference:
+
+| PR | pair | finding | evidence |
+| --- | --- | --- | --- |
+| #75 | 1144→1145 | `reader:unauthenticated-data-exposure` (api.py) | findings-log adjudicates it `real`; the pair contains exactly one commit (deploy.yml); its fixes `7430600`+`b6253c9` land **after** `to_head` |
+| #75 | 1144→1145 | `reader:missing-smoke-test` (gcp.sh) | fix `e681064` lands **after** `to_head` |
+| #48 | 1062→1064 | `reader:error-handling-gap` (api.py) | findings-log `real`, `changed=true`, but api.py is untouched in this pair — fixed later |
+| #48 | 1062→1064 | `reader:unbounded-external-calls` (api.py) | findings-log `real` (`unauthenticated-endpoint-abuse`); only `docs/findings-log.jsonl` changed in the pair |
+
+Genuine resolutions also exist and are labelled `fixed`: PR#75's
+`reader:deploy-ordering-hazard`, fixed inside the pair by `70fe216` — the
+finding asked for `needs: [changes, api]` and the commit delivers exactly that,
+with a `!cancelled()` guard; and PR#90's `reader:tooling-resolution-fallback`,
+adjudicated `real`+`changed` with the file touched in the pair.
+
+**Evidence source declared:** `docs/findings-log.jsonl` carries 112 prior human
+adjudications (`real` 45 / `disproved` 40 / `adjacent` 27) covering 4 of the 11
+sampled PRs. It is used as *evidence* for a label, never as the label — its
+vocabulary is not the pre-registered one, `adjacent` has no clean mapping to it,
+and it keys on `rule` alone, which matches only **7 of 43** sampled findings
+(PR#75's rows use unprefixed slugs — the slug-drift covariate showing up in
+practice). The remaining 36 need direct judgement.
+
+*(Bar-1 scoring is not complete and no precision figure is recorded here yet.)*
