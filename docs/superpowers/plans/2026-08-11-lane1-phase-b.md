@@ -359,7 +359,29 @@ RULING 1 = pinned-light); Delete `web/app/dashboard/dashboard.module.css`; Modif
 
 ### Task B6: Wire facets, search, paging, and the per-PR accordion
 
-**Blocked on RULING 2.**
+**RULING 2 applies. RULING 4 (below) unblocks the key collision.**
+
+> **RULING 4 — the `band`/`tier` collision (controller, 2026-08-11).** PR 1 found that
+> console's facet keys are multi-select and comma-joined while web's dashboard already reads
+> `band` and `tier` from the URL as single values (`page.tsx:390-393`,
+> `dashboard-model.ts:33`). Wiring the facet bar on those names as-is makes
+> `dashboardFilters` read `band === "flagged,cleared"`, match no run, and blank the table
+> while the pill bar claims two bands are selected.
+>
+> **Resolution: ONE filter model. The facets own `band` and `tier`; `dashboardFilters`
+> becomes multi-value.** Rejected: renaming the facet keys (e.g. `f_band`) — that leaves two
+> parallel filter systems on one page, each able to contradict the other, which is the same
+> class of defect as the coverage and tone divergences Phase A existed to remove.
+>
+> **Backward compatibility is REQUIRED, not optional, and gets its own test.** A single value
+> parses as a selection of one, so every URL that works today keeps working: `?band=flagged`
+> must behave exactly as it does now. Pin that explicitly — a shared or bookmarked dashboard
+> link silently returning a different row set is a user-visible regression that no existing
+> test would catch.
+>
+> Re-pin console's collision test (`facets.test.mjs:150`, which guards `repo`/`tenant` —
+> console's scope params) against **web's real scope params**, so the next key added to
+> either side trips it.
 
 - [ ] **Step 1:** Decide nothing here — implement the ruled model. If URL-state: the facet
   bar is a server component emitting `<Link>`s built by the existing `href(params, changes)`
