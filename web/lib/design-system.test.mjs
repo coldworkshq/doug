@@ -111,3 +111,40 @@ test("the CVD reasoning survives the port from the console", async () => {
   assert.match(css, /fails CVD separation against --flag at ΔE 6\.1/);
   assert.match(css, /Coverage is a magnitude, not a judgement/);
 });
+
+test("the dashboard surface keeps the orphan values it inherited, exactly", async () => {
+  // Intent (plan A5.6, controller ruling): dashboard.module.css carried values
+  // with NO equivalent in the palette, and the ruling was that they keep their
+  // exact hex inside the scoped surface block — never substituted for globals'
+  // nearest neighbour, never left dangling.
+  //
+  // This is pinned because the failure is silent and visual. `--rule-soft`
+  // alone draws every row divider in the run ledger; deleting it leaves
+  // `var(--rule-soft)` undefined and the dividers simply stop rendering, while
+  // substituting globals' `--muted`/`--secondary` (#f6f5f1, a visibly
+  // different value) restyles the whole table. Neither shows up in any other
+  // test, because no test renders. Before this test existed, removing the
+  // token left all 153 green — verified, not assumed.
+  //
+  // Three, not the four the module carried: #d4d1c8 was the hand-rolled
+  // ruler border and legend swatch, and both use sites ceased to exist when
+  // CoverageRuler replaced them (it brings console's own #c9c6bd). A token
+  // nobody references would be dead CSS, so it was correctly not carried.
+  //
+  // If a value here ever gains a real palette home, delete it from the block
+  // AND from this list in the same commit; do not loosen the assertion.
+  const css = await readFile(cssUrl, "utf8");
+  const block = css.match(/\.dashboard-surface\s*\{[^}]+\}/g)?.join("\n") ?? "";
+  assert.ok(block, "the .dashboard-surface scope block is gone");
+
+  assert.match(block, /--rule-soft:\s*#f1efe9/);
+  assert.match(block, /--dim:\s*#aaa79f/);
+  assert.match(block, /--row-hover:\s*#faf9f5/);
+
+  // …and the two that deliberately did NOT come here stay out: #eceae3 and
+  // #3d403c are the console's .cov-track/.cov-fill, already global utilities.
+  // A copy inside this scope would be a second source of truth for the
+  // coverage ramp.
+  assert.equal(block.includes("#eceae3"), false);
+  assert.equal(block.includes("#3d403c"), false);
+});
