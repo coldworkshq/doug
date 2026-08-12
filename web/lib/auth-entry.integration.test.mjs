@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -74,8 +75,24 @@ async function waitForServer(url) {
 }
 
 before(async () => {
+  // Delete the marker first so the assertion below cannot be satisfied by a
+  // leftover from an earlier run — a stale dist dir would otherwise let the
+  // guard pass while the build actually landed in the shared `.next`.
+  const buildIdPath = path.join(WEB_DIR, DIST_DIR, "BUILD_ID");
+  rmSync(buildIdPath, { force: true });
+
   const build = await run(process.execPath, [NEXT_BIN, "build"]);
   assert.equal(build.code, 0, build.stdout + build.stderr);
+
+  // If web/next.config.ts ever stops honouring DOUG_WEB_DIST_DIR — renamed,
+  // dropped, or reverted — the build silently lands back in the shared `.next`
+  // and the race this isolation exists to prevent returns as an intermittent
+  // failure that looks like an infrastructure blip. Fail loudly and by name
+  // instead: the build must land where these servers are about to read from.
+  assert.ok(
+    existsSync(buildIdPath),
+    `build did not land in ${DIST_DIR}: web/next.config.ts must set distDir from DOUG_WEB_DIST_DIR`,
+  );
 
   const port = await availablePort();
   origin = `http://127.0.0.1:${port}`;
