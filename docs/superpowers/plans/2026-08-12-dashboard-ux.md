@@ -1238,7 +1238,6 @@ In `web/app/dashboard/page.tsx`, apply these substitutions. Each is a distinct c
 | `RunCells` title `<strong>` | `text-xs` | `text-[14px]` |
 | `RunCells` tier / job / age cells | `text-[10px]` | `text-[11.5px]` |
 | `RunCells` outcome cell | `text-xs` | `text-[13px]` |
-| `TD` (Task 6) | `h-10` | `h-[40px]` |
 | `Evidence` crumb | `text-[10px]` | `text-[11.5px]` |
 | `Evidence` band/threshold line | `text-[9px]` | `text-[10.5px]` |
 | `Evidence` `<dl>` | `text-[10px]` | `text-[12px]` |
