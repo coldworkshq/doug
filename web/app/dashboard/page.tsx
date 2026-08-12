@@ -1,14 +1,17 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { DougLogo } from "@/components/doug-logo";
+import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   capSuffix,
   coverageView,
   dashboardFilters,
   filterRuns,
+  frontDoor,
   outcomeTone,
   repositoryOptions,
 } from "@/lib/dashboard-model";
@@ -303,12 +306,64 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
   );
 }
 
-function NoConnection({ userLabel }: { userLabel: string }) {
+/** The state that used to be silence. The API can still see these connections;
+ *  what expired is the repository scope derived from GitHub at sign-in, which
+ *  `entitlements.TTL` caps at 8h. Showing the connection and naming what went
+ *  stale is the whole point — the alternative, shipped until now, was to drop
+ *  these rows and greet a bound operator as though they had never connected.
+ *
+ *  No repository names are listed, and that is not an oversight: the API sends
+ *  none for an expired connection, because the 8h ceiling exists precisely so a
+ *  scope nobody has re-proven stops being repeated back. */
+function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) {
+  return (
+    <main className={styles.emptyState}>
+      <p className={styles.route}>/spaces</p>
+      <h1>Sign back in to refresh this.</h1>
+      <p>
+        Doug still has your connection. What expired is the repository scope
+        GitHub granted when you signed in — it lasts eight hours, and only a new
+        sign-in can renew it.
+      </p>
+      <div className={styles.setupRows}>
+        {connections.map((connection) => (
+          <div className={styles.setupRow} key={connection.installation_id}>
+            <span>
+              <strong>{connectionLabel(connection)}</strong>
+              <small>session scope expired — sign out and sign back in to refresh</small>
+            </span>
+          </div>
+        ))}
+      </div>
+      <form action={signOutAction}>
+        <button type="submit" className={styles.primaryAction}>Sign out</button>
+      </form>
+    </main>
+  );
+}
+
+function NoConnection({
+  userLabel,
+  scopeUnconfirmed,
+}: {
+  userLabel: string;
+  scopeUnconfirmed: boolean;
+}) {
   return (
     <main className={styles.emptyState}>
       <p className={styles.route}>/account</p>
       <h1>{userLabel}, you&apos;re in.</h1>
       <p>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
+      {/* This screen otherwise claims "you have not connected anything", which
+          is only true if Doug asked. When the sign-in derivation failed it never
+          asked, and `lib/entitlements.ts` leaves this signal precisely so the
+          difference is not papered over. */}
+      {scopeUnconfirmed && (
+        <p className={styles.emptyNote}>
+          Doug could not confirm your repositories when you signed in, so this page may be
+          missing connections you already have. Try again in a moment, or sign out and back in.
+        </p>
+      )}
       <Link href="/install/start" prefetch={false} className={styles.primaryAction}>Connect GitHub</Link>
     </main>
   );
@@ -324,10 +379,10 @@ export default async function DashboardPage({
   const { user, accessToken, organizationId } = auth;
   if (!user || !accessToken) redirect("/sign-in");
   const { connections } = await getConnections(accessToken);
-  const current = connections.find(
-    (connection) => connection.organization_id === organizationId && connection.status === "ready",
-  ) ?? null;
+  const door = frontDoor(connections, organizationId);
+  const current = door.current;
   const userLabel = user.firstName || user.email || "You";
+  const scopeUnconfirmed = (await cookies()).has(SCOPE_UNCONFIRMED_COOKIE);
 
   let rows: RunSummary[] = [];
   let capNote = "";
@@ -374,7 +429,9 @@ export default async function DashboardPage({
       </nav>
       <PendingConnections connections={connections} />
 
-      {connections.length === 0 ? <NoConnection userLabel={userLabel} /> : !current ? (
+      {door.state === "welcome" ? <NoConnection userLabel={userLabel} scopeUnconfirmed={scopeUnconfirmed} />
+        : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
+        : door.state === "choose" ? (
         <main className={styles.chooseState}>
           <p className={styles.route}>/spaces</p>
           <h1>Choose a connected space.</h1>
@@ -383,7 +440,7 @@ export default async function DashboardPage({
         </main>
       ) : (
         <main>
-          <div className={styles.screenLabel}><span>/runs</span> Verdict history for {connectionLabel(current)}</div>
+          <div className={styles.screenLabel}><span>/runs</span> Verdict history for {connectionLabel(door.current)}</div>
           <section className={styles.frame}>
             <div className={styles.filters}>
               <FilterChip active={filters.band === "all" && filters.tier === "all" && !filters.lowCoverage && !filters.hasError} target={href(params, { band: null, tier: null, coverage: null, error: null })}>all</FilterChip>

@@ -186,3 +186,95 @@ test("setup recovery accepts only a positive safe id on an exact visible pending
     null,
   );
 });
+
+// ---------------------------------------------------------------------------
+// The front door: which of the four dashboard states a set of connections puts
+// a signed-in person in. This exists because the states were an inline ternary
+// chain in page.tsx, where `node --test` cannot reach them — and the bug this
+// module now guards against lived exactly there: an operator with a bound
+// installation whose derived scope had aged past entitlements.TTL was shown the
+// never-connected welcome, a claim about them that was false.
+
+const READY = {
+  installation_id: 101,
+  organization_id: "org_acme",
+  account_login: "acme",
+  account_type: "Organization",
+  status: "ready",
+  label: null,
+  repositories: [{ id: 11, full_name: "acme/one" }],
+};
+
+test("an expired scope is told the truth, never shown the never-connected welcome", async () => {
+  const { frontDoor } = await import("./dashboard-model.ts?front-door-expired");
+  const expired = { ...READY, status: "reauthorize_required", repositories: [] };
+
+  const door = frontDoor([expired], "org_acme");
+
+  // The whole point: NOT "welcome". This person has a connection; Doug just
+  // cannot vouch for its scope any more.
+  assert.equal(door.state, "reauthorize");
+  assert.deepEqual(door.expired, [expired]);
+
+  // And the truly never-connected case still reaches the welcome, because that
+  // state is honest for them.
+  assert.equal(frontDoor([], "org_acme").state, "welcome");
+  assert.equal(frontDoor([], null).state, "welcome");
+  assert.deepEqual(frontDoor([], null).expired, []);
+});
+
+test("an expired connection can never become the selected space, even on an exact org match", async () => {
+  const { frontDoor } = await import("./dashboard-model.ts?front-door-selection");
+  const expired = { ...READY, status: "reauthorize_required", repositories: [] };
+
+  // `organization_id` still matches the session's org claim — the row is bound,
+  // it is only the DERIVED SCOPE that died. Selecting it would open a run
+  // ledger against a scope the API will refuse anyway (session_auth.py:188
+  // fails resolve_session closed on a stale claim), so the honest answer is to
+  // refuse it here and say why, not to render a page that 401s underneath.
+  const door = frontDoor([expired], "org_acme");
+  assert.equal(door.current, null);
+  assert.notEqual(door.state, "runs");
+});
+
+test("a live connection still opens its ledger, and a stale sibling never blocks it", async () => {
+  const { frontDoor } = await import("./dashboard-model.ts?front-door-live");
+  const expired = {
+    ...READY,
+    installation_id: 202,
+    organization_id: "org_stale",
+    account_login: "stale",
+    status: "reauthorize_required",
+    repositories: [],
+  };
+
+  const door = frontDoor([READY, expired], "org_acme");
+  assert.equal(door.state, "runs");
+  assert.equal(door.current, READY);
+  assert.deepEqual(door.expired, [expired]);
+
+  // Signed in, connections readable, but no org selected yet: still the
+  // existing "choose a space" state, not a reauthorize claim.
+  const choosing = frontDoor([READY, expired], null);
+  assert.equal(choosing.state, "choose");
+  assert.equal(choosing.current, null);
+});
+
+test("a connection still waiting on setup outranks a stale one for the front door", async () => {
+  const { frontDoor } = await import("./dashboard-model.ts?front-door-setup");
+  const pending = {
+    ...READY,
+    installation_id: 303,
+    organization_id: null,
+    status: "setup_required",
+  };
+  const expired = { ...READY, status: "reauthorize_required", repositories: [] };
+
+  // There is something actionable that is not "sign out and back in", so the
+  // page must land on the choose state where PendingConnections is rendered —
+  // telling this person to re-authenticate would send them away from the button
+  // that actually finishes their setup.
+  const door = frontDoor([pending, expired], null);
+  assert.equal(door.state, "choose");
+  assert.deepEqual(door.expired, [expired]);
+});
