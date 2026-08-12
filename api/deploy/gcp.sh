@@ -12,6 +12,8 @@
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh deploy  # build + deploy the API
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh adjudicator # deploy M3 Job
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh schedule # create/update daily trigger
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh reconcile-job # deploy outcome reconciler Job
+#   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh schedule-reconcile # create/update 6h trigger
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh web     # build + deploy the site
 #   PROJECT=doug-prod0 REGION=us-central1 ./deploy/gcp.sh console # build + deploy the operator console
 #
@@ -45,6 +47,8 @@ WEB_SERVICE=doug-web
 CONSOLE_SERVICE=doug-console
 ADJUDICATOR_JOB=doug-adjudicator
 SCHEDULER_JOB=doug-adjudicator-daily
+RECONCILE_JOB=doug-outcome-reconciler
+RECONCILE_SCHEDULER_JOB=doug-outcome-reconciler-6h
 CONN="$PROJECT:$REGION:$INSTANCE"
 # The showcase queue shows one repo's queue; unset would mix the backfilled
 # probe corpora into it.
@@ -688,6 +692,7 @@ deploy() {
   # it separately would let the live review and outcome detector drift even
   # when both source deploys began at the same commit.
   adjudicator
+  reconcile_job
   api_url
 }
 
@@ -738,6 +743,61 @@ schedule() {
     --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
     --max-retry-attempts 0
   echo "scheduled: $SCHEDULER_JOB -> $ADJUDICATOR_JOB daily at 03:00 UTC"
+}
+
+reconcile_job() {
+  local api_image
+  api_image=$(gcloud run services describe "$SERVICE" \
+    --project "$PROJECT" --region "$REGION" \
+    --format='value(spec.template.spec.containers[0].image)')
+  if [ -z "$api_image" ]; then
+    echo "ERROR: $SERVICE has no deployed image; deploy the API first." >&2
+    return 1
+  fi
+
+  # No DOUG_PREREG_HASH: reconciliation only enqueues outcome_jobs rows, it
+  # never adjudicates or publishes anything, so the hash preflight the
+  # adjudicator requires does not apply here.
+  gcloud run jobs deploy "$RECONCILE_JOB" \
+    --image "$api_image" \
+    --project "$PROJECT" --region "$REGION" \
+    --command python --args=-m,doug.reconcile_worker \
+    --service-account "doug-adjudicator-sa@$PROJECT.iam.gserviceaccount.com" \
+    --set-cloudsql-instances "$CONN" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
+    --set-env-vars "DOUG_GITHUB_APP_ID=4450932" \
+    --memory 512Mi --cpu 1 --tasks 1 --max-retries 0 --task-timeout 900s
+  echo "outcome reconciler deployed from $api_image"
+}
+
+schedule_reconcile() {
+  local scheduler_sa uri action
+  scheduler_sa="doug-scheduler-sa@$PROJECT.iam.gserviceaccount.com"
+  uri="https://run.googleapis.com/v2/projects/$PROJECT/locations/$REGION/jobs/$RECONCILE_JOB:run"
+
+  gcloud run jobs add-iam-policy-binding "$RECONCILE_JOB" \
+    --project "$PROJECT" --region "$REGION" \
+    --member="serviceAccount:$scheduler_sa" --role=roles/run.invoker >/dev/null
+
+  if gcloud scheduler jobs describe "$RECONCILE_SCHEDULER_JOB" \
+      --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    action=update
+  else
+    action=create
+  fi
+  # Every 6 hours, not daily: reconciliation is cheap (no cloning, no model
+  # reads — pulls.list + pulls.get only), and the whole point is shrinking
+  # the window a lost webhook can sit undiscovered. The adjudicator stays
+  # daily because adjudication itself is expensive and nothing about that
+  # cadence is what this Job is fixing.
+  gcloud scheduler jobs "$action" http "$RECONCILE_SCHEDULER_JOB" \
+    --project "$PROJECT" --location "$REGION" \
+    --schedule "0 */6 * * *" --time-zone "Etc/UTC" \
+    --uri "$uri" --http-method POST \
+    --oauth-service-account-email "$scheduler_sa" \
+    --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
+    --max-retry-attempts 0
+  echo "scheduled: $RECONCILE_SCHEDULER_JOB -> $RECONCILE_JOB every 6h"
 }
 
 # Node apps live in an npm workspaces monorepo. Cloud Run `--source ../web`
@@ -854,7 +914,7 @@ api_url() {
     --format="value(status.url)"
 }
 
-case "${1:?setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|web|console}" in
+case "${1:?setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|reconcile-job|schedule-reconcile|web|console}" in
   setup) setup ;;
   example-pack-setup) example_pack_setup ;;
   example-pack-enable) example_pack_enable ;;
@@ -863,7 +923,9 @@ case "${1:?setup|example-pack-setup|example-pack-enable|example-pack-disable|adj
   deploy) deploy ;;
   adjudicator) adjudicator ;;
   schedule) schedule ;;
+  reconcile-job) reconcile_job ;;
+  schedule-reconcile) schedule_reconcile ;;
   web) web ;;
   console) console ;;
-  *) echo "usage: $0 setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|web|console" >&2; exit 2 ;;
+  *) echo "usage: $0 setup|example-pack-setup|example-pack-enable|example-pack-disable|adjudicator-setup|deploy|adjudicator|schedule|reconcile-job|schedule-reconcile|web|console" >&2; exit 2 ;;
 esac
