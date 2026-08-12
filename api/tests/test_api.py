@@ -4822,7 +4822,18 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
     ]
 
 
-def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
+def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
+    tmp_path, monkeypatch
+):
+    """A scope past its TTL is reported, not deleted from the answer.
+
+    THIS TEST REPLACES ONE THAT ASSERTED `{"connections": []}` HERE. That
+    silence was read by the dashboard as "this person has never connected
+    anything", so a bound operator was greeted with the first-run welcome eight
+    hours after signing in and offered a Connect button for a repository Doug
+    was already installed on. Dropping the row and having no connection are not
+    the same fact, and the endpoint may not spell them the same way.
+    """
     _db(tmp_path, monkeypatch)
     _use_bind_jwks(monkeypatch)
     _connection_install(
@@ -4835,6 +4846,84 @@ def test_connections_drop_a_stale_stored_scope(tmp_path, monkeypatch):
     store.replace_session_entitlements(
         "user_01ABC",
         [(101, [11])],
+        now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connections": [
+            {
+                "provider": "github",
+                "installation_id": 101,
+                "organization_id": "org_acme",
+                "account_login": "acme",
+                "account_type": "Organization",
+                # Not "ready", though the installation is bound and live: the
+                # claim about WHICH repos this user reaches is what expired.
+                "status": "reauthorize_required",
+                "label": None,
+                # Withheld, not forgotten — see the test below.
+                "repositories": [],
+            }
+        ]
+    }
+
+
+def test_connections_withhold_the_repository_list_of_an_expired_claim(
+    tmp_path, monkeypatch
+):
+    """The TTL's actual privacy property, kept while the connection is surfaced.
+
+    entitlements.TTL exists because GitHub-side access revocation is invisible
+    to the ledger: someone can lose repo access at GitHub with the installation
+    unchanged, and only the ceiling catches it. Repeating an eight-hour-old repo
+    list back would keep publishing names this person may no longer reach. So
+    the connection is named and the claim it carried is not.
+    """
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(
+        101,
+        "acme",
+        "Organization",
+        [(11, "acme/secret-repo"), (12, "acme/other")],
+        org_id="org_acme",
+    )
+    store.replace_session_entitlements(
+        "user_01ABC",
+        [(101, [11, 12])],
+        now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
+    )
+
+    response = TestClient(app).get("/v1/sessions/connections", headers=_session())
+
+    assert response.status_code == 200
+    assert response.json()["connections"][0]["repositories"] == []
+    assert "secret-repo" not in response.text
+
+
+def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(
+    tmp_path, monkeypatch
+):
+    """Staleness changes an answer's STATUS; it never resurrects a dead one.
+
+    A connection with no readable repository disappears rather than becoming an
+    installation-wide sentinel — the rule this endpoint already had. An expired
+    claim over a repo the installation no longer covers is still nothing to
+    show, and telling someone to sign in again to refresh it would send them
+    around a loop that cannot end.
+    """
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(
+        303, "shrunk", "Organization", [(33, "shrunk/removed")], org_id="org_shrunk"
+    )
+    store.set_installation_repos(303, [(33, "shrunk/removed")], replace=False, state="removed")
+    store.replace_session_entitlements(
+        "user_01ABC",
+        [(303, [33])],
         now=datetime.now(UTC) - entitlements.TTL - timedelta(seconds=1),
     )
 
