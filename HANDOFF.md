@@ -9,12 +9,24 @@
     PR #90 ("dashboard honesty") is in recent git log — so that section
     predates several merges. Not reconciled here; out of scope for this lane,
     flagging so it isn't trusted at face value.
-    State: REVIEW. Built and fully verified (web: tsc clean, `npm run lint`
-    clean, `npm test` 72/72 — was 62, +10 new (lib/docs-nav.test.mjs) —
-    `npm run build` green, all 11 /docs routes prerender static). Branched,
-    committed (6351658), pushed, PR #101 open: github.com/drewjst/doug/pull/101.
-    Remember ADR-0009 (merge-to-main deploys) before merging.
-    Next: Andrew reviews PR #101. Nothing else blocks it.
+    State: REVIEW, PR #101 open: github.com/drewjst/doug/pull/101. No
+    conflicts (main was merged into the branch — the only real one, both
+    sides independently appending to globals.css's utilities layer, resolved
+    by keeping both additions; the huge surrounding diff --stat is main's own
+    unrelated churn since this branch cut, not a conflict). GitHub briefly
+    reported CONFLICTING/DIRTY after the push before its mergeability check
+    caught up — MERGEABLE now.
+    Doug reviewed #101 (risk 0.18, neutral as always) with 4 findings; two
+    were real (docs sidebar had no mobile collapse, and its sticky offset +
+    H2 scroll-margin were two independently hardcoded numbers with nothing
+    keeping them in sync) and are fixed; two were disproved (llms.txt is
+    populated, Doug just wasn't shown it; the .ts-test-import "risk" is a
+    pattern nine sibling files already use under CI's pinned Node 22).
+    Disposition posted as a PR comment. Latest commit 20cc119. Remember
+    ADR-0009 (merge-to-main deploys) before merging.
+    Next: CI (api/web/console + 3 image jobs) was still running as of this
+    write-up — confirm green, then Andrew merges when ready. Nothing else
+    blocks it.
     Decisions this session:
     - Extracted the landing page's inline nav into components/site-header.tsx,
       reused as-is on /docs; left /queue and /dashboard alone — both already
@@ -90,7 +102,9 @@
       useSyncExternalStore (getServerSnapshot=false, client=true), not
       useEffect+setState — this repo's eslint (react-hooks/set-state-in-
       effect) rejects the classic mounted-flag pattern; confirmed lint-clean.
-    Pointers: branch `landing-header-and-docs` @ 6351658, PR #101. New:
+    Pointers: branch `landing-header-and-docs` @ 20cc119 (6351658 original +
+    2a8f1c3 handoff pointer + 2d9f499 main-merge + 20cc119 findings-response),
+    PR #101. New:
     web/components/site-header.tsx, web/components/docs/*, web/lib/docs-nav.ts
     (+.test.mjs), web/app/docs/** (11 routes), web/public/llms.txt. Modified:
     web/app/page.tsx (nav extraction), web/app/globals.css (+--warn,
