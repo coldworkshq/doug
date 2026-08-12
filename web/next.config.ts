@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   // waiting on the lock therefore deletes BUILD_ID inside that window, and the
   // server dies with "Could not find a production build in the '.next'
   // directory". Giving the test its own dist dir makes it the only writer.
+  // Unset everywhere that ships, so the deploy path stays exactly `.next`.
   distDir: process.env.DOUG_WEB_DIST_DIR ?? ".next",
   output: "standalone",
   // Trace from the monorepo root so workspace-hoisted deps are included.
