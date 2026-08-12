@@ -383,7 +383,17 @@ test("the ledger is bounded and its header stays put", async () => {
   // exists to pin. lib/ui-primitives.test.mjs pins the prop; this pins the use.
   assert.match(runTable, /containerClassName/);
   assert.match(runTable, /max-h-\[/);
-  assert.match(runTable, /sticky/);
+  // Asserted against TH, where `sticky` actually lives, NOT against RunTable's
+  // body — the brief originally pinned it on the function text, which a doc
+  // comment mentioning the word satisfies just as well as the real class. A
+  // pin a comment can pass is not a pin.
+  const th = page.match(/const TH =[\s\S]*?;\n/)?.[0] ?? "";
+  assert.ok(th, "the TH constant is gone");
+  assert.match(th, /\bsticky\b/);
+  assert.match(th, /\btop-0\b/);
+  // An opaque background is not decoration: without it the rows scroll
+  // visibly underneath the pinned header.
+  assert.match(th, /\bbg-background\b/);
 
   // Collapsed borders are painted by the table, not the cell, and vanish from
   // a sticky header. The separated model is what keeps the header's rule
