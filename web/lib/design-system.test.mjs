@@ -63,6 +63,47 @@ test("chrome never becomes a data verdict", async () => {
   }
 });
 
+const bandChipUrl = new URL("../components/band-chip.tsx", import.meta.url);
+const coverageRulerUrl = new URL("../components/coverage-ruler.tsx", import.meta.url);
+const runSpineUrl = new URL("../components/run-spine.tsx", import.meta.url);
+
+test("BandChip always says the word, in both colour branches", async () => {
+  // Intent: --flag and --clear sit in the 6-8 CVD floor band, where secondary
+  // encoding is not optional — the WORD is that encoding. A bare dot or a
+  // colour swatch would leave a CVD reader with two chips they cannot tell
+  // apart. Source pin rather than a render test (house rule).
+  const chip = await readFile(bandChipUrl, "utf8");
+  const branches = chip.match(/flagged \? "([^"]*)" : "([^"]*)"/);
+  assert.ok(branches, "BandChip must pick its label with a flagged ? word : word ternary");
+  assert.ok(branches[1].trim().length > 0, "the flagged branch renders no word");
+  assert.ok(branches[2].trim().length > 0, "the cleared branch renders no word");
+  // The reasoning has to survive too, or the next editor sees only two strings.
+  assert.match(chip, /The colour is ALWAYS accompanied by its word/);
+});
+
+test("the coverage ruler never spends a judgement colour on a magnitude", async () => {
+  // Intent: same rule dashboard-contract.test.mjs:60-61 pins for the CSS
+  // module — the cut marker and the bar are measurements. Emptiness is the
+  // alarm; hue stays reserved for Doug's routing decision.
+  const ruler = await readFile(coverageRulerUrl, "utf8");
+  assert.match(ruler, /budget cut/); // the marker exists to be constrained
+  assert.equal(ruler.includes("var(--flag)"), false, "coverage ruler uses the flag colour");
+  assert.equal(ruler.includes("var(--clear)"), false, "coverage ruler uses the clear colour");
+  assert.equal(/className="[^"]*\bdata-(flag|clear)\b/.test(ruler), false);
+});
+
+test("no spine node carries a verdict colour", async () => {
+  // Intent (RunSpine's own docstring): a graded outcome's kind is a judgment,
+  // and that judgment already renders in colour WITH its word in the Outcome
+  // block. Colouring the same fact again on a bare dot asserts it twice, and
+  // a reverted PR's dot would have nothing to say why it is green.
+  const spine = await readFile(runSpineUrl, "utf8");
+  assert.equal(spine.includes("var(--flag)"), false, "a spine node uses the flag colour");
+  assert.equal(spine.includes("var(--clear)"), false, "a spine node uses the clear colour");
+  assert.equal(/\bdata-(flag|clear)\b/.test(spine), false);
+  assert.match(spine, /Every node here is neutral \(done\) or hollow \(wait\)/);
+});
+
 test("the CVD reasoning survives the port from the console", async () => {
   // Intent: the comment IS the spec. A port that drops it leaves the next
   // reader with two hex values and no reason not to add a third.
