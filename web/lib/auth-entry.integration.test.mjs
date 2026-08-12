@@ -10,6 +10,21 @@ const WEB_DIR = fileURLToPath(new URL("..", import.meta.url));
 const NEXT_BIN = path.resolve(WEB_DIR, "../node_modules/next/dist/bin/next");
 const COOKIE_PASSWORD = "local-test-cookie-password-32-chars";
 
+// This test is the only writer of this dist dir. It must never be `.next`:
+// `next build` deletes the whole dist dir the moment it takes the dist lock
+// (next/dist/build/index.js:623), whereas the `next start` below takes no lock
+// and only reads BUILD_ID about 80ms after it prints "Ready"
+// (next/dist/server/lib/router-utils/filesystem.js:183). Sharing `.next` with
+// `npm run build`, `next dev`, a Docker build, or a second agent therefore let
+// those builds delete BUILD_ID inside this server's startup window, killing it
+// with "Could not find a production build in the '.next' directory". Read by
+// web/next.config.ts.
+const DIST_DIR = ".next-auth-entry-test";
+
+// Both the build and every server below must agree on the dist dir, or the
+// server reads a directory the build never wrote.
+const NEXT_ENV = { ...process.env, DOUG_WEB_DIST_DIR: DIST_DIR };
+
 let origin;
 let callbackOrigin;
 let serverProcess;
@@ -30,7 +45,7 @@ function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: WEB_DIR,
-      env: process.env,
+      env: NEXT_ENV,
       ...options,
     });
     let stdout = "";
@@ -71,7 +86,7 @@ before(async () => {
     {
       cwd: WEB_DIR,
       env: {
-        ...process.env,
+        ...NEXT_ENV,
         NODE_ENV: "production",
         WORKOS_CLIENT_ID: "local-test-client",
         WORKOS_API_KEY: "local-test-api-key",
@@ -154,7 +169,7 @@ test("an invalid callback configuration fails closed before WorkOS", async () =>
     {
       cwd: WEB_DIR,
       env: {
-        ...process.env,
+        ...NEXT_ENV,
         NODE_ENV: "production",
         WORKOS_CLIENT_ID: "local-test-client",
         WORKOS_API_KEY: "local-test-api-key",

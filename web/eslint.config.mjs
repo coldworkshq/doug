@@ -9,6 +9,8 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Same, for the dist dir lib/auth-entry.integration.test.mjs builds into.
+    ".next-auth-entry-test/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
