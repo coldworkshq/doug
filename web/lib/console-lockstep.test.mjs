@@ -57,6 +57,29 @@ const RULED_DIVERGENCES = {
       // Parses console's ?tenant= scope param. Web's dashboard is scoped by
       // session and pins that "tenant all" never appears.
       "parseTenantId",
+      // The outcome-tone rule (#93). It lives in web/lib/dashboard-model.ts,
+      // not in the runs-time half, because web's dashboard imports it from
+      // there — so it is a divergence of LOCATION, not of behaviour, and
+      // this test's export comparison cannot see across that move.
+      //
+      // It is not unguarded: web/lib/outcome-tone-parity.test.mjs imports
+      // BOTH copies of `outcomeTone` and asserts they agree over the whole
+      // vocabulary plus kinds neither build knows. That is the same
+      // executable-equivalence check this file applies to the ported
+      // modules, pointed at the one rule that did not move as a module.
+      //
+      // `outcomeToneClass` and `outcomeLabel` are console-only in substance,
+      // not just in location: they emit console's Tailwind class names and
+      // its glyph vocabulary (`✓ clean`, `○ censored`, `↩ revert`). Web's
+      // dashboard renders tone through its own CSS-module classes today, and
+      // Phase B PR 2 rebuilds those render sites — if that rebuild adopts
+      // console's utilities for outcomes, port these two and delete these
+      // two lines rather than leaving a stale allowance behind.
+      // (The `OutcomeTone` type is not listed: types erase under
+      // --experimental-strip-types, so they never reach this comparison.)
+      "outcomeTone",
+      "outcomeToneClass",
+      "outcomeLabel",
     ],
     webOnly: [],
   },
