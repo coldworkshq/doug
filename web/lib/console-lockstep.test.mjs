@@ -68,18 +68,17 @@ const RULED_DIVERGENCES = {
       // executable-equivalence check this file applies to the ported
       // modules, pointed at the one rule that did not move as a module.
       //
-      // `outcomeToneClass` and `outcomeLabel` are console-only in substance,
-      // not just in location: they emit console's Tailwind class names and
-      // its glyph vocabulary (`✓ clean`, `○ censored`, `↩ revert`). Web's
-      // dashboard renders tone through its own CSS-module classes today, and
-      // Phase B PR 2 rebuilds those render sites — if that rebuild adopts
-      // console's utilities for outcomes, port these two and delete these
-      // two lines rather than leaving a stale allowance behind.
+      // `outcomeToneClass` and `outcomeLabel` USED to be listed here too, as
+      // console-only in substance: they emit console's Tailwind class names
+      // and its glyph vocabulary (`✓ clean`, `○ censored`, `↩ revert`), and
+      // web's dashboard painted tone through CSS-module classes instead.
+      // Phase B PR 2 rebuilt those render sites on the console's grammar, so
+      // both are now ported into web/lib/runs-time.ts and the allowance is
+      // GONE rather than left stale — the export comparison below sees them
+      // on both sides again, and the test after next pins that they agree.
       // (The `OutcomeTone` type is not listed: types erase under
       // --experimental-strip-types, so they never reach this comparison.)
       "outcomeTone",
-      "outcomeToneClass",
-      "outcomeLabel",
     ],
     webOnly: [],
   },
@@ -236,6 +235,18 @@ test("the UTC and coverage helpers agree with console's originals", () => {
     con.runs.coverageLabel,
     covCases.map(([c, d]) => [con.runs.coveragePercent(c, d)]),
   );
+});
+
+test("the outcome label and tone-class helpers agree with console's originals", () => {
+  // These two decide what an outcome row SAYS and what colour it says it in,
+  // on both surfaces. A drift here is invisible to either workspace's own
+  // suite and shows up as the console and the dashboard describing the same
+  // `outcomes.kind` row differently — the exact defect #93 fixed for
+  // `outcomeTone`, which is guarded by lib/outcome-tone-parity.test.mjs.
+  const KINDS = [null, "clean", "censored", "revert", "hotfix", "graded-miss", "", "CLEAN"];
+  agree("outcomeLabel", web.runsTime.outcomeLabel, con.runs.outcomeLabel, KINDS.map((k) => [k]));
+  agree("outcomeToneClass", web.runsTime.outcomeToneClass, con.runs.outcomeToneClass,
+    ["clear", "flag", "neutral"].map((t) => [t]));
 });
 
 test("paging agrees with console's original", () => {

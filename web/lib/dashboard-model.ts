@@ -1,4 +1,5 @@
 import { coverageLabel, coveragePercent } from "./coverage";
+import type { OutcomeTone } from "./runs-time";
 
 type FilterableRun = {
   verdict_id: number;
@@ -114,7 +115,11 @@ export function repositoryOptions(connection: ConnectionLike) {
   ];
 }
 
-export type OutcomeTone = "clear" | "flag" | "neutral";
+// One declaration, in the module that also holds the two helpers which
+// consume it (`outcomeToneClass`, `outcomeLabel` — console's runs.ts keeps all
+// three together and so does runs-time.ts). Re-exported because this module is
+// where the rule below lives and callers reach for the type beside it.
+export type { OutcomeTone } from "./runs-time";
 
 /** One tone rule over the vocabulary the adjudicator actually writes —
  *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The
