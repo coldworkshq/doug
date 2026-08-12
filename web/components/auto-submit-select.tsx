@@ -36,6 +36,7 @@ export function AutoSubmitSelect({
   onChange,
   onKeyDown,
   onBlur,
+  onFocus,
   onPointerDown,
   ...props
 }: React.ComponentProps<"select">) {
@@ -46,6 +47,10 @@ export function AutoSubmitSelect({
   // renders differently, and a re-render between the keystroke and the commit
   // would be a wasted pass.
   const pending = React.useRef(false);
+  // The value this control had when the user arrived on it, so Escape can put
+  // it back. Captured on focus rather than on the first keystroke: by the time
+  // a key fires, the browser may already have moved the selection.
+  const entryValue = React.useRef<string | null>(null);
 
   // requestSubmit(), not submit(): it fires the submit event, which is what
   // React needs to run the server action bound to the form. Raw submit()
@@ -53,15 +58,35 @@ export function AutoSubmitSelect({
   const commit = (element: HTMLSelectElement) => {
     pending.current = false;
     browsing.current = false;
+    entryValue.current = element.value;
     element.form?.requestSubmit();
   };
 
   return (
     <select
       {...props}
+      onFocus={(event) => {
+        onFocus?.(event);
+        if (event.defaultPrevented) return;
+        entryValue.current = event.currentTarget.value;
+      }}
       onKeyDown={(event) => {
         onKeyDown?.(event);
         if (event.defaultPrevented) return;
+        // ESCAPE MEANS CANCEL, and it has to be handled explicitly because the
+        // browser does not do it for us here. On an OPEN popup Escape reverts;
+        // on a CLOSED select — which is where arrowing lands you — it does
+        // nothing, so the selection stays visibly moved. Without this the user
+        // presses Escape to back out, sees the value they arrowed to still
+        // sitting there, clicks away, and the blur commit switches their space.
+        // "I cancelled" and "the page navigated" is the worst pair on this
+        // control, because the thing it changes is whose data you are looking at.
+        if (event.key === "Escape") {
+          pending.current = false;
+          browsing.current = false;
+          if (entryValue.current !== null) event.currentTarget.value = entryValue.current;
+          return;
+        }
         if (event.key === "Enter") {
           // A <select> in a form does not re-fire `change` on Enter, so without
           // this an arrowed-to choice would sit unsubmitted until focus moved.

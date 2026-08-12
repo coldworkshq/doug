@@ -368,6 +368,15 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   );
   const thresholdFields = gear.match(/name="threshold"/g) ?? [];
   assert.equal(thresholdFields.length, 2, "threshold must be carried by exactly the two submit buttons");
+
+  // The slider steps by 0.01 and binary floating point turns some of those
+  // steps into 0.30000000000000004. String(draft) put that in the address bar
+  // verbatim: a URL that disagrees with the 0.30 printed beside the slider, and
+  // two links to the same view that do not look like the same view — the exact
+  // confusion serializeSort's "a param that is always present carries no
+  // information" note exists to prevent.
+  assert.equal(gear.includes("value={String(draft)}"), false, "the lens param is not canonicalised");
+  assert.match(gear, /value=\{draft\.toFixed\(2\)\}/);
   // The carried params are what stop the gear clearing every pill on submit,
   // the same defect carriedParams already prevents for the search box.
   assert.match(gear, /carried\.map\(/);
@@ -449,12 +458,17 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   // a button labelled "open" beside a select that had already changed, read as
   // a control that had not taken effect. Selection now navigates.
   //
-  // The submit control is not deleted, it is moved into <noscript>: the select
-  // cannot submit itself without JavaScript, and a form with no submit control
-  // at all would strand a no-JS operator on a space they cannot leave.
-  const [page, select] = await Promise.all([
+  // The submit control is not deleted. It is rendered server-side and removed
+  // once hydration succeeds — NOT wrapped in <noscript>, which covers strictly
+  // less: noscript renders only when scripting is DISABLED, so it did nothing
+  // in the two cases that actually happen, the seconds before hydration and a
+  // bundle that loaded and threw. In both, scripting is on, the noscript
+  // content is absent, and the select's handlers are not attached: the form has
+  // no working control and the operator cannot switch spaces at all.
+  const [page, select, noJs] = await Promise.all([
     readFile(pageUrl, "utf8"),
     readFile(new URL("../components/auto-submit-select.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/no-js-submit.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(select, /^"use client"/);
   assert.match(select, /requestSubmit\(\)/);
@@ -487,10 +501,35 @@ test("choosing a space opens it, and still works without JavaScript", async () =
     "pending is armed from a keystroke again — a key that moves nothing would commit on blur",
   );
 
+  // Escape means cancel, and it needs handling because the browser does not do
+  // it for us here: on a CLOSED select — where arrowing leaves you — Escape
+  // reverts nothing, so the selection stays visibly moved and the blur commit
+  // would then switch the operator's space after they backed out. "I cancelled"
+  // and "the page navigated" is the worst pair on the control that decides
+  // whose data you are looking at.
+  assert.match(select, /"Escape"/);
+  assert.match(select, /entryValue/);
+  const onKeyDownEscape = select.match(/if \(event\.key === "Escape"\) \{[\s\S]*?\n {8}\}/)?.[0] ?? "";
+  assert.ok(onKeyDownEscape, "the Escape branch is gone");
+  assert.match(onKeyDownEscape, /pending\.current = false/);
+  assert.match(onKeyDownEscape, /value = entryValue\.current/);
+
+  // The no-JS fallback must not be a <noscript>. Pinned as an ABSENCE too,
+  // because <noscript> is the obvious-looking thing to reach for and it is
+  // precisely what did not work.
+  assert.match(noJs, /^"use client"/);
+  assert.match(noJs, /useSyncExternalStore/);
+  assert.equal(noJs.includes("useEffect"), false, "the fallback resyncs state in an effect");
+
   const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");
   assert.match(scopePicker, /<AutoSubmitSelect/);
-  assert.match(scopePicker, /<noscript>/);
+  assert.match(scopePicker, /<NoJsSubmit/);
+  assert.equal(
+    scopePicker.includes("<noscript>"),
+    false,
+    "the fallback is a <noscript> again — it renders for nobody whose JS is merely broken",
+  );
   // The server action is untouched — this changes WHEN the form submits, never
   // what happens when it does.
   assert.match(scopePicker, /action=\{switchConnectionAction\}/);

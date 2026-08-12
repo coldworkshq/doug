@@ -101,10 +101,18 @@ export function ThresholdGear({
 
                 Apply is first, so Enter-to-submit inside the popover applies the
                 draft rather than clearing it. */}
+            {/* toFixed(2), not String(draft): the slider steps by 0.01, and
+                binary floating point turns some of those steps into values like
+                0.30000000000000004. String() would put that in the address bar
+                verbatim — a URL that does not match the 0.30 printed beside the
+                slider, and two shared links to the same view that do not look
+                like the same view. The readout above already rounds; this makes
+                the param agree with it (Doug PR 103,
+                reader:float-precision-in-url). */}
             <Button
               type="submit"
               name="threshold"
-              value={String(draft)}
+              value={draft.toFixed(2)}
               size="sm"
               className="mono flex-1 text-[11px]"
             >Apply</Button>

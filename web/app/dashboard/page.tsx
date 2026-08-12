@@ -8,6 +8,7 @@ import { BandChip } from "@/components/band-chip";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
+import { NoJsSubmit } from "@/components/no-js-submit";
 import { RunSpine } from "@/components/run-spine";
 import { ThresholdGear } from "@/components/threshold-gear";
 import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -168,12 +169,14 @@ function ScopePicker({
           ))}
         </AutoSubmitSelect>
       </label>
-      {/* Not deleted — moved. Without JavaScript the select cannot submit
-          itself, and a form with no submit control would strand a no-JS
-          operator on a space they cannot leave. */}
-      <noscript>
-        <button type="submit" className={SUBMIT_BUTTON}>open</button>
-      </noscript>
+      {/* Not deleted — rendered until the client proves it is not needed. It
+          used to be wrapped in a script-absent element, which covered strictly
+          less: that only renders when scripting is DISABLED, so it did nothing
+          in the two cases that actually happen — the seconds before hydration,
+          and a bundle that loaded and threw. In both, this form had no working
+          control at all and an operator could not switch spaces (Doug PR 103,
+          reader:js-dependency-regression). */}
+      <NoJsSubmit className={SUBMIT_BUTTON}>open</NoJsSubmit>
     </form>
   );
 }
@@ -512,9 +515,15 @@ function RunCells({
         </div>
       </TableCell>
       <TableCell className={TD}><BandChip band={run.band} /></TableCell>
-      <TableCell className={`mono ${TD} text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
+      {/* truncate on the two columns whose text comes from the API rather than
+          from a closed set this page controls. shadcn's TableCell brings
+          `whitespace-nowrap`, which the hand-rolled <td>s did not have, so a
+          longer-than-expected tier or outcome now overflows its fixed column
+          instead of wrapping. Truncating states the overflow; spilling into the
+          next column hides it (Doug PR 103, reader:style-default-change). */}
+      <TableCell className={`mono ${TD} truncate text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
       <TableCell className={TD}><CoverageCell run={run} /></TableCell>
-      <TableCell className={`mono ${TD} text-[13px]`}>
+      <TableCell className={`mono ${TD} truncate text-[13px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
       {/* whitespace-normal, against TableCell's nowrap base: this is the one
