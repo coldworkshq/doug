@@ -263,7 +263,60 @@ identical — D6), NOT from a copied `api.ts`.
 
 ### Task B5: Rebuild the dashboard chrome; delete `dashboard.module.css`
 
-**Blocked on RULING 1.** This is the visible task and the one that breaks pins.
+**RULING 1 applies here.** This is the visible task and the one that breaks pins.
+
+> **AMENDMENT 2026-08-11 (controller), from the live-code inventory
+> (`PHASEB-INVENTORY.md`, untracked in this worktree).** Six findings that change how this
+> task must be executed. None were in the parent plan.
+>
+> **A5.1 — the deletion cannot be phased.** All 58 module classes are used by `page.tsx` and
+> by nothing else; `page.tsx:25` is the single import. An intermediate commit that deletes
+> some definitions leaves `styles.X === undefined` and React renders `class="undefined"` —
+> and **no test catches it**, because the contract test greps source text rather than
+> rendering. **The module deletion, the page rewrite and the pin rewrite land in ONE commit.**
+> Step 4's "commit per region if it helps review" is hereby withdrawn for the deletion
+> itself: regions may be drafted incrementally, but only one commit may contain the delete.
+>
+> **A5.2 — the `/coverageRuler/` pin (`:17`) silently survives into falsehood.** It is
+> satisfied today only by `styles.coverageRuler`. After the port the source literal is
+> `CoverageRuler` (capital C) and the lowercase regex fails. Do **not** repair it by
+> loosening to a case-insensitive match — pin the component import AND its JSX usage. Intent:
+> *a coverage ruler exists on this page*.
+>
+> **A5.3 — test 6's reachability pins are coupled to a styling string.** `:71` hardcodes
+> markup containing `className={styles.connectRepositories}`, and `:75`/`:77` derive the
+> whole "reachable in every state" guarantee from `indexOf` on it. Decouple: pin ordering on
+> `href="/install/start"` and the `<PendingConnections` position; pin `prefetch={false}`
+> separately (test 7 already does this correctly). Pasting the new className into `:71` would
+> silently re-couple them.
+>
+> **A5.4 — test 4's three assertions need three DIFFERENT new homes.** `--paper: #fcfcfa`
+> → the scoped surface block. `max-width: 1440px` → whatever wrapper the rebuilt page uses.
+> `:global(.dark)` absence → **a naive repoint at `web/app/globals.css` FAILS**, because
+> globals legitimately defines `.dark` at `:108` and `@custom-variant dark` at `:5`. That
+> intent needs the new mechanism in A5.5 before it can be pinned at all.
+>
+> **A5.5 — the force-light mechanism, and why it is load-bearing.** The dashboard renders
+> light today only because `.console` hardcodes a palette including `--card: #fff`, which
+> shadows the global `--card` for the whole subtree. Web mounts
+> `ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}`
+> (`web/app/layout.tsx:41-45`) and `theme-toggle.tsx:18` persists `dark` in localStorage, so
+> the class follows the user from the landing page into `/dashboard`. Per RULING 1 the
+> dashboard stays light: implement a scoped surface block that re-declares the light token
+> values for the subtree, and pin that the subtree does not inherit `.dark`. **Precedent to
+> mirror in reverse:** `web/app/queue/page.tsx:55` wraps itself in `<div className="dark …">`
+> to force dark, with the reasoning at `:50-54`. Read that comment before writing this.
+>
+> **A5.6 — five hardcoded values have no global token and must not be silently substituted.**
+> `--rule-soft: #f1efe9` (six hairlines: setup rows, table row dividers, unseen block,
+> finding dividers) has no globals equivalent — the nearest, `--muted`/`--secondary`
+> `#f6f5f1`, is a visibly different value, so "replace locals with globals tokens" would
+> change every divider in the ledger. Same for `#aaa79f` (inactive tab text, block
+> sub-headings, unseen status), `#faf9f5` (row hover), `#d4d1c8` (ruler + legend borders).
+> **CONTROLLER RULING:** these keep their exact values as named tokens **inside the scoped
+> surface block from A5.5** — not in `:root`, not substituted, not left dangling. Pixel
+> fidelity is preserved and globals stays clean. `#eceae3`/`#3d403c` are the exception: they
+> are console's `.cov-track`/`.cov-fill` and already ported as global utilities in B1.
 
 **Files:** Modify `web/app/dashboard/page.tsx`, `web/app/globals.css` (surface scope, if
 RULING 1 = pinned-light); Delete `web/app/dashboard/dashboard.module.css`; Modify
