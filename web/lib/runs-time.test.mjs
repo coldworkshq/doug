@@ -17,12 +17,47 @@ import test from "node:test";
 
 import {
   jobDuration,
+  outcomeLabel,
+  outcomeToneClass,
   relativeAge,
   utcClock,
   utcDate,
   utcShortDate,
   utcTimestamp,
 } from "./runs-time.ts";
+
+test("the neutral tone is the ABSENCE of a data colour, never a third one", () => {
+  // This is the assertion dashboard-contract.test.mjs:62-64 used to make
+  // against the deleted CSS module's .outcomeClear/.outcomeFlag/.outcomeNeutral
+  // rules. Same three-way rule, same intent, now on the function that decides
+  // it: `censored` and "no outcome yet" record that nothing was OBSERVED, and
+  // painting a non-observation in the miss colour is the honesty failure the
+  // tone rule exists to refuse.
+  assert.equal(outcomeToneClass("clear"), "data-clear");
+  assert.equal(outcomeToneClass("flag"), "data-flag");
+  assert.equal(outcomeToneClass("neutral"), "text-muted-foreground");
+  // Stated as its own assertion because the equality above could be satisfied
+  // by any string: neutral must never reach for either data colour.
+  assert.equal(outcomeToneClass("neutral").includes("data-flag"), false);
+  assert.equal(outcomeToneClass("neutral").includes("data-clear"), false);
+});
+
+test("the revert glyph is rationed to a recorded revert", () => {
+  // The glyph carries a claim. `↩` says "this PR was reverted" and belongs to
+  // `revert` alone — a flagged kind that is not a revert takes the flag colour
+  // and its own word, with no marker asserting a revert the ledger never
+  // recorded. `◷ pending` (no row yet) and `○ censored` (window closed with
+  // nothing observable) are different facts and read differently.
+  assert.equal(outcomeLabel(null), "◷ pending");
+  assert.equal(outcomeLabel("clean"), "✓ clean");
+  assert.equal(outcomeLabel("censored"), "○ censored");
+  assert.equal(outcomeLabel("revert"), "↩ revert");
+  // An unknown kind is rendered as itself — never given a glyph that would
+  // assert a revert, and never swallowed by a fallback that hides it.
+  assert.equal(outcomeLabel("hotfix"), "hotfix");
+  assert.equal(outcomeLabel("unknown-future-kind"), "unknown-future-kind");
+  assert.equal(outcomeLabel("hotfix").includes("↩"), false);
+});
 
 test("relativeAge renders hours, days and weeks distinctly", () => {
   const now = new Date("2026-08-06T12:00:00Z");

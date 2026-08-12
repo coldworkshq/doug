@@ -157,10 +157,21 @@ test("blank and whitespace URL values parse to no constraint, not to a phantom v
 });
 
 test("facet keys never collide with the scope params the page reads", () => {
-  // The pill bar writes into the same query string as ?repo= and ?tenant=.
-  // A facet named "repo" would silently rewrite the server-side scope
+  // The pill bar writes into the same query string the page reads its scope
+  // from. A facet named "repo" would silently rewrite the server-side scope
   // filter and refetch a different set than the pills claim to narrow.
+  //
+  // RE-PINNED for web (RULING 4). Console's copy of this test guards `repo`
+  // and `tenant`, which are ITS scope params; web's dashboard is scoped by
+  // session and pins that "tenant all" never appears, while it reads `run` to
+  // decide which evidence pane to open. Left as console's literals this test
+  // would have guarded a param web does not have and missed one it does.
+  //
+  // The full list lives in lib/dashboard-view.ts, next to the code that writes
+  // these keys, and lib/dashboard-view.test.mjs asserts the same separation
+  // from that side — so adding a key to either side trips a test.
   for (const key of FACET_KEYS) {
-    assert.ok(key !== "repo" && key !== "tenant", `facet key ${key} collides with a scope param`);
+    assert.ok(key !== "repo", `facet key ${key} collides with the server-side fetch scope`);
+    assert.ok(key !== "run", `facet key ${key} collides with the open-run selection`);
   }
 });

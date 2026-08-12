@@ -8,19 +8,25 @@ const rows = [
   {
     verdict_id: 1,
     repo: "acme/one",
+    pr_number: 12,
+    scored_at: "2026-08-06T10:00:00",
     band: "flagged",
     tier: "reader",
     coverage: { diff_chars: 100, sent_chars: 49, files_sent: 1, files_unseen: ["b"], file_cut: "b" },
     changed_files: 4,
+    outcome_14: null,
     job: { error: null },
   },
   {
     verdict_id: 2,
     repo: "acme/two",
+    pr_number: 34,
+    scored_at: "2026-08-05T10:00:00",
     band: "cleared",
     tier: "deterministic",
     coverage: null,
     changed_files: null,
+    outcome_14: "clean",
     job: { error: "timed out" },
   },
 ];
@@ -35,14 +41,61 @@ test("URL filters compose over already scoped rows without inventing a tenant se
     error: "yes",
     tenant: "all",
   });
+  // ONE filter model (RULING 4). The facet dimensions — band, tier, read,
+  // outcome — are parsed once, by `parseFacetSelection`, and carried as a
+  // selection; `repo` stays the server-side fetch scope and coverage/error
+  // stay the dashboard's own two predicates. There is no second parser that
+  // could read `band` differently from the pill bar that writes it.
   assert.deepEqual(filters, {
     repo: "all",
-    band: "flagged",
-    tier: "reader",
+    facets: { band: ["flagged"], tier: ["reader"] },
     lowCoverage: true,
     hasError: true,
   });
   assert.deepEqual(filterRuns(rows, { ...filters, hasError: false }).map((row) => row.verdict_id), [1]);
+});
+
+test("a single-value band or tier param keeps behaving exactly as it does today", async () => {
+  // BACKWARD COMPATIBILITY, required by RULING 4 and pinned here rather than
+  // assumed. Every dashboard link shared or bookmarked before the facet bar
+  // existed carries `?band=flagged` or `?tier=reader` as a single value. A
+  // multi-value model that parsed those into anything other than a selection
+  // of one would silently return a different row set to whoever opened the
+  // link — a user-visible regression no other test would catch, because every
+  // other test would be written against the new multi-value shape.
+  const { dashboardFilters, filterRuns } = await import("./dashboard-model.ts?compat");
+
+  const single = dashboardFilters({ band: "flagged" });
+  assert.deepEqual(single.facets, { band: ["flagged"] });
+  assert.deepEqual(filterRuns(rows, single).map((row) => row.verdict_id), [1]);
+
+  assert.deepEqual(
+    filterRuns(rows, dashboardFilters({ tier: "deterministic" })).map((row) => row.verdict_id),
+    [2],
+  );
+  // …and the multi-value form the pill bar writes narrows to the union, which
+  // is the whole reason the collision needed a ruling: read as a single value,
+  // "flagged,cleared" matched no run at all and blanked the table while the
+  // bar claimed two bands were selected.
+  assert.deepEqual(
+    filterRuns(rows, dashboardFilters({ band: "flagged,cleared" })).map((row) => row.verdict_id),
+    [1, 2],
+  );
+  // No band param at all is no constraint, not an empty selection.
+  assert.deepEqual(dashboardFilters({}).facets, {});
+  assert.deepEqual(filterRuns(rows, dashboardFilters({})).map((row) => row.verdict_id), [1, 2]);
+});
+
+test("at-cap is one definition, so the count line and the group badges cannot disagree", async () => {
+  // The page derives BOTH the "· latest 500" suffix and the per-PR group
+  // badges' "8+" from the same two numbers. Two separate `>= limit`
+  // comparisons is how a header saying "latest 500" ends up above a table
+  // whose badges claim exact totals.
+  const { isAtCap } = await import("./dashboard-model.ts?at-cap");
+  const { groupRunsByPr } = await import("./grouping.ts?at-cap");
+
+  assert.equal(groupRunsByPr(rows, isAtCap(500, 500))[0].countIsLowerBound, true);
+  assert.equal(groupRunsByPr(rows, isAtCap(499, 500))[0].countIsLowerBound, false);
 });
 
 test("coverage percentage and file ruler use only real denominators", async () => {
@@ -75,12 +128,24 @@ test("coverage percentage and file ruler use only real denominators", async () =
   assert.equal(unknown.label, "—");
 });
 
-test("capSuffix marks a full page as a cap, never as a total", async () => {
-  const { capSuffix } = await import("./dashboard-model.ts?cap-suffix");
-  assert.equal(capSuffix(500, 500), " · latest 500");
-  assert.equal(capSuffix(501, 500), " · latest 500");
-  assert.equal(capSuffix(499, 500), "");
-  assert.equal(capSuffix(0, 500), "");
+test("a full page is marked as a cap, never reported as a total", async () => {
+  // #90's rule, on the boolean that carries it since PR 2 moved the wording
+  // into the page's CountLine. The boundary is `>=`, not `>`: a page holding
+  // exactly `limit` rows is indistinguishable from a truncated one, and the
+  // response says nothing about what lies past it.
+  const { isAtCap } = await import("./dashboard-model.ts?cap");
+  assert.equal(isAtCap(500, 500), true);
+  assert.equal(isAtCap(501, 500), true);
+  assert.equal(isAtCap(499, 500), false);
+  assert.equal(isAtCap(0, 500), false);
+  // No limit means no cap. page.tsx initialises `limit = 0` before the fetch,
+  // and a bare `fetched >= limit` reports TRUE for (0, 0) — a page announcing
+  // "latest 0" and marking every group's count a lower bound, on the strength
+  // of an uninitialised variable. Unreachable today because the call sits
+  // immediately after `limit = response.limit`; pinned so a render-path change
+  // cannot quietly make it reachable.
+  assert.equal(isAtCap(0, 0), false);
+  assert.equal(isAtCap(12, 0), false);
 });
 
 test("selectors preserve installation boundaries and the exact Lema marker", async () => {

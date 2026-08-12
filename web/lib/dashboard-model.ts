@@ -1,28 +1,29 @@
 import { coverageLabel, coveragePercent } from "./coverage";
-import type { ConnectionStatus } from "./session-api";
-
-type FilterableRun = {
-  verdict_id: number;
-  repo: string;
-  band: "flagged" | "cleared";
-  tier: string;
-  coverage: {
-    diff_chars: number;
-    sent_chars: number;
-    files_sent: number;
-    files_unseen: string[];
-    file_cut: string | null;
-  } | null;
-  changed_files: number | null;
-  job: { error?: string | null } | null;
-};
+import { type FacetSelection, matchesFacets, parseFacetSelection } from "./facets";
+import type { OutcomeTone } from "./runs-time";
+import type { ConnectionStatus, RunSummary } from "./session-api";
 
 type SearchValues = Record<string, string | string[] | undefined>;
 
+/** ONE filter model over one query string (RULING 4).
+ *
+ *  `facets` covers every dimension the pill bar owns — band, tier, read,
+ *  outcome — parsed by `parseFacetSelection`, the SAME function that reads the
+ *  keys the bar writes. There is deliberately no second parser for `band`: the
+ *  bar is multi-select and comma-joins its values, and a `band === "flagged"`
+ *  reader beside it would match no run against `flagged,cleared` and blank the
+ *  table while the bar claimed two bands were selected.
+ *
+ *  `repo` is not a facet. It is the SERVER's fetch scope — it decides which
+ *  rows are requested, not which of the fetched rows survive — which is why
+ *  facets.ts pins that no facet key may ever be named `repo`.
+ *
+ *  `lowCoverage` and `hasError` stay predicates rather than facets: neither is
+ *  a value a run carries on some dimension, and building pills for them would
+ *  claim counts over a partition that does not exist. */
 export type DashboardFilters = {
   repo: string;
-  band: "all" | "flagged" | "cleared";
-  tier: "all" | "reader" | "deterministic";
+  facets: FacetSelection;
   lowCoverage: boolean;
   hasError: boolean;
 };
@@ -32,18 +33,18 @@ function one(value: string | string[] | undefined): string | undefined {
 }
 
 export function dashboardFilters(values: SearchValues): DashboardFilters {
-  const band = one(values.band);
-  const tier = one(values.tier);
   return {
     repo: one(values.repo) || "all",
-    band: band === "flagged" || band === "cleared" ? band : "all",
-    tier: tier === "reader" || tier === "deterministic" ? tier : "all",
+    // A single value parses as a selection of one, so `?band=flagged` — every
+    // dashboard link shared before the pill bar existed — returns exactly the
+    // rows it always did. Pinned by dashboard-model.test.mjs's own test.
+    facets: parseFacetSelection((key) => one(values[key]) ?? null),
     lowCoverage: one(values.coverage) === "low",
     hasError: one(values.error) === "yes",
   };
 }
 
-export function coverageView(run: Pick<FilterableRun, "coverage" | "changed_files">) {
+export function coverageView(run: Pick<RunSummary, "coverage" | "changed_files">) {
   const read = run.coverage;
   const result = coveragePercent(read, run.changed_files);
   const percent = result.kind === "known" ? result.pct : null;
@@ -62,20 +63,40 @@ export function coverageView(run: Pick<FilterableRun, "coverage" | "changed_file
   };
 }
 
-/** Suffix for the run-count line: at the fetch cap, say so — a capped page
- *  presented as a total is the lie the console's CountLine exists to refuse. */
-export function capSuffix(fetched: number, limit: number): string {
-  return fetched >= limit ? ` · latest ${limit}` : "";
+/** True when the fetched page hit the API's limit, so it holds only the newest
+ *  `limit` runs and every count taken over it is a lower bound. At the cap the
+ *  count line says "latest 500" INSTEAD of a total — a capped page presented
+ *  as a total is the lie the console's CountLine exists to refuse.
+ *
+ *  One definition, deliberately: that count line and the per-PR group badges'
+ *  "8+" are the same claim about the same page, and two independent
+ *  `>= limit` comparisons is how a header saying "latest 500" ends up above a
+ *  table whose badges claim exact totals.
+ *
+ *  (This replaced `capSuffix`, which returned the suffix as a string. Phase B
+ *  PR 2 moved the wording into the page's CountLine — the console's, so the
+ *  two surfaces report one ledger identically — leaving the honesty rule
+ *  itself here as the boolean both consumers read.)
+ *
+ *  `limit > 0` is not defensive noise: with a bare `fetched >= limit`,
+ *  `isAtCap(0, 0)` is TRUE, and page.tsx initialises both `limit = 0` and an
+ *  empty run list before the fetch. Today the call happens immediately after
+ *  `limit = response.limit` (validated 1..500 by the API), so the zero case is
+ *  unreachable — but the failure it would produce is a page announcing "latest
+ *  0" and marking every PR group's count as a lower bound, i.e. an honesty
+ *  claim manufactured out of an uninitialised variable. A cap is a statement
+ *  that a real limit was hit; no limit means no cap. */
+export function isAtCap(fetched: number, limit: number): boolean {
+  return limit > 0 && fetched >= limit;
 }
 
-export function filterRuns<T extends FilterableRun>(
+export function filterRuns<T extends RunSummary>(
   rows: T[],
   filters: DashboardFilters,
 ): T[] {
   return rows.filter((row) => {
     if (filters.repo !== "all" && row.repo !== filters.repo) return false;
-    if (filters.band !== "all" && row.band !== filters.band) return false;
-    if (filters.tier !== "all" && row.tier !== filters.tier) return false;
+    if (!matchesFacets(row, filters.facets)) return false;
     if (filters.lowCoverage) {
       const result = coveragePercent(row.coverage, row.changed_files);
       if (!(result.kind === "known" && result.low)) return false;
@@ -114,6 +135,12 @@ export function repositoryOptions(connection: ConnectionLike) {
     })),
   ];
 }
+
+// One declaration, in the module that also holds the two helpers which
+// consume it (`outcomeToneClass`, `outcomeLabel` — console's runs.ts keeps all
+// three together and so does runs-time.ts). Re-exported because this module is
+// where the rule below lives and callers reach for the type beside it.
+export type { OutcomeTone } from "./runs-time";
 
 /** Which of the dashboard's four mutually exclusive states a person lands in.
  *  `reauthorize` is the one that did not exist: before it, a connection whose
@@ -180,7 +207,6 @@ export function frontDoor<T extends ConnectionLike>(
   return { state: "welcome", current: null, expired };
 }
 
-export type OutcomeTone = "clear" | "flag" | "neutral";
 
 /** One tone rule over the vocabulary the adjudicator actually writes —
  *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The

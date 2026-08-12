@@ -2,10 +2,19 @@
 // ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
 // inputs, so it fails whichever side moves. This comment is not on trust.
 //
-// This is the time and provenance half (console/lib/runs.ts:60-186). The
-// coverage half of the same console module already lives in web/lib/coverage.ts;
-// parseTenantId is deliberately not ported (web's dashboard is scoped by
-// session, not by a ?tenant= query param).
+// This is the time and provenance half (console/lib/runs.ts:60-186) plus the
+// two outcome RENDER helpers. The coverage half of the same console module
+// already lives in web/lib/coverage.ts; parseTenantId is deliberately not
+// ported (web's dashboard is scoped by session, not by a ?tenant= query param).
+//
+// `outcomeToneClass` / `outcomeLabel` arrived here in Phase B PR 2, when the
+// dashboard rebuild replaced its CSS-module tone classes with the console's
+// Tailwind ones and had to render the same words. Until then they were a ruled
+// console-only divergence in lib/console-lockstep.test.mjs; that allowance is
+// deleted, not left stale. The `outcomeTone` RULE itself still lives in
+// lib/dashboard-model.ts (a divergence of location, guarded separately by
+// lib/outcome-tone-parity.test.mjs), which is why only its `OutcomeTone` type
+// moved down here to sit with the two functions that consume it.
 //
 // Declaration order matches the source, so relativeAge's "defined below,
 // hoisted" reference to parseUtc stays true.
@@ -111,4 +120,44 @@ export function utcDate(iso: string): string {
 export function utcShortDate(iso: string): string {
   const d = parseUtc(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toISOString().slice(5, 10);
+}
+
+export type OutcomeTone = "clear" | "flag" | "neutral";
+
+/** The class that paints a tone. Lives here, not inlined at each render
+ *  site, because the neutral branch is the one a three-way ternary written
+ *  from memory drops — which is exactly the bug this module was added to
+ *  fix, in two components at once.
+ *
+ *  Neutral is `text-muted-foreground`: the ABSENCE of a data colour, never a
+ *  third one. globals.css is the authority — "The two data colours. NEVER
+ *  add a third, and never use --iridescent here: it fails CVD separation
+ *  against --flag at ΔE 6.1 in NORMAL vision". */
+export function outcomeToneClass(tone: OutcomeTone): string {
+  if (tone === "clear") return "data-clear";
+  if (tone === "flag") return "data-flag";
+  return "text-muted-foreground";
+}
+
+/** The marker and word for an outcome kind, or for the absence of one.
+ *
+ *  The glyph carries a claim, so it is rationed:
+ *  - `↩` says "this PR was reverted" and belongs to `revert` alone. A
+ *    flagged kind that is not a revert takes the flag colour and its own
+ *    word, with no glyph — the colour already says "bad outcome", and no
+ *    marker should assert a revert the ledger never recorded.
+ *  - `○ censored` reads from the same hollow-circle family as the table's
+ *    existing `◷ pending`, the console's precedent for a muted non-claim.
+ *    Not `◷` itself: that says the window is still running, and a censored
+ *    window has closed with nothing observable in it.
+ *  - `◷ pending` for null is the table's existing label, unchanged.
+ *
+ *  Both the detail tile and the runs table render through this, so the two
+ *  cannot drift into describing the same row differently. */
+export function outcomeLabel(kind: string | null): string {
+  if (kind === null) return "◷ pending";
+  if (kind === "clean") return "✓ clean";
+  if (kind === "censored") return "○ censored";
+  if (kind === "revert") return "↩ revert";
+  return kind;
 }
