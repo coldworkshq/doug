@@ -116,6 +116,20 @@ test("the search form drops the run selection, because the open run may not surv
   assert.equal(carried.some(([key]) => key === "run"), false);
 });
 
+test("the lens keeps the open run, because re-banding excludes nothing", () => {
+  // The `run` skip exists for controls that NARROW rows: a search can exclude
+  // the very run whose evidence pane is pinned open. The lens removes no rows
+  // at all, so applying one must not close the pane — and "clear the lens",
+  // which goes through href(params, …), preserves `run` either way. The two
+  // halves of one feature disagreeing is the bug this pins.
+  const withRun = { run: "4471", band: "flagged", threshold: "0.3" };
+  assert.equal(view.carriedParams(withRun, ["threshold", "page"]).some(([k]) => k === "run"), false);
+  assert.deepEqual(
+    view.carriedParams(withRun, ["threshold", "page"], { keepRun: true }).find(([k]) => k === "run"),
+    ["run", "4471"],
+  );
+});
+
 test("no facet key may collide with a param the dashboard page reads for itself", () => {
   // Web's version of console's own collision guard. The pill bar writes into
   // the same query string the page reads its scope and its predicates from: a

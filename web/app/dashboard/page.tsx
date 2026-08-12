@@ -359,10 +359,14 @@ function FacetBar({
 function LensBanner({
   lens,
   reband,
+  atCap,
+  limit,
   params,
 }: {
   lens: number;
   reband: number;
+  atCap: boolean;
+  limit: number;
   params: DashboardParams;
 }) {
   return (
@@ -371,9 +375,28 @@ function LensBanner({
       <span className="text-muted-foreground">
         {/* The count is of rows the lens MOVED, not of rows it flagged — the
             size of the lens's effect, so the banner cannot report a ledger's
-            normal state as though this control had caused it. */}
-        Doug scored these against its own line — <b className="font-medium text-foreground">{reband}</b>
-        {reband === 1 ? " row" : " rows"} re-banded by this view.
+            normal state as though this control had caused it.
+
+            Qualified at the cap the same way CountLine qualifies its own
+            total: `rebandedCount` only ever sees `fetched`, which at the page
+            cap is the newest `limit` runs, not the whole scope. Every other
+            count on this page already says so — CountLine replaces the total
+            with "latest N", FacetBar's pill titles name the newest N fetched —
+            so a bare "31 rows re-banded" here would be the one number on the
+            page that let an operator read a fraction of the scope as the
+            whole of it. */}
+        Doug scored these against its own line —{" "}
+        {atCap ? (
+          <>
+            <b className="font-medium text-foreground">{reband}</b> of the latest{" "}
+            <b className="font-medium text-foreground">{limit}</b> rows re-banded by this view.
+          </>
+        ) : (
+          <>
+            <b className="font-medium text-foreground">{reband}</b>
+            {reband === 1 ? " row" : " rows"} re-banded by this view.
+          </>
+        )}
       </span>
       <Link
         href={href(params, thresholdChanges(null))}
@@ -494,7 +517,11 @@ function RunCells({
       <TableCell className={`mono ${TD} text-[13px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
-      <TableCell className={`mono ${TD} text-[11.5px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      {/* whitespace-normal, against TableCell's nowrap base: this is the one
+          cell holding an arbitrary-length string (a job error), in a fixed
+          118px column. Nowrap spills it across the age column — and these are
+          the rows an operator most needs to read. */}
+      <TableCell className={`mono ${TD} whitespace-normal break-words text-[11.5px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
       </TableCell>
       <TableCell className={`mono ${TD} text-right text-[11.5px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
@@ -916,7 +943,7 @@ export default async function DashboardPage({
             <span className="h-px flex-1 bg-border" />
           </div>
           <section className={`${CANVAS} px-5 pb-6`}>
-            {lens !== null && <LensBanner lens={lens} reband={reband} params={params} />}
+            {lens !== null && <LensBanner lens={lens} reband={reband} atCap={atCap} limit={limit} params={params} />}
             <FacetBar
               facets={facets}
               selection={filters.facets}
@@ -954,7 +981,7 @@ export default async function DashboardPage({
                 />
                 <button type="submit" className={SUBMIT_BUTTON}>search</button>
               </form>
-              <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"])} />
+              <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
               <span className="mono ml-auto text-[12px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
                 <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
               </span>

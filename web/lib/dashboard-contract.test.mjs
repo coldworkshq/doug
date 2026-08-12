@@ -374,7 +374,7 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // The page hands it the carried params rather than the gear reaching for the
   // URL itself — the gear has no access to searchParams, by construction.
   assert.match(page, /<ThresholdGear\b/);
-  assert.match(page, /carried=\{carriedParams\(params, \["threshold", "page"\]\)\}/);
+  assert.match(page, /carried=\{carriedParams\(params, \["threshold", "page"\], \{ keepRun: true \}\)\}/);
   // The gear seeds its slider once per mount and is KEYED on the lens, rather
   // than resyncing from the prop inside an effect. setState in an effect is a
   // lint error here (react-hooks/set-state-in-effect) and would also stomp a
@@ -463,6 +463,19 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   // matching nothing) produces no change, so blurring afterwards must not
   // navigate. Arming from the keystroke shipped once and did exactly that.
   assert.match(select, /onPointerDown/);
+
+  // Not merely that the handlers exist: that `pending` is armed where a real
+  // change is KNOWN to have happened. Arming it from the keystroke shipped
+  // once, and a no-op ArrowUp followed by Tab navigated with nothing chosen.
+  const onKeyDownSlice = select.match(/onKeyDown=\{\(event\)[\s\S]*?\n      \}\}/)?.[0] ?? "";
+  const onChangeSlice = select.match(/onChange=\{\(event\)[\s\S]*?\n      \}\}/)?.[0] ?? "";
+  assert.ok(onKeyDownSlice && onChangeSlice, "the select's handlers could not be located");
+  assert.match(onChangeSlice, /pending\.current = true/);
+  assert.equal(
+    onKeyDownSlice.includes("pending.current = true"),
+    false,
+    "pending is armed from a keystroke again — a key that moves nothing would commit on blur",
+  );
 
   const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");

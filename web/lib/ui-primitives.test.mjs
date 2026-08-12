@@ -42,11 +42,19 @@ test("Table's own scroll container is the one the caller can bound", async () =>
   const table = await readFile(tableUrl, "utf8");
   assert.match(table, /containerClassName/);
   assert.match(table, /data-slot="table-container"/);
-  // Threaded into the container's className, not the table's.
-  const container = table.match(/data-slot="table-container"[\s\S]*?\/>/)?.[0]
-    ?? table.match(/<div[\s\S]*?data-slot="table-container"[\s\S]*?>/)?.[0]
-    ?? "";
+
+  // The div's own attribute list, bounded at ITS closing `>`. A lazy match to
+  // the first `/>` runs past it into the self-closing <table> inside, which
+  // means the assertion would still pass with containerClassName moved onto
+  // the table — the exact defect this test exists to catch.
+  const container = table.match(/<div[^>]*data-slot="table-container"[^>]*>/)?.[0] ?? "";
+  assert.ok(container, "the table container div is gone");
   assert.match(container, /containerClassName/);
+  // ...and it must NOT be on the table, where it would nest a second scroll
+  // container inside the first and unstick the header.
+  const tableEl = table.match(/<table[\s\S]*?\/>/)?.[0] ?? "";
+  assert.ok(tableEl, "the <table> element is gone");
+  assert.equal(tableEl.includes("containerClassName"), false);
 });
 
 test("the primitives that genuinely need a client boundary keep it", async () => {

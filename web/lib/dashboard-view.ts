@@ -106,15 +106,25 @@ export { DEFAULT_SORT };
  *
  *  A GET form submits ONLY its own controls, so without these the search box
  *  would silently clear every pill the operator had set. Keys the form owns are
- *  excluded — sending them twice lets the stale hidden copy win — and so is
- *  `run`: searching can exclude the very run whose evidence pane is pinned
- *  open, and a pane beside a table that no longer lists its row claims the row
- *  is there.
+ *  excluded — sending them twice lets the stale hidden copy win.
+ *
+ *  `run` is skipped by default, and the reason is specific to controls that
+ *  NARROW rows: a search can exclude the very run whose evidence pane is
+ *  pinned open, and a pane beside a table that no longer lists its row claims
+ *  the row is there. A control that only RE-BANDS rows — the threshold lens —
+ *  removes none of them, so excluding the pinned run from ITS carried params
+ *  would close a pane the lens never touched. `{ keepRun: true }` is that
+ *  opt-in; the default stays today's behaviour so the search box is
+ *  unaffected. The lens is, so far, the only caller that passes it.
  *
  *  Absent keys are omitted rather than written blank, the same empty-vs-absent
  *  rule `parseFacetSelection` documents. */
-export function carriedParams(values: SearchValues, own: string[]): Array<[string, string]> {
-  const skip = new Set([...own, "run"]);
+export function carriedParams(
+  values: SearchValues,
+  own: string[],
+  options: { keepRun?: boolean } = {},
+): Array<[string, string]> {
+  const skip = new Set(options.keepRun ? own : [...own, "run"]);
   const carried: Array<[string, string]> = [];
   for (const key of [...DASHBOARD_OWN_PARAMS, ...FACET_KEYS]) {
     if (skip.has(key)) continue;
