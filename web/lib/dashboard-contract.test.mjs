@@ -366,6 +366,12 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // URL itself — the gear has no access to searchParams, by construction.
   assert.match(page, /<ThresholdGear\b/);
   assert.match(page, /carried=\{carriedParams\(params, \["threshold", "page"\]\)\}/);
+  // The gear seeds its slider once per mount and is KEYED on the lens, rather
+  // than resyncing from the prop inside an effect. setState in an effect is a
+  // lint error here (react-hooks/set-state-in-effect) and would also stomp a
+  // drag in progress if a navigation landed mid-gesture.
+  assert.equal(gear.includes("useEffect"), false, "the gear resyncs state in an effect");
+  assert.match(page, /<ThresholdGear key=\{lens === null \? "none" : String\(lens\)\}/);
   // ...and the page file itself still has no client boundary. This is already
   // pinned globally; asserted here too because the gear is the change most
   // likely to break it.

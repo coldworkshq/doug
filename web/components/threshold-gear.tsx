@@ -30,15 +30,12 @@ export function ThresholdGear({
   lens: number | null;
   carried: Array<[string, string]>;
 }) {
+  // Seeded once per mount, and the render site keys this component on `lens` —
+  // so a navigation that changes the applied lens remounts the gear and this
+  // initializer runs again. That replaces an effect that called setState to
+  // resync from the prop: React's own rule forbids it (cascading renders), and
+  // it could overwrite a drag in progress if a navigation landed mid-gesture.
   const [draft, setDraft] = React.useState(lens ?? SUGGESTED_START);
-
-  // The lens can change under this component without it unmounting — the page
-  // re-renders on the server after every navigation. Re-seed the draft from the
-  // prop so reopening the gear shows the lens that is actually applied, rather
-  // than the last position the slider happened to be dragged to.
-  React.useEffect(() => {
-    setDraft(lens ?? SUGGESTED_START);
-  }, [lens]);
 
   return (
     <Popover>

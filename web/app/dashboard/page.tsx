@@ -954,7 +954,7 @@ export default async function DashboardPage({
                 />
                 <button type="submit" className={SUBMIT_BUTTON}>search</button>
               </form>
-              <ThresholdGear lens={lens} carried={carriedParams(params, ["threshold", "page"])} />
+              <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"])} />
               <span className="mono ml-auto text-[12px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
                 <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
               </span>
