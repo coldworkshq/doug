@@ -25,6 +25,11 @@ const NAV_LINKS = [
  *  (Docs/Queue/GitHub, the theme toggle) stays low-contrast text until
  *  hovered, so the one action that actually converts a stranger doesn't
  *  have to compete with three links that don't.
+ *
+ *  Changing this bar's padding/height changes how much of the page it can
+ *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
+ *  both clear it using --docs-content-offset (globals.css); re-check that
+ *  value against this component's actual rendered height if either changes.
  */
 export function SiteHeader({
   maxWidthClassName = "max-w-5xl",

@@ -108,6 +108,15 @@
     ),
     radial-gradient(#d9d6cd 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 22px 22px;
+
+  /* The one number both the docs sidebar's sticky offset (app/docs/layout.tsx)
+     and its H2 scroll-margin (components/docs/prose.tsx) have to clear so
+     neither sits under the floating SiteHeader. Not theme-dependent — lives
+     outside :root/.dark's split on purpose, so it isn't a color and never
+     needs a dark-mode counterpart. Sized for SiteHeader's `top-4` plus its
+     current rendered height with margin; a header height change is the one
+     edit that requires re-checking this value against those two usages. */
+  --docs-content-offset: 7rem;
 }
 
 .dark {

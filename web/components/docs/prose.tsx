@@ -43,7 +43,12 @@ export function H2({ id, children }: { id?: string; children: ReactNode }) {
   return (
     <h2
       id={id}
-      className="font-heading mt-12 scroll-mt-28 text-xl font-semibold tracking-tight first:mt-0 sm:text-2xl"
+      // scroll-mt shares --docs-content-offset (globals.css) with the docs
+      // sidebar's sticky offset (app/docs/layout.tsx) — both exist to clear
+      // the floating SiteHeader, from one number rather than two. Currently
+      // unexercised: no page links to an in-page #id yet, so this only
+      // matters the day one does.
+      className="font-heading mt-12 scroll-mt-[var(--docs-content-offset)] text-xl font-semibold tracking-tight first:mt-0 sm:text-2xl"
     >
       {children}
     </h2>
