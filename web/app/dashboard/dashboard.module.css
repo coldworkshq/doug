@@ -183,3 +183,5 @@
 @media (prefers-reduced-motion: reduce) {
   .runs tr { animation: none; }
 }
+
+button.primaryAction { border: 0; cursor: pointer; }

@@ -70,7 +70,7 @@ test("repository connection and every pending setup remain reachable in all dash
   const page = await readFile(pageUrl, "utf8");
   const connectMarkup = '<Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>';
   const connect = page.indexOf(connectMarkup);
-  const stateBranches = page.indexOf("connections.length === 0");
+  const stateBranches = page.indexOf('door.state === "welcome"');
   const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
   assert.ok(connect >= 0 && connect < stateBranches);
   assert.ok(pendingStrip >= 0 && pendingStrip < stateBranches);
@@ -78,6 +78,23 @@ test("repository connection and every pending setup remain reachable in all dash
   assert.match(page, /action=\{finishSetupAction\}/);
   assert.match(page, /name="installation_id"/);
   assert.match(page, />finish setup<\/button>/);
+});
+
+test("an expired scope is named as expired, and never counted as never-connected", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // The claim the bug made: an operator with a bound installation whose derived
+  // scope had aged past entitlements.TTL was shown the never-connected welcome.
+  // The welcome may now be reached ONLY from the state that means it, and the
+  // page must no longer decide it by counting connections — a stale connection
+  // is still a connection.
+  assert.match(page, /door\.state === "welcome" \? <NoConnection/);
+  assert.equal(page.includes("connections.length === 0 ? <NoConnection"), false);
+
+  // And the state it goes to instead says what happened and what fixes it.
+  assert.match(page, /session scope expired — sign out and sign back in to refresh/);
+  assert.match(page, /door\.state === "reauthorize" \? <ScopeExpired/);
+  assert.match(page, /frontDoor\(connections, organizationId\)/);
 });
 
 test("state-mutating install links disable Next prefetch", async () => {
