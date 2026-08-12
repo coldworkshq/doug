@@ -371,3 +371,40 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // likely to break it.
   assert.equal(page.includes('"use client"'), false);
 });
+
+test("the ledger is bounded and its header stays put", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(runTable, "RunTable is gone");
+
+  // The bound goes on the container <Table> ALREADY renders. A max-h wrapper
+  // placed around <Table> would nest a second scroll container inside the
+  // first, and a sticky <th> in the inner one scrolls away with the rows it
+  // exists to pin. lib/ui-primitives.test.mjs pins the prop; this pins the use.
+  assert.match(runTable, /containerClassName/);
+  assert.match(runTable, /max-h-\[/);
+  assert.match(runTable, /sticky/);
+
+  // Collapsed borders are painted by the table, not the cell, and vanish from
+  // a sticky header. The separated model is what keeps the header's rule
+  // visible while it is pinned — without it the bound "works" and the header
+  // silently loses its underline against the scrolling rows.
+  assert.match(runTable, /border-separate/);
+  assert.match(runTable, /border-spacing-0/);
+
+  // Horizontal scrolling was already there and is NOT replaced by the vertical
+  // bound — eight columns still need it below 980px.
+  assert.match(runTable, /min-w-\[980px\]/);
+});
+
+test("the per-PR disclosure survives the table swap", async () => {
+  // The disclosure is a checkbox and a CSS :has() rule, deliberately — it is
+  // the one control that is not URL state, which is exactly why it must not be
+  // what drags a client boundary in. Swapping the table markup is the change
+  // most likely to lose the <tbody>-per-group structure the selector needs.
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(page, /className="pr-group"/);
+  assert.match(page, /className="pr-toggle sr-only"/);
+  assert.match(page, /pr-history/);
+  assert.match(page, /type="checkbox"/);
+});

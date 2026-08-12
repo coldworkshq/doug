@@ -9,6 +9,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { RunSpine } from "@/components/run-spine";
 import { ThresholdGear } from "@/components/threshold-gear";
+import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   coverageView,
@@ -425,8 +426,18 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
   { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
 
-const TH = "mono border-b border-border px-2.5 pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
-const TD = "h-[34px] px-2.5 align-middle";
+/** The header is STICKY inside the bounded container, so it needs its own
+ *  opaque background — a transparent header lets the rows scroll visibly
+ *  underneath it. `--background` rather than `--card`: the ledger sits directly
+ *  on the dashboard surface, not on a panel.
+ *
+ *  The bottom border is on the cell rather than the row because the table uses
+ *  the SEPARATED border model (see RunTable): in the collapsed model the
+ *  border belongs to the table, and a sticky header leaves it behind. */
+const TH =
+  "mono sticky top-0 z-10 border-b border-border bg-background px-2.5 pt-2 pb-[7px] text-left " +
+  "text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
@@ -444,12 +455,12 @@ function RunCells({
 }) {
   return (
     <>
-      <td className={`${TD} text-right`}>
+      <TableCell className={`${TD} text-right`}>
         <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
-      </td>
-      <td className={`${TD} min-w-0`}>
+      </TableCell>
+      <TableCell className={`${TD} min-w-0`}>
         <div className="flex min-w-0 items-baseline gap-2">
           {/* The slot reserves its width whether or not a control lives in it,
               so a PR with history and a PR without still start their repo name
@@ -470,17 +481,17 @@ function RunCells({
             </Link>
           )}
         </div>
-      </td>
-      <td className={TD}><BandChip band={run.band} /></td>
-      <td className={`mono ${TD} text-[10px] text-muted-foreground`}>{run.tier}</td>
-      <td className={TD}><CoverageCell run={run} /></td>
-      <td className={`mono ${TD} text-xs`}>
+      </TableCell>
+      <TableCell className={TD}><BandChip band={run.band} /></TableCell>
+      <TableCell className={`mono ${TD} text-[10px] text-muted-foreground`}>{run.tier}</TableCell>
+      <TableCell className={TD}><CoverageCell run={run} /></TableCell>
+      <TableCell className={`mono ${TD} text-xs`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
-      </td>
-      <td className={`mono ${TD} text-[10px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      </TableCell>
+      <TableCell className={`mono ${TD} text-[10px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
-      </td>
-      <td className={`mono ${TD} text-right text-[10px] text-muted-foreground`}>{relativeAge(run.scored_at)}</td>
+      </TableCell>
+      <TableCell className={`mono ${TD} text-right text-[10px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
     </>
   );
 }
@@ -497,72 +508,86 @@ function RunTable({
   filtering: boolean;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[980px] table-fixed border-collapse">
-        <thead>
-          <tr>
-            {COLUMNS.map((column) => (
-              <th
-                key={column.label}
-                aria-sort={column.sort === undefined
-                  ? undefined
-                  : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-                className={`${TH} ${column.cls}`}
-              >
-                {column.sort === undefined ? column.label : (
-                  <Link
-                    href={href(params, sortChanges(nextSort(sort, column.sort)))}
-                    className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+    // The vertical bound is the point of this container: 50 rows of ledger
+    // pushed the evidence pane a full screen below the fold, so opening a run
+    // scrolled the thing you were reading out of view. 55vh keeps both on
+    // screen. The horizontal scroll it already had is unchanged — eight
+    // columns still do not fit below 980px.
+    <Table
+      containerClassName="max-h-[55vh] overflow-y-auto rounded-[5px] border border-border"
+      className="min-w-[980px] table-fixed border-separate border-spacing-0 text-xs"
+    >
+      {/* TH (below) is what makes this header sticky — `sticky top-0` plus the
+          opaque background it needs so rows don't scroll visibly underneath it.
+          See TH's own doc comment for why that pin lives on the cell. */}
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {COLUMNS.map((column) => (
+            <TableHead
+              key={column.label}
+              aria-sort={column.sort === undefined
+                ? undefined
+                : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+              className={`${TH} ${column.cls}`}
+            >
+              {column.sort === undefined ? column.label : (
+                <Link
+                  href={href(params, sortChanges(nextSort(sort, column.sort)))}
+                  className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+                >
+                  {column.label}
+                  <span aria-hidden className="text-[10px] opacity-70">
+                    {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
+                  </span>
+                </Link>
+              )}
+            </TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      {window.items.map((group) => {
+        const count = runCountLabel(group, filtering);
+        // A PR with one run gets NO control and NO badge. A chevron that
+        // expands to nothing claims there is more to see, and "1" beside
+        // every single-run row is noise standing in for information.
+        const hasHistory = group.children.length > 0;
+        // Each PR group is its own <tbody> — several are valid in one table —
+        // so the :has() disclosure selector never reaches past its own group.
+        // TableBody is NOT used here: it ships `[&_tr:last-child]:border-0`,
+        // which would strip the divider from the last row of every group
+        // rather than from the last row of the table.
+        return (
+          <tbody key={group.key} className="pr-group">
+            <TableRow className="border-0 hover:bg-[var(--row-hover)]">
+              <RunCells
+                run={group.latest}
+                params={params}
+                disclosure={hasHistory ? (
+                  <label
+                    title={count.title}
+                    className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
-                    {column.label}
-                    <span aria-hidden className="text-[9px] opacity-70">
-                      {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
-                    </span>
-                  </Link>
-                )}
-              </th>
+                    <input
+                      type="checkbox"
+                      className="pr-toggle sr-only"
+                      aria-label={`Show the ${count.title} on ${group.repo} #${group.prNumber}`}
+                    />
+                    <span aria-hidden className="pr-caret-closed">▸</span>
+                    <span aria-hidden className="pr-caret-open">▾</span>
+                    {count.text}
+                  </label>
+                ) : null}
+              />
+            </TableRow>
+            {group.children.map((child) => (
+              <TableRow key={child.verdict_id} className="pr-history border-0 bg-muted/40">
+                <RunCells run={child} params={params} indented />
+              </TableRow>
             ))}
-          </tr>
-        </thead>
-        {window.items.map((group) => {
-          const count = runCountLabel(group, filtering);
-          // A PR with one run gets NO control and NO badge. A chevron that
-          // expands to nothing claims there is more to see, and "1" beside
-          // every single-run row is noise standing in for information.
-          const hasHistory = group.children.length > 0;
-          return (
-            <tbody key={group.key} className="pr-group">
-              <tr className="border-b border-[var(--rule-soft)] hover:bg-[var(--row-hover)]">
-                <RunCells
-                  run={group.latest}
-                  params={params}
-                  disclosure={hasHistory ? (
-                    <label
-                      title={count.title}
-                      className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <input
-                        type="checkbox"
-                        className="pr-toggle sr-only"
-                        aria-label={`Show the ${count.title} on ${group.repo} #${group.prNumber}`}
-                      />
-                      <span aria-hidden className="pr-caret-closed">▸</span>
-                      <span aria-hidden className="pr-caret-open">▾</span>
-                      {count.text}
-                    </label>
-                  ) : null}
-                />
-              </tr>
-              {group.children.map((child) => (
-                <tr key={child.verdict_id} className="pr-history border-b border-[var(--rule-soft)] bg-muted/40">
-                  <RunCells run={child} params={params} indented />
-                </tr>
-              ))}
-            </tbody>
-          );
-        })}
-      </table>
-    </div>
+          </tbody>
+        );
+      })}
+    </Table>
   );
 }
 
