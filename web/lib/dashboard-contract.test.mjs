@@ -283,3 +283,53 @@ test("finish setup is a POST-only exact pre-bind and post-bind server action", a
   assert.ok(finish.indexOf("readyOrganizationAfterSetup") > finish.indexOf("bindInstallation"));
   assert.equal(actions.includes("export async function GET"), false);
 });
+
+test("the threshold lens never reaches the evidence pane", async () => {
+  // The lens is a view over the ledger. The evidence pane is a RECORD of one
+  // run, and `detail.threshold` is the line Doug actually scored against —
+  // re-banding it would destroy the only place on the page where the real
+  // verdict can still be read.
+  //
+  // Pinned as an ORDERING property, the way the reachability test is: the
+  // selected summary must be resolved from the unlensed set, so the lens
+  // cannot reach it no matter how the pane is later restyled.
+  const page = await readFile(pageUrl, "utf8");
+  const selection = page.indexOf("selectedSummary = Number.isInteger(selectedId)");
+  const lensApplied = page.indexOf("applyLens(");
+  assert.ok(selection > 0, "the selected-run lookup is gone");
+  assert.ok(lensApplied > 0, "the lens is never applied");
+  assert.match(
+    page.slice(selection, selection + 260),
+    /fetched\.find\(/,
+    "the selected run is no longer resolved from the unlensed fetched set",
+  );
+  // The pane still prints the recorded line, not the lens.
+  assert.match(page, /threshold \{detail\.threshold\.toFixed\(2\)\}/);
+  assert.equal(page.includes("threshold {lens"), false);
+});
+
+test("an active lens is announced on the page, not just applied to it", async () => {
+  // A ledger showing bands that no verdict asserts, with nothing on screen
+  // saying so, is the exact failure this surface exists to refuse. The banner
+  // is the thing that makes the lens a lens.
+  //
+  // GATED ON THE SIGNAL, not merely present in the file — the same rule the
+  // scopeUnconfirmed note follows. A banner rendered unconditionally would
+  // caveat a ledger that has nothing to caveat, and would still satisfy a test
+  // that only looked for the words.
+  const page = await readFile(pageUrl, "utf8");
+  const gate = page.indexOf("{lens !== null && <LensBanner");
+  assert.ok(gate > 0, "the lens banner is not gated on there being a lens");
+  assert.match(page, /function LensBanner\(/);
+  assert.match(page, /re-banded by this view/);
+  // It must offer the way out. A caveat you cannot act on is decoration.
+  const banner = page.match(/function LensBanner\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.match(banner, /thresholdChanges\(null\)/, "the banner has no reset control");
+  // ...and it must not spend a data colour on a view state. --flag and --clear
+  // are verdicts; the lens is chrome.
+  assert.equal(
+    /data-(flag|clear)|var\(--(flag|clear)\)/.test(banner),
+    false,
+    "the lens banner paints a view state in a verdict colour",
+  );
+});

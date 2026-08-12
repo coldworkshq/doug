@@ -24,6 +24,7 @@ import {
   facetToggleChanges,
   predicateChanges,
   sortChanges,
+  thresholdChanges,
   withSelectedOptions,
 } from "@/lib/dashboard-view";
 import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
@@ -32,6 +33,7 @@ import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/pag
 import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
+import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
 import {
   getConnections,
   getSessionRun,
@@ -335,6 +337,44 @@ function FacetBar({
  *  rather than qualifying it in a tooltip. Same numbers and same words as
  *  console's CountLine, so the two surfaces cannot report one ledger
  *  differently. */
+/** The lens, said out loud.
+ *
+ *  `--iridescent` and `bg-accent` — chrome, never `--flag`/`--clear`. The two
+ *  data colours are verdicts, and which line the reader is *looking through* is
+ *  not one. A banner painted in the miss colour would read as an alarm about
+ *  the runs rather than a statement about the view.
+ *
+ *  The reset is a <Link> to `thresholdChanges(null)`, so it works with no
+ *  JavaScript at all — which matters here more than anywhere else on the page,
+ *  because the gear that SETS the lens is a Radix popover and does not. An
+ *  active lens must always be clearable by whoever is looking at it. */
+function LensBanner({
+  lens,
+  reband,
+  params,
+}: {
+  lens: number;
+  reband: number;
+  params: DashboardParams;
+}) {
+  return (
+    <div className="mono flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2 text-[11px] text-foreground">
+      <span className="font-medium text-[var(--iridescent)]">Viewing at {lens.toFixed(2)}</span>
+      <span className="text-muted-foreground">
+        {/* The count is of rows the lens MOVED, not of rows it flagged — the
+            size of the lens's effect, so the banner cannot report a ledger's
+            normal state as though this control had caused it. */}
+        Doug scored these against its own line — <b className="font-medium text-foreground">{reband}</b>
+        {reband === 1 ? " row" : " rows"} re-banded by this view.
+      </span>
+      <Link
+        href={href(params, thresholdChanges(null))}
+        className="ml-auto underline decoration-dotted underline-offset-[3px] hover:text-[var(--iridescent)] max-[900px]:ml-0"
+      >Clear the lens</Link>
+    </div>
+  );
+}
+
 function CountLine({
   shown,
   total,
@@ -738,12 +778,14 @@ export default async function DashboardPage({
   let facets: Facet[] = [];
   let groups: PrGroup[] = [];
   let shown = 0;
+  let reband = 0;
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
 
   const filters = dashboardFilters(params);
   const query = normalizeQuery(value(params, "q"));
   const sort = parseSort(value(params, "sort") ?? null);
+  const lens = parseThresholdLens(value(params, "threshold"));
   const filtering =
     query.length > 0 ||
     filters.lowCoverage ||
@@ -764,12 +806,23 @@ export default async function DashboardPage({
     // does not carry — a stale `?band=foo` is a real constraint and has to be
     // visible and clickable, not just true (Doug PR 102,
     // reader:query-param-contract-change).
-    facets = withSelectedOptions(buildFacets(fetched), filters.facets);
+    // THE LENS IS APPLIED HERE, at the boundary, and everything below reads the
+    // rewritten rows. That is what makes the pills, their counts, the chips and
+    // the count line agree: there is no state where the "needs you" pill says
+    // 12 and the table shows a different 12. See lib/threshold-lens.ts for why
+    // this is a rewrite rather than a parameter (five byte-locked modules).
+    const lensed = applyLens(fetched, lens);
+    reband = rebandedCount(fetched, lensed);
+    facets = withSelectedOptions(buildFacets(lensed), filters.facets);
     groups = sortGroups(
-      groupRunsByPr(filterRunsByQuery(filterRuns(fetched, filters), query), atCap),
+      groupRunsByPr(filterRunsByQuery(filterRuns(lensed, filters), query), atCap),
       sort,
     );
     shown = groups.reduce((total, group) => total + group.runCount, 0);
+    // Resolved from `fetched`, NOT `lensed`. The evidence pane is a record of
+    // what Doug did, and `detail.threshold` is the line it actually scored
+    // against; feeding it a re-banded summary would destroy the one place on
+    // the page where the real verdict can still be read.
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
       ? fetched.find((run) => run.verdict_id === selectedId) ?? null
@@ -831,6 +884,7 @@ export default async function DashboardPage({
             <span className="h-px flex-1 bg-border" />
           </div>
           <section className={`${CANVAS} px-5 pb-6`}>
+            {lens !== null && <LensBanner lens={lens} reband={reband} params={params} />}
             <FacetBar
               facets={facets}
               selection={filters.facets}
