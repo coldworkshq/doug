@@ -433,6 +433,16 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   ]);
   assert.match(select, /^"use client"/);
   assert.match(select, /requestSubmit\(\)/);
+  // Arrowing through a native select fires `change` on every keypress, and
+  // this form navigates. Committing on each one walks a keyboard user off the
+  // page before they reach the option they were aiming for (WCAG 3.2.2). The
+  // keyboard path is therefore deferred to an explicit commit — Enter, Tab or
+  // blur — while pointer input still commits immediately. Pinned because the
+  // naive version is the obvious "simplification" someone will reach for.
+  assert.match(select, /BROWSING_KEYS/);
+  assert.match(select, /onKeyDown/);
+  assert.match(select, /onBlur/);
+  assert.match(select, /ArrowDown/);
 
   const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");
