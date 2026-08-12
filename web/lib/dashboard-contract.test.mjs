@@ -333,3 +333,30 @@ test("an active lens is announced on the page, not just applied to it", async ()
     "the lens banner paints a view state in a verdict colour",
   );
 });
+
+test("the gear writes the lens to the URL, and the page file stays server-side", async () => {
+  // RULING 2 survives the gear. The control is a client leaf because Radix's
+  // popover and slider need to be; the STATE it produces is still a query
+  // param the server reads, so a shared link reproduces the view exactly and
+  // the page's own "filters live in the URL" claim stays true.
+  const [page, gear] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(new URL("../components/threshold-gear.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(gear, /^"use client"/);
+  // A GET form, not a router push: the lens must land in the address bar.
+  assert.match(gear, /method="GET"/);
+  assert.match(gear, /action="\/dashboard"/);
+  assert.match(gear, /name="threshold"/);
+  // The carried params are what stop the gear clearing every pill on submit,
+  // the same defect carriedParams already prevents for the search box.
+  assert.match(gear, /carried\.map\(/);
+  // The page hands it the carried params rather than the gear reaching for the
+  // URL itself — the gear has no access to searchParams, by construction.
+  assert.match(page, /<ThresholdGear\b/);
+  assert.match(page, /carried=\{carriedParams\(params, \["threshold", "page"\]\)\}/);
+  // ...and the page file itself still has no client boundary. This is already
+  // pinned globally; asserted here too because the gear is the change most
+  // likely to break it.
+  assert.equal(page.includes('"use client"'), false);
+});

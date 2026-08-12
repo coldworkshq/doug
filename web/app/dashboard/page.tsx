@@ -8,6 +8,7 @@ import { BandChip } from "@/components/band-chip";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { RunSpine } from "@/components/run-spine";
+import { ThresholdGear } from "@/components/threshold-gear";
 import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   coverageView,
@@ -922,6 +923,7 @@ export default async function DashboardPage({
                 />
                 <button type="submit" className={SUBMIT_BUTTON}>search</button>
               </form>
+              <ThresholdGear lens={lens} carried={carriedParams(params, ["threshold", "page"])} />
               <span className="mono ml-auto text-[11px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
                 <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
               </span>
