@@ -443,6 +443,11 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   assert.match(select, /onKeyDown/);
   assert.match(select, /onBlur/);
   assert.match(select, /ArrowDown/);
+  // `pending` is armed by a real change, never by a keystroke: a browsing key
+  // that moves nothing (ArrowUp on the first option, a type-ahead letter
+  // matching nothing) produces no change, so blurring afterwards must not
+  // navigate. Arming from the keystroke shipped once and did exactly that.
+  assert.match(select, /onPointerDown/);
 
   const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");

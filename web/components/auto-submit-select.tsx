@@ -36,11 +36,15 @@ export function AutoSubmitSelect({
   onChange,
   onKeyDown,
   onBlur,
+  onPointerDown,
   ...props
 }: React.ComponentProps<"select">) {
-  // A change arrived by keyboard and has not been committed yet. A ref, not
-  // state: nothing renders differently because of it, and a re-render between
-  // the keystroke and the commit would be a wasted pass.
+  // The last input was a key that browses the list. Says nothing about whether
+  // the selection moved — only `change` knows that.
+  const browsing = React.useRef(false);
+  // A real, uncommitted change arrived by keyboard. Refs, not state: nothing
+  // renders differently, and a re-render between the keystroke and the commit
+  // would be a wasted pass.
   const pending = React.useRef(false);
 
   // requestSubmit(), not submit(): it fires the submit event, which is what
@@ -48,6 +52,7 @@ export function AutoSubmitSelect({
   // bypasses it and would post as a plain HTML POST.
   const commit = (element: HTMLSelectElement) => {
     pending.current = false;
+    browsing.current = false;
     element.form?.requestSubmit();
   };
 
@@ -57,30 +62,47 @@ export function AutoSubmitSelect({
       onKeyDown={(event) => {
         onKeyDown?.(event);
         if (event.defaultPrevented) return;
-        if (BROWSING_KEYS.has(event.key) || event.key.length === 1) {
-          // Type-ahead is a single printable character; both it and the arrows
-          // are browsing. Mark whatever change follows as uncommitted.
-          pending.current = true;
+        if (event.key === "Enter") {
+          // A <select> in a form does not re-fire `change` on Enter, so without
+          // this an arrowed-to choice would sit unsubmitted until focus moved.
+          if (pending.current) commit(event.currentTarget);
           return;
         }
-        // Enter commits here rather than waiting for blur, because a <select>
-        // inside a form does not fire change again on Enter — without this the
-        // choice would sit unsubmitted until focus moved.
-        if (event.key === "Enter" && pending.current) commit(event.currentTarget);
+        // Arrows, Home/End/PageUp/PageDown, and type-ahead (a single printable
+        // character, which includes the Space that opens the popup). This only
+        // marks HOW the next change arrives — it never arms a commit by itself,
+        // because a key that moves nothing produces no change to commit.
+        if (BROWSING_KEYS.has(event.key) || event.key.length === 1) {
+          browsing.current = true;
+        }
+      }}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        if (event.defaultPrevented) return;
+        // A pointer interaction supersedes a stale keyboard flag — otherwise
+        // opening the popup with Space and then clicking an option would defer
+        // a plainly-pointer choice all the way to blur.
+        browsing.current = false;
       }}
       onChange={(event) => {
         // Any caller-supplied handler runs first and can still preventDefault.
         onChange?.(event);
         if (event.defaultPrevented) return;
-        // Pointer input arrives with no preceding browsing key, so it commits
-        // immediately — which is the whole point of the control.
-        if (!pending.current) commit(event.currentTarget);
+        if (browsing.current) {
+          // Arrowing IS browsing. Hold the choice until the user says they mean
+          // it — Enter, Tab, or leaving the control. Committing here navigates
+          // the page out from under them on their first keystroke (WCAG 3.2.2).
+          pending.current = true;
+          return;
+        }
+        commit(event.currentTarget);
       }}
       onBlur={(event) => {
         onBlur?.(event);
         if (event.defaultPrevented) return;
         // Tab and click-away both land here. A keyboard choice the user walked
-        // away from is still a choice they made.
+        // away from is still a choice they made — but only if they actually
+        // made one, which is why this reads `pending` and not `browsing`.
         if (pending.current) commit(event.currentTarget);
       }}
     />
