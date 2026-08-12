@@ -19,10 +19,18 @@ export function ParamsTable({ rows }: { rows: ParamRow[] }) {
           key={r.name}
           className="grid gap-1 py-3.5 sm:grid-cols-[13rem_1fr] sm:gap-6"
         >
-          <dt className="font-mono text-[13px] text-foreground">
+          {/* min-w-0: a grid item defaults to min-width:auto, so it refuses to
+              shrink below its content and a long name (`GET
+              /v1/prs/:number/receipt` plus its meta) escaped the 13rem track
+              and overlapped the description instead of wrapping inside it.
+              break-words (not `anywhere`) so a name only splits mid-token when
+              it genuinely cannot fit alone, and nowrap on the meta so the
+              badge drops to its own line whole rather than tearing into
+              "pl/anned". */}
+          <dt className="min-w-0 font-mono text-[13px] break-words text-foreground">
             {r.name}
             {r.meta && (
-              <span className="ml-2 text-xs text-muted-foreground">
+              <span className="ml-2 text-xs whitespace-nowrap text-muted-foreground">
                 {r.meta}
               </span>
             )}
