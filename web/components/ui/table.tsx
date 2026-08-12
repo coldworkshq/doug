@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils"
  *  scroll container inside this one, and a sticky <th> inside the inner
  *  container scrolls away with the rows it exists to pin.
  *
- *  The file's “use client” directive is also deliberately gone — see the test. */
+ *  The client-only directive shadcn generates by default is deliberately
+ *  removed — see the test. */
 function Table({
   className,
   containerClassName,
