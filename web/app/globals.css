@@ -228,7 +228,9 @@
      GitHub Pages site's .cell. Used by the landing page (app/page.tsx).
      /queue and the shared loading skeleton still use .glass
      below — they're forced dark regardless of the site theme, so the
-     frosted look it was tuned for still applies unchanged. */
+     frosted look it was tuned for still applies unchanged.
+     console/app/globals.css:162 is this rule's twin — same declarations,
+     kept in lockstep with the data utilities below. */
   .panel {
     background: var(--card);
     border: 1px solid var(--border);
@@ -252,4 +254,28 @@
     color: #9aa298;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
+
+  /* Data utilities ported from console/app/globals.css:164-179 — comments
+     verbatim, because they are the spec. Keep the two files in lockstep —
+     ENFORCED: lib/console-lockstep.test.mjs asserts this block is
+     character-identical to console's, so an edit to either side fails.
+     (.evidence-seam/.evidence-step are deliberately NOT ported: nothing in
+     web renders the evidence seam yet, and unused CSS is not a port.) */
+
+  /* Tabular numerals are mandatory on every column of numbers — a score
+     column that does not align is unreadable at 34px rows. */
+  .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+
+  /* The two data colours. NEVER add a third, and never use --iridescent
+     here: it fails CVD separation against --flag at ΔE 6.1 in NORMAL
+     vision, so the two are indistinguishable side by side. --iridescent is
+     chrome only (nav, focus, hover rules). */
+  .data-flag  { color: var(--flag); }
+  .data-clear { color: var(--clear); }
+
+  /* Coverage is a magnitude, not a judgement — a neutral sequential ramp,
+     never the flag/clear pair. Low coverage is alarmed by how empty the
+     track looks, not by hue. */
+  .cov-track { background: #eceae3; }
+  .cov-fill  { background: #3d403c; }
 }

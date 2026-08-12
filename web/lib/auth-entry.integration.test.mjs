@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,21 @@ import { after, before, test } from "node:test";
 const WEB_DIR = fileURLToPath(new URL("..", import.meta.url));
 const NEXT_BIN = path.resolve(WEB_DIR, "../node_modules/next/dist/bin/next");
 const COOKIE_PASSWORD = "local-test-cookie-password-32-chars";
+
+// This test is the only writer of this dist dir. It must never be `.next`:
+// `next build` deletes the whole dist dir the moment it takes the dist lock
+// (next/dist/build/index.js:623), whereas the `next start` below takes no lock
+// and only reads BUILD_ID about 80ms after it prints "Ready"
+// (next/dist/server/lib/router-utils/filesystem.js:183). Sharing `.next` with
+// `npm run build`, `next dev`, a Docker build, or a second agent therefore let
+// those builds delete BUILD_ID inside this server's startup window, killing it
+// with "Could not find a production build in the '.next' directory". Read by
+// web/next.config.ts.
+const DIST_DIR = ".next-auth-entry-test";
+
+// Both the build and every server below must agree on the dist dir, or the
+// server reads a directory the build never wrote.
+const NEXT_ENV = { ...process.env, DOUG_WEB_DIST_DIR: DIST_DIR };
 
 let origin;
 let callbackOrigin;
@@ -30,7 +46,7 @@ function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: WEB_DIR,
-      env: process.env,
+      env: NEXT_ENV,
       ...options,
     });
     let stdout = "";
@@ -59,8 +75,24 @@ async function waitForServer(url) {
 }
 
 before(async () => {
+  // Delete the marker first so the assertion below cannot be satisfied by a
+  // leftover from an earlier run — a stale dist dir would otherwise let the
+  // guard pass while the build actually landed in the shared `.next`.
+  const buildIdPath = path.join(WEB_DIR, DIST_DIR, "BUILD_ID");
+  rmSync(buildIdPath, { force: true });
+
   const build = await run(process.execPath, [NEXT_BIN, "build"]);
   assert.equal(build.code, 0, build.stdout + build.stderr);
+
+  // If web/next.config.ts ever stops honouring DOUG_WEB_DIST_DIR — renamed,
+  // dropped, or reverted — the build silently lands back in the shared `.next`
+  // and the race this isolation exists to prevent returns as an intermittent
+  // failure that looks like an infrastructure blip. Fail loudly and by name
+  // instead: the build must land where these servers are about to read from.
+  assert.ok(
+    existsSync(buildIdPath),
+    `build did not land in ${DIST_DIR}: web/next.config.ts must set distDir from DOUG_WEB_DIST_DIR`,
+  );
 
   const port = await availablePort();
   origin = `http://127.0.0.1:${port}`;
@@ -71,7 +103,7 @@ before(async () => {
     {
       cwd: WEB_DIR,
       env: {
-        ...process.env,
+        ...NEXT_ENV,
         NODE_ENV: "production",
         WORKOS_CLIENT_ID: "local-test-client",
         WORKOS_API_KEY: "local-test-api-key",
@@ -154,7 +186,7 @@ test("an invalid callback configuration fails closed before WorkOS", async () =>
     {
       cwd: WEB_DIR,
       env: {
-        ...process.env,
+        ...NEXT_ENV,
         NODE_ENV: "production",
         WORKOS_CLIENT_ID: "local-test-client",
         WORKOS_API_KEY: "local-test-api-key",

@@ -1790,6 +1790,19 @@ class EntitlementsRequest(BaseModel):
     token: str = ""
 
 
+def _connection_label(account_login) -> str | None:
+    """The one display marker a connection carries.
+
+    Extracted so the fresh and expired branches below cannot drift: Lema is a
+    SEPARATE PRODUCT that happens to share this ledger, and a reader who sees it
+    unlabelled in one state and labelled in the other learns something false
+    about what Doug is installed on.
+    """
+    if isinstance(account_login, str) and account_login.lower() == "lemahq":
+        return "Lema — separate product"
+    return None
+
+
 @app.get("/v1/sessions/connections")
 def session_connections(authorization: str = Header("")) -> dict:
     """The signed-in user's current repository connections.
@@ -1799,15 +1812,48 @@ def session_connections(authorization: str = Header("")) -> dict:
     installations.  Stored scope is still intersected with live ledger rows;
     a connection with no readable repository disappears rather than becoming
     an installation-wide sentinel.
+
+    AN EXPIRED SCOPE IS REPORTED, NOT DELETED FROM THE ANSWER. A scope past
+    entitlements.TTL used to be skipped here, which left the caller an empty
+    list — and an empty list is how a person who has never connected anything
+    looks. The dashboard believed it and greeted bound operators with the
+    first-run welcome eight hours after they signed in. Those are two different
+    facts and this endpoint may not spell them the same way, so a stale row
+    comes back as `reauthorize_required`: the connection exists, and the claim
+    about which repositories it reaches has aged out.
+
+    ITS REPOSITORY LIST IS WITHHELD, and that is the point of the ceiling
+    rather than an omission. tenancy.live_scope already refuses a suspended
+    installation or a removed repo immediately; TTL exists for the one thing
+    the ledger cannot see — someone losing access AT GITHUB while the
+    installation stays put. Sending an eight-hour-old repo list would keep
+    publishing names this person may no longer reach, so the connection is
+    named and its expired claim is not. session_auth.resolve_session fails
+    closed on the same staleness, so nothing scoped can be read with it either;
+    what changes here is only whether the caller is told.
     """
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
     workos_user_id = _session_subject(authorization)
     connections = []
     for row in store.session_connections_for(workos_user_id):
-        if entitlements.is_stale(row["derived_at"]) or not row["repositories"]:
+        if not row["repositories"]:
             continue
         account_login = row["account_login"]
+        if entitlements.is_stale(row["derived_at"]):
+            connections.append(
+                {
+                    "provider": "github",
+                    "installation_id": row["installation_id"],
+                    "organization_id": row["organization_id"],
+                    "account_login": account_login,
+                    "account_type": row["account_type"],
+                    "status": "reauthorize_required",
+                    "label": _connection_label(account_login),
+                    "repositories": [],
+                }
+            )
+            continue
         connections.append(
             {
                 "provider": "github",
@@ -1816,11 +1862,7 @@ def session_connections(authorization: str = Header("")) -> dict:
                 "account_login": account_login,
                 "account_type": row["account_type"],
                 "status": "ready" if row["organization_id"] else "setup_required",
-                "label": (
-                    "Lema — separate product"
-                    if isinstance(account_login, str) and account_login.lower() == "lemahq"
-                    else None
-                ),
+                "label": _connection_label(account_login),
                 "repositories": row["repositories"],
             }
         )

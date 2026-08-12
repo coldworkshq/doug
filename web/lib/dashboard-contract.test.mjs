@@ -70,7 +70,7 @@ test("repository connection and every pending setup remain reachable in all dash
   const page = await readFile(pageUrl, "utf8");
   const connectMarkup = '<Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>';
   const connect = page.indexOf(connectMarkup);
-  const stateBranches = page.indexOf("connections.length === 0");
+  const stateBranches = page.indexOf('door.state === "welcome"');
   const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
   assert.ok(connect >= 0 && connect < stateBranches);
   assert.ok(pendingStrip >= 0 && pendingStrip < stateBranches);
@@ -78,6 +78,42 @@ test("repository connection and every pending setup remain reachable in all dash
   assert.match(page, /action=\{finishSetupAction\}/);
   assert.match(page, /name="installation_id"/);
   assert.match(page, />finish setup<\/button>/);
+});
+
+test("an expired scope is named as expired, and never counted as never-connected", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // The claim the bug made: an operator with a bound installation whose derived
+  // scope had aged past entitlements.TTL was shown the never-connected welcome.
+  // The welcome may now be reached ONLY from the state that means it, and the
+  // page must no longer decide it by counting connections — a stale connection
+  // is still a connection.
+  assert.match(page, /door\.state === "welcome" \? <NoConnection/);
+  assert.equal(page.includes("connections.length === 0 ? <NoConnection"), false);
+
+  // And the state it goes to instead says what happened and what fixes it.
+  assert.match(page, /session scope expired — sign out and sign back in to refresh/);
+  assert.match(page, /door\.state === "reauthorize" \? <ScopeExpired/);
+  assert.match(page, /frontDoor\(connections, organizationId\)/);
+});
+
+test("a sign-in whose derivation failed says so instead of claiming nothing is connected", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // The welcome is a claim: "you have not connected anything". It is only true
+  // when Doug actually asked. When the derivation POST at sign-in failed, Doug
+  // never asked, and the honest version of the same screen says which one it is.
+  assert.match(page, /const scopeUnconfirmed = \(await cookies\(\)\)\.has\(SCOPE_UNCONFIRMED_COOKIE\)/);
+  assert.match(page, /<NoConnection userLabel=\{userLabel\} scopeUnconfirmed=\{scopeUnconfirmed\} \/>/);
+
+  // The note must be GATED ON THE SIGNAL, not merely present in the file. A
+  // caveat shown to every first-time visitor is its own small dishonesty — most
+  // of them have simply not connected anything — and an ungated one would still
+  // satisfy a test that only looked for the words.
+  assert.match(page, /\{scopeUnconfirmed && \(/);
+  const note = page.indexOf("Doug could not confirm your repositories");
+  const gate = page.indexOf("{scopeUnconfirmed && (");
+  assert.ok(gate >= 0 && gate < note, "the copy must sit inside the scopeUnconfirmed branch");
 });
 
 test("state-mutating install links disable Next prefetch", async () => {

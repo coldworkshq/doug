@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/runs.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. This comment is not on trust.
 
 export interface RunCoverage {
   diff_chars: number;
