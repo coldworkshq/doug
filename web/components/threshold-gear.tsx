@@ -89,15 +89,27 @@ export function ThresholdGear({
               {draft.toFixed(2)}
             </span>
           </div>
-          {/* The slider is a Radix primitive; this is what actually submits.
-              One visible mechanism, rather than a dependency on the
-              primitive's own form bubbling. */}
-          <input type="hidden" name="threshold" value={String(draft)} />
           <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" className="mono flex-1 text-[11px]">Apply</Button>
-            {/* Submitting with the field emptied is how the lens is removed:
-                parseThresholdLens reads blank as no lens, so the server drops
-                it. Rendered only when there is something to clear. */}
+            {/* The two submit buttons OWN this field between them — there is no
+                hidden input, deliberately. A named submit button contributes its
+                entry at its own position in the form, without replacing anything
+                else, so a hidden `threshold` alongside them would submit BOTH and
+                the page's `value()` helper takes the first: "Clear" would have
+                silently re-applied the current lens. Exactly one button submits,
+                so exactly one value travels.
+
+                Apply is first, so Enter-to-submit inside the popover applies the
+                draft rather than clearing it. */}
+            <Button
+              type="submit"
+              name="threshold"
+              value={String(draft)}
+              size="sm"
+              className="mono flex-1 text-[11px]"
+            >Apply</Button>
+            {/* An empty value is how the lens is removed: parseThresholdLens
+                reads blank as no lens, and thresholdChanges drops the param.
+                Rendered only when there is something to clear. */}
             {lens !== null && (
               <Button
                 type="submit"

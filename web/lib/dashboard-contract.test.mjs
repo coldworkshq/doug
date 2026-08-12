@@ -347,7 +347,18 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // A GET form, not a router push: the lens must land in the address bar.
   assert.match(gear, /method="GET"/);
   assert.match(gear, /action="\/dashboard"/);
-  assert.match(gear, /name="threshold"/);
+  // The two submit buttons own `threshold` between them. A hidden input
+  // alongside them would submit BOTH — a named submit button does not replace
+  // other fields — and page.tsx's `value()` helper takes the first of a
+  // repeated key, so "Clear" would silently re-apply the current lens. That
+  // shipped once; this is what stops it shipping again.
+  assert.equal(
+    /<input[^>]*type="hidden"[^>]*name="threshold"/.test(gear),
+    false,
+    "a hidden threshold field would collide with the submit buttons that carry it",
+  );
+  const thresholdFields = gear.match(/name="threshold"/g) ?? [];
+  assert.equal(thresholdFields.length, 2, "threshold must be carried by exactly the two submit buttons");
   // The carried params are what stop the gear clearing every pill on submit,
   // the same defect carriedParams already prevents for the search box.
   assert.match(gear, /carried\.map\(/);
