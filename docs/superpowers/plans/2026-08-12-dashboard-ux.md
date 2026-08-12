@@ -795,7 +795,18 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // A GET form, not a router push: the lens must land in the address bar.
   assert.match(gear, /method="GET"/);
   assert.match(gear, /action="\/dashboard"/);
-  assert.match(gear, /name="threshold"/);
+  // The two submit buttons own `threshold` between them. A hidden input
+  // alongside them would submit BOTH — a named submit button does not replace
+  // other fields — and page.tsx's `value()` helper takes the first of a
+  // repeated key, so "Clear" would silently re-apply the current lens. That
+  // shipped once; this is what stops it shipping again.
+  assert.equal(
+    /<input[^>]*type="hidden"[^>]*name="threshold"/.test(gear),
+    false,
+    "a hidden threshold field would collide with the submit buttons that carry it",
+  );
+  const thresholdFields = gear.match(/name="threshold"/g) ?? [];
+  assert.equal(thresholdFields.length, 2, "threshold must be carried by exactly the two submit buttons");
   // The carried params are what stop the gear clearing every pill on submit,
   // the same defect carriedParams already prevents for the search box.
   assert.match(gear, /carried\.map\(/);
@@ -912,15 +923,27 @@ export function ThresholdGear({
               {draft.toFixed(2)}
             </span>
           </div>
-          {/* The slider is a Radix primitive; this is what actually submits.
-              One visible mechanism, rather than a dependency on the
-              primitive's own form bubbling. */}
-          <input type="hidden" name="threshold" value={String(draft)} />
           <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" className="mono flex-1 text-[11px]">Apply</Button>
-            {/* Submitting with the field emptied is how the lens is removed:
-                parseThresholdLens reads blank as no lens, so the server drops
-                it. Rendered only when there is something to clear. */}
+            {/* The two submit buttons OWN `threshold` between them — there is no
+                hidden input, deliberately. A named submit button contributes its
+                entry at its own position in the form, without replacing anything
+                else, so a hidden `threshold` alongside them would submit BOTH,
+                and page.tsx's `value()` helper takes the first of a repeated
+                key: "Clear" would silently re-apply the current lens. Exactly
+                one button submits, so exactly one value travels.
+
+                Apply is first, so Enter-to-submit inside the popover applies the
+                draft rather than clearing it. */}
+            <Button
+              type="submit"
+              name="threshold"
+              value={String(draft)}
+              size="sm"
+              className="mono flex-1 text-[11px]"
+            >Apply</Button>
+            {/* An empty value is how the lens is removed: parseThresholdLens
+                reads blank as no lens, and thresholdChanges drops the param.
+                Rendered only when there is something to clear. */}
             {lens !== null && (
               <Button
                 type="submit"
