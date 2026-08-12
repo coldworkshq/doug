@@ -2181,12 +2181,12 @@ def _reconcile_then_drain(installation_id: int) -> None:
     worker.reconcile_installation(installation_id, trigger="reconcile")
     worker.drain()
     # Reconciliation can retroactively discover pre-install merges within its
-    # lookback window -- this makes publication-preregistration.md §2.4's claim
+    # lookback window — this makes publication-preregistration.md §2.4's claim
     # ("PRs merged before install produce no webhook, so no job row") no longer
-    # universally true. No current metric reads this yet -- unverdicted_merges
+    # universally true. No current metric reads this yet — unverdicted_merges
     # (§2.4) has no query or code anywhere in this codebase, only its
-    # definition in the design doc -- so nothing is corrupted today. Revisit
-    # §2.4 -- and bump the pre-registration hash -- before unverdicted_merges
+    # definition in the design doc — so nothing is corrupted today. Revisit
+    # §2.4 — and bump the pre-registration hash — before unverdicted_merges
     # ships.
     worker.reconcile_outcomes(installation_id)
 

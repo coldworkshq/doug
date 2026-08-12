@@ -890,8 +890,8 @@ def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
 
     Ordered after drain, not between reconcile_installation and drain: the
     two lanes are independent (drain only ever claims review_jobs, never
-    outcome_jobs), so drain runs first and this call cannot delay a fresh
-    install's first check runs if it were ever slow or raised.
+    outcome_jobs), so drain runs first and this call can no longer delay a
+    fresh install's first check run, even if it were ever slow or raised.
     """
     kicks = _hook_env(tmp_path, monkeypatch)
     monkeypatch.setattr(
