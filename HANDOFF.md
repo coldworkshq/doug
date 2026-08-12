@@ -11,13 +11,10 @@
     flagging so it isn't trusted at face value.
     State: REVIEW. Built and fully verified (web: tsc clean, `npm run lint`
     clean, `npm test` 72/72 — was 62, +10 new (lib/docs-nav.test.mjs) —
-    `npm run build` green, all 11 /docs routes prerender static). NOT YET
-    COMMITTED — sitting in the working
-    tree on `main`. Do not push/merge without a PR: ADR-0009 is merge-to-main-
-    deploys, and this repo's own convention everywhere else in this file is
-    branch-first, one-PR-per-task.
-    Next: Andrew reviews in the working tree (or asks for a branch+commit);
-    branch, commit, open a PR. Nothing else blocks it.
+    `npm run build` green, all 11 /docs routes prerender static). Branched,
+    committed (6351658), pushed, PR #101 open: github.com/drewjst/doug/pull/101.
+    Remember ADR-0009 (merge-to-main deploys) before merging.
+    Next: Andrew reviews PR #101. Nothing else blocks it.
     Decisions this session:
     - Extracted the landing page's inline nav into components/site-header.tsx,
       reused as-is on /docs; left /queue and /dashboard alone — both already
@@ -93,7 +90,7 @@
       useSyncExternalStore (getServerSnapshot=false, client=true), not
       useEffect+setState — this repo's eslint (react-hooks/set-state-in-
       effect) rejects the classic mounted-flag pattern; confirmed lint-clean.
-    Pointers: no branch yet, work is in the `main` working tree. New:
+    Pointers: branch `landing-header-and-docs` @ 6351658, PR #101. New:
     web/components/site-header.tsx, web/components/docs/*, web/lib/docs-nav.ts
     (+.test.mjs), web/app/docs/** (11 routes), web/public/llms.txt. Modified:
     web/app/page.tsx (nav extraction), web/app/globals.css (+--warn,
