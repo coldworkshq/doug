@@ -132,7 +132,16 @@ export type OutcomeTone = "clear" | "flag" | "neutral";
  *  Deliberately identical to `web/lib/dashboard-model.ts`'s `outcomeTone`.
  *  The two surfaces read the same column and must not disagree about what it
  *  means; they are separate workspaces with no shared package, so the rule is
- *  duplicated and pinned by a test on each side rather than imported. */
+ *  duplicated rather than imported.
+ *
+ *  What holds the copies together is `web/lib/outcome-tone-parity.test.mjs`,
+ *  which imports both and asserts they agree. A test on each side is NOT
+ *  enough and this docstring used to claim it was: each pins its own copy to
+ *  itself, so editing one and running both suites is all green while the two
+ *  surfaces describe the same `outcomes.kind` row differently. The parity
+ *  test lives in web because this module has zero imports and so resolves
+ *  standalone, while dashboard-model.ts needs web's loader. Keep it that way:
+ *  adding an import here would break that test's ability to load this file. */
 export function outcomeTone(kind: string | null): OutcomeTone {
   if (kind === null) return "neutral";
   if (kind === "clean") return "clear";
