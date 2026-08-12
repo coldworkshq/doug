@@ -62,6 +62,8 @@ VERDICT = Verdict(
 
 COV = reader.Coverage(diff_chars=400, sent_chars=400, files_sent=1, files_unseen=[])
 
+NOW = datetime.now(UTC)
+
 
 def _db(tmp_path, monkeypatch) -> str:
     url = f"sqlite:///{tmp_path}/doug.db"
@@ -1404,6 +1406,205 @@ def test_reconcile_installation_caps_and_logs_a_pathological_repo(tmp_path, monk
     count = worker.reconcile_installation(1)
     assert count == 150  # capped, not 200 (two full pages) and not unbounded
     assert "capped at 150" in capsys.readouterr().err
+
+
+def _closed_pull(
+    number=1,
+    *,
+    merged_at=None,
+    updated_at=None,
+    merge_commit_sha="c" * 40,
+    base_ref="main",
+    base_repo_id=42,
+    head_sha="a" * 40,
+):
+    """A closed PR as pulls.list returns it (PullRequestSimple) — no
+    merge_commit_sha field, by design (see reconcile_outcomes' docstring);
+    a FakeReconcileGH pairs this with a FakeGetGH that supplies it separately,
+    the same split the real githubkit schema forces."""
+    return SimpleNamespace(
+        number=number,
+        updated_at=updated_at or (merged_at or NOW),
+        merged_at=merged_at,
+        base=SimpleNamespace(
+            ref=base_ref,
+            repo=SimpleNamespace(id=base_repo_id, full_name="o/r"),
+        ),
+        head=SimpleNamespace(sha=head_sha),
+    )
+
+
+class FakeReconcileGH:
+    """pulls.list (no merge_commit_sha) + pulls.get (raw_response.json()
+    carries it) — the two-call shape reconcile_outcomes actually uses."""
+
+    def __init__(self, pulls, merge_shas):
+        self._merge_shas = merge_shas
+
+        def _get(*, owner, repo, pull_number):
+            body = {"merge_commit_sha": self._merge_shas.get(pull_number)}
+            return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: body))
+
+        self.rest = SimpleNamespace(
+            pulls=SimpleNamespace(
+                list=lambda **kw: SimpleNamespace(parsed_data=pulls),
+                get=_get,
+            )
+        )
+
+
+def test_reconcile_outcomes_enqueues_a_missed_merge(tmp_path, monkeypatch):
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
+    gh = FakeReconcileGH([pull], {5: "c" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 2  # 14- and 60-day windows
+
+    url = f"sqlite:///{tmp_path}/doug.db"
+    (row_14, row_60) = sorted(
+        _rows(url, store.outcome_jobs), key=lambda r: r["window_days"]
+    )
+    assert row_14["window_days"] == 14 and row_60["window_days"] == 60
+    assert row_14["pr_number"] == 5 and row_14["github_repo_id"] == 42
+    assert row_14["merge_commit_sha"] == "c" * 40
+    assert row_14["base_ref"] == "main"
+    assert row_14["merged_head_sha"] == "a" * 40
+
+
+def test_reconcile_outcomes_skips_a_pr_closed_without_merging(tmp_path, monkeypatch):
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=6, merged_at=None, updated_at=NOW)
+    gh = FakeReconcileGH([pull], {})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+
+
+def test_reconcile_outcomes_is_a_no_op_against_a_merge_the_webhook_already_recorded(
+    tmp_path, monkeypatch
+):
+    """The dedup proof: seed the row _record_merge would have written, then
+    run reconcile over the same merge, and nothing doubles."""
+    _installed(tmp_path, monkeypatch)
+    merged_at = NOW - timedelta(days=1)
+    store.enqueue_outcome_jobs(1, 42, 5, "c" * 40, merged_at, "main")
+    pull = _closed_pull(number=5, merged_at=merged_at)
+    gh = FakeReconcileGH([pull], {5: "c" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
+    assert len(rows) == 2  # still exactly the 14/60-day pair, not four
+
+
+def test_reconcile_outcomes_ignores_a_merge_outside_the_lookback_window(
+    tmp_path, monkeypatch
+):
+    _installed(tmp_path, monkeypatch)
+    stale = _closed_pull(
+        number=7, merged_at=NOW - timedelta(days=40), updated_at=NOW - timedelta(days=40)
+    )
+    gh = FakeReconcileGH([stale], {7: "d" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+
+
+def test_reconcile_outcomes_skips_a_pr_whose_base_repo_disagrees_with_the_ledger(
+    tmp_path, monkeypatch, capsys
+):
+    _installed(tmp_path, monkeypatch)
+    wrong_repo = _closed_pull(number=8, merged_at=NOW, base_repo_id=999)
+    gh = FakeReconcileGH([wrong_repo], {8: "e" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    err = capsys.readouterr().err
+    assert "base repo id 999" in err and "installation_repos' 42" in err
+
+
+def test_reconcile_all_outcomes_sums_every_active_installation(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.upsert_installation(1, "o1", "Organization", "active")
+    store.set_installation_repos(1, [(42, "o1/r")], replace=True)
+    store.upsert_installation(2, "o2", "Organization", "active")
+    store.set_installation_repos(2, [(43, "o2/r")], replace=True)
+
+    def _client(installation_id):
+        pulls = [
+            _closed_pull(number=1, merged_at=NOW, base_repo_id=42 if installation_id == 1 else 43)
+        ]
+        shas = {1: f"{installation_id}" * 40}
+        return FakeReconcileGH(pulls, shas)
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", _client)
+    assert worker.reconcile_all_outcomes() == 4  # 2 installations * 2 windows each
+
+
+def test_reconcile_all_outcomes_survives_one_bad_installation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
+    store.upsert_installation(1, "o1", "Organization", "active")
+    store.set_installation_repos(1, [(42, "o1/r")], replace=True)
+    store.upsert_installation(2, "o2", "Organization", "active")
+    store.set_installation_repos(2, [(43, "o2/r")], replace=True)
+
+    def _client(installation_id):
+        if installation_id == 1:
+            raise RuntimeError("github said no")
+        return FakeReconcileGH(
+            [_closed_pull(number=1, merged_at=NOW, base_repo_id=43)], {1: "f" * 40}
+        )
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", _client)
+    assert worker.reconcile_all_outcomes() == 2  # installation 2 still ran
+    err = capsys.readouterr().err
+    assert "outcome reconcile failed for installation 1" in err and "github said no" in err
+
+
+def test_reconcile_outcomes_paginates_past_the_first_page(tmp_path, monkeypatch):
+    """pulls.list caps a single response at 100 results, the same ceiling
+    test_reconcile_installation_paginates_past_the_first_page pins for the
+    review lane. sort=updated,direction=desc means the 101st-newest closed
+    PR is still inside the lookback window and must not be silently
+    dropped for want of a second page."""
+    _installed(tmp_path, monkeypatch)
+    page1 = [_closed_pull(number=n, merged_at=NOW, updated_at=NOW) for n in range(1, 101)]
+    page2 = [_closed_pull(number=101, merged_at=NOW, updated_at=NOW)]
+    merge_shas = {n: f"{n:040d}" for n in range(1, 102)}
+
+    def _list(*, page=1, **kw):
+        data = {1: page1, 2: page2}.get(page, [])
+        return SimpleNamespace(parsed_data=data)
+
+    def _get(*, owner, repo, pull_number):
+        body = {"merge_commit_sha": merge_shas[pull_number]}
+        return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: body))
+
+    gh = SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(list=_list, get=_get)))
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 202  # 101 merges * 2 windows each
+    url = f"sqlite:///{tmp_path}/doug.db"
+    seen = {r["pr_number"] for r in _rows(url, store.outcome_jobs)}
+    assert seen == set(range(1, 102))
+
+
+def test_reconcile_outcomes_caps_and_logs_a_pathological_repo(tmp_path, monkeypatch, capsys):
+    """The outcome lane's sibling of
+    test_reconcile_installation_caps_and_logs_a_pathological_repo — same
+    monkeypatch-the-constant-down technique, same log-and-truncate shape."""
+    _installed(tmp_path, monkeypatch)
+    monkeypatch.setattr(worker, "_MAX_CLOSED_PRS_PER_REPO", 3)
+    pulls = [_closed_pull(number=n, merged_at=NOW, updated_at=NOW) for n in range(1, 5)]
+    gh = FakeReconcileGH(pulls, {n: f"{n:040d}" for n in range(1, 5)})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 6  # capped at 3 PRs * 2 windows
+    err = capsys.readouterr().err
+    assert "capped at 3 closed PRs for o/r" in err
 
 
 def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monkeypatch):
