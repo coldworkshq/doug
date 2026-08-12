@@ -288,4 +288,58 @@ and it keys on `rule` alone, which matches only **7 of 43** sampled findings
 (PR#75's rows use unprefixed slugs — the slug-drift covariate showing up in
 practice). The remaining 36 need direct judgement.
 
-*(Bar-1 scoring is not complete and no precision figure is recorded here yet.)*
+### Bar 1 — **FAIL**, proven arithmetically
+
+A fifth false-resolved closes it. The clearest case in the sample is one defect
+appearing in two consecutive pairs of the same PR:
+
+| pair | rule | code at the later head | classifier | truth |
+| --- | --- | --- | --- | --- |
+| #50 v1072→1073 | `reader:input-validation` | `if owner and "/" not in owner:` — **the defect verbatim** | `resolved` | **still-present** |
+| #50 v1074→1076 | `reader:logic-error` | `if owner:` + `if "/" in owner: raise _not_found()` | `resolved` | **fixed** |
+
+`fe307ab6` (v1073) is an ancestor of `8d6f817d` (v1074), so the fix demonstrably
+landed *after* the verdict at which the finding was first called resolved. The
+same underlying defect carries two different rule slugs across the two rounds —
+the slug-drift covariate showing up inside a single PR.
+
+**The arithmetic.** With `still-present ≥ 5` confirmed in a 43-unit sample,
+`fixed ≤ 43 − 5 = 38`, so
+
+> `primary = fixed / (fixed + still-present) ≤ 38 / 43 = 0.884 < 0.90`
+
+This is an upper bound assuming *every* remaining unlabelled unit is a genuine
+fix — the most charitable assumption available. **Bar 1 therefore fails on the
+pre-registered point estimate, and no further labelling can rescue it.** The
+full labelling still matters for the record (it fixes the actual value, the
+`not-a-defect` rate and the design effect), but it cannot change the verdict.
+
+The five confirmed false-resolveds:
+
+1. #75 `reader:unauthenticated-data-exposure` — fixes `7430600`+`b6253c9` land after `to_head`
+2. #75 `reader:missing-smoke-test` — fix `e681064` lands after `to_head`
+3. #48 `reader:error-handling-gap` — adjudicated `real`+`changed`, api.py untouched in the pair
+4. #48 `reader:unbounded-external-calls` — adjudicated `real`, only `docs/` changed in the pair
+5. #50 `reader:input-validation` — defect verbatim at the later head, fixed two verdicts later
+
+### What the failure means
+
+The classifier is not miscounting. It implements the design note's rules
+faithfully — bar 2 proves the coverage abstentions fire correctly on real rows.
+The problem is upstream of the rules: **a finding's absence from the later
+verdict is not evidence that it was fixed**, because the reader is
+nondeterministic across runs on identical input. 26 of 43 sampled findings sit
+on byte-identical code, in linear pairs where the file never left the diff, and
+the finding simply was not re-reported.
+
+Rules 2–4 abstain on the three ways Doug can *know* it did not look. There is no
+rule for the case where Doug looked and silently disagreed with itself, and that
+case is common — it is the majority of this sample. Any halt signal built on
+`resolved` would tell an agent it was done on code nobody had touched.
+
+## Consequence for the lane
+
+Per the plan's Task 3 Step 5 — *"FAIL on any bar ⇒ STOP the lane and report;
+Task 4 does not proceed on a failed bar"* — **Task 4 (receipt wiring) does not
+proceed**, and Phase 2's gate ("Phase 1 bars PASSED") is not satisfied. Both are
+held pending a ruling on the result.
