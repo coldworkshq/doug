@@ -1,13 +1,29 @@
 const SESSION_API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 const SESSION_FETCH_TIMEOUT_MS = 5_000;
 
+/** `reauthorize_required` is the API saying "this connection is real, but the
+ *  scope derived from the provider at sign-in has aged past
+ *  `entitlements.TTL` (8h) and I will not vouch for it". It is NOT a synonym
+ *  for disconnected, and the dashboard must never fold it into the
+ *  never-connected empty state.
+ *
+ *  ACCEPTED HERE BEFORE ANYTHING EMITS IT, deliberately.
+ *  `.github/workflows/deploy.yml:162` gives the web job `needs: [changes, api]`,
+ *  so the API revision is live first. A widened enum shipping on both sides at
+ *  once would hand the new value to a still-running old web build, whose
+ *  exact-enum check would reject the entire body — every dashboard would
+ *  degrade to "Doug could not load your connected spaces." So this value lands
+ *  and deploys while no API emits it, and the API starts emitting it in a
+ *  later PR. `session-api.test.mjs` pins both bodies. */
+export type ConnectionStatus = "ready" | "setup_required" | "reauthorize_required";
+
 export type RepositoryConnection = {
   provider: "github";
   installation_id: number;
   organization_id: string | null;
   account_login: string;
   account_type: "User" | "Organization";
-  status: "ready" | "setup_required";
+  status: ConnectionStatus;
   label: string | null;
   repositories: Array<{ id: number; full_name: string }>;
 };
@@ -178,7 +194,9 @@ function connection(value: unknown): value is RepositoryConnection {
     nullableString(value.organization_id) &&
     typeof value.account_login === "string" &&
     (value.account_type === "User" || value.account_type === "Organization") &&
-    (value.status === "ready" || value.status === "setup_required") &&
+    (value.status === "ready" ||
+      value.status === "setup_required" ||
+      value.status === "reauthorize_required") &&
     nullableString(value.label) &&
     Array.isArray(value.repositories) &&
     value.repositories.every(repository)
