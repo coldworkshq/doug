@@ -110,6 +110,83 @@ export function jobDuration(startedAt: string | null, finishedAt: string | null)
   return m > 0 ? `${m}m${s}s` : `${s}s`;
 }
 
+export type OutcomeTone = "clear" | "flag" | "neutral";
+
+/** One tone rule over the vocabulary the adjudicator actually writes —
+ *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The
+ *  column also permits `hotfix`, which the adjudicator never writes because
+ *  §10 of docs/design/outcome-loop/publication-preregistration.md rules that
+ *  a hotfix is not a miss and that no detector here can tell one repairing
+ *  this PR from one merely following it; it still flags if a row ever
+ *  carries it.
+ *
+ *  `censored` is neutral, not flagged: it records that the PR left the risk
+ *  set UNOBSERVED — the merge landed off the branch the treeless
+ *  single-branch clone can see, or no clone was reachable at all
+ *  (`CensorReason`: BASE_REF / UNREACHABLE). Painting a non-observation in
+ *  the miss colour is the honesty failure this rule exists to refuse.
+ *
+ *  Everything else flags, including kinds this build has never heard of: an
+ *  allowlist here is what let a genuinely bad outcome arrive looking neutral.
+ *
+ *  Deliberately identical to `web/lib/dashboard-model.ts`'s `outcomeTone`.
+ *  The two surfaces read the same column and must not disagree about what it
+ *  means; they are separate workspaces with no shared package, so the rule is
+ *  duplicated rather than imported.
+ *
+ *  What holds the copies together is `web/lib/outcome-tone-parity.test.mjs`,
+ *  which imports both and asserts they agree. A test on each side is NOT
+ *  enough and this docstring used to claim it was: each pins its own copy to
+ *  itself, so editing one and running both suites is all green while the two
+ *  surfaces describe the same `outcomes.kind` row differently. The parity
+ *  test lives in web because this module has zero imports and so resolves
+ *  standalone, while dashboard-model.ts needs web's loader. Keep it that way:
+ *  adding an import here would break that test's ability to load this file. */
+export function outcomeTone(kind: string | null): OutcomeTone {
+  if (kind === null) return "neutral";
+  if (kind === "clean") return "clear";
+  if (kind === "censored") return "neutral";
+  return "flag";
+}
+
+/** The class that paints a tone. Lives here, not inlined at each render
+ *  site, because the neutral branch is the one a three-way ternary written
+ *  from memory drops — which is exactly the bug this module was added to
+ *  fix, in two components at once.
+ *
+ *  Neutral is `text-muted-foreground`: the ABSENCE of a data colour, never a
+ *  third one. globals.css is the authority — "The two data colours. NEVER
+ *  add a third, and never use --iridescent here: it fails CVD separation
+ *  against --flag at ΔE 6.1 in NORMAL vision". */
+export function outcomeToneClass(tone: OutcomeTone): string {
+  if (tone === "clear") return "data-clear";
+  if (tone === "flag") return "data-flag";
+  return "text-muted-foreground";
+}
+
+/** The marker and word for an outcome kind, or for the absence of one.
+ *
+ *  The glyph carries a claim, so it is rationed:
+ *  - `↩` says "this PR was reverted" and belongs to `revert` alone. A
+ *    flagged kind that is not a revert takes the flag colour and its own
+ *    word, with no glyph — the colour already says "bad outcome", and no
+ *    marker should assert a revert the ledger never recorded.
+ *  - `○ censored` reads from the same hollow-circle family as the table's
+ *    existing `◷ pending`, the console's precedent for a muted non-claim.
+ *    Not `◷` itself: that says the window is still running, and a censored
+ *    window has closed with nothing observable in it.
+ *  - `◷ pending` for null is the table's existing label, unchanged.
+ *
+ *  Both the detail tile and the runs table render through this, so the two
+ *  cannot drift into describing the same row differently. */
+export function outcomeLabel(kind: string | null): string {
+  if (kind === null) return "◷ pending";
+  if (kind === "clean") return "✓ clean";
+  if (kind === "censored") return "○ censored";
+  if (kind === "revert") return "↩ revert";
+  return kind;
+}
+
 /** True when an ISO-ish datetime string carries an explicit zone designator
  *  (a trailing "Z", or a "+HH:MM"/"-HH:MM" offset) — the one thing that
  *  tells `Date`'s parser to read it as UTC rather than the runtime's own

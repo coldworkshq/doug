@@ -129,7 +129,15 @@ export type OutcomeTone = "clear" | "flag" | "neutral";
  *  miss colour is the honesty failure this rule exists to refuse.
  *
  *  Everything else flags, including kinds this build has never heard of: an
- *  allowlist here is what let a genuinely bad outcome arrive looking neutral. */
+ *  allowlist here is what let a genuinely bad outcome arrive looking neutral.
+ *
+ *  `console/lib/runs.ts` carries an identical copy — separate workspaces, no
+ *  shared package. The two are held together by
+ *  `web/lib/outcome-tone-parity.test.mjs`, which imports both and asserts
+ *  they agree over the whole vocabulary. Edit this function and that test
+ *  fails until the console's copy moves with it; that is the point, so do
+ *  not "fix" it by relaxing the comparison. Neither workspace's own tests can
+ *  see a divergence — both stayed green through exactly that split once. */
 export function outcomeTone(kind: string | null): OutcomeTone {
   if (kind === null) return "neutral";
   if (kind === "clean") return "clear";
