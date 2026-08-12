@@ -138,6 +138,14 @@ test("a full page is marked as a cap, never reported as a total", async () => {
   assert.equal(isAtCap(501, 500), true);
   assert.equal(isAtCap(499, 500), false);
   assert.equal(isAtCap(0, 500), false);
+  // No limit means no cap. page.tsx initialises `limit = 0` before the fetch,
+  // and a bare `fetched >= limit` reports TRUE for (0, 0) — a page announcing
+  // "latest 0" and marking every group's count a lower bound, on the strength
+  // of an uninitialised variable. Unreachable today because the call sits
+  // immediately after `limit = response.limit`; pinned so a render-path change
+  // cannot quietly make it reachable.
+  assert.equal(isAtCap(0, 0), false);
+  assert.equal(isAtCap(12, 0), false);
 });
 
 test("selectors preserve installation boundaries and the exact Lema marker", async () => {

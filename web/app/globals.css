@@ -232,20 +232,40 @@
    loses against console's client-side `aria-expanded` control.
    Each PR group is its own <tbody> — several are valid in one table — so the
    selector never reaches past the group it belongs to. */
-.pr-history {
-  display: none;
+/* IT MUST FAIL OPEN. `:has()` is the whole mechanism, so the collapse is
+   declared ONLY where `:has()` is supported. Declared unconditionally, an
+   engine without it would apply `display: none` and never apply the rule that
+   undoes it — every earlier verdict permanently hidden, with no control on the
+   page able to reveal them. The ledger would under-report its own history and
+   look complete while doing it, which is the failure this whole surface exists
+   to refuse. Degrading to always-expanded shows more than intended; it never
+   shows less than the truth. */
+@supports selector(:has(*)) {
+  .pr-history {
+    display: none;
+  }
+  .pr-group:has(.pr-toggle:checked) .pr-history {
+    display: table-row;
+  }
+  .pr-caret-open {
+    display: none;
+  }
+  .pr-group:has(.pr-toggle:checked) .pr-caret-open {
+    display: inline;
+  }
+  .pr-group:has(.pr-toggle:checked) .pr-caret-closed {
+    display: none;
+  }
 }
-.pr-group:has(.pr-toggle:checked) .pr-history {
-  display: table-row;
-}
-.pr-caret-open {
-  display: none;
-}
-.pr-group:has(.pr-toggle:checked) .pr-caret-open {
-  display: inline;
-}
-.pr-group:has(.pr-toggle:checked) .pr-caret-closed {
-  display: none;
+
+/* …and where it is unsupported, the affordance is withdrawn rather than left
+   claiming a state it cannot change: a caret reading "collapsed" beside rows
+   that are already visible is a lie about the control, and clicking it would
+   do nothing. */
+@supports not selector(:has(*)) {
+  .pr-disclosure {
+    display: none;
+  }
 }
 
 @layer base {

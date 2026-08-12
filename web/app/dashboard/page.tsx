@@ -24,6 +24,7 @@ import {
   facetToggleChanges,
   predicateChanges,
   sortChanges,
+  withSelectedOptions,
 } from "@/lib/dashboard-view";
 import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
@@ -290,7 +291,12 @@ function FacetBar({
             // label IS the secondary encoding the CVD floor requires, exactly
             // as in BandChip. No third data colour enters here: every other
             // facet stays on ink.
-            const ink = facet.key === "band"
+            // A pill for a value the data does not carry (count 0, appended by
+            // withSelectedOptions) takes NO data colour: `?band=foo` is not a
+            // band, and painting it clear-green would assert a verdict about a
+            // value no run has. It stays on ink and its 0 does the talking.
+            const known = option.value === "flagged" || option.value === "cleared";
+            const ink = facet.key === "band" && known
               ? (option.value === "flagged" ? "text-[var(--flag)]" : "text-[var(--clear)]")
               : on ? "text-foreground" : "text-muted-foreground";
             return (
@@ -492,7 +498,7 @@ function RunTable({
                   disclosure={hasHistory ? (
                     <label
                       title={count.title}
-                      className="mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <input
                         type="checkbox"
@@ -754,7 +760,11 @@ export default async function DashboardPage({
     // set would zero out every unselected option the moment one selection
     // excluded it, which reads as "no such runs exist" rather than "you have
     // filtered them out".
-    facets = buildFacets(fetched);
+    // Built from the FULL fetched set, then merged with any selection the data
+    // does not carry — a stale `?band=foo` is a real constraint and has to be
+    // visible and clickable, not just true (Doug PR 102,
+    // reader:query-param-contract-change).
+    facets = withSelectedOptions(buildFacets(fetched), filters.facets);
     groups = sortGroups(
       groupRunsByPr(filterRunsByQuery(filterRuns(fetched, filters), query), atCap),
       sort,

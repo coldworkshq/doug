@@ -11,7 +11,7 @@
 // one does is "given the params I am looking at, what changes?" — a pure
 // function, tested by lib/dashboard-view.test.mjs without a DOM. The page's own
 // `href(params, changes)` helper applies the result.
-import { FACET_KEYS, type FacetKey, type FacetSelection, serializeFacets } from "./facets";
+import { FACET_KEYS, type Facet, type FacetKey, type FacetSelection, serializeFacets } from "./facets";
 import { DEFAULT_SORT, type SortState, serializeSort } from "./sorting";
 
 type SearchValues = Record<string, string | string[] | undefined>;
@@ -110,4 +110,52 @@ export function carriedParams(values: SearchValues, own: string[]): Array<[strin
     if (value) carried.push([key, value]);
   }
   return carried;
+}
+
+/** Make a selection VISIBLE even when nothing matches it.
+ *
+ *  `buildFacets` derives pills from the fetched runs, so a value no run
+ *  carries produces no pill. Combined with a real constraint that is exactly
+ *  the state Doug's `query-param-contract-change` finding names: open a stale
+ *  or mistyped link — `?band=foo`, or `?outcome=revert` on a space that has
+ *  never had one — and the table is empty, correctly, while the bar shows
+ *  nothing selected and offers nothing to clear. The page says the filter
+ *  excludes the runs; the filter is invisible.
+ *
+ *  Before the facet bar existed, an unrecognised `?band=foo` was silently
+ *  normalised to "all" and the page rendered as if no filter had been asked
+ *  for. That is the other way to be wrong, and the worse one: it answers a
+ *  question the URL did not ask. This keeps the constraint honest AND puts it
+ *  on screen with a count of 0, so it can be seen and clicked off.
+ *
+ *  A value the data does not have is appended rather than sorted in: it is not
+ *  part of the run population the other counts partition, and interleaving it
+ *  would imply it is. */
+export function withSelectedOptions(facets: Facet[], selection: FacetSelection): Facet[] {
+  const merged = facets.map((facet) => {
+    const selected = selection[facet.key] ?? [];
+    const missing = selected.filter(
+      (value) => !facet.options.some((option) => option.value === value),
+    );
+    if (missing.length === 0) return facet;
+    return {
+      ...facet,
+      options: [...facet.options, ...missing.map((value) => ({ value, label: value, count: 0 }))],
+    };
+  });
+
+  // …and a selected key with no facet at all — every run lacking the dimension,
+  // or an empty ledger — still needs its group, or the only evidence of the
+  // constraint stays in the address bar.
+  const present = new Set(merged.map((facet) => facet.key));
+  for (const key of FACET_KEYS) {
+    const selected = selection[key] ?? [];
+    if (present.has(key) || selected.length === 0) continue;
+    merged.push({
+      key,
+      label: key,
+      options: selected.map((value) => ({ value, label: value, count: 0 })),
+    });
+  }
+  return merged;
 }

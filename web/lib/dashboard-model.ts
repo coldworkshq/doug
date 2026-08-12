@@ -76,9 +76,18 @@ export function coverageView(run: Pick<RunSummary, "coverage" | "changed_files">
  *  (This replaced `capSuffix`, which returned the suffix as a string. Phase B
  *  PR 2 moved the wording into the page's CountLine — the console's, so the
  *  two surfaces report one ledger identically — leaving the honesty rule
- *  itself here as the boolean both consumers read.) */
+ *  itself here as the boolean both consumers read.)
+ *
+ *  `limit > 0` is not defensive noise: with a bare `fetched >= limit`,
+ *  `isAtCap(0, 0)` is TRUE, and page.tsx initialises both `limit = 0` and an
+ *  empty run list before the fetch. Today the call happens immediately after
+ *  `limit = response.limit` (validated 1..500 by the API), so the zero case is
+ *  unreachable — but the failure it would produce is a page announcing "latest
+ *  0" and marking every PR group's count as a lower bound, i.e. an honesty
+ *  claim manufactured out of an uninitialised variable. A cap is a statement
+ *  that a real limit was hit; no limit means no cap. */
 export function isAtCap(fetched: number, limit: number): boolean {
-  return fetched >= limit;
+  return limit > 0 && fetched >= limit;
 }
 
 export function filterRuns<T extends RunSummary>(

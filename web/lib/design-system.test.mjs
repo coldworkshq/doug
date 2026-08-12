@@ -3,7 +3,7 @@
 // (house rule: no component render tests) — the utilities are CSS, and the
 // properties below are honesty rules that a future edit could quietly break.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const cssUrl = new URL("../app/globals.css", import.meta.url);
@@ -147,4 +147,109 @@ test("the dashboard surface keeps the orphan values it inherited, exactly", asyn
   // coverage ramp.
   assert.equal(block.includes("#eceae3"), false);
   assert.equal(block.includes("#3d403c"), false);
+});
+
+test("the surface-scoped tokens are used only where the surface is mounted", async () => {
+  // Doug, PR 102, reader:css-token-scope-coupling. --rule-soft, --dim and
+  // --row-hover are declared ONLY on .dashboard-surface. Anything using them
+  // outside that wrapper resolves them to nothing and silently loses its row
+  // dividers, muted text or hover tint — no build error, no test failure, and
+  // nothing renders in this suite to catch it.
+  //
+  // So the blast radius is pinned instead: today exactly one source file
+  // reaches for them, and it is the file that mounts the surface. Extracting a
+  // piece of the dashboard into components/ trips this test, which is the
+  // moment to decide — move the token to :root, or pass the colour in, or
+  // mount the surface around the new home. Do NOT just add the file here
+  // unless it genuinely renders inside .dashboard-surface.
+  const dir = new URL("../", import.meta.url);
+  const sources = [];
+  async function walk(rel) {
+    for (const entry of await readdir(new URL(rel, dir), { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const next = `${rel}${entry.name}${entry.isDirectory() ? "/" : ""}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (/\.(tsx?|mjs)$/.test(entry.name)) sources.push(next);
+    }
+  }
+  await walk("");
+
+  const users = [];
+  for (const rel of sources) {
+    if (rel.endsWith("lib/design-system.test.mjs")) continue;
+    const text = await readFile(new URL(rel, dir), "utf8");
+    if (/var\(--(rule-soft|dim|row-hover)\)/.test(text)) users.push(rel);
+  }
+
+  assert.deepEqual(
+    users.sort(),
+    ["app/dashboard/page.tsx"],
+    "a file outside the dashboard surface now uses a token only declared on it",
+  );
+
+  // And the wrapper that declares them is still mounted by that file.
+  const page = await readFile(new URL("app/dashboard/page.tsx", dir), "utf8");
+  assert.match(page, /className="dashboard-surface/);
+});
+
+test("the dark palette never redeclares a token the dashboard surface pins", async () => {
+  // Doug, PR 102, reader:theme-inheritance-assumption. The light pinning works
+  // because .dashboard-surface redeclares these custom properties on the
+  // dashboard's own wrapper, and an inherited value is the weakest source a
+  // custom property can have. The previously pinned case was the literal
+  // `.dark` selector gaining `dashboard-surface`; this widens it to the whole
+  // mechanism — ANY rule under .dark that sets one of these tokens on a
+  // descendant would win where inheritance does not.
+  const css = await readFile(cssUrl, "utf8");
+  const darkStart = css.search(/(?:^|\n)\.dark[^{]*\{/);
+  assert.ok(darkStart >= 0, "globals.css lost its .dark block");
+
+  // Every rule from the .dark block onward whose selector mentions .dark.
+  const rules = [...css.slice(darkStart).matchAll(/(^|\n)([^{}\n][^{}]*)\{([^}]*)\}/g)];
+  const darkRules = rules.filter(([, , selector]) => /\.dark\b/.test(selector));
+  assert.ok(darkRules.length > 0, "no .dark rule found — the scan is vacuous");
+
+  for (const [, , selector, body] of darkRules) {
+    assert.equal(
+      /--(rule-soft|dim|row-hover)\s*:/.test(body),
+      false,
+      `a .dark rule (${selector.trim()}) redeclares a dashboard-surface token`,
+    );
+    assert.equal(
+      selector.includes("dashboard-surface"),
+      false,
+      `a .dark rule (${selector.trim()}) claims the dashboard surface`,
+    );
+  }
+});
+
+test("the per-PR disclosure fails open where :has() is unsupported", async () => {
+  // Doug, PR 102, reader:css-only-state-loss. The collapse is `display: none`
+  // undone by a `:has()` rule. Declared unconditionally, an engine without
+  // `:has()` applies the hiding and never applies the rule that reverses it —
+  // every earlier verdict hidden permanently, with no control on the page able
+  // to reveal them, and the ledger silently under-reporting its own history
+  // while looking complete.
+  //
+  // Pinned because the fix is invisible in every environment that HAS `:has()`,
+  // which is every environment this suite and CI run in: deleting the @supports
+  // wrapper leaves all tests green and the bug fully back. Verified.
+  const css = code(await readFile(cssUrl, "utf8"));
+
+  const supports = css.match(/@supports\s+selector\(:has\(\*\)\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(supports, "the :has() collapse is no longer behind an @supports guard");
+  assert.match(supports[1], /\.pr-history\s*\{[^}]*display:\s*none/);
+
+  // …and it must not ALSO be declared outside the guard, which would restore
+  // the unconditional hiding while leaving the guard in place as decoration.
+  const outside = css.replace(/@supports[\s\S]*?\n\}/g, "");
+  assert.equal(
+    /\.pr-history\s*\{[^}]*display:\s*none/.test(outside),
+    false,
+    ".pr-history is hidden outside the @supports guard — the fallback is dead",
+  );
+
+  // Where it is unsupported the affordance is withdrawn, so no caret claims a
+  // collapsed state it cannot produce.
+  assert.match(css, /@supports\s+not\s+selector\(:has\(\*\)\)\s*\{[\s\S]*?\.pr-disclosure\s*\{[^}]*display:\s*none/);
 });

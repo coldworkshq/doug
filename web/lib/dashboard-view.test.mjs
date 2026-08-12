@@ -133,3 +133,37 @@ test("no facet key may collide with a param the dashboard page reads for itself"
   assert.ok(view.DASHBOARD_OWN_PARAMS.includes("repo"));
   assert.ok(view.DASHBOARD_OWN_PARAMS.includes("run"));
 });
+
+test("a selection nothing matches is still shown, and still clearable", async () => {
+  // Doug, PR 102, reader:query-param-contract-change. A stale or mistyped link
+  // (?band=foo) is a real constraint — the table is correctly empty — but
+  // buildFacets derives pills from the fetched runs, so nothing rendered the
+  // filter that was doing the excluding. The page said "the filter excludes
+  // them" and offered no filter to see or clear.
+  const { withSelectedOptions } = await import("./dashboard-view.ts?ghost");
+
+  const facets = [
+    { key: "band", label: "band", options: [{ value: "flagged", label: "needs you", count: 2 }] },
+  ];
+
+  const merged = withSelectedOptions(facets, { band: ["flagged", "foo"] });
+  assert.equal(merged.length, 1);
+  // Appended, not interleaved: it is not part of the population the real
+  // counts partition, and sorting it in would imply it is.
+  assert.deepEqual(merged[0].options.map((option) => option.value), ["flagged", "foo"]);
+  // Count 0 is the honest number — no run carries it — and it is what makes
+  // the pill legible as "this is why the table is empty".
+  assert.equal(merged[0].options[1].count, 0);
+
+  // A selected key with NO facet at all still gets its group; otherwise the
+  // only evidence of the constraint is the address bar.
+  const orphan = withSelectedOptions([], { outcome: ["revert"] });
+  assert.equal(orphan.length, 1);
+  assert.equal(orphan[0].key, "outcome");
+  assert.deepEqual(orphan[0].options, [{ value: "revert", label: "revert", count: 0 }]);
+
+  // And a selection the data DOES cover is left exactly as it was — no
+  // duplicate pill, no reordering.
+  assert.deepEqual(withSelectedOptions(facets, { band: ["flagged"] }), facets);
+  assert.deepEqual(withSelectedOptions(facets, {}), facets);
+});
