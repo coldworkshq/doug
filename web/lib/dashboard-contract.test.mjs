@@ -186,6 +186,34 @@ test("repository connection and every pending setup remain reachable in all dash
   assert.match(page, />finish setup<\/button>/);
 });
 
+test("every filter the dashboard offers lives in the URL, not in client memory", async () => {
+  // RULING 2. The page's own count line claims "filters live in the URL", and
+  // that claim is only true while the page has no client island: console's
+  // FacetBar and RunsTable are `"use client"` and keep selection, sort, search
+  // and paging in React state, so copying them here would have retired a
+  // shareable-URL property the page advertises in shipped prose.
+  //
+  // Adapted instead: pills and pager are <Link>s, search is a GET <form>, and
+  // every target is computed by the pure rewrites in lib/dashboard-view.ts.
+  const page = await readFile(pageUrl, "utf8");
+  assert.equal(page.includes('"use client"'), false, "the dashboard grew a client boundary");
+  assert.equal(page.includes("'use client'"), false, "the dashboard grew a client boundary");
+  // The hooks that would only appear if filter state had moved off the URL.
+  for (const hook of ["useState", "useEffect", "useSearchParams", "useRouter", "usePathname"]) {
+    assert.equal(page.includes(hook), false, `the dashboard reads ${hook} — filter state left the URL`);
+  }
+  assert.match(page, /filters live in the URL/);
+  // …and the claim is backed by a real read of the URL on the server.
+  assert.match(page, /const params = await searchParams;/);
+
+  // The per-PR history disclosure is the one control that is NOT URL state,
+  // deliberately — which is exactly why it must not be the thing that drags a
+  // client boundary in. It is a checkbox and a CSS `:has()` rule, so it stays
+  // a real labelled control that keyboard users can operate.
+  assert.match(page, /type="checkbox"/);
+  assert.match(page, /aria-label=\{`Show the \$\{count\.title\}/);
+});
+
 test("state-mutating install links disable Next prefetch", async () => {
   const page = await readFile(pageUrl, "utf8");
   const installLinks = [...page.matchAll(/<Link\b[^>]*>/g)]

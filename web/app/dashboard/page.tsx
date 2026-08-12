@@ -8,14 +8,26 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { RunSpine } from "@/components/run-spine";
 import {
-  capSuffix,
   coverageView,
   dashboardFilters,
   filterRuns,
+  isAtCap,
   outcomeTone,
   repositoryOptions,
 } from "@/lib/dashboard-model";
+import {
+  carriedParams,
+  facetClearChanges,
+  facetToggleChanges,
+  predicateChanges,
+  sortChanges,
+} from "@/lib/dashboard-view";
+import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
+import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
+import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
 import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
+import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
+import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
 import {
   getConnections,
   getSessionRun,
@@ -225,22 +237,215 @@ function CoverageCell({ run }: { run: RunSummary }) {
   );
 }
 
+/** The pill row above the table — console's FacetBar, adapted from a client
+ *  component to a server one (RULING 2). Each pill is a <Link> whose target is
+ *  computed by `facetToggleChanges`, so the selection stays in the URL and
+ *  survives being copied to someone else; console's version writes the same
+ *  query string with `history.pushState` instead.
+ *
+ *  These are NOT the scope controls in the header. Scope (`?repo=`) decides
+ *  what the server fetches; these narrow what was already fetched. Keeping
+ *  them visually distinct — a flat row under the header rather than bordered
+ *  controls in the bar — is what stops an operator reading a pill as a change
+ *  of scope.
+ *
+ *  Counts are over the FULL fetched set, so they do not move as other pills
+ *  are pressed, and their denominator is that same set. At the page cap the
+ *  set is only the newest N runs, and the title says so rather than calling it
+ *  the scope. */
+function FacetBar({
+  facets,
+  selection,
+  totalFetched,
+  atCap,
+  params,
+}: {
+  facets: Facet[];
+  selection: FacetSelection;
+  totalFetched: number;
+  atCap: boolean;
+  params: DashboardParams;
+}) {
+  if (facets.length === 0) return null;
+  const active = Object.values(selection).some((values) => values && values.length > 0);
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3">
+      {facets.map((facet) => (
+        <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
+          <span className="mono text-[10px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
+          {facet.options.map((option) => {
+            const on = (selection[facet.key] ?? []).includes(option.value);
+            // Frame and ink are computed separately and each utility is
+            // emitted exactly once. Concatenating a second `text-*` onto a
+            // string that already has one does NOT override it — Tailwind
+            // resolves that collision by stylesheet order, not by the order of
+            // the class attribute.
+            const frame = on
+              ? "border-[var(--iridescent)] bg-accent"
+              : "border-border bg-card hover:border-[var(--iridescent)]";
+            // The two data colours, each still carrying its word — the pill's
+            // label IS the secondary encoding the CVD floor requires, exactly
+            // as in BandChip. No third data colour enters here: every other
+            // facet stays on ink.
+            const ink = facet.key === "band"
+              ? (option.value === "flagged" ? "text-[var(--flag)]" : "text-[var(--clear)]")
+              : on ? "text-foreground" : "text-muted-foreground";
+            return (
+              <Link
+                key={option.value}
+                href={href(params, facetToggleChanges(selection, facet.key, option.value))}
+                aria-current={on ? "true" : undefined}
+                title={atCap
+                  ? `${option.count} of the newest ${totalFetched} runs fetched — the scope may hold more`
+                  : `${option.count} of ${totalFetched} runs in scope`}
+                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[11px] no-underline ${frame} ${ink}`}
+              >
+                {option.label}
+                <span className="text-[10px] tabular-nums opacity-60">{option.count}</span>
+              </Link>
+            );
+          })}
+        </div>
+      ))}
+      {active && (
+        <Link
+          href={href(params, facetClearChanges())}
+          className="mono ml-auto text-[10.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
+        >clear filters</Link>
+      )}
+    </div>
+  );
+}
+
+/** Filter/fetched totals, not the viewport. The pager below the table states
+ *  "showing X–Y of Z"; this answers how many runs survived the filters across
+ *  the whole fetched set.
+ *
+ *  `total` is the fetched set and `shown` is what survived; at the cap neither
+ *  is a count of the scope, which is why "latest {limit}" REPLACES a bare total
+ *  rather than qualifying it in a tooltip. Same numbers and same words as
+ *  console's CountLine, so the two surfaces cannot report one ledger
+ *  differently. */
+function CountLine({
+  shown,
+  total,
+  groups,
+  limit,
+  atCap,
+  filtering,
+}: {
+  shown: number;
+  total: number;
+  groups: number;
+  limit: number;
+  atCap: boolean;
+  filtering: boolean;
+}) {
+  const prs = <> across <b className="text-foreground">{groups}</b> {groups === 1 ? "pr" : "prs"}</>;
+  const fetched = atCap
+    ? <>the latest <b className="text-foreground">{limit}</b></>
+    : <b className="text-foreground">{total}</b>;
+  if (filtering) {
+    return <span><b className="text-foreground">{shown}</b> of {fetched} runs{prs} · filters live in the URL</span>;
+  }
+  return (
+    <span>
+      {atCap ? <>latest <b className="text-foreground">{limit}</b></> : <b className="text-foreground">{total}</b>}
+      {" "}runs{prs} · filters live in the URL
+    </span>
+  );
+}
+
 /** Column widths are the console's, not the deleted module's. They travel with
  *  the cell components this table now renders: band is 112px because BandChip's
  *  "needs you" wrapped to two lines at 96 and dragged every flagged row taller
- *  than its neighbours. */
-const COLUMNS: Array<{ label: string; cls: string }> = [
-  { label: "score", cls: "w-[78px] text-right" },
+ *  than its neighbours.
+ *
+ *  Only three columns are sortable. band, tier and outcome are categories, and
+ *  sorting a category alphabetically implies a ranking that does not exist —
+ *  narrowing those is what the pills do. */
+const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
+  { label: "score", cls: "w-[78px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
   { label: "band", cls: "w-[112px]" },
   { label: "tier", cls: "w-[88px]" },
-  { label: "read", cls: "w-[176px]" },
+  { label: "read", cls: "w-[176px]", sort: "coverage" },
   { label: "outcome", cls: "w-[104px]" },
   { label: "job", cls: "w-[118px]" },
-  { label: "age", cls: "w-[54px] text-right" },
+  { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
 
-function RunTable({ rows, params }: { rows: RunSummary[]; params: DashboardParams }) {
+const TH = "mono border-b border-border px-2.5 pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+const TD = "h-[34px] px-2.5 align-middle";
+
+/** The eight cells of one run. Children render the identical columns — an
+ *  older run is a full verdict, not a summary of one — and are marked as
+ *  history by indentation and a tint, never by dropping data. */
+function RunCells({
+  run,
+  params,
+  disclosure = null,
+  indented = false,
+}: {
+  run: RunSummary;
+  params: DashboardParams;
+  disclosure?: React.ReactNode;
+  indented?: boolean;
+}) {
+  return (
+    <>
+      <td className={`${TD} text-right`}>
+        <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
+          {run.score.toFixed(2)}
+        </span>
+      </td>
+      <td className={`${TD} min-w-0`}>
+        <div className="flex min-w-0 items-baseline gap-2">
+          {/* The slot reserves its width whether or not a control lives in it,
+              so a PR with history and a PR without still start their repo name
+              at the same x. */}
+          <span className="min-w-[38px] flex-none text-right">{disclosure}</span>
+          {indented ? (
+            // A child row's repo, number and title are its parent's, verbatim.
+            // What distinguishes one run of a PR from the next is WHEN it ran,
+            // so that is what the cell carries — still linking to this run's
+            // own evidence.
+            <Link className="mono truncate pl-3 text-[10px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
+              {relativeAge(run.scored_at)} ago
+            </Link>
+          ) : (
+            <Link className="flex min-w-0 items-baseline gap-2 text-inherit no-underline" href={href(params, { run: String(run.verdict_id) })}>
+              <span className="mono flex-none text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
+              <strong className="min-w-0 flex-1 truncate text-xs font-normal">{run.title}</strong>
+            </Link>
+          )}
+        </div>
+      </td>
+      <td className={TD}><BandChip band={run.band} /></td>
+      <td className={`mono ${TD} text-[10px] text-muted-foreground`}>{run.tier}</td>
+      <td className={TD}><CoverageCell run={run} /></td>
+      <td className={`mono ${TD} text-xs`}>
+        <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
+      </td>
+      <td className={`mono ${TD} text-[10px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+        {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
+      </td>
+      <td className={`mono ${TD} text-right text-[10px] text-muted-foreground`}>{relativeAge(run.scored_at)}</td>
+    </>
+  );
+}
+
+function RunTable({
+  window,
+  params,
+  sort,
+  filtering,
+}: {
+  window: PageWindow<PrGroup>;
+  params: DashboardParams;
+  sort: SortState;
+  filtering: boolean;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[980px] table-fixed border-collapse">
@@ -249,45 +454,89 @@ function RunTable({ rows, params }: { rows: RunSummary[]; params: DashboardParam
             {COLUMNS.map((column) => (
               <th
                 key={column.label}
-                className={`mono border-b border-border px-2.5 pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground ${column.cls}`}
+                aria-sort={column.sort === undefined
+                  ? undefined
+                  : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+                className={`${TH} ${column.cls}`}
               >
-                {column.label}
+                {column.sort === undefined ? column.label : (
+                  <Link
+                    href={href(params, sortChanges(nextSort(sort, column.sort)))}
+                    className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+                  >
+                    {column.label}
+                    <span aria-hidden className="text-[9px] opacity-70">
+                      {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
+                    </span>
+                  </Link>
+                )}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>
-          {rows.map((run) => (
-            <tr key={run.verdict_id} className="border-b border-[var(--rule-soft)] hover:bg-[var(--row-hover)]">
-              <td className="h-[34px] px-2.5 text-right align-middle">
-                <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
-                  {run.score.toFixed(2)}
-                </span>
-              </td>
-              <td className="h-[34px] min-w-0 px-2.5 align-middle">
-                <Link
-                  className="flex min-w-0 items-baseline gap-2 text-inherit no-underline"
-                  href={href(params, { run: String(run.verdict_id) })}
-                >
-                  <span className="mono flex-none text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
-                  <strong className="min-w-0 flex-1 truncate text-xs font-normal">{run.title}</strong>
-                </Link>
-              </td>
-              <td className="h-[34px] px-2.5 align-middle"><BandChip band={run.band} /></td>
-              <td className="mono h-[34px] px-2.5 align-middle text-[10px] text-muted-foreground">{run.tier}</td>
-              <td className="h-[34px] px-2.5 align-middle"><CoverageCell run={run} /></td>
-              <td className="mono h-[34px] px-2.5 align-middle text-xs">
-                <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
-              </td>
-              <td className={"mono h-[34px] px-2.5 align-middle text-[10px] " + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
-                {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
-              </td>
-              <td className="mono h-[34px] px-2.5 text-right align-middle text-[10px] text-muted-foreground">{relativeAge(run.scored_at)}</td>
-            </tr>
-          ))}
-        </tbody>
+        {window.items.map((group) => {
+          const count = runCountLabel(group, filtering);
+          // A PR with one run gets NO control and NO badge. A chevron that
+          // expands to nothing claims there is more to see, and "1" beside
+          // every single-run row is noise standing in for information.
+          const hasHistory = group.children.length > 0;
+          return (
+            <tbody key={group.key} className="pr-group">
+              <tr className="border-b border-[var(--rule-soft)] hover:bg-[var(--row-hover)]">
+                <RunCells
+                  run={group.latest}
+                  params={params}
+                  disclosure={hasHistory ? (
+                    <label
+                      title={count.title}
+                      className="mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <input
+                        type="checkbox"
+                        className="pr-toggle sr-only"
+                        aria-label={`Show the ${count.title} on ${group.repo} #${group.prNumber}`}
+                      />
+                      <span aria-hidden className="pr-caret-closed">▸</span>
+                      <span aria-hidden className="pr-caret-open">▾</span>
+                      {count.text}
+                    </label>
+                  ) : null}
+                />
+              </tr>
+              {group.children.map((child) => (
+                <tr key={child.verdict_id} className="pr-history border-b border-[var(--rule-soft)] bg-muted/40">
+                  <RunCells run={child} params={params} indented />
+                </tr>
+              ))}
+            </tbody>
+          );
+        })}
       </table>
-      {rows.length === 0 && <p className="mono border-b border-border px-2.5 py-9 text-muted-foreground">No runs match these filters.</p>}
+    </div>
+  );
+}
+
+function Pager({ window, params }: { window: PageWindow<PrGroup>; params: DashboardParams }) {
+  const label = pageRangeLabel(window);
+  if (window.pageCount <= 1) {
+    return <p className="mono mt-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
+  }
+  const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
+  const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
+  return (
+    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+      <span>Showing {label}</span>
+      <span className="h-px flex-1 bg-border" />
+      {/* At a boundary the control renders as text, not a disabled link: a
+          <Link> cannot be disabled, and one that navigates to the page you are
+          already on is a control that lies about having an effect. */}
+      {window.page <= 1
+        ? <span className={`${control} opacity-40`}>Prev</span>
+        : <Link href={step(window.page - 1)} className={`${control} hover:text-foreground`}>Prev</Link>}
+      <span>Page {window.page} / {window.pageCount}</span>
+      {window.page >= window.pageCount
+        ? <span className={`${control} opacity-40`}>Next</span>
+        : <Link href={step(window.page + 1)} className={`${control} hover:text-foreground`}>Next</Link>}
     </div>
   );
 }
@@ -413,21 +662,47 @@ export default async function DashboardPage({
   ) ?? null;
   const userLabel = user.firstName || user.email || "You";
 
-  let rows: RunSummary[] = [];
-  let capNote = "";
+  let fetched: RunSummary[] = [];
+  let limit = 0;
+  let atCap = false;
+  let facets: Facet[] = [];
+  let groups: PrGroup[] = [];
+  let shown = 0;
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
+
   const filters = dashboardFilters(params);
+  const query = normalizeQuery(value(params, "q"));
+  const sort = parseSort(value(params, "sort") ?? null);
+  const filtering =
+    query.length > 0 ||
+    filters.lowCoverage ||
+    filters.hasError ||
+    Object.values(filters.facets).some((values) => values && values.length > 0);
+
   if (current) {
     const response = await getSessionRuns(accessToken, filters.repo);
-    rows = filterRuns(response.items, filters);
-    capNote = capSuffix(response.items.length, response.limit);
+    fetched = response.items;
+    limit = response.limit;
+    atCap = isAtCap(fetched.length, limit);
+    // Facets are built from the FULL fetched set, so a pill's count does not
+    // change as other pills are pressed. Recomputing them against the filtered
+    // set would zero out every unselected option the moment one selection
+    // excluded it, which reads as "no such runs exist" rather than "you have
+    // filtered them out".
+    facets = buildFacets(fetched);
+    groups = sortGroups(
+      groupRunsByPr(filterRunsByQuery(filterRuns(fetched, filters), query), atCap),
+      sort,
+    );
+    shown = groups.reduce((total, group) => total + group.runCount, 0);
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
-      ? response.items.find((run) => run.verdict_id === selectedId) ?? null
+      ? fetched.find((run) => run.verdict_id === selectedId) ?? null
       : null;
     if (selectedSummary) detail = await getSessionRun(accessToken, selectedSummary.verdict_id);
   }
+  const pageWindow = pageSlice(groups, parsePage(value(params, "page")));
 
   return (
     <div className="dashboard-surface">
@@ -474,17 +749,61 @@ export default async function DashboardPage({
             <span className="h-px flex-1 bg-border" />
           </div>
           <section className={`${CANVAS} px-5 pb-6`}>
-            <div className="flex flex-wrap items-center gap-[7px] pt-3 pb-[11px]">
-              <FilterChip active={filters.band === "all" && filters.tier === "all" && !filters.lowCoverage && !filters.hasError} target={href(params, { band: null, tier: null, coverage: null, error: null })}>all</FilterChip>
-              <FilterChip active={filters.band === "flagged"} target={href(params, { band: filters.band === "flagged" ? null : "flagged" })}>needs you</FilterChip>
-              <FilterChip active={filters.band === "cleared"} target={href(params, { band: filters.band === "cleared" ? null : "cleared" })}>cleared</FilterChip>
-              <FilterChip active={filters.tier === "reader"} target={href(params, { tier: filters.tier === "reader" ? null : "reader" })}>reader</FilterChip>
-              <FilterChip active={filters.tier === "deterministic"} target={href(params, { tier: filters.tier === "deterministic" ? null : "deterministic" })}>deterministic</FilterChip>
-              <FilterChip active={filters.lowCoverage} target={href(params, { coverage: filters.lowCoverage ? null : "low" })}>coverage &lt; 50%</FilterChip>
-              <FilterChip active={filters.hasError} target={href(params, { error: filters.hasError ? null : "yes" })}>has error</FilterChip>
-              <span className="mono ml-auto text-[11px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full"><b className="text-foreground">{rows.length}</b> runs{capNote} · filters live in the URL</span>
+            <FacetBar
+              facets={facets}
+              selection={filters.facets}
+              // The pill counts were computed over `fetched` (unfiltered), so
+              // their denominator must be `fetched.length` too. Passing the
+              // filtered count here would pair an unfiltered numerator with a
+              // filtered denominator, and could print a count larger than the
+              // total beside it.
+              totalFetched={fetched.length}
+              atCap={atCap}
+              params={params}
+            />
+            <div className="flex flex-wrap items-center gap-[7px] py-3">
+              {/* The dashboard's own two predicates. Not pills in the bar
+                  above: neither is a value a run carries on some dimension, so
+                  neither has a partition to count over. */}
+              <FilterChip active={filters.lowCoverage} target={href(params, predicateChanges("coverage", filters.lowCoverage ? null : "low"))}>coverage &lt; 50%</FilterChip>
+              <FilterChip active={filters.hasError} target={href(params, predicateChanges("error", filters.hasError ? null : "yes"))}>has error</FilterChip>
+              <form method="GET" action="/dashboard" className="flex items-center gap-1.5">
+                {/* A GET form submits ONLY its own controls, so without these
+                    the search box would silently clear every pill set above
+                    it. `run` is deliberately not carried: a search can exclude
+                    the very run whose evidence pane is open. */}
+                {carriedParams(params, ["q", "page"]).map(([key, item]) => (
+                  <input key={key} type="hidden" name={key} value={item} />
+                ))}
+                <label className="sr-only" htmlFor="runs-search">Search runs</label>
+                <input
+                  id="runs-search"
+                  type="search"
+                  name="q"
+                  defaultValue={query}
+                  placeholder="Search repo, PR, title…"
+                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[11px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                />
+                <button type="submit" className={SUBMIT_BUTTON}>search</button>
+              </form>
+              <span className="mono ml-auto text-[11px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
+                <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
+              </span>
             </div>
-            <RunTable rows={rows} params={params} />
+            {groups.length === 0 ? (
+              // An empty result under a filter and an empty ledger are
+              // different facts, and neither is a blank table under a header.
+              <p className="mono border-b border-border px-2.5 py-9 text-center text-xs text-muted-foreground">
+                {filtering
+                  ? "No run matches this filter. The runs are there — the filter excludes them."
+                  : "No runs in this space yet."}
+              </p>
+            ) : (
+              <>
+                <RunTable window={pageWindow} params={params} sort={sort} filtering={filtering} />
+                <Pager window={pageWindow} params={params} />
+              </>
+            )}
           </section>
           {detail && selectedSummary && <Evidence detail={detail} summary={selectedSummary} />}
         </main>

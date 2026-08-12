@@ -205,6 +205,34 @@
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* The dashboard's per-PR history disclosure, in CSS.
+   /dashboard is a server component and stays one (RULING 2) — so expanding a
+   PR's earlier runs cannot be React state, and it deliberately is not URL
+   state either: which rows you happened to open is a reading position, not a
+   view worth sharing, and on a server-rendered page every toggle would be a
+   full navigation that refetches the whole ledger.
+   What is left is a checkbox and `:has()`. The control is a real labelled
+   input, so it is focusable and operable from the keyboard; it announces as a
+   checkbox rather than as a disclosure button, which is the one thing this
+   loses against console's client-side `aria-expanded` control.
+   Each PR group is its own <tbody> — several are valid in one table — so the
+   selector never reaches past the group it belongs to. */
+.pr-history {
+  display: none;
+}
+.pr-group:has(.pr-toggle:checked) .pr-history {
+  display: table-row;
+}
+.pr-caret-open {
+  display: none;
+}
+.pr-group:has(.pr-toggle:checked) .pr-caret-open {
+  display: inline;
+}
+.pr-group:has(.pr-toggle:checked) .pr-caret-closed {
+  display: none;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
