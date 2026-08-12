@@ -5,6 +5,7 @@
 .superpowers
 **/node_modules
 **/.next
+**/.next-auth-entry-test
 **/__pycache__
 **/.venv
 **/venv

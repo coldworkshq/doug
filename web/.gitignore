@@ -15,6 +15,9 @@
 
 # next.js
 /.next/
+# Dist dir owned solely by lib/auth-entry.integration.test.mjs, so no other
+# `next build` can wipe the build its `next start` is booting from.
+/.next-auth-entry-test/
 /out/
 
 # production
