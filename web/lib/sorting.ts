@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/sorting.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. This comment is not on trust.
 // The only adaptation is the import preamble, explained below.
 import type { RunSummary } from "./session-api";
 import type { PrGroup } from "./grouping";

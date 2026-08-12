@@ -6,6 +6,10 @@
 // The hardcoded #c9c6bd hatching is light-paper only, deliberately: the
 // dashboard is pinned to the console's light surface (RULING 1), so there is no
 // dark variant to invent here.
+//
+// ENFORCED: lib/console-lockstep.test.mjs asserts this file is character-identical
+// to console's below the imports — render tests are against the house rule,
+// so that text comparison is what keeps the two from drifting.
 import { coverageLabel, coveragePercent } from "@/lib/coverage";
 import type { RunCoverage } from "@/lib/session-api";
 

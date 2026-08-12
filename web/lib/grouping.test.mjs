@@ -1,5 +1,7 @@
 // Ported verbatim from console/lib/grouping.test.mjs — keep the two in
 // lockstep. Every test name and comment is the console's.
+// ENFORCED (count only): lib/console-lockstep.test.mjs fails if console's copy
+// gains a test this one does not. The bodies are not text-compared.
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import test from "node:test";

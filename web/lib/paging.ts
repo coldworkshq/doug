@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/paging.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. This comment is not on trust.
 /** Client-side page over an already-fetched list. 1-based pages. */
 
 export const DEFAULT_PAGE_SIZE = 50;

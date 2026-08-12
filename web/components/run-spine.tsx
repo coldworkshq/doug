@@ -5,6 +5,10 @@
 // The hardcoded #3d403c / #c9c6bd node colours are light-paper only,
 // deliberately — the dashboard is pinned to the console's light surface
 // (RULING 1), so there is no dark variant to invent here.
+//
+// ENFORCED: lib/console-lockstep.test.mjs asserts this file is character-identical
+// to console's below the imports — render tests are against the house rule,
+// so that text comparison is what keeps the two from drifting.
 import type { RunDetail } from "@/lib/session-api";
 import { jobDuration, utcClock, utcShortDate } from "@/lib/runs-time";
 

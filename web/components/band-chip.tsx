@@ -1,4 +1,8 @@
 // Ported verbatim from console/components/band-chip.tsx — keep the two in lockstep.
+//
+// ENFORCED: lib/console-lockstep.test.mjs asserts this file is character-identical
+// to console's below the imports — render tests are against the house rule,
+// so that text comparison is what keeps the two from drifting.
 import type { RunSummary } from "@/lib/session-api";
 
 // console imports a named `Band` alias from its lib/api. Web's session API

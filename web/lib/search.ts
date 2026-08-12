@@ -1,4 +1,7 @@
 // Ported from console/lib/search.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. The two dropped job exports are
+// listed there as a ruled divergence, so dropping a THIRD would fail.
 //
 // Run-search half only. console's jobMatchesQuery/filterJobsByQuery are NOT
 // ported: they take console's JobItem (its /jobs page type), and web has no

@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/paging.test.mjs — keep the two in lockstep.
+// ENFORCED (count only): lib/console-lockstep.test.mjs fails if console's copy
+// gains a test this one does not. The bodies are not text-compared.
 // Every test name and comment is the console's; a divergence shows up in a diff.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";

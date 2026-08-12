@@ -236,7 +236,9 @@
   }
 
   /* Data utilities ported from console/app/globals.css:164-179 — comments
-     verbatim, because they are the spec. Keep the two files in lockstep.
+     verbatim, because they are the spec. Keep the two files in lockstep —
+     ENFORCED: lib/console-lockstep.test.mjs asserts this block is
+     character-identical to console's, so an edit to either side fails.
      (.evidence-seam/.evidence-step are deliberately NOT ported: nothing in
      web renders the evidence seam yet, and unused CSS is not a port.) */
 

@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/runs.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. This comment is not on trust.
 //
 // This is the time and provenance half (console/lib/runs.ts:60-186). The
 // coverage half of the same console module already lives in web/lib/coverage.ts;

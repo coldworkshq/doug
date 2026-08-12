@@ -6,6 +6,12 @@
 // lives in web/lib/coverage.ts) and the 2 parseTenantId tests (web's dashboard
 // is scoped by session, not by a ?tenant= param — dashboard-contract.test.mjs
 // pins that "tenant all" never appears).
+//
+// NOT count-enforced, unlike the other ported test files: lib/console-lockstep.test.mjs
+// skips console/lib/runs.test.mjs because web splits it across this file and
+// coverage.test.mjs, and that second file is Phase A's (2 tests against
+// console's 10 — a real gap, reported, not something to assert away). The
+// BEHAVIOUR of both modules is enforced there; only the test count is not.
 import assert from "node:assert/strict";
 import test from "node:test";
 

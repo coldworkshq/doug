@@ -5,6 +5,8 @@
 // surface and console's JobItem type has no web equivalent (plan D6). The
 // job() fixture goes with them. Every remaining test name and comment is
 // the console's, verbatim.
+// ENFORCED (count only): lib/console-lockstep.test.mjs pins this file at console's
+// count minus exactly those 2, so a third silent drop would fail.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 

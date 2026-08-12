@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/facets.test.mjs — keep the two in lockstep.
+// ENFORCED (count only): lib/console-lockstep.test.mjs fails if console's copy
+// gains a test this one does not. The bodies are not text-compared.
 // Every test name and comment is the console's. The ONE rename: console's
 // filterRuns is filterRunsByFacets here, because web/lib/dashboard-model.ts
 // already exports a different filterRuns (plan D5).

@@ -1,4 +1,6 @@
 // Ported verbatim from console/lib/facets.ts — keep the two in lockstep.
+// ENFORCED: lib/console-lockstep.test.mjs imports both copies and feeds them identical
+// inputs, so it fails whichever side moves. This comment is not on trust.
 //
 // ONE rename, deliberate: console's `filterRuns` is `filterRunsByFacets`
 // here. web/lib/dashboard-model.ts already exports a DIFFERENT `filterRuns`
