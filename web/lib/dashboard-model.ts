@@ -1,7 +1,7 @@
 import { coverageLabel, coveragePercent } from "./coverage";
 import { type FacetSelection, matchesFacets, parseFacetSelection } from "./facets";
 import type { OutcomeTone } from "./runs-time";
-import type { RunSummary } from "./session-api";
+import type { ConnectionStatus, RunSummary } from "./session-api";
 
 type SearchValues = Record<string, string | string[] | undefined>;
 
@@ -102,7 +102,7 @@ type ConnectionLike = {
   account_login: string;
   account_type: "User" | "Organization";
   label: string | null;
-  status: "ready" | "setup_required";
+  status: ConnectionStatus;
   repositories: Array<{ full_name: string }>;
 };
 
@@ -132,6 +132,72 @@ export function repositoryOptions(connection: ConnectionLike) {
 // three together and so does runs-time.ts). Re-exported because this module is
 // where the rule below lives and callers reach for the type beside it.
 export type { OutcomeTone } from "./runs-time";
+
+/** Which of the dashboard's four mutually exclusive states a person lands in.
+ *  `reauthorize` is the one that did not exist: before it, a connection whose
+ *  derived scope had aged out was dropped by the API and the page counted zero
+ *  connections, so an operator with a bound installation was told *"You're in.
+ *  Connect GitHub only when you want Doug to review repositories."* — a claim
+ *  about them that was false, and unrecoverable from that screen. */
+export type FrontDoorState = "runs" | "choose" | "reauthorize" | "welcome";
+
+/** The state, the selected connection, and the connections Doug can no longer
+ *  vouch for — decided in one place because these three answers have to agree.
+ *
+ *  PRECEDENCE, and each step is a claim about the person reading the screen:
+ *  a live selected space wins (they can work); otherwise anything still usable
+ *  wins (they can choose, or finish a setup — sending them to "sign out and
+ *  back in" would walk them away from the button that finishes it); only when
+ *  nothing is usable does an expired scope become the headline; and only with
+ *  no connections at all is the never-connected welcome true.
+ *
+ *  A `reauthorize_required` connection is DELIBERATELY NOT SELECTABLE. The row
+ *  is still bound — `organization_id` may match the session's org claim exactly
+ *  — but `api/doug/session_auth.py:188` fails `resolve_session` closed on a
+ *  stale claim, so opening its ledger would render a page whose every read 401s.
+ *  Refusing it here and saying why is the honest version of what the API is
+ *  going to do anyway.
+ *
+ *  In practice staleness is all-or-nothing per person: `store.py:2882` stamps
+ *  every row of one `replace_session_entitlements` call with the same
+ *  `derived_at`. The mixed cases below are still handled rather than assumed
+ *  away — a partial write is the kind of thing that happens once, at 3am. */
+/** One member per state rather than `Exclude<…>` on a shared member: the
+ *  discriminant has to be a single literal on each arm for a `state === …`
+ *  check to narrow `current` away from null, which is what lets the runs branch
+ *  in page.tsx use the selected connection without a null assertion or a dead
+ *  `: null` fallback standing in for a case that cannot happen. */
+export type FrontDoor<T> =
+  | { state: "runs"; current: T; expired: T[] }
+  | { state: "choose"; current: null; expired: T[] }
+  | { state: "reauthorize"; current: null; expired: T[] }
+  | { state: "welcome"; current: null; expired: T[] };
+
+export function frontDoor<T extends ConnectionLike>(
+  connections: T[],
+  organizationId: string | null | undefined,
+): FrontDoor<T> {
+  const expired = connections.filter(
+    (connection) => connection.status === "reauthorize_required",
+  );
+  const current =
+    connections.find(
+      (connection) =>
+        connection.status === "ready" &&
+        Boolean(connection.organization_id) &&
+        connection.organization_id === organizationId,
+    ) ?? null;
+  if (current) return { state: "runs", current, expired };
+
+  const usable = connections.some(
+    (connection) =>
+      connection.status === "ready" || connection.status === "setup_required",
+  );
+  if (usable) return { state: "choose", current: null, expired };
+  if (expired.length > 0) return { state: "reauthorize", current: null, expired };
+  return { state: "welcome", current: null, expired };
+}
+
 
 /** One tone rule over the vocabulary the adjudicator actually writes —
  *  `api/doug/adjudicate.py`'s `OutcomeKind`: revert | clean | censored. The
@@ -165,7 +231,7 @@ export function outcomeTone(kind: string | null): OutcomeTone {
 type SetupConnectionLike = {
   installation_id: number;
   organization_id: string | null;
-  status: "ready" | "setup_required";
+  status: ConnectionStatus;
   repositories: Array<unknown>;
 };
 

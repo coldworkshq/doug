@@ -13,6 +13,7 @@
   --color-sheen: var(--sheen);
   --color-flag: var(--flag);
   --color-clear: var(--clear);
+  --color-warn: var(--warn);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -76,6 +77,10 @@
   --sheen: #5b6470;
   --flag: #c93a2b;
   --clear: #177a50;
+  /* Docs-only third status (Preview, between Available/--clear and
+     Planned/--sheen). Same hex the gh-pages docs site used for its
+     b-warn badge — not a token that site's marketing page ever needed. */
+  --warn: #9a6b12;
   --iridescent: #d1571e;
 
   --background: #fcfcfa;
@@ -119,6 +124,15 @@
     ),
     radial-gradient(#d9d6cd 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 22px 22px;
+
+  /* The one number both the docs sidebar's sticky offset (app/docs/layout.tsx)
+     and its H2 scroll-margin (components/docs/prose.tsx) have to clear so
+     neither sits under the floating SiteHeader. Not theme-dependent — lives
+     outside :root/.dark's split on purpose, so it isn't a color and never
+     needs a dark-mode counterpart. Sized for SiteHeader's `top-4` plus its
+     current rendered height with margin; a header height change is the one
+     edit that requires re-checking this value against those two usages. */
+  --docs-content-offset: 7rem;
 }
 
 .dark {
@@ -128,6 +142,7 @@
   --sheen: oklch(0.82 0.12 190);
   --flag: oklch(0.72 0.16 40);
   --clear: oklch(0.78 0.11 165);
+  --warn: #efa167;
   --iridescent: linear-gradient(115deg, #5eead4 0%, #60a5fa 45%, #c084fc 100%);
 
   --background: oklch(0.155 0.02 265);
@@ -303,6 +318,20 @@
     background: oklch(1 0 0 / 4%);
     border: 1px solid oklch(1 0 0 / 10%);
     backdrop-filter: blur(12px);
+  }
+  /* Docs code samples: always the gh-pages docs site's "night" terminal
+     surface, regardless of site theme — same reasoning as .glass above,
+     these are fixed brand colors standing in for a real terminal, not
+     something that should go pale in light mode. */
+  .code-rail {
+    background: #101210;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #edefea;
+  }
+  .code-rail-head {
+    background: #181b18;
+    color: #9aa298;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   /* Data utilities ported from console/app/globals.css:164-179 — comments

@@ -117,6 +117,61 @@ test("session responses reject extra or malformed fields instead of rendering in
   }
 });
 
+test("the connections validator accepts the old API body and the reauthorize_required one", async () => {
+  // DEPLOY-ORDER SAFETY, and the reason this validator change ships in its own
+  // PR ahead of the API's. `.github/workflows/deploy.yml:162` gives the web job
+  // `needs: [changes, api]` — the API revision goes live FIRST. If the enum
+  // widened on both sides at once, the new API would emit
+  // `status: "reauthorize_required"` to a still-running old web build, whose
+  // exact-enum check would reject the whole body and turn every dashboard into
+  // "Doug could not load your connected spaces." So: web learns to accept it
+  // while nothing emits it, and only then does the API emit it.
+  const bodies = [
+    { label: "old api", status: "ready" },
+    { label: "old api", status: "setup_required" },
+    { label: "new api", status: "reauthorize_required" },
+  ];
+  for (const { label, status } of bodies) {
+    const oldFetch = globalThis.fetch;
+    const body = {
+      connections: [{ ...validConnections.connections[0], status }],
+    };
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(body), { status: 200 });
+    try {
+      const { getConnections } = await import(`./session-api.ts?enum-${status}`);
+      assert.deepEqual(
+        await getConnections("secret"),
+        body,
+        `${label} body carrying status=${status} must survive the validator`,
+      );
+    } finally {
+      globalThis.fetch = oldFetch;
+    }
+  }
+});
+
+test("a status outside the known enum is still refused rather than rendered", async () => {
+  // Widening the enum is not the same as abandoning it. An unknown status is a
+  // fact this build cannot render honestly, so it stays a hard rejection.
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        connections: [{ ...validConnections.connections[0], status: "expired" }],
+      }),
+      { status: 200 },
+    );
+  try {
+    const { getConnections, SessionApiError } = await import(
+      "./session-api.ts?unknown-status"
+    );
+    await assert.rejects(getConnections("secret"), SessionApiError);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
 test("session API failures never echo the bearer or upstream response body", async () => {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async () =>

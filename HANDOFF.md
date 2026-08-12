@@ -1,5 +1,115 @@
 # HANDOFF — doug
 
+*** NEW LANE — MARKETING SITE HEADER + HOSTED /docs (2026-08-11/12). Separate
+    from both lanes below (console, and the WorkOS front-door auth lane) —
+    touches only web/, cosmetic + one new public route tree, no API/auth
+    changes. NOTE: the front-door lane's top-of-file status right below this
+    (PHASE 0 IN REVIEW, Phase 1 gated) reads stale against what's actually on
+    main today — web/app/dashboard, /install/*, /auth/* all already exist and
+    PR #90 ("dashboard honesty") is in recent git log — so that section
+    predates several merges. Not reconciled here; out of scope for this lane,
+    flagging so it isn't trusted at face value.
+    State: REVIEW, PR #101 open: github.com/drewjst/doug/pull/101. No
+    conflicts (main was merged into the branch — the only real one, both
+    sides independently appending to globals.css's utilities layer, resolved
+    by keeping both additions; the huge surrounding diff --stat is main's own
+    unrelated churn since this branch cut, not a conflict). GitHub briefly
+    reported CONFLICTING/DIRTY after the push before its mergeability check
+    caught up — MERGEABLE now.
+    Doug reviewed #101 (risk 0.18, neutral as always) with 4 findings; two
+    were real (docs sidebar had no mobile collapse, and its sticky offset +
+    H2 scroll-margin were two independently hardcoded numbers with nothing
+    keeping them in sync) and are fixed; two were disproved (llms.txt is
+    populated, Doug just wasn't shown it; the .ts-test-import "risk" is a
+    pattern nine sibling files already use under CI's pinned Node 22).
+    Disposition posted as a PR comment. Latest commit 20cc119. Remember
+    ADR-0009 (merge-to-main deploys) before merging.
+    Next: CI (api/web/console + 3 image jobs) was still running as of this
+    write-up — confirm green, then Andrew merges when ready. Nothing else
+    blocks it.
+    Decisions this session:
+    - Extracted the landing page's inline nav into components/site-header.tsx,
+      reused as-is on /docs; left /queue and /dashboard alone — both already
+      have deliberately different chrome (forced-dark live-badge nav; signed-
+      in "forensic ledger" shell) and this component would be the wrong fit —
+      rejected: one universal header everywhere.
+    - Header is `sticky top-4`, not `fixed` — reads as floating from the first
+      frame (sticky enforces the top-4 gap immediately when the element sits
+      at the very top of a scrollable area, not only once you've scrolled past
+      it) with zero layout-shift risk and no scroll-listener JS — rejected: a
+      fixed header with manual top-padding compensation on every page below it.
+    - Sign in is the one filled/colored control in the bar; Docs/Queue/GitHub
+      and the theme toggle stay low-contrast text until hover — separates it
+      by visual weight, not just position — rejected: an outline-only Sign in
+      (didn't read as a real CTA next to plain links) and a second solid-black
+      pill (competed with the hero's own Get started).
+    - /docs is real per-route pages (`/docs/quickstart`, `/docs/cli`, …), not
+      a port of the gh-pages site's single-scroll-page-plus-anchors trick —
+      matches how Stripe's own docs actually route, gives every topic a real
+      shareable URL. One nav tree (lib/docs-nav.ts, tested) drives the
+      sidebar, prev/next pager, and the sidebar's title-only filter (matches
+      the old site's filter contract exactly — it never indexed body content
+      either).
+    - Docs content lives as hand-authored TSX + a small shared component kit
+      (components/docs/: badge, callout, code-block, params-table, prose,
+      docs-two-col, docs-sidebar, docs-pager) — matches this app's existing
+      convention (page.tsx already hand-writes its copy as typed consts, no
+      CMS/MDX anywhere in web/) — rejected: adding an MDX pipeline for eleven
+      pages.
+    - Kept Doug's existing tokens/fonts throughout (Bricolage/Geist/Geist
+      Mono, panel/glass, the iridescent accent, the dot-grid atmosphere) for
+      the "Stripe feel" — it's the STRUCTURE (dense grouped sidebar, sticky
+      code-rail beside prose, status badges) that's Stripe-shaped, not the
+      palette — rejected: reskinning toward Stripe's actual indigo/white.
+      Added one new token, --warn (light #9a6b12 / dark #efa167), for the
+      Preview status badge; Available reuses --clear, Planned reuses --sheen
+      (its gh-pages value, #5b6470, is already --sheen's exact light value).
+    - Code-rail is always-dark regardless of site theme (globals.css
+      .code-rail/.code-rail-head, new) — same reasoning already on record for
+      .glass: it's a fixed terminal surface, not something that should go
+      pale in light mode.
+    - Mobile: sidebar falls out of the two-column grid below `lg` and renders
+      inline above the article instead of `display:none` — the gh-pages
+      source hides it below 900px with, by its own admission, no replacement
+      at all. Small, free improvement over the source rather than a faithful
+      port of that specific gap.
+    - StatusDot renders nothing for a page with no status (Introduction,
+      Changelog) even though the gh-pages source gave every sidebar row a dot
+      including those two — a stray signal this codebase's own standing rule
+      ("don't show a signal you can't back up") argues for dropping, not
+      porting. Everything else content-wise is a faithful, numbers-exact port
+      — verified against the real gh-pages HTML (saved to scratchpad, not
+      this repo), not a paraphrase.
+    - Ported /llms.txt too (web/public/llms.txt, static) since it was a real
+      linked feature on the source site (its docs topbar fetches and copies
+      it), not just styling — "just like our docs" included it. Fixed the
+      two hostname-dependent lines (site has no stable custom domain yet per
+      the front-door spec's Phase 3 note) to relative /docs; left everything
+      else, including the CLI examples' github.com/drewjst/doug clone URL,
+      unchanged. Did NOT port the old site's "Copy for LLM" clipboard button,
+      only a plain link — smaller surface, same core feature.
+    - INCIDENTAL FIX, found via the Next.js dev overlay while visually
+      verifying, not asked for: components/theme-toggle.tsx's mount-guard
+      comment claimed "resolvedTheme is undefined on the server and on the
+      first client render alike" — true only for a visitor with no stored
+      preference. A returning dark-mode visitor hits a REAL hydration error
+      on every fresh page load (next-themes resolves to "dark" client-side
+      before this component's own effect could run; <html> is protected by
+      suppressHydrationWarning in layout.tsx, this button wasn't). Pre-
+      existing, not caused by this lane, but this lane is what turns a single
+      page carrying the toggle into eleven, so fixed it now rather than
+      shipping eleven pages that reproduce a known bug more often. Fixed with
+      useSyncExternalStore (getServerSnapshot=false, client=true), not
+      useEffect+setState — this repo's eslint (react-hooks/set-state-in-
+      effect) rejects the classic mounted-flag pattern; confirmed lint-clean.
+    Pointers: branch `landing-header-and-docs` @ 20cc119 (6351658 original +
+    2a8f1c3 handoff pointer + 2d9f499 main-merge + 20cc119 findings-response),
+    PR #101. New:
+    web/components/site-header.tsx, web/components/docs/*, web/lib/docs-nav.ts
+    (+.test.mjs), web/app/docs/** (11 routes), web/public/llms.txt. Modified:
+    web/app/page.tsx (nav extraction), web/app/globals.css (+--warn,
+    +.code-rail/-head), web/components/theme-toggle.tsx (hydration fix). ***
+
 *** NEW LANE — FRONT DOOR (2026-08-08/09). Separate from the console work
     described below, which is unchanged and still accurate.
     Design: docs/superpowers/specs/2026-08-08-front-door-design.md

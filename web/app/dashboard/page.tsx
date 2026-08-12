@@ -1,4 +1,5 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -7,10 +8,12 @@ import { BandChip } from "@/components/band-chip";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { RunSpine } from "@/components/run-spine";
+import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   coverageView,
   dashboardFilters,
   filterRuns,
+  frontDoor,
   isAtCap,
   outcomeTone,
   repositoryOptions,
@@ -632,12 +635,73 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
   );
 }
 
-function NoConnection({ userLabel }: { userLabel: string }) {
+/** The state that used to be silence. The API can still see these connections;
+ *  what expired is the repository scope derived from GitHub at sign-in, which
+ *  `entitlements.TTL` caps at 8h. Showing the connection and naming what went
+ *  stale is the whole point — the alternative, shipped until now, was to drop
+ *  these rows and greet a bound operator as though they had never connected.
+ *
+ *  No repository names are listed, and that is not an oversight: the API sends
+ *  none for an expired connection, because the 8h ceiling exists precisely so a
+ *  scope nobody has re-proven stops being repeated back. */
+function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) {
+  return (
+    <main className={EMPTY_PAGE}>
+      <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
+      <h1 className={EMPTY_HEADING}>Sign back in to refresh this.</h1>
+      <p className={EMPTY_BODY}>
+        Doug still has your connection. What expired is the repository scope
+        GitHub granted when you signed in — it lasts eight hours, and only a new
+        sign-in can renew it.
+      </p>
+      <div className="mt-7 flex flex-col gap-px">
+        {connections.map((connection) => (
+          <div
+            className="mono flex items-center gap-3 border-t border-[var(--rule-soft)] py-2.5 text-[11px] first:border-t-0"
+            key={connection.installation_id}
+          >
+            <span className="flex flex-col gap-0.5">
+              <strong className="font-semibold text-foreground">{connectionLabel(connection)}</strong>
+              <small className="text-[10px] text-muted-foreground">
+                session scope expired — sign out and sign back in to refresh
+              </small>
+            </span>
+          </div>
+        ))}
+      </div>
+      <form action={signOutAction} className="mt-[26px]">
+        <button
+          type="submit"
+          className="mono cursor-pointer rounded-[4px] border-0 bg-foreground px-3.5 py-2.5 text-[11px] text-background"
+        >Sign out</button>
+      </form>
+    </main>
+  );
+}
+
+function NoConnection({
+  userLabel,
+  scopeUnconfirmed,
+}: {
+  userLabel: string;
+  scopeUnconfirmed: boolean;
+}) {
   return (
     <main className={EMPTY_PAGE}>
       <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/account</p>
       <h1 className={EMPTY_HEADING}>{userLabel}, you&apos;re in.</h1>
       <p className={EMPTY_BODY}>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
+      {/* This screen otherwise claims "you have not connected anything", which
+          is only true if Doug asked. When the sign-in derivation failed it never
+          asked, and `lib/entitlements.ts` leaves this signal precisely so the
+          difference is not papered over. (#99, carried through the Phase B
+          rebuild — the claim is the point, the CSS module it used is gone.) */}
+      {scopeUnconfirmed && (
+        <p className={`${EMPTY_NOTE} mt-4`}>
+          Doug could not confirm your repositories when you signed in, so this page may be
+          missing connections you already have. Try again in a moment, or sign out and back in.
+        </p>
+      )}
       <Link
         href="/install/start"
         prefetch={false}
@@ -657,10 +721,10 @@ export default async function DashboardPage({
   const { user, accessToken, organizationId } = auth;
   if (!user || !accessToken) redirect("/sign-in");
   const { connections } = await getConnections(accessToken);
-  const current = connections.find(
-    (connection) => connection.organization_id === organizationId && connection.status === "ready",
-  ) ?? null;
+  const door = frontDoor(connections, organizationId);
+  const current = door.current;
   const userLabel = user.firstName || user.email || "You";
+  const scopeUnconfirmed = (await cookies()).has(SCOPE_UNCONFIRMED_COOKIE);
 
   let fetched: RunSummary[] = [];
   let limit = 0;
@@ -735,7 +799,11 @@ export default async function DashboardPage({
       </nav>
       <PendingConnections connections={connections} />
 
-      {connections.length === 0 ? <NoConnection userLabel={userLabel} /> : !current ? (
+      {/* Four states, not three (#99). `frontDoor` owns the precedence and the
+          selectability of an expired connection; this only dispatches. */}
+      {door.state === "welcome" ? <NoConnection userLabel={userLabel} scopeUnconfirmed={scopeUnconfirmed} />
+        : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
+        : door.state === "choose" ? (
         <main className={EMPTY_PAGE}>
           <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
           <h1 className={EMPTY_HEADING}>Choose a connected space.</h1>
@@ -745,7 +813,11 @@ export default async function DashboardPage({
       ) : (
         <main>
           <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[10px] uppercase tracking-[.15em] text-muted-foreground`}>
-            <span className={ROUTE}>/runs</span> Verdict history for {connectionLabel(current)}
+            {/* `door.current`, not the hoisted `current`: only the discriminated
+                union narrows away null on this arm, which is the reason #99
+                gave one member per state instead of Exclude<> on a shared one.
+                The hoisted binding is widened and would need an assertion. */}
+            <span className={ROUTE}>/runs</span> Verdict history for {connectionLabel(door.current)}
             <span className="h-px flex-1 bg-border" />
           </div>
           <section className={`${CANVAS} px-5 pb-6`}>
