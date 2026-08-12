@@ -6,7 +6,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { RunSpine } from "@/components/run-spine";
 import { Shell } from "@/components/shell";
 import { getRunDetail, isError } from "@/lib/api";
-import { utcDate, utcTimestamp } from "@/lib/runs";
+import { outcomeLabel, outcomeTone, outcomeToneClass, utcDate, utcTimestamp } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
@@ -224,8 +224,17 @@ export default async function RunDetailPage({
                   <div className="mono text-[10px] uppercase tracking-[.12em] text-muted-foreground">
                     {o.window_days !== null ? `${o.window_days}-day window` : "window not recorded"}
                   </div>
-                  <div className={"mono mt-1.5 text-[17px] font-semibold " + (o.kind === "clean" ? "data-clear" : "data-flag")}>
-                    {o.kind === "clean" ? "✓ clean" : `↩ ${o.kind}`}
+                  {/* Tone and label both come from lib/runs, so this tile
+                      and the runs table cannot describe the same row
+                      differently. `censored` reads muted here, not in the
+                      flag colour: it records that the PR left the risk set
+                      unobserved, and a non-observation is not a miss. The
+                      tile keeps its 17px semibold weight either way — this
+                      IS a recorded outcome row, unlike the ungraded tile
+                      below it; what was wrong was the colour and the glyph,
+                      not the prominence. */}
+                  <div className={"mono mt-1.5 text-[17px] font-semibold " + outcomeToneClass(outcomeTone(o.kind))}>
+                    {outcomeLabel(o.kind)}
                   </div>
                   <div className="mono mt-1 text-[10.5px] text-muted-foreground">
                     graded {utcDate(o.observed_at)}

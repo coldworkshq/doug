@@ -33,7 +33,14 @@ import {
   pageSlice,
   parsePage,
 } from "@/lib/paging";
-import { jobDuration, relativeAge, utcTimestamp } from "@/lib/runs";
+import {
+  jobDuration,
+  outcomeLabel,
+  outcomeTone,
+  outcomeToneClass,
+  relativeAge,
+  utcTimestamp,
+} from "@/lib/runs";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import {
   type SortKey,
@@ -522,6 +529,21 @@ function RunRows({
   );
 }
 
+/** The 14-day outcome, or the absence of one. Every branch of the rule
+ *  lives in lib/runs — `outcomeTone` decides the colour, `outcomeLabel` the
+ *  marker and word — so this cell and the run detail tile cannot drift into
+ *  describing the same row differently, and so the rule stays somewhere
+ *  `node --test` can reach it.
+ *
+ *  Only `flag` gets the extra weight. Bold is emphasis, and the two muted
+ *  states — no row yet, and a row recording that the PR left the risk set
+ *  unobserved — are precisely the ones with nothing to emphasise. */
+function OutcomeCell({ kind }: { kind: string | null }) {
+  const tone = outcomeTone(kind);
+  const weight = tone === "flag" ? " font-semibold" : "";
+  return <span className={outcomeToneClass(tone) + weight}>{outcomeLabel(kind)}</span>;
+}
+
 /** The eight cells of one run. Children render the identical columns —
  *  an older run is a full verdict, not a summary of one — and are marked
  *  as history by indentation and a rule, never by dropping data. */
@@ -630,13 +652,7 @@ function RunCells({
         <CoverageBar coverage={run.coverage} changedFiles={run.changed_files} />
       </TableCell>
       <TableCell className="mono h-[34px] px-2.5 text-xs">
-        {run.outcome_14 === null ? (
-          <span className="text-muted-foreground">◷ pending</span>
-        ) : run.outcome_14 === "clean" ? (
-          <span className="data-clear">✓ clean</span>
-        ) : (
-          <span className="data-flag font-semibold">↩ {run.outcome_14}</span>
-        )}
+        <OutcomeCell kind={run.outcome_14} />
       </TableCell>
       <TableCell className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">
         {jobLabel}

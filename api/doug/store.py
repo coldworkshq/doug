@@ -121,7 +121,12 @@ outcomes = Table(
     Column("id", Integer, primary_key=True),
     Column("repo", String(200), nullable=False, index=True),
     Column("pr_number", Integer, nullable=False, index=True),
-    Column("kind", String(20), nullable=False),  # revert | hotfix | clean
+    # The adjudicator writes exactly revert | clean | censored
+    # (adjudicate.py's OutcomeKind). The width also admits `hotfix`, which is
+    # deliberately never written: §10 of the publication preregistration rules
+    # a hotfix is not a miss, and no detector here can tell one repairing this
+    # PR from one that merely followed it. Kept permitted, not produced.
+    Column("kind", String(20), nullable=False),
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("source", String(40), nullable=False),  # git-labels | manual | ...
     # Outcome-loop identity, migration 002. NULL on every row scored before

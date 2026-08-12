@@ -5,6 +5,9 @@ import {
   coverageLabel,
   coveragePercent,
   jobDuration,
+  outcomeLabel,
+  outcomeTone,
+  outcomeToneClass,
   parseTenantId,
   relativeAge,
   utcClock,
@@ -198,4 +201,67 @@ test("parseTenantId rejects everything Number() would silently coerce to 0 or Na
   assert.deepEqual(parseTenantId("0"), { kind: "invalid" });
   assert.deepEqual(parseTenantId("abc"), { kind: "invalid" });
   assert.deepEqual(parseTenantId("12.5"), { kind: "invalid" });
+});
+
+test("outcomeTone treats an unobserved outcome as neutral, not as a miss", () => {
+  // The production vocabulary is exactly revert | clean | censored
+  // (api/doug/adjudicate.py's OutcomeKind). The column also permits hotfix,
+  // which the adjudicator deliberately never writes — §10 rules a hotfix is
+  // not a miss and that no detector here can tell one repairing this PR
+  // apart from one merely following it — so a row carrying it is unexplained
+  // and flags.
+  assert.equal(outcomeTone("clean"), "clear");
+  assert.equal(outcomeTone("revert"), "flag");
+  assert.equal(outcomeTone("hotfix"), "flag");
+  // The assertion this whole rule exists for. `censored` records that the PR
+  // left the risk set UNOBSERVED — merged off the branch the treeless
+  // single-branch clone can see, or no clone reachable at all
+  // (adjudicate.py's CensorReason). The console painted it in the flag
+  // colour, which asserts a bad outcome the ledger does not record.
+  assert.equal(outcomeTone("censored"), "neutral");
+  // An unrecognised kind flags. An allowlist here — anything-but-revert
+  // reads as fine — is what would let a genuinely bad new outcome arrive
+  // looking like nothing.
+  assert.equal(outcomeTone("graded-miss"), "flag");
+  assert.equal(outcomeTone("unknown-future-kind"), "flag");
+  // No outcome row at all: the window has not closed. The one honest neutral
+  // the console already got right.
+  assert.equal(outcomeTone(null), "neutral");
+});
+
+test("outcomeToneClass keeps neutral out of the two data colours", () => {
+  // globals.css: "The two data colours. NEVER add a third" — the CVD rule.
+  // Neutral is the absence of a data colour, not a new one, so it takes the
+  // same muted foreground the pending tile already uses.
+  assert.equal(outcomeToneClass("clear"), "data-clear");
+  assert.equal(outcomeToneClass("flag"), "data-flag");
+  assert.equal(outcomeToneClass("neutral"), "text-muted-foreground");
+  // Pinned as a set, not just per-case: a third data-* colour must not be
+  // reachable from any tone this module can return.
+  const emitted = ["clear", "flag", "neutral"].map(outcomeToneClass);
+  assert.deepEqual(
+    emitted.filter((className) => className.startsWith("data-")).sort(),
+    ["data-clear", "data-flag"],
+  );
+});
+
+test("outcomeLabel withholds the revert glyph from every kind that is not a revert", () => {
+  // ↩ is the revert glyph and it carries a claim. Wearing it is a statement
+  // that this PR was reverted, so only a `revert` row may.
+  assert.equal(outcomeLabel("revert"), "↩ revert");
+  assert.equal(outcomeLabel("clean"), "✓ clean");
+  // Censored is a non-observation, so it takes a muted marker from the same
+  // hollow-circle family as `◷ pending` — the console's existing precedent
+  // for "the ledger is not claiming anything here". It is NOT `◷`: that
+  // would say the window is still running, and this one has closed.
+  assert.equal(outcomeLabel("censored"), "○ censored");
+  // Flagged but not a revert: the colour carries "bad outcome", the word
+  // carries which kind, and no glyph invents a revert that was never
+  // recorded. hotfix is the permitted-but-never-written case; the last two
+  // are kinds this build has never heard of.
+  assert.equal(outcomeLabel("hotfix"), "hotfix");
+  assert.equal(outcomeLabel("graded-miss"), "graded-miss");
+  assert.equal(outcomeLabel("unknown-future-kind"), "unknown-future-kind");
+  // No row yet — the table's existing pending label, unchanged.
+  assert.equal(outcomeLabel(null), "◷ pending");
 });
