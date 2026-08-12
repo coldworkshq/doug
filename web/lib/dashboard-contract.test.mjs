@@ -97,6 +97,25 @@ test("an expired scope is named as expired, and never counted as never-connected
   assert.match(page, /frontDoor\(connections, organizationId\)/);
 });
 
+test("a sign-in whose derivation failed says so instead of claiming nothing is connected", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // The welcome is a claim: "you have not connected anything". It is only true
+  // when Doug actually asked. When the derivation POST at sign-in failed, Doug
+  // never asked, and the honest version of the same screen says which one it is.
+  assert.match(page, /const scopeUnconfirmed = \(await cookies\(\)\)\.has\(SCOPE_UNCONFIRMED_COOKIE\)/);
+  assert.match(page, /<NoConnection userLabel=\{userLabel\} scopeUnconfirmed=\{scopeUnconfirmed\} \/>/);
+
+  // The note must be GATED ON THE SIGNAL, not merely present in the file. A
+  // caveat shown to every first-time visitor is its own small dishonesty — most
+  // of them have simply not connected anything — and an ungated one would still
+  // satisfy a test that only looked for the words.
+  assert.match(page, /\{scopeUnconfirmed && \(/);
+  const note = page.indexOf("Doug could not confirm your repositories");
+  const gate = page.indexOf("{scopeUnconfirmed && (");
+  assert.ok(gate >= 0 && gate < note, "the copy must sit inside the scopeUnconfirmed branch");
+});
+
 test("state-mutating install links disable Next prefetch", async () => {
   const page = await readFile(pageUrl, "utf8");
   const installLinks = [...page.matchAll(/<Link\b[^>]*>/g)]

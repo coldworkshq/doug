@@ -7,8 +7,12 @@ import test from "node:test";
 globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 register("./node-next-loader.mjs", import.meta.url);
 
+/** `status` may be a single code or one code PER ATTEMPT — the retry added in
+ *  `recordProviderEntitlements` is only worth having if a first answer and a
+ *  second can differ, which is exactly the cold-start case it exists for. */
 async function withEntitlementServer(run, { status = 204, delayMs = 0 } = {}) {
   const requests = [];
+  const codes = Array.isArray(status) ? [...status] : null;
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
@@ -18,8 +22,9 @@ async function withEntitlementServer(run, { status = 204, delayMs = 0 } = {}) {
       headers: request.headers,
       body,
     });
+    const code = codes ? (codes.shift() ?? 500) : status;
     const finish = () => {
-      response.writeHead(status);
+      response.writeHead(code);
       response.end();
     };
     if (delayMs > 0) {
@@ -111,62 +116,194 @@ test("callback entitlement derivation sends the provider token only in the serve
   });
 });
 
+/** Collect console.error while `run` executes, and always put it back. */
+async function withCapturedErrors(run) {
+  const errors = [];
+  const oldConsoleError = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  try {
+    await run(errors);
+  } finally {
+    console.error = oldConsoleError;
+  }
+  return errors;
+}
+
+const CANARY = {
+  accessToken: "workos-session-token-canary",
+  authenticationMethod: "GitHubOAuth",
+  oauthTokens: { accessToken: "provider-token-canary" },
+  user: { id: "user_01CANARY" },
+};
+
+// Fast limits for the tests that are about SHAPE — how many attempts, what is
+// logged, what is bounded. The production defaults are pinned separately, by
+// the cold-start test below, which pays real time on purpose.
+const QUICK = { budgetMs: 400, backoffMs: 10 };
+
 test("a transient entitlement API failure does not turn a valid sign-in into a callback failure", async () => {
   const { recordProviderEntitlements } = await import("./entitlements.ts");
   await withEntitlementServer(async (requests) => {
-    const errors = [];
-    const oldConsoleError = console.error;
-    console.error = (...args) => errors.push(args.join(" "));
-    try {
-      await recordProviderEntitlements({
-        accessToken: "workos-session-token-canary",
-        authenticationMethod: "GitHubOAuth",
-        oauthTokens: { accessToken: "provider-token-canary" },
-      });
-    } finally {
-      console.error = oldConsoleError;
-    }
-    assert.equal(requests.length, 1);
-    assert.deepEqual(errors, [
-      "doug: entitlement refresh failed; authentication succeeded; stored scope unchanged (HTTP 503)",
-    ]);
+    const errors = await withCapturedErrors(async () => {
+      // Resolves. It must never reject: `handleAuth` runs onSuccess inside its
+      // own try/catch, so a throw here would take a VALID sign-in down with it.
+      await recordProviderEntitlements(CANARY, QUICK);
+    });
+    assert.equal(requests.length, 2, "a failed derivation is retried exactly once");
+    assert.equal(errors.length, 1, "the retry is not narrated twice; only the outcome is logged");
     assert.equal(errors[0].includes("workos-session-token-canary"), false);
     assert.equal(errors[0].includes("provider-token-canary"), false);
   }, { status: 503 });
 });
 
+test("a cold-started API gets a second chance, and one success is enough", async () => {
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async (requests) => {
+    const errors = await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, QUICK);
+    });
+    assert.equal(requests.length, 2);
+    // The retry is a real derivation, not a ping: same bearer, same body.
+    assert.deepEqual(JSON.parse(requests[1].body), {
+      provider: "GitHubOAuth",
+      token: "provider-token-canary",
+    });
+    assert.equal(requests[1].headers.authorization, "Bearer workos-session-token-canary");
+    assert.deepEqual(errors, [], "a derivation that succeeded on retry is not an error");
+  }, { status: [503, 204] });
+});
+
+test("the derivation deadline outlives a scale-to-zero cold start", async () => {
+  // THE BUG, in one number. The old budget was 2s. api/deploy/gcp.sh deploys
+  // the API with no --min-instances, so it scales to zero and the first request
+  // after an idle period waits for a container boot and a Cloud SQL connection.
+  // A 2.5s answer is a cold start answering — not a failure — and abandoning it
+  // left the user with no derived scope and no way to tell.
+  //
+  // Deliberately runs against the PRODUCTION defaults (no limits argument), and
+  // pays 2.5s of real time to do it: this is the one claim that a fast test
+  // with injected limits could not make.
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async (requests) => {
+    const errors = await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY);
+    });
+    assert.equal(requests.length, 1, "a slow-but-alive API is waited for, not retried past");
+    assert.deepEqual(errors, [], "a cold start is not an error");
+  }, { delayMs: 2_500 });
+});
+
 test("a hung entitlement API cannot hold the sign-in callback until the platform timeout", async () => {
   const { recordProviderEntitlements } = await import("./entitlements.ts");
   await withEntitlementServer(async (requests) => {
-    let deadline;
-    const errors = [];
-    const oldConsoleError = console.error;
-    console.error = (...args) => errors.push(args.join(" "));
-    try {
-      await Promise.race([
-        recordProviderEntitlements({
-          accessToken: "workos-session-timeout-canary",
-          authenticationMethod: "GitHubOAuth",
-          oauthTokens: { accessToken: "provider-token-timeout-canary" },
-        }),
-        new Promise((_, reject) => {
-          deadline = setTimeout(
-            () => reject(new Error("entitlement callback exceeded its deadline")),
-            3_500,
-          );
-        }),
-      ]);
-    } finally {
-      clearTimeout(deadline);
-      console.error = oldConsoleError;
-    }
+    const started = Date.now();
+    let settled = false;
+    const errors = await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, QUICK);
+      settled = true;
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(settled, true, "the callback is released rather than held open");
+    // The budget is a TOTAL, not per attempt: a hung API must not be able to
+    // charge the person signing in twice for the same silence.
+    assert.ok(
+      elapsed < QUICK.budgetMs * 2,
+      `derivation took ${elapsed}ms, which is not bounded by a ${QUICK.budgetMs}ms budget`,
+    );
+    assert.ok(requests.length >= 1 && requests.length <= 2);
+    assert.equal(errors.length, 1);
+  }, { delayMs: 30_000 });
+});
+
+test("a derivation Doug gave up on is one structured line naming the user and no token", async () => {
+  // Cloud Run parses a single-line JSON object on stderr into a structured
+  // entry, so this is what makes a swallowed failure findable in the logs at
+  // all — the previous message named neither the user nor the event, which is
+  // why this bug was reported from the dashboard rather than seen in logging.
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async () => {
+    const errors = await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, QUICK);
+    });
+    assert.equal(errors.length, 1);
+    const entry = JSON.parse(errors[0]);
+    assert.equal(entry.severity, "ERROR");
+    assert.equal(entry.event, "entitlement_derivation_failed");
+    assert.equal(entry.workos_user_id, "user_01CANARY");
+    assert.equal(entry.attempts, 2);
+    assert.equal(typeof entry.message, "string");
+    // Property 2 of api/doug/entitlements.py, held on this side of the wire:
+    // the credential appears in the request body and nowhere else, least of all
+    // in a log line that outlives the request.
+    assert.equal(errors[0].includes("provider-token-canary"), false);
+    assert.equal(errors[0].includes("workos-session-token-canary"), false);
+  }, { status: 503 });
+});
+
+test("a failed derivation leaves a short-lived signal the dashboard can render", async () => {
+  const { recordProviderEntitlements, SCOPE_UNCONFIRMED_COOKIE } = await import(
+    "./entitlements.ts"
+  );
+  const writes = [];
+  await withEntitlementServer(async () => {
+    await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, {
+        ...QUICK,
+        cookieStore: async () => ({ set: (...args) => writes.push(args) }),
+      });
+    });
+  }, { status: 503 });
+
+  assert.equal(writes.length, 1);
+  const [name, value, options] = writes[0];
+  assert.equal(name, SCOPE_UNCONFIRMED_COOKIE);
+  assert.equal(value, "1");
+  assert.equal(options.httpOnly, true, "only the server reads this; it is not for scripts");
+  assert.equal(options.path, "/");
+  assert.equal(options.sameSite, "lax");
+  // Short-lived on purpose: a Server Component cannot delete a cookie, so this
+  // has to expire on its own rather than outlive the moment it describes.
+  assert.ok(options.maxAge > 0 && options.maxAge <= 300);
+});
+
+test("a successful derivation leaves no failure signal behind", async () => {
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  const writes = [];
+  await withEntitlementServer(async (requests) => {
+    await recordProviderEntitlements(CANARY, {
+      ...QUICK,
+      cookieStore: async () => ({ set: (...args) => writes.push(args) }),
+    });
     assert.equal(requests.length, 1);
-    assert.deepEqual(errors, [
-      "doug: entitlement refresh failed; authentication succeeded; stored scope unchanged (TimeoutError)",
-    ]);
-    assert.equal(errors[0].includes("workos-session-timeout-canary"), false);
-    assert.equal(errors[0].includes("provider-token-timeout-canary"), false);
-  }, { delayMs: 5_000 });
+  });
+  assert.deepEqual(writes, [], "nothing failed, so the dashboard is told nothing");
+});
+
+test("neither a hostile cookie store nor a dead API can fail the sign-in", async () => {
+  // The design lock: derivation is best-effort and authentication is not.
+  const { recordProviderEntitlements } = await import("./entitlements.ts");
+  await withEntitlementServer(async () => {
+    await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, {
+        ...QUICK,
+        cookieStore: async () => {
+          throw new Error("cookies() was called outside a request scope");
+        },
+      });
+    });
+  }, { status: 503 });
+
+  // No server at all: DNS/connection failure on both attempts.
+  const oldApiUrl = process.env.DOUG_API_URL;
+  process.env.DOUG_API_URL = "http://127.0.0.1:1";
+  try {
+    await withCapturedErrors(async () => {
+      await recordProviderEntitlements(CANARY, QUICK);
+    });
+  } finally {
+    if (oldApiUrl === undefined) delete process.env.DOUG_API_URL;
+    else process.env.DOUG_API_URL = oldApiUrl;
+  }
 });
 
 test("sign-out delegates to AuthKit from a server action instead of a browser GET", async () => {

@@ -1,9 +1,11 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { DougLogo } from "@/components/doug-logo";
+import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   capSuffix,
   coverageView,
@@ -340,12 +342,28 @@ function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) 
   );
 }
 
-function NoConnection({ userLabel }: { userLabel: string }) {
+function NoConnection({
+  userLabel,
+  scopeUnconfirmed,
+}: {
+  userLabel: string;
+  scopeUnconfirmed: boolean;
+}) {
   return (
     <main className={styles.emptyState}>
       <p className={styles.route}>/account</p>
       <h1>{userLabel}, you&apos;re in.</h1>
       <p>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
+      {/* This screen otherwise claims "you have not connected anything", which
+          is only true if Doug asked. When the sign-in derivation failed it never
+          asked, and `lib/entitlements.ts` leaves this signal precisely so the
+          difference is not papered over. */}
+      {scopeUnconfirmed && (
+        <p className={styles.emptyNote}>
+          Doug could not confirm your repositories when you signed in, so this page may be
+          missing connections you already have. Try again in a moment, or sign out and back in.
+        </p>
+      )}
       <Link href="/install/start" prefetch={false} className={styles.primaryAction}>Connect GitHub</Link>
     </main>
   );
@@ -364,6 +382,7 @@ export default async function DashboardPage({
   const door = frontDoor(connections, organizationId);
   const current = door.current;
   const userLabel = user.firstName || user.email || "You";
+  const scopeUnconfirmed = (await cookies()).has(SCOPE_UNCONFIRMED_COOKIE);
 
   let rows: RunSummary[] = [];
   let capNote = "";
@@ -410,7 +429,7 @@ export default async function DashboardPage({
       </nav>
       <PendingConnections connections={connections} />
 
-      {door.state === "welcome" ? <NoConnection userLabel={userLabel} />
+      {door.state === "welcome" ? <NoConnection userLabel={userLabel} scopeUnconfirmed={scopeUnconfirmed} />
         : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
         : door.state === "choose" ? (
         <main className={styles.chooseState}>
