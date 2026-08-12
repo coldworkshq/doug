@@ -123,6 +123,8 @@ def _startup_reconcile() -> None:
             print(f"doug: drift check failed ({type(e).__name__}: {e})", file=sys.stderr)
         n = worker.reconcile_all()
         print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
+        m = worker.reconcile_all_outcomes()
+        print(f"doug: outcome reconcile enqueued {m} window(s)", file=sys.stderr)
         worker.drain()
     except Exception as e:  # noqa: BLE001 — catch-up is best-effort, never fatal
         print(f"doug: startup reconcile failed ({type(e).__name__}: {e})", file=sys.stderr)
@@ -2168,6 +2170,7 @@ def _reconcile_then_drain(installation_id: int) -> None:
     fixing credentials can see why nothing happened.
     """
     worker.reconcile_installation(installation_id, trigger="reconcile")
+    worker.reconcile_outcomes(installation_id)
     worker.drain()
 
 

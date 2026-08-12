@@ -317,12 +317,17 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
         calls.append("reconcile")
         return 3
 
+    def fake_reconcile_outcomes() -> int:
+        calls.append("outcome-reconcile")
+        return 2
+
     def fake_drain() -> int:
         calls.append("drain")
         drained.set()
         return 0
 
     monkeypatch.setattr(worker, "reconcile_all", fake_reconcile)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", fake_reconcile_outcomes)
     monkeypatch.setattr(worker, "drain", fake_drain)
     _startup_guards(monkeypatch, app_enabled=True, ledger=True)
 
@@ -332,7 +337,19 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
         # or slow and would still prove nothing about the ordering.
         assert drained.wait(timeout=5), "startup never reached the drain"
     _join_startup_threads()
-    assert calls == ["reconcile", "drain"]
+    assert calls == ["reconcile", "outcome-reconcile", "drain"]
+
+
+def test_startup_logs_how_many_outcome_windows_reconcile_enqueued(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 5)
+    monkeypatch.setattr(worker, "drain", lambda: None)
+    _startup_guards(monkeypatch, app_enabled=True, ledger=True)
+
+    with TestClient(app):
+        pass
+    _join_startup_threads()
+    assert "outcome reconcile enqueued 5 window(s)" in capsys.readouterr().err
 
 
 def test_startup_serves_before_the_reconcile_it_started_finishes(monkeypatch):
@@ -355,6 +372,7 @@ def test_startup_serves_before_the_reconcile_it_started_finishes(monkeypatch):
         return 0
 
     monkeypatch.setattr(worker, "reconcile_all", slow_reconcile)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: 0)
     _startup_guards(monkeypatch, app_enabled=True, ledger=True)
 
@@ -451,6 +469,7 @@ def test_startup_warns_when_verdicts_reference_installations_the_ledger_lacks(
     _api_db(tmp_path, monkeypatch)
     _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
     monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
     from doug.api import _startup_reconcile
 
@@ -473,6 +492,7 @@ def test_startup_warns_when_verdicts_reference_repos_the_ledger_lacks(
     store.upsert_installation(150424894, "drewjst", "User", "active")
     _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=1)
     monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
     from doug.api import _startup_reconcile
 
@@ -492,6 +512,7 @@ def test_a_failing_drift_check_never_blocks_the_catchup_sweep(
     _api_db(tmp_path, monkeypatch)
     ran = []
     monkeypatch.setattr(worker, "reconcile_all", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
 
     def _boom():
@@ -545,6 +566,13 @@ def _hook_env(tmp_path, monkeypatch) -> list:
         "reconcile_installation",
         lambda i, *, trigger="live": kicks.append((i, trigger)),
     )
+    # Silent by default — does NOT append to kicks, unlike the stub above.
+    # Every _hook_env caller that asserts kicks by exact equality (most of
+    # them) is testing something unrelated to outcome reconciliation, and a
+    # stub that recorded a kick here would fail all of them for a fact they
+    # do not test. test_installation_created_reconciles_outcomes_too
+    # re-monkeypatches this one, deliberately, to verify it fires.
+    monkeypatch.setattr(worker, "reconcile_outcomes", lambda i: 0)
     return kicks
 
 
@@ -853,6 +881,21 @@ def test_the_installation_created_handler_asks_for_the_sweeps_terms(tmp_path, mo
         {"action": "created", "installation": INSTALLATION, "repositories": []},
     )
     assert kicks == [(150424894, "reconcile"), "drain"]
+
+
+def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
+    """The outcome lane's own catch-up, on the same event review's already
+    gets — a fresh install may already have merges from before the App was
+    on it, the same reason reconcile_installation runs here at all."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker, "reconcile_outcomes", lambda i: kicks.append(("outcomes", i))
+    )
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert kicks == [(150424894, "reconcile"), ("outcomes", 150424894), "drain"]
 
 
 def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
