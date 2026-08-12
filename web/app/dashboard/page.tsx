@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { BandChip } from "@/components/band-chip";
+import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { RunSpine } from "@/components/run-spine";
@@ -153,7 +154,7 @@ function ScopePicker({
     <form action={switchConnectionAction} className="flex items-center gap-1.5">
       <label className={SWITCH_CONTROL}>
         <span className={SWITCH_LABEL}>space</span>
-        <select
+        <AutoSubmitSelect
           name="organization_id"
           defaultValue={current?.organization_id ?? ""}
           aria-label="Connected space"
@@ -165,9 +166,14 @@ function ScopePicker({
               {connectionLabel(connection)}
             </option>
           ))}
-        </select>
+        </AutoSubmitSelect>
       </label>
-      <button type="submit" className={SUBMIT_BUTTON}>open</button>
+      {/* Not deleted — moved. Without JavaScript the select cannot submit
+          itself, and a form with no submit control would strand a no-JS
+          operator on a space they cannot leave. */}
+      <noscript>
+        <button type="submit" className={SUBMIT_BUTTON}>open</button>
+      </noscript>
     </form>
   );
 }

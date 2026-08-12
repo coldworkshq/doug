@@ -418,3 +418,33 @@ test("the per-PR disclosure survives the table swap", async () => {
   assert.match(page, /pr-history/);
   assert.match(page, /type="checkbox"/);
 });
+
+test("choosing a space opens it, and still works without JavaScript", async () => {
+  // Two clicks to change whose data you are looking at, the second of which was
+  // a button labelled "open" beside a select that had already changed, read as
+  // a control that had not taken effect. Selection now navigates.
+  //
+  // The submit control is not deleted, it is moved into <noscript>: the select
+  // cannot submit itself without JavaScript, and a form with no submit control
+  // at all would strand a no-JS operator on a space they cannot leave.
+  const [page, select] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(new URL("../components/auto-submit-select.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(select, /^"use client"/);
+  assert.match(select, /requestSubmit\(\)/);
+
+  const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(scopePicker, "the scope picker is gone");
+  assert.match(scopePicker, /<AutoSubmitSelect/);
+  assert.match(scopePicker, /<noscript>/);
+  // The server action is untouched — this changes WHEN the form submits, never
+  // what happens when it does.
+  assert.match(scopePicker, /action=\{switchConnectionAction\}/);
+
+  // The repo filter is deliberately NOT given the same treatment: it is a GET
+  // form on the same page rather than an org switch, and its submit button is
+  // a normal, expected control. Pinned so the two are not "made consistent"
+  // later without a reason.
+  assert.match(page, /<select name="repo"/);
+});
