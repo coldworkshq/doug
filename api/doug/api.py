@@ -73,10 +73,15 @@ STARTUP_THREAD_NAME = "doug-startup-reconcile"
 def _startup_reconcile() -> None:
     """Heal the queue this instance came up to, then work it.
 
-    Both halves belong to the same catch-up and in this order: reconcile_all
-    only enqueues, so a drain running ahead of it would drain whatever the
-    last delivery left and stop, leaving everything this sweep discovers
-    waiting for a delivery that already went missing once.
+    Three pieces belong to the same catch-up, not two: reconcile_all,
+    reconcile_all_outcomes, and drain. reconcile_all only enqueues, so a
+    drain running ahead of it would drain whatever the last delivery left
+    and stop, leaving everything this sweep discovers waiting for a
+    delivery that already went missing once — why it runs before drain.
+    reconcile_all_outcomes only enqueues too, but into outcome_jobs, which
+    this drain never claims either way (a separate Job works that lane);
+    it runs in between because it belongs to the same cold-start catch-up,
+    not because drain depends on it.
 
     This runs on every cold start, which on a scale-to-zero deployment means
     often, and nothing here rate-limits it or elects a leader. What bounds
@@ -85,7 +90,11 @@ def _startup_reconcile() -> None:
     ingest._revive returns None for a 'done' row, so a sweep that finds
     nothing new leaves nothing for the drain to claim. A job that is claimed
     is checked against store.find_verdict_by_identity before any paid read.
-    Repeated sweeps therefore cost GitHub list calls, not model spend.
+    Repeated sweeps therefore cost GitHub list calls, not model spend —
+    except reconcile_all_outcomes, which also pays one pulls.get per merge
+    inside its lookback window on every cold start, even for a merge the
+    ledger already has: enqueue_outcome_jobs's ON CONFLICT DO NOTHING
+    discards the row, but only after that call is paid for.
 
     The gap that leaves on spend: the pre-read is still advisory, so two
     workers racing the same reclaimed job can both pass it and both pay.
@@ -2170,8 +2179,15 @@ def _reconcile_then_drain(installation_id: int) -> None:
     fixing credentials can see why nothing happened.
     """
     worker.reconcile_installation(installation_id, trigger="reconcile")
-    worker.reconcile_outcomes(installation_id)
     worker.drain()
+    # Reconciliation can retroactively discover pre-install merges within its
+    # lookback window -- this makes publication-preregistration.md §2.4's claim
+    # ("PRs merged before install produce no webhook, so no job row") no longer
+    # universally true. No current metric reads this yet (unverdicted_merges is
+    # unimplemented -- store.py:1634 is a comment only), so nothing is corrupted
+    # today. Revisit §2.4 -- and bump the pre-registration hash -- before
+    # unverdicted_merges ships.
+    worker.reconcile_outcomes(installation_id)
 
 
 def _enqueue_pull_request(payload: dict) -> int | None:

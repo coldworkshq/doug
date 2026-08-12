@@ -800,7 +800,7 @@ git commit -m "feat(api): add the outcome-reconciliation Cloud Run Job entrypoin
 
 ### Read first
 
-This script has no automated test in this repository (confirmed: no `test_gcp.sh` or equivalent exists anywhere in the tree). Before editing, open `api/deploy/gcp.sh` and locate three things by eye, since exact line numbers may have shifted since this plan was written:
+Correction (post-implementation): this claim was wrong — `api/tests/test_deploy_gcp.py` already exists and already tests this script against a fake `gcloud`. This task's Step 4 shipped without coverage for the two new targets as a result; a later fix wave added it. Before editing, open `api/deploy/gcp.sh` and locate three things by eye, since exact line numbers may have shifted since this plan was written:
 1. The usage header near the top (documents each target — this is where the two new targets get documented, following the existing one-line-per-target style: `#   PROJECT=... REGION=... ./deploy/gcp.sh adjudicator # deploy M3 Job`).
 2. The `adjudicator()` and `schedule()` function bodies — the exact template Step 1 below mirrors, quoted here as it reads today so this task is checkable without re-opening the script first:
 

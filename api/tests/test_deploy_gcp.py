@@ -708,6 +708,45 @@ def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tm
     assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
 
 
+def test_reconcile_job_deploys_the_live_api_image_under_the_adjudicator_sa_with_no_prereg_hash(
+    tmp_path,
+):
+    """Mirrors test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract
+    for the outcome reconciler: same live image, same runtime identity and
+    secret allowlist as the adjudicator (no new SA), but it must NOT carry
+    DOUG_PREREG_HASH anywhere in its arguments — reconciliation only enqueues
+    outcome_jobs rows, it never adjudicates or publishes anything, so the
+    hash preflight the adjudicator requires does not apply here (see
+    reconcile_job()'s own comment in gcp.sh)."""
+    lines = _run_gcp(tmp_path, "reconcile-job")
+    [deploy] = [
+        line for line in lines if line.startswith("run jobs deploy doug-outcome-reconciler")
+    ]
+    assert (
+        "--image us-docker.pkg.dev/doug-prod0/cloud-run-source-deploy/"
+        "doug-api@sha256:abc123" in deploy
+    )
+    assert "--memory 512Mi" in deploy
+    assert "--cpu 1" in deploy
+    assert "--tasks 1" in deploy
+    assert "--max-retries 0" in deploy
+    assert "--task-timeout 900s" in deploy
+    assert "--command python" in deploy
+    assert "--args=-m,doug.reconcile_worker" in deploy
+    assert "--service-account doug-adjudicator-sa@doug-prod0.iam.gserviceaccount.com" in deploy
+
+    expected_secrets = (
+        "DATABASE_URL=doug-database-url:latest,"
+        "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest"
+    )
+    actual_secrets = deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
+    assert actual_secrets == expected_secrets
+
+    # The one thing that must NOT be here: this is what distinguishes the
+    # reconciler's deploy from the adjudicator's, which does carry it.
+    assert "DOUG_PREREG_HASH" not in deploy
+
+
 def test_adjudicator_resolves_the_locked_preregistration_from_its_own_location(tmp_path):
     """An absolute script invocation must hash the lock, not caller-relative text."""
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
@@ -901,6 +940,30 @@ def test_schedule_creates_one_daily_utc_trigger_with_a_scheduler_identity(tmp_pa
         "doug-scheduler-sa@doug-prod0.iam.gserviceaccount.com" in create
     )
     assert "/locations/us-central1/jobs/doug-adjudicator:run" in create
+
+
+def test_schedule_reconcile_creates_a_6h_utc_trigger_with_the_scheduler_identity(tmp_path):
+    """Mirrors test_schedule_creates_one_daily_utc_trigger_with_a_scheduler_identity
+    for the outcome reconciler's own scheduler entry: doug-scheduler-sa
+    invokes doug-outcome-reconciler (not doug-adjudicator-sa, and not the
+    adjudicator's Job), every 6 hours rather than daily."""
+    lines = _run_gcp(tmp_path, "schedule-reconcile")
+    [binding] = [line for line in lines if line.startswith("run jobs add-iam-policy-binding")]
+    assert binding.startswith("run jobs add-iam-policy-binding doug-outcome-reconciler ")
+    assert "--member=serviceAccount:doug-scheduler-sa@doug-prod0.iam.gserviceaccount.com" in binding
+    assert "--role=roles/run.invoker" in binding
+    assert "doug-adjudicator-sa" not in binding
+
+    [create] = [line for line in lines if line.startswith("scheduler jobs create http")]
+    assert create.startswith("scheduler jobs create http doug-outcome-reconciler-6h ")
+    assert "--schedule 0 */6 * * *" in create
+    assert "--time-zone Etc/UTC" in create
+    assert "--http-method POST" in create
+    assert (
+        "--oauth-service-account-email "
+        "doug-scheduler-sa@doug-prod0.iam.gserviceaccount.com" in create
+    )
+    assert "/locations/us-central1/jobs/doug-outcome-reconciler:run" in create
 
 
 def test_api_deploy_also_refreshes_the_adjudicator_from_its_promoted_image():

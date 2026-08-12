@@ -886,7 +886,13 @@ def test_the_installation_created_handler_asks_for_the_sweeps_terms(tmp_path, mo
 def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
     """The outcome lane's own catch-up, on the same event review's already
     gets — a fresh install may already have merges from before the App was
-    on it, the same reason reconcile_installation runs here at all."""
+    on it, the same reason reconcile_installation runs here at all.
+
+    Ordered after drain, not between reconcile_installation and drain: the
+    two lanes are independent (drain only ever claims review_jobs, never
+    outcome_jobs), so drain runs first and this call cannot delay a fresh
+    install's first check runs if it were ever slow or raised.
+    """
     kicks = _hook_env(tmp_path, monkeypatch)
     monkeypatch.setattr(
         worker, "reconcile_outcomes", lambda i: kicks.append(("outcomes", i))
@@ -895,7 +901,7 @@ def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
         "installation",
         {"action": "created", "installation": INSTALLATION, "repositories": []},
     )
-    assert kicks == [(150424894, "reconcile"), ("outcomes", 150424894), "drain"]
+    assert kicks == [(150424894, "reconcile"), "drain", ("outcomes", 150424894)]
 
 
 def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
@@ -944,6 +950,11 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     # Only the drain is cut: it would otherwise run the real pipeline against
     # whatever this test revived, which is the thing being asserted about.
     monkeypatch.setattr(worker, "drain", lambda *a, **k: None)
+    # Defensive, not load-bearing today: this fixture's PR has no merged_at,
+    # so reconcile_outcomes' pulls.get never runs regardless. Stubbed anyway
+    # (silent no-op, same as _hook_env's own stub for this function) so this
+    # test stays robust if the fixture above ever grows a merged_at.
+    monkeypatch.setattr(worker, "reconcile_outcomes", lambda i: 0)
 
     _webhook(
         "installation",

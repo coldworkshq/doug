@@ -1526,6 +1526,54 @@ def test_reconcile_outcomes_skips_a_pr_whose_base_repo_disagrees_with_the_ledger
     assert "base repo id 999" in err and "installation_repos' 42" in err
 
 
+def test_reconcile_outcomes_survives_an_unparseable_pulls_get_response(
+    tmp_path, monkeypatch, capsys
+):
+    """detail.raw_response.json().get("merge_commit_sha") used to sit OUTSIDE
+    the try/except that wraps pulls.get — a response body that failed to
+    parse into something .get()-able propagated straight out of
+    reconcile_outcomes instead of being treated as one unreadable PR, the
+    same way a pulls.get() call that raises outright already was."""
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=9, merged_at=NOW)
+
+    def _get(*, owner, repo, pull_number):
+        # A parsed body that is not a dict: .get() raises AttributeError,
+        # the same failure mode a malformed real response would produce.
+        return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: ["not", "a", "dict"]))
+
+    gh = SimpleNamespace(
+        rest=SimpleNamespace(
+            pulls=SimpleNamespace(
+                list=lambda **kw: SimpleNamespace(parsed_data=[pull]),
+                get=_get,
+            )
+        )
+    )
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+    err = capsys.readouterr().err
+    assert "o/r#9" in err and "pulls.get failed" in err
+
+
+def test_reconcile_outcomes_skips_a_pr_whose_merged_at_is_not_a_datetime(tmp_path, monkeypatch):
+    """merged_at went straight from a None check to _aware(), which calls
+    .tzinfo with no type check. updated_at a few lines above already guards
+    the same call with isinstance(updated_at, datetime); merged_at now gets
+    the same guard, so a githubkit UNSET sentinel or another non-datetime,
+    non-None value is skipped instead of raising
+    AttributeError: '...' object has no attribute 'tzinfo'."""
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=10, merged_at="not-a-datetime", updated_at=NOW)
+    gh = FakeReconcileGH([pull], {10: "b" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+
+
 def test_reconcile_all_outcomes_sums_every_active_installation(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
     store.upsert_installation(1, "o1", "Organization", "active")

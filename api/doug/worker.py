@@ -770,9 +770,13 @@ def reconcile_outcomes(installation_id: int) -> int:
             continue
         if len(pulls) >= _MAX_CLOSED_PRS_PER_REPO:
             pulls = pulls[:_MAX_CLOSED_PRS_PER_REPO]
+            # Not "this pass": pagination always sorts updated_at desc, so the
+            # same excluded tail sorts last on every future pass too — a repo
+            # that hits this cap once never reconciles that tail on any pass.
             print(
                 f"doug: outcome reconcile capped at {_MAX_CLOSED_PRS_PER_REPO} closed PRs "
-                f"for {full_name}; the rest were not reconciled this pass",
+                f"for {full_name}; the excluded tail is not reconciled by this or any "
+                "later pass",
                 file=sys.stderr,
             )
         for p in pulls:
@@ -782,6 +786,8 @@ def reconcile_outcomes(installation_id: int) -> int:
             merged_at = getattr(p, "merged_at", None)
             if merged_at is None:
                 continue  # closed without merging
+            if not isinstance(merged_at, datetime):
+                continue  # UNSET sentinel or a malformed field, not a real timestamp
             merged_at = _aware(merged_at)
             number = getattr(p, "number", None)
             base = getattr(p, "base", None)
@@ -805,14 +811,15 @@ def reconcile_outcomes(installation_id: int) -> int:
                 continue
             try:
                 detail = gh.rest.pulls.get(owner=owner, repo=name, pull_number=number)
+                merge_sha = detail.raw_response.json().get("merge_commit_sha")
             except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
-                    f"(pulls.get failed: {type(e).__name__}: {e})",
+                    f"(pulls.get failed or its response was unreadable: "
+                    f"{type(e).__name__}: {e})",
                     file=sys.stderr,
                 )
                 continue
-            merge_sha = detail.raw_response.json().get("merge_commit_sha")
             if not isinstance(merge_sha, str) or not merge_sha:
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
