@@ -30,11 +30,11 @@ function Event({
   return (
     <li className="relative pb-5 pl-5 last:pb-0 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-[3.5px] [&:not(:last-child)]:before:top-[11px] [&:not(:last-child)]:before:bottom-[-3px] [&:not(:last-child)]:before:w-px [&:not(:last-child)]:before:bg-border">
       <span className={`absolute left-0 top-[5px] size-2 rounded-full border-[1.5px] ${node}`} />
-      <div className="mono flex items-baseline gap-[7px] text-xs font-medium">
+      <div className="mono flex items-baseline gap-[7px] text-[13px] font-medium">
         {title}
-        <span className="ml-auto text-[10.5px] font-normal text-muted-foreground">{stamp}</span>
+        <span className="ml-auto text-[11.5px] font-normal text-muted-foreground">{stamp}</span>
       </div>
-      <div className="mono mt-0.5 text-[10.5px] text-muted-foreground">{sub}</div>
+      <div className="mono mt-0.5 text-[11.5px] text-muted-foreground">{sub}</div>
     </li>
   );
 }
@@ -59,7 +59,7 @@ export function RunSpine({ run }: { run: RunDetail }) {
   const changedFiles = run.pr?.changed_files ?? null;
   return (
     <aside className="border-r border-border pr-6 pt-5">
-      <h2 className="mono mb-4 text-[10px] font-medium uppercase tracking-[.16em] text-muted-foreground">
+      <h2 className="mono mb-4 text-[11px] font-medium uppercase tracking-[.16em] text-muted-foreground">
         The run
       </h2>
       <ol>

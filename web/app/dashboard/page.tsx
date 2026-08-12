@@ -5,9 +5,13 @@ import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { BandChip } from "@/components/band-chip";
+import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
+import { NoJsSubmit } from "@/components/no-js-submit";
 import { RunSpine } from "@/components/run-spine";
+import { ThresholdGear } from "@/components/threshold-gear";
+import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SCOPE_UNCONFIRMED_COOKIE } from "@/lib/entitlements";
 import {
   coverageView,
@@ -24,6 +28,7 @@ import {
   facetToggleChanges,
   predicateChanges,
   sortChanges,
+  thresholdChanges,
   withSelectedOptions,
 } from "@/lib/dashboard-view";
 import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
@@ -32,6 +37,7 @@ import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/pag
 import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
+import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
 import {
   getConnections,
   getSessionRun,
@@ -59,13 +65,13 @@ const SWITCH_CONTROL =
   "focus-within:border-[var(--iridescent)] focus-within:outline-2 focus-within:outline-offset-2 " +
   "focus-within:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-const SWITCH_LABEL = "text-[9px] uppercase tracking-[.11em] text-muted-foreground";
+const SWITCH_LABEL = "text-[10px] uppercase tracking-[.11em] text-muted-foreground";
 
 const SWITCH_SELECT =
-  "max-w-[270px] max-[900px]:max-w-[180px] border-0 bg-transparent text-[11px] text-foreground outline-0";
+  "max-w-[270px] max-[900px]:max-w-[180px] border-0 bg-transparent text-[12.5px] text-foreground outline-0";
 
 const SUBMIT_BUTTON =
-  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[10px] " +
+  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11.5px] " +
   "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +
   "focus-visible:border-[var(--iridescent)] focus-visible:text-foreground";
 
@@ -74,12 +80,12 @@ const SUBMIT_BUTTON =
  *  string — it pins the href and the label, so restyling the link can never
  *  fail an ordering guarantee. */
 const CONNECT_LINK =
-  "mono text-[10px] text-[var(--iridescent)] underline underline-offset-[3px] max-[900px]:ml-auto " +
+  "mono text-[11.5px] text-[var(--iridescent)] underline underline-offset-[3px] max-[900px]:ml-auto " +
   "focus-visible:outline-2 focus-visible:outline-offset-[3px] " +
   "focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
 const TAB =
-  "mono -mb-px border-b-2 border-transparent px-[13px] pt-[9px] pb-2 text-[10px] uppercase " +
+  "mono -mb-px border-b-2 border-transparent px-[13px] pt-[9px] pb-2 text-[11.5px] uppercase " +
   "tracking-[.08em] text-[var(--dim)] no-underline aria-[current]:border-b-[var(--iridescent)] " +
   "aria-[current]:font-semibold aria-[current]:text-foreground";
 
@@ -87,8 +93,8 @@ const TAB =
  *  provenance sub-label, styled here rather than at the call site so the
  *  headings' own markup stays the plain sentence it claims to be. */
 const BLOCK_HEADING =
-  "mono mb-3 flex items-center gap-2.5 text-[10px] font-medium uppercase tracking-[.16em] " +
-  "text-muted-foreground [&_span]:text-[8px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
+  "mono mb-3 flex items-center gap-2.5 text-[11px] font-medium uppercase tracking-[.16em] " +
+  "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
   "[&_span]:text-[var(--dim)]";
 
 const BLOCK = "border-b border-border py-[22px]";
@@ -149,7 +155,7 @@ function ScopePicker({
     <form action={switchConnectionAction} className="flex items-center gap-1.5">
       <label className={SWITCH_CONTROL}>
         <span className={SWITCH_LABEL}>space</span>
-        <select
+        <AutoSubmitSelect
           name="organization_id"
           defaultValue={current?.organization_id ?? ""}
           aria-label="Connected space"
@@ -161,9 +167,16 @@ function ScopePicker({
               {connectionLabel(connection)}
             </option>
           ))}
-        </select>
+        </AutoSubmitSelect>
       </label>
-      <button type="submit" className={SUBMIT_BUTTON}>open</button>
+      {/* Not deleted — rendered until the client proves it is not needed. It
+          used to be wrapped in a script-absent element, which covered strictly
+          less: that only renders when scripting is DISABLED, so it did nothing
+          in the two cases that actually happen — the seconds before hydration,
+          and a bundle that loaded and threw. In both, this form had no working
+          control at all and an operator could not switch spaces (Doug PR 103,
+          reader:js-dependency-regression). */}
+      <NoJsSubmit className={SUBMIT_BUTTON}>open</NoJsSubmit>
     </form>
   );
 }
@@ -179,8 +192,8 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
       aria-labelledby="pending-connections-title"
     >
       <div className="flex flex-col justify-center gap-[3px]">
-        <span id="pending-connections-title" className="text-[9px] uppercase tracking-[.12em] text-[var(--iridescent)]">setup required</span>
-        <small className="text-[9px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
+        <span id="pending-connections-title" className="text-[10.5px] uppercase tracking-[.12em] text-[var(--iridescent)]">setup required</span>
+        <small className="text-[10.5px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
       </div>
       <div className="flex flex-col">
         {pending.map((connection) => (
@@ -189,14 +202,14 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
             key={connection.installation_id}
           >
             <span className="flex min-w-0 flex-col gap-0.5">
-              <strong className="truncate text-[10px] font-medium">{connectionLabel(connection)}</strong>
-              <small className="text-[9px] text-muted-foreground">{connection.account_type.toLowerCase()} · {connection.repositories.length} repositories</small>
+              <strong className="truncate text-[11.5px] font-medium">{connectionLabel(connection)}</strong>
+              <small className="text-[10.5px] text-muted-foreground">{connection.account_type.toLowerCase()} · {connection.repositories.length} repositories</small>
             </span>
             <form action={finishSetupAction}>
               <input type="hidden" name="installation_id" value={connection.installation_id} />
               <button
                 type="submit"
-                className="cursor-pointer rounded-[3px] border border-[var(--iridescent)] bg-transparent px-2 py-[5px] text-[9px] uppercase text-[var(--iridescent)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_30%,transparent)]"
+                className="cursor-pointer rounded-[3px] border border-[var(--iridescent)] bg-transparent px-2 py-[5px] text-[10.5px] uppercase text-[var(--iridescent)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_30%,transparent)]"
               >finish setup</button>
             </form>
           </div>
@@ -217,7 +230,7 @@ function FilterChip({
 }) {
   return (
     <Link
-      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[11px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
+      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[12px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
       data-active={active || undefined}
       href={target}
     >{children}</Link>
@@ -230,9 +243,9 @@ function FilterChip({
  *  looks, not by hue — the same rule CoverageRuler's cut marker follows. */
 function CoverageCell({ run }: { run: RunSummary }) {
   const view = coverageView(run);
-  if (view.kind === "no-read") return <span className="mono text-[10px] text-muted-foreground">no read</span>;
+  if (view.kind === "no-read") return <span className="mono text-[11.5px] text-muted-foreground">no read</span>;
   return (
-    <div className="mono flex items-center gap-[7px] text-[10px] text-foreground" title={view.chars ?? undefined}>
+    <div className="mono flex items-center gap-[7px] text-[11.5px] text-foreground" title={view.chars ?? undefined}>
       <span className="cov-track block h-1.5 w-[62px]">
         <span className="cov-fill block h-full" style={{ width: `${view.percent ?? 0}%` }} />
       </span>
@@ -276,7 +289,7 @@ function FacetBar({
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3">
       {facets.map((facet) => (
         <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
-          <span className="mono text-[10px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
+          <span className="mono text-[11px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
           {facet.options.map((option) => {
             const on = (selection[facet.key] ?? []).includes(option.value);
             // Frame and ink are computed separately and each utility is
@@ -307,10 +320,10 @@ function FacetBar({
                 title={atCap
                   ? `${option.count} of the newest ${totalFetched} runs fetched — the scope may hold more`
                   : `${option.count} of ${totalFetched} runs in scope`}
-                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[11px] no-underline ${frame} ${ink}`}
+                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[12px] no-underline ${frame} ${ink}`}
               >
                 {option.label}
-                <span className="text-[10px] tabular-nums opacity-60">{option.count}</span>
+                <span className="text-[11px] tabular-nums opacity-60">{option.count}</span>
               </Link>
             );
           })}
@@ -319,9 +332,70 @@ function FacetBar({
       {active && (
         <Link
           href={href(params, facetClearChanges())}
-          className="mono ml-auto text-[10.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
+          className="mono ml-auto text-[11.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
         >clear filters</Link>
       )}
+    </div>
+  );
+}
+
+/** The lens, said out loud.
+ *
+ *  `--iridescent` and `bg-accent` — chrome, never `--flag`/`--clear`. The two
+ *  data colours are verdicts, and which line the reader is *looking through* is
+ *  not one. A banner painted in the miss colour would read as an alarm about
+ *  the runs rather than a statement about the view.
+ *
+ *  The reset is a <Link> to `thresholdChanges(null)`, so it works with no
+ *  JavaScript at all — which matters here more than anywhere else on the page,
+ *  because the gear that SETS the lens is a Radix popover and does not. An
+ *  active lens must always be clearable by whoever is looking at it. */
+function LensBanner({
+  lens,
+  reband,
+  atCap,
+  limit,
+  params,
+}: {
+  lens: number;
+  reband: number;
+  atCap: boolean;
+  limit: number;
+  params: DashboardParams;
+}) {
+  return (
+    <div className="mono mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2 text-[11px] text-foreground">
+      <span className="font-medium text-[var(--iridescent)]">Viewing at {lens.toFixed(2)}</span>
+      <span className="text-muted-foreground">
+        {/* The count is of rows the lens MOVED, not of rows it flagged — the
+            size of the lens's effect, so the banner cannot report a ledger's
+            normal state as though this control had caused it.
+
+            Qualified at the cap the same way CountLine qualifies its own
+            total: `rebandedCount` only ever sees `fetched`, which at the page
+            cap is the newest `limit` runs, not the whole scope. Every other
+            count on this page already says so — CountLine replaces the total
+            with "latest N", FacetBar's pill titles name the newest N fetched —
+            so a bare "31 rows re-banded" here would be the one number on the
+            page that let an operator read a fraction of the scope as the
+            whole of it. */}
+        Doug scored these against its own line —{" "}
+        {atCap ? (
+          <>
+            <b className="font-medium text-foreground">{reband}</b> of the latest{" "}
+            <b className="font-medium text-foreground">{limit}</b> rows re-banded by this view.
+          </>
+        ) : (
+          <>
+            <b className="font-medium text-foreground">{reband}</b>
+            {reband === 1 ? " row" : " rows"} re-banded by this view.
+          </>
+        )}
+      </span>
+      <Link
+        href={href(params, thresholdChanges(null))}
+        className="ml-auto underline decoration-dotted underline-offset-[3px] hover:text-[var(--iridescent)] max-[900px]:ml-0"
+      >Clear the lens</Link>
     </div>
   );
 }
@@ -384,8 +458,18 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
   { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
 
-const TH = "mono border-b border-border px-2.5 pb-[7px] text-left text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
-const TD = "h-[34px] px-2.5 align-middle";
+/** The header is STICKY inside the bounded container, so it needs its own
+ *  opaque background — a transparent header lets the rows scroll visibly
+ *  underneath it. `--background` rather than `--card`: the ledger sits directly
+ *  on the dashboard surface, not on a panel.
+ *
+ *  The bottom border is on the cell rather than the row because the table uses
+ *  the SEPARATED border model (see RunTable): in the collapsed model the
+ *  border belongs to the table, and a sticky header leaves it behind. */
+const TH =
+  "mono sticky top-0 z-10 border-b border-border bg-background px-2.5 pt-2 pb-[7px] text-left " +
+  "text-[11px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
@@ -403,12 +487,12 @@ function RunCells({
 }) {
   return (
     <>
-      <td className={`${TD} text-right`}>
-        <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
+      <TableCell className={`${TD} text-right`}>
+        <span className={"mono text-[16px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
-      </td>
-      <td className={`${TD} min-w-0`}>
+      </TableCell>
+      <TableCell className={`${TD} min-w-0`}>
         <div className="flex min-w-0 items-baseline gap-2">
           {/* The slot reserves its width whether or not a control lives in it,
               so a PR with history and a PR without still start their repo name
@@ -419,27 +503,37 @@ function RunCells({
             // What distinguishes one run of a PR from the next is WHEN it ran,
             // so that is what the cell carries — still linking to this run's
             // own evidence.
-            <Link className="mono truncate pl-3 text-[10px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
+            <Link className="mono truncate pl-3 text-[11.5px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
               {relativeAge(run.scored_at)} ago
             </Link>
           ) : (
             <Link className="flex min-w-0 items-baseline gap-2 text-inherit no-underline" href={href(params, { run: String(run.verdict_id) })}>
-              <span className="mono flex-none text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
-              <strong className="min-w-0 flex-1 truncate text-xs font-normal">{run.title}</strong>
+              <span className="mono flex-none text-[11.5px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
+              <strong className="min-w-0 flex-1 truncate text-[14px] font-normal">{run.title}</strong>
             </Link>
           )}
         </div>
-      </td>
-      <td className={TD}><BandChip band={run.band} /></td>
-      <td className={`mono ${TD} text-[10px] text-muted-foreground`}>{run.tier}</td>
-      <td className={TD}><CoverageCell run={run} /></td>
-      <td className={`mono ${TD} text-xs`}>
+      </TableCell>
+      <TableCell className={TD}><BandChip band={run.band} /></TableCell>
+      {/* truncate on the two columns whose text comes from the API rather than
+          from a closed set this page controls. shadcn's TableCell brings
+          `whitespace-nowrap`, which the hand-rolled <td>s did not have, so a
+          longer-than-expected tier or outcome now overflows its fixed column
+          instead of wrapping. Truncating states the overflow; spilling into the
+          next column hides it (Doug PR 103, reader:style-default-change). */}
+      <TableCell className={`mono ${TD} truncate text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
+      <TableCell className={TD}><CoverageCell run={run} /></TableCell>
+      <TableCell className={`mono ${TD} truncate text-[13px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
-      </td>
-      <td className={`mono ${TD} text-[10px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      </TableCell>
+      {/* whitespace-normal, against TableCell's nowrap base: this is the one
+          cell holding an arbitrary-length string (a job error), in a fixed
+          118px column. Nowrap spills it across the age column — and these are
+          the rows an operator most needs to read. */}
+      <TableCell className={`mono ${TD} whitespace-normal break-words text-[11.5px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
-      </td>
-      <td className={`mono ${TD} text-right text-[10px] text-muted-foreground`}>{relativeAge(run.scored_at)}</td>
+      </TableCell>
+      <TableCell className={`mono ${TD} text-right text-[11.5px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
     </>
   );
 }
@@ -456,84 +550,95 @@ function RunTable({
   filtering: boolean;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[980px] table-fixed border-collapse">
-        <thead>
-          <tr>
-            {COLUMNS.map((column) => (
-              <th
-                key={column.label}
-                aria-sort={column.sort === undefined
-                  ? undefined
-                  : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-                className={`${TH} ${column.cls}`}
-              >
-                {column.sort === undefined ? column.label : (
-                  <Link
-                    href={href(params, sortChanges(nextSort(sort, column.sort)))}
-                    className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+    // The vertical bound is the point of this container: 50 rows of ledger
+    // pushed the evidence pane a full screen below the fold, so opening a run
+    // scrolled the thing you were reading out of view. 55vh keeps both on
+    // screen. The horizontal scroll it already had is unchanged — eight
+    // columns still do not fit below 980px.
+    <Table
+      containerClassName="max-h-[55vh] overflow-y-auto rounded-[5px] border border-border"
+      className="min-w-[980px] table-fixed border-separate border-spacing-0 text-xs"
+    >
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {COLUMNS.map((column) => (
+            <TableHead
+              key={column.label}
+              aria-sort={column.sort === undefined
+                ? undefined
+                : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+              className={`${TH} ${column.cls}`}
+            >
+              {column.sort === undefined ? column.label : (
+                <Link
+                  href={href(params, sortChanges(nextSort(sort, column.sort)))}
+                  className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+                >
+                  {column.label}
+                  <span aria-hidden className="text-[10px] opacity-70">
+                    {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
+                  </span>
+                </Link>
+              )}
+            </TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      {window.items.map((group) => {
+        const count = runCountLabel(group, filtering);
+        // A PR with one run gets NO control and NO badge. A chevron that
+        // expands to nothing claims there is more to see, and "1" beside
+        // every single-run row is noise standing in for information.
+        const hasHistory = group.children.length > 0;
+        // Each PR group is its own <tbody> — several are valid in one table —
+        // so the :has() disclosure selector never reaches past its own group.
+        // TableBody is NOT used here: it ships `[&_tr:last-child]:border-0`,
+        // which would strip the divider from the last row of every group
+        // rather than from the last row of the table.
+        return (
+          <tbody key={group.key} className="pr-group">
+            <TableRow className="border-0 hover:bg-[var(--row-hover)]">
+              <RunCells
+                run={group.latest}
+                params={params}
+                disclosure={hasHistory ? (
+                  <label
+                    title={count.title}
+                    className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
-                    {column.label}
-                    <span aria-hidden className="text-[9px] opacity-70">
-                      {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
-                    </span>
-                  </Link>
-                )}
-              </th>
+                    <input
+                      type="checkbox"
+                      className="pr-toggle sr-only"
+                      aria-label={`Show the ${count.title} on ${group.repo} #${group.prNumber}`}
+                    />
+                    <span aria-hidden className="pr-caret-closed">▸</span>
+                    <span aria-hidden className="pr-caret-open">▾</span>
+                    {count.text}
+                  </label>
+                ) : null}
+              />
+            </TableRow>
+            {group.children.map((child) => (
+              <TableRow key={child.verdict_id} className="pr-history border-0 bg-muted/40">
+                <RunCells run={child} params={params} indented />
+              </TableRow>
             ))}
-          </tr>
-        </thead>
-        {window.items.map((group) => {
-          const count = runCountLabel(group, filtering);
-          // A PR with one run gets NO control and NO badge. A chevron that
-          // expands to nothing claims there is more to see, and "1" beside
-          // every single-run row is noise standing in for information.
-          const hasHistory = group.children.length > 0;
-          return (
-            <tbody key={group.key} className="pr-group">
-              <tr className="border-b border-[var(--rule-soft)] hover:bg-[var(--row-hover)]">
-                <RunCells
-                  run={group.latest}
-                  params={params}
-                  disclosure={hasHistory ? (
-                    <label
-                      title={count.title}
-                      className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <input
-                        type="checkbox"
-                        className="pr-toggle sr-only"
-                        aria-label={`Show the ${count.title} on ${group.repo} #${group.prNumber}`}
-                      />
-                      <span aria-hidden className="pr-caret-closed">▸</span>
-                      <span aria-hidden className="pr-caret-open">▾</span>
-                      {count.text}
-                    </label>
-                  ) : null}
-                />
-              </tr>
-              {group.children.map((child) => (
-                <tr key={child.verdict_id} className="pr-history border-b border-[var(--rule-soft)] bg-muted/40">
-                  <RunCells run={child} params={params} indented />
-                </tr>
-              ))}
-            </tbody>
-          );
-        })}
-      </table>
-    </div>
+          </tbody>
+        );
+      })}
+    </Table>
   );
 }
 
 function Pager({ window, params }: { window: PageWindow<PrGroup>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
-    return <p className="mono mt-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
+    return <p className="mono mt-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
   }
   const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
   const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
   return (
-    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">
       <span>Showing {label}</span>
       <span className="h-px flex-1 bg-border" />
       {/* At a boundary the control renders as text, not a disabled link: a
@@ -555,14 +660,14 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
     <section className={`${CANVAS} px-5 pt-[18px] pb-12`} aria-labelledby="run-evidence-title">
       <header className="flex items-end justify-between gap-6 border-t border-border pt-4 pb-[22px] max-[900px]:flex-col max-[900px]:items-start">
         <div>
-          <p className="mono mb-[7px] text-[10px] text-muted-foreground">/runs/{detail.verdict_id} · {detail.repo} · #{detail.pr_number}</p>
+          <p className="mono mb-[7px] text-[11.5px] text-muted-foreground">/runs/{detail.verdict_id} · {detail.repo} · #{detail.pr_number}</p>
           <h2 id="run-evidence-title" className="font-heading max-w-[980px] text-[clamp(22px,2.2vw,30px)] font-semibold leading-[1.1] tracking-[-.035em]">{summary.title}</h2>
         </div>
         <div className="mono flex flex-none flex-col items-end max-[900px]:items-start">
           <strong className={"text-[36px] font-medium " + (detail.band === "flagged" ? "data-flag" : "data-clear")}>
             {detail.score.toFixed(2)}
           </strong>
-          <span className="text-[9px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
+          <span className="text-[10.5px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
         </div>
       </header>
 
@@ -586,7 +691,7 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
 
           <section className={BLOCK}>
             <h3 className={BLOCK_HEADING}>The read</h3>
-            <dl className="mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[10px]">
+            <dl className="mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]">
               <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 whitespace-pre-wrap">{detail.tier}</dd>
               <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
               <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
@@ -600,8 +705,8 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <h3 className={BLOCK_HEADING}>Findings <span>{detail.reasons.length}</span></h3>
             {detail.reasons.map((reason) => (
               <div className={FINDING} key={`${reason.rule}-${reason.label}`}>
-                <span className="mono data-flag text-[9px] uppercase">{reason.severity ?? "rule"}</span>
-                <div><code className="mono text-[10px]">{reason.rule}</code><p className="mt-[3px] text-xs text-muted-foreground">{reason.label}</p></div>
+                <span className="mono data-flag text-[10.5px] uppercase">{reason.severity ?? "rule"}</span>
+                <div><code className="mono text-[11.5px]">{reason.rule}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{reason.label}</p></div>
               </div>
             ))}
             {detail.reasons.length === 0 && <p className={EMPTY_NOTE}>No findings recorded.</p>}
@@ -611,8 +716,8 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <h3 className={BLOCK_HEADING}>Deviations <span>separate stream</span></h3>
             {detail.deviations.map((deviation) => (
               <div className={FINDING} key={`${deviation.type}-${deviation.description}`}>
-                <span className="mono data-flag text-[9px] uppercase">{deviation.severity}</span>
-                <div><code className="mono text-[10px]">{deviation.type}</code><p className="mt-[3px] text-xs text-muted-foreground">{deviation.description}</p></div>
+                <span className="mono data-flag text-[10.5px] uppercase">{deviation.severity}</span>
+                <div><code className="mono text-[11.5px]">{deviation.type}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{deviation.description}</p></div>
               </div>
             ))}
             {detail.deviations.length === 0 && <p className={EMPTY_NOTE}>No deviations recorded.</p>}
@@ -623,13 +728,13 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2.5">
               {detail.outcomes.map((outcome) => (
                 <div key={`${outcome.window_days}-${outcome.observed_at}`} className="flex flex-col border border-border bg-card p-3">
-                  <span className="mono text-[9px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
+                  <span className="mono text-[10.5px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
                   {/* Tone and word both come from the shared rule, so this tile
                       and the outcome column above cannot describe the same row
                       differently — and neither can the console, which renders
                       through the very same two functions. */}
-                  <strong className={"mono my-1 text-[15px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
-                  <small className="mono text-[9px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
+                  <strong className={"mono my-1 text-[16px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
+                  <small className="mono text-[10.5px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
                 </div>
               ))}
               {detail.outcomes.length === 0 && <p className={EMPTY_NOTE}>No outcome recorded yet.</p>}
@@ -738,12 +843,14 @@ export default async function DashboardPage({
   let facets: Facet[] = [];
   let groups: PrGroup[] = [];
   let shown = 0;
+  let reband = 0;
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
 
   const filters = dashboardFilters(params);
   const query = normalizeQuery(value(params, "q"));
   const sort = parseSort(value(params, "sort") ?? null);
+  const lens = parseThresholdLens(value(params, "threshold"));
   const filtering =
     query.length > 0 ||
     filters.lowCoverage ||
@@ -755,21 +862,32 @@ export default async function DashboardPage({
     fetched = response.items;
     limit = response.limit;
     atCap = isAtCap(fetched.length, limit);
-    // Facets are built from the FULL fetched set, so a pill's count does not
-    // change as other pills are pressed. Recomputing them against the filtered
-    // set would zero out every unselected option the moment one selection
-    // excluded it, which reads as "no such runs exist" rather than "you have
-    // filtered them out".
-    // Built from the FULL fetched set, then merged with any selection the data
-    // does not carry — a stale `?band=foo` is a real constraint and has to be
+    // THE LENS IS APPLIED HERE, at the boundary, and everything below reads the
+    // rewritten rows. That is what makes the pills, their counts, the chips and
+    // the count line agree: there is no state where the "needs you" pill says
+    // 12 and the table shows a different 12. See lib/threshold-lens.ts for why
+    // this is a rewrite rather than a parameter (five byte-locked modules).
+    const lensed = applyLens(fetched, lens);
+    reband = rebandedCount(fetched, lensed);
+    // Facets are built from `lensed` — the FULL set, post-lens but still
+    // unfiltered — so a pill's count does not change as other pills are
+    // pressed. Recomputing them against the filtered set would zero out every
+    // unselected option the moment one selection excluded it, which reads as
+    // "no such runs exist" rather than "you have filtered them out".
+    // Built from that same set, then merged with any selection the data does
+    // not carry — a stale `?band=foo` is a real constraint and has to be
     // visible and clickable, not just true (Doug PR 102,
     // reader:query-param-contract-change).
-    facets = withSelectedOptions(buildFacets(fetched), filters.facets);
+    facets = withSelectedOptions(buildFacets(lensed), filters.facets);
     groups = sortGroups(
-      groupRunsByPr(filterRunsByQuery(filterRuns(fetched, filters), query), atCap),
+      groupRunsByPr(filterRunsByQuery(filterRuns(lensed, filters), query), atCap),
       sort,
     );
     shown = groups.reduce((total, group) => total + group.runCount, 0);
+    // Resolved from `fetched`, NOT `lensed`. The evidence pane is a record of
+    // what Doug did, and `detail.threshold` is the line it actually scored
+    // against; feeding it a re-banded summary would destroy the one place on
+    // the page where the real verdict can still be read.
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
       ? fetched.find((run) => run.verdict_id === selectedId) ?? null
@@ -797,7 +915,7 @@ export default async function DashboardPage({
           <button type="submit" className={SUBMIT_BUTTON}>filter</button>
         </form>}
         <Link href="/install/start" prefetch={false} className={CONNECT_LINK}>Connect repositories</Link>
-        <div className="mono ml-auto flex items-center gap-2.5 text-[10px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
+        <div className="mono ml-auto flex items-center gap-2.5 text-[11.5px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
           <span>{user.email}</span>
           <form action={signOutAction}><button type="submit" className="cursor-pointer border-0 bg-transparent text-inherit underline">sign out</button></form>
         </div>
@@ -822,7 +940,7 @@ export default async function DashboardPage({
         </main>
       ) : (
         <main>
-          <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[10px] uppercase tracking-[.15em] text-muted-foreground`}>
+          <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[11px] uppercase tracking-[.15em] text-muted-foreground`}>
             {/* `door.current`, not the hoisted `current`: only the discriminated
                 union narrows away null on this arm, which is the reason #99
                 gave one member per state instead of Exclude<> on a shared one.
@@ -831,14 +949,17 @@ export default async function DashboardPage({
             <span className="h-px flex-1 bg-border" />
           </div>
           <section className={`${CANVAS} px-5 pb-6`}>
+            {lens !== null && <LensBanner lens={lens} reband={reband} atCap={atCap} limit={limit} params={params} />}
             <FacetBar
               facets={facets}
               selection={filters.facets}
-              // The pill counts were computed over `fetched` (unfiltered), so
-              // their denominator must be `fetched.length` too. Passing the
-              // filtered count here would pair an unfiltered numerator with a
-              // filtered denominator, and could print a count larger than the
-              // total beside it.
+              // The pill counts were computed over `lensed` (post-lens, still
+              // unfiltered), so their denominator must match its length —
+              // which is `fetched.length`: applyLens is a `map`, so
+              // `lensed.length === fetched.length` always, lens or no lens.
+              // Passing the filtered count here would pair an unfiltered
+              // numerator with a filtered denominator, and could print a count
+              // larger than the total beside it.
               totalFetched={fetched.length}
               atCap={atCap}
               params={params}
@@ -864,18 +985,19 @@ export default async function DashboardPage({
                   name="q"
                   defaultValue={query}
                   placeholder="Search repo, PR, title…"
-                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[11px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[12.5px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
                 />
                 <button type="submit" className={SUBMIT_BUTTON}>search</button>
               </form>
-              <span className="mono ml-auto text-[11px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
+              <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
+              <span className="mono ml-auto text-[12px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
                 <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
               </span>
             </div>
             {groups.length === 0 ? (
               // An empty result under a filter and an empty ledger are
               // different facts, and neither is a blank table under a header.
-              <p className="mono border-b border-border px-2.5 py-9 text-center text-xs text-muted-foreground">
+              <p className="mono border-b border-border px-2.5 py-9 text-center text-[13px] text-muted-foreground">
                 {filtering
                   ? "No run matches this filter. The runs are there — the filter excludes them."
                   : "No runs in this space yet."}

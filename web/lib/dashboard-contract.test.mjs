@@ -12,6 +12,7 @@ const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
 // that replaced it — none was dropped. See each test's own note for where its
 // intent now lives.
 const globalsUrl = new URL("../app/globals.css", import.meta.url);
+const gearUrl = new URL("../components/threshold-gear.tsx", import.meta.url);
 
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
@@ -70,12 +71,13 @@ test("the signed-in console stays on the reference light paper surface", async (
   // which would drift. Because those custom properties are declared ON the
   // dashboard's own wrapper, they beat anything `.dark` sets further up the
   // tree: inheritance is the weakest source a custom property can have.
-  const [css, page] = await Promise.all([
+  const [css, page, gear] = await Promise.all([
     readFile(globalsUrl, "utf8"),
     readFile(pageUrl, "utf8"),
+    readFile(gearUrl, "utf8"),
   ]);
 
-  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface\s*\{([\s\S]*?)\n\}/);
+  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface,\n\.paper-tokens\s*\{([\s\S]*?)\n\}/);
   assert.ok(
     light,
     "the dashboard scope no longer shares :root's light palette block — it now follows the dark toggle",
@@ -93,6 +95,13 @@ test("the signed-in console stays on the reference light paper surface", async (
 
   // The mechanism is only real if the page actually mounts it.
   assert.match(page, /className="dashboard-surface/);
+
+  // The block gained `.paper-tokens` (a third selector on the SAME
+  // declarations, not a second copy) so that content Radix portals out of the
+  // wrapper — the threshold gear's popover — still gets the paper palette.
+  // Pinned as part of the shared block precisely so nobody "fixes" a dark
+  // popover by pasting the values into a component.
+  assert.match(gear, /className="paper-tokens/);
 
   // The 1440px canvas — the reference layout width the design was measured at.
   // It moved from the module's six `max-width: 1440px` rules onto the page's
@@ -282,4 +291,252 @@ test("finish setup is a POST-only exact pre-bind and post-bind server action", a
   assert.ok(finish.lastIndexOf("getConnections") > finish.indexOf("bindInstallation"));
   assert.ok(finish.indexOf("readyOrganizationAfterSetup") > finish.indexOf("bindInstallation"));
   assert.equal(actions.includes("export async function GET"), false);
+});
+
+test("the threshold lens never reaches the evidence pane", async () => {
+  // The lens is a view over the ledger. The evidence pane is a RECORD of one
+  // run, and `detail.threshold` is the line Doug actually scored against —
+  // re-banding it would destroy the only place on the page where the real
+  // verdict can still be read.
+  //
+  // Pinned as an ORDERING property, the way the reachability test is: the
+  // selected summary must be resolved from the unlensed set, so the lens
+  // cannot reach it no matter how the pane is later restyled.
+  const page = await readFile(pageUrl, "utf8");
+  const selection = page.indexOf("selectedSummary = Number.isInteger(selectedId)");
+  const lensApplied = page.indexOf("applyLens(");
+  assert.ok(selection > 0, "the selected-run lookup is gone");
+  assert.ok(lensApplied > 0, "the lens is never applied");
+  assert.match(
+    page.slice(selection, selection + 260),
+    /fetched\.find\(/,
+    "the selected run is no longer resolved from the unlensed fetched set",
+  );
+  // The pane still prints the recorded line, not the lens.
+  assert.match(page, /threshold \{detail\.threshold\.toFixed\(2\)\}/);
+  assert.equal(page.includes("threshold {lens"), false);
+});
+
+test("an active lens is announced on the page, not just applied to it", async () => {
+  // A ledger showing bands that no verdict asserts, with nothing on screen
+  // saying so, is the exact failure this surface exists to refuse. The banner
+  // is the thing that makes the lens a lens.
+  //
+  // GATED ON THE SIGNAL, not merely present in the file — the same rule the
+  // scopeUnconfirmed note follows. A banner rendered unconditionally would
+  // caveat a ledger that has nothing to caveat, and would still satisfy a test
+  // that only looked for the words.
+  const page = await readFile(pageUrl, "utf8");
+  const gate = page.indexOf("{lens !== null && <LensBanner");
+  assert.ok(gate > 0, "the lens banner is not gated on there being a lens");
+  assert.match(page, /function LensBanner\(/);
+  assert.match(page, /re-banded by this view/);
+  // It must offer the way out. A caveat you cannot act on is decoration.
+  const banner = page.match(/function LensBanner\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.match(banner, /thresholdChanges\(null\)/, "the banner has no reset control");
+  // ...and it must not spend a data colour on a view state. --flag and --clear
+  // are verdicts; the lens is chrome.
+  assert.equal(
+    /data-(flag|clear)|var\(--(flag|clear)\)/.test(banner),
+    false,
+    "the lens banner paints a view state in a verdict colour",
+  );
+});
+
+test("the gear writes the lens to the URL, and the page file stays server-side", async () => {
+  // RULING 2 survives the gear. The control is a client leaf because Radix's
+  // popover and slider need to be; the STATE it produces is still a query
+  // param the server reads, so a shared link reproduces the view exactly and
+  // the page's own "filters live in the URL" claim stays true.
+  const [page, gear] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(new URL("../components/threshold-gear.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(gear, /^"use client"/);
+  // A GET form, not a router push: the lens must land in the address bar.
+  assert.match(gear, /method="GET"/);
+  assert.match(gear, /action="\/dashboard"/);
+  // The two submit buttons own `threshold` between them. A hidden input
+  // alongside them would submit BOTH — a named submit button does not replace
+  // other fields — and page.tsx's `value()` helper takes the first of a
+  // repeated key, so "Clear" would silently re-apply the current lens. That
+  // shipped once; this is what stops it shipping again.
+  assert.equal(
+    /<input[^>]*type="hidden"[^>]*name="threshold"/.test(gear),
+    false,
+    "a hidden threshold field would collide with the submit buttons that carry it",
+  );
+  const thresholdFields = gear.match(/name="threshold"/g) ?? [];
+  assert.equal(thresholdFields.length, 2, "threshold must be carried by exactly the two submit buttons");
+
+  // The slider steps by 0.01 and binary floating point turns some of those
+  // steps into 0.30000000000000004. String(draft) put that in the address bar
+  // verbatim: a URL that disagrees with the 0.30 printed beside the slider, and
+  // two links to the same view that do not look like the same view — the exact
+  // confusion serializeSort's "a param that is always present carries no
+  // information" note exists to prevent.
+  assert.equal(gear.includes("value={String(draft)}"), false, "the lens param is not canonicalised");
+  assert.match(gear, /value=\{draft\.toFixed\(2\)\}/);
+  // The carried params are what stop the gear clearing every pill on submit,
+  // the same defect carriedParams already prevents for the search box.
+  assert.match(gear, /carried\.map\(/);
+  // The page hands it the carried params rather than the gear reaching for the
+  // URL itself — the gear has no access to searchParams, by construction.
+  assert.match(page, /<ThresholdGear\b/);
+  assert.match(page, /carried=\{carriedParams\(params, \["threshold", "page"\], \{ keepRun: true \}\)\}/);
+  // The gear seeds its slider once per mount and is KEYED on the lens, rather
+  // than resyncing from the prop inside an effect. setState in an effect is a
+  // lint error here (react-hooks/set-state-in-effect) and would also stomp a
+  // drag in progress if a navigation landed mid-gesture.
+  assert.equal(gear.includes("useEffect"), false, "the gear resyncs state in an effect");
+  // Loosened from a literal pin on the key expression's exact source text:
+  // hoisting the key into a `const` is a legitimate refactor that preserves
+  // this property and would otherwise fail a pin that only matched one
+  // formatting of it. What is real is that ThresholdGear IS keyed, and the
+  // key's expression references `lens` — that is what forces the remount when
+  // the applied lens changes, which is the property under test.
+  const gearTag = page.match(/<ThresholdGear\b[^>]*>/)?.[0] ?? "";
+  assert.ok(gearTag, "the gear is no longer rendered");
+  const keyExpr = gearTag.match(/\bkey=\{([^}]*)\}/)?.[1] ?? "";
+  assert.ok(keyExpr, "<ThresholdGear> lost its key");
+  assert.match(keyExpr, /\blens\b/, "the gear's key does not reference `lens`");
+  // ...and the page file itself still has no client boundary. This is already
+  // pinned globally; asserted here too because the gear is the change most
+  // likely to break it.
+  assert.equal(page.includes('"use client"'), false);
+});
+
+test("the ledger is bounded and its header stays put", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(runTable, "RunTable is gone");
+
+  // The bound goes on the container <Table> ALREADY renders. A max-h wrapper
+  // placed around <Table> would nest a second scroll container inside the
+  // first, and a sticky <th> in the inner one scrolls away with the rows it
+  // exists to pin. lib/ui-primitives.test.mjs pins the prop; this pins the use.
+  assert.match(runTable, /containerClassName/);
+  assert.match(runTable, /max-h-\[/);
+  // Asserted against TH, where `sticky` actually lives, NOT against RunTable's
+  // body — the brief originally pinned it on the function text, which a doc
+  // comment mentioning the word satisfies just as well as the real class. A
+  // pin a comment can pass is not a pin.
+  const th = page.match(/const TH =[\s\S]*?;\n/)?.[0] ?? "";
+  assert.ok(th, "the TH constant is gone");
+  assert.match(th, /\bsticky\b/);
+  assert.match(th, /\btop-0\b/);
+  // An opaque background is not decoration: without it the rows scroll
+  // visibly underneath the pinned header.
+  assert.match(th, /\bbg-background\b/);
+
+  // Collapsed borders are painted by the table, not the cell, and vanish from
+  // a sticky header. The separated model is what keeps the header's rule
+  // visible while it is pinned — without it the bound "works" and the header
+  // silently loses its underline against the scrolling rows.
+  assert.match(runTable, /border-separate/);
+  assert.match(runTable, /border-spacing-0/);
+
+  // Horizontal scrolling was already there and is NOT replaced by the vertical
+  // bound — eight columns still need it below 980px.
+  assert.match(runTable, /min-w-\[980px\]/);
+});
+
+test("the per-PR disclosure survives the table swap", async () => {
+  // The disclosure is a checkbox and a CSS :has() rule, deliberately — it is
+  // the one control that is not URL state, which is exactly why it must not be
+  // what drags a client boundary in. Swapping the table markup is the change
+  // most likely to lose the <tbody>-per-group structure the selector needs.
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(page, /className="pr-group"/);
+  assert.match(page, /className="pr-toggle sr-only"/);
+  assert.match(page, /pr-history/);
+  assert.match(page, /type="checkbox"/);
+});
+
+test("choosing a space opens it, and still works without JavaScript", async () => {
+  // Two clicks to change whose data you are looking at, the second of which was
+  // a button labelled "open" beside a select that had already changed, read as
+  // a control that had not taken effect. Selection now navigates.
+  //
+  // The submit control is not deleted. It is rendered server-side and removed
+  // once hydration succeeds — NOT wrapped in <noscript>, which covers strictly
+  // less: noscript renders only when scripting is DISABLED, so it did nothing
+  // in the two cases that actually happen, the seconds before hydration and a
+  // bundle that loaded and threw. In both, scripting is on, the noscript
+  // content is absent, and the select's handlers are not attached: the form has
+  // no working control and the operator cannot switch spaces at all.
+  const [page, select, noJs] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(new URL("../components/auto-submit-select.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/no-js-submit.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(select, /^"use client"/);
+  assert.match(select, /requestSubmit\(\)/);
+  // Arrowing through a native select fires `change` on every keypress, and
+  // this form navigates. Committing on each one walks a keyboard user off the
+  // page before they reach the option they were aiming for (WCAG 3.2.2). The
+  // keyboard path is therefore deferred to an explicit commit — Enter, Tab or
+  // blur — while pointer input still commits immediately. Pinned because the
+  // naive version is the obvious "simplification" someone will reach for.
+  assert.match(select, /BROWSING_KEYS/);
+  assert.match(select, /onKeyDown/);
+  assert.match(select, /onBlur/);
+  assert.match(select, /ArrowDown/);
+  // `pending` is armed by a real change, never by a keystroke: a browsing key
+  // that moves nothing (ArrowUp on the first option, a type-ahead letter
+  // matching nothing) produces no change, so blurring afterwards must not
+  // navigate. Arming from the keystroke shipped once and did exactly that.
+  assert.match(select, /onPointerDown/);
+
+  // Not merely that the handlers exist: that `pending` is armed where a real
+  // change is KNOWN to have happened. Arming it from the keystroke shipped
+  // once, and a no-op ArrowUp followed by Tab navigated with nothing chosen.
+  const onKeyDownSlice = select.match(/onKeyDown=\{\(event\)[\s\S]*?\n      \}\}/)?.[0] ?? "";
+  const onChangeSlice = select.match(/onChange=\{\(event\)[\s\S]*?\n      \}\}/)?.[0] ?? "";
+  assert.ok(onKeyDownSlice && onChangeSlice, "the select's handlers could not be located");
+  assert.match(onChangeSlice, /pending\.current = true/);
+  assert.equal(
+    onKeyDownSlice.includes("pending.current = true"),
+    false,
+    "pending is armed from a keystroke again — a key that moves nothing would commit on blur",
+  );
+
+  // Escape means cancel, and it needs handling because the browser does not do
+  // it for us here: on a CLOSED select — where arrowing leaves you — Escape
+  // reverts nothing, so the selection stays visibly moved and the blur commit
+  // would then switch the operator's space after they backed out. "I cancelled"
+  // and "the page navigated" is the worst pair on the control that decides
+  // whose data you are looking at.
+  assert.match(select, /"Escape"/);
+  assert.match(select, /entryValue/);
+  const onKeyDownEscape = select.match(/if \(event\.key === "Escape"\) \{[\s\S]*?\n {8}\}/)?.[0] ?? "";
+  assert.ok(onKeyDownEscape, "the Escape branch is gone");
+  assert.match(onKeyDownEscape, /pending\.current = false/);
+  assert.match(onKeyDownEscape, /value = entryValue\.current/);
+
+  // The no-JS fallback must not be a <noscript>. Pinned as an ABSENCE too,
+  // because <noscript> is the obvious-looking thing to reach for and it is
+  // precisely what did not work.
+  assert.match(noJs, /^"use client"/);
+  assert.match(noJs, /useSyncExternalStore/);
+  assert.equal(noJs.includes("useEffect"), false, "the fallback resyncs state in an effect");
+
+  const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(scopePicker, "the scope picker is gone");
+  assert.match(scopePicker, /<AutoSubmitSelect/);
+  assert.match(scopePicker, /<NoJsSubmit/);
+  assert.equal(
+    scopePicker.includes("<noscript>"),
+    false,
+    "the fallback is a <noscript> again — it renders for nobody whose JS is merely broken",
+  );
+  // The server action is untouched — this changes WHEN the form submits, never
+  // what happens when it does.
+  assert.match(scopePicker, /action=\{switchConnectionAction\}/);
+
+  // The repo filter is deliberately NOT given the same treatment: it is a GET
+  // form on the same page rather than an org switch, and its submit button is
+  // a normal, expected control. Pinned so the two are not "made consistent"
+  // later without a reason.
+  assert.match(page, /<select name="repo"/);
 });

@@ -116,6 +116,20 @@ test("the search form drops the run selection, because the open run may not surv
   assert.equal(carried.some(([key]) => key === "run"), false);
 });
 
+test("the lens keeps the open run, because re-banding excludes nothing", () => {
+  // The `run` skip exists for controls that NARROW rows: a search can exclude
+  // the very run whose evidence pane is pinned open. The lens removes no rows
+  // at all, so applying one must not close the pane — and "clear the lens",
+  // which goes through href(params, …), preserves `run` either way. The two
+  // halves of one feature disagreeing is the bug this pins.
+  const withRun = { run: "4471", band: "flagged", threshold: "0.3" };
+  assert.equal(view.carriedParams(withRun, ["threshold", "page"]).some(([k]) => k === "run"), false);
+  assert.deepEqual(
+    view.carriedParams(withRun, ["threshold", "page"], { keepRun: true }).find(([k]) => k === "run"),
+    ["run", "4471"],
+  );
+});
+
 test("no facet key may collide with a param the dashboard page reads for itself", () => {
   // Web's version of console's own collision guard. The pill bar writes into
   // the same query string the page reads its scope and its predicates from: a
@@ -166,4 +180,31 @@ test("a selection nothing matches is still shown, and still clearable", async ()
   // duplicate pill, no reordering.
   assert.deepEqual(withSelectedOptions(facets, { band: ["flagged"] }), facets);
   assert.deepEqual(withSelectedOptions(facets, {}), facets);
+});
+
+test("the lens is a dashboard param, so the search form carries it instead of dropping it", () => {
+  // A GET form submits only its own controls. Without `threshold` in
+  // DASHBOARD_OWN_PARAMS, typing in the search box would silently clear an
+  // active lens — the same defect the carried-params rule already prevents for
+  // the facet pills. The membership ALSO enrols the name in the collision
+  // guard below, which is why it is asserted rather than assumed.
+  assert.ok(view.DASHBOARD_OWN_PARAMS.includes("threshold"));
+  const carried = view.carriedParams({ threshold: "0.3", band: "flagged" }, ["q", "page"]);
+  assert.deepEqual(carried.find(([key]) => key === "threshold"), ["threshold", "0.3"]);
+});
+
+test("changing the lens returns to the first page", () => {
+  // Page 4 of a ledger banded one way is not page 4 of the same ledger banded
+  // another. Every control that changes WHICH rows are flagged resets paging,
+  // exactly as a facet toggle does.
+  assert.deepEqual(view.thresholdChanges(0.3), { threshold: "0.3", page: null });
+  assert.equal(apply("page=4&band=flagged", view.thresholdChanges(0.3)), "band=flagged&threshold=0.3");
+});
+
+test("clearing the lens deletes the param rather than writing it blank", () => {
+  // `?threshold=` present-but-empty is the empty-vs-absent confusion
+  // parseFacetSelection documents; parseThresholdLens reads it as no lens, so
+  // leaving it behind would put a param in every shared URL that means nothing.
+  assert.deepEqual(view.thresholdChanges(null), { threshold: null, page: null });
+  assert.equal(apply("threshold=0.3&band=flagged", view.thresholdChanges(null)), "band=flagged");
 });

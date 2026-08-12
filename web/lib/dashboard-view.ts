@@ -13,6 +13,7 @@
 // `href(params, changes)` helper applies the result.
 import { FACET_KEYS, type Facet, type FacetKey, type FacetSelection, serializeFacets } from "./facets";
 import { DEFAULT_SORT, type SortState, serializeSort } from "./sorting";
+import { serializeThresholdLens } from "./threshold-lens";
 
 type SearchValues = Record<string, string | string[] | undefined>;
 
@@ -25,7 +26,7 @@ type SearchValues = Record<string, string | string[] | undefined>;
  *  the fetch while claiming to narrow the result; one named `run` would open an
  *  evidence pane. Adding a param here and a facet key of the same name in
  *  facets.ts trips the test. */
-export const DASHBOARD_OWN_PARAMS = ["repo", "run", "coverage", "error", "q", "sort", "page"] as const;
+export const DASHBOARD_OWN_PARAMS = ["repo", "run", "coverage", "error", "q", "sort", "page", "threshold"] as const;
 
 function one(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -81,6 +82,17 @@ export function predicateChanges(
   return { [key]: next, page: null };
 }
 
+/** The threshold lens (`?threshold=0.3`). Not a facet and not a predicate: it
+ *  does not narrow the rows at all — it changes what BAND each row is shown in,
+ *  which every facet and predicate downstream then filters on.
+ *
+ *  It still returns to the first page, and for a sharper reason than a filter
+ *  does: page 4 of a ledger banded one way is not page 4 of the same ledger
+ *  banded another, even though both pages hold the same number of rows. */
+export function thresholdChanges(lens: number | null): Record<string, string | null> {
+  return { threshold: serializeThresholdLens(lens), page: null };
+}
+
 /** The default sort writes no param at all. A param that is always present
  *  carries no information and makes two identical views look like different
  *  ones when shared. */
@@ -94,15 +106,25 @@ export { DEFAULT_SORT };
  *
  *  A GET form submits ONLY its own controls, so without these the search box
  *  would silently clear every pill the operator had set. Keys the form owns are
- *  excluded — sending them twice lets the stale hidden copy win — and so is
- *  `run`: searching can exclude the very run whose evidence pane is pinned
- *  open, and a pane beside a table that no longer lists its row claims the row
- *  is there.
+ *  excluded — sending them twice lets the stale hidden copy win.
+ *
+ *  `run` is skipped by default, and the reason is specific to controls that
+ *  NARROW rows: a search can exclude the very run whose evidence pane is
+ *  pinned open, and a pane beside a table that no longer lists its row claims
+ *  the row is there. A control that only RE-BANDS rows — the threshold lens —
+ *  removes none of them, so excluding the pinned run from ITS carried params
+ *  would close a pane the lens never touched. `{ keepRun: true }` is that
+ *  opt-in; the default stays today's behaviour so the search box is
+ *  unaffected. The lens is, so far, the only caller that passes it.
  *
  *  Absent keys are omitted rather than written blank, the same empty-vs-absent
  *  rule `parseFacetSelection` documents. */
-export function carriedParams(values: SearchValues, own: string[]): Array<[string, string]> {
-  const skip = new Set([...own, "run"]);
+export function carriedParams(
+  values: SearchValues,
+  own: string[],
+  options: { keepRun?: boolean } = {},
+): Array<[string, string]> {
+  const skip = new Set(options.keepRun ? own : [...own, "run"]);
   const carried: Array<[string, string]> = [];
   for (const key of [...DASHBOARD_OWN_PARAMS, ...FACET_KEYS]) {
     if (skip.has(key)) continue;
