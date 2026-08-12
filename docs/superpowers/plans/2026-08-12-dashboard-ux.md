@@ -1377,42 +1377,30 @@ Expected: FAIL — `ENOENT`, `components/auto-submit-select.tsx` does not exist.
 
 - [ ] **Step 3: Write the component**
 
-Create `web/components/auto-submit-select.tsx`:
+Create `web/components/auto-submit-select.tsx`. **Pointer input commits
+immediately; keyboard input commits on Enter, Tab or blur.** On a closed native
+`<select>`, browsers fire `change` on every arrow key and every type-ahead
+character, and this form navigates — submitting on each one walks a keyboard
+user off the page on their first keystroke (WCAG 3.2.2), with no explicit-commit
+control left once the `open` button moved into `<noscript>`.
+
+See the shipped file for the full implementation and its comments; the shape is:
 
 ```tsx
-"use client";
+const BROWSING_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 
-// A <select> that submits its form when its value changes.
-//
-// This exists as its own file for one reason: app/dashboard/page.tsx may not
-// contain a client boundary (lib/dashboard-contract.test.mjs, RULING 2), and
-// the scope picker must STAY in that file — its focus ring and its
-// aria-label are pinned there, on the grounds that the control which changes
-// whose data you are looking at has to be visibly focusable. So the smallest
-// possible piece moves: the element that needs an event handler, and nothing
-// else. Every other prop is forwarded untouched.
-import * as React from "react";
-
-export function AutoSubmitSelect({
-  onChange,
-  ...props
-}: React.ComponentProps<"select">) {
-  return (
-    <select
-      {...props}
-      onChange={(event) => {
-        // Any caller-supplied handler runs first and can still preventDefault.
-        onChange?.(event);
-        if (event.defaultPrevented) return;
-        // requestSubmit(), not submit(): it fires the submit event, which is
-        // what React needs to run the server action bound to the form. Raw
-        // submit() bypasses it and would post the form as a plain HTML POST.
-        event.currentTarget.form?.requestSubmit();
-      }}
-    />
-  );
+export function AutoSubmitSelect({ onChange, onKeyDown, onBlur, ...props }: React.ComponentProps<"select">) {
+  const pending = React.useRef(false);
+  const commit = (element: HTMLSelectElement) => { pending.current = false; element.form?.requestSubmit(); };
+  // onKeyDown: a browsing key or a single printable char sets pending; Enter commits.
+  // onChange:  commits only when nothing is pending — i.e. pointer input.
+  // onBlur:    commits a pending keyboard choice (Tab, click-away).
 }
 ```
+
+`requestSubmit()`, not `submit()`: it fires the submit event, which is what
+React needs to run the server action bound to the form. Every handler forwards
+its caller-supplied counterpart first and respects `event.defaultPrevented`.
 
 - [ ] **Step 4: Use it from `ScopePicker`**
 

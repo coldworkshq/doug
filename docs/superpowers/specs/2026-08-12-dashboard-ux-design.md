@@ -206,11 +206,21 @@ control that changes whose data you are looking at must be visibly focusable.
 Extracting the whole component would break both pins for a styling reason.
 
 Only the `<select>` moves: `components/auto-submit-select.tsx`, `"use client"`,
-a thin wrapper that calls `form.requestSubmit()` on change and otherwise
-forwards `name`, `defaultValue`, `aria-label`, `className` and children
-untouched. The existing `switchConnectionAction` server action is unchanged, so
+a thin wrapper that calls `form.requestSubmit()` and otherwise forwards `name`,
+`defaultValue`, `aria-label`, `className` and children untouched. The existing
+`switchConnectionAction` server action is unchanged, so
 `action={switchConnectionAction}` still appears in `page.tsx` where its pin
 expects it.
+
+**Pointer commits immediately; keyboard commits on Enter, Tab or blur.** On a
+closed native `<select>`, browsers fire `change` on every arrow key and every
+type-ahead character. Since this form navigates, submitting on each one would
+walk a keyboard user off the page on their first keystroke, before they reached
+the option they were aiming for — WCAG 3.2.2 (On Input), and with the `open`
+button gone there would be no explicit-commit path left. Arrowing is browsing,
+not choosing, so a change that arrived by keyboard is held until the user says
+they mean it. Mouse and touch are unaffected: pick an option, navigate, no
+button — which is the behaviour this change exists to deliver.
 
 The `open` button moves inside `<noscript>`. Without JavaScript the form still
 has a submit control; with it, the button is gone and selection navigates. The
