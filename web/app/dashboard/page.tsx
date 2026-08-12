@@ -336,15 +336,6 @@ function FacetBar({
   );
 }
 
-/** Filter/fetched totals, not the viewport. The pager below the table states
- *  "showing X–Y of Z"; this answers how many runs survived the filters across
- *  the whole fetched set.
- *
- *  `total` is the fetched set and `shown` is what survived; at the cap neither
- *  is a count of the scope, which is why "latest {limit}" REPLACES a bare total
- *  rather than qualifying it in a tooltip. Same numbers and same words as
- *  console's CountLine, so the two surfaces cannot report one ledger
- *  differently. */
 /** The lens, said out loud.
  *
  *  `--iridescent` and `bg-accent` — chrome, never `--flag`/`--clear`. The two
@@ -370,7 +361,7 @@ function LensBanner({
   params: DashboardParams;
 }) {
   return (
-    <div className="mono flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2 text-[11px] text-foreground">
+    <div className="mono mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2 text-[11px] text-foreground">
       <span className="font-medium text-[var(--iridescent)]">Viewing at {lens.toFixed(2)}</span>
       <span className="text-muted-foreground">
         {/* The count is of rows the lens MOVED, not of rows it flagged — the
@@ -406,6 +397,15 @@ function LensBanner({
   );
 }
 
+/** Filter/fetched totals, not the viewport. The pager below the table states
+ *  "showing X–Y of Z"; this answers how many runs survived the filters across
+ *  the whole fetched set.
+ *
+ *  `total` is the fetched set and `shown` is what survived; at the cap neither
+ *  is a count of the scope, which is why "latest {limit}" REPLACES a bare total
+ *  rather than qualifying it in a tooltip. Same numbers and same words as
+ *  console's CountLine, so the two surfaces cannot report one ledger
+ *  differently. */
 function CountLine({
   shown,
   total,
@@ -550,9 +550,6 @@ function RunTable({
       containerClassName="max-h-[55vh] overflow-y-auto rounded-[5px] border border-border"
       className="min-w-[980px] table-fixed border-separate border-spacing-0 text-xs"
     >
-      {/* TH (below) is what makes this header sticky — `sticky top-0` plus the
-          opaque background it needs so rows don't scroll visibly underneath it.
-          See TH's own doc comment for why that pin lives on the cell. */}
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           {COLUMNS.map((column) => (
@@ -856,15 +853,6 @@ export default async function DashboardPage({
     fetched = response.items;
     limit = response.limit;
     atCap = isAtCap(fetched.length, limit);
-    // Facets are built from the FULL fetched set, so a pill's count does not
-    // change as other pills are pressed. Recomputing them against the filtered
-    // set would zero out every unselected option the moment one selection
-    // excluded it, which reads as "no such runs exist" rather than "you have
-    // filtered them out".
-    // Built from the FULL fetched set, then merged with any selection the data
-    // does not carry — a stale `?band=foo` is a real constraint and has to be
-    // visible and clickable, not just true (Doug PR 102,
-    // reader:query-param-contract-change).
     // THE LENS IS APPLIED HERE, at the boundary, and everything below reads the
     // rewritten rows. That is what makes the pills, their counts, the chips and
     // the count line agree: there is no state where the "needs you" pill says
@@ -872,6 +860,15 @@ export default async function DashboardPage({
     // this is a rewrite rather than a parameter (five byte-locked modules).
     const lensed = applyLens(fetched, lens);
     reband = rebandedCount(fetched, lensed);
+    // Facets are built from `lensed` — the FULL set, post-lens but still
+    // unfiltered — so a pill's count does not change as other pills are
+    // pressed. Recomputing them against the filtered set would zero out every
+    // unselected option the moment one selection excluded it, which reads as
+    // "no such runs exist" rather than "you have filtered them out".
+    // Built from that same set, then merged with any selection the data does
+    // not carry — a stale `?band=foo` is a real constraint and has to be
+    // visible and clickable, not just true (Doug PR 102,
+    // reader:query-param-contract-change).
     facets = withSelectedOptions(buildFacets(lensed), filters.facets);
     groups = sortGroups(
       groupRunsByPr(filterRunsByQuery(filterRuns(lensed, filters), query), atCap),
@@ -947,11 +944,13 @@ export default async function DashboardPage({
             <FacetBar
               facets={facets}
               selection={filters.facets}
-              // The pill counts were computed over `fetched` (unfiltered), so
-              // their denominator must be `fetched.length` too. Passing the
-              // filtered count here would pair an unfiltered numerator with a
-              // filtered denominator, and could print a count larger than the
-              // total beside it.
+              // The pill counts were computed over `lensed` (post-lens, still
+              // unfiltered), so their denominator must match its length —
+              // which is `fetched.length`: applyLens is a `map`, so
+              // `lensed.length === fetched.length` always, lens or no lens.
+              // Passing the filtered count here would pair an unfiltered
+              // numerator with a filtered denominator, and could print a count
+              // larger than the total beside it.
               totalFetched={fetched.length}
               atCap={atCap}
               params={params}

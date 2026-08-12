@@ -107,7 +107,15 @@ test("rebandedCount counts only the rows the lens actually moved", () => {
   ];
   const after = applyLens(before, 0.3);
   assert.equal(rebandedCount(before, after), 1);
-  assert.equal(rebandedCount(before, before), 0);
+  // NOT `rebandedCount(before, before)` — comparing an array to itself makes
+  // `before[i].band !== before[i].band` false for every i under ANY
+  // implementation, even one that (wrongly) compares object identity instead
+  // of `.band`, so it cannot fail no matter what the function does. A
+  // hand-built copy — new objects, identical bands — actually exercises the
+  // "nothing moved" path: it would also catch an implementation that compared
+  // `before[i] !== after[i]` instead of their `.band` fields.
+  const unmoved = before.map((row) => ({ ...row }));
+  assert.equal(rebandedCount(before, unmoved), 0);
 });
 
 test("the default-shaped lens still round-trips through the URL", () => {

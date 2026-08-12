@@ -181,8 +181,8 @@ substituted.
 | | before | after |
 |---|---|---|
 | PR title | 12px | 14px |
-| body / cell text | 10px | 12px |
-| uppercase micro-labels | 9px | 10px |
+| body / cell text | 10px | 11.5px |
+| uppercase micro-labels | 9px | 11px |
 | score | 14.5px | 16px |
 | row height | 34px | 40px |
 

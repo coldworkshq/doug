@@ -13,16 +13,24 @@
 //
 // WHY THE LENS IS APPLIED AT THE BOUNDARY, rewriting `band` on the rows,
 // rather than threaded through as a parameter: `buildFacets`, `matchesFacets`,
-// `groupRunsByPr` and `BandChip` all read `run.band`, and all four are
-// byte-locked to console's copies by lib/console-lockstep.test.mjs. A `lens`
-// parameter would have to be added to every one of them, and the lockstep
-// would reject all of it.
+// `groupRunsByPr`, `BandChip` and `runMatchesQuery` (lib/search.ts) all read
+// `run.band`, and all five are byte-locked to console's copies by
+// lib/console-lockstep.test.mjs. A `lens` parameter would have to be added to
+// every one of them, and the lockstep would reject all of it.
 //
 // Rewriting at the boundary is also what makes the page COHERENT rather than
 // merely possible. Because every downstream reader sees the same rewritten
 // rows, the band pills, their counts, the chips in the table and the count
 // line cannot disagree: there is no state where the "needs you" pill says 12
 // and the table shows a different 12.
+//
+// One consequence of rewriting rather than threading: with a lens active, the
+// search box searches what you SEE, not what Doug recorded. Typing "cleared"
+// matches rows whose recorded verdict was flagged but that the lens re-banded
+// to cleared — `runMatchesQuery` reads the same rewritten `run.band` as
+// everything else past the boundary, on purpose. That is the intended
+// behaviour, the same coherence this comment argues for above; it was simply
+// undocumented until now.
 import type { RunSummary } from "./session-api";
 
 /** Scores are 0..1 — `scoring.py` caps its total at 0.99 and `reader.py`

@@ -380,7 +380,17 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   // lint error here (react-hooks/set-state-in-effect) and would also stomp a
   // drag in progress if a navigation landed mid-gesture.
   assert.equal(gear.includes("useEffect"), false, "the gear resyncs state in an effect");
-  assert.match(page, /<ThresholdGear key=\{lens === null \? "none" : String\(lens\)\}/);
+  // Loosened from a literal pin on the key expression's exact source text:
+  // hoisting the key into a `const` is a legitimate refactor that preserves
+  // this property and would otherwise fail a pin that only matched one
+  // formatting of it. What is real is that ThresholdGear IS keyed, and the
+  // key's expression references `lens` — that is what forces the remount when
+  // the applied lens changes, which is the property under test.
+  const gearTag = page.match(/<ThresholdGear\b[^>]*>/)?.[0] ?? "";
+  assert.ok(gearTag, "the gear is no longer rendered");
+  const keyExpr = gearTag.match(/\bkey=\{([^}]*)\}/)?.[1] ?? "";
+  assert.ok(keyExpr, "<ThresholdGear> lost its key");
+  assert.match(keyExpr, /\blens\b/, "the gear's key does not reference `lens`");
   // ...and the page file itself still has no client boundary. This is already
   // pinned globally; asserted here too because the gear is the change most
   // likely to break it.
