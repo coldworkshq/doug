@@ -7,14 +7,27 @@ register("./node-next-loader.mjs", import.meta.url);
 
 const pageUrl = new URL("../app/dashboard/page.tsx", import.meta.url);
 const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
-const cssUrl = new URL("../app/dashboard/dashboard.module.css", import.meta.url);
+// Was ../app/dashboard/dashboard.module.css until Phase B PR 2 deleted it. The
+// four pins that read the module are rewritten below against the mechanisms
+// that replaced it — none was dropped. See each test's own note for where its
+// intent now lives.
+const globalsUrl = new URL("../app/globals.css", import.meta.url);
 
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
   assert.match(page, /You're in\. Connect GitHub only when you want Doug to review repositories\./);
   assert.match(page, /Lema — separate product/);
   assert.match(page, /What the reader was given/);
-  assert.match(page, /coverageRuler/);
+  // Intent: A COVERAGE RULER EXISTS ON THIS PAGE. Until Phase B PR 2 this was
+  // `/coverageRuler/`, satisfied only by the CSS module's class name — after
+  // the port the source literal is `CoverageRuler`, capital C, so the old
+  // regex would have failed. It is NOT repaired by loosening to a
+  // case-insensitive match, which would pass on any passing mention of the
+  // words: the component's import and its use are pinned separately, so
+  // importing it without rendering it fails, and rendering something else
+  // fails too.
+  assert.match(page, /import \{ CoverageRuler \} from "@\/components\/coverage-ruler";/);
+  assert.match(page, /<CoverageRuler\b/);
   assert.equal(page.includes("tenant all"), false);
   assert.equal(page.includes("health"), false);
   assert.equal(page.includes("illustrative"), false);
@@ -46,35 +59,128 @@ test("organization switching and sign-out are POST server actions", async () => 
 });
 
 test("the signed-in console stays on the reference light paper surface", async () => {
-  const css = await readFile(cssUrl, "utf8");
-  assert.equal(css.includes(":global(.dark)"), false);
-  assert.match(css, /--paper:\s*#fcfcfa/);
-  assert.match(css, /max-width:\s*1440px/);
+  // The deleted dashboard.module.css hardcoded a whole light palette on
+  // `.console`, including `--card: #fff`, which shadowed the global `--card`
+  // for the entire subtree. THAT is why the dashboard rendered light no matter
+  // what web's theme toggle said, and deleting the module without a
+  // replacement would have silently retired the property along with the pin.
+  //
+  // The replacement (RULING 1) is `.dashboard-surface`, which shares ONE
+  // declaration block with `:root` — not a second copy of the light values,
+  // which would drift. Because those custom properties are declared ON the
+  // dashboard's own wrapper, they beat anything `.dark` sets further up the
+  // tree: inheritance is the weakest source a custom property can have.
+  const [css, page] = await Promise.all([
+    readFile(globalsUrl, "utf8"),
+    readFile(pageUrl, "utf8"),
+  ]);
+
+  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface\s*\{([\s\S]*?)\n\}/);
+  assert.ok(
+    light,
+    "the dashboard scope no longer shares :root's light palette block — it now follows the dark toggle",
+  );
+  // The exact reference background, not an approximation.
+  assert.match(light[1], /--background:\s*#fcfcfa/);
+  // The token whose shadowing is what actually forced light before.
+  assert.match(light[1], /--card:\s*#ffffff/);
+
+  // ...and the dark palette must never claim the dashboard scope, which is the
+  // one edit that would defeat the mechanism above while leaving it in place.
+  const dark = css.match(/(?:^|\n)\.dark[^{]*\{/);
+  assert.ok(dark, "globals.css lost its .dark block");
+  assert.equal(dark[0].includes("dashboard-surface"), false);
+
+  // The mechanism is only real if the page actually mounts it.
+  assert.match(page, /className="dashboard-surface/);
+
+  // The 1440px canvas — the reference layout width the design was measured at.
+  // It moved from the module's six `max-width: 1440px` rules onto the page's
+  // own wrappers.
+  assert.match(page, /max-w-\[1440px\]/);
 });
 
 test("coverage, outcomes, and select focus use honest visual semantics", async () => {
-  const [page, css] = await Promise.all([
-    readFile(pageUrl, "utf8"),
-    readFile(cssUrl, "utf8"),
-  ]);
-  const cutMarker = css.match(/\.coverageRuler > i\s*\{[^}]+\}/)?.[0] ?? "";
-  assert.equal(cutMarker.includes("var(--flag-data)"), false);
-  assert.match(css, /\.outcomeClear\s*\{[^}]*var\(--clear-data\)/);
-  assert.match(css, /\.outcomeFlag\s*\{[^}]*var\(--flag-data\)/);
-  assert.match(css, /\.outcomeNeutral\s*\{[^}]*var\(--ink-muted\)/);
-  assert.match(page, /outcomeTone\(outcome\.kind\)/);
-  assert.match(css, /\.switchControl:focus-within\s*\{[^}]*(outline|box-shadow):/);
+  const page = await readFile(pageUrl, "utf8");
+
+  // COVERAGE IS A MAGNITUDE, NOT A JUDGEMENT. The forensic ruler's own
+  // cut-marker rule is pinned on the component (design-system.test.mjs, "the
+  // coverage ruler never spends a judgement colour on a magnitude"); what this
+  // page must not do is paint its own table-row coverage cell with a verdict
+  // colour. It uses the neutral sequential ramp from globals and nothing else.
+  const readCell = page.match(/function CoverageCell\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(readCell, "CoverageCell is gone — the read column has no pinned renderer");
+  assert.match(readCell, /cov-track/);
+  assert.match(readCell, /cov-fill/);
+  assert.equal(
+    /data-(flag|clear)|var\(--(flag|clear)\)/.test(readCell),
+    false,
+    "the read column borrows a verdict colour for a measurement",
+  );
+
+  // THE THREE-WAY TONE RULE. Was three pins on the module's
+  // .outcomeClear/.outcomeFlag/.outcomeNeutral rules; the rule itself now
+  // lives in `outcomeToneClass` (runs-time.test.mjs pins that neutral is the
+  // ABSENCE of a data colour, never the miss colour). What is pinned here is
+  // that BOTH render sites go through it rather than branching inline — an
+  // inline ternary written from memory is what dropped the neutral branch in
+  // two components at once, the bug that rule exists to prevent.
+  const toneCalls = page.match(/outcomeToneClass\(outcomeTone\(/g) ?? [];
+  assert.ok(
+    toneCalls.length >= 2,
+    `every outcome render site must use the shared rule; found ${toneCalls.length}`,
+  );
+  assert.equal(page.includes('=== "clean"'), false, "outcome tone is branched inline");
+  assert.equal(page.includes('=== "censored"'), false, "outcome tone is branched inline");
+
+  // THE ORG SWITCHER'S FOCUS RING. This is the control that changes whose data
+  // you are looking at, so it must be visibly focusable. It had no counterpart
+  // in the ported component library, which is why the inventory called it the
+  // pin most likely to be dropped rather than migrated — and why it is pinned
+  // on the CONTROL rather than on a class string. One level of indirection is
+  // resolved deliberately: hoisting a long utility string into a const is a
+  // normal edit, and it must not be able to drop the ring silently.
+  const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(scopePicker, "the scope picker is gone");
+  assert.match(scopePicker, /aria-label="Connected space"/);
+  const hoisted = scopePicker.match(/<label className=\{(\w+)\}/)?.[1];
+  const controlClasses = hoisted
+    ? page.match(new RegExp(`const ${hoisted}\\s*=[\\s\\S]*?;\\n`))?.[0] ?? ""
+    : scopePicker.match(/<label className="([^"]*)"/)?.[1] ?? "";
+  assert.match(
+    controlClasses,
+    /focus-within:(outline|ring|border)/,
+    "the control that switches which org's data you see has no visible focus indicator",
+  );
 });
 
 test("repository connection and every pending setup remain reachable in all dashboard states", async () => {
   const page = await readFile(pageUrl, "utf8");
-  const connectMarkup = '<Link href="/install/start" prefetch={false} className={styles.connectRepositories}>Connect repositories</Link>';
-  const connect = page.indexOf(connectMarkup);
+  // Reachability is an ORDERING property: both affordances are rendered ABOVE
+  // the three-way state branch, so they exist in every state — including the
+  // states where the user has nothing yet, and the one where a half-finished
+  // install is the only thing to act on.
+  //
+  // Pinned on the link's href and its label, NEVER on its className. The old
+  // pin hardcoded the full markup including `className={styles.connectRepositories}`
+  // and derived all three assertions from `indexOf` on it, so restyling the
+  // link would have failed the reachability guarantee for a styling reason
+  // while the invariant itself was untouched. Pasting the new class string
+  // back in here would silently re-couple them.
+  const connectLink = page.match(/<Link\b[\s\S]{0,400}?>\s*Connect repositories\s*<\/Link>/);
+  assert.ok(connectLink, "the header's 'Connect repositories' link is gone");
+  assert.match(connectLink[0], /href="\/install\/start"/);
   const stateBranches = page.indexOf("connections.length === 0");
   const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
-  assert.ok(connect >= 0 && connect < stateBranches);
-  assert.ok(pendingStrip >= 0 && pendingStrip < stateBranches);
-  assert.ok(page.includes(connectMarkup));
+  assert.ok(stateBranches > 0, "the three-way state branch is gone");
+  assert.ok(connectLink.index < stateBranches, "connect repositories fell inside a state branch");
+  assert.ok(
+    pendingStrip >= 0 && pendingStrip < stateBranches,
+    "the pending-setup strip fell inside a state branch",
+  );
+  // `prefetch={false}` on this link is pinned by the next test, over BOTH
+  // install links at once — deliberately separate, so a prefetch regression
+  // and a reachability regression cannot be confused for one another.
   assert.match(page, /action=\{finishSetupAction\}/);
   assert.match(page, /name="installation_id"/);
   assert.match(page, />finish setup<\/button>/);

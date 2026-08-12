@@ -51,12 +51,28 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
+:root,
+.dashboard-surface {
   /* Light palette, matched to the GitHub Pages marketing site
      (drewjst.github.io/doug) so the two surfaces read as one brand. Same
      hex values as that site's :root, remapped onto shadcn's variable
      names. This is now the default theme — see .dark below for the
-     "iridescent SaaS" look this app used exclusively before. */
+     "iridescent SaaS" look this app used exclusively before.
+
+     `.dashboard-surface` shares this block rather than copying it. The
+     signed-in dashboard is pinned to this light paper surface and does NOT
+     follow the theme toggle (Phase B RULING 1): re-declaring these custom
+     properties on the dashboard's own wrapper beats anything `.dark` sets on
+     <html>, because inheritance is the weakest source a custom property can
+     have. That is the same mechanism the deleted dashboard.module.css relied
+     on when it hardcoded `--card: #fff` on `.console`, minus the second copy
+     of the palette that could drift away from this one.
+
+     Mirror image of web/app/queue/page.tsx:55, which wraps itself in `dark`
+     to force the other direction, for the reason its comment gives. The
+     dashboard's rule and the extra tokens it needs are below the .dark block.
+     ENFORCED: lib/dashboard-contract.test.mjs, "the signed-in console stays
+     on the reference light paper surface". */
   --sheen: #5b6470;
   --flag: #c93a2b;
   --clear: #177a50;
@@ -161,6 +177,32 @@
     linear-gradient(oklch(1 0 0 / 2.5%) 1px, transparent 1px),
     linear-gradient(90deg, oklch(1 0 0 / 2.5%) 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+}
+
+/* The signed-in dashboard's own surface: the light tokens above (shared, not
+   copied) plus the four values the deleted dashboard.module.css carried that
+   have NO equivalent in the palette. They keep their exact hex here rather
+   than being substituted — globals' nearest neighbours are visibly different
+   values (`--muted`/`--secondary` are #f6f5f1 against --rule-soft's #f1efe9),
+   and --rule-soft alone draws every row divider in the run ledger, so
+   "close enough" would restyle the whole table.
+
+   #eceae3 / #3d403c are deliberately NOT here: they are the console's
+   .cov-track / .cov-fill, already ported as global utilities.
+
+   The paint is the module's own: a dot grid on paper, opaque, covering the
+   viewport — <body> keeps web's theme, so in dark mode this is what stops the
+   gutters showing through. */
+.dashboard-surface {
+  --rule-soft: #f1efe9;
+  --dim: #aaa79f;
+  --row-hover: #faf9f5;
+
+  min-height: 100vh;
+  color: var(--foreground);
+  background: radial-gradient(var(--border) 1px, transparent 1px) var(--background);
+  background-size: 20px 20px;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
