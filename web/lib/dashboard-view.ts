@@ -13,6 +13,7 @@
 // `href(params, changes)` helper applies the result.
 import { FACET_KEYS, type Facet, type FacetKey, type FacetSelection, serializeFacets } from "./facets";
 import { DEFAULT_SORT, type SortState, serializeSort } from "./sorting";
+import { serializeThresholdLens } from "./threshold-lens";
 
 type SearchValues = Record<string, string | string[] | undefined>;
 
@@ -25,7 +26,7 @@ type SearchValues = Record<string, string | string[] | undefined>;
  *  the fetch while claiming to narrow the result; one named `run` would open an
  *  evidence pane. Adding a param here and a facet key of the same name in
  *  facets.ts trips the test. */
-export const DASHBOARD_OWN_PARAMS = ["repo", "run", "coverage", "error", "q", "sort", "page"] as const;
+export const DASHBOARD_OWN_PARAMS = ["repo", "run", "coverage", "error", "q", "sort", "page", "threshold"] as const;
 
 function one(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -79,6 +80,17 @@ export function predicateChanges(
   next: string | null,
 ): Record<string, string | null> {
   return { [key]: next, page: null };
+}
+
+/** The threshold lens (`?threshold=0.3`). Not a facet and not a predicate: it
+ *  does not narrow the rows at all — it changes what BAND each row is shown in,
+ *  which every facet and predicate downstream then filters on.
+ *
+ *  It still returns to the first page, and for a sharper reason than a filter
+ *  does: page 4 of a ledger banded one way is not page 4 of the same ledger
+ *  banded another, even though both pages hold the same number of rows. */
+export function thresholdChanges(lens: number | null): Record<string, string | null> {
+  return { threshold: serializeThresholdLens(lens), page: null };
 }
 
 /** The default sort writes no param at all. A param that is always present
