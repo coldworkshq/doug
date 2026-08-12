@@ -53,7 +53,8 @@
 }
 
 :root,
-.dashboard-surface {
+.dashboard-surface,
+.paper-tokens {
   /* Light palette, matched to the GitHub Pages marketing site
      (drewjst.github.io/doug) so the two surfaces read as one brand. Same
      hex values as that site's :root, remapped onto shadcn's variable
@@ -73,7 +74,16 @@
      to force the other direction, for the reason its comment gives. The
      dashboard's rule and the extra tokens it needs are below the .dark block.
      ENFORCED: lib/dashboard-contract.test.mjs, "the signed-in console stays
-     on the reference light paper surface". */
+     on the reference light paper surface".
+
+     `.paper-tokens` is the same declarations for content that renders OUTSIDE
+     the dashboard's wrapper while belonging to it — today that is exactly one
+     thing: the threshold gear's popover, which Radix renders through a portal
+     into <body>. A portal escapes `.dashboard-surface`, so without this the
+     panel inherits whatever `.dark` set on <html> and renders a dark card over
+     the light paper page. It carries the tokens and nothing else: the surface
+     paint (min-height, the dot grid) stays on `.dashboard-surface` below,
+     because a popover is not a page. */
   --sheen: #5b6470;
   --flag: #c93a2b;
   --clear: #177a50;

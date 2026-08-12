@@ -12,6 +12,7 @@ const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
 // that replaced it — none was dropped. See each test's own note for where its
 // intent now lives.
 const globalsUrl = new URL("../app/globals.css", import.meta.url);
+const gearUrl = new URL("../components/threshold-gear.tsx", import.meta.url);
 
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
@@ -70,12 +71,13 @@ test("the signed-in console stays on the reference light paper surface", async (
   // which would drift. Because those custom properties are declared ON the
   // dashboard's own wrapper, they beat anything `.dark` sets further up the
   // tree: inheritance is the weakest source a custom property can have.
-  const [css, page] = await Promise.all([
+  const [css, page, gear] = await Promise.all([
     readFile(globalsUrl, "utf8"),
     readFile(pageUrl, "utf8"),
+    readFile(gearUrl, "utf8"),
   ]);
 
-  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface\s*\{([\s\S]*?)\n\}/);
+  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface,\n\.paper-tokens\s*\{([\s\S]*?)\n\}/);
   assert.ok(
     light,
     "the dashboard scope no longer shares :root's light palette block — it now follows the dark toggle",
@@ -93,6 +95,13 @@ test("the signed-in console stays on the reference light paper surface", async (
 
   // The mechanism is only real if the page actually mounts it.
   assert.match(page, /className="dashboard-surface/);
+
+  // The block gained `.paper-tokens` (a third selector on the SAME
+  // declarations, not a second copy) so that content Radix portals out of the
+  // wrapper — the threshold gear's popover — still gets the paper palette.
+  // Pinned as part of the shared block precisely so nobody "fixes" a dark
+  // popover by pasting the values into a component.
+  assert.match(gear, /className="paper-tokens/);
 
   // The 1440px canvas — the reference layout width the design was measured at.
   // It moved from the module's six `max-width: 1440px` rules onto the page's

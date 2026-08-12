@@ -58,7 +58,11 @@ export function ThresholdGear({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[290px]">
+      {/* Radix portals this into <body>, outside `.dashboard-surface` — so it
+          would inherit `.dark` from <html> and render a dark panel over the
+          light paper ledger. `paper-tokens` carries the same palette block
+          the surface uses (globals.css), not a copy of it. */}
+      <PopoverContent align="end" className="paper-tokens w-[290px]">
         <form method="GET" action="/dashboard" className="flex flex-col gap-3">
           {/* A GET form submits only its own controls. Without these, setting a
               lens would silently clear every pill, the sort and the search. */}
