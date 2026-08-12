@@ -63,13 +63,13 @@ const SWITCH_CONTROL =
   "focus-within:border-[var(--iridescent)] focus-within:outline-2 focus-within:outline-offset-2 " +
   "focus-within:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-const SWITCH_LABEL = "text-[9px] uppercase tracking-[.11em] text-muted-foreground";
+const SWITCH_LABEL = "text-[10px] uppercase tracking-[.11em] text-muted-foreground";
 
 const SWITCH_SELECT =
-  "max-w-[270px] max-[900px]:max-w-[180px] border-0 bg-transparent text-[11px] text-foreground outline-0";
+  "max-w-[270px] max-[900px]:max-w-[180px] border-0 bg-transparent text-[12.5px] text-foreground outline-0";
 
 const SUBMIT_BUTTON =
-  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[10px] " +
+  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11.5px] " +
   "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +
   "focus-visible:border-[var(--iridescent)] focus-visible:text-foreground";
 
@@ -78,12 +78,12 @@ const SUBMIT_BUTTON =
  *  string — it pins the href and the label, so restyling the link can never
  *  fail an ordering guarantee. */
 const CONNECT_LINK =
-  "mono text-[10px] text-[var(--iridescent)] underline underline-offset-[3px] max-[900px]:ml-auto " +
+  "mono text-[11.5px] text-[var(--iridescent)] underline underline-offset-[3px] max-[900px]:ml-auto " +
   "focus-visible:outline-2 focus-visible:outline-offset-[3px] " +
   "focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
 const TAB =
-  "mono -mb-px border-b-2 border-transparent px-[13px] pt-[9px] pb-2 text-[10px] uppercase " +
+  "mono -mb-px border-b-2 border-transparent px-[13px] pt-[9px] pb-2 text-[11.5px] uppercase " +
   "tracking-[.08em] text-[var(--dim)] no-underline aria-[current]:border-b-[var(--iridescent)] " +
   "aria-[current]:font-semibold aria-[current]:text-foreground";
 
@@ -91,8 +91,8 @@ const TAB =
  *  provenance sub-label, styled here rather than at the call site so the
  *  headings' own markup stays the plain sentence it claims to be. */
 const BLOCK_HEADING =
-  "mono mb-3 flex items-center gap-2.5 text-[10px] font-medium uppercase tracking-[.16em] " +
-  "text-muted-foreground [&_span]:text-[8px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
+  "mono mb-3 flex items-center gap-2.5 text-[11px] font-medium uppercase tracking-[.16em] " +
+  "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
   "[&_span]:text-[var(--dim)]";
 
 const BLOCK = "border-b border-border py-[22px]";
@@ -183,8 +183,8 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
       aria-labelledby="pending-connections-title"
     >
       <div className="flex flex-col justify-center gap-[3px]">
-        <span id="pending-connections-title" className="text-[9px] uppercase tracking-[.12em] text-[var(--iridescent)]">setup required</span>
-        <small className="text-[9px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
+        <span id="pending-connections-title" className="text-[10.5px] uppercase tracking-[.12em] text-[var(--iridescent)]">setup required</span>
+        <small className="text-[10.5px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
       </div>
       <div className="flex flex-col">
         {pending.map((connection) => (
@@ -193,14 +193,14 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
             key={connection.installation_id}
           >
             <span className="flex min-w-0 flex-col gap-0.5">
-              <strong className="truncate text-[10px] font-medium">{connectionLabel(connection)}</strong>
-              <small className="text-[9px] text-muted-foreground">{connection.account_type.toLowerCase()} · {connection.repositories.length} repositories</small>
+              <strong className="truncate text-[11.5px] font-medium">{connectionLabel(connection)}</strong>
+              <small className="text-[10.5px] text-muted-foreground">{connection.account_type.toLowerCase()} · {connection.repositories.length} repositories</small>
             </span>
             <form action={finishSetupAction}>
               <input type="hidden" name="installation_id" value={connection.installation_id} />
               <button
                 type="submit"
-                className="cursor-pointer rounded-[3px] border border-[var(--iridescent)] bg-transparent px-2 py-[5px] text-[9px] uppercase text-[var(--iridescent)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_30%,transparent)]"
+                className="cursor-pointer rounded-[3px] border border-[var(--iridescent)] bg-transparent px-2 py-[5px] text-[10.5px] uppercase text-[var(--iridescent)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_30%,transparent)]"
               >finish setup</button>
             </form>
           </div>
@@ -221,7 +221,7 @@ function FilterChip({
 }) {
   return (
     <Link
-      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[11px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
+      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[12px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
       data-active={active || undefined}
       href={target}
     >{children}</Link>
@@ -234,9 +234,9 @@ function FilterChip({
  *  looks, not by hue — the same rule CoverageRuler's cut marker follows. */
 function CoverageCell({ run }: { run: RunSummary }) {
   const view = coverageView(run);
-  if (view.kind === "no-read") return <span className="mono text-[10px] text-muted-foreground">no read</span>;
+  if (view.kind === "no-read") return <span className="mono text-[11.5px] text-muted-foreground">no read</span>;
   return (
-    <div className="mono flex items-center gap-[7px] text-[10px] text-foreground" title={view.chars ?? undefined}>
+    <div className="mono flex items-center gap-[7px] text-[11.5px] text-foreground" title={view.chars ?? undefined}>
       <span className="cov-track block h-1.5 w-[62px]">
         <span className="cov-fill block h-full" style={{ width: `${view.percent ?? 0}%` }} />
       </span>
@@ -280,7 +280,7 @@ function FacetBar({
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3">
       {facets.map((facet) => (
         <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
-          <span className="mono text-[10px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
+          <span className="mono text-[11px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
           {facet.options.map((option) => {
             const on = (selection[facet.key] ?? []).includes(option.value);
             // Frame and ink are computed separately and each utility is
@@ -311,10 +311,10 @@ function FacetBar({
                 title={atCap
                   ? `${option.count} of the newest ${totalFetched} runs fetched — the scope may hold more`
                   : `${option.count} of ${totalFetched} runs in scope`}
-                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[11px] no-underline ${frame} ${ink}`}
+                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[12px] no-underline ${frame} ${ink}`}
               >
                 {option.label}
-                <span className="text-[10px] tabular-nums opacity-60">{option.count}</span>
+                <span className="text-[11px] tabular-nums opacity-60">{option.count}</span>
               </Link>
             );
           })}
@@ -323,7 +323,7 @@ function FacetBar({
       {active && (
         <Link
           href={href(params, facetClearChanges())}
-          className="mono ml-auto text-[10.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
+          className="mono ml-auto text-[11.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
         >clear filters</Link>
       )}
     </div>
@@ -436,7 +436,7 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
  *  border belongs to the table, and a sticky header leaves it behind. */
 const TH =
   "mono sticky top-0 z-10 border-b border-border bg-background px-2.5 pt-2 pb-[7px] text-left " +
-  "text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+  "text-[11px] font-medium uppercase tracking-[.13em] text-muted-foreground";
 const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
@@ -456,7 +456,7 @@ function RunCells({
   return (
     <>
       <TableCell className={`${TD} text-right`}>
-        <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
+        <span className={"mono text-[16px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
       </TableCell>
@@ -471,27 +471,27 @@ function RunCells({
             // What distinguishes one run of a PR from the next is WHEN it ran,
             // so that is what the cell carries — still linking to this run's
             // own evidence.
-            <Link className="mono truncate pl-3 text-[10px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
+            <Link className="mono truncate pl-3 text-[11.5px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
               {relativeAge(run.scored_at)} ago
             </Link>
           ) : (
             <Link className="flex min-w-0 items-baseline gap-2 text-inherit no-underline" href={href(params, { run: String(run.verdict_id) })}>
-              <span className="mono flex-none text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
-              <strong className="min-w-0 flex-1 truncate text-xs font-normal">{run.title}</strong>
+              <span className="mono flex-none text-[11.5px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
+              <strong className="min-w-0 flex-1 truncate text-[14px] font-normal">{run.title}</strong>
             </Link>
           )}
         </div>
       </TableCell>
       <TableCell className={TD}><BandChip band={run.band} /></TableCell>
-      <TableCell className={`mono ${TD} text-[10px] text-muted-foreground`}>{run.tier}</TableCell>
+      <TableCell className={`mono ${TD} text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
       <TableCell className={TD}><CoverageCell run={run} /></TableCell>
-      <TableCell className={`mono ${TD} text-xs`}>
+      <TableCell className={`mono ${TD} text-[13px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
-      <TableCell className={`mono ${TD} text-[10px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      <TableCell className={`mono ${TD} text-[11.5px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
       </TableCell>
-      <TableCell className={`mono ${TD} text-right text-[10px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
+      <TableCell className={`mono ${TD} text-right text-[11.5px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
     </>
   );
 }
@@ -594,12 +594,12 @@ function RunTable({
 function Pager({ window, params }: { window: PageWindow<PrGroup>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
-    return <p className="mono mt-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
+    return <p className="mono mt-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
   }
   const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
   const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
   return (
-    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">
       <span>Showing {label}</span>
       <span className="h-px flex-1 bg-border" />
       {/* At a boundary the control renders as text, not a disabled link: a
@@ -621,14 +621,14 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
     <section className={`${CANVAS} px-5 pt-[18px] pb-12`} aria-labelledby="run-evidence-title">
       <header className="flex items-end justify-between gap-6 border-t border-border pt-4 pb-[22px] max-[900px]:flex-col max-[900px]:items-start">
         <div>
-          <p className="mono mb-[7px] text-[10px] text-muted-foreground">/runs/{detail.verdict_id} · {detail.repo} · #{detail.pr_number}</p>
+          <p className="mono mb-[7px] text-[11.5px] text-muted-foreground">/runs/{detail.verdict_id} · {detail.repo} · #{detail.pr_number}</p>
           <h2 id="run-evidence-title" className="font-heading max-w-[980px] text-[clamp(22px,2.2vw,30px)] font-semibold leading-[1.1] tracking-[-.035em]">{summary.title}</h2>
         </div>
         <div className="mono flex flex-none flex-col items-end max-[900px]:items-start">
           <strong className={"text-[36px] font-medium " + (detail.band === "flagged" ? "data-flag" : "data-clear")}>
             {detail.score.toFixed(2)}
           </strong>
-          <span className="text-[9px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
+          <span className="text-[10.5px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
         </div>
       </header>
 
@@ -652,7 +652,7 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
 
           <section className={BLOCK}>
             <h3 className={BLOCK_HEADING}>The read</h3>
-            <dl className="mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[10px]">
+            <dl className="mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]">
               <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 whitespace-pre-wrap">{detail.tier}</dd>
               <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
               <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
@@ -666,8 +666,8 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <h3 className={BLOCK_HEADING}>Findings <span>{detail.reasons.length}</span></h3>
             {detail.reasons.map((reason) => (
               <div className={FINDING} key={`${reason.rule}-${reason.label}`}>
-                <span className="mono data-flag text-[9px] uppercase">{reason.severity ?? "rule"}</span>
-                <div><code className="mono text-[10px]">{reason.rule}</code><p className="mt-[3px] text-xs text-muted-foreground">{reason.label}</p></div>
+                <span className="mono data-flag text-[10.5px] uppercase">{reason.severity ?? "rule"}</span>
+                <div><code className="mono text-[11.5px]">{reason.rule}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{reason.label}</p></div>
               </div>
             ))}
             {detail.reasons.length === 0 && <p className={EMPTY_NOTE}>No findings recorded.</p>}
@@ -677,8 +677,8 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <h3 className={BLOCK_HEADING}>Deviations <span>separate stream</span></h3>
             {detail.deviations.map((deviation) => (
               <div className={FINDING} key={`${deviation.type}-${deviation.description}`}>
-                <span className="mono data-flag text-[9px] uppercase">{deviation.severity}</span>
-                <div><code className="mono text-[10px]">{deviation.type}</code><p className="mt-[3px] text-xs text-muted-foreground">{deviation.description}</p></div>
+                <span className="mono data-flag text-[10.5px] uppercase">{deviation.severity}</span>
+                <div><code className="mono text-[11.5px]">{deviation.type}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{deviation.description}</p></div>
               </div>
             ))}
             {detail.deviations.length === 0 && <p className={EMPTY_NOTE}>No deviations recorded.</p>}
@@ -689,13 +689,13 @@ function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary 
             <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2.5">
               {detail.outcomes.map((outcome) => (
                 <div key={`${outcome.window_days}-${outcome.observed_at}`} className="flex flex-col border border-border bg-card p-3">
-                  <span className="mono text-[9px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
+                  <span className="mono text-[10.5px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
                   {/* Tone and word both come from the shared rule, so this tile
                       and the outcome column above cannot describe the same row
                       differently — and neither can the console, which renders
                       through the very same two functions. */}
-                  <strong className={"mono my-1 text-[15px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
-                  <small className="mono text-[9px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
+                  <strong className={"mono my-1 text-[16px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
+                  <small className="mono text-[10.5px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
                 </div>
               ))}
               {detail.outcomes.length === 0 && <p className={EMPTY_NOTE}>No outcome recorded yet.</p>}
@@ -876,7 +876,7 @@ export default async function DashboardPage({
           <button type="submit" className={SUBMIT_BUTTON}>filter</button>
         </form>}
         <Link href="/install/start" prefetch={false} className={CONNECT_LINK}>Connect repositories</Link>
-        <div className="mono ml-auto flex items-center gap-2.5 text-[10px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
+        <div className="mono ml-auto flex items-center gap-2.5 text-[11.5px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
           <span>{user.email}</span>
           <form action={signOutAction}><button type="submit" className="cursor-pointer border-0 bg-transparent text-inherit underline">sign out</button></form>
         </div>
@@ -901,7 +901,7 @@ export default async function DashboardPage({
         </main>
       ) : (
         <main>
-          <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[10px] uppercase tracking-[.15em] text-muted-foreground`}>
+          <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[11px] uppercase tracking-[.15em] text-muted-foreground`}>
             {/* `door.current`, not the hoisted `current`: only the discriminated
                 union narrows away null on this arm, which is the reason #99
                 gave one member per state instead of Exclude<> on a shared one.
@@ -944,19 +944,19 @@ export default async function DashboardPage({
                   name="q"
                   defaultValue={query}
                   placeholder="Search repo, PR, title…"
-                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[11px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[12.5px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
                 />
                 <button type="submit" className={SUBMIT_BUTTON}>search</button>
               </form>
               <ThresholdGear lens={lens} carried={carriedParams(params, ["threshold", "page"])} />
-              <span className="mono ml-auto text-[11px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
+              <span className="mono ml-auto text-[12px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
                 <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
               </span>
             </div>
             {groups.length === 0 ? (
               // An empty result under a filter and an empty ledger are
               // different facts, and neither is a blank table under a header.
-              <p className="mono border-b border-border px-2.5 py-9 text-center text-xs text-muted-foreground">
+              <p className="mono border-b border-border px-2.5 py-9 text-center text-[13px] text-muted-foreground">
                 {filtering
                   ? "No run matches this filter. The runs are there — the filter excludes them."
                   : "No runs in this space yet."}

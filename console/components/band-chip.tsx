@@ -13,7 +13,7 @@ export function BandChip({ band }: { band: Band | null }) {
   return (
     <span
       className={
-        "mono inline-flex items-center rounded-[3px] px-[7px] py-0.5 text-[10.5px] uppercase tracking-[.06em] " +
+        "mono inline-flex items-center rounded-[3px] px-[7px] py-0.5 text-[11.5px] uppercase tracking-[.06em] " +
         (flagged
           ? "bg-[color-mix(in_srgb,var(--flag)_9%,transparent)] text-[var(--flag)]"
           : "bg-[color-mix(in_srgb,var(--clear)_9%,transparent)] text-[var(--clear)]")
