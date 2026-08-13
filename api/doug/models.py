@@ -17,6 +17,20 @@ class AuthorType(StrEnum):
     AGENT = "agent"
 
 
+def is_bot_author(user_type: str | None, login: str | None) -> bool:
+    """One predicate for "this PR author is a GitHub App".
+
+    Shared by the webhook enqueue gate (api), reconcile's skip (worker),
+    and review's author classification — they must agree or a PR skipped
+    by one path is charged by another, and prose-coupled copies diverged
+    once already (see worker._skip_reason's docstring). A missing user is
+    not a bot: callers pass None fields through and proceed on False. The
+    isinstance guard is load-bearing for the webhook path, whose login
+    comes from an untrusted payload and need not be a string at all.
+    """
+    return user_type == "Bot" or (isinstance(login, str) and login.endswith("[bot]"))
+
+
 class PRMetadata(BaseModel):
     number: int
     title: str
@@ -116,6 +130,27 @@ class QueueSummary(BaseModel):
 class QueueResponse(BaseModel):
     summary: QueueSummary
     items: list[QueueItem]
+
+
+class ScoreboardResponse(BaseModel):
+    """Public Doug-on-Doug instrument. Distinct from the queue.
+
+    `miss_rate` is always null in this increment: the first publication
+    is the empty / not-yet-decidable state. `decidable` is therefore
+    always false. The label travels in the payload so a client cannot
+    invent a rate from the counts.
+    """
+
+    repo: str
+    adjudicated: int
+    pending: int
+    as_of: datetime
+    first_due: datetime | None
+    deep_reads: int | None
+    deep_read_cap: int
+    miss_rate: None
+    decidable: bool
+    label: str
 
 
 class RunCoverage(BaseModel):

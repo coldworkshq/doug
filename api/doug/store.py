@@ -25,6 +25,7 @@ import sys
 import threading
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
@@ -57,7 +58,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from . import migrations
 from .models import Band, Verdict
-from .reader import Coverage, ReaderVerdict
+from .reader import Coverage, ReaderVerdict, installation_scope
 
 metadata = MetaData()
 
@@ -634,13 +635,17 @@ def enabled() -> bool:
     return _get_engine() is not None
 
 
-def _as_utc(value: datetime) -> datetime:
+def _as_utc(value: datetime | None) -> datetime | None:
     """Normalise a DB timestamp to aware UTC.
 
     sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
     Claim holders compare the started_at they were handed against the row,
     so both sides of that equality have to share a timezone convention.
+    None passes through — instrument_snapshot's first_due is legitimately
+    absent on an empty ledger.
     """
+    if value is None:
+        return None
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
@@ -1235,6 +1240,163 @@ def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bo
             .values(count=deep_read_counters.c.count + 1)
         )
         return result.rowcount > 0
+
+
+# The $99 plan's pooled deep-read allowance, shown on the check-run meter
+# and public scoreboard. Distinct from reader.INSTALLATION_MONTHLY_READ_CAP
+# (4000), which is a runaway guard, not a plan limit.
+PLAN_DEEP_READ_CAP = 200
+
+
+@dataclass(frozen=True)
+class InstrumentSnapshot:
+    """The counters the check-run footer and public scoreboard both render.
+
+    `adjudicated` is count(outcome_jobs WHERE status='done') for one
+    installation+repo — never count(outcomes), which multi-counts.
+    `miss_rate` stays None until a later increment computes the
+    pre-registered table; the empty/undecidable state is the product.
+    """
+
+    adjudicated: int
+    pending: int
+    as_of: datetime
+    first_due: datetime | None
+    deep_reads: int | None
+    deep_read_cap: int = PLAN_DEEP_READ_CAP
+    miss_rate: None = None
+
+
+def instrument_snapshot(
+    installation_id: int,
+    github_repo_id: int,
+    *,
+    now: datetime | None = None,
+) -> InstrumentSnapshot | None:
+    """Publication counters for one repo. None when there is no ledger."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    as_of = now or datetime.now(UTC)
+    period = as_of.strftime("%Y-%m")
+    scope = installation_scope(installation_id)
+    scoped = and_(
+        outcome_jobs.c.installation_id == installation_id,
+        outcome_jobs.c.github_repo_id == github_repo_id,
+    )
+    with engine.connect() as conn:
+        # One statement, one snapshot: under READ COMMITTED each statement
+        # sees fresh data, so three separate SELECTs could count a job as
+        # neither adjudicated nor pending if it flipped between them.
+        adjudicated, pending, first_due = conn.execute(
+            select(
+                func.count().filter(outcome_jobs.c.status == "done"),
+                func.count().filter(outcome_jobs.c.status != "done"),
+                func.min(outcome_jobs.c.due_at).filter(
+                    outcome_jobs.c.status != "done"
+                ),
+            )
+            .select_from(outcome_jobs)
+            .where(scoped)
+        ).one()
+        meter = conn.execute(
+            select(deep_read_counters.c.count).where(
+                deep_read_counters.c.scope == scope,
+                deep_read_counters.c.period == period,
+            )
+        ).scalar_one_or_none()
+    return InstrumentSnapshot(
+        adjudicated=int(adjudicated),
+        pending=int(pending),
+        as_of=as_of,
+        first_due=_as_utc(first_due),
+        # Saturates at the plan cap: spend is enforced only by reader's 4000
+        # runaway guard, so the raw counter can pass 200 — but this meter
+        # reports plan usage, and "201/200" on the public surfaces would
+        # read as a billing bug rather than an exhausted allowance.
+        deep_reads=0 if meter is None else min(int(meter), PLAN_DEEP_READ_CAP),
+        deep_read_cap=PLAN_DEEP_READ_CAP,
+        miss_rate=None,
+    )
+
+
+def instrument_snapshot_for_repo(
+    repo: str,
+    *,
+    now: datetime | None = None,
+) -> InstrumentSnapshot | None:
+    """Resolve a display name to ids, then snapshot. Empty if unknown.
+
+    Showcase pages pin a full_name, not a github_repo_id. installation_repos
+    is the live mapping; review_jobs is the fallback for a name that has
+    been reviewed but not (yet) in the install ledger. An unknown name is
+    the empty instrument, not None — None is reserved for 'no ledger'.
+
+    Several active installations can share a full_name after a GitHub App
+    reinstall. Prefer the one that already has outcome_jobs for that
+    (installation, repo) pair; otherwise the lowest installation_id.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    as_of = now or datetime.now(UTC)
+    with engine.connect() as conn:
+        candidates = [
+            (int(r["installation_id"]), int(r["github_repo_id"]))
+            for r in conn.execute(
+                select(
+                    installation_repos.c.installation_id,
+                    installation_repos.c.github_repo_id,
+                ).where(
+                    installation_repos.c.full_name == repo,
+                    installation_repos.c.state == "active",
+                )
+            ).mappings()
+        ]
+        if not candidates:
+            # A reviewed-but-uninstalled name can also span several pairs
+            # (reinstall history in review_jobs), so the fallback feeds the
+            # same prefer-with-jobs rule below rather than trusting an
+            # unordered LIMIT 1 to land on the pair that has adjudications.
+            candidates = [
+                (int(r["installation_id"]), int(r["github_repo_id"]))
+                for r in conn.execute(
+                    select(
+                        review_jobs.c.installation_id,
+                        review_jobs.c.github_repo_id,
+                    )
+                    .where(review_jobs.c.repo_full_name == repo)
+                    .distinct()
+                ).mappings()
+            ]
+        if not candidates:
+            pair = None
+        else:
+            candidates.sort()
+            ids = [installation_id for installation_id, _ in candidates]
+            with_jobs = {
+                (int(installation_id), int(github_repo_id))
+                for installation_id, github_repo_id in conn.execute(
+                    select(
+                        outcome_jobs.c.installation_id,
+                        outcome_jobs.c.github_repo_id,
+                    )
+                    .where(outcome_jobs.c.installation_id.in_(ids))
+                    .distinct()
+                )
+            }
+            pair = next((c for c in candidates if c in with_jobs), candidates[0])
+    if pair is None:
+        return InstrumentSnapshot(
+            adjudicated=0,
+            pending=0,
+            as_of=as_of,
+            first_due=None,
+            deep_reads=0,
+            deep_read_cap=PLAN_DEEP_READ_CAP,
+            miss_rate=None,
+        )
+    return instrument_snapshot(pair[0], pair[1], now=as_of)
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:

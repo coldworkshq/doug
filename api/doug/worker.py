@@ -26,7 +26,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
 from .example_pack import CaptureScopeV0, NameVersionV0, PackScopeV0
-from .models import Band, Reason, Verdict
+from .models import Band, Reason, Verdict, is_bot_author
 
 _EXAMPLE_PACK_VERIFIER_VERSIONS = (
     NameVersionV0(name="import-settlement", version="v0"),
@@ -113,7 +113,9 @@ def _replay_recorded(
             findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
             coverage=cov,
         )
-    title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
+    title, summary = check_run.render(
+        existing["tier"], verdict, intent_read, cov, instrument=_instrument(job)
+    )
     # complete before post: a lost claim must not emit a check run that a
     # second holder will also post via this path.
     if not ingest.complete(
@@ -311,7 +313,9 @@ def process_job(job: dict) -> int | None:
                 Reason(rule="deviations-unrecorded", label=str(e)[:200], weight=0.0)
             )
 
-    title, summary = check_run.render(tier, verdict, intent_read, cov)
+    title, summary = check_run.render(
+        tier, verdict, intent_read, cov, instrument=_instrument(job)
+    )
     # The one outcome of the three that bought a model read, and the only
     # line that says "paid read" — see the replay branch above for why those
     # two must not read alike. Emitted before ingest.complete, not after:
@@ -423,13 +427,16 @@ def _skip_reason(p) -> str | None:
     is not the same test as `p.draft is True`. If the webhook's gate
     changes, this changes with it.
 
-    "The same gate" is two properties, and they are the ones to check when
+    "The same gate" is three properties, and they are the ones to check when
     either side moves: an unknown draft state — absent, null, not a
-    boolean — is "draft" on both sides, and repo ids that are not both
-    integers are "fork" on both sides rather than something to compare.
-    They diverged once already, when the webhook read a missing `draft` key
-    as "not a draft" and compared two absent ids as equal; the webhook was
-    the newer code, so this docstring was the thing that became false.
+    boolean — is "draft" on both sides, repo ids that are not both
+    integers are "fork" on both sides rather than something to compare, and
+    a GitHub App author (`user.type == "Bot"` or login ending in `[bot]`)
+    is "bot" on both sides. A missing user is not a bot: truncated
+    payloads proceed, matching review.py. They diverged once already, when
+    the webhook read a missing `draft` key as "not a draft" and compared
+    two absent ids as equal; the webhook was the newer code, so this
+    docstring was the thing that became false.
     """
     # Only an explicit draft=False proceeds. True, the UNSET sentinel, and a
     # genuinely missing field all fall through to "skip" — the same
@@ -444,9 +451,36 @@ def _skip_reason(p) -> str | None:
     # so an outside contributor must not be able to drive spend. UNSET or
     # missing ids are treated as a fork: the safe direction to be wrong in
     # is "skip".
-    if not isinstance(head_id, int) or not isinstance(base_id, int):
+    if not isinstance(head_id, int) or not isinstance(base_id, int) or head_id != base_id:
         return "fork"
-    return "fork" if head_id != base_id else None
+    # Same-repo Dependabot (and every other GitHub App) passes the fork
+    # gate. A deep read of that diff is spend against the plan cap for a
+    # change nobody asked Doug to grade. Detection is models.is_bot_author,
+    # shared with review.py and the webhook gate. A missing user is not a
+    # bot — truncated payloads proceed.
+    user = getattr(p, "user", None)
+    if user and is_bot_author(getattr(user, "type", None), getattr(user, "login", None)):
+        return "bot"
+    return None
+
+
+def _instrument(job: dict):
+    """Ledger counters for the check-run footer. None when there is no ledger.
+
+    Degrades to None (footer omitted) on any store error: by the time this
+    runs the model read is paid and the verdict durable, so a transient DB
+    failure over a cosmetic footer must not abort the check-run post — the
+    same contract save_deviations gets in process_job.
+    """
+    try:
+        return store.instrument_snapshot(job["installation_id"], job["github_repo_id"])
+    except Exception as e:  # noqa: BLE001 — advisory footer; verdict already durable
+        print(
+            f"doug: instrument snapshot skipped for job {job['id']} "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+        return None
 
 
 # Hard ceiling on how many open PRs reconcile will look at per repo. No

@@ -1001,20 +1001,24 @@ def _pr_payload(
     sha="a" * 40,
     base_sha="0" * 40,
     number=7,
+    user=None,
 ):
     head_repo = None if head_repo_id is None else {"id": head_repo_id}
+    pr = {
+        "number": number,
+        "draft": draft,
+        "head": {"sha": sha, "repo": head_repo},
+        "base": {
+            "sha": base_sha,
+            "repo": {"id": 987, "full_name": "drewjst/doug"},
+        },
+    }
+    if user is not None:
+        pr["user"] = user
     return {
         "action": action,
         "installation": INSTALLATION,
-        "pull_request": {
-            "number": number,
-            "draft": draft,
-            "head": {"sha": sha, "repo": head_repo},
-            "base": {
-                "sha": base_sha,
-                "repo": {"id": 987, "full_name": "drewjst/doug"},
-            },
-        },
+        "pull_request": pr,
     }
 
 
@@ -1073,6 +1077,38 @@ def test_a_fork_pull_request_is_not_enqueued(tmp_path, monkeypatch):
     assert _table(tmp_path, store.review_jobs) == []
 
 
+def test_a_bot_authored_pull_request_is_not_enqueued(tmp_path, monkeypatch):
+    """Dependabot (and every other GitHub App) opens same-repo PRs, so the
+    fork gate never fires. A deep read of that diff is spend against the
+    plan cap for a change nobody asked Doug to grade. Merges still clock —
+    this gate is the reader path only, matching the fork skip."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    payload = _pr_payload(user={"login": "dependabot[bot]", "type": "Bot"})
+    assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+    assert kicks == []
+
+
+def test_a_login_ending_in_bot_is_not_enqueued(tmp_path, monkeypatch):
+    """review.py treats login.endswith('[bot]') as a bot even when type is
+    not the literal 'Bot'. The enqueue gate must match that detection, or
+    a GitHub App that spells its type oddly still buys a deep read."""
+    _hook_env(tmp_path, monkeypatch)
+    payload = _pr_payload(user={"login": "renovate[bot]", "type": "User"})
+    assert _webhook("pull_request", payload).status_code == 202
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_missing_user_is_not_treated_as_a_bot(tmp_path, monkeypatch):
+    """A truncated payload is not a Dependabot PR. The safe direction for
+    a missing author is proceed — same as review.py, which only flags a
+    user that is actually present."""
+    kicks = _hook_env(tmp_path, monkeypatch)
+    assert _webhook("pull_request", _pr_payload()).status_code == 202
+    assert len(_table(tmp_path, store.review_jobs)) == 1
+    assert kicks == ["drain"]
+
+
 def test_a_pull_request_whose_fork_was_deleted_is_not_enqueued(tmp_path, monkeypatch):
     """head.repo is null once the fork is gone. It must fail the fork gate
     rather than raise — a KeyError here 500s and GitHub redelivers it."""
@@ -1114,6 +1150,7 @@ def _closed_payload(
     base_ref="main",
     base_repo_id=987,
     head_sha="a" * 40,
+    user=None,
 ):
     """A `closed` delivery. `merged` varies independently of the other two
     fields on purpose — see test_a_closed_but_unmerged_pull_request_writes_nothing.
@@ -1133,6 +1170,8 @@ def _closed_payload(
     }
     if head_sha is not None:
         pr["head"] = {"sha": head_sha, "repo": {"id": 987}}
+    if user is not None:
+        pr["user"] = user
     return {
         "action": "closed",
         "installation": INSTALLATION,
@@ -1168,6 +1207,20 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     # No read bought, and nothing queued that would buy one.
     assert _table(tmp_path, store.review_jobs) == []
     assert kicks == []
+
+
+def test_a_merged_bot_pull_request_still_starts_the_outcome_clock(tmp_path, monkeypatch):
+    """Bot-authored PRs skip the deep read, not the outcome loop. A
+    Dependabot merge that lands is still production, and prereg §2.4
+    counts it in the denominator. Putting a bot gate on _record_merge
+    would silently shrink the published miss-rate base."""
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload(user={"login": "dependabot[bot]", "type": "Bot"})
+    assert _webhook("pull_request", payload).status_code == 202
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert len(jobs) == 2
+    assert {job["window_days"] for job in jobs} == {14, 60}
+    assert _table(tmp_path, store.review_jobs) == []
 
 
 def test_the_outcome_windows_are_measured_from_the_merge_not_from_now(tmp_path, monkeypatch):
@@ -3577,6 +3630,57 @@ def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
     # caller-controlled key could have grown to 50 entries.
     assert isinstance(api._showcase_cache, tuple)
     assert len(api._showcase_cache) == 2
+
+
+def test_showcase_scoreboard_404s_when_the_repo_is_unset(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_SHOWCASE_REPO", raising=False)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/scoreboard").status_code == 404
+
+
+def test_showcase_scoreboard_serves_without_any_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    r = client.get("/v1/showcase/scoreboard")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["adjudicated"] == 0
+    assert body["pending"] == 0
+    assert body["miss_rate"] is None
+    assert body["decidable"] is False
+    assert body["label"] == "not yet decidable — a count, not a rate"
+    assert body["deep_read_cap"] == 200
+    assert body["repo"] == "drewjst/doug"
+
+
+def test_showcase_scoreboard_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    store.upsert_installation(1, "drewjst", "User", "active")
+    store.set_installation_repos(1, [(1, "drewjst/doug")], replace=True)
+    store.enqueue_outcome_jobs(
+        1, 1, 7, "a" * 40, datetime(2026, 8, 1, tzinfo=UTC), "main"
+    )
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    client = TestClient(app)
+    pinned = client.get("/v1/showcase/scoreboard").json()
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    attempted = client.get("/v1/showcase/scoreboard?repo=someone/private").json()
+    assert pinned["pending"] == 2  # 14- and 60-day windows
+    pinned.pop("as_of")
+    attempted.pop("as_of")
+    assert attempted == pinned
+
+
+def test_showcase_scoreboard_sets_a_public_cache_control_header(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    client = TestClient(app)
+    r = client.get("/v1/showcase/scoreboard")
+    assert r.headers["cache-control"] == "public, max-age=30"
 
 
 # ---------------------------------------------------------------------------

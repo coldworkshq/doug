@@ -29,6 +29,7 @@ import sys
 from .models import Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
+from .store import InstrumentSnapshot
 
 NAME = "Doug"
 # GitHub caps output.summary at 65535 chars and rejects the whole call over
@@ -68,6 +69,29 @@ DEVIATION_NOTE = (
 TRUNCATION_NOTICE = "\n\n_Truncated: this check run exceeded GitHub's summary limit._"
 
 
+def _date(value) -> str:
+    return value.strftime("%Y-%m-%d")
+
+
+def _footer(instrument: InstrumentSnapshot) -> list[str]:
+    line = (
+        f"adjudicated {instrument.adjudicated} · pending {instrument.pending} "
+        f"· as of {_date(instrument.as_of)}"
+    )
+    if instrument.adjudicated == 0 and instrument.first_due is not None:
+        line += f" · first due {_date(instrument.first_due)}"
+    # Two leading empties -> a blank line before the footer. The body's last
+    # line is a list item (or the Judged-against paragraph); one newline
+    # after a list item is a GFM lazy continuation, which would glue these
+    # lines into that bullet instead of rendering them as their own block.
+    lines = ["", "", line]
+    if instrument.deep_reads is not None:
+        lines.append(
+            f"deep reads {instrument.deep_reads}/{instrument.deep_read_cap} this cycle"
+        )
+    return lines
+
+
 def _headline(tier: str, verdict: Verdict) -> str:
     band = verdict.band.value.capitalize()
     if tier == "reader":
@@ -99,6 +123,7 @@ def render(
     verdict: Verdict,
     intent_read: IntentRead | None,
     coverage: Coverage | None,
+    instrument: InstrumentSnapshot | None = None,
 ) -> tuple[str, str]:
     """(title, summary_md) for one verdict."""
     title = _headline(tier, verdict)
@@ -150,10 +175,17 @@ def render(
             lines.append(f"- none (alignment {intent_read.alignment}/100)")
         lines += ["", f"Judged against: {', '.join(intent_read.refs) or 'no records'}."]
 
+    footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)
-    if len(body) > SUMMARY_LIMIT:
-        body = body[: SUMMARY_LIMIT - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
-    return title[:TITLE_LIMIT], body
+    combined = body + footer
+    if len(combined) > SUMMARY_LIMIT:
+        # Keep the instrument lines (and the truncation marker) as a
+        # reserved tail. Cutting from the front would drop the footer on
+        # the oversized-findings case the cap is sized for.
+        reserved = TRUNCATION_NOTICE + footer
+        cut = max(0, SUMMARY_LIMIT - len(reserved))
+        combined = body[:cut] + reserved
+    return title[:TITLE_LIMIT], combined
 
 
 def post(gh, owner: str, repo: str, head_sha: str, title: str, summary: str) -> None:

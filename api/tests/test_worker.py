@@ -566,6 +566,18 @@ def test_the_check_run_is_posted_against_the_jobs_head_sha(tmp_path, monkeypatch
     assert posted[0]["title"].lower().startswith("flagged")
 
 
+def test_the_posted_check_run_carries_the_instrument_footer(tmp_path, monkeypatch):
+    """render() can take an instrument and still never receive one. The
+    worker is the call site that makes the footer exist on a real PR."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    assert "adjudicated 0" in posted[0]["summary"]
+    assert "pending 0" in posted[0]["summary"]
+    assert "deep reads 0/200 this cycle" in posted[0]["summary"]
+
+
 def _intent(findings=None):
     return review.IntentRead(
         alignment=41,
@@ -1094,8 +1106,9 @@ def _pull(
     draft=False,
     head_repo_id=42,
     base_repo_id=42,
+    user=None,
 ):
-    return SimpleNamespace(
+    ns = SimpleNamespace(
         number=number,
         draft=draft,
         head=SimpleNamespace(sha=head_sha, repo=SimpleNamespace(id=head_repo_id)),
@@ -1104,6 +1117,9 @@ def _pull(
             repo=SimpleNamespace(id=base_repo_id, full_name="o/r"),
         ),
     )
+    if user is not None:
+        ns.user = user
+    return ns
 
 
 class FakeListGH:
@@ -1155,6 +1171,20 @@ def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         worker.app_auth, "installation_client",
         lambda i: FakeListGH([_pull(head_repo_id=99)]),
+    )
+    assert worker.reconcile_installation(1) == 0
+    assert ingest.claim() is None
+
+
+def test_reconcile_skips_bot_authored_prs(tmp_path, monkeypatch):
+    """Same-repo Dependabot PRs pass the fork gate. Reconcile must still
+    refuse to enqueue them, or a restart would buy the deep read the
+    webhook just skipped."""
+    _installed(tmp_path, monkeypatch)
+    bot = SimpleNamespace(login="dependabot[bot]", type="Bot")
+    monkeypatch.setattr(
+        worker.app_auth, "installation_client",
+        lambda i: FakeListGH([_pull(user=bot)]),
     )
     assert worker.reconcile_installation(1) == 0
     assert ingest.claim() is None
@@ -1909,6 +1939,42 @@ def test_skip_reason_treats_missing_or_unset_repo_ids_as_fork():
 
     missing_head = SimpleNamespace(draft=False, head=SimpleNamespace(sha="a" * 40))
     assert worker._skip_reason(missing_head) == "fork"
+
+
+def test_skip_reason_returns_bot_for_a_bot_user():
+    """The webhook and reconcile share this gate. A GitHub App author is
+    not a draft and not a fork — without this branch, Dependabot buys a
+    deep read on every open PR the App can see."""
+    bot = SimpleNamespace(
+        draft=False,
+        head=SimpleNamespace(sha="a" * 40, repo=SimpleNamespace(id=42)),
+        base=SimpleNamespace(repo=SimpleNamespace(id=42, full_name="o/r")),
+        user=SimpleNamespace(login="dependabot[bot]", type="Bot"),
+    )
+    assert worker._skip_reason(bot) == "bot"
+
+    suffix_only = SimpleNamespace(
+        draft=False,
+        head=bot.head,
+        base=bot.base,
+        user=SimpleNamespace(login="renovate[bot]", type="User"),
+    )
+    assert worker._skip_reason(suffix_only) == "bot"
+
+    human = SimpleNamespace(
+        draft=False,
+        head=bot.head,
+        base=bot.base,
+        user=SimpleNamespace(login="alice", type="User"),
+    )
+    assert worker._skip_reason(human) is None
+
+    missing = SimpleNamespace(
+        draft=False,
+        head=bot.head,
+        base=bot.base,
+    )
+    assert worker._skip_reason(missing) is None
 
 
 def test_reconcile_skips_a_pr_whose_base_repo_id_disagrees_with_the_store(tmp_path, monkeypatch):
