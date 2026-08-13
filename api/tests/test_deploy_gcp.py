@@ -494,11 +494,15 @@ def test_gcloudignore_keeps_every_tracked_web_source_file_in_the_upload():
     compiled, so it is exempt.
     """
     root = Path(__file__).resolve().parents[2]
+    # -z, not .split(): git C-quotes unusual paths and .split() breaks on any
+    # whitespace, so `web/app/case study/page.tsx` would silently become two
+    # fragments that match nothing and pass — dropping the very file this pin
+    # is meant to cover instead of failing.
     tracked = subprocess.run(
-        ["git", "ls-files", "web", "console"],
+        ["git", "ls-files", "-z", "web", "console"],
         cwd=root, capture_output=True, text=True, check=True,
-    ).stdout.split()
-    compiled = [p for p in tracked if not p.endswith(".md")]
+    ).stdout.split("\0")
+    compiled = [p for p in tracked if p and not p.endswith(".md")]
     # Guard the guard: an empty list would make every assertion below vacuous.
     assert len(compiled) > 100, f"expected a real source tree, got {len(compiled)}"
     assert any(p.startswith("web/app/docs/") for p in compiled), \
@@ -510,17 +514,31 @@ def test_gcloudignore_keeps_every_tracked_web_source_file_in_the_upload():
     with tempfile.TemporaryDirectory() as tmp:
         scratch = Path(tmp)
         subprocess.run(["git", "init", "-q"], cwd=scratch, check=True)
+        # The oracle must see .gcloudignore and NOTHING else. A scratch repo
+        # still inherits the developer's global core.excludesFile (and any
+        # info/exclude an init.templateDir dropped in), so a global gitignore
+        # holding a bare `docs`/`out`/`dist` would report real web sources as
+        # stripped and fail this test on that machine while CI stayed green.
+        (scratch / ".git" / "info" / "exclude").write_text("")
         (scratch / ".gitignore").write_text((root / ".gcloudignore").read_text())
         for rel in compiled:
             target = scratch / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.touch()
-        # check-ignore prints the paths it WOULD exclude; exit 1 == none.
-        ignored = subprocess.run(
-            ["git", "check-ignore", "--stdin"],
-            cwd=scratch, input="\n".join(compiled),
+        # check-ignore prints the paths it WOULD exclude; 0 = some ignored,
+        # 1 = none, anything else is a real error. Reading stdout alone would
+        # turn a git failure into an empty list and a silent pass — the exact
+        # cannot-fail mode this pin exists to prevent.
+        proc = subprocess.run(
+            ["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "-z", "--stdin"],
+            cwd=scratch, input="\0".join(compiled),
             capture_output=True, text=True,
-        ).stdout.split()
+        )
+        assert proc.returncode in (0, 1), (
+            f"git check-ignore failed ({proc.returncode}), so this pin proved "
+            f"nothing: {proc.stderr.strip()}"
+        )
+        ignored = [p for p in proc.stdout.split("\0") if p]
 
     assert not ignored, (
         "these tracked sources would be stripped from the Cloud Build upload "
