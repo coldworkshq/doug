@@ -81,8 +81,9 @@ export function mergeCaption(
   totalMerges: number,
 ): string {
   if (totalMerges <= 1) return "";
-  const role = merge.publication_governing
+  // The ROLE only. `governingLine` already renders `publication_note`, and a
+  // page that calls both would print the same sentence twice per merge.
+  return merge.publication_governing
     ? "governs the published record"
     : "not the governing merge";
-  return merge.publication_note ? `${role} — ${merge.publication_note}` : role;
 }

@@ -66,7 +66,7 @@ const EMPTY_NOTE = "text-xs text-muted-foreground";
 /** The label/value grammar of the dashboard's evidence pane, verbatim. */
 const DL = "mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]";
 
-type Failure = "missing" | "expired" | "unavailable";
+type Failure = "missing" | "expired" | "unavailable" | "unreachable";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -118,14 +118,20 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
   );
 }
 
-/** Three states, three sentences, no shared "something went wrong".
+/** Four states, four sentences, no shared "something went wrong".
  *
  *  A table rather than a branch: the arm is chosen once, at the fetch, by the
  *  API's own status contract, and this only prints what that choice already
  *  decided. `expired` reuses the words #99/#100 shipped for
  *  `reauthorize_required` rather than inventing a second expiry story, and
  *  the control it asks for — sign out — is the one already in the header
- *  above. */
+ *  above.
+ *
+ *  `unreachable` is the fourth arm, and it exists because the other three are
+ *  each a claim. It is the only one reached without a status the API chose,
+ *  so it is the only one that names no cause and asks for nothing: telling a
+ *  reader to sign back in over a dropped connection would be exactly the
+ *  confident false claim this document is built to make impossible. */
 const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string }> = {
   missing: {
     route: "/prs",
@@ -150,6 +156,15 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
       "Doug still has your connection. What expired is the repository scope GitHub " +
       "granted when you signed in — it lasts eight hours, and only a new sign-in can " +
       "renew it. Sign out from the header above, then sign back in.",
+  },
+  unreachable: {
+    route: "/prs",
+    heading: "Doug could not load this receipt.",
+    body:
+      "The request came back with nothing this page can read. Which link in the chain " +
+      "gave way is not something Doug can tell from here, so it is not named — and " +
+      "nothing about your session or the pull request is claimed either way. Nothing " +
+      "is rendered below because nothing is known.",
   },
 };
 
@@ -432,7 +447,13 @@ export default async function ReceiptPage({
     // checks it BEFORE the token precisely so a misconfiguration is not
     // reported as a bad credential, and this must not undo that.
     else if (status === 503) failure = "unavailable";
-    else failure = "expired";
+    // 401 ONLY. `sessionJson` throws status:null on a transport failure AND on
+    // a body the validator rejects; a 500 or 502 is neither. Routing any of
+    // those to the expiry copy tells a reader to sign out and back in over a
+    // network blip — a confident false claim on the one surface built to make
+    // those impossible.
+    else if (status === 401) failure = "expired";
+    else failure = "unreachable";
     loaded = { receipt: null, failure };
   }
 

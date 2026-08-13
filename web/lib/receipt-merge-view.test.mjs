@@ -99,8 +99,17 @@ test("a non-governing merge names which merge governs instead of vanishing", () 
     { publication_governing: false, publication_note: "superseded by a later merge" },
     2,
   );
-  assert.ok(caption.includes("superseded by a later merge"), "the note renders verbatim");
-  assert.ok(/not.*governing/i.test(caption));
+  assert.equal(caption, "not the governing merge");
+  // The regression this exact equality exists to prevent: the caption used to
+  // append `publication_note`, which `governingLine` ALSO returns, so a page
+  // rendering both — the receipt screen renders both, by design — printed the
+  // same sentence twice for every merge. A `.includes()` check here would pass
+  // on the appending version.
+  assert.equal(
+    caption.includes("superseded by a later merge"),
+    false,
+    "the caption echoes the note governingLine already renders",
+  );
 });
 
 test("the governing merge is named as governing", () => {
@@ -108,7 +117,7 @@ test("the governing merge is named as governing", () => {
     { publication_governing: true, publication_note: "governing merge" },
     2,
   );
-  assert.ok(/governs/i.test(caption));
+  assert.equal(caption, "governs the published record");
 });
 
 test("a single merge needs no governing qualifier", () => {
