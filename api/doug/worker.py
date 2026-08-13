@@ -827,6 +827,21 @@ def reconcile_outcomes(installation_id: int) -> int:
                     file=sys.stderr,
                 )
                 continue
+            # Same length guard api.py's _text applies to the webhook's copy
+            # of this fact, and for the same reason: base_ref is VARCHAR(200)
+            # while GitHub allows a longer branch name, and Postgres answers
+            # an over-long INSERT with StringDataRightTruncation. Here that
+            # exception would escape both try blocks and unwind the whole
+            # installation — every repo after this one skipped, on this pass
+            # and every later one. sqlite stores the long value happily, so a
+            # green local suite is not evidence about this.
+            if len(base_ref) > store.outcome_jobs.c.base_ref.type.length:
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    f"(base.ref is {len(base_ref)} chars, longer than the column)",
+                    file=sys.stderr,
+                )
+                continue
             try:
                 detail = gh.rest.pulls.get(owner=owner, repo=name, pull_number=number)
                 merge_sha = detail.raw_response.json().get("merge_commit_sha")
@@ -838,10 +853,14 @@ def reconcile_outcomes(installation_id: int) -> int:
                     file=sys.stderr,
                 )
                 continue
-            if not isinstance(merge_sha, str) or not merge_sha:
+            if (
+                not isinstance(merge_sha, str)
+                or not merge_sha
+                or len(merge_sha) > store.outcome_jobs.c.merge_commit_sha.type.length
+            ):
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
-                    "(missing merge_commit_sha)",
+                    "(missing or over-long merge_commit_sha)",
                     file=sys.stderr,
                 )
                 continue

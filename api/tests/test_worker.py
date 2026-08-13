@@ -1532,6 +1532,29 @@ def test_reconcile_outcomes_ignores_an_old_merge_that_was_touched_recently(
     assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
 
 
+def test_reconcile_outcomes_skips_a_branch_name_too_long_for_the_column(
+    tmp_path, monkeypatch, capsys
+):
+    """outcome_jobs.base_ref is VARCHAR(200) and GitHub allows a longer
+    branch name; Postgres answers an over-long INSERT with
+    StringDataRightTruncation. _record_merge guards this on the webhook's
+    copy of the same fact (_text with the column) — unguarded here the
+    exception escapes both try blocks and unwinds the installation, so every
+    repo after this one is skipped on this pass and every later one. sqlite
+    stores the long value happily, which is why this asserts the skip
+    directly rather than trusting the suite's own database to raise.
+    """
+    _installed(tmp_path, monkeypatch)
+    long_ref = "b" * (store.outcome_jobs.c.base_ref.type.length + 1)
+    pull = _closed_pull(number=11, merged_at=NOW, base_ref=long_ref)
+    gh = FakeReconcileGH([pull], {11: "b" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+    assert "longer than the column" in capsys.readouterr().err
+
+
 def test_reconcile_outcomes_skips_a_pr_whose_base_repo_disagrees_with_the_ledger(
     tmp_path, monkeypatch, capsys
 ):

@@ -758,6 +758,17 @@ reconcile_job() {
   # No DOUG_PREREG_HASH: reconciliation only enqueues outcome_jobs rows, it
   # never adjudicates or publishes anything, so the hash preflight the
   # adjudicator requires does not apply here.
+  #
+  # 3600s, the adjudicator's timeout, not the 15 minutes this sweep's per-run
+  # work looks like it needs. reconcile_all_outcomes walks installations
+  # sequentially and store.active_installations() has no ORDER BY, so a task
+  # killed at the timeout has no resume point and no fairness: with
+  # --max-retries 0 the next execution starts from the same list head and
+  # whichever tenants sort last are never reconciled at all, while the
+  # symptom in the console is an ordinary timeout rather than a coverage gap.
+  # The headroom is what keeps that failure hypothetical; if a sweep ever
+  # approaches an hour, the fix is batching with a durable cursor, not a
+  # bigger number here.
   gcloud run jobs deploy "$RECONCILE_JOB" \
     --image "$api_image" \
     --project "$PROJECT" --region "$REGION" \
@@ -766,7 +777,7 @@ reconcile_job() {
     --set-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest" \
     --set-env-vars "DOUG_GITHUB_APP_ID=4450932" \
-    --memory 512Mi --cpu 1 --tasks 1 --max-retries 0 --task-timeout 900s
+    --memory 512Mi --cpu 1 --tasks 1 --max-retries 0 --task-timeout 3600s
   echo "outcome reconciler deployed from $api_image"
 }
 

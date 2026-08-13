@@ -74,14 +74,21 @@ def _startup_reconcile() -> None:
     """Heal the queue this instance came up to, then work it.
 
     Three pieces belong to the same catch-up, not two: reconcile_all,
-    reconcile_all_outcomes, and drain. reconcile_all only enqueues, so a
-    drain running ahead of it would drain whatever the last delivery left
-    and stop, leaving everything this sweep discovers waiting for a
-    delivery that already went missing once — why it runs before drain.
-    reconcile_all_outcomes only enqueues too, but into outcome_jobs, which
-    this drain never claims either way (a separate Job works that lane);
-    it runs in between because it belongs to the same cold-start catch-up,
-    not because drain depends on it.
+    drain, and reconcile_all_outcomes, in that order. reconcile_all only
+    enqueues, so a drain running ahead of it would drain whatever the last
+    delivery left and stop, leaving everything this sweep discovers waiting
+    for a delivery that already went missing once — why it runs before
+    drain. reconcile_all_outcomes only enqueues too, but into outcome_jobs,
+    which this drain never claims either way (a separate Job works that
+    lane), so drain does not depend on it — and it therefore goes LAST,
+    the same order _reconcile_then_drain uses on installation.created and
+    for the same reason. It is the expensive half in GitHub calls (a
+    pulls.get per merge in the window, per repo, per installation, see
+    below) and the installation token's rate limit is shared with the
+    review lane: ahead of drain, an outcome sweep large enough to exhaust
+    it would starve the paid, user-visible reviews, which fail their jobs
+    and then wait out FAILED_REVIVE_COOLOFF_SECONDS. Behind drain, the
+    rate limit is spent in the order the two lanes are worth.
 
     This runs on every cold start, which on a scale-to-zero deployment means
     often, and nothing here rate-limits it or elects a leader. What bounds
@@ -132,9 +139,9 @@ def _startup_reconcile() -> None:
             print(f"doug: drift check failed ({type(e).__name__}: {e})", file=sys.stderr)
         n = worker.reconcile_all()
         print(f"doug: reconcile enqueued {n} job(s)", file=sys.stderr)
+        worker.drain()
         m = worker.reconcile_all_outcomes()
         print(f"doug: outcome reconcile enqueued {m} window(s)", file=sys.stderr)
-        worker.drain()
     except Exception as e:  # noqa: BLE001 — catch-up is best-effort, never fatal
         print(f"doug: startup reconcile failed ({type(e).__name__}: {e})", file=sys.stderr)
 

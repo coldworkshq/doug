@@ -730,7 +730,12 @@ def test_reconcile_job_deploys_the_live_api_image_under_the_adjudicator_sa_with_
     assert "--cpu 1" in deploy
     assert "--tasks 1" in deploy
     assert "--max-retries 0" in deploy
-    assert "--task-timeout 900s" in deploy
+    # The adjudicator's hour, not a smaller number sized to what one sweep
+    # looks like it needs: a task killed at the timeout has no resume point
+    # and active_installations() has no ORDER BY, so the tenants that sort
+    # last would simply never be reconciled, and --max-retries 0 means
+    # nothing re-runs to catch them.
+    assert "--task-timeout 3600s" in deploy
     assert "--command python" in deploy
     assert "--args=-m,doug.reconcile_worker" in deploy
     assert "--service-account doug-adjudicator-sa@doug-prod0.iam.gserviceaccount.com" in deploy

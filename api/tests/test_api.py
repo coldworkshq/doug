@@ -309,6 +309,14 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
     row this sweep is about to discover then waits for some unrelated
     delivery to kick a drain — which on the quiet repo whose missed
     deliveries stranded them is the case this exists for.
+
+    The outcome sweep is pinned on the far side of the drain, and that is a
+    behavior too, not an arrangement: it spends a pulls.get per merge in its
+    window on an installation token whose rate limit the review lane shares,
+    while drain never claims outcome_jobs and so cannot depend on it. Ahead
+    of the drain it can exhaust that limit and starve the paid reviews;
+    behind it, reviews are served first. Same order _reconcile_then_drain
+    uses on installation.created.
     """
     calls: list[str] = []
     drained = threading.Event()
@@ -336,8 +344,11 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
         # this test by construction, and a fixed pause would be either flaky
         # or slow and would still prove nothing about the ordering.
         assert drained.wait(timeout=5), "startup never reached the drain"
+    # The join is what makes the outcome sweep's position assertable: it now
+    # runs after the Event above is set, so only a finished thread proves it
+    # ran at all.
     _join_startup_threads()
-    assert calls == ["reconcile", "outcome-reconcile", "drain"]
+    assert calls == ["reconcile", "drain", "outcome-reconcile"]
 
 
 def test_startup_logs_how_many_outcome_windows_reconcile_enqueued(monkeypatch, capsys):

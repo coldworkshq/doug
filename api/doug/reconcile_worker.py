@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 
-from . import app_auth, worker
+from . import app_auth, store, worker
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,16 @@ def run() -> ReconcileSummary:
             "DOUG_GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be configured "
             "before reconciling"
         )
+    # Per-tenant failures are best-effort (see the module docstring); a
+    # missing ledger is not one of those. Without DATABASE_URL every store
+    # call answers as if the world were empty — active_installations() is []
+    # and reconcile_all_outcomes() returns 0 — so this Job would report
+    # {"windows_enqueued": 0} and go green while healing nothing, which is
+    # the exact silent gap it was built to close. Its own secret binding is
+    # separate from the API service's, so this can drift on its own.
+    # outcome_queue._engine fails the sibling Job loud for the same reason.
+    if not store.enabled():
+        raise RuntimeError("DATABASE_URL must be configured before reconciling")
     return ReconcileSummary(windows_enqueued=worker.reconcile_all_outcomes())
 
 
