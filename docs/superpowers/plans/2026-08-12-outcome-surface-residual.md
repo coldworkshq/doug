@@ -804,13 +804,15 @@ test("a recorded merged head sha renders it", () => {
   assert.equal(mergedHeadLine({ merged_head_sha: "fe307ab6" }), "fe307ab6");
 });
 
-test("a non-governing merge names which merge governs instead of vanishing", () => {
+test("a non-governing merge is named as not governing", () => {
   const caption = mergeCaption(
     { publication_governing: false, publication_note: "superseded by a later merge" },
     2,
   );
-  assert.ok(caption.includes("superseded by a later merge"), "the note renders verbatim");
-  assert.ok(/not.*governing/i.test(caption));
+  assert.equal(caption, "not the governing merge");
+  // The note is governingLine's job. Repeating it here would print the same
+  // sentence twice per merge on the page.
+  assert.ok(!caption.includes("superseded by a later merge"));
 });
 
 test("the governing merge is named as governing", () => {
@@ -818,7 +820,7 @@ test("the governing merge is named as governing", () => {
     { publication_governing: true, publication_note: "governing merge" },
     2,
   );
-  assert.ok(/governs/i.test(caption));
+  assert.equal(caption, "governs the published record");
 });
 
 test("a single merge needs no governing qualifier", () => {
@@ -922,10 +924,11 @@ export function mergeCaption(
   totalMerges: number,
 ): string {
   if (totalMerges <= 1) return "";
-  const role = merge.publication_governing
+  // The ROLE only. `governingLine` already renders `publication_note`, and a
+  // page that calls both would print the same sentence twice per merge.
+  return merge.publication_governing
     ? "governs the published record"
     : "not the governing merge";
-  return merge.publication_note ? `${role} — ${merge.publication_note}` : role;
 }
 ```
 
@@ -991,11 +994,17 @@ Error states, per spec §2.4 — each is a distinct true statement:
     // checks it BEFORE the token precisely so a misconfiguration is not
     // reported as a bad credential, and this must not undo that.
     else if (status === 503) failure = "unavailable";
-    else failure = "expired";
+    // 401 ONLY. `sessionJson` throws status:null on a transport failure AND on
+    // a body the validator rejects; a 500 or 502 is neither. Routing any of
+    // those to the expiry copy tells a reader to sign out and back in over a
+    // network blip — a confident false claim on the one surface built to make
+    // those impossible.
+    else if (status === 401) failure = "expired";
+    else failure = "unreachable";
   }
 ```
 
-Copy for each: `missing` → "No receipt for this pull request."; `unavailable` → "The ledger is not answering."; `expired` → reuse the existing `reauthorize_required` treatment from #99/#100 rather than inventing a second expiry story.
+Copy for each: `missing` → "No receipt for this pull request."; `unavailable` → "The ledger is not answering."; `expired` → reuse the existing `reauthorize_required` treatment from #99/#100 rather than inventing a second expiry story; `unreachable` → "Doug could not load this receipt." with no instruction to sign in and no claim about why.
 
 A PR with verdicts but no merges is the ordinary open-PR case, not an error: render `latest_verdict` and the literal line "not merged — no window has started".
 

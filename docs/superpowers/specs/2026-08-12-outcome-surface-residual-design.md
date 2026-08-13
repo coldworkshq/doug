@@ -185,7 +185,15 @@ rhythm. No third data colour (the CVD rule at `console/app/globals.css:160-196`)
   say "you don't have access", which would re-leak the existence signal the API's 404
   exists to suppress.
 - **401** — session expired. Reuse the existing `reauthorize_required` treatment shipped
-  in #99/#100 rather than inventing a second expiry story.
+  in #99/#100 rather than inventing a second expiry story. **401 only** — see below.
+- **Anything else, including no status at all** — an honest "could not load", with no
+  instruction to sign in. `sessionJson` throws `status: null` on a transport failure
+  (timeout, DNS, connection refused) *and* on a body the validator rejects, and neither is
+  an expired session. A 500 or a 502 is not one either. **Amended 2026-08-12** — this arm
+  did not exist in the first draft of this section, which routed every non-404, non-503
+  case to the expiry copy. That told a reader to sign out and back in for a network blip
+  or a malformed payload, which is a confident false claim on the one surface built to
+  make confident false claims impossible. Four arms, not three.
 - **503** — deployment fault (no ledger, no operator secret). Render as "the ledger is
   not answering", never as a credential problem: the API checks 503 *before* the token
   precisely so a misconfiguration is not reported as a bad credential.
