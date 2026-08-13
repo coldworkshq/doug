@@ -309,6 +309,14 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
     row this sweep is about to discover then waits for some unrelated
     delivery to kick a drain — which on the quiet repo whose missed
     deliveries stranded them is the case this exists for.
+
+    The outcome sweep is pinned on the far side of the drain, and that is a
+    behavior too, not an arrangement: it spends a pulls.get per merge in its
+    window on an installation token whose rate limit the review lane shares,
+    while drain never claims outcome_jobs and so cannot depend on it. Ahead
+    of the drain it can exhaust that limit and starve the paid reviews;
+    behind it, reviews are served first. Same order _reconcile_then_drain
+    uses on installation.created.
     """
     calls: list[str] = []
     drained = threading.Event()
@@ -317,12 +325,17 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
         calls.append("reconcile")
         return 3
 
+    def fake_reconcile_outcomes() -> int:
+        calls.append("outcome-reconcile")
+        return 2
+
     def fake_drain() -> int:
         calls.append("drain")
         drained.set()
         return 0
 
     monkeypatch.setattr(worker, "reconcile_all", fake_reconcile)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", fake_reconcile_outcomes)
     monkeypatch.setattr(worker, "drain", fake_drain)
     _startup_guards(monkeypatch, app_enabled=True, ledger=True)
 
@@ -331,8 +344,23 @@ def test_startup_reconciles_the_backlog_before_it_drains_it(monkeypatch):
         # this test by construction, and a fixed pause would be either flaky
         # or slow and would still prove nothing about the ordering.
         assert drained.wait(timeout=5), "startup never reached the drain"
+    # The join is what makes the outcome sweep's position assertable: it now
+    # runs after the Event above is set, so only a finished thread proves it
+    # ran at all.
     _join_startup_threads()
-    assert calls == ["reconcile", "drain"]
+    assert calls == ["reconcile", "drain", "outcome-reconcile"]
+
+
+def test_startup_logs_how_many_outcome_windows_reconcile_enqueued(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 5)
+    monkeypatch.setattr(worker, "drain", lambda: None)
+    _startup_guards(monkeypatch, app_enabled=True, ledger=True)
+
+    with TestClient(app):
+        pass
+    _join_startup_threads()
+    assert "outcome reconcile enqueued 5 window(s)" in capsys.readouterr().err
 
 
 def test_startup_serves_before_the_reconcile_it_started_finishes(monkeypatch):
@@ -355,6 +383,7 @@ def test_startup_serves_before_the_reconcile_it_started_finishes(monkeypatch):
         return 0
 
     monkeypatch.setattr(worker, "reconcile_all", slow_reconcile)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: 0)
     _startup_guards(monkeypatch, app_enabled=True, ledger=True)
 
@@ -451,6 +480,7 @@ def test_startup_warns_when_verdicts_reference_installations_the_ledger_lacks(
     _api_db(tmp_path, monkeypatch)
     _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
     monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
     from doug.api import _startup_reconcile
 
@@ -473,6 +503,7 @@ def test_startup_warns_when_verdicts_reference_repos_the_ledger_lacks(
     store.upsert_installation(150424894, "drewjst", "User", "active")
     _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=1)
     monkeypatch.setattr(worker, "reconcile_all", lambda: 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
     from doug.api import _startup_reconcile
 
@@ -492,6 +523,7 @@ def test_a_failing_drift_check_never_blocks_the_catchup_sweep(
     _api_db(tmp_path, monkeypatch)
     ran = []
     monkeypatch.setattr(worker, "reconcile_all", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(worker, "reconcile_all_outcomes", lambda: 0)
     monkeypatch.setattr(worker, "drain", lambda: None)
 
     def _boom():
@@ -545,6 +577,13 @@ def _hook_env(tmp_path, monkeypatch) -> list:
         "reconcile_installation",
         lambda i, *, trigger="live": kicks.append((i, trigger)),
     )
+    # Silent by default — does NOT append to kicks, unlike the stub above.
+    # Every _hook_env caller that asserts kicks by exact equality (most of
+    # them) is testing something unrelated to outcome reconciliation, and a
+    # stub that recorded a kick here would fail all of them for a fact they
+    # do not test. test_installation_created_reconciles_outcomes_too
+    # re-monkeypatches this one, deliberately, to verify it fires.
+    monkeypatch.setattr(worker, "reconcile_outcomes", lambda i: 0)
     return kicks
 
 
@@ -855,6 +894,27 @@ def test_the_installation_created_handler_asks_for_the_sweeps_terms(tmp_path, mo
     assert kicks == [(150424894, "reconcile"), "drain"]
 
 
+def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
+    """The outcome lane's own catch-up, on the same event review's already
+    gets — a fresh install may already have merges from before the App was
+    on it, the same reason reconcile_installation runs here at all.
+
+    Ordered after drain, not between reconcile_installation and drain: the
+    two lanes are independent (drain only ever claims review_jobs, never
+    outcome_jobs), so drain runs first and this call can no longer delay a
+    fresh install's first check run, even if it were ever slow or raised.
+    """
+    kicks = _hook_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        worker, "reconcile_outcomes", lambda i: kicks.append(("outcomes", i))
+    )
+    _webhook(
+        "installation",
+        {"action": "created", "installation": INSTALLATION, "repositories": []},
+    )
+    assert kicks == [(150424894, "reconcile"), "drain", ("outcomes", 150424894)]
+
+
 def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     tmp_path, monkeypatch, capsys
 ):
@@ -901,6 +961,11 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     # Only the drain is cut: it would otherwise run the real pipeline against
     # whatever this test revived, which is the thing being asserted about.
     monkeypatch.setattr(worker, "drain", lambda *a, **k: None)
+    # Defensive, not load-bearing today: this fixture's PR has no merged_at,
+    # so reconcile_outcomes' pulls.get never runs regardless. Stubbed anyway
+    # (silent no-op, same as _hook_env's own stub for this function) so this
+    # test stays robust if the fixture above ever grows a merged_at.
+    monkeypatch.setattr(worker, "reconcile_outcomes", lambda i: 0)
 
     _webhook(
         "installation",

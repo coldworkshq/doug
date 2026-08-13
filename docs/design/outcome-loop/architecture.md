@@ -76,6 +76,19 @@ on adjudicated data · `[later]` has a named trigger, not a date.
                                                    │ censored (all else)             │
                                                    └─────────────────────────────────┘
 
+                                                   ┌─────────────────────────────────┐
+                    Cloud Scheduler ──────────────►│ doug-outcome-reconciler ·       │
+                    (every 6h) [v1]                │ Cloud Run Job, 512Mi      [v1]  │
+                                                   │                                 │
+                                                   │ doug.reconcile_worker: no       │
+                                                   │ model spend — pulls.list +      │
+                                                   │ pulls.get only, re-derives      │
+                                                   │ closed PRs (14-day lookback)    │
+                                                   │ → enqueue_outcome_jobs, same    │
+                                                   │ ON CONFLICT dedupe as the       │
+                                                   │ merge webhook                   │
+                                                   └─────────────────────────────────┘
+
   ┌───────────────────────────────┐    ┌──────────────────────────────────────────┐
   │  doug-web · Cloud Run [live]  │    │  doug-mcp · Cloud Run            [v1.5]  │
   │                               │    │  GATED: ships only when it can answer    │
@@ -140,6 +153,7 @@ What that yields, concretely:
 |---|---|---|---|
 | doug-api / doug-web | 2 services, one repo | already done | path-filtered deploys already give independent ship cadence |
 | doug-adjudicator | Job, same image, same repo | v1 | 2Gi clones + long runs don't fit a 512Mi request-serving service; but its detector must be the api's own `git_labels` |
+| doug-outcome-reconciler | Job, same image, same repo | v1 | its whole point is shrinking the window a lost webhook sits undiscovered, which wants a tighter cadence (6h) than adjudication's daily one; folding it into doug-adjudicator would inherit a cadence sized for an expensive job, not a cheap list-only one |
 | review worker | own Cloud Run worker pool | sustained review_jobs depth, or webhook p99 approaching GitHub's ~10s | the in-service drain is fine at design-partner volume; a premature pool doubles deploy surface |
 | doug-mcp | own service, same image, same repo | v1.5 ship (adjudicated rows ≥ min-n) | third-party agent clients are a different trust boundary and must never queue in front of ingest — but same repo forever: identical pattern math is the point |
 | staging project | second GCP project | tenant #2, or the first deploy-caused incident | gated-traffic deploys (candidate → smoke → promote) cover one-tenant blast radius; ADR-0009's trigger is recorded, not dodged |

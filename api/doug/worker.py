@@ -21,6 +21,7 @@ succeeded.
 import os
 import platform
 import sys
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 
 from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
@@ -678,6 +679,219 @@ def reconcile_all() -> int:
         except Exception as e:  # noqa: BLE001 — one bad tenant must not stop the rest
             print(
                 f"doug: reconcile failed for installation {installation_id} "
+                f"({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+    return total
+
+
+# Bounded by TIME, not count: an installation's OPEN PRs are naturally
+# bounded (reconcile_installation's _MAX_OPEN_PRS_PER_REPO exists only as a
+# backstop against a pathological repo), but "every closed PR" grows
+# without bound over a repo's lifetime. sort=updated,direction=desc lets a
+# reconcile pass stop the moment a page's oldest PR falls outside the
+# window, so a healthy repo costs one page, not its whole history.
+_MERGE_RECONCILE_LOOKBACK = timedelta(days=14)
+
+# Backstop for a repo that closes an implausible number of PRs inside the
+# lookback window — the outcome lane's sibling of _MAX_OPEN_PRS_PER_REPO,
+# logged the same way when hit.
+_MAX_CLOSED_PRS_PER_REPO = 300
+
+
+def _aware(dt: datetime) -> datetime:
+    """githubkit's ISO-8601 timestamps come back tz-aware in every field
+    checked against the installed schema (PullRequestSimple.merged_at,
+    .updated_at). Normalised defensively anyway — the same guard
+    api.py's _payload_timestamp applies to the webhook's own copy of the
+    same fact — so a future githubkit upgrade that ever changes this
+    cannot turn into a naive/aware TypeError here."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def reconcile_outcomes(installation_id: int) -> int:
+    """Enqueue outcome-observation windows for every merge this
+    installation's webhook may have missed.
+
+    The outcome lane's analogue of reconcile_installation, healing the same
+    failure it heals: "a delivery this service 202s and then loses to a
+    restart is never retried" (reconcile_installation's own docstring).
+    _record_merge (api.py) is the ONLY other path that ever writes an
+    outcome_jobs row, and it runs exclusively off the pull_request/closed
+    webhook — there is no drain, no claim, no revive to fall back on the
+    way review_jobs has, so a lost delivery here is healed by nothing else
+    in this codebase today. This re-derives recently-closed PRs from the
+    API and lets enqueue_outcome_jobs's ON CONFLICT DO NOTHING
+    (store.py's uq_outcome_job) throw away what it already has — the
+    identical "never trust the webhook alone" principle, applied to the
+    one lane that has never had it.
+
+    No draft/fork gate: _record_merge applies neither
+    (publication-preregistration.md §2.4 — "no fork gate, no draft gate,
+    no verdict-existence check"), and a merged PR is never a draft, so
+    mirroring reconcile_installation's _skip_reason here would silently
+    exclude merges the webhook path itself would have recorded.
+
+    pulls.list's PullRequestSimple carries no merge_commit_sha (githubkit
+    v2026_03_10 does not model that field, though GitHub's own OpenAPI
+    description text for pulls.get — reproduced verbatim in its own
+    docstring — still names it), so each merge candidate costs a second
+    call, pulls.get, read from its raw response body rather than the typed
+    model. That is the one place this function is not cheap; it is still
+    bounded by the same lookback window and cap as everything else here.
+    """
+    gh = app_auth.installation_client(installation_id)
+    cutoff = datetime.now(UTC) - _MERGE_RECONCILE_LOOKBACK
+    count = 0
+    for repo_id, full_name in store.active_repos(installation_id):
+        owner, _, name = full_name.partition("/")
+        pulls: list = []
+        page = 1
+        exhausted = True
+        try:
+            while True:
+                batch = gh.rest.pulls.list(
+                    owner=owner, repo=name, state="closed",
+                    sort="updated", direction="desc",
+                    per_page=100, page=page,
+                ).parsed_data
+                if not batch:
+                    break
+                pulls.extend(batch)
+                oldest = getattr(batch[-1], "updated_at", None)
+                stale = isinstance(oldest, datetime) and _aware(oldest) < cutoff
+                exhausted = stale or len(batch) < 100
+                if exhausted or len(pulls) >= _MAX_CLOSED_PRS_PER_REPO:
+                    break
+                page += 1
+        except Exception as e:  # noqa: BLE001 — one unreadable repo is not fatal
+            print(
+                f"doug: outcome reconcile skipped {full_name} ({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+            continue
+        # Truncation only loses PRs when there are more than the cap, or when
+        # pagination stopped at the cap with pages still unread. Exactly-at-cap
+        # with the listing exhausted drops nothing, and claiming otherwise
+        # would have an operator hunting a tail that does not exist.
+        if len(pulls) > _MAX_CLOSED_PRS_PER_REPO or (
+            len(pulls) == _MAX_CLOSED_PRS_PER_REPO and not exhausted
+        ):
+            pulls = pulls[:_MAX_CLOSED_PRS_PER_REPO]
+            # Not "this pass": pagination always sorts updated_at desc, so the
+            # same excluded tail sorts last on every future pass too — a repo
+            # that hits this cap once never reconciles that tail on any pass.
+            print(
+                f"doug: outcome reconcile capped at {_MAX_CLOSED_PRS_PER_REPO} closed PRs "
+                f"for {full_name}; the excluded tail is not reconciled by this or any "
+                "later pass",
+                file=sys.stderr,
+            )
+        for p in pulls:
+            updated_at = getattr(p, "updated_at", None)
+            if isinstance(updated_at, datetime) and _aware(updated_at) < cutoff:
+                continue
+            merged_at = getattr(p, "merged_at", None)
+            if merged_at is None:
+                continue  # closed without merging
+            if not isinstance(merged_at, datetime):
+                continue  # UNSET sentinel or a malformed field, not a real timestamp
+            merged_at = _aware(merged_at)
+            # The window is on the MERGE, not on updated_at. updated_at only
+            # bounds pagination; a PR merged years ago and touched yesterday
+            # (a comment, a label) sorts inside the listing window while its
+            # merge sits far outside it. Enqueueing that one would hand the
+            # adjudicator a row whose due_at is already long past — an
+            # instant verdict on a merge Doug never reviewed, and one more
+            # pre-install merge in the denominator (see api.py's note on
+            # publication-preregistration.md §2.4).
+            if merged_at < cutoff:
+                continue
+            number = getattr(p, "number", None)
+            base = getattr(p, "base", None)
+            base_ref = getattr(base, "ref", None)
+            base_repo_id = getattr(getattr(base, "repo", None), "id", None)
+            if not isinstance(number, int):
+                continue
+            if base_repo_id != repo_id:
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    f"(base repo id {base_repo_id} != installation_repos' {repo_id})",
+                    file=sys.stderr,
+                )
+                continue
+            if not isinstance(base_ref, str) or not base_ref:
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    "(missing base.ref)",
+                    file=sys.stderr,
+                )
+                continue
+            # Same length guard api.py's _text applies to the webhook's copy
+            # of this fact, and for the same reason: base_ref is VARCHAR(200)
+            # while GitHub allows a longer branch name, and Postgres answers
+            # an over-long INSERT with StringDataRightTruncation. Here that
+            # exception would escape both try blocks and unwind the whole
+            # installation — every repo after this one skipped, on this pass
+            # and every later one. sqlite stores the long value happily, so a
+            # green local suite is not evidence about this.
+            if len(base_ref) > store.outcome_jobs.c.base_ref.type.length:
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    f"(base.ref is {len(base_ref)} chars, longer than the column)",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                detail = gh.rest.pulls.get(owner=owner, repo=name, pull_number=number)
+                merge_sha = detail.raw_response.json().get("merge_commit_sha")
+            except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    f"(pulls.get failed or its response was unreadable: "
+                    f"{type(e).__name__}: {e})",
+                    file=sys.stderr,
+                )
+                continue
+            if (
+                not isinstance(merge_sha, str)
+                or not merge_sha
+                or len(merge_sha) > store.outcome_jobs.c.merge_commit_sha.type.length
+            ):
+                print(
+                    f"doug: outcome reconcile skipped {full_name}#{number} "
+                    "(missing or over-long merge_commit_sha)",
+                    file=sys.stderr,
+                )
+                continue
+            merged_head_sha = getattr(getattr(p, "head", None), "sha", None)
+            if not isinstance(merged_head_sha, str):
+                merged_head_sha = None
+            inserted = store.enqueue_outcome_jobs(
+                installation_id, repo_id, number, merge_sha, merged_at, base_ref,
+                merged_head_sha=merged_head_sha,
+            )
+            count += len(inserted)
+    return count
+
+
+def reconcile_all_outcomes() -> int:
+    """The outcome lane's analogue of reconcile_all — every active
+    installation, and one bad tenant must not stop the rest.
+
+    Deliberately does NOT call ingest.reclaim_stalled(): that sweep exists
+    for review_jobs' claim/lease model (a row stuck 'running' because the
+    worker holding it died), and outcome_jobs has no such state to
+    reclaim — enqueue_outcome_jobs's only two outcomes are 'inserted' and
+    'already there' (ON CONFLICT DO NOTHING), never a claim to strand.
+    """
+    total = 0
+    for installation_id in store.active_installations():
+        try:
+            total += reconcile_outcomes(installation_id)
+        except Exception as e:  # noqa: BLE001 — one bad tenant must not stop the rest
+            print(
+                f"doug: outcome reconcile failed for installation {installation_id} "
                 f"({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
