@@ -1328,27 +1328,30 @@ def instrument_snapshot_for_repo(
     is the live mapping; review_jobs is the fallback for a name that has
     been reviewed but not (yet) in the install ledger. An unknown name is
     the empty instrument, not None — None is reserved for 'no ledger'.
+
+    Several active installations can share a full_name after a GitHub App
+    reinstall. Prefer the one that already has outcome_jobs for that
+    (installation, repo) pair; otherwise the lowest installation_id.
     """
     engine = _get_engine()
     if engine is None:
         return None
     as_of = now or datetime.now(UTC)
     with engine.connect() as conn:
-        row = (
-            conn.execute(
+        candidates = [
+            (int(r["installation_id"]), int(r["github_repo_id"]))
+            for r in conn.execute(
                 select(
                     installation_repos.c.installation_id,
                     installation_repos.c.github_repo_id,
                 ).where(
                     installation_repos.c.full_name == repo,
                     installation_repos.c.state == "active",
-                ).limit(1)
-            )
-            .mappings()
-            .first()
-        )
-        if row is None:
-            row = (
+                )
+            ).mappings()
+        ]
+        if not candidates:
+            fallback = (
                 conn.execute(
                     select(
                         review_jobs.c.installation_id,
@@ -1360,7 +1363,27 @@ def instrument_snapshot_for_repo(
                 .mappings()
                 .first()
             )
-    if row is None:
+            pair = (
+                (int(fallback["installation_id"]), int(fallback["github_repo_id"]))
+                if fallback is not None
+                else None
+            )
+        else:
+            candidates.sort()
+            ids = [installation_id for installation_id, _ in candidates]
+            with_jobs = {
+                (int(installation_id), int(github_repo_id))
+                for installation_id, github_repo_id in conn.execute(
+                    select(
+                        outcome_jobs.c.installation_id,
+                        outcome_jobs.c.github_repo_id,
+                    )
+                    .where(outcome_jobs.c.installation_id.in_(ids))
+                    .distinct()
+                )
+            }
+            pair = next((c for c in candidates if c in with_jobs), candidates[0])
+    if pair is None:
         return InstrumentSnapshot(
             adjudicated=0,
             pending=0,
@@ -1370,9 +1393,7 @@ def instrument_snapshot_for_repo(
             deep_read_cap=PLAN_DEEP_READ_CAP,
             miss_rate=None,
         )
-    return instrument_snapshot(
-        int(row["installation_id"]), int(row["github_repo_id"]), now=as_of
-    )
+    return instrument_snapshot(pair[0], pair[1], now=as_of)
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:

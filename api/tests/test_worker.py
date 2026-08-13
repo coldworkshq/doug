@@ -566,6 +566,18 @@ def test_the_check_run_is_posted_against_the_jobs_head_sha(tmp_path, monkeypatch
     assert posted[0]["title"].lower().startswith("flagged")
 
 
+def test_the_posted_check_run_carries_the_instrument_footer(tmp_path, monkeypatch):
+    """render() can take an instrument and still never receive one. The
+    worker is the call site that makes the footer exist on a real PR."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    assert "adjudicated 0" in posted[0]["summary"]
+    assert "pending 0" in posted[0]["summary"]
+    assert "deep reads 0/200 this cycle" in posted[0]["summary"]
+
+
 def _intent(findings=None):
     return review.IntentRead(
         alignment=41,

@@ -171,13 +171,17 @@ def render(
             lines.append(f"- none (alignment {intent_read.alignment}/100)")
         lines += ["", f"Judged against: {', '.join(intent_read.refs) or 'no records'}."]
 
-    if instrument is not None:
-        lines += _footer(instrument)
-
+    footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)
-    if len(body) > SUMMARY_LIMIT:
-        body = body[: SUMMARY_LIMIT - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
-    return title[:TITLE_LIMIT], body
+    combined = body + footer
+    if len(combined) > SUMMARY_LIMIT:
+        # Keep the instrument lines (and the truncation marker) as a
+        # reserved tail. Cutting from the front would drop the footer on
+        # the oversized-findings case the cap is sized for.
+        reserved = TRUNCATION_NOTICE + footer
+        cut = max(0, SUMMARY_LIMIT - len(reserved))
+        combined = body[:cut] + reserved
+    return title[:TITLE_LIMIT], combined
 
 
 def post(gh, owner: str, repo: str, head_sha: str, title: str, summary: str) -> None:

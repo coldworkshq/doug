@@ -192,6 +192,27 @@ def test_the_summary_is_truncated_below_githubs_cap():
     assert summary.endswith(check_run.TRUNCATION_NOTICE)
 
 
+def test_truncation_keeps_the_instrument_footer():
+    """The footer is why this increment exists. Cutting the summary from
+    the front would drop it on the 400-finding PR — the one case the cap
+    is sized for — and leave a check that never shows N/M."""
+    noisy = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(rule=f"reader:pattern-{i}", label="x" * 300, weight=0.0)
+                for i in range(500)
+            ]
+        }
+    )
+    _, summary = check_run.render(
+        "reader", noisy, None, WHOLE, instrument=_snap()
+    )
+    assert len(summary) == check_run.SUMMARY_LIMIT
+    assert check_run.TRUNCATION_NOTICE in summary
+    assert summary.endswith("deep reads 0/200 this cycle")
+    assert "adjudicated 0" in summary.split(check_run.TRUNCATION_NOTICE, 1)[1]
+
+
 def test_deviations_render_under_an_unvalidated_heading():
     """The derangement check FAILED on 2026-07-31 — this instrument has no
     validity evidence. Rendering its output beside reader findings, which

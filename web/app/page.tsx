@@ -111,10 +111,10 @@ export default async function Home() {
               className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted-foreground"
               style={{ animationDelay: "160ms" }}
             >
-              Doug reads the diff, scores it against the reverts this repo
-              actually had, and routes the handful that need human eyes.
-              Everything else clears. When it&rsquo;s wrong, it will say so
-              — in public.
+              Doug reads the diff and routes the handful that need human
+              eyes. Everything else clears. Every merge starts a clock
+              against the reverts this repo actually had. When it&rsquo;s
+              wrong, it will say so — in public.
             </p>
             <div
               className="animate-rise mt-10 flex flex-wrap gap-3"

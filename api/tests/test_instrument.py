@@ -6,6 +6,7 @@ multi-counts (design-lock.md) and would make the empty state a lie the
 moment the first adjudication lands with two windows.
 """
 
+import inspect
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine
@@ -157,8 +158,34 @@ def test_adjudicated_is_not_count_of_outcomes_rows(tmp_path, monkeypatch):
     assert snap.adjudicated != 10
 
 
+def test_instrument_snapshot_source_does_not_name_the_outcomes_table():
+    """Behavioral 10-vs-2 above still goes green if the query JOINs
+    outcomes and happens to return 2. The function body itself must not
+    mention the outcomes table once outcome_jobs is stripped."""
+    src = inspect.getsource(store.instrument_snapshot)
+    assert "select_from(outcome_jobs)" in src
+    assert "outcomes" not in src.replace("outcome_jobs", "")
+
+
 def test_snapshot_for_repo_resolves_via_installation_repos(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALLATION_ID, "drewjst", "User", "active")
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, "drewjst/doug")], replace=True)
+    _job(url, status="done", pr_number=1, window_days=14)
+    _job(url, status="pending", pr_number=2, window_days=14)
+    snap = store.instrument_snapshot_for_repo("drewjst/doug", now=NOW)
+    assert snap is not None
+    assert snap.adjudicated == 1
+    assert snap.pending == 1
+
+
+def test_snapshot_for_repo_prefers_the_install_that_has_jobs(tmp_path, monkeypatch):
+    """A GitHub App reinstall mints a new installation_id. The old
+    outcome_jobs stay on the previous one. Picking an arbitrary active
+    row would publish a live 0/0 while clocks exist."""
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(OTHER_INSTALL, "drewjst", "User", "active")
+    store.set_installation_repos(OTHER_INSTALL, [(REPO_ID, "drewjst/doug")], replace=True)
     store.upsert_installation(INSTALLATION_ID, "drewjst", "User", "active")
     store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, "drewjst/doug")], replace=True)
     _job(url, status="done", pr_number=1, window_days=14)
