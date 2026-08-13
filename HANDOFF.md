@@ -1,16 +1,19 @@
 # HANDOFF — doug
 
-State:    spec — lane-state audit + brainstorm, no code written. STOPPED
-          mid-brainstorm: PR #106 (open, from a Cursor session on branch
-          cursor/unbeatable-doug-research-584a) already implements most of the
-          lane. Clean tree @ 37942c3.
+State:    spec — residual spec WRITTEN and committed (8851571), 1 commit off
+          main @ 37942c3. Another session is code-reviewing PR #106; this
+          session deliberately did NOT duplicate that.
 
-Next:     Andrew's call: review #106 against the 3 conflicts below, or continue
-          speccing the residual (60-day join + receipt screen — the only two
-          Lane A items #106 does NOT touch).
+Next:     Andrew reviews docs/superpowers/specs/
+          2026-08-12-outcome-surface-residual-design.md. On approval →
+          writing-plans for the receipt screen ONLY (the 60-day join is
+          sequenced behind #106's merge).
 
-Blockers: #106 conflicts with two rulings Andrew gave THIS session. Needs one
-          governing answer before it merges.
+Blockers: #106 conflicts with two rulings Andrew gave THIS session (§0.1 of
+          the new spec). Needs one governing answer before #106 merges. NOT
+          discoverable by the running code review — the rulings exist in a
+          session transcript, not in any file. Andrew was offered the handoff
+          to that session and has not yet said yes.
 
 Decisions this session:
 - PR #106 OVERLAP (found only because Andrew asked): it ships check-run footer,
