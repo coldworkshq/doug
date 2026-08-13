@@ -29,6 +29,7 @@ import sys
 from .models import Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
+from .store import InstrumentSnapshot
 
 NAME = "Doug"
 # GitHub caps output.summary at 65535 chars and rejects the whole call over
@@ -68,6 +69,25 @@ DEVIATION_NOTE = (
 TRUNCATION_NOTICE = "\n\n_Truncated: this check run exceeded GitHub's summary limit._"
 
 
+def _date(value) -> str:
+    return value.strftime("%Y-%m-%d")
+
+
+def _footer(instrument: InstrumentSnapshot) -> list[str]:
+    line = (
+        f"adjudicated {instrument.adjudicated} · pending {instrument.pending} "
+        f"· as of {_date(instrument.as_of)}"
+    )
+    if instrument.adjudicated == 0 and instrument.first_due is not None:
+        line += f" · first due {_date(instrument.first_due)}"
+    lines = ["", line]
+    if instrument.deep_reads is not None:
+        lines.append(
+            f"deep reads {instrument.deep_reads}/{instrument.deep_read_cap} this cycle"
+        )
+    return lines
+
+
 def _headline(tier: str, verdict: Verdict) -> str:
     band = verdict.band.value.capitalize()
     if tier == "reader":
@@ -99,6 +119,7 @@ def render(
     verdict: Verdict,
     intent_read: IntentRead | None,
     coverage: Coverage | None,
+    instrument: InstrumentSnapshot | None = None,
 ) -> tuple[str, str]:
     """(title, summary_md) for one verdict."""
     title = _headline(tier, verdict)
@@ -149,6 +170,9 @@ def render(
         else:
             lines.append(f"- none (alignment {intent_read.alignment}/100)")
         lines += ["", f"Judged against: {', '.join(intent_read.refs) or 'no records'}."]
+
+    if instrument is not None:
+        lines += _footer(instrument)
 
     body = "\n".join(lines)
     if len(body) > SUMMARY_LIMIT:

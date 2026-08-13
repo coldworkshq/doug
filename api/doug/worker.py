@@ -113,7 +113,9 @@ def _replay_recorded(
             findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
             coverage=cov,
         )
-    title, summary = check_run.render(existing["tier"], verdict, intent_read, cov)
+    title, summary = check_run.render(
+        existing["tier"], verdict, intent_read, cov, instrument=_instrument(job)
+    )
     # complete before post: a lost claim must not emit a check run that a
     # second holder will also post via this path.
     if not ingest.complete(
@@ -311,7 +313,9 @@ def process_job(job: dict) -> int | None:
                 Reason(rule="deviations-unrecorded", label=str(e)[:200], weight=0.0)
             )
 
-    title, summary = check_run.render(tier, verdict, intent_read, cov)
+    title, summary = check_run.render(
+        tier, verdict, intent_read, cov, instrument=_instrument(job)
+    )
     # The one outcome of the three that bought a model read, and the only
     # line that says "paid read" — see the replay branch above for why those
     # two must not read alike. Emitted before ingest.complete, not after:
@@ -447,6 +451,11 @@ def _skip_reason(p) -> str | None:
     if not isinstance(head_id, int) or not isinstance(base_id, int):
         return "fork"
     return "fork" if head_id != base_id else None
+
+
+def _instrument(job: dict):
+    """Ledger counters for the check-run footer. None when there is no ledger."""
+    return store.instrument_snapshot(job["installation_id"], job["github_repo_id"])
 
 
 # Hard ceiling on how many open PRs reconcile will look at per repo. No

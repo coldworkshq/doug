@@ -7,10 +7,11 @@ back silently), a partial read must not read as a whole one, and nothing
 here may ever conclude anything but neutral.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from doug import check_run, reader
+from doug import check_run, reader, store
 from doug.models import Band, Reason
 from doug.review import IntentRead
 
@@ -371,3 +372,65 @@ def test_post_truncates_a_summary_that_would_be_rejected():
     gh, checks = _gh()
     check_run.post(gh, "o", "r", "d" * 40, "t", "x" * 90_000)
     assert len(checks.calls[0]["output"]["summary"]) == check_run.SUMMARY_LIMIT
+
+
+def _snap(**overrides) -> store.InstrumentSnapshot:
+    return store.InstrumentSnapshot(
+        **{
+            "adjudicated": 0,
+            "pending": 12,
+            "as_of": datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+            "first_due": datetime(2026, 8, 16, tzinfo=UTC),
+            "deep_reads": 0,
+            "deep_read_cap": 200,
+            "miss_rate": None,
+            **overrides,
+        }
+    )
+
+
+def test_a_zero_snapshot_still_renders_the_footer():
+    """Empty is the product. Omitting the footer when N=0 would hide the
+    instrument until the first adjudication, which is the week a prospect
+    decides whether the clock is real."""
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, instrument=_snap())
+    assert "adjudicated 0" in summary
+    assert "pending 12" in summary
+    assert "as of 2026-08-13" in summary
+    assert "first due 2026-08-16" in summary
+    assert "deep reads 0/200 this cycle" in summary
+
+
+def test_without_an_instrument_the_summary_does_not_invent_a_footer():
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    assert "adjudicated" not in summary
+    assert "deep reads" not in summary
+
+
+def test_a_nonzero_snapshot_does_not_promise_a_first_due():
+    _, summary = check_run.render(
+        "reader",
+        FLAGGED,
+        None,
+        WHOLE,
+        instrument=_snap(adjudicated=4, pending=8, first_due=None),
+    )
+    assert "adjudicated 4" in summary
+    assert "pending 8" in summary
+    assert "as of 2026-08-13" in summary
+    assert "first due" not in summary
+    assert "deep reads 0/200 this cycle" in summary
+
+
+def test_a_missing_meter_omits_the_deep_read_line():
+    _, summary = check_run.render(
+        "reader", FLAGGED, None, WHOLE, instrument=_snap(deep_reads=None)
+    )
+    assert "adjudicated 0" in summary
+    assert "deep reads" not in summary
+
+
+def test_the_footer_does_not_publish_a_miss_rate():
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, instrument=_snap())
+    assert "miss rate" not in summary.lower()
+
