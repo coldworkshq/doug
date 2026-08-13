@@ -29,6 +29,7 @@ function run(overrides) {
     finding_counts: { total: 0, high: 0, medium: 0, low: 0 },
     job: null,
     outcome_14: null,
+    outcome_60: null,
     ...overrides,
   };
 }
@@ -76,6 +77,21 @@ test("a missing outcome is 'pending', which is a different fact from 'clean'", (
 
   const outcome = facets.find((f) => f.key === "outcome");
   assert.deepEqual(outcome.options.map((o) => o.value), ["clean", "pending", "reverted"]);
+});
+
+test("a missing 60-day outcome is 'pending', which is a different fact from 'clean'", () => {
+  // outcome_60 null means the 60-day window has not closed yet — the same
+  // fact outcome_14 null states about its own window, and independent of
+  // it: a run can be "clean" at 14 days and still "pending" at 60. Folding
+  // either into "clean" would claim an observation that has not happened.
+  const facets = buildFacets([
+    run({ verdict_id: 1, outcome_60: null }),
+    run({ verdict_id: 2, outcome_60: "clean" }),
+    run({ verdict_id: 3, outcome_60: "reverted" }),
+  ]);
+
+  const outcome60 = facets.find((f) => f.key === "outcome_60");
+  assert.deepEqual(outcome60.options.map((o) => o.value), ["clean", "pending", "reverted"]);
 });
 
 test("'no read' is keyed off a missing coverage row, not off a zero rate", () => {

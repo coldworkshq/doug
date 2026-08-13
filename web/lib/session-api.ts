@@ -66,6 +66,7 @@ export type RunSummary = {
     finished_at: string | null;
   } | null;
   outcome_14: string | null;
+  outcome_60: string | null;
 };
 
 export type RunListResponse = { items: RunSummary[]; limit: number; offset: number };
@@ -243,7 +244,7 @@ function coverage(value: unknown): value is RunCoverage | null {
 const RUN_SUMMARY_KEYS = [
   "verdict_id", "repo", "installation_id", "github_repo_id", "pr_number", "title", "url",
   "scored_at", "tier", "source", "score", "band", "threshold", "coverage", "changed_files",
-  "finding_counts", "job", "outcome_14",
+  "finding_counts", "job", "outcome_14", "outcome_60",
 ] as const;
 
 function runSummary(value: unknown): value is RunSummary {
@@ -266,7 +267,7 @@ function runSummary(value: unknown): value is RunSummary {
     ]) && typeof job.status === "string" && Number.isInteger(job.attempts) &&
       nullableString(job.error) && nullableString(job.enqueued_at) &&
       nullableString(job.started_at) && nullableString(job.finished_at))) &&
-    nullableString(value.outcome_14)
+    nullableString(value.outcome_14) && nullableString(value.outcome_60)
   );
 }
 

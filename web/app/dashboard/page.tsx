@@ -444,16 +444,24 @@ function CountLine({
  *  "needs you" wrapped to two lines at 96 and dragged every flagged row taller
  *  than its neighbours.
  *
- *  Only three columns are sortable. band, tier and outcome are categories, and
- *  sorting a category alphabetically implies a ranking that does not exist —
- *  narrowing those is what the pills do. */
+ *  Only three columns are sortable. band, tier and the two outcome columns are
+ *  categories, and sorting a category alphabetically implies a ranking that
+ *  does not exist — narrowing those is what the pills do.
+ *
+ *  14d and 60d are two separate, always-shown, separately-labelled columns —
+ *  never one column resolving to the strongest signal (RULING, plan D-outcome-
+ *  surface). They are different observations of different windows: a row
+ *  reading "clean" at 14d and "pending" at 60d is the honest picture, and
+ *  collapsing them would let "clean" silently mean two different things
+ *  depending on data the reader cannot see. */
 const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
   { label: "score", cls: "w-[78px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
   { label: "band", cls: "w-[112px]" },
   { label: "tier", cls: "w-[88px]" },
   { label: "read", cls: "w-[176px]", sort: "coverage" },
-  { label: "outcome", cls: "w-[104px]" },
+  { label: "14d outcome", cls: "w-[100px]" },
+  { label: "60d outcome", cls: "w-[100px]" },
   { label: "job", cls: "w-[118px]" },
   { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
@@ -471,7 +479,7 @@ const TH =
   "text-[11px] font-medium uppercase tracking-[.13em] text-muted-foreground";
 const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
 
-/** The eight cells of one run. Children render the identical columns — an
+/** The nine cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
  *  history by indentation and a tint, never by dropping data. */
 function RunCells({
@@ -532,8 +540,18 @@ function RunCells({
           next column hides it (Doug PR 103, reader:style-default-change). */}
       <TableCell className={`mono ${TD} truncate text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
       <TableCell className={TD}><CoverageCell run={run} /></TableCell>
+      {/* Two independent cells — deliberately not one window falling back to
+          the other. 14d and 60d are different observations of different
+          windows, and a fallback would let one cell's "clean" silently stand
+          in for the other's "pending" (see COLUMNS' docstring). Each goes
+          through the same outcomeTone/outcomeLabel rule the detail tile
+          uses, so all three render sites cannot drift into describing one
+          row differently. */}
       <TableCell className={`mono ${TD} truncate text-[13px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
+      </TableCell>
+      <TableCell className={`mono ${TD} truncate text-[13px]`}>
+        <span className={outcomeToneClass(outcomeTone(run.outcome_60))}>{outcomeLabel(run.outcome_60)}</span>
       </TableCell>
       {/* whitespace-normal, against TableCell's nowrap base: this is the one
           cell holding an arbitrary-length string (a job error), in a fixed
@@ -562,7 +580,7 @@ function RunTable({
     // The vertical bound is the point of this container: 50 rows of ledger
     // pushed the evidence pane a full screen below the fold, so opening a run
     // scrolled the thing you were reading out of view. 55vh keeps both on
-    // screen. The horizontal scroll it already had is unchanged — eight
+    // screen. The horizontal scroll it already had is unchanged — nine
     // columns still do not fit below 980px.
     <Table
       containerClassName="max-h-[55vh] overflow-y-auto rounded-[5px] border border-border"

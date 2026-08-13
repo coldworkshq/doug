@@ -52,6 +52,7 @@ export interface RunSummary {
   finding_counts: RunFindingCounts;
   job: RunJob | null;
   outcome_14: string | null;
+  outcome_60: string | null;
 }
 
 /** Mirrors api/doug/models.py's PRMetadata field-by-field. Deliberately

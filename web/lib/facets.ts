@@ -13,13 +13,19 @@
 // assumed.
 import type { RunSummary } from "./session-api";
 
-/** The four dimensions the pill bar narrows on.
+/** The five dimensions the pill bar narrows on.
  *
  *  None of these may ever collide with `repo` or `tenant`: those are scope
  *  params the SERVER reads to decide what to fetch, and the pill bar writes
  *  into the same query string. A facet named "repo" would rewrite the fetch
- *  while claiming to filter the result. A test asserts the separation. */
-export const FACET_KEYS = ["band", "tier", "read", "outcome"] as const;
+ *  while claiming to filter the result. A test asserts the separation.
+ *
+ *  `outcome` and `outcome_60` are deliberately two separate keys, not one
+ *  keyed by window: they are different observations of different windows
+ *  (14 and 60 days), and folding them into one facet would let a single
+ *  "clean" pill silently mean either. Same ruling that governs the two
+ *  table columns they filter. */
+export const FACET_KEYS = ["band", "tier", "read", "outcome", "outcome_60"] as const;
 
 export type FacetKey = (typeof FACET_KEYS)[number];
 
@@ -43,6 +49,7 @@ const FACET_LABELS: Record<FacetKey, string> = {
   tier: "tier",
   read: "read",
   outcome: "outcome",
+  outcome_60: "60d outcome",
 };
 
 /** The facet value a run carries on one dimension. Total by construction —
@@ -65,6 +72,10 @@ function facetValue(run: RunSummary, key: FacetKey): string {
     // verdict was borne out when nothing has been observed.
     case "outcome":
       return run.outcome_14 ?? "pending";
+    // Same treatment, same reason, for the 60-day window — a distinct
+    // observation of a distinct window, not a fallback for the 14-day one.
+    case "outcome_60":
+      return run.outcome_60 ?? "pending";
   }
 }
 
