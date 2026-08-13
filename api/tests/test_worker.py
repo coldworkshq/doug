@@ -1513,6 +1513,25 @@ def test_reconcile_outcomes_ignores_a_merge_outside_the_lookback_window(
     assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
 
 
+def test_reconcile_outcomes_ignores_an_old_merge_that_was_touched_recently(
+    tmp_path, monkeypatch
+):
+    """updated_at bounds pagination; the lookback window is about the MERGE.
+    A comment or label on a years-old merged PR bumps updated_at back inside
+    the listing window, and enqueueing it would hand the adjudicator a row
+    whose due_at is already long past — an instant verdict on a merge Doug
+    never reviewed."""
+    _installed(tmp_path, monkeypatch)
+    touched = _closed_pull(
+        number=9, merged_at=NOW - timedelta(days=400), updated_at=NOW
+    )
+    gh = FakeReconcileGH([touched], {9: "9" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+
+
 def test_reconcile_outcomes_skips_a_pr_whose_base_repo_disagrees_with_the_ledger(
     tmp_path, monkeypatch, capsys
 ):

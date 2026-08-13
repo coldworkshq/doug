@@ -747,6 +747,7 @@ def reconcile_outcomes(installation_id: int) -> int:
         owner, _, name = full_name.partition("/")
         pulls: list = []
         page = 1
+        exhausted = True
         try:
             while True:
                 batch = gh.rest.pulls.list(
@@ -759,7 +760,8 @@ def reconcile_outcomes(installation_id: int) -> int:
                 pulls.extend(batch)
                 oldest = getattr(batch[-1], "updated_at", None)
                 stale = isinstance(oldest, datetime) and _aware(oldest) < cutoff
-                if stale or len(batch) < 100 or len(pulls) >= _MAX_CLOSED_PRS_PER_REPO:
+                exhausted = stale or len(batch) < 100
+                if exhausted or len(pulls) >= _MAX_CLOSED_PRS_PER_REPO:
                     break
                 page += 1
         except Exception as e:  # noqa: BLE001 — one unreadable repo is not fatal
@@ -768,7 +770,13 @@ def reconcile_outcomes(installation_id: int) -> int:
                 file=sys.stderr,
             )
             continue
-        if len(pulls) >= _MAX_CLOSED_PRS_PER_REPO:
+        # Truncation only loses PRs when there are more than the cap, or when
+        # pagination stopped at the cap with pages still unread. Exactly-at-cap
+        # with the listing exhausted drops nothing, and claiming otherwise
+        # would have an operator hunting a tail that does not exist.
+        if len(pulls) > _MAX_CLOSED_PRS_PER_REPO or (
+            len(pulls) == _MAX_CLOSED_PRS_PER_REPO and not exhausted
+        ):
             pulls = pulls[:_MAX_CLOSED_PRS_PER_REPO]
             # Not "this pass": pagination always sorts updated_at desc, so the
             # same excluded tail sorts last on every future pass too — a repo
@@ -789,6 +797,16 @@ def reconcile_outcomes(installation_id: int) -> int:
             if not isinstance(merged_at, datetime):
                 continue  # UNSET sentinel or a malformed field, not a real timestamp
             merged_at = _aware(merged_at)
+            # The window is on the MERGE, not on updated_at. updated_at only
+            # bounds pagination; a PR merged years ago and touched yesterday
+            # (a comment, a label) sorts inside the listing window while its
+            # merge sits far outside it. Enqueueing that one would hand the
+            # adjudicator a row whose due_at is already long past — an
+            # instant verdict on a merge Doug never reviewed, and one more
+            # pre-install merge in the denominator (see api.py's note on
+            # publication-preregistration.md §2.4).
+            if merged_at < cutoff:
+                continue
             number = getattr(p, "number", None)
             base = getattr(p, "base", None)
             base_ref = getattr(base, "ref", None)
