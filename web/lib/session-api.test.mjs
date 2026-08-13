@@ -324,3 +324,56 @@ test("run detail rejects malformed rendered findings", async () => {
     globalThis.fetch = oldFetch;
   }
 });
+
+test("SessionApiError carries the HTTP status when there was one", async () => {
+  const { SessionApiError } = await import("./session-api.ts?error-status-set");
+  const err = new SessionApiError("nope", 404);
+  assert.equal(err.status, 404);
+});
+
+test("SessionApiError status is null when the request never got a response", async () => {
+  const { SessionApiError } = await import("./session-api.ts?error-status-null");
+  const err = new SessionApiError("nope");
+  assert.equal(err.status, null);
+});
+
+test("getReceipt rejects a payload that is not a receipt", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ repo: "x" }), { status: 200 });
+  try {
+    const { getReceipt, SessionApiError } = await import("./session-api.ts?receipt-shape");
+    await assert.rejects(() => getReceipt("token", "drewjst/doug", 90), SessionApiError);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("getReceipt surfaces a 404 as a 404, not as a generic failure", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response("{}", { status: 404 });
+  try {
+    const { getReceipt } = await import("./session-api.ts?receipt-404");
+    await getReceipt("token", "drewjst/doug", 90);
+    assert.fail("should have thrown");
+  } catch (error) {
+    assert.equal(error.status, 404);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("getReceipt sends repo as a query parameter, encoded", async () => {
+  const original = globalThis.fetch;
+  let seen = "";
+  globalThis.fetch = async (url) => {
+    seen = String(url);
+    return new Response("{}", { status: 404 });
+  };
+  try {
+    const { getReceipt } = await import("./session-api.ts?receipt-query");
+    await getReceipt("token", "drewjst/doug", 90).catch(() => {});
+    assert.ok(seen.includes("/v1/prs/90/receipt?repo=drewjst%2Fdoug"));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
