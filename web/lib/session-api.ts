@@ -1,4 +1,4 @@
-import { isReceiptResponse, type ReceiptResponse } from "./receipt-shape.ts";
+import { isReceiptResponse, type ReceiptResponse } from "./receipt-shape";
 
 const SESSION_API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 const SESSION_FETCH_TIMEOUT_MS = 5_000;
