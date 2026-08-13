@@ -774,6 +774,20 @@ def save_review(
     has no installation. `github_repo_id` is the only stable repo identity —
     `repo` is a display string that changes when a repo is renamed.
 
+    A findings row's `file` and `severity` come off the Reason and are never
+    re-derived here, so **a Verdict must arrive already carrying them**.
+    reader.verdict_from_reader is the only builder that produces them, and
+    both callers go through it (worker.process_job via review.score_one, and
+    scripts/backfill_ledger). Passing a hand-built Verdict alongside a
+    `reader_verdict` persists NULL for both — the reader_verdict is read for
+    risk_score/rationale/raw only. That used to be papered over by matching
+    each Reason's label against the findings' `description`, which is
+    model-authored text rather than a key: two findings wording one defect
+    identically collapsed and both rows took the last one's file. `file` is
+    half of convergence's identity, where a wrong value is worse than a
+    missing one, so the rematch was removed rather than repaired. A third
+    caller that builds Reasons by hand is the way this invariant breaks.
+
     App-path identity is unique (migration 005). A racing peer that already
     committed the same (installation_id, github_repo_id, pr_number, head_sha)
     makes this insert raise; we return that peer's id rather than failing the

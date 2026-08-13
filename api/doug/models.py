@@ -108,7 +108,17 @@ class Reason(BaseModel):
     # exclude=True keeps it off the wire. Its consumer is convergence, which
     # reads the `findings` table directly and never an API response, and no
     # surface renders it — so serializing it would widen RunDetailResponse
-    # and /v1/queue for nobody. web/lib/session-api.ts:274-278 validates a
+    # and /v1/queue for nobody.
+    #
+    # That guarantee is narrower than it looks, and the narrowness is the
+    # part worth knowing: `exclude` is honoured by model_dump/model_dump_json
+    # and therefore by FastAPI's response serialization, and by nothing else.
+    # `dict(reason)` and `reason.__dict__` both still yield `file`, because
+    # BaseModel.__iter__ walks every field. Anything that reaches a response
+    # body through one of those instead of model_dump would put the key back
+    # on the wire — which is why the boundary is pinned behaviourally by
+    # test_run_detail_reason_carries_exactly_the_keys_the_client_validates
+    # rather than left to this comment. web/lib/session-api.ts:274-278 validates a
     # reason with an exact key set, deliberately, so that the API and the
     # client cannot drift unnoticed; an extra key there is a rejected
     # payload, not an ignored field.
