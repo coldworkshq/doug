@@ -779,10 +779,21 @@ test("no pre-registration in force renders as absence, never a fabricated hash",
   assert.equal(line, "no pre-registration in force");
 });
 
-test("a merge with no governing verdict says so and does not borrow the latest", () => {
-  const line = governingLine({ governing_verdict: null, publication_note: "no governing verdict" });
-  assert.ok(/no governing verdict/i.test(line));
-  assert.ok(!/latest/i.test(line));
+test("a merge with no governing verdict falls back to its own words, not the latest verdict", () => {
+  // publication_note is deliberately EMPTY here. A fixture whose note already
+  // reads "no governing verdict" would pass whether or not the null-branch
+  // exists — the note would simply pass through — so it proves nothing about
+  // the branch it is named for.
+  const line = governingLine({ governing_verdict: null, publication_note: "" });
+  assert.equal(line, "no governing verdict at this merge");
+});
+
+test("a merge WITH a governing verdict renders its note verbatim", () => {
+  const line = governingLine({
+    governing_verdict: { verdict_id: 1044 },
+    publication_note: "governing merge",
+  });
+  assert.equal(line, "governing merge");
 });
 
 test("an unrecorded merged head sha renders as not recorded", () => {
@@ -845,7 +856,15 @@ export type OutcomeTone = "clear" | "flag" | "neutral";
  *  The tone mapping is the rule ruled in the two-lane plan and shipped in #93:
  *  `clean` → clear, `censored` → NEUTRAL, any other non-null → flag, null →
  *  neutral. `censored` is an UNOBSERVED outcome; painting it in the miss
- *  colour reports a non-observation as a miss. */
+ *  colour reports a non-observation as a miss.
+ *
+ *  KNOWN LATENT CASE: `store.py:126-129` documents that `outcomes.kind` is
+ *  wide enough to hold `hotfix` — "permitted, not produced", and explicitly
+ *  NOT a miss. Nothing writes it today (prereg §10 says it is deliberately
+ *  never written), so the default branch never sees it. If that ever changes,
+ *  `hotfix` would land in `flag` and repeat #93's error on a new value. Add
+ *  its branch at the same time as its writer, not before — an unreachable
+ *  branch is untestable, and this comment is the reminder. */
 export function windowOutcome(w: Pick<ReceiptWindow, "status" | "kind">): {
   text: string;
   tone: OutcomeTone;
