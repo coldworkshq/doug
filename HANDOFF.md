@@ -1,19 +1,34 @@
 # HANDOFF — doug
 
-State:    spec — residual spec WRITTEN and committed (8851571), 1 commit off
-          main @ 37942c3. Another session is code-reviewing PR #106; this
-          session deliberately did NOT duplicate that.
+State:    building — spec + 7-task TDD plan written and committed, rebased onto
+          main @ da8bf97 (#106 merged). 3 commits off main. Task 1 is next;
+          no code written yet.
 
-Next:     Andrew reviews docs/superpowers/specs/
-          2026-08-12-outcome-surface-residual-design.md. On approval →
-          writing-plans for the receipt screen ONLY (the 60-day join is
-          sequenced behind #106's merge).
+Next:     Execute the plan, Task 1 first (web/lib/receipt-shape.ts + validator,
+          TDD). Plan: docs/superpowers/plans/
+          2026-08-12-outcome-surface-residual.md
 
-Blockers: #106 conflicts with two rulings Andrew gave THIS session (§0.1 of
-          the new spec). Needs one governing answer before #106 merges. NOT
-          discoverable by the running code review — the rulings exist in a
-          session transcript, not in any file. Andrew was offered the handoff
-          to that session and has not yet said yes.
+Blockers: none for the build. Two OPEN rulings unrelated to it, both about the
+          now-merged scoreboard (see below) — they do not gate these 7 tasks.
+
+Post-#106-merge re-verification (all checked against da8bf97, not assumed):
+- Receipt screen's zero-overlap claim HOLDS: session-api.ts and
+  web/app/dashboard/page.tsx are both untouched by #106.
+- 60-day join is UNBLOCKED (store.py/models.py free). The 14-day filter moved
+  store.py:2245 -> 2407. RunSummaryItem survives at models.py:184.
+- NONE of §0.1 was addressed. The external review
+  (docs/reviews/2026-08-12-pr-106-external-review.md) found and fixed 8
+  findings; the fixture-fallback trap is not among them. Its finding #3 is
+  ADJACENT — a review_jobs fallback that can publish a 0/0 scoreboard for a
+  repo WITH adjudications — but that is the server-side resolution path; the
+  trap is the client-side validator path and is live on main. Review finding
+  #7 refactored both fetches into a shared cachedShowcaseFetch(path,
+  validator, fallback), so the defect is now shared uniformly by the queue and
+  scoreboard rather than duplicated. Confirmed still present:
+  scoreboard-shape.ts:9-10 pins miss_rate:null + decidable:false as literals
+  and the validator rejects anything else.
+- Both conflicts remain OPEN, exactly as predicted: a code review structurally
+  cannot find a ruling that exists only in a session transcript.
 
 Decisions this session:
 - PR #106 OVERLAP (found only because Andrew asked): it ships check-run footer,
