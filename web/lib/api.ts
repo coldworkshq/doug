@@ -1,5 +1,7 @@
 import fixture from "./queue-fixture.json";
+import scoreboardFixture from "./scoreboard-fixture.json";
 import { isQueueResponse } from "./queue-shape";
+import { isScoreboardResponse } from "./scoreboard-shape";
 
 export type {
   Band,
@@ -9,7 +11,9 @@ export type {
   QueueItem,
   QueueResponse,
 } from "./queue-shape";
+export type { ScoreboardResponse } from "./scoreboard-shape";
 import type { Band, QueueResponse } from "./queue-shape";
+import type { ScoreboardResponse } from "./scoreboard-shape";
 
 export const API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 
@@ -82,4 +86,46 @@ export function applyThreshold(queue: QueueResponse, threshold: number): QueueRe
     summary: { open: items.length, flagged, cleared: items.length - flagged, threshold },
     items,
   };
+}
+
+type ScoreboardResult = { scoreboard: ScoreboardResponse; source: "live" | "fixture" };
+
+async function fetchScoreboard(): Promise<ScoreboardResult> {
+  try {
+    const res = await fetch(`${API_URL}/v1/showcase/scoreboard`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const body: unknown = await res.json();
+      if (isScoreboardResponse(body)) return { scoreboard: body, source: "live" };
+    }
+  } catch {
+    // API down — the bundled fixture keeps the empty instrument visible.
+  }
+  return { scoreboard: scoreboardFixture as ScoreboardResponse, source: "fixture" };
+}
+
+let scoreboardInflight: Promise<ScoreboardResult> | null = null;
+let lastScoreboard: { at: number; value: ScoreboardResult } | null = null;
+
+export async function getScoreboard(
+  opts: { maxAgeMs?: number } = {},
+): Promise<ScoreboardResult> {
+  const maxAge = opts.maxAgeMs ?? 0;
+  if (lastScoreboard) {
+    const ttl =
+      lastScoreboard.value.source === "live"
+        ? maxAge
+        : Math.min(maxAge, FIXTURE_TTL_MS);
+    if (Date.now() - lastScoreboard.at < ttl) return lastScoreboard.value;
+  }
+  if (!scoreboardInflight) {
+    scoreboardInflight = fetchScoreboard().then((value) => {
+      lastScoreboard = { at: Date.now(), value };
+      scoreboardInflight = null;
+      return value;
+    });
+  }
+  return scoreboardInflight;
 }

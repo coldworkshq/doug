@@ -54,6 +54,7 @@ test("AuthKit proxy injects optional callback session state without gating publi
 
   assert.equal(matches("/"), false);
   assert.equal(matches("/queue"), false);
+  assert.equal(matches("/scoreboard"), false);
   assert.equal(matches("/dashboard"), true);
   assert.equal(matches("/install/start"), true);
   assert.equal(matches("/install/callback"), true);

@@ -1,0 +1,12 @@
+{
+  "repo": "drewjst/doug",
+  "adjudicated": 0,
+  "pending": 0,
+  "as_of": "2026-08-13T12:00:00Z",
+  "first_due": null,
+  "deep_reads": 0,
+  "deep_read_cap": 200,
+  "miss_rate": null,
+  "decidable": false,
+  "label": "not yet decidable — a count, not a rate"
+}
