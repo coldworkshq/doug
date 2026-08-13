@@ -548,6 +548,40 @@ def test_verdict_mapping_and_threshold():
     assert reader.verdict_from_reader(low).band is Band.CLEARED
 
 
+def test_verdict_from_reader_carries_each_findings_own_file():
+    """`file` travels on the Reason for the same reason `severity` does.
+
+    store.save_review used to recover it afterwards by matching each Reason's
+    label against the model's own `description` text — a key the model
+    chooses and can repeat. Two findings that word one defect the same way
+    collapsed to a single dict entry there, so both rows took the last
+    finding's file. Setting it at construction removes the key entirely.
+    """
+    rv = reader.ReaderVerdict.model_validate(
+        {
+            **PAYLOAD,
+            "findings": [
+                {
+                    "category_slug": "missing-null-check",
+                    "description": "Response is dereferenced without a guard",
+                    "file": "a.py",
+                    "severity": "high",
+                },
+                {
+                    "category_slug": "missing-null-check",
+                    "description": "Response is dereferenced without a guard",
+                    "file": "b.py",
+                    "severity": "low",
+                },
+            ],
+        }
+    )
+
+    reasons = reader.verdict_from_reader(rv).reasons
+    assert [r.file for r in reasons] == ["a.py", "b.py"]
+    assert [r.severity for r in reasons] == ["high", "low"]
+
+
 # --- The spend cap, at the one place money is actually spent -------------
 #
 # store.record_deep_read has been tested since #25 and called from nowhere,

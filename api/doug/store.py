@@ -774,6 +774,20 @@ def save_review(
     has no installation. `github_repo_id` is the only stable repo identity —
     `repo` is a display string that changes when a repo is renamed.
 
+    A findings row's `file` and `severity` come off the Reason and are never
+    re-derived here, so **a Verdict must arrive already carrying them**.
+    reader.verdict_from_reader is the only builder that produces them, and
+    both callers go through it (worker.process_job via review.score_one, and
+    scripts/backfill_ledger). Passing a hand-built Verdict alongside a
+    `reader_verdict` persists NULL for both — the reader_verdict is read for
+    risk_score/rationale/raw only. That used to be papered over by matching
+    each Reason's label against the findings' `description`, which is
+    model-authored text rather than a key: two findings wording one defect
+    identically collapsed and both rows took the last one's file. `file` is
+    half of convergence's identity, where a wrong value is worse than a
+    missing one, so the rematch was removed rather than repaired. A third
+    caller that builds Reasons by hand is the way this invariant breaks.
+
     App-path identity is unique (migration 005). A racing peer that already
     committed the same (installation_id, github_repo_id, pr_number, head_sha)
     makes this insert raise; we return that peer's id rather than failing the
@@ -825,22 +839,20 @@ def save_review(
                     "rule": r.rule,
                     "label": r.label,
                     "weight": r.weight,
-                    "file": None,
-                    # The Reason itself may already carry severity (reader
-                    # tier sets it in verdict_from_reader); reader_verdict
-                    # below only adds `file` and reconfirms the same value
-                    # when a match is found.
+                    # Both come off the Reason, which carried them from the
+                    # finding itself (reader.verdict_from_reader). This used
+                    # to re-derive `file` from `reader_verdict` by matching
+                    # r.label against each finding's `description`, which is
+                    # model-authored text and therefore not a key: two
+                    # findings wording one defect identically collapsed to
+                    # one dict entry and both rows took the last one's file
+                    # and severity. Deterministic reasons and the weight-0
+                    # notices carry None for both, exactly as before.
+                    "file": r.file,
                     "severity": r.severity,
                 }
                 for r in verdict.reasons
             ]
-            if reader_verdict:
-                by_desc = {f.description: f for f in reader_verdict.findings}
-                for r in rows:
-                    f = by_desc.get(r["label"])
-                    if f:
-                        r["file"] = f.file
-                        r["severity"] = f.severity
             if rows:
                 conn.execute(findings.insert(), rows)
             if coverage is not None:

@@ -961,6 +961,7 @@ def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Ve
             label=f.description,
             weight=0.0,
             severity=f.severity,
+            file=f.file,
         )
         for f in rv.findings
     ]
