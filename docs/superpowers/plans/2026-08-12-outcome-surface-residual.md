@@ -20,6 +20,7 @@ Baseline: `origin/main` @ `da8bf97`
 - **Colour is always accompanied by its word** — use `BandChip`, never a bare swatch.
 - **Numbers use `.mono` with tabular-nums.**
 - **`node --test` only sees `lib/**/*.test.mjs`.** A test placed anywhere else does not run and is worse than no test.
+- **Import extensions are asymmetric, and getting it wrong breaks the build, not the tests.** A `.test.mjs` file MUST import the module under test with an explicit `.ts` extension — node's `--experimental-strip-types` resolves it. A `.ts` source file MUST NOT: `tsconfig` has `allowImportingTsExtensions` disabled, so `next build` fails type-checking with TS5097 while `npm test` stays green. Precedent: `web/lib/api.ts` imports `from "./scoreboard-shape"`, while `web/lib/scoreboard-shape.test.mjs` imports `from "./scoreboard-shape.ts"`. Because `npm test` does not catch this, **run `npm run build` before committing any task that adds an import to a `.ts` file.**
 - Verify with `make test` and `make lint` from the repo root. Web-only iteration: `npm test --workspace=web`.
 
 ## File Structure
@@ -448,8 +449,10 @@ In `sessionJson`, pass the status through:
 Add the import at the top of the file:
 
 ```typescript
-import { isReceiptResponse, type ReceiptResponse } from "./receipt-shape.ts";
+import { isReceiptResponse, type ReceiptResponse } from "./receipt-shape";
 ```
+
+No `.ts` extension — this is a source file, and `next build` rejects the extension with TS5097. The test file is the opposite case and keeps its `.ts`.
 
 Add the fetch at the end of the file:
 
@@ -604,7 +607,7 @@ Expected: FAIL — module not found.
 Create `web/lib/receipt-verdict-view.ts`:
 
 ```typescript
-import type { ReceiptRead, ReceiptResponse, ReceiptVerdict } from "./receipt-shape.ts";
+import type { ReceiptRead, ReceiptResponse, ReceiptVerdict } from "./receipt-shape";
 
 /** What the reader was configured to see.
  *
@@ -824,7 +827,7 @@ import type {
   ReceiptMerge,
   ReceiptPreregistration,
   ReceiptWindow,
-} from "./receipt-shape.ts";
+} from "./receipt-shape";
 
 export type OutcomeTone = "clear" | "flag" | "neutral";
 
