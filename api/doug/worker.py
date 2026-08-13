@@ -427,13 +427,16 @@ def _skip_reason(p) -> str | None:
     is not the same test as `p.draft is True`. If the webhook's gate
     changes, this changes with it.
 
-    "The same gate" is two properties, and they are the ones to check when
+    "The same gate" is three properties, and they are the ones to check when
     either side moves: an unknown draft state — absent, null, not a
-    boolean — is "draft" on both sides, and repo ids that are not both
-    integers are "fork" on both sides rather than something to compare.
-    They diverged once already, when the webhook read a missing `draft` key
-    as "not a draft" and compared two absent ids as equal; the webhook was
-    the newer code, so this docstring was the thing that became false.
+    boolean — is "draft" on both sides, repo ids that are not both
+    integers are "fork" on both sides rather than something to compare, and
+    a GitHub App author (`user.type == "Bot"` or login ending in `[bot]`)
+    is "bot" on both sides. A missing user is not a bot: truncated
+    payloads proceed, matching review.py. They diverged once already, when
+    the webhook read a missing `draft` key as "not a draft" and compared
+    two absent ids as equal; the webhook was the newer code, so this
+    docstring was the thing that became false.
     """
     # Only an explicit draft=False proceeds. True, the UNSET sentinel, and a
     # genuinely missing field all fall through to "skip" — the same
@@ -448,9 +451,21 @@ def _skip_reason(p) -> str | None:
     # so an outside contributor must not be able to drive spend. UNSET or
     # missing ids are treated as a fork: the safe direction to be wrong in
     # is "skip".
-    if not isinstance(head_id, int) or not isinstance(base_id, int):
+    if not isinstance(head_id, int) or not isinstance(base_id, int) or head_id != base_id:
         return "fork"
-    return "fork" if head_id != base_id else None
+    # Same-repo Dependabot (and every other GitHub App) passes the fork
+    # gate. A deep read of that diff is spend against the plan cap for a
+    # change nobody asked Doug to grade. Detection matches review.py:
+    # type == "Bot" or login.endswith("[bot]"). A missing user is not a
+    # bot — truncated payloads proceed.
+    user = getattr(p, "user", None)
+    if user:
+        login = getattr(user, "login", None)
+        if getattr(user, "type", None) == "Bot" or (
+            isinstance(login, str) and login.endswith("[bot]")
+        ):
+            return "bot"
+    return None
 
 
 def _instrument(job: dict):

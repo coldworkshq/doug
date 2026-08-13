@@ -2269,6 +2269,14 @@ def _enqueue_pull_request(payload: dict) -> int | None:
         # 500s. Same choice worker._skip_reason makes, for the same reason:
         # the safe direction to be wrong in is skip.
         return None
+    # Same-repo GitHub App PRs pass the fork gate. Detection matches
+    # review.py and worker._skip_reason: type == "Bot" or login ending in
+    # "[bot]". A missing user is not a bot — truncated payloads proceed.
+    # Merges still clock: _record_merge has no fork/bot gate.
+    user = _obj(pr.get("user"))
+    login = user.get("login")
+    if user.get("type") == "Bot" or (isinstance(login, str) and login.endswith("[bot]")):
+        return None
     number = pr.get("number")
     full_name = _text(base.get("full_name"), store.review_jobs.c.repo_full_name)
     base_sha = _text(base_ref.get("sha"), store.review_jobs.c.base_sha)
