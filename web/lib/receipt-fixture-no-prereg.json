@@ -1,0 +1,78 @@
+{
+  "repo": "drewjst/doug",
+  "pr_number": 4906,
+  "preregistration": {
+    "hash": null,
+    "in_force": false
+  },
+  "latest_verdict": {
+    "verdict_id": 9301,
+    "scored_at": "2026-08-10T06:22:31Z",
+    "tier": "reader",
+    "source": "webhook",
+    "head_sha": "7c2e05b9a1d38f460e5c7b21a94f6d380b1e5c7a",
+    "model": "claude-opus-4",
+    "prompt_hash": "sha256:5b1f70e2a9c4d3861b05fe7c28d9a4013f6b8c52e07d19a4bc63f280d5e19a37",
+    "read": {
+      "diff_budget": 40000,
+      "read_order": "path",
+      "recorded": true
+    },
+    "score": 0.31,
+    "band": "cleared",
+    "threshold": 0.62,
+    "risk_score": 12,
+    "rationale": null,
+    "reasons": [],
+    "deviations": [],
+    "intent_alignment": null,
+    "intent_refs": [],
+    "coverage": null
+  },
+  "merges": [
+    {
+      "merge_commit_sha": "d81b407e2c6a95f30b7e1d4c8a25f6903e7b1d40",
+      "merged_at": "2026-08-10T09:05:00Z",
+      "base_ref": "main",
+      "merged_head_sha": "7c2e05b9a1d38f460e5c7b21a94f6d380b1e5c7a",
+      "governing_verdict": {
+        "verdict_id": 9301,
+        "scored_at": "2026-08-10T06:22:31Z",
+        "tier": "reader",
+        "source": "webhook",
+        "head_sha": "7c2e05b9a1d38f460e5c7b21a94f6d380b1e5c7a",
+        "model": "claude-opus-4",
+        "prompt_hash": "sha256:5b1f70e2a9c4d3861b05fe7c28d9a4013f6b8c52e07d19a4bc63f280d5e19a37",
+        "read": {
+          "diff_budget": 40000,
+          "read_order": "path",
+          "recorded": true
+        },
+        "score": 0.31,
+        "band": "cleared",
+        "threshold": 0.62,
+        "risk_score": 12,
+        "rationale": null,
+        "reasons": [],
+        "deviations": [],
+        "intent_alignment": null,
+        "intent_refs": [],
+        "coverage": null
+      },
+      "publication_governing": true,
+      "publication_note": "This is the merge whose governing verdict the published quarterly statistic uses for this pull request.",
+      "adjudication": [
+        {
+          "window_days": 14,
+          "status": "pending",
+          "due_at": "2026-08-24T09:05:00Z",
+          "kind": null,
+          "observed_at": null,
+          "source": null,
+          "detail": null,
+          "prereg_hash": null
+        }
+      ]
+    }
+  ]
+}

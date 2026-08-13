@@ -66,7 +66,7 @@ const EMPTY_NOTE = "text-xs text-muted-foreground";
 /** The label/value grammar of the dashboard's evidence pane, verbatim. */
 const DL = "mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]";
 
-type Failure = "missing" | "expired" | "unavailable" | "unreachable";
+type Failure = "missing" | "expired" | "unavailable" | "unreachable" | "unscoped";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -118,20 +118,25 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
   );
 }
 
-/** Four states, four sentences, no shared "something went wrong".
+/** Five states, five sentences, no shared "something went wrong".
  *
- *  A table rather than a branch: the arm is chosen once, at the fetch, by the
- *  API's own status contract, and this only prints what that choice already
- *  decided. `expired` reuses the words #99/#100 shipped for
- *  `reauthorize_required` rather than inventing a second expiry story, and
- *  the control it asks for — sign out — is the one already in the header
- *  above.
+ *  A table rather than a branch: the arm is chosen once — at the fetch, by the
+ *  API's own status contract, or before it by the request this page was given
+ *  — and this only prints what that choice already decided. `expired` reuses
+ *  the words #99/#100 shipped for `reauthorize_required` rather than inventing
+ *  a second expiry story, and the control it asks for — sign out — is the one
+ *  already in the header above.
  *
- *  `unreachable` is the fourth arm, and it exists because the other three are
- *  each a claim. It is the only one reached without a status the API chose,
- *  so it is the only one that names no cause and asks for nothing: telling a
- *  reader to sign back in over a dropped connection would be exactly the
- *  confident false claim this document is built to make impossible. */
+ *  `unreachable` exists because the other arms are each a claim. It is the one
+ *  reached without a status the API chose, so it is the one that names no
+ *  cause and asks for nothing: telling a reader to sign back in over a dropped
+ *  connection would be exactly the confident false claim this document is
+ *  built to make impossible.
+ *
+ *  `unscoped` is not a failure of the ledger at all — it is this page saying
+ *  the link it was opened with names no repository. It exists because the
+ *  alternative was `missing`, which asserts that no verdict and no merge are
+ *  recorded for a pull request nobody has identified yet. */
 const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string }> = {
   missing: {
     route: "/prs",
@@ -161,10 +166,20 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
     route: "/prs",
     heading: "Doug could not load this receipt.",
     body:
-      "The request came back with nothing this page can read. Which link in the chain " +
-      "gave way is not something Doug can tell from here, so it is not named — and " +
-      "nothing about your session or the pull request is claimed either way. Nothing " +
-      "is rendered below because nothing is known.",
+      "There is no answer here this page can read. Whether the request reached the API " +
+      "at all is not something this screen can tell — a dropped connection and a reply " +
+      "in an unexpected shape arrive here identically — so neither is claimed, and " +
+      "nothing is said about your session or the pull request either. Nothing is " +
+      "rendered below because nothing is known.",
+  },
+  unscoped: {
+    route: "/prs",
+    heading: "This link does not name a repository.",
+    body:
+      "A pull request number is ambiguous on its own — two repositories in one space can " +
+      "both have a #4821 — so the receipt is fetched by repository and number together, " +
+      "and this page will not guess which one was meant. Opening the pull request from " +
+      "the run ledger carries the repository with it.",
   },
 };
 
@@ -298,6 +313,26 @@ function MergeCard({
             merge it was not standing at. */}
         <Row label="governing">{governingLine(merge)}</Row>
       </dl>
+      {/* THE VERDICT ITSELF, not just a sentence about it.
+          `NOT_PUBLICATION_GOVERNING_NOTE` renders verbatim in the row above
+          and reads "The verdict shown here is historical context — what was
+          standing when THIS commit merged"; api.py:730-743 wrote it assuming a
+          person reading an earlier merge after an incident "sees a real
+          verdict sitting beside a `false`". Printing the note without the
+          verdict makes both that sentence and the gap banner's "Both are on
+          this page" false. Spec §2.2's last row requires both verdicts
+          rendered side by side and forbids either one alone.
+          A presence gate, no new decision: every line inside VerdictCard is
+          function-derived, and the null case is already worded by
+          `governingLine` in the row above. */}
+      {merge.governing_verdict !== null && (
+        <>
+          <h4 className={`${BLOCK_HEADING} mt-3.5 flex-wrap`}>
+            Governing verdict <span>what was standing when this commit merged</span>
+          </h4>
+          <VerdictCard verdict={merge.governing_verdict} />
+        </>
+      )}
       <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(215px,1fr))] gap-2.5">
         {merge.adjudication.map((entry) => (
           <WindowTile key={entry.window_days} entry={entry} prereg={prereg} />
@@ -404,11 +439,27 @@ export default async function ReceiptPage({
   const { user, accessToken } = auth;
   if (!user || !accessToken) redirect("/sign-in");
   const email = user.email;
-  // The same reader the dashboard's run list uses, so the two surfaces cannot
-  // disagree about which repository `?repo=` names. A PR number alone is
-  // ambiguous across repositories, which is why the API requires it.
+  // The same reader the dashboard's run list uses — same normalisation of
+  // `?repo=` (first entry of a repeated key, empty string discarded), so the
+  // two surfaces cannot disagree about which repository the query names.
   const repo = dashboardFilters(query).repo;
   const prNumber = Number(number);
+
+  // "all" is that reader's default and the RUN LIST's every-repo sentinel
+  // (dashboard-model.ts:37, and the header's own <select> option). It is not a
+  // repository — no GitHub full name is a bare word — and the receipt endpoint
+  // has no every-repo branch, so `live.get("all")` is None and the API 404s.
+  // Left alone, a link that dropped its query string would therefore render
+  // "Doug has no verdict and no merge recorded for it" about a pull request in
+  // a repository nobody named. This page cannot know that, so it says the one
+  // thing it does know instead.
+  if (repo === "all") {
+    return (
+      <Frame email={email}>
+        <Unloadable failure="unscoped" />
+      </Frame>
+    );
+  }
 
   // A path segment that is not a positive integer names no pull request — the
   // same fact the API's 404 states, so it renders the same state. Sending it
