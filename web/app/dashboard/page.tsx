@@ -478,11 +478,13 @@ function RunCells({
   run,
   params,
   disclosure = null,
+  receipt = null,
   indented = false,
 }: {
   run: RunSummary;
   params: DashboardParams;
   disclosure?: React.ReactNode;
+  receipt?: React.ReactNode;
   indented?: boolean;
 }) {
   return (
@@ -512,6 +514,13 @@ function RunCells({
               <strong className="min-w-0 flex-1 truncate text-[14px] font-normal">{run.title}</strong>
             </Link>
           )}
+          {/* The PR's receipt, not this run's evidence — a second, separate
+              destination, so it is a sibling of the link above rather than
+              nested inside it. Passed only by the group row (a child row's
+              PR identity is its parent's, and the receipt is per PR, not per
+              run); absent everywhere else, which is why this slot is a
+              rendered node and not a branch. */}
+          {receipt}
         </div>
       </TableCell>
       <TableCell className={TD}><BandChip band={run.band} /></TableCell>
@@ -601,6 +610,17 @@ function RunTable({
               <RunCells
                 run={group.latest}
                 params={params}
+                receipt={
+                  // `repo` travels in the query string because a PR number
+                  // alone is ambiguous across repositories — the same reason
+                  // the API requires it. Both fields come off the group, so
+                  // the link names the PR the row is actually about.
+                  <Link
+                    className="mono ml-auto flex-none text-[11px] text-muted-foreground no-underline underline-offset-[3px] hover:text-[var(--iridescent)] hover:underline"
+                    aria-label={`Receipt for ${group.repo} #${group.prNumber}`}
+                    href={`/dashboard/pr/${group.prNumber}?repo=${encodeURIComponent(group.repo)}`}
+                  >receipt</Link>
+                }
                 disclosure={hasHistory ? (
                   <label
                     title={count.title}

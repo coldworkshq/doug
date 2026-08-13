@@ -1,0 +1,140 @@
+{
+  "repo": "drewjst/doug",
+  "pr_number": 4821,
+  "preregistration": {
+    "hash": "sha256:0a7f4c1d9b3e60528d41ac77f2b5e9d0c6a83b14f7e25d09ab6c31f480e7d2a5",
+    "in_force": true
+  },
+  "latest_verdict": {
+    "verdict_id": 9112,
+    "scored_at": "2026-08-04T17:41:55Z",
+    "tier": "deterministic",
+    "source": "backfill",
+    "head_sha": null,
+    "model": null,
+    "prompt_hash": null,
+    "read": {
+      "diff_budget": null,
+      "read_order": null,
+      "recorded": false
+    },
+    "score": 0.44,
+    "band": "cleared",
+    "threshold": 0.62,
+    "risk_score": null,
+    "rationale": null,
+    "reasons": [],
+    "deviations": [],
+    "intent_alignment": null,
+    "intent_refs": [],
+    "coverage": null
+  },
+  "merges": [
+    {
+      "merge_commit_sha": "3f1c9ad4c0c1b2e5f6a7d8c9b0a1e2f3d4c5b6a7",
+      "merged_at": "2026-07-29T11:02:10Z",
+      "base_ref": "main",
+      "merged_head_sha": null,
+      "governing_verdict": null,
+      "publication_governing": false,
+      "publication_note": "This merge did not govern publication. The pull request merged again later, and the published quarterly statistic uses the verdict standing at that later merge. The verdict shown here is historical context — what was standing when THIS commit merged — and is not the published number.",
+      "adjudication": [
+        {
+          "window_days": 14,
+          "status": "done",
+          "due_at": "2026-08-12T11:02:10Z",
+          "kind": "censored",
+          "observed_at": "2026-08-12T11:07:44Z",
+          "source": "settle_batch",
+          "detail": {
+            "reason": "repository left the risk set before the window closed",
+            "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+          },
+          "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+        },
+        {
+          "window_days": 60,
+          "status": "done",
+          "due_at": "2026-09-27T11:02:10Z",
+          "kind": "clean",
+          "observed_at": "2026-09-27T11:04:02Z",
+          "source": "settle_batch",
+          "detail": {
+            "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+          },
+          "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+        }
+      ]
+    },
+    {
+      "merge_commit_sha": "a2d70b6e1f4c8395d0b7e2a1c6f39d84b05e7c21",
+      "merged_at": "2026-08-01T08:36:44Z",
+      "base_ref": "main",
+      "merged_head_sha": "b41d0e29c7f5a3861d0e4b7c92f5a8d36e10b4c9",
+      "governing_verdict": {
+        "verdict_id": 9088,
+        "scored_at": "2026-07-31T22:14:02Z",
+        "tier": "reader",
+        "source": "webhook",
+        "head_sha": "b41d0e29c7f5a3861d0e4b7c92f5a8d36e10b4c9",
+        "model": "claude-opus-4",
+        "prompt_hash": "sha256:5b1f70e2a9c4d3861b05fe7c28d9a4013f6b8c52e07d19a4bc63f280d5e19a37",
+        "read": {
+          "diff_budget": 60000,
+          "read_order": "risk",
+          "recorded": true
+        },
+        "score": 0.81,
+        "band": "flagged",
+        "threshold": 0.62,
+        "risk_score": 71,
+        "rationale": "Migration and auth boundary in one diff, approved in four minutes.",
+        "reasons": [
+          {
+            "rule": "boundary-plus-migration",
+            "label": "Sensitive area and a migration in the same diff",
+            "weight": 0.35,
+            "severity": null
+          }
+        ],
+        "deviations": [],
+        "intent_alignment": 2,
+        "intent_refs": ["DOUG-412"],
+        "coverage": {
+          "diff_chars": 84210,
+          "sent_chars": 60000,
+          "files_sent": 9,
+          "files_unseen": ["migrations/0042_ledger_org_id.sql"],
+          "file_cut": "auth/session/context.go"
+        }
+      },
+      "publication_governing": true,
+      "publication_note": "This is the merge whose governing verdict the published quarterly statistic uses for this pull request.",
+      "adjudication": [
+        {
+          "window_days": 14,
+          "status": "done",
+          "due_at": "2026-08-15T08:36:44Z",
+          "kind": "revert",
+          "observed_at": "2026-08-09T03:19:51Z",
+          "source": "settle_batch",
+          "detail": {
+            "revert_sha": "c05e91f7d2b48a6301c9e5f7b28d4a63019f7e5c",
+            "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+          },
+          "prereg_hash": "sha256:1c9f8b0d4e72a3516c8fd2b90a4e7c15d36f8021b9ae4c7d05f31682ba9c40de"
+        },
+        {
+          "window_days": 60,
+          "status": "pending",
+          "due_at": "2026-09-30T08:36:44Z",
+          "kind": null,
+          "observed_at": null,
+          "source": null,
+          "detail": null,
+          "prereg_hash": null
+        }
+      ]
+    }
+  ]
+}

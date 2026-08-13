@@ -183,13 +183,25 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
 
   assert.deepEqual(
     users.sort(),
-    ["app/dashboard/page.tsx"],
+    ["app/dashboard/page.tsx", "app/dashboard/pr/[number]/page.tsx"],
     "a file outside the dashboard surface now uses a token only declared on it",
   );
 
-  // And the wrapper that declares them is still mounted by that file.
-  const page = await readFile(new URL("app/dashboard/page.tsx", dir), "utf8");
-  assert.match(page, /className="dashboard-surface/);
+  // And every file on that list still mounts the wrapper that declares them.
+  // This is the decision the comment above demands, taken rather than skipped:
+  // the receipt screen reuses the dashboard's BLOCK_HEADING verbatim (--dim on
+  // its provenance sub-label) and earns the token by mounting its own
+  // .dashboard-surface, not by being added here as an exemption. Asserting it
+  // for EVERY entry rather than for the first is what keeps the second file
+  // from weakening the pin.
+  for (const rel of users) {
+    const source = await readFile(new URL(rel, dir), "utf8");
+    assert.match(
+      source,
+      /className="dashboard-surface/,
+      `${rel} uses a surface-scoped token without mounting the surface`,
+    );
+  }
 });
 
 test("the dark palette never redeclares a token the dashboard surface pins", async () => {
