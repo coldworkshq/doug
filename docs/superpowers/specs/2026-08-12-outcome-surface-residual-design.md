@@ -94,9 +94,26 @@ against #106:
 | 60-day join | `api/doug/store.py` (`run_history`), `api/doug/models.py`, both clients' row types, `facets.ts` | **yes** — #106 edits `store.py` (+161) and `models.py` (+21) |
 
 So the receipt screen proceeds now and is unaffected by the review's outcome. The
-60-day join is sequenced **after #106 merges**, per the two-lane plan's own execution
+60-day join was sequenced **after #106 merges**, per the two-lane plan's own execution
 loop: "The one shared file is `store.py` — changes to it ship as small separate PRs,
 coordinated by the controller."
+
+**Amended 2026-08-12 after #106 merged as `da8bf97`.** The sequencing constraint is
+discharged; both items may proceed. Re-verified against merged main: `session-api.ts`
+and `web/app/dashboard/page.tsx` are untouched by #106, so the receipt screen's
+zero-overlap claim holds; `RunSummaryItem` survives at `models.py:184`; the
+`window_days == 14` filter moved from `store.py:2245` to **`store.py:2407`**.
+
+Also re-verified: **none of §0.1 was addressed by the merge.** The external review
+(`docs/reviews/2026-08-12-pr-106-external-review.md`) found and fixed eight findings,
+none of them the fixture-fallback trap. Its finding #3 is adjacent — a `review_jobs`
+fallback that could publish a 0/0 scoreboard for a repo *with* adjudications — but that
+is a server-side resolution path; the trap below is the client-side validator path and
+survives on main. Review finding #7 refactored both fetches into a shared
+`cachedShowcaseFetch(path, validator, fallback)`; the behaviour is unchanged, so the
+defect is now shared uniformly by the queue and scoreboard rather than duplicated. Both
+conflicts remain open, as expected: a code review structurally cannot find a ruling that
+exists only in a session transcript.
 
 ---
 
@@ -179,10 +196,10 @@ rhythm. No third data colour (the CVD rule at `console/app/globals.css:160-196`)
 
 ## 3. Surface 2 — the 60-day join
 
-**Sequenced after #106 merges.** Rebase first.
+**Unblocked** — #106 merged as `da8bf97`.
 
 `store.run_history` currently filters `outcomes.c.window_days == 14` and keys its
-reduction by `(repo, pr_number)` (`api/doug/store.py:~2245`). The change:
+reduction by `(repo, pr_number)` (`api/doug/store.py:2407`, post-merge). The change:
 
 - drop the `window_days == 14` filter; key the dict by `(repo, pr_number, window_days)`;
 - emit **two** scalar columns, `outcome_14` and `outcome_60`, preserving the existing
