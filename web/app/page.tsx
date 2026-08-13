@@ -19,7 +19,7 @@ const RULES = [
   {
     n: "03",
     title: "Publishes its miss rate",
-    body: "Every escaped defect Doug cleared is counted, dated, and published. If the number is bad, you'll see it here first.",
+    body: "Every escaped defect Doug cleared will be counted, dated, and published on the locked cadence. If the number is bad, you'll see it here first.",
   },
 ];
 
@@ -51,7 +51,7 @@ const NOT_TOLD = [
 const LAYERS = [
   {
     tag: "landing",
-    title: "Learns what production did",
+    title: "Every merge starts a clock",
     body: "Every merge starts a clock. At 14 and 60 days the verdict is graded against what actually happened — reverted, or survived the window. The scoreboard starts at zero and says so.",
   },
   {
@@ -111,10 +111,10 @@ export default async function Home() {
               className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted-foreground"
               style={{ animationDelay: "160ms" }}
             >
-              Doug reads the diff, scores it against what actually reverted in
-              repos like yours, and routes the handful that need human eyes.
-              Everything else clears. When it&rsquo;s wrong, it says so — in
-              public.
+              Doug reads the diff, scores it against the reverts this repo
+              actually had, and routes the handful that need human eyes.
+              Everything else clears. When it&rsquo;s wrong, it will say so
+              — in public.
             </p>
             <div
               className="animate-rise mt-10 flex flex-wrap gap-3"
@@ -279,7 +279,7 @@ export default async function Home() {
             Others learn what reviewers say
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-4xl">
-            Doug learns what production did, remembers it, and tells your
+            Doug grades what production did, remembers it, and will tell your
             agents{" "}
             <span className="text-iridescent">before they type</span>.
           </h2>
