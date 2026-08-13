@@ -118,6 +118,27 @@ class QueueResponse(BaseModel):
     items: list[QueueItem]
 
 
+class ScoreboardResponse(BaseModel):
+    """Public Doug-on-Doug instrument. Distinct from the queue.
+
+    `miss_rate` is always null in this increment: the first publication
+    is the empty / not-yet-decidable state. `decidable` is therefore
+    always false. The label travels in the payload so a client cannot
+    invent a rate from the counts.
+    """
+
+    repo: str
+    adjudicated: int
+    pending: int
+    as_of: datetime
+    first_due: datetime | None
+    deep_reads: int | None
+    deep_read_cap: int
+    miss_rate: None
+    decidable: bool
+    label: str
+
+
 class RunCoverage(BaseModel):
     """What the reader was actually given. None on the whole object means no
     read happened — never zeros, which would claim Doug read nothing of a

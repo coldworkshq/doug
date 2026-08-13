@@ -635,13 +635,17 @@ def enabled() -> bool:
     return _get_engine() is not None
 
 
-def _as_utc(value: datetime) -> datetime:
+def _as_utc(value: datetime | None) -> datetime | None:
     """Normalise a DB timestamp to aware UTC.
 
     sqlite's CURRENT_TIMESTAMP is naive; Postgres timestamptz is aware.
     Claim holders compare the started_at they were handed against the row,
     so both sides of that equality have to share a timezone convention.
+    None passes through — instrument_snapshot's first_due is legitimately
+    absent on an empty ledger.
     """
+    if value is None:
+        return None
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
@@ -1263,14 +1267,6 @@ class InstrumentSnapshot:
     miss_rate: None = None
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
-
-
 def instrument_snapshot(
     installation_id: int,
     github_repo_id: int,
@@ -1318,6 +1314,64 @@ def instrument_snapshot(
         deep_reads=0 if meter is None else int(meter),
         deep_read_cap=PLAN_DEEP_READ_CAP,
         miss_rate=None,
+    )
+
+
+def instrument_snapshot_for_repo(
+    repo: str,
+    *,
+    now: datetime | None = None,
+) -> InstrumentSnapshot | None:
+    """Resolve a display name to ids, then snapshot. Empty if unknown.
+
+    Showcase pages pin a full_name, not a github_repo_id. installation_repos
+    is the live mapping; review_jobs is the fallback for a name that has
+    been reviewed but not (yet) in the install ledger. An unknown name is
+    the empty instrument, not None — None is reserved for 'no ledger'.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    as_of = now or datetime.now(UTC)
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                select(
+                    installation_repos.c.installation_id,
+                    installation_repos.c.github_repo_id,
+                ).where(
+                    installation_repos.c.full_name == repo,
+                    installation_repos.c.state == "active",
+                ).limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            row = (
+                conn.execute(
+                    select(
+                        review_jobs.c.installation_id,
+                        review_jobs.c.github_repo_id,
+                    )
+                    .where(review_jobs.c.repo_full_name == repo)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+    if row is None:
+        return InstrumentSnapshot(
+            adjudicated=0,
+            pending=0,
+            as_of=as_of,
+            first_due=None,
+            deep_reads=0,
+            deep_read_cap=PLAN_DEEP_READ_CAP,
+            miss_rate=None,
+        )
+    return instrument_snapshot(
+        int(row["installation_id"]), int(row["github_repo_id"]), now=as_of
     )
 
 

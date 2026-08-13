@@ -60,6 +60,7 @@ from .models import (
     RunOutcome,
     RunOutcomeJob,
     RunSummaryItem,
+    ScoreboardResponse,
     Verdict,
 )
 from .scoring import default_threshold, score
@@ -675,6 +676,46 @@ def showcase_queue(response: Response) -> QueueResponse:
         return _showcase_cache[1]
     body = _queue_response(_rows_to_items(store.latest_reviews(repo=showcase)), None)
     _showcase_cache = (now, body)
+    return body
+
+
+_scoreboard_cache: tuple[float, ScoreboardResponse] | None = None
+
+SCOREBOARD_UNDECIDABLE = "not yet decidable — a count, not a rate"
+
+
+@app.get("/v1/showcase/scoreboard")
+def showcase_scoreboard(response: Response) -> ScoreboardResponse:
+    """The public Doug-on-Doug instrument, pinned like the showcase queue.
+
+    Unauthenticated, not a selector: repo from DOUG_SHOWCASE_REPO, never
+    from the caller. Same 404-if-unset-or-no-ledger contract as
+    /v1/showcase/queue so a missing pin cannot invent a scoreboard.
+    """
+    global _scoreboard_cache
+    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
+    if not showcase or not store.enabled():
+        raise _not_found()
+    response.headers["Cache-Control"] = "public, max-age=30"
+    now = time.monotonic()
+    if _scoreboard_cache is not None and now - _scoreboard_cache[0] < _SHOWCASE_CACHE_TTL_S:
+        return _scoreboard_cache[1]
+    snap = store.instrument_snapshot_for_repo(showcase)
+    if snap is None:
+        raise _not_found()
+    body = ScoreboardResponse(
+        repo=showcase,
+        adjudicated=snap.adjudicated,
+        pending=snap.pending,
+        as_of=snap.as_of,
+        first_due=snap.first_due,
+        deep_reads=snap.deep_reads,
+        deep_read_cap=snap.deep_read_cap,
+        miss_rate=None,
+        decidable=False,
+        label=SCOREBOARD_UNDECIDABLE,
+    )
+    _scoreboard_cache = (now, body)
     return body
 
 

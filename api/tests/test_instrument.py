@@ -155,3 +155,25 @@ def test_adjudicated_is_not_count_of_outcomes_rows(tmp_path, monkeypatch):
     snap = store.instrument_snapshot(INSTALLATION_ID, REPO_ID, now=NOW)
     assert snap.adjudicated == 2
     assert snap.adjudicated != 10
+
+
+def test_snapshot_for_repo_resolves_via_installation_repos(tmp_path, monkeypatch):
+    url = _db(tmp_path, monkeypatch)
+    store.upsert_installation(INSTALLATION_ID, "drewjst", "User", "active")
+    store.set_installation_repos(INSTALLATION_ID, [(REPO_ID, "drewjst/doug")], replace=True)
+    _job(url, status="done", pr_number=1, window_days=14)
+    _job(url, status="pending", pr_number=2, window_days=14)
+    snap = store.instrument_snapshot_for_repo("drewjst/doug", now=NOW)
+    assert snap is not None
+    assert snap.adjudicated == 1
+    assert snap.pending == 1
+
+
+def test_snapshot_for_an_unknown_repo_is_the_empty_instrument(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    snap = store.instrument_snapshot_for_repo("nobody/nowhere", now=NOW)
+    assert snap is not None
+    assert snap.adjudicated == 0
+    assert snap.pending == 0
+    assert snap.deep_reads == 0
+

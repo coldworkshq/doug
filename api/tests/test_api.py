@@ -3579,6 +3579,57 @@ def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
     assert len(api._showcase_cache) == 2
 
 
+def test_showcase_scoreboard_404s_when_the_repo_is_unset(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOUG_SHOWCASE_REPO", raising=False)
+    client = TestClient(app)
+    assert client.get("/v1/showcase/scoreboard").status_code == 404
+
+
+def test_showcase_scoreboard_serves_without_any_token(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    client = TestClient(app)
+    r = client.get("/v1/showcase/scoreboard")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["adjudicated"] == 0
+    assert body["pending"] == 0
+    assert body["miss_rate"] is None
+    assert body["decidable"] is False
+    assert body["label"] == "not yet decidable — a count, not a rate"
+    assert body["deep_read_cap"] == 200
+    assert body["repo"] == "drewjst/doug"
+
+
+def test_showcase_scoreboard_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    store.upsert_installation(1, "drewjst", "User", "active")
+    store.set_installation_repos(1, [(1, "drewjst/doug")], replace=True)
+    store.enqueue_outcome_jobs(
+        1, 1, 7, "a" * 40, datetime(2026, 8, 1, tzinfo=UTC), "main"
+    )
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    client = TestClient(app)
+    pinned = client.get("/v1/showcase/scoreboard").json()
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    attempted = client.get("/v1/showcase/scoreboard?repo=someone/private").json()
+    assert pinned["pending"] == 2  # 14- and 60-day windows
+    pinned.pop("as_of")
+    attempted.pop("as_of")
+    assert attempted == pinned
+
+
+def test_showcase_scoreboard_sets_a_public_cache_control_header(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
+    monkeypatch.setattr(api, "_scoreboard_cache", None)
+    client = TestClient(app)
+    r = client.get("/v1/showcase/scoreboard")
+    assert r.headers["cache-control"] == "public, max-age=30"
+
+
 # ---------------------------------------------------------------------------
 # POST /v1/installations/bind — authority, not visibility.
 #

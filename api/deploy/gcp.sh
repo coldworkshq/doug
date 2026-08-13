@@ -683,10 +683,11 @@ deploy() {
     # candidate whose public pages are broken. Gated BEFORE
     # update-traffic — a check that runs after traffic moves protects
     # nothing.
-    promote_if_healthy "$SERVICE" /openapi.json /v1/showcase/queue
+    promote_if_healthy "$SERVICE" /openapi.json /v1/showcase/queue /v1/showcase/scoreboard
   else
     smoke "$(api_url)/openapi.json"
     smoke "$(api_url)/v1/showcase/queue"
+    smoke "$(api_url)/v1/showcase/scoreboard"
   fi
   # The Job consumes the promoted service's exact immutable image. Building
   # it separately would let the live review and outcome detector drift even
