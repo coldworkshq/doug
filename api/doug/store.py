@@ -25,6 +25,7 @@ import sys
 import threading
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
@@ -57,7 +58,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from . import migrations
 from .models import Band, Verdict
-from .reader import Coverage, ReaderVerdict
+from .reader import Coverage, ReaderVerdict, installation_scope
 
 metadata = MetaData()
 
@@ -1235,6 +1236,89 @@ def record_deep_read(scope: str, cap: int, *, now: datetime | None = None) -> bo
             .values(count=deep_read_counters.c.count + 1)
         )
         return result.rowcount > 0
+
+
+# The $99 plan's pooled deep-read allowance, shown on the check-run meter
+# and public scoreboard. Distinct from reader.INSTALLATION_MONTHLY_READ_CAP
+# (4000), which is a runaway guard, not a plan limit.
+PLAN_DEEP_READ_CAP = 200
+
+
+@dataclass(frozen=True)
+class InstrumentSnapshot:
+    """The counters the check-run footer and public scoreboard both render.
+
+    `adjudicated` is count(outcome_jobs WHERE status='done') for one
+    installation+repo — never count(outcomes), which multi-counts.
+    `miss_rate` stays None until a later increment computes the
+    pre-registered table; the empty/undecidable state is the product.
+    """
+
+    adjudicated: int
+    pending: int
+    as_of: datetime
+    first_due: datetime | None
+    deep_reads: int | None
+    deep_read_cap: int = PLAN_DEEP_READ_CAP
+    miss_rate: None = None
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def instrument_snapshot(
+    installation_id: int,
+    github_repo_id: int,
+    *,
+    now: datetime | None = None,
+) -> InstrumentSnapshot | None:
+    """Publication counters for one repo. None when there is no ledger."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    as_of = now or datetime.now(UTC)
+    period = as_of.strftime("%Y-%m")
+    scope = installation_scope(installation_id)
+    scoped = and_(
+        outcome_jobs.c.installation_id == installation_id,
+        outcome_jobs.c.github_repo_id == github_repo_id,
+    )
+    with engine.connect() as conn:
+        adjudicated = conn.execute(
+            select(func.count())
+            .select_from(outcome_jobs)
+            .where(scoped, outcome_jobs.c.status == "done")
+        ).scalar_one()
+        pending = conn.execute(
+            select(func.count())
+            .select_from(outcome_jobs)
+            .where(scoped, outcome_jobs.c.status != "done")
+        ).scalar_one()
+        first_due = conn.execute(
+            select(func.min(outcome_jobs.c.due_at)).where(
+                scoped, outcome_jobs.c.status != "done"
+            )
+        ).scalar_one()
+        meter = conn.execute(
+            select(deep_read_counters.c.count).where(
+                deep_read_counters.c.scope == scope,
+                deep_read_counters.c.period == period,
+            )
+        ).scalar_one_or_none()
+    return InstrumentSnapshot(
+        adjudicated=int(adjudicated),
+        pending=int(pending),
+        as_of=as_of,
+        first_due=_as_utc(first_due),
+        deep_reads=0 if meter is None else int(meter),
+        deep_read_cap=PLAN_DEEP_READ_CAP,
+        miss_rate=None,
+    )
 
 
 def save_read(verdict_id: int | None, cov: Coverage) -> int:
