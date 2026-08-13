@@ -94,6 +94,27 @@ class Reason(BaseModel):
     # carry a weight and no severity. Both travel here so a surface can
     # show whichever one is meaningful instead of a constant 0.00.
     severity: str | None = None
+    # The file a reader finding names, set where the finding is still in
+    # hand (reader.verdict_from_reader) rather than recovered later. It used
+    # to be rebuilt in store.save_review by matching this Reason's label
+    # against the model's own `description` — a key the model picks and can
+    # repeat, so two findings wording one defect the same way collapsed and
+    # both rows took the last one's file. `file` is half of convergence's
+    # identity (convergence.py:174-179), where a wrong one is worse than a
+    # missing one: it retires a live identity and invents another.
+    # None for every deterministic reason and for the weight-0 notices,
+    # which name no single file.
+    #
+    # exclude=True keeps it off the wire. Its consumer is convergence, which
+    # reads the `findings` table directly and never an API response, and no
+    # surface renders it — so serializing it would widen RunDetailResponse
+    # and /v1/queue for nobody. web/lib/session-api.ts:274-278 validates a
+    # reason with an exact key set, deliberately, so that the API and the
+    # client cannot drift unnoticed; an extra key there is a rejected
+    # payload, not an ignored field. Publishing `file` is a contract change
+    # and belongs in a commit that also updates that validator, its type,
+    # and console/lib/api.ts — not a side effect of fixing the write path.
+    file: str | None = Field(default=None, exclude=True)
 
 
 class Band(StrEnum):

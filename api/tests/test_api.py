@@ -3204,9 +3204,14 @@ def test_jobs_accepts_pending_status_under_the_unhealthy_view(tmp_path, monkeypa
 
 
 # /v1/runs/{verdict_id} — the console's forensic endpoint. RV is the same
-# reader output test_store.py's find_verdict_by_id tests build: its one
-# finding's description matches VERDICT's own reason label, so save_review
-# attaches file/severity to it the same way a real reader row would.
+# reader output test_store.py's find_verdict_by_id tests build, and supplies
+# the row's risk_score, rationale and raw. It does NOT supply the findings
+# rows' file/severity: those come off VERDICT's own Reasons, which carry
+# neither, so the stored findings are severity-NULL — the shape the
+# deterministic tier produces, and what the finding_counts test above
+# depends on. (save_review used to rebuild them here by matching the
+# Reason's label against RV's finding description; that key was the model's
+# own text and collapsed whenever two findings shared it.)
 RV = api.reader.ReaderVerdict.model_validate(
     {
         "risk_score": 62,
@@ -3312,6 +3317,28 @@ def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypat
     assert body["coverage"]["file_cut"] == "api/doug/api.py"
     assert body["reasons"][0]["rule"] == "reader:race-condition"
     assert body["deviations"] == []
+
+
+def test_run_detail_reason_carries_exactly_the_keys_the_client_validates(
+    tmp_path, monkeypatch
+):
+    """web/lib/session-api.ts:274-278 checks a reason against an EXACT key
+    set, deliberately, so that the API and the client cannot drift unseen.
+    An added key there is a rejected payload, not an ignored field.
+
+    Reason.file exists for the findings table (convergence reads that table,
+    never this response) and is marked exclude=True to stay off the wire.
+    Publishing it is a contract change and has to land together with that
+    validator, its RunDetail type, and console/lib/api.ts — this pins the
+    boundary so the change cannot happen by accident.
+    """
+    _db(tmp_path, monkeypatch)
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid)
+    assert sorted(body["reasons"][0]) == ["label", "rule", "severity", "weight"]
 
 
 def test_run_detail_reports_no_job_as_null_and_no_outcomes_as_empty(tmp_path, monkeypatch):

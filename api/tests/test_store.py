@@ -35,11 +35,25 @@ RV = reader.ReaderVerdict.model_validate(
     }
 )
 
+# What reader.verdict_from_reader(RV) produces, written out rather than
+# called so the fixture stays a literal and cannot pick up an ambient
+# DOUG_READER_THRESHOLD at import. test_reader_verdict_fixture_matches_the
+# _production_builder below pins the two together; they were allowed to
+# drift once, and the missing severity/file here is what made save_review's
+# description-matching rebuild look load-bearing instead of redundant.
 VERDICT = Verdict(
     score=0.62,
     band=Band.FLAGGED,
     threshold=0.30,
-    reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded", weight=0.0)],
+    reasons=[
+        Reason(
+            rule="reader:race-condition",
+            label="Cache write is not guarded",
+            weight=0.0,
+            severity="high",
+            file="cache.py",
+        )
+    ],
 )
 
 
@@ -246,6 +260,70 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         f = conn.execute(select(store.findings)).mappings().one()
         assert f["verdict_id"] == vid
         assert f["severity"] == "high" and f["file"] == "cache.py"
+
+
+def test_reader_verdict_fixture_matches_the_production_builder():
+    """VERDICT must stay what the reader tier actually emits for RV.
+
+    Every save_review test below feeds this pair in together, so a fixture
+    that drifts from verdict_from_reader silently changes what those tests
+    are about. It had drifted — the Reason carried neither severity nor
+    file, which no reader-tier verdict does — and that is what let a rebuild
+    keyed on model-authored description text look necessary.
+    """
+    assert reader.verdict_from_reader(RV).reasons == VERDICT.reasons
+
+
+def test_save_review_keeps_each_findings_own_file_when_two_share_a_description(
+    tmp_path, monkeypatch
+):
+    """Two findings can word one defect identically and differ only by file.
+
+    `file` is half of convergence's identity (convergence.py:174-179), so a
+    row that takes its neighbour's file does not merely lose information: it
+    retires an identity that is still live and invents one that never
+    existed — a false `resolved` beside a false `new` on the next round.
+    That is the failure mode the whole abstention ladder exists to prevent,
+    arriving through the write path instead of the rules.
+
+    Goes through verdict_from_reader rather than a hand-built Verdict: the
+    join this pins the absence of lived between the two, so a fixture that
+    skips one of them cannot exercise it.
+    """
+    url = _db(tmp_path, monkeypatch)
+    rv = reader.ReaderVerdict.model_validate(
+        {
+            "risk_score": 62,
+            "rationale": "The same guard is missing in two places.",
+            "findings": [
+                {
+                    "category_slug": "missing-null-check",
+                    "description": "Response is dereferenced without a guard",
+                    "file": "a.py",
+                    "severity": "high",
+                },
+                {
+                    "category_slug": "missing-null-check",
+                    "description": "Response is dereferenced without a guard",
+                    "file": "b.py",
+                    "severity": "low",
+                },
+            ],
+        }
+    )
+
+    vid = store.save_review("o/r", 11, "reader", reader.verdict_from_reader(rv), rv)
+    assert vid is not None
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(select(store.findings).order_by(store.findings.c.id))
+            .mappings()
+            .all()
+        )
+    assert [r["file"] for r in rows] == ["a.py", "b.py"]
+    assert [r["severity"] for r in rows] == ["high", "low"]
 
 
 def test_save_review_persists_reason_severity_without_a_reader_verdict(tmp_path, monkeypatch):

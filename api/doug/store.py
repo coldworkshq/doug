@@ -825,22 +825,20 @@ def save_review(
                     "rule": r.rule,
                     "label": r.label,
                     "weight": r.weight,
-                    "file": None,
-                    # The Reason itself may already carry severity (reader
-                    # tier sets it in verdict_from_reader); reader_verdict
-                    # below only adds `file` and reconfirms the same value
-                    # when a match is found.
+                    # Both come off the Reason, which carried them from the
+                    # finding itself (reader.verdict_from_reader). This used
+                    # to re-derive `file` from `reader_verdict` by matching
+                    # r.label against each finding's `description`, which is
+                    # model-authored text and therefore not a key: two
+                    # findings wording one defect identically collapsed to
+                    # one dict entry and both rows took the last one's file
+                    # and severity. Deterministic reasons and the weight-0
+                    # notices carry None for both, exactly as before.
+                    "file": r.file,
                     "severity": r.severity,
                 }
                 for r in verdict.reasons
             ]
-            if reader_verdict:
-                by_desc = {f.description: f for f in reader_verdict.findings}
-                for r in rows:
-                    f = by_desc.get(r["label"])
-                    if f:
-                        r["file"] = f.file
-                        r["severity"] = f.severity
             if rows:
                 conn.execute(findings.insert(), rows)
             if coverage is not None:
