@@ -10,6 +10,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 GCP_PATH = Path(__file__).resolve().parents[1] / "deploy" / "gcp.sh"
@@ -467,6 +468,83 @@ def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
         return [line for line in text.splitlines() if line and not line.startswith("#")]
 
     assert body(dockerignore) == body(gcloudignore)
+
+
+def test_gcloudignore_keeps_every_tracked_web_source_file_in_the_upload():
+    """Byte-identity with .dockerignore (above) is necessary but NOT
+    sufficient, and on its own it shipped a 404 to production.
+
+    .gcloudignore is gitignore syntax, where a bare `docs` matches a
+    directory named docs at ANY depth. .dockerignore anchors bare patterns
+    to the context root. Identical text, different meaning: the shared
+    `docs` line excluded only ./docs from every local and CI `docker build`
+    while additionally stripping web/app/docs/** and web/components/docs/**
+    from the Cloud Build upload — the one context nothing exercised.
+
+    The failure was silent by construction. The pages and the components
+    they import disappeared together, so no import dangled and `next build`
+    went green on 11 routes instead of 21; the deploy's smoke test only
+    probes `/`. site-header.tsx is not under a docs/ directory, so the
+    header's Docs link shipped and pointed at a route that had never been
+    compiled. /docs 404'd in production from #101 until someone opened it.
+
+    So: assert the invariant the images actually depend on — every tracked
+    file the web/console builds compile survives the upload filter — rather
+    than a spelling. Markdown is excluded on purpose (`**/*.md`) and is not
+    compiled, so it is exempt.
+    """
+    root = Path(__file__).resolve().parents[2]
+    # -z, not .split(): git C-quotes unusual paths and .split() breaks on any
+    # whitespace, so `web/app/case study/page.tsx` would silently become two
+    # fragments that match nothing and pass — dropping the very file this pin
+    # is meant to cover instead of failing.
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "web", "console"],
+        cwd=root, capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
+    compiled = [p for p in tracked if p and not p.endswith(".md")]
+    # Guard the guard: an empty list would make every assertion below vacuous.
+    assert len(compiled) > 100, f"expected a real source tree, got {len(compiled)}"
+    assert any(p.startswith("web/app/docs/") for p in compiled), \
+        "web/app/docs/ is not tracked — this pin can no longer see the regression"
+
+    # Use git as the gitignore oracle: same engine gcloud's .gcloudignore
+    # follows, so this cannot drift from real matching semantics the way a
+    # hand-rolled matcher would.
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=scratch, check=True)
+        # The oracle must see .gcloudignore and NOTHING else. A scratch repo
+        # still inherits the developer's global core.excludesFile (and any
+        # info/exclude an init.templateDir dropped in), so a global gitignore
+        # holding a bare `docs`/`out`/`dist` would report real web sources as
+        # stripped and fail this test on that machine while CI stayed green.
+        (scratch / ".git" / "info" / "exclude").write_text("")
+        (scratch / ".gitignore").write_text((root / ".gcloudignore").read_text())
+        for rel in compiled:
+            target = scratch / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+        # check-ignore prints the paths it WOULD exclude; 0 = some ignored,
+        # 1 = none, anything else is a real error. Reading stdout alone would
+        # turn a git failure into an empty list and a silent pass — the exact
+        # cannot-fail mode this pin exists to prevent.
+        proc = subprocess.run(
+            ["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "-z", "--stdin"],
+            cwd=scratch, input="\0".join(compiled),
+            capture_output=True, text=True,
+        )
+        assert proc.returncode in (0, 1), (
+            f"git check-ignore failed ({proc.returncode}), so this pin proved "
+            f"nothing: {proc.stderr.strip()}"
+        )
+        ignored = [p for p in proc.stdout.split("\0") if p]
+
+    assert not ignored, (
+        "these tracked sources would be stripped from the Cloud Build upload "
+        "and silently vanish from the deployed image — anchor the offending "
+        f".gcloudignore entry with a leading slash: {sorted(ignored)}"
+    )
 
 
 def test_api_deploy_source_is_api_dir_not_repo_root():

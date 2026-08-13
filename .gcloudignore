@@ -3,6 +3,18 @@
 # .dockerignore so the Cloud Build upload matches the context CI and local
 # `docker build -f … .` exercise.
 #
+# IDENTICAL TEXT IS NOT IDENTICAL MEANING — every root-only entry below MUST
+# carry a leading slash. This file is gitignore syntax, where a bare `docs`
+# matches a directory named docs at ANY depth; .dockerignore anchors bare
+# patterns to the context root. A bare `docs` here therefore silently stripped
+# web/app/docs/** and web/components/docs/** from the Cloud Build upload while
+# every local and CI `docker build` kept them. Next then built cleanly — pages
+# and the components they import vanished together, so nothing dangled — and
+# shipped 11 routes instead of 21. The header's /docs link went live against a
+# route that had never been compiled, and /docs 404'd in production from #101
+# until this was found. Docker Cleans leading slashes away, so `/docs` means
+# root-only in BOTH files: anchor here, mirror there, and the two stay honest.
+#
 # This file is ONLY consulted when the upload top-level is the repo root
 # (gcp.sh build_node_image). API deploys use `cd api && --source .`, so
 # they resolve api/.gcloudignore and are unaffected by the `api` exclude
@@ -21,11 +33,11 @@
 **/.pytest_cache
 **/.ruff_cache
 **/*.pyc
-api
-docs
-data
-out
-reports
+/api
+/docs
+/data
+/out
+/reports
 *.sqlite
 *.sqlite3
 *.db

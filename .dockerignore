@@ -12,11 +12,11 @@
 **/.pytest_cache
 **/.ruff_cache
 **/*.pyc
-api
-docs
-data
-out
-reports
+/api
+/docs
+/data
+/out
+/reports
 *.sqlite
 *.sqlite3
 *.db

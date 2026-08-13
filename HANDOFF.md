@@ -1,65 +1,59 @@
 # HANDOFF — doug
 
-State:    review — dashboard-ux is code-complete and every automated gate is
-          green, but the four behaviours have NEVER been seen in a browser.
-          Not mergeable until Andrew looks at it.
-          web 204/204 · console 110/110 · tsc clean (both) · eslint clean ·
-          `npm run build` clean (20 routes). 23 commits off origin/main @ 7f64652.
+State:    review — /docs 404 root-caused and fixed, code review run at medium
+          and all 4 findings fixed. web 204/204 + lint + build (11 docs routes)
+          · api 1344/1344 + ruff. 3 commits off main @ b3fa8d8.
 
-Next:     ANDREW RUNS IT. `npm run dev --workspace=web` from the worktree needs
-          WorkOS credentials this repo does not carry — the dev server errors with
-          "You are calling 'withAuth' on a route that isn't covered by the AuthKit
-          middleware" and /dashboard never renders. Check, in this order:
-          1. THE TABLE. Four CSS mechanisms compose here and every pin on them is a
-             string grep: sticky <th> inside a container that is both overflow-x-auto
-             (base) and overflow-y-auto + max-h-[55vh]; border-separate with cell-level
-             borders; the :has() disclosure under the separated model; horizontal
-             scroll below 980px. FIRST: find a run with job.error set and look at the
-             job column — it is w-[118px], fixed layout, arbitrary-length string.
-          2. THE GEAR IN DARK MODE. Toggle dark on the marketing site, then open
-             /dashboard and open the gear. This was a confirmed defect (see C1 below);
-             the fix is unobserved. Also check it isn't clipped by the sticky header.
-          3. THE SPACE PICKER IN FIREFOX AND SAFARI. The keyboard path was traced
-             against Chrome's event model only. Firefox historically does not fire
-             `change` on arrow keys in a closed <select>; if it doesn't, `pending` is
-             never armed and the onBlur commit silently does nothing.
-          4. THE TYPE SCALE. Band column is w-[112px], sized when the chip was 10.5px
-             and could wrap; the chip is now 11.5px and TableCell forbids wrapping.
+Next:     Merge the PR. /docs STAYS 404 until this lands on main and the deploy
+          runs — nothing about the fix is live yet.
 
-Blockers: WorkOS credentials for a local dev server. Not a code problem.
+Blockers: none
 
 Decisions this session:
-- The threshold control is a VIEW LENS, not a setting — the needs-you line is a
-  server-side env var stamped per verdict at scoring time, so no UI can change what
-  Doug did — rejected: a real persisted per-space threshold (store schema + endpoint
-  + worker read; would only affect future runs), and a plain "score >= X" filter
-  (honest but can't answer "what would a tighter line have caught?")
-- The lens rewrites `band` on the row objects at the boundary rather than threading a
-  `lens` parameter — five of the modules that read `run.band` are byte-locked to
-  console's copies, so a parameter would have been rejected by the lockstep; the
-  rewrite also makes pills, counts, chips and the count line agree for free —
-  rejected: re-colouring chips only (pills would then disagree with the table)
-- `.paper-tokens` as a third selector on the SHARED palette block — rejected: a second
-  copy of the values in the component (globals.css's own comment warns it will drift),
-  and removing Radix's Portal (changes clipping semantics for every future popover)
-- Space picker commits on pointer immediately, defers keyboard to Enter/Tab/blur —
-  auto-submitting every `change` navigates on every arrow key (WCAG 3.2.2) — rejected:
-  shipping the naive version Andrew asked for, and keeping the "open" button visible
-- The branch does NOT touch package-lock.json — shadcn add pulled zero new deps; the
-  29 "peer": true lines were npm renormalising metadata — rejected: committing the
-  churn with a corrected description
-- Type scale bumped in console/ too, for band-chip.tsx and run-spine.tsx only — that is
-  what the lockstep pin is for. COST, not yet addressed: console's own surfaces were
-  not bumped, so those two components are now oversized inside console
-  (console/components/runs-table.tsx:646, console/app/runs/[verdictId]/page.tsx:104)
+- ROOT CAUSE of the /docs 404: `.gcloudignore` is gitignore syntax, where a
+  bare `docs` matches a dir named docs at ANY depth; `.dockerignore` anchors
+  bare patterns to the context root. The two were deliberately kept
+  BYTE-IDENTICAL by test_root_gcloudignore_tracks_dockerignore_for_node_builds,
+  so the shared `docs` line stripped web/app/docs/** and web/components/docs/**
+  from `gcloud builds submit` ONLY — the one context nothing exercised. Pages
+  and the components they import vanished together, so no import dangled,
+  `next build` went green on 11 routes instead of 21, and the deploy smoke test
+  only probes `/`. site-header.tsx is not under a docs/ dir, so the Docs link
+  shipped pointing at a route never compiled. Proven with
+  `gcloud meta list-files-for-upload` and by pulling the live image, whose
+  app-paths-manifest.json lists 11 routes and no docs.
+- FIX: anchor /api /docs /data /out /reports in BOTH files. Docker Cleans a
+  leading slash away, so `/docs` is root-only in both — semantics now agree AND
+  the text stays identical, so the lockstep pin still holds — rejected:
+  deleting that pin (still load-bearing, just insufficient alone).
+- The docs CONTENT needed nothing: /docs is already a faithful port of the
+  gh-pages site (same 5 groups, 11 sections, real commands and numbers). The
+  ask was "build a Stripe-like docs page"; it was already built in #101 and
+  had simply never been served — rejected: writing new content before Andrew
+  can see what exists.
+- Two rendering bugs found by being the first to ever render this surface:
+  DocsTwoCol's rail lacked min-w-0 (below lg the grid collapses to one column,
+  the rail's min-content = the code block's longest line, so the column
+  stretched to 462px in a 375px viewport and clipped body copy off the right
+  edge of EVERY docs page on mobile); ParamsTable's name overflowed its 13rem
+  track.
+- Code review (medium) found 4 real defects in THIS branch's own code, all
+  fixed: nowrap on the meta re-overflowed the track (216px vs 208px); and the
+  new pin inherited the dev's global core.excludesFile (spurious red on some
+  machines, green in CI), never checked check-ignore's returncode (a git error
+  = empty stdout = vacuous pass), and parsed `git ls-files` with .split()
+  (breaks on paths with whitespace, silently dropping the file it covers).
+- The "pl/anned" tearing was NOT an overflow-wrap problem: {r.name} and the
+  meta span are adjacent JSX expressions with no whitespace text node between
+  them, and ml-2 is a margin, not a break opportunity — so the run was
+  unbreakable and the browser had to split mid-token. Fixed with an explicit
+  {" "} — rejected: flex-wrap (works, but items-baseline inflates a two-line
+  name's line box by 42px).
 
-Pointers: worktree .worktrees/dashboard-ux · branch dashboard-ux · spec
-          docs/superpowers/specs/2026-08-12-dashboard-ux-design.md · plan
-          docs/superpowers/plans/2026-08-12-dashboard-ux.md · SDD ledger with every
-          review round, parked finding and deferred minor at
-          .superpowers/sdd/2026-08-12-dashboard-ux/progress.md
-          THREE PLAN DEFECTS were caught by review, not by tests, and all three are
-          worth knowing about: the gear's Clear button re-applied the lens (duplicate
-          name="threshold" fields, first-value-wins); a /sticky/ assertion that a doc
-          comment could satisfy; and C1, a Radix portal escaping .dashboard-surface so
-          the popover rendered dark over the light page — the only portal in the app.
+Pointers: worktree .claude/worktrees/hosted-docs-page-365b6f · branch
+          claude/hosted-docs-page-365b6f · fix in .gcloudignore +
+          .dockerignore · pin at api/tests/test_deploy_gcp.py:472 · components
+          web/components/docs/{docs-two-col,params-table}.tsx · pages
+          web/app/docs/* · nav web/lib/docs-nav.ts
+          Untracked and deliberately NOT committed: .claude/launch.json (local
+          preview config; the repo does not track .claude).
