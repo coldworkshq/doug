@@ -548,10 +548,15 @@ test("a stamped prompt hash renders the hash", () => {
   assert.equal(promptHashLine({ prompt_hash: "abc123" }), "abc123");
 });
 
-test("the latest-verdict caption states the external exclusion", () => {
+test("the latest-verdict caption states the external EXCLUSION, not merely the topic", () => {
   const caption = latestVerdictCaption();
-  assert.ok(/external/i.test(caption), "a human approval is newer and is deliberately not this");
-  assert.ok(!/newest verdict on this PR/i.test(caption));
+  // Exact equality, deliberately. A /external/i check would pass on
+  // "…including external reviews" — the precise inversion this caption
+  // exists to prevent — so it cannot discriminate the thing that matters.
+  assert.equal(
+    caption,
+    "Doug's most recent score. Excludes external reviews, which carry no read.",
+  );
 });
 
 test("a gap between latest and governing is reported with both ids", () => {
