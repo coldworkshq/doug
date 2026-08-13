@@ -286,9 +286,9 @@ def test_save_review_keeps_each_findings_own_file_when_two_share_a_description(
     That is the failure mode the whole abstention ladder exists to prevent,
     arriving through the write path instead of the rules.
 
-    Goes through verdict_from_reader rather than a hand-built Verdict: the
-    join this pins the absence of lived between the two, so a fixture that
-    skips one of them cannot exercise it.
+    Goes through verdict_from_reader rather than a hand-built Verdict on
+    purpose: the deleted join sat between those two, so a test that skips
+    either end cannot reach the collapse this pins.
     """
     url = _db(tmp_path, monkeypatch)
     rv = reader.ReaderVerdict.model_validate(

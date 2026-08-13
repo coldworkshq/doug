@@ -111,9 +111,15 @@ class Reason(BaseModel):
     # and /v1/queue for nobody. web/lib/session-api.ts:274-278 validates a
     # reason with an exact key set, deliberately, so that the API and the
     # client cannot drift unnoticed; an extra key there is a rejected
-    # payload, not an ignored field. Publishing `file` is a contract change
-    # and belongs in a commit that also updates that validator, its type,
-    # and console/lib/api.ts — not a side effect of fixing the write path.
+    # payload, not an ignored field.
+    #
+    # Publishing `file` is therefore a contract change, not a flag flip, and
+    # dropping exclude=True on its own is worse than leaving it: the two
+    # projections that rebuild reasons for a response — store._verdict_bundle
+    # and api._rows_to_items — both select rule/label/weight/severity and
+    # never findings.c.file, so every reason would serialize `"file": null`
+    # forever. A commit that publishes it has to widen those two first, then
+    # that validator, its RunDetail type, and console/lib/api.ts.
     file: str | None = Field(default=None, exclude=True)
 
 
