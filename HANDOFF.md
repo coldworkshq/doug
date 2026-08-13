@@ -1,59 +1,89 @@
 # HANDOFF — doug
 
-State:    review — /docs 404 root-caused and fixed, code review run at medium
-          and all 4 findings fixed. web 204/204 + lint + build (11 docs routes)
-          · api 1344/1344 + ruff. 3 commits off main @ b3fa8d8.
+State:    spec — lane-state audit + brainstorm, no code written. STOPPED
+          mid-brainstorm: PR #106 (open, from a Cursor session on branch
+          cursor/unbeatable-doug-research-584a) already implements most of the
+          lane. Clean tree @ 37942c3.
 
-Next:     Merge the PR. /docs STAYS 404 until this lands on main and the deploy
-          runs — nothing about the fix is live yet.
+Next:     Andrew's call: review #106 against the 3 conflicts below, or continue
+          speccing the residual (60-day join + receipt screen — the only two
+          Lane A items #106 does NOT touch).
 
-Blockers: none
+Blockers: #106 conflicts with two rulings Andrew gave THIS session. Needs one
+          governing answer before it merges.
 
 Decisions this session:
-- ROOT CAUSE of the /docs 404: `.gcloudignore` is gitignore syntax, where a
-  bare `docs` matches a dir named docs at ANY depth; `.dockerignore` anchors
-  bare patterns to the context root. The two were deliberately kept
-  BYTE-IDENTICAL by test_root_gcloudignore_tracks_dockerignore_for_node_builds,
-  so the shared `docs` line stripped web/app/docs/** and web/components/docs/**
-  from `gcloud builds submit` ONLY — the one context nothing exercised. Pages
-  and the components they import vanished together, so no import dangled,
-  `next build` went green on 11 routes instead of 21, and the deploy smoke test
-  only probes `/`. site-header.tsx is not under a docs/ dir, so the Docs link
-  shipped pointing at a route never compiled. Proven with
-  `gcloud meta list-files-for-upload` and by pulling the live image, whose
-  app-paths-manifest.json lists 11 routes and no docs.
-- FIX: anchor /api /docs /data /out /reports in BOTH files. Docker Cleans a
-  leading slash away, so `/docs` is root-only in both — semantics now agree AND
-  the text stays identical, so the lockstep pin still holds — rejected:
-  deleting that pin (still load-bearing, just insufficient alone).
-- The docs CONTENT needed nothing: /docs is already a faithful port of the
-  gh-pages site (same 5 groups, 11 sections, real commands and numbers). The
-  ask was "build a Stripe-like docs page"; it was already built in #101 and
-  had simply never been served — rejected: writing new content before Andrew
-  can see what exists.
-- Two rendering bugs found by being the first to ever render this surface:
-  DocsTwoCol's rail lacked min-w-0 (below lg the grid collapses to one column,
-  the rail's min-content = the code block's longest line, so the column
-  stretched to 462px in a 375px viewport and clipped body copy off the right
-  edge of EVERY docs page on mobile); ParamsTable's name overflowed its 13rem
-  track.
-- Code review (medium) found 4 real defects in THIS branch's own code, all
-  fixed: nowrap on the meta re-overflowed the track (216px vs 208px); and the
-  new pin inherited the dev's global core.excludesFile (spurious red on some
-  machines, green in CI), never checked check-ignore's returncode (a git error
-  = empty stdout = vacuous pass), and parsed `git ls-files` with .split()
-  (breaks on paths with whitespace, silently dropping the file it covers).
-- The "pl/anned" tearing was NOT an overflow-wrap problem: {r.name} and the
-  meta span are adjacent JSX expressions with no whitespace text node between
-  them, and ml-2 is a margin, not a break opportunity — so the run was
-  unbreakable and the browser had to split mid-token. Fixed with an explicit
-  {" "} — rejected: flex-wrap (works, but items-baseline inflates a two-line
-  name's line box by 42px).
+- PR #106 OVERLAP (found only because Andrew asked): it ships check-run footer,
+  public scoreboard (endpoint + page), landing copy honesty, and bot-author
+  deep-read skip — 4 of the 6 ranked options, incl. both M3 gate items. It does
+  NOT ship the 60-day join or the receipt screen. Its spec is
+  docs/superpowers/specs/2026-08-13-unbeatable-doug-research.md ("Approach A",
+  Andrew-approved in another session; this session had not seen it).
+- CONFLICT 1 — scoreboard scope. Andrew ruled THIS session "full §3 table,
+  always". #106 ships 10 fields, none of §3's disclosure columns (no
+  censoring_rate / unverdicted_merges-by-bucket / remediated_clears /
+  base_rate / Wilson CI / partial_read_share). Also under-delivers against its
+  OWN spec §4.3, which says the query "emits the §3 table".
+- CONFLICT 2 — venue. Andrew ruled THIS session "not a publication — proof,
+  not venue" (rationale: a live page as venue makes every page load a
+  publication, reintroducing the selective-disclosure problem §12's cadence
+  rule solves). Approach A §4.3 says "Venue can be the scoreboard page in this
+  increment". More recent ruling should govern; §4.3 needs amending — but that
+  is Andrew's call to state, not this session's to assume.
+- CONFLICT 3 — latent trap in #106, VERIFIED by reading the branch. The zero
+  state is pinned in 3 coupled places: `miss_rate: None` (Pydantic,
+  models.py:137), `miss_rate: null` as a TS literal (scoreboard-shape.ts), and
+  isScoreboardResponse() rejecting `miss_rate !== null || decidable !== false`.
+  On validation failure web/lib/api.ts fetchScoreboard() silently falls back to
+  scoreboard-fixture.json, which reads adjudicated:0 pending:0. NOT a 08-16
+  break — adjudicated/pending come from instrument_snapshot and tick correctly,
+  and "not yet decidable" stays honest while no interval is computed. The trap
+  fires on the NEXT change to this endpoint (the one that teaches it a rate —
+  i.e. the surface's whole purpose): miss three files and the public page
+  silently claims zero adjudications.
+- Brainstorm rulings from Andrew, still valid and reusable for whatever ships:
+  full §3 table always; scoreboard is proof not venue; two lanes (small three
+  first, scoreboard separate).
+- SIZING FACTS established: SESSION_SCOPES = ("queue:read","receipt:read")
+  (session_auth.py:27) so the receipt screen needs NO auth work and NO new
+  endpoint. Nothing computed §3 before #106; precision.py:21 wilson() is the
+  only reusable piece; §4 base_rate must come from backtest/git_labels.py over
+  12 months of squash merges. §9 noise estimates are NOT computable — one hand
+  audit per (repo, window), every quarter, forever.
+- LANE AUDIT, verified against code not plans: Lane 0 closed (all 4). Lane 1
+  Phase A (#90) + Phase B (#95/#102/#103) shipped; **Phase C is 0 of 7** —
+  `finding_counts` has zero hits in web/, no /receipt or /scoreboard route, no
+  health strip, and web/lib/api.ts:23 still calls /v1/showcase/queue not the
+  real tenant queue. Phase D untouched. Lane 2 halted at a FAILED bar 1.
+- THE CLOCK REORDERS THE PLAN: 2026-08-16 is the first due clock (#92 receipt:
+  eligible_14 = existing_60 = 66, first rows ever, stamped v9). Doug is about
+  to produce its first real outcomes and NOTHING renders them: the receipt
+  endpoint (api.py:916) has zero consumers, there is no scoreboard route, and
+  check_run.py has no adjudicated/pending footer. The last two are M3 exit-gate
+  items. So Phase C ships against the clock (60-day join → receipt → scoreboard
+  → footer), NOT in the plan's effort-to-value order — rejected: starting with
+  finding_counts/spend meter, which are the cheap tail.
+- CONVERGENCE RULING (proposed, not yet Andrew's): bar 1 failed upstream of the
+  classifier — the reader is nondeterministic, so absence ≠ fixed; 26 of 43
+  sampled findings sat on byte-identical code. Proposed fourth abstention:
+  file byte-identical between the two verdict heads ⇒ `unknown`, never
+  `resolved`. Catches 4 of the 5 confirmed false-resolveds (#75 ×2, #48 ×2);
+  does NOT catch #50 input-validation, which is slug drift — the
+  finding-identity problem. MUST be re-pre-registered and re-evaluated, not
+  patched into the existing bar: those units leave the ratio as `unknown`, the
+  sample shrinks, and 0.90 is not guaranteed. Independently: unblock MCP v0 by
+  shipping the receipt payload WITHOUT a convergence halt signal — the
+  differentiation is band/threshold/coverage provenance, and the spend gate can
+  be a per-PR read ceiling instead — rejected: holding MCP v0 hostage to a
+  signal that may never pass its bar.
+- Live defect found, unfixed: web/app/docs/rest-api/page.tsx:38 marks
+  /v1/queue and /v1/prs/:number/receipt "planned — none of this is live"; both
+  ship today (api.py:534, api.py:916). Under-claiming on a page that only
+  became reachable at #105. Belongs with Phase D copy honesty.
 
-Pointers: worktree .claude/worktrees/hosted-docs-page-365b6f · branch
-          claude/hosted-docs-page-365b6f · fix in .gcloudignore +
-          .dockerignore · pin at api/tests/test_deploy_gcp.py:472 · components
-          web/components/docs/{docs-two-col,params-table}.tsx · pages
-          web/app/docs/* · nav web/lib/docs-nav.ts
-          Untracked and deliberately NOT committed: .claude/launch.json (local
-          preview config; the repo does not track .claude).
+Pointers: worktree .claude/worktrees/doug-next-improvement-546ca1 · branch
+          claude/doug-next-improvement-546ca1 (no commits) · spec
+          docs/superpowers/specs/2026-08-11-two-lane-plan-design.md §2 Phase C
+          · eval docs/design/outcome-loop/convergence-eval-results.md (bar 1
+          FAIL arithmetic at "The arithmetic") · gate items at
+          ROADMAP.md:311-312 · first clock ROADMAP.md:297
