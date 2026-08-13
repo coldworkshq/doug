@@ -62,6 +62,7 @@ from .models import (
     RunSummaryItem,
     ScoreboardResponse,
     Verdict,
+    is_bot_author,
 )
 from .scoring import default_threshold, score
 
@@ -638,6 +639,20 @@ _SHOWCASE_CACHE_TTL_S = 30.0
 _showcase_cache: tuple[float, QueueResponse] | None = None
 
 
+def _showcase_repo_or_404() -> str:
+    """The pinned repo every public showcase endpoint serves, or 404.
+
+    One gate rather than a copy per endpoint: an unset DOUG_SHOWCASE_REPO
+    and a missing ledger must look identical on every showcase surface, so
+    the check has a single owner. The caches deliberately stay separate
+    module-level slots — tests monkeypatch them by name.
+    """
+    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
+    if not showcase or not store.enabled():
+        raise _not_found()
+    return showcase
+
+
 @app.get("/v1/showcase/queue")
 def showcase_queue(response: Response) -> QueueResponse:
     """The public Doug-on-Doug queue, pinned to one repo by deployment.
@@ -667,9 +682,7 @@ def showcase_queue(response: Response) -> QueueResponse:
     is deliberately public.
     """
     global _showcase_cache
-    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
-    if not showcase or not store.enabled():
-        raise _not_found()
+    showcase = _showcase_repo_or_404()
     response.headers["Cache-Control"] = "public, max-age=30"
     now = time.monotonic()
     if _showcase_cache is not None and now - _showcase_cache[0] < _SHOWCASE_CACHE_TTL_S:
@@ -693,9 +706,7 @@ def showcase_scoreboard(response: Response) -> ScoreboardResponse:
     /v1/showcase/queue so a missing pin cannot invent a scoreboard.
     """
     global _scoreboard_cache
-    showcase = os.environ.get("DOUG_SHOWCASE_REPO")
-    if not showcase or not store.enabled():
-        raise _not_found()
+    showcase = _showcase_repo_or_404()
     response.headers["Cache-Control"] = "public, max-age=30"
     now = time.monotonic()
     if _scoreboard_cache is not None and now - _scoreboard_cache[0] < _SHOWCASE_CACHE_TTL_S:
@@ -2269,13 +2280,12 @@ def _enqueue_pull_request(payload: dict) -> int | None:
         # 500s. Same choice worker._skip_reason makes, for the same reason:
         # the safe direction to be wrong in is skip.
         return None
-    # Same-repo GitHub App PRs pass the fork gate. Detection matches
-    # review.py and worker._skip_reason: type == "Bot" or login ending in
-    # "[bot]". A missing user is not a bot — truncated payloads proceed.
+    # Same-repo GitHub App PRs pass the fork gate. Detection is
+    # models.is_bot_author, shared with review.py and worker._skip_reason.
+    # A missing user is not a bot — truncated payloads proceed.
     # Merges still clock: _record_merge has no fork/bot gate.
     user = _obj(pr.get("user"))
-    login = user.get("login")
-    if user.get("type") == "Bot" or (isinstance(login, str) and login.endswith("[bot]")):
+    if is_bot_author(user.get("type"), user.get("login")):
         return None
     number = pr.get("number")
     full_name = _text(base.get("full_name"), store.review_jobs.c.repo_full_name)

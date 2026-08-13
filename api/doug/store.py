@@ -1285,21 +1285,20 @@ def instrument_snapshot(
         outcome_jobs.c.github_repo_id == github_repo_id,
     )
     with engine.connect() as conn:
-        adjudicated = conn.execute(
-            select(func.count())
-            .select_from(outcome_jobs)
-            .where(scoped, outcome_jobs.c.status == "done")
-        ).scalar_one()
-        pending = conn.execute(
-            select(func.count())
-            .select_from(outcome_jobs)
-            .where(scoped, outcome_jobs.c.status != "done")
-        ).scalar_one()
-        first_due = conn.execute(
-            select(func.min(outcome_jobs.c.due_at)).where(
-                scoped, outcome_jobs.c.status != "done"
+        # One statement, one snapshot: under READ COMMITTED each statement
+        # sees fresh data, so three separate SELECTs could count a job as
+        # neither adjudicated nor pending if it flipped between them.
+        adjudicated, pending, first_due = conn.execute(
+            select(
+                func.count().filter(outcome_jobs.c.status == "done"),
+                func.count().filter(outcome_jobs.c.status != "done"),
+                func.min(outcome_jobs.c.due_at).filter(
+                    outcome_jobs.c.status != "done"
+                ),
             )
-        ).scalar_one()
+            .select_from(outcome_jobs)
+            .where(scoped)
+        ).one()
         meter = conn.execute(
             select(deep_read_counters.c.count).where(
                 deep_read_counters.c.scope == scope,
@@ -1311,7 +1310,11 @@ def instrument_snapshot(
         pending=int(pending),
         as_of=as_of,
         first_due=_as_utc(first_due),
-        deep_reads=0 if meter is None else int(meter),
+        # Saturates at the plan cap: spend is enforced only by reader's 4000
+        # runaway guard, so the raw counter can pass 200 — but this meter
+        # reports plan usage, and "201/200" on the public surfaces would
+        # read as a billing bug rather than an exhausted allowance.
+        deep_reads=0 if meter is None else min(int(meter), PLAN_DEEP_READ_CAP),
         deep_read_cap=PLAN_DEEP_READ_CAP,
         miss_rate=None,
     )
@@ -1351,23 +1354,23 @@ def instrument_snapshot_for_repo(
             ).mappings()
         ]
         if not candidates:
-            fallback = (
-                conn.execute(
+            # A reviewed-but-uninstalled name can also span several pairs
+            # (reinstall history in review_jobs), so the fallback feeds the
+            # same prefer-with-jobs rule below rather than trusting an
+            # unordered LIMIT 1 to land on the pair that has adjudications.
+            candidates = [
+                (int(r["installation_id"]), int(r["github_repo_id"]))
+                for r in conn.execute(
                     select(
                         review_jobs.c.installation_id,
                         review_jobs.c.github_repo_id,
                     )
                     .where(review_jobs.c.repo_full_name == repo)
-                    .limit(1)
-                )
-                .mappings()
-                .first()
-            )
-            pair = (
-                (int(fallback["installation_id"]), int(fallback["github_repo_id"]))
-                if fallback is not None
-                else None
-            )
+                    .distinct()
+                ).mappings()
+            ]
+        if not candidates:
+            pair = None
         else:
             candidates.sort()
             ids = [installation_id for installation_id, _ in candidates]

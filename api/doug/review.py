@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from . import features, intent, intent_providers, reader, settle
 from .backtest.harvest import resolve_token
-from .models import AuthorType, Band, PRMetadata, Reason, Verdict
+from .models import AuthorType, Band, PRMetadata, Reason, Verdict, is_bot_author
 from .scoring import score
 
 print = functools.partial(print, flush=True)  # noqa: A001
@@ -164,7 +164,7 @@ def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetada
             author=p.user.login if p.user else "unknown",
             author_type=(
                 AuthorType.AGENT
-                if p.user and (p.user.type == "Bot" or p.user.login.endswith("[bot]"))
+                if p.user and is_bot_author(p.user.type, p.user.login)
                 else AuthorType.HUMAN
             ),
             # pulls.list omits additions/deletions; per-file stats carry them.
@@ -240,7 +240,7 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
         author=p.user.login if p.user else "unknown",
         author_type=(
             AuthorType.AGENT
-            if p.user and (p.user.type == "Bot" or p.user.login.endswith("[bot]"))
+            if p.user and is_bot_author(p.user.type, p.user.login)
             else AuthorType.HUMAN
         ),
         additions=sum(f.additions for f in files),

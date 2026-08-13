@@ -150,16 +150,13 @@ def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy()
     has no candidate to stage against — see promote_if_healthy's own
     comment above it)."""
     body = _function_body("deploy")
-    assert "promote_if_healthy" in body
-    assert "/v1/showcase/queue" in body
-    assert "/v1/showcase/scoreboard" in body
-    # All three on one promote call — a second promote_if_healthy that
-    # only smokes openapi+queue would let a broken scoreboard ship.
-    assert body.count("promote_if_healthy") >= 1
-    queue_line = [
-        ln for ln in body.splitlines() if "promote_if_healthy" in ln and "showcase" in ln
-    ]
-    assert queue_line and "/v1/showcase/scoreboard" in queue_line[0]
+    # The exact promote line, all three routes on the one call: substring
+    # checks alone are satisfiable by the first-deploy smoke lines, which
+    # would let a gate that dropped openapi or queue pass unnoticed.
+    assert (
+        'promote_if_healthy "$SERVICE" '
+        "/openapi.json /v1/showcase/queue /v1/showcase/scoreboard" in body
+    )
     assert 'smoke "$(api_url)/v1/showcase/queue"' in body
     assert 'smoke "$(api_url)/v1/showcase/scoreboard"' in body
 

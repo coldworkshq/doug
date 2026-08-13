@@ -80,7 +80,11 @@ def _footer(instrument: InstrumentSnapshot) -> list[str]:
     )
     if instrument.adjudicated == 0 and instrument.first_due is not None:
         line += f" · first due {_date(instrument.first_due)}"
-    lines = ["", line]
+    # Two leading empties -> a blank line before the footer. The body's last
+    # line is a list item (or the Judged-against paragraph); one newline
+    # after a list item is a GFM lazy continuation, which would glue these
+    # lines into that bullet instead of rendering them as their own block.
+    lines = ["", "", line]
     if instrument.deep_reads is not None:
         lines.append(
             f"deep reads {instrument.deep_reads}/{instrument.deep_read_cap} this cycle"

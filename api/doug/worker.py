@@ -26,7 +26,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
 from .example_pack import CaptureScopeV0, NameVersionV0, PackScopeV0
-from .models import Band, Reason, Verdict
+from .models import Band, Reason, Verdict, is_bot_author
 
 _EXAMPLE_PACK_VERIFIER_VERSIONS = (
     NameVersionV0(name="import-settlement", version="v0"),
@@ -455,22 +455,32 @@ def _skip_reason(p) -> str | None:
         return "fork"
     # Same-repo Dependabot (and every other GitHub App) passes the fork
     # gate. A deep read of that diff is spend against the plan cap for a
-    # change nobody asked Doug to grade. Detection matches review.py:
-    # type == "Bot" or login.endswith("[bot]"). A missing user is not a
+    # change nobody asked Doug to grade. Detection is models.is_bot_author,
+    # shared with review.py and the webhook gate. A missing user is not a
     # bot — truncated payloads proceed.
     user = getattr(p, "user", None)
-    if user:
-        login = getattr(user, "login", None)
-        if getattr(user, "type", None) == "Bot" or (
-            isinstance(login, str) and login.endswith("[bot]")
-        ):
-            return "bot"
+    if user and is_bot_author(getattr(user, "type", None), getattr(user, "login", None)):
+        return "bot"
     return None
 
 
 def _instrument(job: dict):
-    """Ledger counters for the check-run footer. None when there is no ledger."""
-    return store.instrument_snapshot(job["installation_id"], job["github_repo_id"])
+    """Ledger counters for the check-run footer. None when there is no ledger.
+
+    Degrades to None (footer omitted) on any store error: by the time this
+    runs the model read is paid and the verdict durable, so a transient DB
+    failure over a cosmetic footer must not abort the check-run post — the
+    same contract save_deviations gets in process_job.
+    """
+    try:
+        return store.instrument_snapshot(job["installation_id"], job["github_repo_id"])
+    except Exception as e:  # noqa: BLE001 — advisory footer; verdict already durable
+        print(
+            f"doug: instrument snapshot skipped for job {job['id']} "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+        return None
 
 
 # Hard ceiling on how many open PRs reconcile will look at per repo. No
