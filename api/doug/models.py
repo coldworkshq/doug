@@ -200,6 +200,7 @@ class RunSummaryItem(BaseModel):
     finding_counts: RunFindingCounts
     job: RunJob | None
     outcome_14: str | None
+    outcome_60: str | None
 
 
 class RunListResponse(BaseModel):

@@ -1096,6 +1096,7 @@ def _run_item(row: dict) -> RunSummaryItem:
         finding_counts=RunFindingCounts(**row["finding_counts"]),
         job=RunJob(**row["job"]) if row["job"] else None,
         outcome_14=row["outcome_14"],
+        outcome_60=row["outcome_60"],
     )
 
 

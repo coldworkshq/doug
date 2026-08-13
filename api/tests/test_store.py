@@ -2212,9 +2212,12 @@ def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
     assert job["attempts"] == 2
 
 
-def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
-    """Both windows exist for a merged PR. The list column is the 14d one;
-    joining both would fan the run out into two rows."""
+def test_run_history_reports_outcome_60_beside_outcome_14_on_one_row(
+    tmp_path, monkeypatch
+):
+    """Both windows exist for a merged PR and both are joined in, each as
+    its own scalar column on the same row — never a list column, which
+    would fan the one run out into two rows."""
     _db(tmp_path, monkeypatch)
     store.save_review(
         "o/r", 1, "reader", VERDICT,
@@ -2229,8 +2232,9 @@ def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
                 github_repo_id=1, installation_id=99,
             ))
     rows = store.run_history()
-    assert len(rows) == 1
+    assert len(rows) == 1, "two windows fanned one run out into two rows"
     assert rows[0]["outcome_14"] == "clean"
+    assert rows[0]["outcome_60"] == "revert"
 
 
 def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypatch):
