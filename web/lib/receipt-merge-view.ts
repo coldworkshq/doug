@@ -15,7 +15,15 @@ export type OutcomeTone = "clear" | "flag" | "neutral";
  *  The tone mapping is the rule ruled in the two-lane plan and shipped in #93:
  *  `clean` → clear, `censored` → NEUTRAL, any other non-null → flag, null →
  *  neutral. `censored` is an UNOBSERVED outcome; painting it in the miss
- *  colour reports a non-observation as a miss. */
+ *  colour reports a non-observation as a miss.
+ *
+ *  KNOWN LATENT CASE: `store.py:126-129` documents that `outcomes.kind` is
+ *  wide enough to hold `hotfix` — "permitted, not produced", and explicitly
+ *  NOT a miss. Nothing writes it today (prereg §10 says it is deliberately
+ *  never written), so the default branch never sees it. If that ever changes,
+ *  `hotfix` would land in `flag` and repeat #93's error on a new value. Add
+ *  its branch at the same time as its writer, not before — an unreachable
+ *  branch is untestable, and this comment is the reminder. */
 export function windowOutcome(w: Pick<ReceiptWindow, "status" | "kind">): {
   text: string;
   tone: OutcomeTone;
