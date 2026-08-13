@@ -918,7 +918,9 @@ Expected: PASS.
 - [ ] **Step 5: Mutation proof — the two asymmetric ones**
 
 1. In `windowOutcome`, change the null branch to `return { text: "clean", tone: "clear" };` — the open-window and failed-job tests must FAIL. This is the single most dangerous substitution on the screen.
-2. In `windowPreregLine`, move the `inForce` branch above the `w.prereg_hash` branch — the adjudicated-window test must FAIL.
+2. In `windowPreregLine`, make the in-force hash win over a window's own stamp — replace the whole body with `return inForce.hash ? \`${inForce.hash} · will govern this window\` : "no pre-registration in force";`. The adjudicated-window test must FAIL, because the window's own `prereg_hash` is no longer consulted.
+
+   Be careful with this one: merely reordering the `!inForce.in_force` guard above the `w.prereg_hash` check is **inert** — it changes nothing for a window that has a stamp, stays green, and proves nothing. A mutation that cannot fail is not a proof.
 
 3. In `mergeCaption`, change the guard to `if (totalMerges >= 1) return "";` — the non-governing test must FAIL, because a multi-merge PR would then render every merge with no indication of which one governs.
 
