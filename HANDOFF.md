@@ -1,15 +1,21 @@
 # HANDOFF — doug
 
-State:    review — the outcome-surface residual is BUILT, reviewed, and green.
-          8 code commits + docs off main @ da8bf97 (#106 merged). Final
-          whole-branch review clean after one fix wave. Nothing pushed; no PR
-          opened yet.
+State:    review — PR #108 IS OPEN.
+          https://github.com/drewjst/doug/pull/108
+          Branch pushed; worktree preserved for PR feedback. Final whole-branch
+          review clean after one fix wave.
 
-Next:     Open the PR (superpowers:finishing-a-development-branch was the next
-          step). Then Andrew's two still-open rulings, both about the MERGED
-          scoreboard and unrelated to this branch — see "Still open" below.
+Next:     Andrew reviews/merges #108. Then his two still-open rulings, both
+          about the MERGED #106 scoreboard and unrelated to this branch — see
+          "Still open" below.
 
 Blockers: none for this branch.
+
+Mergeability: verified with `git merge-tree` against origin/main @ de66f4f
+          (#107, which landed DURING this build). Four files overlap —
+          models.py, store.py, test_api.py, test_store.py — and it merges
+          cleanly. Note local `main` is stale at 37942c3; pull before any
+          local merge.
 
 Verified cold by the controller, not taken from agent reports:
           web 270/270 · console 113/113 · api 1393/1393 · both Node builds
