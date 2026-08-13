@@ -31,11 +31,18 @@ export interface Facet {
 /** Absent key and empty array both mean "no constraint on this facet". */
 export type FacetSelection = Partial<Record<FacetKey, string[]>>;
 
+/** KEY and LABEL are separate things, and only one of them is a contract.
+ *
+ *  `outcome` stays the key so links already in circulation still round-trip;
+ *  the label names its window because the pill bar renders `facet.label`, and
+ *  a group labelled bare "outcome" beside a table column reading "14d outcome"
+ *  leaves the reader to guess which window the filter narrows — the same
+ *  unnamed-window defect the two-column ruling exists to refuse. */
 const FACET_LABELS: Record<FacetKey, string> = {
   band: "band",
   tier: "tier",
   read: "read",
-  outcome: "outcome",
+  outcome: "14d outcome",
   outcome_60: "60d outcome",
 };
 

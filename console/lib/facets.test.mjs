@@ -174,3 +174,27 @@ test("facet keys never collide with the scope params the page reads", () => {
     assert.ok(key !== "repo" && key !== "tenant", `facet key ${key} collides with a scope param`);
   }
 });
+
+test("every outcome facet names its window, so no pill group says bare \"outcome\"", () => {
+  // The KEY is a contract and the LABEL is not. `outcome` stays the key so
+  // links already in circulation round-trip; what the pill bar RENDERS is
+  // `facet.label`, and both tables now read "14d outcome" / "60d outcome".
+  // A group labelled bare "outcome" beside them leaves the reader to guess
+  // which window the filter narrows — a bare header is exactly what the
+  // two-column ruling refused, and the filter above the columns is not
+  // exempt from it.
+  const facets = buildFacets([
+    run({ verdict_id: 1, outcome_14: "clean", outcome_60: "clean" }),
+    run({ verdict_id: 2, outcome_14: null, outcome_60: null }),
+  ]);
+
+  const fourteen = facets.find((f) => f.key === "outcome");
+  const sixty = facets.find((f) => f.key === "outcome_60");
+  assert.ok(fourteen && sixty, "both outcome facets must be built when both vary");
+  assert.equal(fourteen.label, "14d outcome");
+  assert.equal(sixty.label, "60d outcome");
+  // The keys are untouched — a "fix" that renamed the key to match the label
+  // would break every shared URL carrying ?outcome=.
+  assert.ok(FACET_KEYS.includes("outcome"));
+  assert.ok(FACET_KEYS.includes("outcome_60"));
+});

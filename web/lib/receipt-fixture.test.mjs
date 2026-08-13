@@ -12,17 +12,22 @@
 // fixtures landed; a hand-verified fact is not a pinned one.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { register } from "node:module";
 import test from "node:test";
 
-import {
+// receipt-merge-view.ts delegates its tone rule to dashboard-model.ts, which
+// imports "./coverage" extensionless the way Next resolves it.
+register("./node-next-loader.mjs", import.meta.url);
+
+const {
   governingLine,
   mergeCaption,
   mergedHeadLine,
   windowOutcome,
   windowPreregLine,
-} from "./receipt-merge-view.ts";
-import { isReceiptResponse } from "./receipt-shape.ts";
-import { promptHashLine, readLine, verdictGap } from "./receipt-verdict-view.ts";
+} = await import("./receipt-merge-view.ts");
+const { isReceiptResponse } = await import("./receipt-shape.ts");
+const { promptHashLine, readLine, verdictGap } = await import("./receipt-verdict-view.ts");
 
 async function load(name) {
   return JSON.parse(await readFile(new URL(`./${name}`, import.meta.url), "utf8"));
@@ -108,9 +113,28 @@ test("the fixture's merge identity and captions render the multi-merge states", 
   assert.equal(mergedHeadLine(governing), governing.merged_head_sha);
   assert.equal(mergeCaption(older, receipt.merges.length), "not the governing merge");
   assert.equal(mergeCaption(governing, receipt.merges.length), "governs the published record");
-  // The note lives in exactly one place on the page, and this is it.
-  assert.equal(governingLine(older), older.publication_note);
-  assert.equal(mergeCaption(older, receipt.merges.length).includes(older.publication_note), false);
+
+  // `older` carries `governing_verdict: null` AND the API's real non-governing
+  // note, which is the payload the store produces for a merge with no reader
+  // verdict standing at it. This assertion USED to read
+  // `governingLine(older) === older.publication_note` — it pinned the defect:
+  // the note passing through under the label `governing`, beside no verdict,
+  // saying a verdict was standing. The absence is the only honest line here.
+  assert.equal(older.governing_verdict, null);
+  assert.notEqual(older.publication_note, "");
+  assert.equal(governingLine(older), "no governing verdict at this merge");
+
+  // The note itself is still the page's words for the merge that HAS a
+  // verdict to describe — that is where §2.2's "publication_note verbatim"
+  // row lives, and it must not be lost while fixing the null case.
+  assert.equal(governingLine(governing), governing.publication_note);
+  assert.notEqual(governing.governing_verdict, null);
+
+  // …and the caption never echoes what governingLine already renders.
+  assert.equal(
+    mergeCaption(governing, receipt.merges.length).includes(governing.publication_note),
+    false,
+  );
 });
 
 test("the no-prereg fixture reaches the states the main one cannot", async () => {

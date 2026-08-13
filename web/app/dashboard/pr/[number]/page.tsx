@@ -66,7 +66,12 @@ const EMPTY_NOTE = "text-xs text-muted-foreground";
 /** The label/value grammar of the dashboard's evidence pane, verbatim. */
 const DL = "mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]";
 
-type Failure = "missing" | "expired" | "unavailable" | "unreachable" | "unscoped";
+/** Named for what is KNOWN, not for what is inferred. `unauthorized` was
+ *  `expired` until the review of this branch: a 401 is the API declining the
+ *  session, and expiry is only one of the five things that produce it
+ *  (session_auth.py:164-195). An arm named for one cause is read as that
+ *  cause's arm by the next person to word it. */
+type Failure = "missing" | "unauthorized" | "unavailable" | "unreachable" | "unscoped";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -122,10 +127,19 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
  *
  *  A table rather than a branch: the arm is chosen once — at the fetch, by the
  *  API's own status contract, or before it by the request this page was given
- *  — and this only prints what that choice already decided. `expired` reuses
- *  the words #99/#100 shipped for `reauthorize_required` rather than inventing
- *  a second expiry story, and the control it asks for — sign out — is the one
- *  already in the header above.
+ *  — and this only prints what that choice already decided.
+ *
+ *  `unauthorized` deliberately does NOT reuse #99/#100's expiry words. Those
+ *  are licensed on the dashboard because the API states `reauthorize_required`
+ *  in the body; here the only fact in hand is a bare 401, and `resolve_session`
+ *  returns None — 401 — for FIVE different states (session_auth.py:164-195):
+ *  a JWT that fails verification, no organization selected (the ordinary
+ *  first-sign-in state), no installation bound to the selected org, an
+ *  entitlement past `entitlements.TTL`, and a `live_scope` that resolves to
+ *  nothing. "Doug still has your connection" is false in three of those, and
+ *  this screen cannot tell them apart. So the arm names the code, lists what it
+ *  covers, and offers the one control that helps across the set — sign out,
+ *  already in the header above — without claiming it is the cause.
  *
  *  `unreachable` exists because the other arms are each a claim. It is the one
  *  reached without a status the API chose, so it is the one that names no
@@ -154,13 +168,17 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
       "This is a deployment fault — no ledger, or no operator secret — and not a " +
       "problem with your session. Nothing is rendered below because nothing is known.",
   },
-  expired: {
+  unauthorized: {
     route: "/spaces",
-    heading: "Sign back in to refresh this.",
+    heading: "Doug would not answer for this session.",
     body:
-      "Doug still has your connection. What expired is the repository scope GitHub " +
-      "granted when you signed in — it lasts eight hours, and only a new sign-in can " +
-      "renew it. Sign out from the header above, then sign back in.",
+      "The API declined it, and that one answer covers several different states: a " +
+      "sign-in token it will not verify, no space selected yet, no installation bound " +
+      "to the space you are in, and a repository scope that has aged past its " +
+      "eight-hour life. This page is told that the request was declined, not which of " +
+      "those it was, so it does not pick one. Signing out from the header above and " +
+      "signing back in renews the token and re-derives the scope, which covers most of " +
+      "them; the run ledger is where the space and its connection are shown.",
   },
   unreachable: {
     route: "/prs",
@@ -238,7 +256,16 @@ function VerdictCard({ verdict }: { verdict: ReceiptVerdict }) {
 /** Chrome colours — `--iridescent` over `bg-accent` — never `--flag`.
  *  The gap between what Doug says now and what was standing at the merge is
  *  a fact about two verdicts, not a verdict about the PR, and painting it in
- *  the miss colour would read as an alarm about the code. */
+ *  the miss colour would read as an alarm about the code.
+ *
+ *  SELECTION IS NOT INCLUSION. This sentence used to end "and is the one the
+ *  published statistic uses", which is a claim about the DENOMINATOR that
+ *  neither this page nor `verdictGap` is in a position to make: the published
+ *  denominator is cleared-band only (publication-preregistration.md:186,
+ *  `AND g.band = 'cleared'`), while band is deliberately no part of governing-
+ *  verdict selection. The branch's own fixture carries a governing verdict in
+ *  band `flagged` — so the sentence was false on the very data written to
+ *  exercise it. What is true is narrower and is what it now says. */
 function GapBanner({ gap }: { gap: VerdictGap }) {
   return (
     <div className="mono mt-4 flex flex-col gap-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2.5 text-[11.5px]">
@@ -247,8 +274,10 @@ function GapBanner({ gap }: { gap: VerdictGap }) {
       </span>
       <span className="break-words text-muted-foreground">
         Verdict {gap.latestId} is Doug&apos;s most recent score. Verdict {gap.governingId} was
-        standing when {gap.mergeSha} merged, and is the one the published statistic uses. Both
-        are on this page.
+        standing when {gap.mergeSha} merged, and is the one the publication rule selects for this
+        pull request. Selected is not the same as counted — the published rate is computed over
+        cleared-band verdicts only — so this says which verdict the rule picks here, not that the
+        published number includes it. Both are on this page.
       </span>
     </div>
   );
@@ -500,10 +529,11 @@ export default async function ReceiptPage({
     else if (status === 503) failure = "unavailable";
     // 401 ONLY. `sessionJson` throws status:null on a transport failure AND on
     // a body the validator rejects; a 500 or 502 is neither. Routing any of
-    // those to the expiry copy tells a reader to sign out and back in over a
-    // network blip — a confident false claim on the one surface built to make
-    // those impossible.
-    else if (status === 401) failure = "expired";
+    // those here would tell a reader their session was declined over a network
+    // blip — a confident false claim on the one surface built to make those
+    // impossible. What the arm itself may claim is bounded the same way: a 401
+    // names no cause, so neither does its copy.
+    else if (status === 401) failure = "unauthorized";
     else failure = "unreachable";
     loaded = { receipt: null, failure };
   }

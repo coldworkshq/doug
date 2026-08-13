@@ -2244,7 +2244,14 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
         "o/r", 1, "reader", VERDICT,
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
-    assert store.run_history()[0]["outcome_14"] is None
+    row = store.run_history()[0]
+    assert row["outcome_14"] is None
+    # BOTH windows, or the test guards half the surface it names. The 60-day
+    # column ships beside the 14-day one and carries the same rule for the
+    # same reason — a window that has not closed is not a clean result — and
+    # a reduction that dropped `outcome_60` to a default would pass a test
+    # that only ever looked at `outcome_14`.
+    assert row["outcome_60"] is None
 
 
 def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(

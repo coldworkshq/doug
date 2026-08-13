@@ -2401,12 +2401,12 @@ def run_history(
         # the highest-id (most recent) row — last-observation-wins, applied
         # per window now that window_days is part of the key: a re-grade of
         # the 14-day outcome cannot overwrite the 60-day one or vice versa.
-        # That is a different reduction than find_scored_prs_with_outcomes
-        # uses on this same table (store.py:1240-1241), which fans a
-        # multi-outcome PR out into several rows and leaves the reduction to
-        # its caller. The difference is deliberate: outcome_14/outcome_60
-        # are single scalar values here, so there is no caller-side
-        # reduction to defer to.
+        # That is a different reduction than `pattern_join` (store.py:2149)
+        # uses on this same table, which fans a multi-outcome PR out into
+        # several rows and leaves the reduction to its caller — see its own
+        # note at store.py:2197-2198. The difference is deliberate:
+        # outcome_14/outcome_60 are single scalar values here, so there is no
+        # caller-side reduction to defer to.
         keys = {(r["repo"], r["pr_number"]) for r in rows}
         outcome_query = (
             select(outcomes)

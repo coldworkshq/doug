@@ -1,13 +1,33 @@
 import assert from "node:assert/strict";
+import { register } from "node:module";
 import test from "node:test";
 
-import {
+// receipt-merge-view.ts delegates its tone rule to dashboard-model.ts rather
+// than keeping a third copy of it, and dashboard-model imports "./coverage"
+// extensionless the way Next resolves it. Same registration dashboard-model's
+// own tests use.
+register("./node-next-loader.mjs", import.meta.url);
+
+const {
   governingLine,
   mergeCaption,
   mergedHeadLine,
   windowOutcome,
   windowPreregLine,
-} from "./receipt-merge-view.ts";
+} = await import("./receipt-merge-view.ts");
+
+/** The API's own words, copied verbatim from `api/doug/api.py:748-753`.
+ *
+ *  This is a FIXTURE OF THE REAL INPUT, not a convenience string. The
+ *  `publication_note` field is never empty on the wire — api.py picks one of
+ *  two non-empty constants by `publication_governing` alone — so a test that
+ *  fed `""` proved only that an unreachable branch existed. It passed against
+ *  the implementation that shipped the defect. */
+const NOT_PUBLICATION_GOVERNING_NOTE =
+  "This merge did not govern publication. The pull request merged again " +
+  "later, and the published quarterly statistic uses the verdict standing " +
+  "at that later merge. The verdict shown here is historical context — what " +
+  "was standing when THIS commit merged — and is not the published number.";
 
 function win(overrides = {}) {
   return {
@@ -69,12 +89,40 @@ test("no pre-registration in force renders as absence, never a fabricated hash",
   assert.equal(line, "no pre-registration in force");
 });
 
-test("a merge with no governing verdict falls back to its own words, not the latest verdict", () => {
-  // publication_note is deliberately EMPTY here. A fixture whose note already
-  // reads "no governing verdict" would pass whether or not the null-branch
-  // exists — the note would simply pass through — so it proves nothing about
-  // the branch it is named for.
-  const line = governingLine({ governing_verdict: null, publication_note: "" });
+test("a merge with no governing verdict says so, even though the API always sends a note", () => {
+  // THE REAL PAYLOAD. `governing_verdict: null` arrives alongside a full,
+  // non-empty `publication_note` — that combination is what
+  // test_merged_pr_without_a_reader_verdict_reports_null_governing produces —
+  // and the note must NOT win. `merge.publication_note || <sentence>` passes
+  // the old empty-string test and fails this one: it returns the note, whose
+  // words are "The verdict shown here is historical context — what was
+  // standing when THIS commit merged", printed under the label `governing`
+  // beside no verdict at all. The store says no verdict was standing
+  // (store.py:1795-1797, prereg §2.4's excluded bucket), so that is the page
+  // asserting the opposite of the truth about the most sensitive thing on it.
+  const line = governingLine({
+    governing_verdict: null,
+    publication_note: NOT_PUBLICATION_GOVERNING_NOTE,
+  });
+  assert.equal(line, "no governing verdict at this merge");
+  assert.equal(
+    line.includes("what was standing when THIS commit merged"),
+    false,
+    "the note claims a verdict was standing at a merge where none was",
+  );
+});
+
+test("a null governing verdict beats the GOVERNING note too, not just the non-governing one", () => {
+  // The other constant (api.py:744-747) on the same null verdict. It is a
+  // stranger payload — the governing merge with nothing to govern with — but
+  // it is the same field and the same rule, and pinning only the non-governing
+  // constant would leave `publication_governing && note` as a live fallback.
+  const line = governingLine({
+    governing_verdict: null,
+    publication_note:
+      "This is the merge whose governing verdict the published quarterly " +
+      "statistic uses for this pull request.",
+  });
   assert.equal(line, "no governing verdict at this merge");
 });
 
