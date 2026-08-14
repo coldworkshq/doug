@@ -57,7 +57,8 @@ test("the root loading skeleton is chrome-neutral", () => {
   // web/app/loading.tsx also covers /dashboard, which has its own shell.
   // Public SiteHeader here flashes Sign in / Docs / Queue on a signed-in
   // ledger. "fetching the queue" invents a page this skeleton is not.
-  assert.equal(loading.includes("SiteHeader"), false);
+  assert.equal(loading.includes('from "@/components/site-header"'), false);
+  assert.equal(loading.includes("<SiteHeader"), false);
   assert.equal(loading.includes("fetching the queue"), false);
 });
 

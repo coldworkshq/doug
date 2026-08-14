@@ -371,3 +371,12 @@ def test_convergence_is_pure():
     assert imported <= {"dataclasses", "collections", "collections.abc", "typing", ".patterns"}, (
         imported
     )
+
+
+def test_settlement_rules_match_the_producer():
+    """convergence.py cannot import settle.py (purity). The two copies of
+    the producer codes must still be the same set, or a new settle notice
+    would be invisible to the finding-diff."""
+    from doug.settle import SETTLED_REASON_CODES
+
+    assert convergence.SETTLEMENT_RULES == SETTLED_REASON_CODES
