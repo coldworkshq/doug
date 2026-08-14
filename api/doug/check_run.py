@@ -26,7 +26,7 @@ Three things this surface must never smooth over:
 
 import sys
 
-from .models import Verdict
+from .models import Band, Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
 from .store import InstrumentSnapshot
@@ -61,6 +61,13 @@ DEVIATION_NOTE = (
     "The instrument behind this section has not passed its derangement "
     "check (2026-07-31), so these are unvalidated observations. They do "
     "not contribute to the band or score above (ADR-0007)."
+)
+# settle.py drops disproved findings and leaves a weight-0 notice. Listing
+# that notice under ### Findings beneath a Flagged title reads as a remaining
+# defect. The band is the risk score; nothing survived.
+SETTLED_NOTE = (
+    "The band is the risk score, not a remaining finding. Every finding "
+    "the read produced was disproved at head or against the live schema."
 )
 # Appended, replacing whatever the cut removed, when the rendered body would
 # still exceed SUMMARY_LIMIT. A silent [:SUMMARY_LIMIT] slice reads as a
@@ -145,7 +152,10 @@ def render(
     # block rendered, so it can never be lost instead.
     skip = {"read-truncated"} if partial is not None else set()
     risks = [r for r in verdict.reasons if r.rule not in skip]
+    only_settled = bool(risks) and all(r.rule.startswith("settled-") for r in risks)
     lines += ["", "### Findings", ""]
+    if only_settled and verdict.band is Band.FLAGGED:
+        lines += [SETTLED_NOTE, ""]
     if risks:
         lines += [
             f"- `{r.rule}` — {_oneline(r.label)}" + (f" _({r.severity})_" if r.severity else "")

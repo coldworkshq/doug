@@ -142,6 +142,34 @@ def test_a_clean_verdict_renders_an_explicit_none():
     assert "- none" in summary.splitlines()
 
 
+def test_flagged_with_only_settlement_notices_does_not_read_as_a_remaining_defect():
+    """settle.py drops disproved findings and leaves a weight-0 notice so
+    the ledger stays honest. The check run used to list that notice under
+    ### Findings beneath a Flagged title, which operators read as "Doug
+    still found something" — the band is the risk score; nothing survived.
+    """
+    settled = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(
+                    rule="settled-missing-import",
+                    label=(
+                        "Dropped 2 finding(s) disproved by runtime import "
+                        "at head — foo.py: missing-import"
+                    ),
+                    weight=0.0,
+                )
+            ]
+        }
+    )
+    title, summary = check_run.render("reader", settled, None, WHOLE)
+    assert title.lower().startswith("flagged")
+    assert "risk score" in summary.lower()
+    assert "disproved" in summary.lower()
+    assert "settled-missing-import" in summary
+    assert "- none" not in summary.splitlines()
+
+
 def test_a_partial_read_is_called_out_once_and_only_once():
     """score_one already appends the read-truncated Reason to the verdict
     (review.py:133-134), so rendering the coverage block naively duplicated

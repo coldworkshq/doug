@@ -44,9 +44,13 @@ test("the landing miss-rate panel points at the live scoreboard", () => {
   assert.match(landing, /href="\/scoreboard"/);
 });
 
-test("the queue is not a dead-end: scoreboard and docs are one tap away", () => {
-  assert.match(queue, /href="\/scoreboard"/);
-  assert.match(queue, /href="\/docs"/);
+test("the queue follows the site theme and shares the public header", () => {
+  // Forced-dark + .glass made /queue the one public page that did not
+  // look like Doug. SiteHeader carries Docs/Scoreboard/Queue; this file
+  // must not re-hide them behind a private nav.
+  assert.equal(queue.includes('className="dark'), false);
+  assert.match(queue, /SiteHeader/);
+  assert.equal(queue.includes("glass"), false);
 });
 
 test("the queue footnoted the cleared band, not just the score", () => {

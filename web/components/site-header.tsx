@@ -9,12 +9,12 @@ const NAV_LINKS = [
   { href: "/queue", label: "Queue" },
 ] as const;
 
-/** Floating site chrome for the public marketing surface (/, /docs/*).
+/** Floating site chrome for the public marketing surface (/, /docs/*,
+ *  /scoreboard, /queue).
  *
- *  Deliberately NOT used on /queue (forced-dark, its own minimal live-badge
- *  nav) or /dashboard (its own signed-in "forensic ledger" shell with a
- *  tenant/repo selector) — both have chrome that earned its own design and
- *  this component would be the wrong fit for either.
+ *  Deliberately NOT used on /dashboard (its own signed-in "forensic ledger"
+ *  shell with a tenant/repo selector) — that chrome earned its own design
+ *  and this component would be the wrong fit.
  *
  *  `position: sticky` + `top-4` rather than `fixed`: it still reserves its
  *  own space in flow (no content jumps under it, no scroll-lock JS), but
