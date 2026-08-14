@@ -29,6 +29,7 @@ import sys
 from .models import Band, Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
+from .settle import SETTLED_REASON_CODES
 from .store import InstrumentSnapshot
 
 NAME = "Doug"
@@ -152,9 +153,9 @@ def render(
     # block rendered, so it can never be lost instead.
     skip = {"read-truncated"} if partial is not None else set()
     risks = [r for r in verdict.reasons if r.rule not in skip]
-    only_settled = bool(risks) and all(r.rule.startswith("settled-") for r in risks)
+    only_settled = bool(risks) and all(r.rule in SETTLED_REASON_CODES for r in risks)
     lines += ["", "### Findings", ""]
-    if only_settled and verdict.band is Band.FLAGGED:
+    if only_settled and verdict.band == Band.FLAGGED:
         lines += [SETTLED_NOTE, ""]
     if risks:
         lines += [

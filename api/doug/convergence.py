@@ -27,12 +27,12 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .patterns import from_rule, normalize
+from .settle import SETTLED_REASON_CODES as SETTLEMENT_RULES
 
 # settle.py's two weight-0 notices, appended to the later verdict's reasons
 # when it disproved a finding rather than the author fixing it
 # (settle.py:192, :291). Their label grammar is parsed below and pinned by
 # tests/test_convergence.py against the real emitters.
-SETTLEMENT_RULES = frozenset({"settled-missing-import", "settled-schema-dependency"})
 
 IDENTITY_INCOMPLETE = "identity-incomplete"
 FILE_UNCOVERED = "file-uncovered"

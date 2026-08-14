@@ -148,26 +148,50 @@ def test_flagged_with_only_settlement_notices_does_not_read_as_a_remaining_defec
     ### Findings beneath a Flagged title, which operators read as "Doug
     still found something" — the band is the risk score; nothing survived.
     """
-    settled = FLAGGED.model_copy(
+    from doug.settle import SETTLED_REASON_CODES
+
+    assert SETTLED_REASON_CODES == {
+        "settled-missing-import",
+        "settled-schema-dependency",
+    }
+    for rule in sorted(SETTLED_REASON_CODES):
+        settled = FLAGGED.model_copy(
+            update={
+                "reasons": [
+                    Reason(
+                        rule=rule,
+                        label=f"Dropped 2 finding(s) — {rule}",
+                        weight=0.0,
+                    )
+                ]
+            }
+        )
+        title, summary = check_run.render("reader", settled, None, WHOLE)
+        assert title.lower().startswith("flagged")
+        assert check_run.SETTLED_NOTE in summary
+        assert "risk score" in summary.lower()
+        assert rule in summary
+        assert "- none" not in summary.splitlines()
+
+
+def test_a_settled_prefix_near_miss_is_not_a_settlement_notice():
+    """Prefix matching would treat any settled-* rule as the two producers
+    in settle.py. A hand-written near-miss must still look like a remaining
+    finding, not get SETTLED_NOTE."""
+    near = FLAGGED.model_copy(
         update={
             "reasons": [
                 Reason(
-                    rule="settled-missing-import",
-                    label=(
-                        "Dropped 2 finding(s) disproved by runtime import "
-                        "at head — foo.py: missing-import"
-                    ),
+                    rule="settled-by-hand",
+                    label="Someone labelled this settled",
                     weight=0.0,
                 )
             ]
         }
     )
-    title, summary = check_run.render("reader", settled, None, WHOLE)
-    assert title.lower().startswith("flagged")
-    assert "risk score" in summary.lower()
-    assert "disproved" in summary.lower()
-    assert "settled-missing-import" in summary
-    assert "- none" not in summary.splitlines()
+    _, summary = check_run.render("reader", near, None, WHOLE)
+    assert check_run.SETTLED_NOTE not in summary
+    assert "settled-by-hand" in summary
 
 
 def test_a_partial_read_is_called_out_once_and_only_once():

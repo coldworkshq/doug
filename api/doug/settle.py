@@ -41,6 +41,16 @@ from collections.abc import Callable, Iterable
 
 from .reader import ReaderFinding, ReaderVerdict
 
+# Weight-0 notices appended when a finding is disproved rather than the
+# author fixing it. The only two producers are settlement_notice and
+# schema_settlement_notice below. check_run.py and convergence.py import
+# this set rather than prefix-matching "settled-".
+SETTLED_MISSING_IMPORT = "settled-missing-import"
+SETTLED_SCHEMA_DEPENDENCY = "settled-schema-dependency"
+SETTLED_REASON_CODES = frozenset(
+    {SETTLED_MISSING_IMPORT, SETTLED_SCHEMA_DEPENDENCY}
+)
+
 _IMPORT_SLUGS = frozenset(
     {
         "missing-import",
@@ -189,7 +199,7 @@ def settlement_notice(dropped: list[ReaderFinding]):
         f"{d.file}: {d.category_slug} ({claimed_names(d) or ['?']})" for d in dropped
     )
     return Reason(
-        rule="settled-missing-import",
+        rule=SETTLED_MISSING_IMPORT,
         label=f"Dropped {len(dropped)} finding(s) disproved by runtime import at head — {labels}",
         weight=0.0,
     )
@@ -288,7 +298,7 @@ def schema_settlement_notice(dropped: list[ReaderFinding]):
         f"{d.file}: {d.category_slug} ({claimed_columns(d) or ['?']})" for d in dropped
     )
     return Reason(
-        rule="settled-schema-dependency",
+        rule=SETTLED_SCHEMA_DEPENDENCY,
         label=f"Dropped {len(dropped)} finding(s) disproved by the live schema — {labels}",
         weight=0.0,
     )

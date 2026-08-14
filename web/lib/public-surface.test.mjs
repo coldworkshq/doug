@@ -11,6 +11,7 @@ const header = await readFile(
 );
 const landing = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const queue = await readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8");
+const loading = await readFile(new URL("../app/loading.tsx", import.meta.url), "utf8");
 const intro = await readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8");
 const rest = await readFile(
   new URL("../app/docs/rest-api/page.tsx", import.meta.url),
@@ -29,8 +30,7 @@ test("the header's public routes survive below the sm breakpoint", () => {
   // NAV_LINKS, a phone cannot reach Docs, Scoreboard, or Queue from the
   // chrome — and the request that produced this pin came from a phone.
   assert.match(header, /hidden sm:flex/);
-  assert.match(header, /<details/);
-  assert.match(header, /sm:hidden/);
+  assert.match(header, /<details className="[^"]*sm:hidden/);
   const maps = header.match(/NAV_LINKS\.map/g) ?? [];
   assert.equal(
     maps.length,
@@ -49,8 +49,16 @@ test("the queue follows the site theme and shares the public header", () => {
   // look like Doug. SiteHeader carries Docs/Scoreboard/Queue; this file
   // must not re-hide them behind a private nav.
   assert.equal(queue.includes('className="dark'), false);
-  assert.match(queue, /SiteHeader/);
+  assert.match(queue, /<SiteHeader/);
   assert.equal(queue.includes("glass"), false);
+});
+
+test("the root loading skeleton is chrome-neutral", () => {
+  // web/app/loading.tsx also covers /dashboard, which has its own shell.
+  // Public SiteHeader here flashes Sign in / Docs / Queue on a signed-in
+  // ledger. "fetching the queue" invents a page this skeleton is not.
+  assert.equal(loading.includes("SiteHeader"), false);
+  assert.equal(loading.includes("fetching the queue"), false);
 });
 
 test("the queue footnoted the cleared band, not just the score", () => {
@@ -64,6 +72,9 @@ test("docs intro does not claim the public surface is only the CLI", () => {
   assert.equal(intro.includes("Today the public surface is the"), false);
   assert.match(intro, /\/scoreboard/);
   assert.match(intro, /\/queue/);
+  // experience.md: banned verb "caught". Routing language, not capture.
+  assert.equal(intro.includes("caught"), false);
+  assert.match(intro, /would have routed/);
 });
 
 test("REST API docs name the live showcase routes and do not pretend none of this is live", () => {
@@ -73,6 +84,18 @@ test("REST API docs name the live showcase routes and do not pretend none of thi
   // Banned: per-author-type miss rates (honesty contract) and an invented host.
   assert.equal(rest.includes("per author type"), false);
   assert.equal(rest.includes("api.doug.dev"), false);
+});
+
+test("REST API docs do not mark live tenant routes as planned or preview", () => {
+  // GET /v1/queue and GET /v1/prs/:number/receipt are token/session-gated
+  // and shipped. Tenant scoreboard is the remaining planned surface.
+  assert.match(rest, /name: "GET \/v1\/queue"[\s\S]*?meta: "live"/);
+  assert.match(rest, /name: "GET \/v1\/prs\/:number\/receipt"[\s\S]*?meta: "live"/);
+  assert.match(rest, /name: "GET \/v1\/scoreboard"[\s\S]*?meta: "planned"/);
+  assert.equal(rest.includes("Tenant REST is still planned"), false);
+  assert.equal(rest.includes("Tenant REST is still the planned"), false);
+  assert.match(rest, /\$DOUG_API_URL/);
+  assert.match(rest, /SAMPLE — empty-ledger snapshot/);
 });
 
 test("REST API sits in Coming up as preview, not planned — showcase is live", () => {
@@ -95,4 +118,7 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.equal(llms.includes("public surface today is the backtest CLI"), false);
   assert.match(llms, /\/v1\/showcase\/scoreboard/);
   assert.equal(llms.includes("per author type"), false);
+  assert.match(llms, /tenant queue and receipt live/);
+  assert.match(llms, /Planned: tenant-scoped GET \/v1\/scoreboard/);
+  assert.equal(llms.includes("Planned: tenant-scoped GET /v1/queue"), false);
 });

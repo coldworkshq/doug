@@ -7,7 +7,7 @@ import { DocsPageHeader, IC, P } from "@/components/docs/prose";
 export const metadata = {
   title: "REST API — Doug Documentation",
   description:
-    "Public showcase endpoints are live. Tenant REST is still the planned product surface.",
+    "Public showcase endpoints are live. Tenant queue and receipt are live, gated. A tenant scoreboard is still planned.",
 };
 
 export default function RestApiPage() {
@@ -24,8 +24,8 @@ export default function RestApiPage() {
               The unauthenticated showcase endpoints are live — they are what{" "}
               <b className="font-semibold text-foreground">/queue</b> and{" "}
               <b className="font-semibold text-foreground">/scoreboard</b>{" "}
-              render. Tenant REST (a queue of <em>your</em> repos, a
-              scoreboard of <em>your</em> clocks) is still planned.
+              render. Tenant queue and receipt are live behind a session or
+              a token. A scoreboard of <em>your</em> clocks is still planned.
             </DocsPageHeader>
 
             <P>
@@ -50,24 +50,30 @@ export default function RestApiPage() {
                 },
                 {
                   name: "GET /v1/prs/:number/receipt",
-                  meta: "preview",
+                  meta: "live",
                   description:
                     "The evidence trail behind a verdict. Session or a token with receipt:read. Not a public showcase route.",
                 },
                 {
                   name: "GET /v1/queue",
+                  meta: "live",
+                  description:
+                    "Tenant-scoped routed queue. Session or token. The showcase route is pinned to one repo by design and is not this.",
+                },
+                {
+                  name: "GET /v1/scoreboard",
                   meta: "planned",
                   description:
-                    "Tenant-scoped routed queue. The showcase route is pinned to one repo by design and is not this.",
+                    "Tenant-scoped clocks: your adjudicated / pending / miss_rate. The showcase route is pinned to one repo by design and is not this.",
                 },
               ]}
             />
           </>
         }
         rail={
-          <CodeBlock title="LIVE — showcase scoreboard">
+          <CodeBlock title="SAMPLE — empty-ledger snapshot">
             <Dim>$</Dim>{" "}
-            <Bright>curl /v1/showcase/scoreboard</Bright>
+            <Bright>curl &quot;$DOUG_API_URL/v1/showcase/scoreboard&quot;</Bright>
             {"\n{\n  "}
             <Str>&quot;repo&quot;</Str>
             {": "}

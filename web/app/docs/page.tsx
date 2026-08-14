@@ -49,7 +49,7 @@ export default function DocsIntroductionPage() {
                 </b>
                 : replay your repo&rsquo;s merged history, label
                 defect-inducing PRs from revert anchors in git, and measure
-                exactly what Doug would have caught. The report is the demo —
+                which PRs Doug would have routed. The report is the demo —
                 and the same numbers we publish for ourselves.
               </P>
             </DocsPageHeader>
