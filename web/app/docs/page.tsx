@@ -69,7 +69,7 @@ export default function DocsIntroductionPage() {
             {"\n"}
             <Bright>doug-backtest</Bright> <Str>your-org/your-repo</Str>
             {"\n\n"}
-            <Comment># 2 · route the live queue          [preview]</Comment>
+            <Comment># 2 · route the live queue</Comment>
             {"\n"}
             <Dim>62 open → 5 need you · rest cleared w/ receipts</Dim>
             {"\n\n"}

@@ -2,7 +2,7 @@ import { Bright, CodeBlock, Dim, Kw, Str } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
 import { DocsTwoCol } from "@/components/docs/docs-two-col";
 import { ParamsTable } from "@/components/docs/params-table";
-import { DocsPageHeader, P } from "@/components/docs/prose";
+import { DocsPageHeader, IC, P } from "@/components/docs/prose";
 
 export const metadata = {
   title: "REST API — Doug Documentation",
@@ -29,10 +29,9 @@ export default function RestApiPage() {
             </DocsPageHeader>
 
             <P>
-              Both showcase routes ignore <code>?repo=</code>. The bound is
-              the API&rsquo;s <code>DOUG_SHOWCASE_REPO</code>, not a query
-              string a stranger can widen. Per-author-type rates are not
-              published.
+              Both showcase routes ignore <IC>?repo=</IC>. The bound is the
+              API&rsquo;s <IC>DOUG_SHOWCASE_REPO</IC>, not a query string a
+              stranger can widen. Per-author-type rates are not published.
             </P>
 
             <ParamsTable
