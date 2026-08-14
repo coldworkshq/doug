@@ -1,10 +1,10 @@
 # Doug — risk-routed code review
 
-> Doug scores every pull request deterministically against the repository's own
-> defect history, clears the safe majority, and routes the risky few to a human
-> with evidence attached. Never blocks a merge. Status: EARLY PREVIEW — the
-> public surface today is the backtest CLI. Docs: /docs · Repo:
-> https://github.com/drewjst/doug
+> Doug scores every pull request, clears the majority, and routes the risky
+> few to a human with evidence attached. Never blocks a merge. Status: EARLY
+> PREVIEW — public surfaces: /queue, /scoreboard, hosted /docs, GitHub App
+> check runs. The self-serve measurement tool is the backtest CLI. Docs:
+> /docs · Repo: https://github.com/drewjst/doug
 
 ## Status legend
 - AVAILABLE: works today
@@ -100,10 +100,13 @@ variants ranked by outcome evidence) and doug.check (submit a draft diff, get
 losing-variant matches). Gated on evidence: patterns ship only after outcome
 deltas replicate across repos. First domain: schema migrations. No dates promised.
 
-## REST API (PLANNED — not live)
-Sketch: GET /v1/queue (routed queue with scores + receipts), GET
-/v1/prs/:number/receipt (evidence trail behind a verdict), GET /v1/scoreboard
-(published miss rates per author type — public by design).
+## REST API (PREVIEW — public showcase live; tenant REST planned)
+Live, unauthenticated, pinned to the showcase repo:
+- GET /v1/showcase/queue — open PRs with scores and reasons (what /queue renders)
+- GET /v1/showcase/scoreboard — prospective counters; miss_rate is null until the
+  pre-registered interval fires. Per-author-type rates are not published.
+Preview: GET /v1/prs/:number/receipt — evidence trail, session or receipt:read token.
+Planned: tenant-scoped GET /v1/queue.
 
 ## Research results — LLM diff-read probe (2026-07, PREVIEW — not in the shipped scorer)
 Pre-registered before any run (bars, samples, kill conditions frozen first).

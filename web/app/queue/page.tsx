@@ -62,6 +62,18 @@ export default async function QueuePage({
             <DougLogo /> doug
           </Link>
           <div className="flex items-center gap-2">
+            <Link
+              href="/scoreboard"
+              className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Scoreboard
+            </Link>
+            <Link
+              href="/docs"
+              className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Docs
+            </Link>
             <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
               <span
                 className={
@@ -191,6 +203,9 @@ export default async function QueuePage({
           are fixed. Every finding names the pattern it matched, so a score
           can be argued with. Reader findings come from a model reading the
           diff; the deterministic fallback names a weighted rule instead.
+          Cleared means not deeply inspected by a human. On one of two
+          research repos the cleared band was not safer than merging blind;
+          the number we are measuring is yours, not theirs.
         </footer>
       </main>
     </div>

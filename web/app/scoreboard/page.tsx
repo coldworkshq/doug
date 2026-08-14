@@ -42,7 +42,8 @@ export default async function ScoreboardPage() {
           is not mixed into these numbers.
         </p>
 
-        <dl className="panel mt-10 grid gap-6 rounded-2xl p-8 sm:grid-cols-2">
+        <dl className="panel relative mt-10 grid gap-6 overflow-hidden rounded-2xl p-8 sm:grid-cols-2">
+          <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
           <div>
             <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Adjudicated

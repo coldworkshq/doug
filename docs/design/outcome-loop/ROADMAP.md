@@ -11,12 +11,12 @@ Effort marks are engineer-days of focused work, not calendar days.
 
 `[x]` done and merged · `[ ]` not started · `[~]` **partially** landed, with the remaining half
 named in the item. `[~]` exists because items go half-true in a way that reads as done if you
-only count boxes: a shipped primitive nothing calls is not a shipped capability. Two are open —
-**fork-PR + bot-author exclusion** (the fork half is done, the bot-author half is not) and
-**doug-web's dedicated service account** (code merged in #44; the ops cutover has not run). Two
-closed the way this mark is meant to close: Task 7's reconcile, once Task 7b called it from the
-lifespan, and M2's spend cap, whose primitive landed in #25 and sat wired to nothing until #37
-put `_charge(scope)` in front of both paid entry points.
+only count boxes: a shipped primitive nothing calls is not a shipped capability. One of the
+original pair remains open — **doug-web's dedicated service account** (code merged in #44; the
+ops cutover has not run). Bot-author skip closed in #106. Two closed the way this mark is
+meant to close: Task 7's reconcile, once Task 7b called it from the lifespan, and M2's spend
+cap, whose primitive landed in #25 and sat wired to nothing until #37 put `_charge(scope)` in
+front of both paid entry points.
 
 ---
 
@@ -161,11 +161,15 @@ executed as written — amendments folded in at their task, never as a second pa
   backtested one), with graceful degradation when the reviews call fails. Merged #25.
 - [x] ADR-0002 made real: cross-pin test (reader constants ≡ `llm_probe.py`), `prompt_hash` written
   per verdict. Merged #25. The previous test compared `reader.py` to itself and could not fail.
-- [~] Fork-PR + bot-author exclusion from deep reads — the **fork** half is done, on both
-  entrances to the paid path: the webhook gate (`api.py:660`) never enqueues one, and
-  `worker._skip_reason` (`worker.py:236`) refuses one that reached the queue another way.
-  Both treat non-integer repo ids as a fork, because the safe direction to be wrong in is
-  skip. Merged #27. **Bot-author is still open**, and it is the half that still costs money.
+- [x] Fork-PR + bot-author exclusion from deep reads — the **fork** half merged
+  #27, on both entrances to the paid path: the webhook gate never enqueues one,
+  and `worker._skip_reason` refuses one that reached the queue another way.
+  Both treat non-integer repo ids as a fork. **Bot-author skip shipped in #106:**
+  webhook + worker refuse to enqueue/charge when `user.type == "Bot"` or the
+  login ends with `[bot]`. A missing user is not a bot (proceed). Merges still
+  clock (prereg §2.4). The deterministic `agent-authored` rule stays on the
+  fallback tier for human-authored PRs that touch bot-shaped diffs; Dependabot
+  does not buy a deep read.
 - [x] Per-installation gate on the **experimental intent tier**. **This item did not exist on
   this list until 2026-08-02** — it was found by reading the cost lines #37 had just added,
   which is the first time anyone could see that the intent read is the *larger* of the two paid
@@ -308,8 +312,12 @@ path, no cross-tenant read, no silent partial reads.
   ("PR head sha at merge — not stored") **forward only**: rows written before
   this slice stay NULL, and it does not touch the locked §2.1 timestamp-match
   rule.
-- [ ] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
-- [ ] Public Doug-on-Doug scoreboard page (dogfood proof, no auth)
+- [x] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
+  this cycle. Empty is the product (`adjudicated 0` still renders). Shipped in #106.
+- [x] Public Doug-on-Doug scoreboard page (dogfood proof, no auth) — `/scoreboard`
+  consumes `GET /v1/showcase/scoreboard`, same `instrument_snapshot` as the footer.
+  Prospective panel only; miss rate is `null` / `not yet decidable — a count, not a rate`.
+  Shipped in #106.
 - [~] **Pre-registration document published + hashed** (metrics, denominator, both windows,
   right-censoring, cadence). `LOCKED v8`, the atomic dual-write, guarded catch-up CLI,
   deploy lock, and production runbook are built on `m3-60-day-backfill`; production is

@@ -266,9 +266,15 @@ export default async function Home() {
                 —
               </p>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Not yet. That needs verdicts joined to outcomes in
-                production, and Doug has been live for days, not months. The
-                number lands here with a date next to it, good or bad.
+                Not yet. The live counters — adjudicated, pending, first due —
+                sit on the{" "}
+                <Link
+                  href="/scoreboard"
+                  className="underline underline-offset-4 hover:text-foreground"
+                >
+                  scoreboard
+                </Link>
+                . The number lands here with a date next to it, good or bad.
               </p>
             </div>
           </div>
