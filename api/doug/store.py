@@ -2304,10 +2304,11 @@ def run_history(
     probe corpora, CLI rows and the research quarantine out of a console
     that is meant to show tenant traffic.
 
-    Each row carries `coverage`, `finding_counts`, `job` and `outcome_14`.
-    Every child join goes through an id-picking subquery because a plain
-    outerjoin duplicates the verdict row whenever two children match, and a
-    duplicated run reads as a real second review rather than as a bug.
+    Each row carries `coverage`, `finding_counts`, `job`, `outcome_14` and
+    `outcome_60`. Every child join goes through an id-picking subquery
+    because a plain outerjoin duplicates the verdict row whenever two
+    children match, and a duplicated run reads as a real second review
+    rather than as a bug.
     """
     engine = _get_engine()
     if engine is None or limit < 1 or offset < 0:
@@ -2400,23 +2401,28 @@ def run_history(
             ).mappings()
         }
 
-        # 14-day only. Both windows exist for a merged PR, and carrying both
-        # into a list column is what fans one run out into two. Filtered on
-        # both halves of the key — repo alone would fetch every 14-day
-        # outcome for every repo on the page, not just the PRs on it.
+        # Both windows, each surfaced as its own scalar column. Both exist
+        # for a merged PR, and carrying either into a list column is what
+        # fans one run out into two — outcome_14 and outcome_60 instead stay
+        # two separate keys on the same row. Filtered on both halves of the
+        # PR key — repo alone would fetch every outcome for every repo on
+        # the page, not just the PRs on it.
         #
         # `outcomes` carries no unique constraint on (repo, pr_number,
         # window_days), so if a PR is ever re-graded the dict below keeps
-        # the highest-id (most recent) row — last-observation-wins. That is
-        # a different reduction than find_scored_prs_with_outcomes uses on
-        # this same table (store.py:1240-1241), which fans a multi-outcome
-        # PR out into several rows and leaves the reduction to its caller.
-        # The difference is deliberate: outcome_14 is a single list-column
-        # value here, so there is no caller-side reduction to defer to.
+        # the highest-id (most recent) row — last-observation-wins, applied
+        # per window now that window_days is part of the key: a re-grade of
+        # the 14-day outcome cannot overwrite the 60-day one or vice versa.
+        # That is a different reduction than `pattern_join` (store.py:2149)
+        # uses on this same table, which fans a multi-outcome PR out into
+        # several rows and leaves the reduction to its caller — see its own
+        # note at store.py:2197-2198. The difference is deliberate:
+        # outcome_14/outcome_60 are single scalar values here, so there is no
+        # caller-side reduction to defer to.
         keys = {(r["repo"], r["pr_number"]) for r in rows}
         outcome_query = (
             select(outcomes)
-            .where(outcomes.c.window_days == 14)
+            .where(outcomes.c.window_days.in_((14, 60)))
             .where(outcomes.c.repo.in_({k[0] for k in keys}))
             .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
         )
@@ -2427,7 +2433,7 @@ def run_history(
         if repo_ids is not None:
             outcome_query = outcome_query.where(outcomes.c.github_repo_id.in_(repo_ids))
         outcome_by_pr = {
-            (row["repo"], row["pr_number"]): row["kind"]
+            (row["repo"], row["pr_number"], row["window_days"]): row["kind"]
             for row in conn.execute(
                 outcome_query.order_by(outcomes.c.id)
             ).mappings()
@@ -2438,7 +2444,8 @@ def run_history(
         row["coverage"] = cov_by_verdict.get(row["id"])
         row["finding_counts"] = counts_by_verdict.get(row["id"], dict(zero))
         row["job"] = job_by_verdict.get(row["id"])
-        row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"]))
+        row["outcome_14"] = outcome_by_pr.get((row["repo"], row["pr_number"], 14))
+        row["outcome_60"] = outcome_by_pr.get((row["repo"], row["pr_number"], 60))
     return rows
 
 

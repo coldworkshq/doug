@@ -163,6 +163,44 @@ test("coverage, outcomes, and select focus use honest visual semantics", async (
   );
 });
 
+test("the 14-day and 60-day outcomes render as two independent cells, never one collapsed to the other", async () => {
+  // RULING (plan D-outcome-surface, project owner): 14-day and 60-day are two
+  // separate, always-shown, separately-labelled columns, each with its own
+  // pending state — NOT one column resolving to the strongest signal. They
+  // are different observations of different windows, and collapsing them
+  // (`outcome_60 ?? outcome_14`) would let a row's rendered "clean" silently
+  // mean either window depending on data the reader cannot see. A row where
+  // 14d reads "clean" and 60d reads "pending" is the honest picture, and
+  // showing both is what makes the clock visible.
+  //
+  // Mutation proof (brief Step 5): collapse the two cells into one resolving
+  // to `outcome_60 ?? outcome_14` and this test fails — the independent
+  // `outcomeLabel(run.outcome_14)` call the first assertion requires is gone,
+  // replaced by a single call fed the fallback expression.
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(
+    page,
+    /outcomeToneClass\(outcomeTone\(run\.outcome_14\)\)[\s\S]{0,40}outcomeLabel\(run\.outcome_14\)/,
+    "the 14-day cell must render run.outcome_14 through the shared tone/label rule, on its own",
+  );
+  assert.match(
+    page,
+    /outcomeToneClass\(outcomeTone\(run\.outcome_60\)\)[\s\S]{0,40}outcomeLabel\(run\.outcome_60\)/,
+    "the 60-day cell must render run.outcome_60 through the shared tone/label rule, on its own",
+  );
+  for (const collapsed of ["outcome_60 ?? run.outcome_14", "run.outcome_60 ?? run.outcome_14", "outcome_60 ?? outcome_14"]) {
+    assert.equal(
+      page.includes(collapsed),
+      false,
+      `the outcome columns must not collapse to one value (found "${collapsed}")`,
+    );
+  }
+  // Both columns carry their own label — a row is never left to infer which
+  // window a bare "outcome" header meant.
+  assert.match(page, /label:\s*"14d outcome"/);
+  assert.match(page, /label:\s*"60d outcome"/);
+});
+
 test("repository connection and every pending setup remain reachable in all dashboard states", async () => {
   const page = await readFile(pageUrl, "utf8");
   // Reachability is an ORDERING property: both affordances are rendered ABOVE

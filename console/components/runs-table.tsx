@@ -57,6 +57,12 @@ interface Column {
   sort?: SortKey;
 }
 
+// 14d and 60d are two separate, always-shown, separately-labelled columns —
+// never one column resolving to the strongest signal (RULING, plan
+// D-outcome-surface). They are different observations of different windows:
+// a row reading "clean" at 14d and "pending" at 60d is the honest picture,
+// and collapsing them would let "clean" silently mean two different things
+// depending on data the reader cannot see.
 const COLUMNS: Column[] = [
   { label: "score", cls: "w-[78px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
@@ -65,7 +71,8 @@ const COLUMNS: Column[] = [
   { label: "band", cls: "w-[112px]" },
   { label: "tier", cls: "w-[88px]" },
   { label: "read", cls: "w-[176px]", sort: "coverage" },
-  { label: "outcome", cls: "w-[104px]" },
+  { label: "14d outcome", cls: "w-[100px]" },
+  { label: "60d outcome", cls: "w-[100px]" },
   { label: "job", cls: "w-[118px]" },
   { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
@@ -529,11 +536,12 @@ function RunRows({
   );
 }
 
-/** The 14-day outcome, or the absence of one. Every branch of the rule
- *  lives in lib/runs — `outcomeTone` decides the colour, `outcomeLabel` the
- *  marker and word — so this cell and the run detail tile cannot drift into
- *  describing the same row differently, and so the rule stays somewhere
- *  `node --test` can reach it.
+/** One outcome window's cell — 14-day or 60-day, or the absence of either.
+ *  Every branch of the rule lives in lib/runs — `outcomeTone` decides the
+ *  colour, `outcomeLabel` the marker and word — so this cell, its sibling
+ *  window's cell, and the run detail tile cannot drift into describing the
+ *  same row differently, and so the rule stays somewhere `node --test` can
+ *  reach it.
  *
  *  Only `flag` gets the extra weight. Bold is emphasis, and the two muted
  *  states — no row yet, and a row recording that the PR left the risk set
@@ -544,7 +552,7 @@ function OutcomeCell({ kind }: { kind: string | null }) {
   return <span className={outcomeToneClass(tone) + weight}>{outcomeLabel(kind)}</span>;
 }
 
-/** The eight cells of one run. Children render the identical columns —
+/** The nine cells of one run. Children render the identical columns —
  *  an older run is a full verdict, not a summary of one — and are marked
  *  as history by indentation and a rule, never by dropping data. */
 function RunCells({
@@ -651,8 +659,14 @@ function RunCells({
       <TableCell className="h-[34px] px-2.5">
         <CoverageBar coverage={run.coverage} changedFiles={run.changed_files} />
       </TableCell>
+      {/* Two independent cells — deliberately not one window falling back to
+          the other. See COLUMNS' docstring above for why a fallback would
+          misrepresent the row. */}
       <TableCell className="mono h-[34px] px-2.5 text-xs">
         <OutcomeCell kind={run.outcome_14} />
+      </TableCell>
+      <TableCell className="mono h-[34px] px-2.5 text-xs">
+        <OutcomeCell kind={run.outcome_60} />
       </TableCell>
       <TableCell className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">
         {jobLabel}

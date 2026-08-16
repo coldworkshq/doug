@@ -26,6 +26,7 @@ export function runMatchesQuery(run: RunSummary, q: string): boolean {
     run.band,
     run.tier,
     run.outcome_14,
+    run.outcome_60,
   );
   return query.split(/\s+/).every((token) => text.includes(token));
 }

@@ -23,6 +23,7 @@ function run(overrides) {
     finding_counts: { total: 0, high: 0, medium: 0, low: 0 },
     job: null,
     outcome_14: null,
+    outcome_60: null,
     ...overrides,
   };
 }
@@ -70,6 +71,21 @@ test("a missing outcome is 'pending', which is a different fact from 'clean'", (
 
   const outcome = facets.find((f) => f.key === "outcome");
   assert.deepEqual(outcome.options.map((o) => o.value), ["clean", "pending", "reverted"]);
+});
+
+test("a missing 60-day outcome is 'pending', which is a different fact from 'clean'", () => {
+  // outcome_60 null means the 60-day window has not closed yet — the same
+  // fact outcome_14 null states about its own window, and independent of
+  // it: a run can be "clean" at 14 days and still "pending" at 60. Folding
+  // either into "clean" would claim an observation that has not happened.
+  const facets = buildFacets([
+    run({ verdict_id: 1, outcome_60: null }),
+    run({ verdict_id: 2, outcome_60: "clean" }),
+    run({ verdict_id: 3, outcome_60: "reverted" }),
+  ]);
+
+  const outcome60 = facets.find((f) => f.key === "outcome_60");
+  assert.deepEqual(outcome60.options.map((o) => o.value), ["clean", "pending", "reverted"]);
 });
 
 test("'no read' is keyed off a missing coverage row, not off a zero rate", () => {
@@ -157,4 +173,28 @@ test("facet keys never collide with the scope params the page reads", () => {
   for (const key of FACET_KEYS) {
     assert.ok(key !== "repo" && key !== "tenant", `facet key ${key} collides with a scope param`);
   }
+});
+
+test("every outcome facet names its window, so no pill group says bare \"outcome\"", () => {
+  // The KEY is a contract and the LABEL is not. `outcome` stays the key so
+  // links already in circulation round-trip; what the pill bar RENDERS is
+  // `facet.label`, and both tables now read "14d outcome" / "60d outcome".
+  // A group labelled bare "outcome" beside them leaves the reader to guess
+  // which window the filter narrows — a bare header is exactly what the
+  // two-column ruling refused, and the filter above the columns is not
+  // exempt from it.
+  const facets = buildFacets([
+    run({ verdict_id: 1, outcome_14: "clean", outcome_60: "clean" }),
+    run({ verdict_id: 2, outcome_14: null, outcome_60: null }),
+  ]);
+
+  const fourteen = facets.find((f) => f.key === "outcome");
+  const sixty = facets.find((f) => f.key === "outcome_60");
+  assert.ok(fourteen && sixty, "both outcome facets must be built when both vary");
+  assert.equal(fourteen.label, "14d outcome");
+  assert.equal(sixty.label, "60d outcome");
+  // The keys are untouched — a "fix" that renamed the key to match the label
+  // would break every shared URL carrying ?outcome=.
+  assert.ok(FACET_KEYS.includes("outcome"));
+  assert.ok(FACET_KEYS.includes("outcome_60"));
 });

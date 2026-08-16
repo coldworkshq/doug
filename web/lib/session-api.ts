@@ -1,3 +1,5 @@
+import { isReceiptResponse, type ReceiptResponse } from "./receipt-shape";
+
 const SESSION_API_URL = process.env.DOUG_API_URL ?? "http://localhost:8000";
 const SESSION_FETCH_TIMEOUT_MS = 5_000;
 
@@ -64,6 +66,7 @@ export type RunSummary = {
     finished_at: string | null;
   } | null;
   outcome_14: string | null;
+  outcome_60: string | null;
 };
 
 export type RunListResponse = { items: RunSummary[]; limit: number; offset: number };
@@ -129,7 +132,19 @@ export type RunDetail = Record<string, unknown> & {
   }>;
 };
 
-export class SessionApiError extends Error {}
+export class SessionApiError extends Error {
+  /** The HTTP status when the request reached the API, null when it did not
+   *  (timeout, DNS, connection refused). The receipt screen needs 404 told
+   *  apart from 401 and 503: they are three different true statements, and
+   *  reporting a deployment fault as a credential problem is the failure the
+   *  API's own status contract exists to prevent. */
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null = null) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -229,7 +244,7 @@ function coverage(value: unknown): value is RunCoverage | null {
 const RUN_SUMMARY_KEYS = [
   "verdict_id", "repo", "installation_id", "github_repo_id", "pr_number", "title", "url",
   "scored_at", "tier", "source", "score", "band", "threshold", "coverage", "changed_files",
-  "finding_counts", "job", "outcome_14",
+  "finding_counts", "job", "outcome_14", "outcome_60",
 ] as const;
 
 function runSummary(value: unknown): value is RunSummary {
@@ -252,7 +267,7 @@ function runSummary(value: unknown): value is RunSummary {
     ]) && typeof job.status === "string" && Number.isInteger(job.attempts) &&
       nullableString(job.error) && nullableString(job.enqueued_at) &&
       nullableString(job.started_at) && nullableString(job.finished_at))) &&
-    nullableString(value.outcome_14)
+    nullableString(value.outcome_14) && nullableString(value.outcome_60)
   );
 }
 
@@ -338,7 +353,7 @@ async function sessionJson(
       headers: { Authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
     });
-    if (!response.ok) throw new SessionApiError(message);
+    if (!response.ok) throw new SessionApiError(message, response.status);
     return await response.json();
   } catch (error) {
     if (error instanceof SessionApiError) throw error;
@@ -405,5 +420,26 @@ export async function getSessionRun(
   const message = "Doug could not load this run.";
   const body = await sessionJson(`/v1/sessions/runs/${verdictId}`, accessToken, message);
   if (!isRunDetail(body)) throw new SessionApiError(message);
+  return body;
+}
+
+/** One PR's evidentiary record.
+ *
+ *  `repo` travels as a query parameter because a PR number alone is ambiguous
+ *  across repositories — the API requires it for that reason. No new scope is
+ *  needed: SESSION_SCOPES already carries `receipt:read`
+ *  (`api/doug/session_auth.py:27`). */
+export async function getReceipt(
+  accessToken: string,
+  repo: string,
+  prNumber: number,
+): Promise<ReceiptResponse> {
+  const message = "Doug could not load this receipt.";
+  const body = await sessionJson(
+    `/v1/prs/${prNumber}/receipt?repo=${encodeURIComponent(repo)}`,
+    accessToken,
+    message,
+  );
+  if (!isReceiptResponse(body)) throw new SessionApiError(message);
   return body;
 }

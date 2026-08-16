@@ -2290,9 +2290,12 @@ def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
     assert job["attempts"] == 2
 
 
-def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
-    """Both windows exist for a merged PR. The list column is the 14d one;
-    joining both would fan the run out into two rows."""
+def test_run_history_reports_outcome_60_beside_outcome_14_on_one_row(
+    tmp_path, monkeypatch
+):
+    """Both windows exist for a merged PR and both are joined in, each as
+    its own scalar column on the same row — never a list column, which
+    would fan the one run out into two rows."""
     _db(tmp_path, monkeypatch)
     store.save_review(
         "o/r", 1, "reader", VERDICT,
@@ -2307,8 +2310,9 @@ def test_run_history_reports_only_the_14_day_outcome(tmp_path, monkeypatch):
                 github_repo_id=1, installation_id=99,
             ))
     rows = store.run_history()
-    assert len(rows) == 1
+    assert len(rows) == 1, "two windows fanned one run out into two rows"
     assert rows[0]["outcome_14"] == "clean"
+    assert rows[0]["outcome_60"] == "revert"
 
 
 def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypatch):
@@ -2318,7 +2322,14 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
         "o/r", 1, "reader", VERDICT,
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
-    assert store.run_history()[0]["outcome_14"] is None
+    row = store.run_history()[0]
+    assert row["outcome_14"] is None
+    # BOTH windows, or the test guards half the surface it names. The 60-day
+    # column ships beside the 14-day one and carries the same rule for the
+    # same reason — a window that has not closed is not a clean result — and
+    # a reduction that dropped `outcome_60` to a default would pass a test
+    # that only ever looked at `outcome_14`.
+    assert row["outcome_60"] is None
 
 
 def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(

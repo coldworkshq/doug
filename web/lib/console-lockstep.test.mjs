@@ -156,16 +156,22 @@ function run(overrides = {}) {
     finding_counts: { total: 0, high: 0, medium: 0, low: 0 },
     job: null,
     outcome_14: null,
+    outcome_60: null,
     ...overrides,
   };
 }
 
+// outcome_60 is varied independently of outcome_14 across these rows — a run
+// can read "clean" at 14 days and still be pending at 60 (verdict_id 1), or
+// pending at 14 and closed by 60 (verdict_id 4) — so the fixture actually
+// exercises the two windows as separate observations, not as one value
+// mirrored onto two fields.
 const RUNS = [
-  run({ verdict_id: 1, band: "flagged", outcome_14: null, coverage: READ, changed_files: 8, scored_at: "2026-08-05T10:00:00" }),
-  run({ verdict_id: 2, band: "cleared", outcome_14: "clean", coverage: null, changed_files: 8, scored_at: "2026-08-06T11:00:00Z" }),
-  run({ verdict_id: 3, band: "flagged", outcome_14: "reverted", coverage: TINY, changed_files: null, scored_at: "2026-08-04T09:30:00", pr_number: 57 }),
-  run({ verdict_id: 4, band: "cleared", outcome_14: null, coverage: READ, changed_files: 4, tier: "deep", repo: "acme/other", pr_number: 56 }),
-  run({ verdict_id: 5, band: "flagged", outcome_14: "hotfix", coverage: READ, changed_files: 100, tier: "deep", scored_at: "2026-08-07T23:59:59+05:00" }),
+  run({ verdict_id: 1, band: "flagged", outcome_14: null, outcome_60: null, coverage: READ, changed_files: 8, scored_at: "2026-08-05T10:00:00" }),
+  run({ verdict_id: 2, band: "cleared", outcome_14: "clean", outcome_60: "clean", coverage: null, changed_files: 8, scored_at: "2026-08-06T11:00:00Z" }),
+  run({ verdict_id: 3, band: "flagged", outcome_14: "reverted", outcome_60: "reverted", coverage: TINY, changed_files: null, scored_at: "2026-08-04T09:30:00", pr_number: 57 }),
+  run({ verdict_id: 4, band: "cleared", outcome_14: null, outcome_60: "clean", coverage: READ, changed_files: 4, tier: "deep", repo: "acme/other", pr_number: 56 }),
+  run({ verdict_id: 5, band: "flagged", outcome_14: "hotfix", outcome_60: null, coverage: READ, changed_files: 100, tier: "deep", scored_at: "2026-08-07T23:59:59+05:00" }),
 ];
 
 const STAMPS = [
@@ -277,6 +283,8 @@ test("facets agree with console's original, across the rename", () => {
     {}, { band: [] }, { band: ["flagged"] }, { band: ["flagged", "cleared"] },
     { band: ["purple"] }, { outcome: ["pending"] }, { band: ["flagged"], outcome: ["pending"] },
     { read: ["no-read"] }, { read: ["read"] }, { tier: ["deep"] },
+    { outcome_60: ["pending"] }, { outcome_60: ["clean"] },
+    { outcome: ["pending"], outcome_60: ["clean"] },
   ];
   agree("buildFacets", web.facets.buildFacets, con.facets.buildFacets,
     [[RUNS], [[]], [[RUNS[0]]], [RUNS.slice(0, 2)]]);

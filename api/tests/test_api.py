@@ -2946,10 +2946,10 @@ def test_runs_503s_without_a_ledger(tmp_path, monkeypatch):
 
 # Beyond the brief's six: the response is the contract Task 7's console
 # reads, and none of those six touch title/url/tier/source/score/band/
-# threshold/changed_files/finding_counts/job/outcome_14/pr_number/
-# github_repo_id — a dropped or misspelled key among them would pass all
-# six anyway. This pins every key of RunSummaryItem in one row that carries
-# a real pr_meta, coverage, job and outcome.
+# threshold/changed_files/finding_counts/job/outcome_14/outcome_60/
+# pr_number/github_repo_id — a dropped or misspelled key among them would
+# pass all six anyway. This pins every key of RunSummaryItem in one row
+# that carries a real pr_meta, coverage, job and both outcome windows.
 def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     coverage = api.reader.Coverage(
@@ -2979,6 +2979,11 @@ def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatc
             observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
             github_repo_id=1, installation_id=99,
         ))
+        conn.execute(store.outcomes.insert().values(
+            repo="o/r", pr_number=7, kind="revert", window_days=60,
+            observed_at=datetime(2026, 9, 30, tzinfo=UTC), source="git-labels",
+            github_repo_id=1, installation_id=99,
+        ))
     client = TestClient(app)
     item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
     assert item["verdict_id"] == vid
@@ -3004,6 +3009,7 @@ def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatc
     assert item["finding_counts"] == {"total": 1, "high": 0, "medium": 0, "low": 0}
     assert item["job"]["status"] == "done" and item["job"]["attempts"] == 1
     assert item["outcome_14"] == "clean"
+    assert item["outcome_60"] == "revert"
 
 
 def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
