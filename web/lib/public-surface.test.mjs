@@ -24,6 +24,7 @@ const changelog = await readFile(
 );
 const llms = await readFile(new URL("../public/llms.txt", import.meta.url), "utf8");
 const nav = await readFile(new URL("./docs-nav.ts", import.meta.url), "utf8");
+const about = await readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8");
 
 /** The field of ONE record, or null.
  *
@@ -56,6 +57,35 @@ test("the header's public routes survive below the sm breakpoint", () => {
     2,
     "desktop nav and the mobile disclosure must both iterate NAV_LINKS",
   );
+});
+
+test("nav order puts the live product surfaces before reference material", () => {
+  // Scoreboard and Queue are the live showcase surfaces; Docs and About are
+  // reference material. Regressing this ordering is exactly the kind of
+  // silent reshuffle a diff review wouldn't catch without a pin.
+  const order = ["/scoreboard", "/queue", "/docs", "/about"];
+  const positions = order.map((href) => header.indexOf(`href: "${href}"`));
+  assert.ok(
+    positions.every((p) => p !== -1),
+    "every nav link must be present in NAV_LINKS",
+  );
+  for (let i = 1; i < positions.length; i++) {
+    assert.ok(
+      positions[i] > positions[i - 1],
+      `${order[i]} must come after ${order[i - 1]} in NAV_LINKS`,
+    );
+  }
+});
+
+test("about page exists, wears the shared chrome, and is reachable from the header", () => {
+  assert.match(header, /href: "\/about"/);
+  assert.match(about, /<SiteHeader/);
+  assert.equal(about.includes('className="dark'), false);
+});
+
+test("about page tells the naming story and wires the photo gallery to a real path", () => {
+  assert.match(about, /Saint Bernard/);
+  assert.match(about, /\/about\/doug\//);
 });
 
 test("the landing miss-rate panel points at the live scoreboard", () => {
