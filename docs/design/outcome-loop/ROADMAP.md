@@ -307,7 +307,12 @@ path, no cross-tenant read, no silent partial reads.
   Migration **8** is consumed by this slice (`verdicts.diff_budget`,
   `verdicts.read_order`, `outcome_jobs.merged_head_sha`, plus a one-time
   `verdicts.prompt_hash` backfill over historical reader rows) —
-  **MT3's `installations.reconciled_at` is migration 9.**
+  ~~**MT3's `installations.reconciled_at` is migration 9.**~~ **Superseded
+  2026-08-17:** 9 went to Front Door Phase 1a and 10 to `review_jobs.base_sha`,
+  so MT3 takes **11**. MT3 also does not use `installations.reconciled_at`: a
+  per-*installation* timestamp cannot say *which* repos were swept, and the
+  defect it must close is a per-repo coverage hole. See
+  `docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md` §4.5.
   `merged_head_sha`, captured at merge, closes pre-registration §11 item 7
   ("PR head sha at merge — not stored") **forward only**: rows written before
   this slice stay NULL, and it does not touch the locked §2.1 timestamp-match
@@ -396,13 +401,25 @@ would bite a real tenant.
   `docs/superpowers/specs/2026-08-04-tenant-api-keys-design.md`: resolve
   intersects every call against the live ledger, and the uninstall webhook
   now bulk-revokes the installation's keys outright.
-- [ ] **MT3 — `reconcile_all` must not scale by repo count.** No cap on repos
-  per installation and no call budget (the existing `_MAX_OPEN_PRS_PER_REPO`
-  bounds PRs *per repo*, not repos). A 10k-repo installation is ≥10k REST calls
-  per cold start, on a scale-to-zero service where cold starts are frequent —
-  and the loop is **serial across installations**, so one large tenant delays
-  every tenant behind it. Fixing MT0 exposes this rather than causing it.
-  (Next free migration: **9** — migration 8 is consumed by M3's receipts slice.)
+- [ ] **MT3 — the reconcile sweeps must not scale by repo count.** No cap on
+  repos per installation and no call budget (the existing
+  `_MAX_OPEN_PRS_PER_REPO` bounds PRs *per repo*, not repos). A 10k-repo
+  installation is ≥10k REST calls per cold start, on a scale-to-zero service
+  where cold starts are frequent — and the loop is **serial across
+  installations**, so one large tenant delays every tenant behind it. Fixing
+  MT0 exposes this rather than causing it.
+  **Scope corrected 2026-08-17:** this item said `reconcile_all`, but
+  `reconcile_outcomes` has the identical uncapped `active_repos` loop and is
+  the more expensive lane (a `pulls.get` per merge in the window, per repo,
+  per installation). Both are in scope; the scheduling primitive is built once.
+  **And the item is a correctness item, not a scaling one:** `active_repos`
+  has no `ORDER BY` and `reconcile_all`'s only caller is a daemon thread
+  (`api.py:188`) that scale-to-zero reaps, so on a large installation the
+  repos past the reaping point are never swept on *any* cold start. A silent,
+  permanent coverage hole, not slowness.
+  Design: `docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md`.
+  (Next free migration: **11** — 9 is Front Door Phase 1a and 10 is
+  `review_jobs.base_sha`; the earlier "next free: 9" note here was stale.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as

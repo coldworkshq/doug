@@ -25,6 +25,25 @@ const changelog = await readFile(
 const llms = await readFile(new URL("../public/llms.txt", import.meta.url), "utf8");
 const nav = await readFile(new URL("./docs-nav.ts", import.meta.url), "utf8");
 
+/** The field of ONE record, or null.
+ *
+ *  These files are arrays of `{ key: "value", … }` object literals. Matching
+ *  `anchor …lazy… field` across the whole source reads as a per-record
+ *  assertion and is not one: the lazy span crosses record boundaries, so it
+ *  is satisfied by the NEXT record's field and passes on the exact
+ *  regression it exists to catch. That is not hypothetical — flipping the
+ *  receipt row to `meta: "planned"` left this suite green until this helper
+ *  landed, and the sibling row only failed because it happened to sit last.
+ *  Slicing to the record first makes the assertion positional-order-proof.
+ */
+function fieldOf(source, anchorKey, anchorValue, field) {
+  const start = source.indexOf(`${anchorKey}: ${JSON.stringify(anchorValue)}`);
+  if (start === -1) return null;
+  const next = source.indexOf(`${anchorKey}: "`, start + 1);
+  const record = source.slice(start, next === -1 ? undefined : next);
+  return record.match(new RegExp(`${field}: "([^"]*)"`))?.[1] ?? null;
+}
+
 test("the header's public routes survive below the sm breakpoint", () => {
   // Desktop nav is `hidden sm:flex`. If that is the only iterator over
   // NAV_LINKS, a phone cannot reach Docs, Scoreboard, or Queue from the
@@ -82,17 +101,31 @@ test("REST API docs name the live showcase routes and do not pretend none of thi
   assert.equal(rest.includes("none of this is live"), false);
   assert.match(rest, /\/v1\/showcase\/queue/);
   assert.match(rest, /\/v1\/showcase\/scoreboard/);
-  // Banned: per-author-type miss rates (honesty contract) and an invented host.
-  assert.equal(rest.includes("per author type"), false);
+  // Honesty contract: per-author-type rates are never published. Banning the
+  // literal "per author type" pinned the DELETION of the July sketch's
+  // wording and nothing else — both files now write the phrase hyphenated,
+  // so the ban could not fire on a reintroduction spelled the way the file
+  // already spells it. Pin the disclaimer instead: republishing the rates
+  // means deleting or contradicting this sentence, and both fail here.
+  assert.match(rest, /Per-author-type rates are not published/);
+  assert.doesNotMatch(rest, /(?:published|publish(?:es|ing)?) [^.]*?per[-\s]author[-\s]type/i);
   assert.equal(rest.includes("api.doug.dev"), false);
 });
 
 test("REST API docs do not mark live tenant routes as planned or preview", () => {
   // GET /v1/queue and GET /v1/prs/:number/receipt are token/session-gated
   // and shipped. Tenant scoreboard is the remaining planned surface.
-  assert.match(rest, /name: "GET \/v1\/queue"[\s\S]*?meta: "live"/);
-  assert.match(rest, /name: "GET \/v1\/prs\/:number\/receipt"[\s\S]*?meta: "live"/);
-  assert.match(rest, /name: "GET \/v1\/scoreboard"[\s\S]*?meta: "planned"/);
+  assert.equal(fieldOf(rest, "name", "GET /v1/queue", "meta"), "live");
+  assert.equal(
+    fieldOf(rest, "name", "GET /v1/prs/:number/receipt", "meta"),
+    "live",
+  );
+  assert.equal(fieldOf(rest, "name", "GET /v1/showcase/queue", "meta"), "live");
+  assert.equal(
+    fieldOf(rest, "name", "GET /v1/showcase/scoreboard", "meta"),
+    "live",
+  );
+  assert.equal(fieldOf(rest, "name", "GET /v1/scoreboard", "meta"), "planned");
   assert.equal(rest.includes("Tenant REST is still planned"), false);
   assert.equal(rest.includes("Tenant REST is still the planned"), false);
   assert.match(rest, /\$DOUG_API_URL/);
@@ -100,7 +133,7 @@ test("REST API docs do not mark live tenant routes as planned or preview", () =>
 });
 
 test("REST API sits in Coming up as preview, not planned — showcase is live", () => {
-  assert.match(nav, /href: "\/docs\/rest-api"[\s\S]*?status: "preview"/);
+  assert.equal(fieldOf(nav, "href", "/docs/rest-api", "status"), "preview");
 });
 
 test("the MCP sketch does not invent a garden that has no rows", () => {
@@ -118,7 +151,9 @@ test("the changelog records the instrument becoming visible", () => {
 test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.equal(llms.includes("public surface today is the backtest CLI"), false);
   assert.match(llms, /\/v1\/showcase\/scoreboard/);
-  assert.equal(llms.includes("per author type"), false);
+  // Same reasoning as the rest-api pin above: disclaimer, not spelling.
+  assert.match(llms, /Per-author-type rates are not published/);
+  assert.doesNotMatch(llms, /(?:published|publish(?:es|ing)?) [^.]*?per[-\s]author[-\s]type/i);
   assert.match(llms, /tenant queue and receipt live/);
   assert.match(llms, /Planned: tenant-scoped GET \/v1\/scoreboard/);
   assert.equal(llms.includes("Planned: tenant-scoped GET /v1/queue"), false);

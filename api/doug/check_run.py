@@ -153,7 +153,29 @@ def render(
     # block rendered, so it can never be lost instead.
     skip = {"read-truncated"} if partial is not None else set()
     risks = [r for r in verdict.reasons if r.rule not in skip]
-    only_settled = bool(risks) and all(r.rule in SETTLED_REASON_CODES for r in risks)
+    # `partial is None` is load-bearing, not defensive. SETTLED_NOTE reads as
+    # "nothing survived"; on a KNOWN-partial read that claim sits directly
+    # beneath the blockquote saying a clear is not evidence about the rest, and
+    # the two contradict. The truncation Reason is filtered out of `risks` two
+    # lines up, so without this guard the pair renders together.
+    #
+    # Deliberately NOT `coverage is not None and partial is None`. `partial` is
+    # also None when coverage was never recorded (worker.py:100, replaying a
+    # row with no stored coverage), and the note DOES render there, unqualified.
+    # That is intended: settle.py's notices are appended only in review.py's
+    # reader branch, immediately before a real coverage is computed and
+    # returned (review.py:367-376), so reasons-all-settled with absent coverage
+    # is unreachable on the live path — legacy replays only — and the note's
+    # claim is about the findings the read produced, which stays true whatever
+    # the coverage. Tightening this to require known-complete coverage would
+    # buy nothing and would reintroduce #109's misreading (a settled notice
+    # listed under "Findings" beneath a Flagged title, reading as a remaining
+    # defect) for every replayed check run.
+    only_settled = (
+        partial is None
+        and bool(risks)
+        and all(r.rule in SETTLED_REASON_CODES for r in risks)
+    )
     lines += ["", "### Findings", ""]
     if only_settled and verdict.band == Band.FLAGGED:
         lines += [SETTLED_NOTE, ""]
