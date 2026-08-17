@@ -251,7 +251,9 @@ gets a test that can fail:
 - **Coverage:** with `N` repos and slice `B`, every repo is swept within
   `ceil(N/B)` runs. Fails if any repo is skipped — the §1.3 defect, pinned.
 - **Interruption safety:** kill a run mid-sweep; assert the next run resumes on
-  unswept repos and does not re-sweep stamped ones. Pins §4.2 property 5.
+  unswept repos and does not re-sweep stamped ones. Pins §4.2's **safe
+  interruption** property (the fourth), which D5 made load-bearing for two call
+  sites rather than one — the Job's deadline and the reapable startup pass.
 - **Fairness:** one 10k-repo tenant and one 5-repo tenant; assert the small
   tenant's sweep interval does not degrade with the large tenant's repo count.
   This is the assertion that would have failed under global ordering (§4.1),

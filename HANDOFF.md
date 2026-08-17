@@ -123,9 +123,10 @@ Fix is operational: **redeliver the `installation` event.** Do NOT
 uninstall/reinstall — that mints a new `installation_id` and orphans all 33
 existing verdicts.
 
-MT3 (`reconcile_all` has no repo cap or call budget, and is serial across
+MT3 (the sweeps have no repo cap or call budget, and are serial across
 installations) is the code follow-on. Fixing MT0 *exposes* it rather than
-causing it. Next free migration: **9**.
+causing it. **Next free migration: 11** — see the MT3 section above; the
+"migration 9" this section used to name was stale and is now taken.
 
 ## Recommended order after #109
 
@@ -157,8 +158,14 @@ Carried forward from the #108 session, still unresolved:
   `cachedShowcaseFetch` silently serves a fixture reading `adjudicated: 0`.
   Fires on the next change to that endpoint — the one that teaches it a rate.
 
-Pointers: worktree .claude/worktrees/pr-106-code-review-cb48f9 · branch `pr109`
-          @ 44781d2 (PR #109, base main) · findings in
-          web/lib/public-surface.test.mjs + api/doug/check_run.py:156 ·
-          roadmap docs/design/outcome-loop/ROADMAP.md (MT0 :369, MT3 :399,
-          M4 :341) · prereg §3 docs/design/outcome-loop/publication-preregistration.md:337
+Pointers: worktree .claude/worktrees/pr-106-code-review-cb48f9 · branch
+          `fix/pr109-review-findings` (PR #110, base main) · MT3 spec
+          docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md
+          · fixes in web/lib/public-surface.test.mjs (`fieldOf`) +
+          api/doug/check_run.py:174 · roadmap
+          docs/design/outcome-loop/ROADMAP.md (MT0 :374, MT3 :404, M4 :348)
+          · prereg §3
+          docs/design/outcome-loop/publication-preregistration.md:337
+          NOTE: roadmap line numbers shift whenever that file is edited —
+          MT0/MT3 moved once already on this branch. Grep the item name
+          ("MT0 — Populate", "MT3 — the reconcile") rather than trusting these.
