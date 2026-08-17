@@ -2,12 +2,12 @@ import { Bright, CodeBlock, Dim, Kw, Str } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
 import { DocsTwoCol } from "@/components/docs/docs-two-col";
 import { ParamsTable } from "@/components/docs/params-table";
-import { DocsPageHeader } from "@/components/docs/prose";
+import { DocsPageHeader, IC, P } from "@/components/docs/prose";
 
 export const metadata = {
   title: "REST API — Doug Documentation",
   description:
-    "The planned REST surface for the hosted product — not live yet.",
+    "Public showcase endpoints are live. Tenant queue and receipt are live, gated. A tenant scoreboard is still planned.",
 };
 
 export default function RestApiPage() {
@@ -19,75 +19,86 @@ export default function RestApiPage() {
             <DocsPageHeader
               kicker="Coming up"
               title="REST API"
-              status="planned"
+              status="preview"
             >
-              The hosted product will expose the same objects the CLI prints
-              today. Sketched here so you can see the shape early —{" "}
-              <b className="font-semibold text-foreground">
-                none of this is live
-              </b>
-              .
+              The unauthenticated showcase endpoints are live — they are what{" "}
+              <b className="font-semibold text-foreground">/queue</b> and{" "}
+              <b className="font-semibold text-foreground">/scoreboard</b>{" "}
+              render. Tenant queue and receipt are live behind a session or
+              a token. A scoreboard of <em>your</em> clocks is still planned.
             </DocsPageHeader>
+
+            <P>
+              Both showcase routes ignore <IC>?repo=</IC>. The bound is the
+              API&rsquo;s <IC>DOUG_SHOWCASE_REPO</IC>, not a query string a
+              stranger can widen. Per-author-type rates are not published.
+            </P>
 
             <ParamsTable
               rows={[
                 {
-                  name: "GET /v1/queue",
-                  meta: "planned",
+                  name: "GET /v1/showcase/queue",
+                  meta: "live",
                   description:
-                    "The routed queue: open PRs with scores, verdicts, and receipts.",
+                    "Open PRs for the showcase repo, scored, with reasons. Unauthenticated. What /queue renders.",
+                },
+                {
+                  name: "GET /v1/showcase/scoreboard",
+                  meta: "live",
+                  description:
+                    "Prospective counters from the ledger: adjudicated, pending, first due, deep-read meter. miss_rate is null until the pre-registered interval fires. Label: not yet decidable — a count, not a rate.",
                 },
                 {
                   name: "GET /v1/prs/:number/receipt",
-                  meta: "planned",
+                  meta: "live",
                   description:
-                    "The full evidence trail behind a verdict — rules fired, hotspot history, pattern matches.",
+                    "The evidence trail behind a verdict. Session or a token with receipt:read. Not a public showcase route.",
+                },
+                {
+                  name: "GET /v1/queue",
+                  meta: "live",
+                  description:
+                    "Tenant-scoped routed queue. Session or token. The showcase route is pinned to one repo by design and is not this.",
                 },
                 {
                   name: "GET /v1/scoreboard",
                   meta: "planned",
                   description:
-                    "Published calibration: miss rates per author type, over time. Public by design.",
+                    "Tenant-scoped clocks: your adjudicated / pending / miss_rate. The showcase route is pinned to one repo by design and is not this.",
                 },
               ]}
             />
           </>
         }
         rail={
-          <CodeBlock title="SKETCH — NOT LIVE">
+          <CodeBlock title="SAMPLE — empty-ledger snapshot">
             <Dim>$</Dim>{" "}
-            <Bright>curl https://api.doug.dev/v1/prs/4821/receipt</Bright>
+            <Bright>curl &quot;$DOUG_API_URL/v1/showcase/scoreboard&quot;</Bright>
             {"\n{\n  "}
-            <Str>&quot;verdict&quot;</Str>
+            <Str>&quot;repo&quot;</Str>
             {": "}
-            <Str>&quot;needs_human&quot;</Str>
+            <Str>&quot;drewjst/doug&quot;</Str>
             {",\n  "}
-            <Str>&quot;routed_to&quot;</Str>
+            <Str>&quot;adjudicated&quot;</Str>
             {": "}
-            <Str>&quot;maya&quot;</Str>
+            <Kw>0</Kw>
             {",\n  "}
-            <Str>&quot;evidence&quot;</Str>
-            {": [\n    { "}
-            <Str>&quot;rule&quot;</Str>
+            <Str>&quot;pending&quot;</Str>
             {": "}
-            <Str>&quot;hotspot_path&quot;</Str>
-            {", "}
-            <Str>&quot;lift&quot;</Str>
+            <Kw>0</Kw>
+            {",\n  "}
+            <Str>&quot;miss_rate&quot;</Str>
             {": "}
-            <Kw>2.34</Kw>
-            {" },\n    { "}
-            <Str>&quot;pattern&quot;</Str>
+            <Kw>null</Kw>
+            {",\n  "}
+            <Str>&quot;decidable&quot;</Str>
             {": "}
-            <Str>&quot;dual_write_no_guard&quot;</Str>
-            {",\n      "}
-            <Str>&quot;seen&quot;</Str>
+            <Kw>false</Kw>
+            {",\n  "}
+            <Str>&quot;label&quot;</Str>
             {": "}
-            <Kw>214</Kw>
-            {", "}
-            <Str>&quot;reverted&quot;</Str>
-            {": "}
-            <Kw>31</Kw>
-            {" }\n  ]\n}"}
+            <Str>&quot;not yet decidable — a count, not a rate&quot;</Str>
+            {"\n}"}
           </CodeBlock>
         }
       />

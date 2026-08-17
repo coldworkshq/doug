@@ -1,7 +1,7 @@
 import Link from "next/link";
 
-import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
+import { SiteHeader } from "@/components/site-header";
 import { applyThreshold, getQueue, type Reason } from "@/lib/api";
 
 const PRESETS = [0.5, 0.62, 0.8];
@@ -47,38 +47,26 @@ export default async function QueuePage({
   const queue = applyThreshold(raw, threshold);
 
   return (
-    // Forced dark, full-bleed: out of scope for the light/dark theme the
-    // landing page (app/page.tsx) got. --background/--foreground now
-    // default to light site-wide, so without this wrapper the queue would
-    // silently go light too, and the gutters outside max-w-5xl (body's
-    // own background) would stay light while the column went dark.
-    <div className="dark min-h-full bg-background text-foreground">
+    <>
+      <SiteHeader />
       <main className="mx-auto w-full max-w-5xl px-6">
-        <nav className="flex items-center justify-between py-6">
-          <Link
-            href="/"
-            className="font-heading flex items-center gap-2 text-lg font-semibold tracking-tight"
-          >
-            <DougLogo /> doug
-          </Link>
-          <div className="flex items-center gap-2">
-            <span className="glass flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground">
-              <span
-                className={
-                  "size-1.5 rounded-full " +
-                  (source === "live"
-                    ? "animate-pulse bg-clear"
-                    : "bg-muted-foreground")
-                }
-              />
-              {source === "live" ? "live api" : "bundled fixture"}
-            </span>
-          </div>
-        </nav>
-
         <section className="py-10">
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div>
+              <p
+                className="panel mb-4 inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground"
+              >
+                {source === "live" ? (
+                  <>
+                    <span className="size-1.5 rounded-full bg-sheen" /> live api
+                  </>
+                ) : (
+                  <>
+                    <span className="size-1.5 rounded-full bg-muted-foreground" />{" "}
+                    bundled fixture
+                  </>
+                )}
+              </p>
               <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
                 Review queue
               </p>
@@ -89,7 +77,7 @@ export default async function QueuePage({
                 </span>
               </h1>
             </div>
-            <div className="glass flex items-center gap-1 rounded-full p-1.5 font-mono text-xs">
+            <div className="panel flex items-center gap-1 rounded-full p-1.5 font-mono text-xs">
               <span className="px-2 uppercase tracking-widest text-muted-foreground">
                 threshold
               </span>
@@ -101,7 +89,7 @@ export default async function QueuePage({
                     "rounded-full px-3 py-1 transition-colors " +
                     (t === threshold
                       ? "bg-primary text-primary-foreground"
-                      : "hover:bg-white/10")
+                      : "hover:bg-accent hover:text-accent-foreground")
                   }
                 >
                   {t.toFixed(2)}
@@ -109,7 +97,7 @@ export default async function QueuePage({
               ))}
             </div>
           </div>
-          <div className="glass mt-8 rounded-2xl p-6">
+          <div className="panel mt-8 rounded-2xl p-6">
             <ScoreStrip
               points={queue.items.map((i) => ({
                 score: i.verdict.score,
@@ -125,7 +113,7 @@ export default async function QueuePage({
             <article
               key={pr.number}
               className={
-                "glass grid gap-3 rounded-2xl p-6 transition-transform hover:-translate-y-0.5 md:grid-cols-[5rem_1fr_auto] " +
+                "panel grid gap-3 rounded-2xl p-6 transition-transform hover:-translate-y-0.5 md:grid-cols-[5rem_1fr_auto] " +
                 (verdict.band === "flagged" ? "border-flag/30" : "")
               }
             >
@@ -185,14 +173,17 @@ export default async function QueuePage({
           ))}
         </section>
 
-        <footer className="border-t border-white/5 py-8 font-mono text-xs text-muted-foreground">
+        <footer className="border-t border-border py-8 font-mono text-xs text-muted-foreground">
           The score is not a grade — it prices what a change touches and how
           much of it, so it routes attention and does not fall as findings
           are fixed. Every finding names the pattern it matched, so a score
           can be argued with. Reader findings come from a model reading the
           diff; the deterministic fallback names a weighted rule instead.
+          Cleared means not deeply inspected by a human. On one of two
+          research repos the cleared band was not safer than merging blind;
+          the number we are measuring is yours, not theirs.
         </footer>
       </main>
-    </div>
+    </>
   );
 }

@@ -20,6 +20,35 @@ export default function ChangelogPage() {
             <ParamsTable
               rows={[
                 {
+                  name: "2026-08-13",
+                  description: (
+                    <>
+                      The outcome instrument is visible. Every check run
+                      ends with{" "}
+                      <IC>adjudicated N · pending M · as of &lt;date&gt;</IC>{" "}
+                      and a deep-read meter; the public{" "}
+                      <IC>/scoreboard</IC> page shows the same counters from
+                      the same query, empty and dated. Bot-authored PRs no
+                      longer buy a deep read. Hosted <IC>/docs</IC> actually
+                      serves — Cloud Build had been stripping it. Finding{" "}
+                      <IC>file</IC> is carried on the Reason rather than
+                      rematched by description.
+                    </>
+                  ),
+                },
+                {
+                  name: "2026-08-12",
+                  description: (
+                    <>
+                      Dashboard rebuilt on the console&rsquo;s design grammar:
+                      a bounded table, a threshold view lens, a larger type
+                      scale, a space picker that navigates on selection.
+                      Floating header with separated sign-in. Hosted docs
+                      section.
+                    </>
+                  ),
+                },
+                {
                   name: "2026-08",
                   description: (
                     <>

@@ -9,12 +9,12 @@ const NAV_LINKS = [
   { href: "/queue", label: "Queue" },
 ] as const;
 
-/** Floating site chrome for the public marketing surface (/, /docs/*).
+/** Floating site chrome for the public marketing surface (/, /docs/*,
+ *  /scoreboard, /queue).
  *
- *  Deliberately NOT used on /queue (forced-dark, its own minimal live-badge
- *  nav) or /dashboard (its own signed-in "forensic ledger" shell with a
- *  tenant/repo selector) — both have chrome that earned its own design and
- *  this component would be the wrong fit for either.
+ *  Deliberately NOT used on /dashboard (its own signed-in "forensic ledger"
+ *  shell with a tenant/repo selector) — that chrome earned its own design
+ *  and this component would be the wrong fit.
  *
  *  `position: sticky` + `top-4` rather than `fixed`: it still reserves its
  *  own space in flow (no content jumps under it, no scroll-lock JS), but
@@ -23,9 +23,10 @@ const NAV_LINKS = [
  *  floating from the very first frame, not only once you scroll.
  *
  *  Sign in is the one filled, colored control in the bar — everything else
- *  (Docs/Queue/GitHub, the theme toggle) stays low-contrast text until
- *  hovered, so the one action that actually converts a stranger doesn't
- *  have to compete with three links that don't.
+ *  (Docs/Scoreboard/Queue/GitHub, the theme toggle) stays low-contrast text
+ *  until hovered, so the one action that actually converts a stranger
+ *  doesn't have to compete with four links that don't. Below `sm` those
+ *  links live in a native <details> disclosure rather than vanishing.
  *
  *  Changing this bar's padding/height changes how much of the page it can
  *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
@@ -65,6 +66,36 @@ export function SiteHeader({
               GitHub
             </a>
           </nav>
+
+          {/* Native disclosure, not a client menu: works without JS, matches
+              the dashboard's no-JS ethic, and is the only way Docs /
+              Scoreboard / Queue exist below `sm` — the nav above is
+              `hidden sm:flex`. */}
+          <details className="relative sm:hidden">
+            <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
+              Menu
+            </summary>
+            <nav
+              aria-label="Site sections"
+              className="absolute top-[calc(100%+0.5rem)] right-0 z-50 flex w-44 flex-col rounded-2xl border border-border bg-background/95 p-1.5 shadow-lg shadow-black/[0.06] backdrop-blur-md dark:shadow-black/40"
+            >
+              {NAV_LINKS.map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                >
+                  {l.label}
+                </Link>
+              ))}
+              <a
+                href="https://github.com/drewjst/doug"
+                className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                GitHub
+              </a>
+            </nav>
+          </details>
 
           <span
             className="mx-1 hidden h-4 border-l border-border sm:block"

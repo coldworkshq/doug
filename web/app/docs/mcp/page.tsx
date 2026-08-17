@@ -1,4 +1,4 @@
-import { CodeBlock, Comment, Dim, Fn, Hot, Ok, Str } from "@/components/docs/code-block";
+import { CodeBlock, Comment, Dim, Fn, Str } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
 import { DocsTwoCol } from "@/components/docs/docs-two-col";
@@ -81,19 +81,9 @@ export default function McpPatternGardenPage() {
             <Str>&quot;backfill a NOT NULL column on a hot table&quot;</Str>
             {")"}
             {"\n\n"}
-            <Comment>→ 2 variants known · 412 episodes · 87 repos</Comment>
+            <Comment>→ no adjudicated rows yet</Comment>
             {"\n"}
-            <Ok>✓ dual-write → backfill → enforce</Ok>
-            {"\n  "}
-            <Dim>survives 3.1yr median under churn · 289 receipts</Dim>
-            {"\n"}
-            <Hot>✗ single-pass ALTER + backfill</Hot>
-            {"\n  "}
-            <Dim>{"reverted 31/123 · lock storms on >10M rows"}</Dim>
-            {"\n\n"}
-            <Comment>
-              {"→ failure modes: lock timeout · replica lag\n→ citations: sentry#38112 · grafana#71204 · +29"}
-            </Comment>
+            <Dim>garden stays closed until the probes pass</Dim>
           </CodeBlock>
         }
       />

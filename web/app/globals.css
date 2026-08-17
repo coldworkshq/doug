@@ -70,9 +70,9 @@
      on when it hardcoded `--card: #fff` on `.console`, minus the second copy
      of the palette that could drift away from this one.
 
-     Mirror image of web/app/queue/page.tsx:55, which wraps itself in `dark`
-     to force the other direction, for the reason its comment gives. The
-     dashboard's rule and the extra tokens it needs are below the .dark block.
+     Mirror image of the signed-in dashboard: /queue used to wrap itself in
+     `dark` to force the other direction. It now follows the site theme, so
+     this block is the default for every public page.
      ENFORCED: lib/dashboard-contract.test.mjs, "the signed-in console stays
      on the reference light paper surface".
 
@@ -334,10 +334,8 @@
     background: var(--iridescent);
   }
   /* Bento-style panel: solid card + hairline border, matching the
-     GitHub Pages site's .cell. Used by the landing page (app/page.tsx).
-     /queue and the shared loading skeleton still use .glass
-     below — they're forced dark regardless of the site theme, so the
-     frosted look it was tuned for still applies unchanged.
+     GitHub Pages site's .cell. Used by the landing page, /queue,
+     /scoreboard, and the shared loading skeleton.
      console/app/globals.css:162 is this rule's twin — same declarations,
      kept in lockstep with the data utilities below. */
   .panel {

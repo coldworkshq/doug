@@ -54,7 +54,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     name: "Coming up",
     pages: [
       { href: "/docs/mcp", title: "MCP · Pattern Garden", status: "preview" },
-      { href: "/docs/rest-api", title: "REST API", status: "planned" },
+      { href: "/docs/rest-api", title: "REST API", status: "preview" },
     ],
   },
   {

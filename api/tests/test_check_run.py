@@ -142,6 +142,58 @@ def test_a_clean_verdict_renders_an_explicit_none():
     assert "- none" in summary.splitlines()
 
 
+def test_flagged_with_only_settlement_notices_does_not_read_as_a_remaining_defect():
+    """settle.py drops disproved findings and leaves a weight-0 notice so
+    the ledger stays honest. The check run used to list that notice under
+    ### Findings beneath a Flagged title, which operators read as "Doug
+    still found something" — the band is the risk score; nothing survived.
+    """
+    from doug.settle import SETTLED_REASON_CODES
+
+    assert SETTLED_REASON_CODES == {
+        "settled-missing-import",
+        "settled-schema-dependency",
+    }
+    for rule in sorted(SETTLED_REASON_CODES):
+        settled = FLAGGED.model_copy(
+            update={
+                "reasons": [
+                    Reason(
+                        rule=rule,
+                        label=f"Dropped 2 finding(s) — {rule}",
+                        weight=0.0,
+                    )
+                ]
+            }
+        )
+        title, summary = check_run.render("reader", settled, None, WHOLE)
+        assert title.lower().startswith("flagged")
+        assert check_run.SETTLED_NOTE in summary
+        assert "risk score" in summary.lower()
+        assert rule in summary
+        assert "- none" not in summary.splitlines()
+
+
+def test_a_settled_prefix_near_miss_is_not_a_settlement_notice():
+    """Prefix matching would treat any settled-* rule as the two producers
+    in settle.py. A hand-written near-miss must still look like a remaining
+    finding, not get SETTLED_NOTE."""
+    near = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(
+                    rule="settled-by-hand",
+                    label="Someone labelled this settled",
+                    weight=0.0,
+                )
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", near, None, WHOLE)
+    assert check_run.SETTLED_NOTE not in summary
+    assert "settled-by-hand" in summary
+
+
 def test_a_partial_read_is_called_out_once_and_only_once():
     """score_one already appends the read-truncated Reason to the verdict
     (review.py:133-134), so rendering the coverage block naively duplicated
