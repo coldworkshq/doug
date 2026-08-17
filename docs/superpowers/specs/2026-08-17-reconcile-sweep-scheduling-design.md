@@ -1,7 +1,7 @@
 # MT3 — reconcile sweeps must not scale by repo count
 
 **Date:** 2026-08-17
-**Status:** design, awaiting review
+**Status:** design approved 2026-08-17 — all decisions locked (D1–D5), ready for an implementation plan
 **Roadmap item:** MT3 (`docs/design/outcome-loop/ROADMAP.md:399`), scope amended — see §2
 **Blocks:** M5's first outside install
 
@@ -100,6 +100,7 @@ state has to be per repo. See §4.5.
 | D2 | The full sweep moves to its own scheduled Cloud Run Job, mirroring `doug-outcome-reconciler` | Keeping it in-process with cursor + budget; merging both lanes into one Job |
 | D3 | The Job **enqueues only**. `drain` stays in the API on its existing webhook + cold-start triggers | Job POSTs an internal drain endpoint; Job drains in-process |
 | D4 | One shared scheduling primitive, applied to both lanes | Review lane only, as MT3 literally reads |
+| D5 | The startup thread keeps a **bounded** stalest-N pass (§5) | Accepting the healing-latency regression; shortening the Job cadence |
 
 D3 keeps the Job's service account narrow: no model credentials, no spend-cap
 surface, no paid reads on a second deploy path. It matches the outcome lane's
@@ -206,29 +207,39 @@ correct cold-start behaviour.
 
 ---
 
-## 5. Open decision — the startup sweep regression
+## 5. D5 — the startup sweep keeps a bounded pass *(decided 2026-08-17)*
 
-D2 moves the full sweep out of the startup thread. That is a **latency
-regression on the healing property**, and it should be taken deliberately
-rather than absorbed.
+D2 moves the full sweep out of the startup thread. On its own that is a
+**latency regression on the healing property**: today a lost webhook delivery
+heals on the next cold start — minutes on a busy service — and afterward it
+would wait for the Job's cadence (6h, if the review lane mirrors
+`doug-outcome-reconciler-6h`).
 
-Today a lost webhook delivery heals on the next cold start — minutes on a busy
-service. After this change it waits for the Job's cadence (6h, if the review
-lane mirrors `doug-outcome-reconciler-6h`).
+**Decision: (b).** The startup thread keeps a *bounded* pass over the stalest
+N repos, and only that. It is cheap, and it is reap-safe by construction rather
+than by care — §4.2's "stopping early is always safe" property is exactly what
+makes a thread that may be killed at any moment a legitimate caller. So the
+cost is one extra call site, not new machinery, and the healing latency the
+current design has is preserved.
 
-Three options:
+This makes the primitive's interruption-safety load-bearing in two places
+rather than one, which raises the value of the interruption test in §6 — that
+test now protects the startup path as well as the Job.
 
-- **(a) Accept it.** Reconcile is a catch-up lane, not a latency path; the
-  webhook is the latency path. Simplest, and the cadence is tunable.
-- **(b) Keep a bounded startup pass.** The startup thread sweeps the *stalest
-  N* repos — cheap, bounded, reap-safe by construction (§4.2 property 5), and
-  preserves fast healing. Costs a second caller of the primitive.
-- **(c) Shorten the Job cadence** for the review lane only.
+Rejected:
 
-**Recommendation: (b).** The primitive already makes a bounded pass safe, so
-the cost is one extra call site rather than new machinery, and it keeps the
-healing property the current design has. This is the one item flagged for
-explicit decision before implementation.
+- **(a) Accept the regression.** Defensible — reconcile is a catch-up lane and
+  the webhook is the latency path — but it trades away a property the system
+  has today for nothing, when keeping it costs one call site.
+- **(c) Shorten the Job cadence** for the review lane. Pays for healing latency
+  with REST calls against every installation on every run, rather than with a
+  bounded pass on the instance that just started.
+
+Note the startup pass and the `installation.created` sweep (§4.4) are
+different: the startup pass is bounded, the install-time sweep must not be.
+That makes **three** call sites into the sweep — bounded (startup), budgeted
+(Job), and unbounded (install-time) — and §6's entry-point test must cover all
+three.
 
 ---
 
@@ -248,8 +259,11 @@ gets a test that can fail:
 - **Budget unit:** a repo with 1000 open PRs consumes 10 calls of budget, not 1.
 - **Backoff:** a permanently failing repo does not consume its slice on every
   run.
-- **Unbudgeted install path:** `installation.created` sweeps every repo of the
-  new installation, ignoring the slice (§4.4).
+- **Three entry points, three bounds:** `installation.created` sweeps every
+  repo of the new installation ignoring the slice (§4.4); the Job sweeps to its
+  per-installation budget (§4.2); the startup pass sweeps at most stalest-N
+  (§5). A test per call site — collapsing any two is the §4.4 regression that
+  would look like correct behaviour.
 - **Lane independence:** sweeping the review lane does not advance the outcome
   lane's staleness.
 
