@@ -1,17 +1,66 @@
 # HANDOFF — doug
 
-State:    review — PR #109 reviewed at medium on branch `pr109` @ 44781d2.
-          3 findings reported, none fixed yet. Suites green as-is:
-          api 1400/1400 + ruff · web 228/228 + eslint + next build.
+State:    spec — MT3 design written and committed. Awaiting Andrew's review of
+          the spec + one open decision (§5). Branch `fix/pr109-review-findings`
+          @ dc2e894, pushed, 2 commits off main @ 2e6a69c.
 
-Next:     Andrew's call on two things, in this order:
-          1. Fix the 3 review findings on #109, then merge.
-          2. **MT0** — redeliver the `installation` webhook in GitHub. This is
-             operational, not code, and it is the real critical path (below).
+Next:     1. Andrew reviews docs/superpowers/specs/
+             2026-08-17-reconcile-sweep-scheduling-design.md and rules on §5
+             (the startup-sweep healing regression; recommendation is (b),
+             keep a bounded stalest-N pass).
+          2. Open a PR for `fix/pr109-review-findings` (3 review fixes +
+             MT3 spec). Not opened yet — say the word.
+          3. **MT0** — redeliver the `installation` webhook in GitHub.
+             Operational, Andrew's hands, and still the real critical path.
+          Then: writing-plans for MT3 implementation.
 
-Blockers: MT0 blocks every prospective clock. Not a code blocker for #109.
+Blockers: MT0 blocks every prospective clock. Not a code blocker for MT3 —
+          fixing MT0 exposes MT3 rather than causing it.
 
-## PR #109 review — 3 findings (unfixed)
+## #109's 3 findings — ALL FIXED (commit da404c8)
+
+#109 was merged before the fixes landed, so they went onto main afterward.
+Each fix is proven by re-running the mutation that previously passed:
+- `public-surface.test.mjs` cross-row regexes → `fieldOf()` slices to one
+  record first. Receipt-row mutation now FAILS (it passed before). Both
+  showcase rows newly pinned — they were named but never checked.
+- `check_run.py` `only_settled` → gated on `partial is None`.
+- per-author-type ban → pinned to the disclaimer sentence, not a spelling
+  neither file uses.
+Verified: api 1402/1402 · web 282/282 · ruff · eslint · next build.
+
+## MT3 — decisions locked (do not re-litigate)
+
+- D1 Design for the org-install case (10k repos), not design-partner scale.
+- D2 Full sweep moves to its own scheduled Cloud Run Job, mirroring
+     doug-outcome-reconciler. Startup thread drops the full sweep.
+- D3 Job ENQUEUES ONLY; drain stays in the API. Keeps the Job SA narrow —
+     no model creds, no spend-cap surface, no paid reads on a second path.
+- D4 One shared primitive applied to BOTH lanes.
+- Design: staleness within a tenant, round-robin across tenants.
+- REJECTED: global staleness ordering. It does not deliver fairness — a
+  10k-repo tenant joining degrades every other tenant's interval 200x, which
+  is MT3's own complaint with the blocking spread evenly. The per-tenant cap
+  is structural, not a refinement.
+- REFUTED (recorded so it is not re-argued): the claim that global
+  interleaving re-mints an installation token per repo. githubkit's
+  DEFAULT_CACHE_STRATEGY is a module-level singleton shared across clients —
+  verified empirically. Interleaving costs connection churn, not REST calls.
+
+## MT3 — what the spec work corrected in the ROADMAP
+
+- "Next free migration: 9" was STALE. 9 = Front Door Phase 1a, 10 =
+  review_jobs.base_sha. **MT3 takes 11.**
+- The reserved `installations.reconciled_at` CANNOT close the defect: a
+  per-installation timestamp says a sweep ran, never which repos it reached.
+  Sweep state must be per repo.
+- Scope corrected to both lanes; reconcile_outcomes has the identical loop
+  and is the more expensive one.
+- MT3 is a CORRECTNESS item, not a scaling one: active_repos has no ORDER BY
+  and reconcile_all's only caller is a reaped daemon thread, so the tail is
+  never swept on any cold start. Silent permanent coverage hole.
+
+## PR #109 review — original findings (now fixed, kept for calibration)
 
 All three are the same defect class: **a check that passes for the wrong
 reason** — the same family the last branch's review loop kept catching.
