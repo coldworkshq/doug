@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DougLogo } from "@/components/doug-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { GITHUB_REPO_URL } from "@/lib/links";
 
 const NAV_LINKS = [
   { href: "/scoreboard", label: "Scoreboard" },
@@ -11,7 +12,7 @@ const NAV_LINKS = [
 ] as const;
 
 /** Floating site chrome for the public marketing surface (/, /docs/*,
- *  /scoreboard, /queue).
+ *  /scoreboard, /queue, /about).
  *
  *  Deliberately NOT used on /dashboard (its own signed-in "forensic ledger"
  *  shell with a tenant/repo selector) — that chrome earned its own design
@@ -65,7 +66,7 @@ export function SiteHeader({
               </Link>
             ))}
             <a
-              href="https://github.com/drewjst/doug"
+              href={GITHUB_REPO_URL}
               className="rounded-full px-3 py-1.5 whitespace-nowrap transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               GitHub
@@ -73,8 +74,8 @@ export function SiteHeader({
           </nav>
 
           {/* Native disclosure, not a client menu: works without JS, matches
-              the dashboard's no-JS ethic, and is the only way Docs /
-              Scoreboard / Queue exist below `sm` — the nav above is
+              the dashboard's no-JS ethic, and is the only way Scoreboard /
+              Queue / Docs / About exist below `sm` — the nav above is
               `hidden sm:flex`. */}
           <details className="relative sm:hidden">
             <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
@@ -94,7 +95,7 @@ export function SiteHeader({
                 </Link>
               ))}
               <a
-                href="https://github.com/drewjst/doug"
+                href={GITHUB_REPO_URL}
                 className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 GitHub

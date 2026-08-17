@@ -22,22 +22,21 @@ const FACTS = [
  *  on click. No fetch, no persisted state — the one thing on this page that
  *  needs "use client" is exactly this, and nothing else on the page pulls
  *  it in. */
-export function DougFactButton() {
+export function DougFactButton({ className = "" }: { className?: string }) {
   const [factIndex, setFactIndex] = useState<number | null>(null);
 
   function next() {
     setFactIndex((prev) => {
-      if (FACTS.length <= 1) return 0;
-      let candidate = Math.floor(Math.random() * FACTS.length);
-      while (candidate === prev) {
-        candidate = Math.floor(Math.random() * FACTS.length);
-      }
-      return candidate;
+      // FACTS has 8 entries, so an offset of at least 1 (mod its length)
+      // always lands on a different index than `prev` — no rejection
+      // sampling, no branch for "only one fact to pick from".
+      const offset = 1 + Math.floor(Math.random() * (FACTS.length - 1));
+      return ((prev ?? 0) + offset) % FACTS.length;
     });
   }
 
   return (
-    <div className="flex grow flex-col">
+    <div className={`flex grow flex-col ${className}`}>
       <p className="min-h-10 grow text-sm leading-relaxed text-muted-foreground">
         {factIndex === null
           ? "One click, one fact — about the dog, or the product."

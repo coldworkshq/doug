@@ -5,26 +5,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const header = await readFile(
-  new URL("../components/site-header.tsx", import.meta.url),
-  "utf8",
-);
-const landing = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-const queue = await readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8");
-const loading = await readFile(new URL("../app/loading.tsx", import.meta.url), "utf8");
-const intro = await readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8");
-const rest = await readFile(
-  new URL("../app/docs/rest-api/page.tsx", import.meta.url),
-  "utf8",
-);
-const mcp = await readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8");
-const changelog = await readFile(
-  new URL("../app/docs/changelog/page.tsx", import.meta.url),
-  "utf8",
-);
-const llms = await readFile(new URL("../public/llms.txt", import.meta.url), "utf8");
-const nav = await readFile(new URL("./docs-nav.ts", import.meta.url), "utf8");
-const about = await readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8");
+// None of these reads depend on another's result — run them concurrently
+// rather than paying 12 sequential round trips.
+const [header, landing, queue, loading, intro, rest, mcp, changelog, llms, nav, about] =
+  await Promise.all([
+    readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/rest-api/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/changelog/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/llms.txt", import.meta.url), "utf8"),
+    readFile(new URL("./docs-nav.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
+  ]);
 
 /** The field of ONE record, or null.
  *
