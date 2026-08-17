@@ -1,18 +1,16 @@
 # HANDOFF — doug
 
-State:    spec — MT3 design written and committed. Awaiting Andrew's review of
-          the spec + one open decision (§5). Branch `fix/pr109-review-findings`
-          @ dc2e894, pushed, 2 commits off main @ 2e6a69c.
+State:    review — **PR #110 IS OPEN.** https://github.com/drewjst/doug/pull/110
+          Branch `fix/pr109-review-findings` @ d597b98, 4 commits off main
+          @ 2e6a69c. #109's 3 findings fixed + MT3 design. All D1–D5 locked.
+          Verified cold at d597b98: api 1402/1402 · web 282/282 · ruff ·
+          eslint · next build (23 routes).
 
-Next:     1. Andrew reviews docs/superpowers/specs/
-             2026-08-17-reconcile-sweep-scheduling-design.md and rules on §5
-             (the startup-sweep healing regression; recommendation is (b),
-             keep a bounded stalest-N pass).
-          2. Open a PR for `fix/pr109-review-findings` (3 review fixes +
-             MT3 spec). Not opened yet — say the word.
-          3. **MT0** — redeliver the `installation` webhook in GitHub.
+Next:     1. Andrew reviews/merges #110.
+          2. **MT0** — redeliver the `installation` webhook in GitHub.
              Operational, Andrew's hands, and still the real critical path.
-          Then: writing-plans for MT3 implementation.
+          3. writing-plans for MT3 implementation (spec is approved and
+             needs no further decisions).
 
 Blockers: MT0 blocks every prospective clock. Not a code blocker for MT3 —
           fixing MT0 exposes MT3 rather than causing it.
@@ -37,6 +35,15 @@ Verified: api 1402/1402 · web 282/282 · ruff · eslint · next build.
 - D3 Job ENQUEUES ONLY; drain stays in the API. Keeps the Job SA narrow —
      no model creds, no spend-cap surface, no paid reads on a second path.
 - D4 One shared primitive applied to BOTH lanes.
+- D5 Startup thread keeps a BOUNDED stalest-N pass — not nothing. Moving the
+     full sweep out would trade away the healing latency the system has today
+     (lost delivery heals next cold start vs. waiting 6h for the Job).
+     Cheap because interruption-safety is structural, so a reapable thread is
+     a legitimate caller by construction. Rejected: accept the regression;
+     shorten the Job cadence.
+- CONSEQUENCE: THREE entry points, three different bounds — unbounded
+  (installation.created), budgeted (Job), bounded (startup). Collapsing any
+  two is a regression that looks like correct behaviour. One test per site.
 - Design: staleness within a tenant, round-robin across tenants.
 - REJECTED: global staleness ordering. It does not deliver fairness — a
   10k-repo tenant joining degrades every other tenant's interval 200x, which
