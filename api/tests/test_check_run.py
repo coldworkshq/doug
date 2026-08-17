@@ -194,6 +194,55 @@ def test_a_settled_prefix_near_miss_is_not_a_settlement_notice():
     assert "settled-by-hand" in summary
 
 
+def test_a_truncated_read_never_claims_every_finding_was_disproved():
+    """SETTLED_NOTE says "Every finding the read produced was disproved."
+    On a partial read that sentence is not available: the read never saw
+    the whole diff, so there is no "every". The truncation Reason is
+    filtered out of `risks` before the all() runs, so without an explicit
+    guard a truncated read renders the absolute claim directly beneath a
+    blockquote that says a clear is not evidence about the rest — the two
+    sentences contradict on the one surface that exists to be honest.
+    """
+    truncated = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                reader.truncation_reason(PARTIAL),
+                Reason(
+                    rule="settled-missing-import",
+                    label="Dropped 2 finding(s) disproved by runtime import at head",
+                    weight=0.0,
+                ),
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", truncated, None, PARTIAL)
+    assert "a clear is not evidence about the rest" in summary
+    assert check_run.SETTLED_NOTE not in summary
+    # The settlement itself is still disclosed — suppressing the absolute
+    # claim must not suppress the ledger line that says what was dropped.
+    assert "settled-missing-import" in summary
+    assert "- none" not in summary.splitlines()
+
+
+def test_a_whole_read_still_gets_the_settled_note():
+    """The guard above must not silence the note on the complete read it
+    was built for — otherwise the fix trades one dishonesty for a regression.
+    """
+    settled = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(
+                    rule="settled-missing-import",
+                    label="Dropped 2 finding(s) disproved by runtime import at head",
+                    weight=0.0,
+                )
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", settled, None, WHOLE)
+    assert check_run.SETTLED_NOTE in summary
+
+
 def test_a_partial_read_is_called_out_once_and_only_once():
     """score_one already appends the read-truncated Reason to the verdict
     (review.py:133-134), so rendering the coverage block naively duplicated

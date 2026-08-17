@@ -153,7 +153,16 @@ def render(
     # block rendered, so it can never be lost instead.
     skip = {"read-truncated"} if partial is not None else set()
     risks = [r for r in verdict.reasons if r.rule not in skip]
-    only_settled = bool(risks) and all(r.rule in SETTLED_REASON_CODES for r in risks)
+    # `partial is None` is load-bearing, not defensive. SETTLED_NOTE claims
+    # EVERY finding the read produced was disproved; a partial read has no
+    # "every" to speak for. The truncation Reason is filtered out of `risks`
+    # two lines up, so without this the note renders directly beneath the
+    # blockquote that says a clear is not evidence about the rest.
+    only_settled = (
+        partial is None
+        and bool(risks)
+        and all(r.rule in SETTLED_REASON_CODES for r in risks)
+    )
     lines += ["", "### Findings", ""]
     if only_settled and verdict.band == Band.FLAGGED:
         lines += [SETTLED_NOTE, ""]
