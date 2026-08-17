@@ -4,9 +4,10 @@ import { DougLogo } from "@/components/doug-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const NAV_LINKS = [
-  { href: "/docs", label: "Docs" },
   { href: "/scoreboard", label: "Scoreboard" },
   { href: "/queue", label: "Queue" },
+  { href: "/docs", label: "Docs" },
+  { href: "/about", label: "About" },
 ] as const;
 
 /** Floating site chrome for the public marketing surface (/, /docs/*,
@@ -23,10 +24,14 @@ const NAV_LINKS = [
  *  floating from the very first frame, not only once you scroll.
  *
  *  Sign in is the one filled, colored control in the bar — everything else
- *  (Docs/Scoreboard/Queue/GitHub, the theme toggle) stays low-contrast text
- *  until hovered, so the one action that actually converts a stranger
- *  doesn't have to compete with four links that don't. Below `sm` those
+ *  (Scoreboard/Queue/Docs/About/GitHub, the theme toggle) stays low-contrast
+ *  text until hovered, so the one action that actually converts a stranger
+ *  doesn't have to compete with five links that don't. Below `sm` those
  *  links live in a native <details> disclosure rather than vanishing.
+ *
+ *  Order is deliberate: the two live product surfaces (Scoreboard, Queue)
+ *  come first, reference material (Docs, About) after, GitHub last as the
+ *  escape hatch to the source.
  *
  *  Changing this bar's padding/height changes how much of the page it can
  *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
