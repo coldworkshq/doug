@@ -1108,6 +1108,56 @@ def set_installation_repos(
                 known[repo_id] = result.inserted_primary_key[0]
 
 
+def repo_threshold(installation_id: int, github_repo_id: int) -> float | None:
+    """The repo's own needs-you line, or None to inherit the process defaults.
+
+    Read regardless of `state`: the worker calls this with the job's own
+    installation_id at scoring time, and a repo removed mid-job still
+    scores against the line it was configured with.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(installation_repos.c.needs_you_threshold).where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+            )
+        ).scalar_one_or_none()
+    return None if value is None else float(value)
+
+
+def set_repo_threshold(
+    installation_id: int, github_repo_id: int, value: float | None
+) -> bool:
+    """Write the line on the ACTIVE row for (installation_id, github_repo_id).
+
+    Returns False when no such active row exists — the API turns that into
+    404. Keyed on both columns, never github_repo_id alone: a transferred
+    repo has rows under two installations. Writes ONLY this column —
+    `updated_at` means "registration/state changed" and is repo_id_for's
+    tiebreaker between duplicate registrations; a settings write must not
+    move it. Rounds to 2dp to match Verdict.score and to make the reader's
+    round(t*100) an exact integer.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    stored = None if value is None else round(float(value), 2)
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_repos)
+            .where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+                installation_repos.c.state == "active",
+            )
+            .values(needs_you_threshold=stored)
+        )
+    return result.rowcount == 1
+
+
 _OUTCOME_IDENTITY = (
     outcome_jobs.c.installation_id,
     outcome_jobs.c.github_repo_id,
