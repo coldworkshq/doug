@@ -8,10 +8,10 @@ State:    building — design-lock.md AND build-plan.md both LOCKED
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     Task 3 — the separate frozen verify prompt (VERIFY_SYSTEM /
-          VERIFY_SCHEMA) alongside DECISION_INTENT_SYSTEM at reader.py:135-138.
-          `predicate` enum with exactly one member, constant_value_is; NO
-          `refuted` field; additionalProperties: False. Tasks 1-2 DONE.
+Next:     Task 4 — the constant_value_is predicate runner (new module
+          api/doug/verify.py). Pure, resolvers injected, settle.py's shape.
+          MUST abstain on ambiguity per settle.py:239 ("we settle neither
+          rather than guess"). Tasks 1-3 DONE.
           ONE BLOCKER, Andrew's hands, gates MERGE not work: P0.1 — publish
           the LOCKED v9 pre-registration + deploy its hash. Zero code, zero
           rows; the one artifact whose value decreases with calendar time.
@@ -65,7 +65,7 @@ Decisions this session:
   the words leaves a false completeness claim looking rigorous — rejected:
   round 1's either/or framing.
 
-Tasks 1-2 DONE (verified 2026-08-18; Task 1 committed afcb77c):
+Tasks 1-3 DONE (verified 2026-08-18; committed afcb77c, a1411d3):
 - reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
   = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
   PROMPT_HASH untouched (8bd26c67...), freeze tests green.
@@ -83,7 +83,17 @@ Tasks 1-2 DONE (verified 2026-08-18; Task 1 committed afcb77c):
   `git show <sha>:<path> | sed -n 'a,bp'` and compares hashes — a different
   tool, no shared code. Confirmed it RUNS (not skipped). Mutation-checked:
   exclusive-end and splitlines()-without-keepends each kill both tests.
-- api: 1408/1408 passed, ruff clean across the whole package.
+- Task 3: VERIFY_SYSTEM / VERIFY_SCHEMA / VERIFY_PROMPT_HASH + VerifyCheck,
+  VerifyResponse (both extra="forbid"). `checks` is a LIST so declining is
+  the natural answer — empty means diff-only, or an absence claim, or no
+  nameable location; all three leave the finding published and ungrounded.
+  NO `refuted` field and no boolean anywhere: the model cannot express a
+  conclusion at the type level. PROMPT_HASH unmoved (8bd26c67...).
+  VERIFY_PROMPT_HASH added because the intent tier is frozen by prose with
+  no test behind it — a hash only anchors identity if edits move it.
+- Task 3 mutation-checked: adding `refuted`, loosening extra=forbid, and
+  adding a second predicate each kill a test.
+- api: 1413/1413 passed, ruff clean across the whole package.
 
 Pointers: docs/design/competitor-imports/ (six artifacts) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·

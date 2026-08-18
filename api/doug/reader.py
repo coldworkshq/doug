@@ -28,7 +28,7 @@ import sys
 import time
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import example_pack_capture
 from .example_pack import (
@@ -121,6 +121,133 @@ def _compute_prompt_hash() -> str:
 
 
 PROMPT_HASH = _compute_prompt_hash()
+
+
+# --- Verify tier -----------------------------------------------------------
+#
+# A third, separate read: given ONE finding the diff-reader already produced,
+# name the place in the repo whose bytes would ground it. Frozen from creation
+# on ADR-0002's terms, like DECISION_INTENT_SYSTEM, and carrying its own hash
+# so a receipt can say which verify instrument ran.
+#
+# Two things are deliberately absent from VERIFY_SCHEMA and must stay absent.
+#
+# There is no `refuted` field, and no boolean of any kind. The model cannot
+# express a conclusion here, so no conclusion of its can be honored. This is
+# not defensiveness about hallucination — it is a measured failure. On PR #107
+# a refutation of `reader:serialization-contract` quoted models.py's
+# `exclude=True` line: byte-matching, grep-re-derivable, and factually true.
+# The refutation was still wrong, because models.py records that `exclude` is
+# honored by model_dump/FastAPI "and by nothing else". A true quote carried a
+# false conclusion. Byte-matching proves the model did not invent the file; it
+# proves nothing about the claim.
+#
+# There is no predicate for absence. `constant_value_is` is an existence-and-
+# value claim, and a byte range discharges it completely. "Nothing else reads
+# this" is not that shape: the citation shows one place out of a complement the
+# model itself chose and never reported, which is exactly the error settle.py's
+# docstring names — the check and the error are the same observation. Adding an
+# absence predicate later is a new frozen prompt, not an edit to this one.
+#
+# `checks` is a list so that declining is the natural answer. An empty list
+# means the finding needs no read outside the diff, or that no specific
+# location can be named. Both leave the finding published and ungrounded,
+# which is the only safe default: nothing here may remove a finding.
+
+VERIFY_SYSTEM = (
+    "You are given one finding from a code review of a pull request diff, and "
+    "you decide what to read to ground it. Do not judge whether the finding is "
+    "right or wrong — you are not being asked for a verdict, and nothing you "
+    "return can remove the finding. Return the location whose contents would "
+    "settle a claim about a specific named value or definition: the file, the "
+    "line range, and the exact text you expect to find there. Only claims of "
+    "the form 'this named thing is defined here and holds this value' can be "
+    "grounded this way. A claim that something does not exist, that no other "
+    "caller does X, or that a place is the only one of its kind cannot be "
+    "settled by reading one location, and you must return no check for it. "
+    "Return no check whenever the finding rests entirely on the diff, or when "
+    "you cannot name a specific file and line range with confidence. Returning "
+    "nothing is a correct and common answer."
+)
+
+VERIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "checks": {
+            "type": "array",
+            "description": (
+                "Locations to read, or empty. Empty when the finding rests on "
+                "the diff alone, when the claim is about an absence, or when no "
+                "specific location can be named."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Repo-relative path, as it appears in the tree.",
+                    },
+                    "line_start": {
+                        "type": "integer",
+                        "description": "1-based, inclusive.",
+                    },
+                    "line_end": {
+                        "type": "integer",
+                        "description": "1-based, inclusive. Equal to line_start for one line.",
+                    },
+                    "quoted_text": {
+                        "type": "string",
+                        "description": (
+                            "The exact text you expect at that range, verbatim and "
+                            "including indentation. It is compared byte for byte; a "
+                            "mismatch discards the check and the finding stands."
+                        ),
+                    },
+                    "predicate": {
+                        "type": "string",
+                        "enum": ["constant_value_is"],
+                        "description": (
+                            "The only supported check: the named constant is defined "
+                            "at this range and holds the value shown."
+                        ),
+                    },
+                },
+                "required": [
+                    "file",
+                    "line_start",
+                    "line_end",
+                    "quoted_text",
+                    "predicate",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["checks"],
+    "additionalProperties": False,
+}
+
+VERIFY_PROMPT_HASH = hashlib.sha256(
+    (VERIFY_SYSTEM + repr(VERIFY_SCHEMA)).encode()
+).hexdigest()
+
+
+class VerifyCheck(BaseModel):
+    """One location the model asks to have read. A request, never a conclusion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file: str
+    line_start: int
+    line_end: int
+    quoted_text: str
+    predicate: Literal["constant_value_is"]
+
+
+class VerifyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    checks: list[VerifyCheck] = Field(default_factory=list)
 
 
 # --- Intent tier -----------------------------------------------------------

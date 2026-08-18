@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from doug import example_pack_capture, reader, review, store
 from doug.api import app
@@ -1170,3 +1171,100 @@ def test_an_impossible_range_leaves_the_finding_ungrounded():
     assert reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=2, line_end=1) is None
     assert reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=1, line_end=99) is None
     assert reader.cite(path="f.py", head_sha="a" * 40, text="", line_start=1, line_end=1) is None
+
+
+def test_the_verify_schema_cannot_express_a_conclusion():
+    """The model must not be able to say a finding is wrong, at the type level.
+
+    Not defensiveness about hallucination — a measured failure. On PR #107 a
+    refutation of reader:serialization-contract quoted models.py's exclude=True
+    line: byte-matching, grep-re-derivable, factually TRUE, and the refutation
+    was still wrong, because exclude is honored by model_dump/FastAPI and by
+    nothing else. A true quote carried a false conclusion.
+
+    So the guarantee has to be structural, not a rule someone remembers. If a
+    `refuted` field is ever added, or extra="forbid" is loosened, a conclusion
+    becomes expressible and this fails.
+    """
+    assert "refuted" not in repr(reader.VERIFY_SCHEMA)
+    assert reader.VERIFY_SCHEMA["additionalProperties"] is False
+    item = reader.VERIFY_SCHEMA["properties"]["checks"]["items"]
+    assert item["additionalProperties"] is False
+    assert set(item["properties"]) == {
+        "file", "line_start", "line_end", "quoted_text", "predicate",
+    }
+    with pytest.raises(ValidationError):
+        reader.VerifyResponse.model_validate(
+            {"checks": [{
+                "file": "f.py", "line_start": 1, "line_end": 1,
+                "quoted_text": "X = 1", "predicate": "constant_value_is",
+                "refuted": True,
+            }]}
+        )
+
+
+def test_declining_to_name_a_location_is_the_natural_answer():
+    """Returning nothing has to be cheap and valid, or the model will invent.
+
+    An empty list means the finding rests on the diff, or names an absence, or
+    could not be located. All three leave the finding published and ungrounded,
+    which is the only safe default: nothing in this tier may remove a finding.
+    """
+    assert reader.VerifyResponse.model_validate({"checks": []}).checks == []
+    assert reader.VerifyResponse().checks == []
+
+
+def test_the_predicate_vocabulary_is_one_member_and_permanent():
+    """A frozen prompt makes every predicate name permanent, so spending one is
+    a decision with no take-backs.
+
+    Four candidates were cut because each scored 0/8 against the only
+    rater-independent evidence in the repo: name_is_runtime_imported,
+    column_exists_in_live_schema, path_does_not_exist, symbol_defined_in_file.
+    constant_value_is is the one that recovers a real finding. Adding another
+    is a new frozen prompt and a new hash — not an edit to this one, which is
+    what this pins.
+    """
+    enum = reader.VERIFY_SCHEMA["properties"]["checks"]["items"]["properties"]["predicate"]["enum"]
+    assert enum == ["constant_value_is"]
+    with pytest.raises(ValidationError):
+        reader.VerifyCheck.model_validate({
+            "file": "f.py", "line_start": 1, "line_end": 1,
+            "quoted_text": "x", "predicate": "path_does_not_exist",
+        })
+
+
+def test_the_verify_tier_does_not_move_the_shipped_prompt_hash():
+    """ADR-0012's five constants stay byte-identical to the probe, and
+    PROMPT_HASH is sha256(SYSTEM + repr(SCHEMA)).
+
+    A second frozen prompt is exactly what ADR-0002 said to do instead of
+    editing the first ("anything that adds input to the model must occupy a
+    separate frozen prompt"). This pins that the separation actually held:
+    verdicts written before and after this tier landed stay comparable on
+    prompt identity.
+    """
+    assert reader.PROMPT_HASH == hashlib.sha256(
+        (reader.SYSTEM + repr(reader.SCHEMA)).encode()
+    ).hexdigest()
+    assert reader.VERIFY_SYSTEM not in reader.SYSTEM
+    assert "checks" not in repr(reader.SCHEMA)
+
+
+def test_the_verify_prompt_hash_changes_with_its_own_frozen_bytes(monkeypatch):
+    """The intent tier is frozen by prose with no test behind it; this one is not.
+
+    A hash only anchors "these results came from this instrument" if editing the
+    instrument moves it. Without this, VERIFY_SYSTEM could be reworded in a diff
+    that reads as a copy change while every receipt kept claiming the old
+    identity — the failure ADR-0012 wrote its freeze to prevent.
+    """
+    before = hashlib.sha256(
+        (reader.VERIFY_SYSTEM + repr(reader.VERIFY_SCHEMA)).encode()
+    ).hexdigest()
+    assert before == reader.VERIFY_PROMPT_HASH
+
+    after = hashlib.sha256(
+        (reader.VERIFY_SYSTEM + " Also consider style." + repr(reader.VERIFY_SCHEMA)).encode()
+    ).hexdigest()
+    assert after != reader.VERIFY_PROMPT_HASH
