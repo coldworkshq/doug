@@ -484,18 +484,39 @@ test("the ledger is bounded and its header stays put", async () => {
   // property that matters is not "980" but "the table refuses to shrink past
   // what its own columns need". A future width change moves both together, and
   // deleting a column cannot silently leave the floor above the content.
-  const widths = [...page.matchAll(/cls: "w-\[(\d+)px\]/g)].map((match) => Number(match[1]));
-  assert.ok(widths.length >= 7, `COLUMNS lost its fixed widths; found ${widths.length}`);
-  const fixed = widths.reduce((total, width) => total + width, 0);
-  const declared = Number(runTable.match(/min-w-\[(\d+)px\]/)?.[1] ?? 0);
-  assert.ok(declared > 0, "the ledger lost its horizontal minimum — narrow columns will crush");
-  // The pull request column is the one flexible column and holds a repo name, a
-  // PR number and a title. Below ~160px the title truncates to nothing and the
-  // row stops identifying the thing it is a row about.
-  assert.ok(
-    declared >= fixed + 160,
-    `min-w-[${declared}px] is under the ${fixed}px its fixed columns claim plus 160px for the title`,
-  );
+  //
+  // SLICE TO ONE ARRAY BEFORE MATCHING. A bare /cls: "w-\[(\d+)px\]/g over the
+  // whole file was correct only while COLUMNS was the only column table on the
+  // page; REPO_COLUMNS arrived and the scan summed all fourteen widths, failing
+  // the runs table for the repositories table's arithmetic. Same defect class
+  // as PR #109's cross-row regexes, caught the same way: name the record first.
+  const floorFor = (arrayName, tableSource, flexible) => {
+    const array = page.match(new RegExp(`const ${arrayName}[^=]*=\\s*\\[([\\s\\S]*?)\\n\\];`))?.[1];
+    assert.ok(array, `${arrayName} is gone — its table has no pinned column widths`);
+    const widths = [...array.matchAll(/cls: "w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
+    assert.ok(widths.length >= 5, `${arrayName} lost its fixed widths; found ${widths.length}`);
+    const fixed = widths.reduce((total, width) => total + width, 0);
+    const declared = Number(tableSource.match(/min-w-\[(\d+)px\]/)?.[1] ?? 0);
+    assert.ok(declared > 0, `the ${arrayName} table lost its horizontal minimum — narrow columns will crush`);
+    assert.ok(
+      declared >= fixed + flexible,
+      `min-w-[${declared}px] is under the ${fixed}px ${arrayName} claims plus ${flexible}px for its flexible column`,
+    );
+  };
+
+  // The pull request column is the ledger's one flexible column and holds a repo
+  // name, a PR number and a title. Below ~160px the title truncates to nothing
+  // and the row stops identifying the thing it is a row about.
+  floorFor("COLUMNS", runTable, 160);
+
+  // The repositories table's flexible column holds a repo full_name and, on a
+  // row the installation no longer lists, a "not connected" marker beside it.
+  const repoTable = page.match(/function RepositoryTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(repoTable, "RepositoryTable is gone");
+  assert.match(repoTable, /containerClassName/);
+  assert.match(repoTable, /max-h-\[/);
+  assert.match(repoTable, /border-separate/);
+  floorFor("REPO_COLUMNS", repoTable, 160);
 });
 
 test("the per-PR disclosure survives the table swap", async () => {

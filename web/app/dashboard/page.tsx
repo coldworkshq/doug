@@ -34,7 +34,14 @@ import {
 } from "@/lib/dashboard-view";
 import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
-import { bandCensus, censusScope, severityCensus } from "@/lib/ledger-census";
+import {
+  bandCensus,
+  censusScope,
+  repoRollup,
+  repositoryTable,
+  type RepoRowView,
+  severityCensus,
+} from "@/lib/ledger-census";
 import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
 import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
@@ -517,6 +524,48 @@ function CountLine({
   );
 }
 
+/** The repositories view's count line — deliberately NOT CountLine.
+ *
+ *  It states two things that come from two different places, and keeping them
+ *  in one sentence is the whole point: the repository total is the
+ *  installation's own list and is complete, while every per-row number beside
+ *  it is counted over the runs that came back, which at the page cap is the
+ *  newest N and not the scope. Reusing CountLine would have printed one
+ *  unqualified total and let the row counts inherit its authority.
+ *
+ *  `repos` can exceed `connected` — a repository with runs that the
+ *  installation no longer lists still gets a row (see `repositoryTable`), and
+ *  the extra is named rather than quietly folded into the total. */
+function RepoCountLine({
+  repos,
+  connected,
+  shown,
+  total,
+  limit,
+  atCap,
+  filtering,
+}: {
+  repos: number;
+  connected: number;
+  shown: number;
+  total: number;
+  limit: number;
+  atCap: boolean;
+  filtering: boolean;
+}) {
+  const orphans = repos - connected;
+  const over = atCap
+    ? <>the latest <b className="text-foreground">{limit}</b> runs fetched</>
+    : <><b className="text-foreground">{filtering ? shown : total}</b> {filtering ? "runs in view" : "runs fetched"}</>;
+  return (
+    <span>
+      <b className="text-foreground">{connected}</b> {connected === 1 ? "repository" : "repositories"} connected
+      {orphans > 0 && <> · <b className="text-foreground">{orphans}</b> with runs but no longer listed</>}
+      {" "}· counts over {over}
+    </span>
+  );
+}
+
 /** Column widths are the console's, tightened for the split layout: the ledger
  *  now shares its row with a 400px dock, so every fixed column gave up what it
  *  could without truncating its own content. band is the one column that did
@@ -775,7 +824,113 @@ function RunTable({
   );
 }
 
-function Pager({ window, params }: { window: PageWindow<PrGroup>; params: DashboardParams }) {
+/** Paging is a property of a WINDOW, not of what is in it — the runs ledger and
+ *  the repositories table page identically, so this reads only the paging
+ *  fields and never the items. */
+/** Column widths for the repositories view. Narrower than the ledger's — seven
+ *  columns, none of them holding an arbitrary-length string, so the whole table
+ *  fits the ledger column at every width the dock allows. */
+const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
+  { label: "repository", cls: "" },
+  { label: "runs", cls: "w-[58px] text-right" },
+  { label: "prs", cls: "w-[52px] text-right" },
+  { label: "needs you", cls: "w-[82px] text-right" },
+  { label: "findings", cls: "w-[76px] text-right" },
+  { label: "read", cls: "w-[104px]" },
+  { label: "errors", cls: "w-[62px] text-right" },
+];
+
+/** Every repository the installation covers, against what the ledger says.
+ *
+ *  A zero is a real answer here and is rendered as one: a connected repository
+ *  with no runs in view is the row an operator is looking for, and it must not
+ *  be dimmed into invisibility or sorted away. What IS dimmed is the count
+ *  itself — muted ink on a 0, full ink on a number — so the eye lands on the
+ *  repositories Doug is actually working in without the quiet ones leaving the
+ *  page.
+ *
+ *  No data colour on the read column (a magnitude, on the neutral ramp) and
+ *  none on `runs`/`prs`/`findings` (quantities, not verdicts). `needs you` and
+ *  `errors` take --flag ONLY when non-zero, because there a number IS the
+ *  verdict — it is the count of runs this repository is asking a human for. */
+function RepositoryTable({
+  window,
+  params,
+}: {
+  window: PageWindow<RepoRowView>;
+  params: DashboardParams;
+}) {
+  return (
+    <Table
+      containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
+      className="min-w-[700px] table-fixed border-separate border-spacing-0 text-xs"
+    >
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {REPO_COLUMNS.map((column) => (
+            <TableHead key={column.label} className={`${TH} ${column.cls}`}>{column.label}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <tbody>
+        {window.items.map((row) => (
+          <TableRow key={row.repo} className="border-0 hover:bg-[var(--row-hover)]">
+            <TableCell className={`${TD} min-w-0`}>
+              <div className="flex min-w-0 items-baseline gap-2">
+                {/* The row's action: narrow the ledger to this repository. It
+                    writes `repo`, which is the SERVER's fetch scope — so this
+                    is the one control on the page that changes what comes back
+                    rather than what survives, and it drops the view and the
+                    page with it. */}
+                {/* `min-w-0 truncate` and NOT `flex-1`: the repository column is
+                    the flexible one and runs to ~570px, so a growing link pushed
+                    the marker beside it to the far edge of the cell, half a
+                    screen from the name it describes. Sized to its text, the
+                    marker sits against the name and the slack falls after both. */}
+                <Link
+                  href={href(params, { repo: row.repo, view: null, page: null })}
+                  className="mono min-w-0 truncate text-[12px] text-foreground no-underline hover:text-[var(--iridescent)] hover:underline underline-offset-[3px]"
+                >{row.repo}</Link>
+                {/* Runs exist for a repository the installation no longer
+                    lists. The verdicts are real; the row says why it looks
+                    odd rather than disappearing. Chrome, not a data colour —
+                    this is a fact about the connection, not about a PR. */}
+                {!row.connected && (
+                  <span
+                    title="This repository has runs in the ledger but the installation no longer lists it — renamed, removed, or access revoked."
+                    className="mono flex-none rounded-[3px] border border-border px-1.5 py-px text-[9.5px] uppercase tracking-[.08em] text-muted-foreground"
+                  >not connected</span>
+                )}
+              </div>
+            </TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.runs === 0 ? "text-[var(--dim)]" : "text-foreground")}>{row.runs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.prs === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.prs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.flagged > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.flagged}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.findings === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.findings}</TableCell>
+            <TableCell className={TD}>
+              {/* Chars, on the neutral ramp, and null renders "—". A repository
+                  Doug has never read and one it read nothing of are different
+                  facts, and 0% asserts the second. */}
+              {row.coveragePct === null ? (
+                <span className="mono text-[11px] text-[var(--dim)]">—</span>
+              ) : (
+                <div className="mono flex items-center gap-[6px] text-[11px] text-foreground" title="share of changed characters sent to the reader">
+                  <span className="cov-track block h-1.5 w-[46px]">
+                    <span className="cov-fill block h-full" style={{ width: `${row.coveragePct}%` }} />
+                  </span>
+                  <span>{Math.round(row.coveragePct)}%</span>
+                </div>
+              )}
+            </TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.errored > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.errored}</TableCell>
+          </TableRow>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+function Pager({ window, params }: { window: PageWindow<unknown>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
     return <p className="mono mt-2.5 text-[10.5px] uppercase tracking-[.12em] text-[var(--dim)]">Showing {label}</p>;
@@ -1019,12 +1174,23 @@ export default async function DashboardPage({
    *  because page 2 of the same filter is the same question with a different
    *  fifty rows in front of it. `censusScope` names whichever set this is. */
   let visible: RunSummary[] = [];
+  /** Every repository the installation covers, joined to what the fetched
+   *  ledger says about each. Built even in the runs view — it is a `map` over
+   *  data already in memory, and computing it in one place keeps the two views
+   *  reading one join rather than two. */
+  let repoRows: RepoRowView[] = [];
   let shown = 0;
   let reband = 0;
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
 
   const filters = dashboardFilters(params);
+  /** Which of the two ledger views is open. A query param rather than a route:
+   *  both views read the SAME fetch, the same filters and the same lens, and a
+   *  second route would either duplicate this page's shell or need a layout
+   *  that cannot see the page's own rows to fill the rail's readout. Unknown
+   *  values fall back to runs — `?view=nonsense` must not blank the page. */
+  const view = value(params, "view") === "repositories" ? "repositories" : "runs";
   const query = normalizeQuery(value(params, "q"));
   const sort = parseSort(value(params, "sort") ?? null);
   const lens = parseThresholdLens(value(params, "threshold"));
@@ -1050,6 +1216,14 @@ export default async function DashboardPage({
     visible = filterRunsByQuery(filterRuns(lensed, filters), query);
     groups = sortGroups(groupRunsByPr(visible, atCap), sort);
     shown = groups.reduce((total, group) => total + group.runCount, 0);
+    // The connection's list is authoritative about what Doug COULD review; the
+    // rollup is only ever about the runs that came back. `repositoryTable`
+    // keeps both sides, which is what lets this screen show a connected repo
+    // with no runs at all.
+    repoRows = repositoryTable(
+      door.current.repositories.map((repository) => repository.full_name),
+      repoRollup(visible),
+    );
     // Resolved from the UNLENSED set: the evidence pane is a record of one run
     // and `detail.threshold` is the line Doug actually scored it against.
     const selectedId = Number(value(params, "run"));
@@ -1058,7 +1232,14 @@ export default async function DashboardPage({
       : null;
     if (selectedSummary) detail = await getSessionRun(accessToken, selectedSummary.verdict_id);
   }
-  const pageWindow = pageSlice(groups, parsePage(value(params, "page")));
+  // One page number, two windows — only one is ever rendered. `pageSlice`
+   // clamps out of range, so landing on page 7 of the runs view and switching
+   // to a two-page repositories list shows page 2 rather than nothing; the nav
+   // links drop `page` anyway, because a page number does not survive a change
+   // of what is being paged.
+  const pageNumber = parsePage(value(params, "page"));
+  const pageWindow = pageSlice(groups, pageNumber);
+  const repoWindow = pageSlice(repoRows, pageNumber);
   const scope = censusScope({ shown, fetched: fetched.length, limit, atCap, filtering });
 
   return (
@@ -1110,11 +1291,22 @@ export default async function DashboardPage({
           </div>
 
           <nav className="flex flex-col border-b border-border py-1.5 max-lg:flex-row max-lg:border-0 max-lg:py-0" aria-label="Dashboard sections">
-            <Link href="/dashboard" aria-current="page" className={RAIL_ITEM}>Runs</Link>
+            {/* Both entries carry the current filters across, and both drop
+                `page`: a page number is a position in one list and means
+                nothing in the other. */}
+            <Link
+              href={href(params, { view: null, page: null })}
+              aria-current={view === "runs" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Runs</Link>
+            <Link
+              href={href(params, { view: "repositories", page: null })}
+              aria-current={view === "repositories" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Repositories</Link>
             {/* Still not built, and still said so. A nav entry that navigates
                 nowhere is a lie about the product; one that names itself as
                 unbuilt is a roadmap. */}
-            <span className={RAIL_ITEM}>Repositories <small className="ml-auto text-[8px] tracking-normal normal-case">later</small></span>
             <span className={RAIL_ITEM}>Evidence <small className="ml-auto text-[8px] tracking-normal normal-case">later</small></span>
             {/* Docs is a REAL destination and the only entry here that leaves
                 the dashboard, so it sits below a rule rather than in the run of
@@ -1196,11 +1388,29 @@ export default async function DashboardPage({
                       the reason #99 gave one member per state instead of
                       Exclude<> on a shared one. The hoisted binding is widened
                       and would need an assertion. */}
-                  <span className={ROUTE}>/runs</span>
+                  <span className={ROUTE}>{view === "repositories" ? "/repositories" : "/runs"}</span>
                   <span className="truncate">{connectionLabel(door.current)}</span>
                   <span className="h-px flex-1 bg-border" />
                   <span className="mono flex-none normal-case tracking-normal text-muted-foreground">
-                    <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
+                    {view === "repositories" ? (
+                      // TWO SOURCES, SAID OUT LOUD. The repository count is
+                      // authoritative — it is the installation's own list. Every
+                      // other number on the row beside it is counted over the
+                      // runs that came back, which at the cap is a window and not
+                      // the scope. One line cannot be allowed to lend the first
+                      // number's completeness to the rest.
+                      <RepoCountLine
+                        repos={repoRows.length}
+                        connected={door.current.repositories.length}
+                        shown={shown}
+                        total={fetched.length}
+                        limit={limit}
+                        atCap={atCap}
+                        filtering={filtering}
+                      />
+                    ) : (
+                      <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
+                    )}
                   </span>
                 </div>
 
@@ -1246,7 +1456,22 @@ export default async function DashboardPage({
                   </form>
                   <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
                 </div>
-                {groups.length === 0 ? (
+                {view === "repositories" ? (
+                  repoRows.length === 0 ? (
+                    // Reachable only when the installation lists no repositories
+                    // AND the ledger holds none either — a bound install that
+                    // covers nothing. Not the same as "no runs yet", which is a
+                    // repository list with an empty ledger and still has rows.
+                    <p className="mono rounded-[5px] border border-border px-2.5 py-9 text-center text-[12.5px] text-muted-foreground">
+                      This space has no repositories. Connect one to give Doug something to review.
+                    </p>
+                  ) : (
+                    <>
+                      <RepositoryTable window={repoWindow} params={params} />
+                      <Pager window={repoWindow} params={params} />
+                    </>
+                  )
+                ) : groups.length === 0 ? (
                   // An empty result under a filter and an empty ledger are
                   // different facts, and neither is a blank table under a header.
                   <p className="mono rounded-[5px] border border-border px-2.5 py-9 text-center text-[12.5px] text-muted-foreground">

@@ -280,6 +280,72 @@ test("at the page cap the census names the window, never a total it cannot see",
   );
 });
 
+test("a connected repository with no runs in view is a row, not an omission", async () => {
+  // The most useful row on the repositories screen. Listing only repos that
+  // appear in the ledger would silently drop it, and "Doug has reviewed nothing
+  // here" is precisely what an operator opens this screen to find — a repo that
+  // is connected but never reviewed is a coverage hole, and an absent row reads
+  // as no hole at all.
+  const { repositoryTable, repoRollup } = await import("./ledger-census.ts?repo-table");
+  const rows = repositoryTable(
+    ["acme/busy", "acme/silent"],
+    repoRollup([run({ repo: "acme/busy" })]),
+  );
+  assert.deepEqual(rows.map((r) => r.repo), ["acme/busy", "acme/silent"]);
+  const silent = rows[1];
+  assert.equal(silent.runs, 0);
+  assert.equal(silent.connected, true);
+  // Null, not 0. Doug has not read this repo; it has not read 0% of it.
+  assert.equal(silent.coveragePct, null);
+});
+
+test("a repository with runs but no connection entry is kept and marked, never dropped", async () => {
+  // The mirror failure. A repo removed from the installation, renamed, or with
+  // access revoked leaves its verdicts in the ledger — they are real runs and
+  // real findings. Joining only from the connection side would hide them, and
+  // the run table beside this screen would still be showing them, so the two
+  // surfaces would disagree about the same ledger.
+  const { repositoryTable, repoRollup } = await import("./ledger-census.ts?orphan");
+  const rows = repositoryTable(
+    ["acme/current"],
+    repoRollup([
+      run({ repo: "acme/current", pr_number: 1 }),
+      run({ repo: "acme/removed", pr_number: 2, band: "flagged" }),
+      run({ repo: "acme/removed", pr_number: 3 }),
+    ]),
+  );
+  const removed = rows.find((r) => r.repo === "acme/removed");
+  assert.ok(removed, "a repo with runs was dropped because the connection no longer lists it");
+  assert.equal(removed.connected, false);
+  assert.equal(removed.runs, 2);
+  assert.equal(removed.flagged, 1);
+  assert.equal(rows.find((r) => r.repo === "acme/current").connected, true);
+});
+
+test("every repository appears exactly once, whichever side it came from", async () => {
+  // A repo present in BOTH sources is the normal case, and the join must not
+  // emit it twice — a duplicated row would double-count in any total taken over
+  // this table.
+  const { repositoryTable, repoRollup } = await import("./ledger-census.ts?once");
+  const rows = repositoryTable(
+    ["acme/one", "acme/two"],
+    repoRollup([run({ repo: "acme/one" }), run({ repo: "acme/two", pr_number: 9 })]),
+  );
+  assert.equal(rows.length, 2);
+  assert.deepEqual([...new Set(rows.map((r) => r.repo))].length, 2);
+});
+
+test("repositories sort busiest first, so silent ones land in one block at the end", async () => {
+  // Scattering zero-run repos alphabetically through the list is what makes a
+  // coverage hole hard to see. Ties break by name so the order is stable.
+  const { repositoryTable, repoRollup } = await import("./ledger-census.ts?repo-sort");
+  const rows = repositoryTable(
+    ["z/quiet", "a/quiet", "m/busy"],
+    repoRollup([run({ repo: "m/busy" }), run({ repo: "m/busy", pr_number: 2 })]),
+  );
+  assert.deepEqual(rows.map((r) => r.repo), ["m/busy", "a/quiet", "z/quiet"]);
+});
+
 test("an empty ledger censuses to zeros and nulls, never to a divide-by-zero", async () => {
   // The empty state is a real state: a freshly connected space has no runs, and
   // every panel on this surface renders against it before it renders against

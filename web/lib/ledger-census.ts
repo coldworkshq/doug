@@ -383,6 +383,62 @@ export function repoRollup(runs: RunSummary[]): RepoRow[] {
     .sort((a, b) => b.runs - a.runs || a.repo.localeCompare(b.repo));
 }
 
+/** One row of the repositories view: a repository, and whatever the fetched
+ *  ledger has to say about it. */
+export type RepoRowView = RepoRow & {
+  /** True when the connection still lists this repository. False means the
+   *  ledger holds runs for a repo the installation no longer covers — renamed,
+   *  removed, or access revoked — which is a fact worth showing, not a row
+   *  worth dropping. */
+  connected: boolean;
+};
+
+/** Every repository, joined to what the ledger says about it.
+ *
+ *  TWO SOURCES, AND THEY ANSWER DIFFERENT QUESTIONS. `connected` is the
+ *  installation's own repository list from /v1/sessions/connections — complete
+ *  and authoritative about what Doug COULD review. `rollup` is derived from the
+ *  runs actually fetched, which is at most the newest `limit` of them — partial
+ *  by construction, and never authoritative about anything except itself.
+ *
+ *  The join is a FULL OUTER one, deliberately, because each side alone lies in
+ *  a different direction:
+ *
+ *  - A connected repo with no runs in view is the single most useful row on
+ *    this screen. Listing only repos that appear in the ledger would silently
+ *    drop it, and "Doug has reviewed nothing here" is exactly what an operator
+ *    is looking for. It renders with zeroed counts and `runs: 0`.
+ *  - A repo with runs but no connection entry is the mirror failure and must
+ *    never be dropped: the verdicts are real and still in the ledger. It
+ *    renders with `connected: false` so the screen can say why it looks odd.
+ *
+ *  Sorted busiest first, then by name — which puts every zero-run repository
+ *  in one alphabetical block at the end rather than scattering them. */
+export function repositoryTable(connected: string[], rollup: RepoRow[]): RepoRowView[] {
+  const byRepo = new Map(rollup.map((row) => [row.repo, row]));
+  const rows: RepoRowView[] = connected.map((repo) => {
+    const measured = byRepo.get(repo);
+    byRepo.delete(repo);
+    return measured
+      ? { ...measured, connected: true }
+      : {
+          repo,
+          runs: 0,
+          prs: 0,
+          flagged: 0,
+          findings: 0,
+          errored: 0,
+          // Null, not 0. Doug has not read this repository; it has not read
+          // 0% of it. Same distinction `RepoRow.coveragePct` already makes.
+          coveragePct: null,
+          connected: true,
+        };
+  });
+  // Whatever is left in the map had runs and no connection entry.
+  for (const orphan of byRepo.values()) rows.push({ ...orphan, connected: false });
+  return rows.sort((a, b) => b.runs - a.runs || a.repo.localeCompare(b.repo));
+}
+
 /** "41s" / "6m12s" / "1h04m" from a duration in seconds, or "—" for null.
  *
  *  Never rounds a real duration down to "0s": anything under a second reads
