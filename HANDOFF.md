@@ -1,5 +1,27 @@
 # HANDOFF — doug
 
+State:    spec (this branch: per-repo needs-you threshold)
+Next:     Fold the three adversarial-review reports (correctness / tenancy /
+          product lenses, run 2026-08-18) into
+          docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md,
+          re-commit, get Andrew's read, then invoke writing-plans.
+Blockers: none on this branch. (Production-dark stream: #116 MERGED as
+          3eddbf0; its remaining steps are kept verbatim under "Prior stream"
+          below — verify the adjudicator Job actually drained before deleting.)
+Decisions this session:
+- D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
+- D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
+- D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
+- Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
+Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
+          seams: review.score_one (review.py:303), worker.py:250,
+          store.set_installation_repos, api.py:1877 connections,
+          web/lib/threshold-lens.ts (header must be rewritten), ADR-0013 to write
+
+---
+
+## Prior stream (production-dark; #116 merged) — original head kept for context
+
 State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
           never-executed path. #113 (383daf6), #114 (8e1d774) and #115
           (22156d9) are all MERGED. **PR #116 IS OPEN** and is the last thing
