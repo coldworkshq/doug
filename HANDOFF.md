@@ -8,11 +8,10 @@ State:    building — design-lock.md AND build-plan.md both LOCKED
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     Task 5 — spend isolation, and the plan says land it BEFORE wiring.
-          `verify:<id>` scope, third branch in cap_for (reader.py:267), hard
-          per-PR cap, timeout below 120s. The test that matters: a run doing
-          verify reads leaves instrument_snapshot's counter unchanged, so the
-          customer's `deep reads N/200` footer never moves. Tasks 1-4 DONE.
+Next:     Task 6 — wire into the review path (review.py, worker.py). This is
+          the FIRST task that touches the live path; everything through Task 5
+          is inert. The superset assertion lands here: the finding set out must
+          be a superset of the finding set in. Tasks 1-5 DONE.
           ONE BLOCKER, Andrew's hands, gates MERGE not work: P0.1 — publish
           the LOCKED v9 pre-registration + deploy its hash. Zero code, zero
           rows; the one artifact whose value decreases with calendar time.
@@ -66,7 +65,8 @@ Decisions this session:
   the words leaves a false completeness claim looking rigorous — rejected:
   round 1's either/or framing.
 
-Tasks 1-4 DONE (verified 2026-08-18; afcb77c, a1411d3, b24c52d):
+Tasks 1-5 DONE (verified 2026-08-18; afcb77c a1411d3 b24c52d 6b270ca).
+NOTHING IS WIRED YET — all of it is inert until Task 6.
 - reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
   = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
   PROMPT_HASH untouched (8bd26c67...), freeze tests green.
@@ -105,7 +105,20 @@ Tasks 1-4 DONE (verified 2026-08-18; afcb77c, a1411d3, b24c52d):
 - Task 4 mutation-checked: dropping the AST check kills 3 tests including the
   byte-match one; allowing non-literal values kills it; skipping the quote
   comparison kills the fabricated-quote test.
-- api: 1423/1423 passed, ruff clean across the whole package.
+- Task 5: verify_scope(id) -> "verify:<id>" — a DIFFERENT prefix from
+  installation_scope, so instrument_snapshot (which resolves its meter with
+  installation_scope) structurally cannot see verify spend. That keeps the
+  customer's `deep reads N/200` footer honest; charging installation:<id>
+  would render allowance they never spent, and at the 200 clamp it reads as
+  an exhausted plan — the same defect class as PR #106 row 2.
+  Also VERIFY_MONTHLY_READ_CAP=4000, MAX_VERIFY_READS_PER_REVIEW=2 (bounds
+  latency inside worker.drain's 20-jobs-sequential loop, not just spend),
+  DEFAULT_VERIFY_TIMEOUT_S=60 (< the 120s read timeout).
+  installation_from_scope("verify:99") is None — a verify read names nobody.
+- Task 5 mutation-checked: making verify_scope collide with
+  installation_scope kills two tests; raising the verify timeout above the
+  read timeout kills a third.
+- api: 1426/1426 passed, ruff clean across the whole package.
 
 Pointers: docs/design/competitor-imports/ (six artifacts) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·

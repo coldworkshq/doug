@@ -358,9 +358,33 @@ SENTINEL_SCOPE = "untenanted"
 # reviews to the deterministic tier.
 INSTALLATION_MONTHLY_READ_CAP = 4000
 SENTINEL_MONTHLY_READ_CAP = 1000
+# Verify reads spend on their OWN budget, and the separation is not tidiness.
+# store.instrument_snapshot resolves its meter with installation_scope() and
+# renders the result as `deep reads N/200` on the customer's check run, clamped
+# at 200 — so a verify read charged to installation:<id> would show up as
+# allowance the customer never used, and at the clamp it reads as exhausted.
+# That is a pricing change wearing a feature's clothes. A separate prefix makes
+# it structurally impossible rather than a rule someone has to remember.
+#
+# Same order of magnitude as the installation cap, by the same reasoning: at the
+# per-review ceiling below, 4,000 units is ~2,000 PRs from one installation in a
+# calendar month. A runaway guard, not a plan limit.
+VERIFY_MONTHLY_READ_CAP = 4000
+
+# Per review, not per month. Every verify read is a model call on the live path,
+# inside worker.drain's 20-jobs-sequential loop on Starlette's shared pool — so
+# this bounds latency as much as spend. Raising it is a repricing and a
+# throughput change together, and needs to be argued as both.
+MAX_VERIFY_READS_PER_REVIEW = 2
+
+# Strictly below DEFAULT_READ_TIMEOUT_S. A verify read is a small, bounded
+# question against one finding; if it has not answered in half the time the
+# whole-diff read gets, the finding ships ungrounded and nobody waits.
+DEFAULT_VERIFY_TIMEOUT_S = 60
 
 
 _SCOPE_PREFIX = "installation:"
+_VERIFY_SCOPE_PREFIX = "verify:"
 
 
 def installation_scope(installation_id: int) -> str:
@@ -393,8 +417,31 @@ def installation_from_scope(scope: str) -> int | None:
     return value if str(value) == rest else None
 
 
+def verify_scope(installation_id: int | None) -> str:
+    """The one place a verify read's scope string is built.
+
+    Deliberately NOT installation_scope's prefix: installation_from_scope only
+    recognises "installation:", and instrument_snapshot only ever meters what
+    installation_scope emits, so a verify read cannot reach the customer's
+    published counter by construction.
+    """
+    if installation_id is None:
+        return f"{_VERIFY_SCOPE_PREFIX}{SENTINEL_SCOPE}"
+    return f"{_VERIFY_SCOPE_PREFIX}{installation_id}"
+
+
+def is_verify_scope(scope: str) -> bool:
+    return scope.startswith(_VERIFY_SCOPE_PREFIX)
+
+
 def cap_for(scope: str) -> int:
+    if is_verify_scope(scope):
+        return VERIFY_MONTHLY_READ_CAP
     return SENTINEL_MONTHLY_READ_CAP if scope == SENTINEL_SCOPE else INSTALLATION_MONTHLY_READ_CAP
+
+
+def verify_timeout() -> float:
+    return float(os.environ.get("DOUG_VERIFY_TIMEOUT_S", DEFAULT_VERIFY_TIMEOUT_S))
 
 
 def _charge(scope: str) -> None:
