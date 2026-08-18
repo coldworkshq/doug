@@ -42,14 +42,22 @@ export function ThresholdGear({
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="Adjust the needs-you line"
+          aria-label="Preview the ledger at a different line"
           className="mono relative flex h-[30px] cursor-pointer items-center gap-1.5 rounded-[5px] border border-border bg-card px-2 text-[11px] text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
         >
           <svg viewBox="0 0 16 16" aria-hidden className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.4">
             <circle cx="8" cy="8" r="2.1" />
             <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" strokeLinecap="round" />
           </svg>
-          needs-you line
+          {/* "preview at…", and deliberately NOT the words the repositories
+              view spends on its per-repository FLAG LINE — the setting that
+              decides what Doug does next. While this button borrowed those
+              words the two controls were indistinguishable on one screen, and
+              moving this gear visibly changes the "needs you" count one column
+              left of that setting, so the wrong control appeared to have taken
+              effect. The label is an element's own text rather than a bare node
+              so dashboard-contract.test.mjs can pin the two names apart. */}
+          <span>preview at…</span>
           {/* The dot is never the ONLY signal that a lens is on — the page
               draws a full banner above the table. It is a locator for the
               control that set it, not the disclosure itself. */}

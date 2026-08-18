@@ -9,6 +9,7 @@ import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { CensusPanel } from "@/components/census-panel";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
+import { FlagLineControl } from "@/components/flag-line-control";
 import { NoJsSubmit } from "@/components/no-js-submit";
 import { RunSpine } from "@/components/run-spine";
 import { ThresholdGear } from "@/components/threshold-gear";
@@ -832,18 +833,53 @@ function RunTable({
 /** Paging is a property of a WINDOW, not of what is in it — the runs ledger and
  *  the repositories table page identically, so this reads only the paging
  *  fields and never the items. */
-/** Column widths for the repositories view. Narrower than the ledger's — seven
+/** Column widths for the repositories view. Narrower than the ledger's — eight
  *  columns, none of them holding an arbitrary-length string, so the whole table
- *  fits the ledger column at every width the dock allows. */
+ *  fits the ledger column at every width the dock allows.
+ *
+ *  "flag line" sits DIRECTLY BESIDE "needs you" on purpose: one is the count of
+ *  runs that asked for a human, the other is the line that decides who asks
+ *  next. Reading them together is the whole reason the setting lives on this
+ *  table rather than behind a settings page. */
 const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
   { label: "repository", cls: "" },
   { label: "runs", cls: "w-[58px] text-right" },
   { label: "prs", cls: "w-[52px] text-right" },
   { label: "needs you", cls: "w-[82px] text-right" },
+  { label: "flag line", cls: "w-[150px]" },
   { label: "findings", cls: "w-[76px] text-right" },
   { label: "read", cls: "w-[104px]" },
   { label: "errors", cls: "w-[62px] text-right" },
 ];
+
+/** One repository's flag line, keyed by `full_name` because that is the only
+ *  name the rollup rows carry — the ledger joins runs to repositories by name,
+ *  and the numeric id exists only on the connection's own list. */
+type FlagLineSetting = { id: number; needs_you_threshold: number | null };
+
+/** The flag-line cell, and the one row shape that gets no control.
+ *
+ *  A repository with runs in the ledger but no entry on the installation's list
+ *  — the "not connected" row — has no `installation_repos` row behind it, so
+ *  there is no id to PATCH and no setting to state. It gets an em dash, the
+ *  same answer the read column gives for a fact it does not have, rather than a
+ *  control that would fail on submit. */
+function FlagLineCell({
+  setting,
+  defaults,
+}: {
+  setting: FlagLineSetting | null;
+  defaults: { reader: number; fallback: number };
+}) {
+  if (!setting) return <span className="mono text-[12px] text-[var(--dim)]">—</span>;
+  return (
+    <FlagLineControl
+      githubRepoId={setting.id}
+      value={setting.needs_you_threshold}
+      defaults={defaults}
+    />
+  );
+}
 
 /** Every repository the installation covers, against what the ledger says.
  *
@@ -861,14 +897,18 @@ const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
 function RepositoryTable({
   window,
   params,
+  settings,
+  defaults,
 }: {
   window: PageWindow<RepoRowView>;
   params: DashboardParams;
+  settings: Map<string, FlagLineSetting>;
+  defaults: { reader: number; fallback: number };
 }) {
   return (
     <Table
       containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
-      className="min-w-[700px] table-fixed border-separate border-spacing-0 text-xs"
+      className="min-w-[760px] table-fixed border-separate border-spacing-0 text-xs"
     >
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -911,6 +951,9 @@ function RepositoryTable({
             <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.runs === 0 ? "text-[var(--dim)]" : "text-foreground")}>{row.runs}</TableCell>
             <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.prs === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.prs}</TableCell>
             <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.flagged > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.flagged}</TableCell>
+            <TableCell className={TD}>
+              <FlagLineCell setting={settings.get(row.repo) ?? null} defaults={defaults} />
+            </TableCell>
             <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.findings === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.findings}</TableCell>
             <TableCell className={TD}>
               {/* Chars, on the neutral ramp, and null renders "—". A repository
@@ -1161,7 +1204,13 @@ export default async function DashboardPage({
   const auth = await withAuth();
   const { user, accessToken, organizationId } = auth;
   if (!user || !accessToken) redirect("/sign-in");
-  const { connections } = await getConnections(accessToken);
+  // The whole response, not just `connections`: the repositories view prints
+  // Doug's OWN two defaults beside every unset repository, and they are the
+  // API's to state — the reader's line and the deterministic fallback are
+  // environment values on the API, and a copy of them here would drift the
+  // moment either is retuned.
+  const { connections, default_needs_you_threshold: flagLineDefaults } =
+    await getConnections(accessToken);
   const door = frontDoor(connections, organizationId);
   const current = door.current;
   const userLabel = user.firstName || user.email || "You";
@@ -1184,6 +1233,11 @@ export default async function DashboardPage({
    *  data already in memory, and computing it in one place keeps the two views
    *  reading one join rather than two. */
   let repoRows: RepoRowView[] = [];
+  /** The per-repository flag lines, for the rows that have one. Built from the
+   *  CONNECTION's list rather than from the ledger: a repository Doug has never
+   *  reviewed still has a line worth setting, and a repository with runs but no
+   *  connection row has no id to write. */
+  let flagLines = new Map<string, FlagLineSetting>();
   let shown = 0;
   let reband = 0;
   let selectedSummary: RunSummary | null = null;
@@ -1228,6 +1282,12 @@ export default async function DashboardPage({
     repoRows = repositoryTable(
       door.current.repositories.map((repository) => repository.full_name),
       repoRollup(visible),
+    );
+    flagLines = new Map(
+      door.current.repositories.map((repository): [string, FlagLineSetting] => [
+        repository.full_name,
+        { id: repository.id, needs_you_threshold: repository.needs_you_threshold },
+      ]),
     );
     // Resolved from the UNLENSED set: the evidence pane is a record of one run
     // and `detail.threshold` is the line Doug actually scored it against.
@@ -1472,7 +1532,12 @@ export default async function DashboardPage({
                     </p>
                   ) : (
                     <>
-                      <RepositoryTable window={repoWindow} params={params} />
+                      <RepositoryTable
+                        window={repoWindow}
+                        params={params}
+                        settings={flagLines}
+                        defaults={flagLineDefaults}
+                      />
                       <Pager window={repoWindow} params={params} />
                     </>
                   )

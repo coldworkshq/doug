@@ -1,0 +1,99 @@
+import { setFlagLineAction } from "@/app/dashboard/actions";
+
+/** The per-repository FLAG LINE — Doug's setting, not the preview gear.
+ *
+ *  Server-rendered, no client boundary: a <details>, two <form>s and a server
+ *  action. The gear beside it needs JavaScript because a Radix popover and
+ *  slider do; this does not, and a setting that silently stops working when a
+ *  bundle fails to load is worse than one that never needed the bundle.
+ *
+ *  FORWARD-ONLY, and the copy says so where the change is made. The API writes
+ *  the line for future scoring runs only — verdicts already recorded keep the
+ *  line they were scored against (it is stamped per row), and an open PR keeps
+ *  its existing check until a new commit triggers a re-review. Stating that in
+ *  a tooltip somewhere else would leave the person who just moved the number
+ *  believing the table in front of them was about to move with it.
+ *
+ *  Unset prints BOTH defaults, because production scores with the reader
+ *  (DOUG_READER_THRESHOLD) and falls back to the deterministic line
+ *  (DOUG_THRESHOLD); one number would be a claim that is false half the time.
+ *  Both arrive from the API, so this component never guesses either.
+ *
+ *  TWO FORMS, NOT TWO SUBMIT BUTTONS — the opposite of the threshold gear, and
+ *  deliberately. A named submit button contributes its entry AT ITS OWN
+ *  POSITION without replacing anything else, so a "reset" button sharing
+ *  `needs_you_threshold` with the number input above it would submit both, and
+ *  `formData.get` takes the first: pressing reset on a repository set to 0.75
+ *  would have re-saved 0.75 and reported success. The gear can own its field
+ *  from two buttons because it has no input; this one cannot, so clearing gets
+ *  a form of its own where nothing else can travel. */
+export function FlagLineControl({
+  githubRepoId,
+  value,
+  defaults,
+}: {
+  githubRepoId: number;
+  value: number | null;
+  defaults: { reader: number; fallback: number };
+}) {
+  const shown =
+    value === null
+      ? `default · ${defaults.reader.toFixed(2)} deep read / ${defaults.fallback.toFixed(2)} fallback`
+      : value.toFixed(2);
+  return (
+    <details className="group">
+      {/* The accessible name carries the VALUE as well as the word, because the
+          value is the whole point of the row: a bare aria-label="flag line"
+          would replace "default · 0.30 deep read / 0.62 fallback" for anyone
+          reading by ear, leaving them a control whose current setting they
+          cannot hear. */}
+      <summary
+        className="mono cursor-pointer list-none text-[12px] text-muted-foreground hover:text-foreground"
+        aria-label={`flag line — ${shown}`}
+      >
+        {shown}
+      </summary>
+      <div className="mt-1 flex flex-col gap-1">
+        <p className="text-[10.5px] text-muted-foreground">
+          One line for both scorers. Unset, Doug uses {defaults.reader.toFixed(2)} on deep reads and {defaults.fallback.toFixed(2)} when the reader didn&apos;t run.
+          Applies to reviews from now on — past verdicts keep the line they were scored against, and open PRs keep their check until a new commit.
+          {value !== null && value >= 0.9 && " Close to flag-nothing on the fallback scorer."}
+        </p>
+        <p className="text-[10.5px] text-muted-foreground">
+          This is Doug&apos;s line for new reviews — the preview gear above only re-bands what&apos;s on screen.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <form action={setFlagLineAction} className="flex items-center gap-2">
+            <input type="hidden" name="github_repo_id" value={githubRepoId} />
+            <label className="mono text-[10.5px] uppercase tracking-[.08em] text-muted-foreground">
+              flag line
+              <input
+                name="needs_you_threshold"
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                defaultValue={value ?? ""}
+                list={`flag-line-marks-${githubRepoId}`}
+                className="mono ml-2 h-[26px] w-[72px] rounded-[4px] border border-border bg-card px-1.5 text-[12px] text-foreground"
+              />
+              {/* The defaults as MARKS, never as a prefilled value: an input
+                  showing 0.30 on an unset repository would claim a setting that
+                  does not exist, which is the one thing this row must not say. */}
+              <datalist id={`flag-line-marks-${githubRepoId}`}>
+                <option value={defaults.reader} label="deep read default" />
+                <option value={defaults.fallback} label="fallback default" />
+              </datalist>
+            </label>
+            <button type="submit" className="mono h-[26px] rounded-[4px] border border-border px-2 text-[11px]">save</button>
+          </form>
+          <form action={setFlagLineAction}>
+            <input type="hidden" name="github_repo_id" value={githubRepoId} />
+            <input type="hidden" name="needs_you_threshold" value="" />
+            <button type="submit" className="mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] text-muted-foreground">reset to default</button>
+          </form>
+        </div>
+      </div>
+    </details>
+  );
+}

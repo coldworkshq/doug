@@ -444,6 +444,46 @@ test("the gear writes the lens to the URL, and the page file stays server-side",
   assert.equal(page.includes('"use client"'), false);
 });
 
+test("the preview gear and the per-repo flag line setting are never called the same thing", async () => {
+  // Two controls, one view, opposite powers. The gear RE-BANDS what is already
+  // on screen; the flag line CHANGES WHAT DOUG DOES NEXT. While the gear read
+  // "needs-you line" they shared a name on the same table — and moving the gear
+  // visibly changes the "needs you" count sitting one column left of the
+  // setting, so the wrong one looks like it took effect. Different words are
+  // the fix, and this is what stops them converging again.
+  const gear = await readFile(new URL("../components/threshold-gear.tsx", import.meta.url), "utf8");
+  const control = await readFile(new URL("../components/flag-line-control.tsx", import.meta.url), "utf8");
+  assert.match(gear, />\s*preview at…\s*</);
+  assert.equal(gear.includes("needs-you line"), false, "the gear no longer claims to be the line");
+  assert.match(control, /flag line/);
+  // FORWARD-ONLY, said where the change is made. The API writes the setting for
+  // future scoring runs only: verdicts already recorded keep the line they were
+  // scored against, and an open PR keeps its existing check until a new commit
+  // triggers a re-review. A control that quietly implied it rewrote history
+  // would be the dishonesty this whole surface exists to refuse.
+  assert.match(control, /Applies to reviews from now on/);
+  assert.match(control, /open PRs keep their check until a new commit/);
+  // BOTH defaults are printed when the repository is unset, because production
+  // scores with the reader and falls back to the deterministic line — one
+  // number would be a claim that is false half the time. Pinned on the template
+  // around the numbers rather than on "0.30"/"0.62": the control renders
+  // `defaults.reader.toFixed(2)` from the API response, so pinning the digits
+  // would pin this suite to one deployment's environment.
+  assert.match(control, /on deep reads and/);
+  assert.match(control, /when the reader didn/);
+  assert.match(control, /defaults\.reader\.toFixed\(2\)/);
+  assert.match(control, /defaults\.fallback\.toFixed\(2\)/);
+});
+
+test("setFlagLineAction is a server action wired to the repositories table", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setFlagLineAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  assert.match(page, /FlagLineControl/);
+});
+
 test("the ledger is bounded and its header stays put", async () => {
   const page = await readFile(pageUrl, "utf8");
   const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";

@@ -250,6 +250,47 @@ export function parseInstallationId(value: unknown): number | null {
   return Number.isSafeInteger(installationId) ? installationId : null;
 }
 
+/** The GitHub repository id a flag-line form names.
+ *
+ *  It becomes the path segment of a PATCH, so it is either a real id or
+ *  nothing: `0` is not a repository, a float is not an id, and past 2^53 the
+ *  digits stop naming one integer. The API authorises the write; this only
+ *  refuses to send a request Doug could not describe afterwards. */
+export function parseGithubRepoId(value: FormDataEntryValue | null): number | null {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** '' → null (clear the override). A 0..1 decimal → that number. Anything else
+ *  → undefined, meaning INVALID, which the action refuses outright.
+ *
+ *  Three outcomes rather than two because "clear" and "unreadable" are
+ *  different instructions and the second must never be performed as the first.
+ *
+ *  Same grammar as `parseThresholdLens`, deliberately: `Number()` alone accepts
+ *  "", " ", "0x1f" and "Infinity", and the range check is what makes "62" —
+ *  someone typing the percentage — fail closed instead of quietly meaning
+ *  "flag nothing" on every future review of that repository. The lens can
+ *  afford to read garbage as absent because it only re-bands a view; this
+ *  writes a setting, so garbage is an error, not a default.
+ *
+ *  CLEAR IS THE EXACT EMPTY STRING, tested BEFORE the trim. `"  "` is not a
+ *  clear: nothing in this form can produce it — the reset button carries a
+ *  literal `value=""` and a number input submits either "" or digits — so a
+ *  blank-looking value arriving here came from somewhere Doug does not model,
+ *  and silently reading it as "reset this repository to the defaults" is a
+ *  write nobody asked for. Trimming still applies to the numeric path, where
+ *  it only forgives padding around a value the person did type. */
+export function parseFlagLine(value: FormDataEntryValue | null): number | null | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value === "") return null;
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : undefined;
+}
+
 export function isFinishableSetupConnection(
   connections: SetupConnectionLike[],
   installationId: number,
