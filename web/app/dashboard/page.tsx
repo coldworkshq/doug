@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { signOutAction } from "@/app/auth/actions";
 import { BandChip } from "@/components/band-chip";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
+import { CensusPanel } from "@/components/census-panel";
 import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { NoJsSubmit } from "@/components/no-js-submit";
@@ -33,6 +34,15 @@ import {
 } from "@/lib/dashboard-view";
 import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
+import {
+  bandCensus,
+  censusScope,
+  countedOver,
+  repoRollup,
+  repositoryTable,
+  type RepoRowView,
+  severityCensus,
+} from "@/lib/ledger-census";
 import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
 import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
@@ -51,53 +61,96 @@ import { finishSetupAction, switchConnectionAction } from "./actions";
 
 const LEMA_LABEL = "Lema — separate product";
 
-/** The reference canvas width the whole design was measured at. Every band
- *  that spans the viewport centres its content on it, which is why it repeats
- *  rather than living on one outer wrapper: the header's and the tab strip's
- *  hairlines run edge to edge while their contents stop here. */
+/** The reference canvas width the empty states are measured at. The RUNS state
+ *  no longer centres on it: a three-column instrument shell (rail · ledger ·
+ *  dock) is a full-bleed layout, and capping it at 1440 would have spent the
+ *  width the dock exists to use. The states that are a single column of prose —
+ *  welcome, choose, reauthorize — still centre here, because a paragraph read
+ *  across 1900px is not a paragraph. */
 const CANVAS = "mx-auto w-full max-w-[1440px]";
+
+/** THE DOCK'S BREAKPOINT is 1620px, and it is written out literally at all
+ *  five sites below rather than hoisted into a constant, because Tailwind finds
+ *  classes by scanning source text: `${DOCK_AT}:h-screen` is assembled at
+ *  runtime, matches nothing at build time, and ships a class that no stylesheet
+ *  defines. The failure is silent — the markup looks right and the rule is
+ *  simply absent — so the repetition is the safe form, not the sloppy one.
+ *
+ *  Four rules share the stop: the ledger/dock grid gains its second column, the
+ *  ledger becomes viewport-tall with its own scroll, the table drops its `vh`
+ *  bound, and the dock pins itself. Below it the dock is a full-width block
+ *  under the ledger and the page scrolls as one document — the layout this page
+ *  had before, kept as the narrow-viewport answer rather than reinvented.
+ *
+ *  1620 IS MEASURED, not chosen. The ledger's chrome — 212 of rail, a 400 dock,
+ *  40 of gutter, two container borders and the table's own ~15px vertical
+ *  scrollbar — costs 669px, and the table needs 940 (see COLUMNS), so the dock
+ *  can only appear from 1609 up; 1620 carries the slack for a platform whose
+ *  scrollbars are wider. Arithmetic alone said 1600 and was wrong by 9px, which
+ *  is exactly the kind of error that ships as "why does this scroll sideways".
+ *
+ *  Tried at 1360 first, which was worse than a small scroll: the ledger got 708,
+ *  the eight fixed columns do not shrink, and the whole shortfall came out of
+ *  the one flexible column — the pull request title rendered 40px wide, i.e.
+ *  "feat(…". A split view whose master column cannot say what a row is about is
+ *  not a split view, so the dock waits until there is room for both. Nine data
+ *  columns and a 400px pane genuinely do not fit a 1440 laptop; below 1620 the
+ *  ledger takes the whole width and the title is generous, which is the better
+ *  half of a trade that has no free side. */
 
 /** A bordered control that wraps a <select>. The focus ring is on the wrapper,
  *  not the select, because the label and its value read as one control — and
- *  it is not optional: this is what changes whose data you are looking at. */
+ *  it is not optional: this is what changes whose data you are looking at.
+ *  Stacked label-over-value in the rail, where the column is 212px and a
+ *  side-by-side label would leave the org name six characters wide. */
 const SWITCH_CONTROL =
-  "mono flex min-h-[30px] items-center gap-[7px] rounded-[5px] border border-border bg-card px-2 py-1 " +
+  "mono flex w-full flex-col gap-[3px] rounded-[5px] border border-border bg-card px-2 py-[5px] " +
   "focus-within:border-[var(--iridescent)] focus-within:outline-2 focus-within:outline-offset-2 " +
   "focus-within:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-const SWITCH_LABEL = "text-[10px] uppercase tracking-[.11em] text-muted-foreground";
+const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--dim)]";
 
 const SWITCH_SELECT =
-  "max-w-[270px] max-[900px]:max-w-[180px] border-0 bg-transparent text-[12.5px] text-foreground outline-0";
+  "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
 
 const SUBMIT_BUTTON =
-  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11.5px] " +
+  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
   "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +
   "focus-visible:border-[var(--iridescent)] focus-visible:text-foreground";
 
-/** Hoisted so the link's own tag stays short and legible. The reachability
- *  pin in lib/dashboard-contract.test.mjs deliberately does NOT read this
- *  string — it pins the href and the label, so restyling the link can never
- *  fail an ordering guarantee. */
-const CONNECT_LINK =
-  "mono text-[11.5px] text-[var(--iridescent)] underline underline-offset-[3px] max-[900px]:ml-auto " +
-  "focus-visible:outline-2 focus-visible:outline-offset-[3px] " +
-  "focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
+/** One row of the settings menu — the connect link and the sign-out button
+ *  share it so a <Link> and a <button type="submit"> render as one list.
+ *
+ *  Hoisted so each tag stays short and legible. The reachability pin in
+ *  lib/dashboard-contract.test.mjs deliberately does NOT read this string — it
+ *  pins the href and the label, so restyling can never fail an ordering
+ *  guarantee. */
+const MENU_ITEM =
+  "mono block w-full cursor-pointer rounded-[3px] border-0 bg-transparent px-2 py-[7px] " +
+  "text-left text-[11px] text-muted-foreground no-underline hover:bg-accent " +
+  "hover:text-[var(--iridescent)] focus-visible:bg-accent focus-visible:outline-2 " +
+  "focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-const TAB =
-  "mono -mb-px border-b-2 border-transparent px-[13px] pt-[9px] pb-2 text-[11.5px] uppercase " +
-  "tracking-[.08em] text-[var(--dim)] no-underline aria-[current]:border-b-[var(--iridescent)] " +
+/** A rail entry. The current section is marked by a filled tick in the left
+ *  gutter AND by weight and ink — three carriers, because the tick is 2px wide
+ *  and the accent is the one colour on this page that is not allowed to mean
+ *  anything about a verdict. */
+const RAIL_ITEM =
+  "mono relative flex items-center gap-2 border-l-2 border-transparent py-[7px] pr-2 pl-[13px] " +
+  "text-[11px] uppercase tracking-[.09em] text-[var(--dim)] no-underline " +
+  "hover:bg-[var(--row-hover)] hover:text-foreground " +
+  "aria-[current]:border-l-[var(--iridescent)] aria-[current]:bg-accent " +
   "aria-[current]:font-semibold aria-[current]:text-foreground";
 
 /** The evidence pane's section headings. The `<span>` inside each one is a
  *  provenance sub-label, styled here rather than at the call site so the
  *  headings' own markup stays the plain sentence it claims to be. */
 const BLOCK_HEADING =
-  "mono mb-3 flex items-center gap-2.5 text-[11px] font-medium uppercase tracking-[.16em] " +
+  "mono mb-3 flex items-center gap-2.5 text-[10px] font-medium uppercase tracking-[.16em] " +
   "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
   "[&_span]:text-[var(--dim)]";
 
-const BLOCK = "border-b border-border py-[22px]";
+const BLOCK = "border-b border-border px-5 py-[18px]";
 
 /** The route chip — a monospace breadcrumb in the accent wash. */
 const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
@@ -110,7 +163,7 @@ const EMPTY_BODY = "mt-4 max-w-[620px] text-base text-muted-foreground";
 const EMPTY_NOTE = "text-xs text-muted-foreground";
 
 /** A finding or a deviation: the marker column, then the rule and its words. */
-const FINDING = "grid grid-cols-[62px_minmax(0,1fr)] gap-3 border-t border-[var(--rule-soft)] py-[11px]";
+const FINDING = "grid grid-cols-[54px_minmax(0,1fr)] gap-2.5 border-t border-[var(--rule-soft)] py-[10px]";
 
 type DashboardParams = Record<string, string | string[] | undefined>;
 
@@ -152,7 +205,7 @@ function ScopePicker({
   );
   if (ready.length === 0) return null;
   return (
-    <form action={switchConnectionAction} className="flex items-center gap-1.5">
+    <form action={switchConnectionAction} className="flex flex-col gap-1.5 max-lg:w-[200px]">
       <label className={SWITCH_CONTROL}>
         <span className={SWITCH_LABEL}>space</span>
         <AutoSubmitSelect
@@ -176,7 +229,7 @@ function ScopePicker({
           and a bundle that loaded and threw. In both, this form had no working
           control at all and an operator could not switch spaces (Doug PR 103,
           reader:js-dependency-regression). */}
-      <NoJsSubmit className={SUBMIT_BUTTON}>open</NoJsSubmit>
+      <NoJsSubmit className={`${SUBMIT_BUTTON} w-full`}>open</NoJsSubmit>
     </form>
   );
 }
@@ -188,7 +241,7 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
   if (pending.length === 0) return null;
   return (
     <section
-      className="mono mx-auto grid w-full max-w-[1400px] grid-cols-[210px_minmax(0,1fr)] gap-[18px] border-b border-border bg-background/[.91] px-5 py-2.5 max-[900px]:grid-cols-1"
+      className="mono grid w-full grid-cols-[210px_minmax(0,1fr)] gap-[18px] border-b border-border bg-background/[.91] px-5 py-2.5 max-[900px]:grid-cols-1"
       aria-labelledby="pending-connections-title"
     >
       <div className="flex flex-col justify-center gap-[3px]">
@@ -219,6 +272,40 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
   );
 }
 
+/** The rail's live readout: what is in view, in four numbers.
+ *
+ *  The same functions the dock's census panel calls, over the same array, so
+ *  the rail and the panel cannot report one ledger differently — they are not
+ *  two counts of the same thing, they are one count rendered twice.
+ *
+ *  `scope` is the denominator sentence, carried onto the group's `title` rather
+ *  than printed: the rail has 212px and the sentence is a paragraph, but a
+ *  count with no reachable denominator is the thing this page refuses. The dock
+ *  prints it in full, three hundred pixels away. */
+function RailReadout({ runs, scope }: { runs: RunSummary[]; scope: string }) {
+  const band = bandCensus(runs);
+  const severity = severityCensus(runs);
+  const rows: Array<{ word: string; count: number; tone: string }> = [
+    { word: "needs you", count: band.flagged, tone: "data-flag" },
+    { word: "cleared", count: band.cleared, tone: "data-clear" },
+    { word: "findings", count: severity.total, tone: "text-foreground" },
+    { word: "near the line", count: band.nearLine, tone: "text-foreground" },
+  ];
+  return (
+    <div className="px-4 py-3.5" title={scope}>
+      <p className="mono mb-2 text-[9px] uppercase tracking-[.15em] text-[var(--dim)]">In view</p>
+      <dl className="mono m-0 flex flex-col gap-[5px] text-[10.5px]">
+        {rows.map((row) => (
+          <div key={row.word} className="flex items-baseline gap-2">
+            <dt className={`${row.tone} w-[30px] flex-none text-right text-[14px] font-medium tabular-nums`}>{row.count}</dt>
+            <dd className="m-0 min-w-0 truncate text-muted-foreground">{row.word}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function FilterChip({
   active,
   children,
@@ -230,7 +317,7 @@ function FilterChip({
 }) {
   return (
     <Link
-      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[12px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
+      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[11.5px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
       data-active={active || undefined}
       href={target}
     >{children}</Link>
@@ -243,10 +330,10 @@ function FilterChip({
  *  looks, not by hue — the same rule CoverageRuler's cut marker follows. */
 function CoverageCell({ run }: { run: RunSummary }) {
   const view = coverageView(run);
-  if (view.kind === "no-read") return <span className="mono text-[11.5px] text-muted-foreground">no read</span>;
+  if (view.kind === "no-read") return <span className="mono text-[11px] text-muted-foreground">no read</span>;
   return (
-    <div className="mono flex items-center gap-[7px] text-[11.5px] text-foreground" title={view.chars ?? undefined}>
-      <span className="cov-track block h-1.5 w-[62px]">
+    <div className="mono flex items-center gap-[6px] text-[11px] text-foreground" title={view.chars ?? undefined}>
+      <span className="cov-track block h-1.5 w-[46px]">
         <span className="cov-fill block h-full" style={{ width: `${view.percent ?? 0}%` }} />
       </span>
       <span>{view.label}</span>
@@ -260,11 +347,10 @@ function CoverageCell({ run }: { run: RunSummary }) {
  *  survives being copied to someone else; console's version writes the same
  *  query string with `history.pushState` instead.
  *
- *  These are NOT the scope controls in the header. Scope (`?repo=`) decides
- *  what the server fetches; these narrow what was already fetched. Keeping
- *  them visually distinct — a flat row under the header rather than bordered
- *  controls in the bar — is what stops an operator reading a pill as a change
- *  of scope.
+ *  These are NOT the scope controls in the rail. Scope (`?repo=`) decides what
+ *  the server fetches; these narrow what was already fetched. Keeping them
+ *  visually distinct — a flat row over the ledger rather than bordered controls
+ *  in the rail — is what stops an operator reading a pill as a change of scope.
  *
  *  Counts are over the FULL fetched set, so they do not move as other pills
  *  are pressed, and their denominator is that same set. At the page cap the
@@ -286,10 +372,10 @@ function FacetBar({
   if (facets.length === 0) return null;
   const active = Object.values(selection).some((values) => values && values.length > 0);
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border pb-2.5">
       {facets.map((facet) => (
         <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
-          <span className="mono text-[11px] uppercase tracking-[.13em] text-muted-foreground">{facet.label}</span>
+          <span className="mono text-[10px] uppercase tracking-[.13em] text-[var(--dim)]">{facet.label}</span>
           {facet.options.map((option) => {
             const on = (selection[facet.key] ?? []).includes(option.value);
             // Frame and ink are computed separately and each utility is
@@ -320,10 +406,10 @@ function FacetBar({
                 title={atCap
                   ? `${option.count} of the newest ${totalFetched} runs fetched — the scope may hold more`
                   : `${option.count} of ${totalFetched} runs in scope`}
-                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[3px] text-[12px] no-underline ${frame} ${ink}`}
+                className={`mono inline-flex items-center gap-1.5 rounded-[4px] border px-[7px] py-[2px] text-[11.5px] no-underline ${frame} ${ink}`}
               >
                 {option.label}
-                <span className="text-[11px] tabular-nums opacity-60">{option.count}</span>
+                <span className="text-[10.5px] tabular-nums opacity-60">{option.count}</span>
               </Link>
             );
           })}
@@ -332,7 +418,7 @@ function FacetBar({
       {active && (
         <Link
           href={href(params, facetClearChanges())}
-          className="mono ml-auto text-[11.5px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
+          className="mono ml-auto text-[11px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
         >clear filters</Link>
       )}
     </div>
@@ -364,7 +450,7 @@ function LensBanner({
   params: DashboardParams;
 }) {
   return (
-    <div className="mono mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2 text-[11px] text-foreground">
+    <div className="mono mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-1.5 text-[11px] text-foreground">
       <span className="font-medium text-[var(--iridescent)]">Viewing at {lens.toFixed(2)}</span>
       <span className="text-muted-foreground">
         {/* The count is of rows the lens MOVED, not of rows it flagged — the
@@ -439,10 +525,75 @@ function CountLine({
   );
 }
 
-/** Column widths are the console's, not the deleted module's. They travel with
- *  the cell components this table now renders: band is 112px because BandChip's
- *  "needs you" wrapped to two lines at 96 and dragged every flagged row taller
- *  than its neighbours.
+/** The repositories view's count line — deliberately NOT CountLine.
+ *
+ *  It states two things that come from two different places, and keeping them
+ *  in one sentence is the whole point: the repository total is the
+ *  installation's own list and is complete, while every per-row number beside
+ *  it is counted over the runs that came back, which at the page cap is the
+ *  newest N and not the scope. Reusing CountLine would have printed one
+ *  unqualified total and let the row counts inherit its authority.
+ *
+ *  `repos` can exceed `connected` — a repository with runs that the
+ *  installation no longer lists still gets a row (see `repositoryTable`), and
+ *  the extra is named rather than quietly folded into the total. */
+function RepoCountLine({
+  repos,
+  connected,
+  shown,
+  total,
+  limit,
+  atCap,
+  filtering,
+}: {
+  repos: number;
+  connected: number;
+  shown: number;
+  total: number;
+  limit: number;
+  atCap: boolean;
+  filtering: boolean;
+}) {
+  const orphans = repos - connected;
+  // `countedOver` owns the branch order. This line used to test `atCap` first and,
+  // with a filter active at the page cap, announced "counts over the latest 500
+  // runs fetched" while every number beside it was counted over the filtered
+  // subset — and the dock's census panel, branching the other way, printed a
+  // different denominator for the same rows on the same screen. One function now
+  // answers for both, so the disagreement is unrepresentable rather than fixed.
+  const over = countedOver({ shown, fetched: total, limit, atCap, filtering });
+  return (
+    <span>
+      <b className="text-foreground">{connected}</b> {connected === 1 ? "repository" : "repositories"} connected
+      {orphans > 0 && <> · <b className="text-foreground">{orphans}</b> with runs but no longer listed</>}
+      {" "}· counts over {over}
+    </span>
+  );
+}
+
+/** Column widths are the console's, tightened for the split layout: the ledger
+ *  now shares its row with a 400px dock, so every fixed column gave up what it
+ *  could without truncating its own content. band is the one column that did
+ *  NOT shrink to fit: BandChip's "needs you" measures 86px of set text and the
+ *  cell adds 16px of padding, so anything under 102 wraps it to two lines and
+ *  drags every flagged row taller than its neighbours. Measured in a browser
+ *  at 92px — where it did exactly that — not estimated.
+ *
+ *  The two outcome columns took their width back from `read` and `job` for the
+ *  same reason, one step milder: at 76px `◷ pending` truncated to `◷ pendi…`,
+ *  and pending is the value most rows carry while the clocks are still running.
+ *  Truncation states its own overflow and is the right failure mode, but a
+ *  column that truncates its MODAL value is a column that is simply too narrow.
+ *  `read` gave up 8px it was not using (a 46px bar and a 4-character percentage)
+ *  and `job` gave up 8px it wraps anyway.
+ *
+ *  THE TABLE'S 940px MINIMUM falls out of these widths and is not a round
+ *  number: the eight fixed columns claim 626, the cell padding 16, and the pull
+ *  request cell spends 200 more on its disclosure slot, its `repo #n`, its
+ *  receipt link and three gaps before the title gets anything. 940 is what
+ *  leaves the title ~85px at the narrowest width the ledger is ever asked to
+ *  render at — measured, not projected. Below that the table scrolls horizontally, which states the
+ *  shortfall; crushing the title hides it.
  *
  *  Only three columns are sortable. band, tier and the two outcome columns are
  *  categories, and sorting a category alphabetically implies a ranking that
@@ -455,15 +606,15 @@ function CountLine({
  *  collapsing them would let "clean" silently mean two different things
  *  depending on data the reader cannot see. */
 const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
-  { label: "score", cls: "w-[78px] text-right", sort: "score" },
+  { label: "score", cls: "w-[58px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
-  { label: "band", cls: "w-[112px]" },
-  { label: "tier", cls: "w-[88px]" },
-  { label: "read", cls: "w-[176px]", sort: "coverage" },
-  { label: "14d outcome", cls: "w-[100px]" },
-  { label: "60d outcome", cls: "w-[100px]" },
-  { label: "job", cls: "w-[118px]" },
-  { label: "age", cls: "w-[54px] text-right", sort: "age" },
+  { label: "band", cls: "w-[106px]" },
+  { label: "tier", cls: "w-[64px]" },
+  { label: "read", cls: "w-[104px]", sort: "coverage" },
+  { label: "14d outcome", cls: "w-[88px]" },
+  { label: "60d outcome", cls: "w-[88px]" },
+  { label: "job", cls: "w-[76px]" },
+  { label: "age", cls: "w-[42px] text-right" , sort: "age" },
 ];
 
 /** The header is STICKY inside the bounded container, so it needs its own
@@ -475,9 +626,9 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
  *  the SEPARATED border model (see RunTable): in the collapsed model the
  *  border belongs to the table, and a sticky header leaves it behind. */
 const TH =
-  "mono sticky top-0 z-10 border-b border-border bg-background px-2.5 pt-2 pb-[7px] text-left " +
-  "text-[11px] font-medium uppercase tracking-[.13em] text-muted-foreground";
-const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
+  "mono sticky top-0 z-10 border-b border-border bg-background px-2 pt-[7px] pb-[6px] text-left " +
+  "text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+const TD = "h-[34px] border-b border-[var(--rule-soft)] px-2 align-middle";
 
 /** The nine cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
@@ -485,20 +636,28 @@ const TD = "h-10 border-b border-[var(--rule-soft)] px-2.5 align-middle";
 function RunCells({
   run,
   params,
+  selected = false,
   disclosure = null,
   receipt = null,
   indented = false,
 }: {
   run: RunSummary;
   params: DashboardParams;
+  selected?: boolean;
   disclosure?: React.ReactNode;
   receipt?: React.ReactNode;
   indented?: boolean;
 }) {
   return (
     <>
-      <TableCell className={`${TD} text-right`}>
-        <span className={"mono text-[16px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
+      <TableCell className={`${TD} relative text-right`}>
+        {/* The selection marker is a rule in the gutter, not a row tint: the
+            row's own background is already carrying hover, and a second wash
+            over it makes "selected" and "hovered" the same colour at the exact
+            moment a reader is moving between them. Chrome, never a data
+            colour — which run you are reading is not a verdict about it. */}
+        {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-[var(--iridescent)]" />}
+        <span className={"mono text-[14px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
       </TableCell>
@@ -507,19 +666,19 @@ function RunCells({
           {/* The slot reserves its width whether or not a control lives in it,
               so a PR with history and a PR without still start their repo name
               at the same x. */}
-          <span className="min-w-[38px] flex-none text-right">{disclosure}</span>
+          <span className="min-w-[34px] flex-none text-right">{disclosure}</span>
           {indented ? (
             // A child row's repo, number and title are its parent's, verbatim.
             // What distinguishes one run of a PR from the next is WHEN it ran,
             // so that is what the cell carries — still linking to this run's
             // own evidence.
-            <Link className="mono truncate pl-3 text-[11.5px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
+            <Link className="mono truncate pl-3 text-[11px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
               {relativeAge(run.scored_at)} ago
             </Link>
           ) : (
             <Link className="flex min-w-0 items-baseline gap-2 text-inherit no-underline" href={href(params, { run: String(run.verdict_id) })}>
-              <span className="mono flex-none text-[11.5px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
-              <strong className="min-w-0 flex-1 truncate text-[14px] font-normal">{run.title}</strong>
+              <span className="mono flex-none text-[11px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
+              <strong className="min-w-0 flex-1 truncate text-[13px] font-normal">{run.title}</strong>
             </Link>
           )}
           {/* The PR's receipt, not this run's evidence — a second, separate
@@ -538,7 +697,7 @@ function RunCells({
           longer-than-expected tier or outcome now overflows its fixed column
           instead of wrapping. Truncating states the overflow; spilling into the
           next column hides it (Doug PR 103, reader:style-default-change). */}
-      <TableCell className={`mono ${TD} truncate text-[11.5px] text-muted-foreground`}>{run.tier}</TableCell>
+      <TableCell className={`mono ${TD} truncate text-[11px] text-muted-foreground`}>{run.tier}</TableCell>
       <TableCell className={TD}><CoverageCell run={run} /></TableCell>
       {/* Two independent cells — deliberately not one window falling back to
           the other. 14d and 60d are different observations of different
@@ -547,20 +706,20 @@ function RunCells({
           through the same outcomeTone/outcomeLabel rule the detail tile
           uses, so all three render sites cannot drift into describing one
           row differently. */}
-      <TableCell className={`mono ${TD} truncate text-[13px]`}>
+      <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
-      <TableCell className={`mono ${TD} truncate text-[13px]`}>
+      <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_60))}>{outcomeLabel(run.outcome_60)}</span>
       </TableCell>
       {/* whitespace-normal, against TableCell's nowrap base: this is the one
           cell holding an arbitrary-length string (a job error), in a fixed
-          118px column. Nowrap spills it across the age column — and these are
+          84px column. Nowrap spills it across the age column — and these are
           the rows an operator most needs to read. */}
-      <TableCell className={`mono ${TD} whitespace-normal break-words text-[11.5px] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      <TableCell className={`mono ${TD} whitespace-normal break-words text-[10.5px] leading-[1.25] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
       </TableCell>
-      <TableCell className={`mono ${TD} text-right text-[11.5px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
+      <TableCell className={`mono ${TD} text-right text-[11px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
     </>
   );
 }
@@ -570,21 +729,25 @@ function RunTable({
   params,
   sort,
   filtering,
+  selectedId,
 }: {
   window: PageWindow<PrGroup>;
   params: DashboardParams;
   sort: SortState;
   filtering: boolean;
+  selectedId: number | null;
 }) {
   return (
-    // The vertical bound is the point of this container: 50 rows of ledger
-    // pushed the evidence pane a full screen below the fold, so opening a run
-    // scrolled the thing you were reading out of view. 55vh keeps both on
-    // screen. The horizontal scroll it already had is unchanged — nine
-    // columns still do not fit below 980px.
+    // The ledger fills whatever height the shell leaves it and scrolls inside
+    // that bound, so the dock beside it never moves and the page itself does
+    // not scroll at all on a wide screen. `max-h-[62vh]` is the fallback for
+    // viewports below 1620px, where the shell is one scrolling document and
+    // an unbounded table would push the dock a full screen below the fold —
+    // the failure the old 55vh bound was added to fix, kept for the layout
+    // that still has it.
     <Table
-      containerClassName="max-h-[55vh] overflow-y-auto rounded-[5px] border border-border"
-      className="min-w-[980px] table-fixed border-separate border-spacing-0 text-xs"
+      containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
+      className="min-w-[940px] table-fixed border-separate border-spacing-0 text-xs"
     >
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -599,11 +762,11 @@ function RunTable({
               {column.sort === undefined ? column.label : (
                 <Link
                   href={href(params, sortChanges(nextSort(sort, column.sort)))}
-                  className={"inline-flex items-center gap-1 no-underline hover:text-foreground " + (sort.key === column.sort ? "text-foreground" : "")}
+                  className="text-inherit no-underline hover:text-foreground"
                 >
                   {column.label}
-                  <span aria-hidden className="text-[10px] opacity-70">
-                    {sort.key === column.sort ? (sort.dir === "desc" ? "▾" : "▴") : "▿"}
+                  <span aria-hidden className="ml-1 opacity-60">
+                    {sort.key === column.sort ? (sort.dir === "asc" ? "▲" : "▼") : "▾"}
                   </span>
                 </Link>
               )}
@@ -612,29 +775,22 @@ function RunTable({
         </TableRow>
       </TableHeader>
       {window.items.map((group) => {
-        const count = runCountLabel(group, filtering);
-        // A PR with one run gets NO control and NO badge. A chevron that
-        // expands to nothing claims there is more to see, and "1" beside
-        // every single-run row is noise standing in for information.
         const hasHistory = group.children.length > 0;
-        // Each PR group is its own <tbody> — several are valid in one table —
-        // so the :has() disclosure selector never reaches past its own group.
-        // TableBody is NOT used here: it ships `[&_tr:last-child]:border-0`,
-        // which would strip the divider from the last row of every group
-        // rather than from the last row of the table.
+        const count = runCountLabel(group, filtering);
         return (
           <tbody key={group.key} className="pr-group">
             <TableRow className="border-0 hover:bg-[var(--row-hover)]">
               <RunCells
                 run={group.latest}
                 params={params}
+                selected={group.latest.verdict_id === selectedId}
                 receipt={
-                  // `repo` travels in the query string because a PR number
-                  // alone is ambiguous across repositories — the same reason
-                  // the API requires it. Both fields come off the group, so
-                  // the link names the PR the row is actually about.
+                  // The receipt is the PR's evidentiary record and lives on its
+                  // own route — a different destination from this run's
+                  // evidence, which is why it is a second link rather than a
+                  // section of the first one's target.
                   <Link
-                    className="mono ml-auto flex-none text-[11px] text-muted-foreground no-underline underline-offset-[3px] hover:text-[var(--iridescent)] hover:underline"
+                    className="mono ml-auto flex-none text-[10.5px] text-muted-foreground no-underline underline-offset-[3px] hover:text-[var(--iridescent)] hover:underline"
                     aria-label={`Receipt for ${group.repo} #${group.prNumber}`}
                     href={`/dashboard/pr/${group.prNumber}?repo=${encodeURIComponent(group.repo)}`}
                   >receipt</Link>
@@ -642,7 +798,7 @@ function RunTable({
                 disclosure={hasHistory ? (
                   <label
                     title={count.title}
-                    className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="pr-disclosure mono inline-flex cursor-pointer items-center gap-1 rounded-[3px] px-1.5 py-1 text-[10.5px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <input
                       type="checkbox"
@@ -658,7 +814,12 @@ function RunTable({
             </TableRow>
             {group.children.map((child) => (
               <TableRow key={child.verdict_id} className="pr-history border-0 bg-muted/40">
-                <RunCells run={child} params={params} indented />
+                <RunCells
+                  run={child}
+                  params={params}
+                  selected={child.verdict_id === selectedId}
+                  indented
+                />
               </TableRow>
             ))}
           </tbody>
@@ -668,15 +829,121 @@ function RunTable({
   );
 }
 
-function Pager({ window, params }: { window: PageWindow<PrGroup>; params: DashboardParams }) {
+/** Paging is a property of a WINDOW, not of what is in it — the runs ledger and
+ *  the repositories table page identically, so this reads only the paging
+ *  fields and never the items. */
+/** Column widths for the repositories view. Narrower than the ledger's — seven
+ *  columns, none of them holding an arbitrary-length string, so the whole table
+ *  fits the ledger column at every width the dock allows. */
+const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
+  { label: "repository", cls: "" },
+  { label: "runs", cls: "w-[58px] text-right" },
+  { label: "prs", cls: "w-[52px] text-right" },
+  { label: "needs you", cls: "w-[82px] text-right" },
+  { label: "findings", cls: "w-[76px] text-right" },
+  { label: "read", cls: "w-[104px]" },
+  { label: "errors", cls: "w-[62px] text-right" },
+];
+
+/** Every repository the installation covers, against what the ledger says.
+ *
+ *  A zero is a real answer here and is rendered as one: a connected repository
+ *  with no runs in view is the row an operator is looking for, and it must not
+ *  be dimmed into invisibility or sorted away. What IS dimmed is the count
+ *  itself — muted ink on a 0, full ink on a number — so the eye lands on the
+ *  repositories Doug is actually working in without the quiet ones leaving the
+ *  page.
+ *
+ *  No data colour on the read column (a magnitude, on the neutral ramp) and
+ *  none on `runs`/`prs`/`findings` (quantities, not verdicts). `needs you` and
+ *  `errors` take --flag ONLY when non-zero, because there a number IS the
+ *  verdict — it is the count of runs this repository is asking a human for. */
+function RepositoryTable({
+  window,
+  params,
+}: {
+  window: PageWindow<RepoRowView>;
+  params: DashboardParams;
+}) {
+  return (
+    <Table
+      containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
+      className="min-w-[700px] table-fixed border-separate border-spacing-0 text-xs"
+    >
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {REPO_COLUMNS.map((column) => (
+            <TableHead key={column.label} className={`${TH} ${column.cls}`}>{column.label}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <tbody>
+        {window.items.map((row) => (
+          <TableRow key={row.repo} className="border-0 hover:bg-[var(--row-hover)]">
+            <TableCell className={`${TD} min-w-0`}>
+              <div className="flex min-w-0 items-baseline gap-2">
+                {/* The row's action: narrow the ledger to this repository. It
+                    writes `repo`, which is the SERVER's fetch scope — so this
+                    is the one control on the page that changes what comes back
+                    rather than what survives, and it drops the view and the
+                    page with it. */}
+                {/* `min-w-0 truncate` and NOT `flex-1`: the repository column is
+                    the flexible one and runs to ~570px, so a growing link pushed
+                    the marker beside it to the far edge of the cell, half a
+                    screen from the name it describes. Sized to its text, the
+                    marker sits against the name and the slack falls after both. */}
+                <Link
+                  href={href(params, { repo: row.repo, view: null, page: null })}
+                  className="mono min-w-0 truncate text-[12px] text-foreground no-underline hover:text-[var(--iridescent)] hover:underline underline-offset-[3px]"
+                >{row.repo}</Link>
+                {/* Runs exist for a repository the installation no longer
+                    lists. The verdicts are real; the row says why it looks
+                    odd rather than disappearing. Chrome, not a data colour —
+                    this is a fact about the connection, not about a PR. */}
+                {!row.connected && (
+                  <span
+                    title="This repository has runs in the ledger but the installation no longer lists it — renamed, removed, or access revoked."
+                    className="mono flex-none rounded-[3px] border border-border px-1.5 py-px text-[9.5px] uppercase tracking-[.08em] text-muted-foreground"
+                  >not connected</span>
+                )}
+              </div>
+            </TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.runs === 0 ? "text-[var(--dim)]" : "text-foreground")}>{row.runs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.prs === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.prs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.flagged > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.flagged}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.findings === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.findings}</TableCell>
+            <TableCell className={TD}>
+              {/* Chars, on the neutral ramp, and null renders "—". A repository
+                  Doug has never read and one it read nothing of are different
+                  facts, and 0% asserts the second. */}
+              {row.coveragePct === null ? (
+                <span className="mono text-[11px] text-[var(--dim)]">—</span>
+              ) : (
+                <div className="mono flex items-center gap-[6px] text-[11px] text-foreground" title="share of changed characters sent to the reader">
+                  <span className="cov-track block h-1.5 w-[46px]">
+                    <span className="cov-fill block h-full" style={{ width: `${row.coveragePct}%` }} />
+                  </span>
+                  <span>{Math.round(row.coveragePct)}%</span>
+                </div>
+              )}
+            </TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.errored > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.errored}</TableCell>
+          </TableRow>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+function Pager({ window, params }: { window: PageWindow<unknown>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
-    return <p className="mono mt-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">Showing {label}</p>;
+    return <p className="mono mt-2.5 text-[10.5px] uppercase tracking-[.12em] text-[var(--dim)]">Showing {label}</p>;
   }
   const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
   const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
   return (
-    <div className="mono mt-3 flex flex-wrap items-center gap-3 text-[11.5px] uppercase tracking-[.12em] text-muted-foreground">
+    <div className="mono mt-2.5 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
       <span>Showing {label}</span>
       <span className="h-px flex-1 bg-border" />
       {/* At a boundary the control renders as text, not a disabled link: a
@@ -693,106 +960,131 @@ function Pager({ window, params }: { window: PageWindow<PrGroup>; params: Dashbo
   );
 }
 
-function Evidence({ detail, summary }: { detail: RunDetail; summary: RunSummary }) {
+/** One run's record, in the dock.
+ *
+ *  Single column at every width. The two-column spine/blocks split this pane
+ *  used to run belonged to a 1440px canvas; inside a 400px dock a viewport
+ *  breakpoint would have put two columns in a container that never has room for
+ *  them, because `lg:` asks about the window and the dock's width is set by the
+ *  grid. One column is right at 400px and merely generous at 900.
+ *
+ *  The three links in the header are the run's ACTIONS — the PR itself, the
+ *  PR's receipt, and the way back out of the pane. `summary.url` has been on
+ *  every row of the runs response since the endpoint existed and nothing has
+ *  ever rendered it; it is nullable, so the link is a rendered node rather than
+ *  a disabled control, and a run with no recorded URL simply does not offer
+ *  one. */
+function Evidence({
+  detail,
+  summary,
+  params,
+}: {
+  detail: RunDetail;
+  summary: RunSummary;
+  params: DashboardParams;
+}) {
+  const action =
+    "mono rounded-[3px] border border-border px-[7px] py-[3px] text-[10px] uppercase tracking-[.08em] " +
+    "text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-[var(--iridescent)]";
   return (
-    <section className={`${CANVAS} px-5 pt-[18px] pb-12`} aria-labelledby="run-evidence-title">
-      <header className="flex items-end justify-between gap-6 border-t border-border pt-4 pb-[22px] max-[900px]:flex-col max-[900px]:items-start">
-        <div>
-          <p className="mono mb-[7px] text-[11.5px] text-muted-foreground">/runs/{detail.verdict_id} · {detail.repo} · #{detail.pr_number}</p>
-          <h2 id="run-evidence-title" className="font-heading max-w-[980px] text-[clamp(22px,2.2vw,30px)] font-semibold leading-[1.1] tracking-[-.035em]">{summary.title}</h2>
+    <section aria-labelledby="run-evidence-title" className="pb-16">
+      <header className="border-b border-border px-5 pt-5 pb-4">
+        <div className="mono mb-2 flex items-center gap-2 text-[10.5px] text-muted-foreground">
+          <span className={ROUTE}>/runs/{detail.verdict_id}</span>
+          <span className="truncate">{detail.repo} · #{detail.pr_number}</span>
+          <Link href={href(params, { run: null })} className="ml-auto flex-none text-[14px] leading-none text-muted-foreground no-underline hover:text-foreground" aria-label="Close this run">×</Link>
         </div>
-        <div className="mono flex flex-none flex-col items-end max-[900px]:items-start">
-          <strong className={"text-[36px] font-medium " + (detail.band === "flagged" ? "data-flag" : "data-clear")}>
-            {detail.score.toFixed(2)}
-          </strong>
-          <span className="text-[10.5px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
+        <div className="flex items-start justify-between gap-4">
+          <h2 id="run-evidence-title" className="font-heading min-w-0 text-[19px] font-semibold leading-[1.15] tracking-[-.03em]">{summary.title}</h2>
+          <div className="mono flex flex-none flex-col items-end">
+            <strong className={"text-[28px] font-medium leading-none " + (detail.band === "flagged" ? "data-flag" : "data-clear")}>
+              {detail.score.toFixed(2)}
+            </strong>
+            <span className="mt-1 text-[9.5px] text-muted-foreground">{detail.band === "flagged" ? "needs you" : "cleared"} · threshold {detail.threshold.toFixed(2)}</span>
+          </div>
+        </div>
+        <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+          {summary.url && (
+            <a href={summary.url} target="_blank" rel="noreferrer" className={action}>open pull request ↗</a>
+          )}
+          <Link href={`/dashboard/pr/${detail.pr_number}?repo=${encodeURIComponent(detail.repo)}`} className={action}>receipt</Link>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 border-t border-border lg:grid-cols-[230px_minmax(0,1fr)]">
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>What the reader was given <span>reader evidence</span></h3>
+        {detail.coverage ? (
+          // The ruler renders the run's own file list, so it needs the PR's
+          // dropped files as well as its coverage — two separate holes in the
+          // same read.
+          <CoverageRuler
+            coverage={detail.coverage}
+            changedFiles={summary.changed_files}
+            filesDropped={detail.pr?.files_dropped ?? []}
+          />
+        ) : <p className={EMPTY_NOTE}>No reader coverage was recorded for this run.</p>}
+      </div>
+
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>What Doug did <span>review job</span></h3>
         <RunSpine run={detail} />
+      </div>
 
-        <div className="min-w-0 lg:pl-6">
-          <section className={BLOCK}>
-            <h3 className={BLOCK_HEADING}>What the reader was given <span>reader evidence</span></h3>
-            {detail.coverage ? (
-              // changed_files comes off the summary row, the same denominator
-              // the read column above used for this run — one number, so the
-              // table and the pane can never print two different rates for it.
-              <CoverageRuler
-                coverage={detail.coverage}
-                changedFiles={summary.changed_files}
-                filesDropped={detail.pr?.files_dropped ?? []}
-              />
-            ) : <p className={EMPTY_NOTE}>No reader coverage was recorded for this run.</p>}
-          </section>
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>The read</h3>
+        <dl className="mono grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[11px]">
+          <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.tier}</dd>
+          <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
+          <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
+          <dt className="uppercase text-muted-foreground">risk score</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.risk_score ?? "not recorded"}</dd>
+          <dt className="uppercase text-muted-foreground">head sha</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.head_sha ?? "not recorded"}</dd>
+          <dt className="uppercase text-muted-foreground">rationale</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.rationale ?? "No rationale was recorded."}</dd>
+        </dl>
+      </div>
 
-          <section className={BLOCK}>
-            <h3 className={BLOCK_HEADING}>The read</h3>
-            <dl className="mono grid grid-cols-[130px_1fr] gap-x-[18px] gap-y-2 text-[12px]">
-              <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 whitespace-pre-wrap">{detail.tier}</dd>
-              <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
-              <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
-              <dt className="uppercase text-muted-foreground">risk score</dt><dd className="m-0 whitespace-pre-wrap">{detail.risk_score ?? "not recorded"}</dd>
-              <dt className="uppercase text-muted-foreground">head sha</dt><dd className="m-0 whitespace-pre-wrap">{detail.head_sha ?? "not recorded"}</dd>
-              <dt className="uppercase text-muted-foreground">rationale</dt><dd className="m-0 whitespace-pre-wrap">{detail.rationale ?? "No rationale was recorded."}</dd>
-            </dl>
-          </section>
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>Findings <span>{detail.reasons.length}</span></h3>
+        {detail.reasons.map((reason) => (
+          <div className={FINDING} key={`${reason.rule}-${reason.label}`}>
+            <span className="mono data-flag text-[10px] uppercase">{reason.severity ?? "rule"}</span>
+            <div><code className="mono text-[11px] break-words">{reason.rule}</code><p className="mt-[3px] text-[12.5px] text-muted-foreground">{reason.label}</p></div>
+          </div>
+        ))}
+        {detail.reasons.length === 0 && <p className={EMPTY_NOTE}>No findings recorded.</p>}
+      </div>
 
-          <section className={BLOCK}>
-            <h3 className={BLOCK_HEADING}>Findings <span>{detail.reasons.length}</span></h3>
-            {detail.reasons.map((reason) => (
-              <div className={FINDING} key={`${reason.rule}-${reason.label}`}>
-                <span className="mono data-flag text-[10.5px] uppercase">{reason.severity ?? "rule"}</span>
-                <div><code className="mono text-[11.5px]">{reason.rule}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{reason.label}</p></div>
-              </div>
-            ))}
-            {detail.reasons.length === 0 && <p className={EMPTY_NOTE}>No findings recorded.</p>}
-          </section>
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>Deviations <span>separate stream</span></h3>
+        {detail.deviations.map((deviation) => (
+          <div className={FINDING} key={`${deviation.type}-${deviation.description}`}>
+            <span className="mono data-flag text-[10px] uppercase">{deviation.severity}</span>
+            <div><code className="mono text-[11px] break-words">{deviation.type}</code><p className="mt-[3px] text-[12.5px] text-muted-foreground">{deviation.description}</p></div>
+          </div>
+        ))}
+        {detail.deviations.length === 0 && <p className={EMPTY_NOTE}>No deviations recorded.</p>}
+      </div>
 
-          <section className={BLOCK}>
-            <h3 className={BLOCK_HEADING}>Deviations <span>separate stream</span></h3>
-            {detail.deviations.map((deviation) => (
-              <div className={FINDING} key={`${deviation.type}-${deviation.description}`}>
-                <span className="mono data-flag text-[10.5px] uppercase">{deviation.severity}</span>
-                <div><code className="mono text-[11.5px]">{deviation.type}</code><p className="mt-[3px] text-[13px] text-muted-foreground">{deviation.description}</p></div>
-              </div>
-            ))}
-            {detail.deviations.length === 0 && <p className={EMPTY_NOTE}>No deviations recorded.</p>}
-          </section>
-
-          <section className={BLOCK}>
-            <h3 className={BLOCK_HEADING}>Outcome</h3>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2.5">
-              {detail.outcomes.map((outcome) => (
-                <div key={`${outcome.window_days}-${outcome.observed_at}`} className="flex flex-col border border-border bg-card p-3">
-                  <span className="mono text-[10.5px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
-                  {/* Tone and word both come from the shared rule, so this tile
-                      and the outcome column above cannot describe the same row
-                      differently — and neither can the console, which renders
-                      through the very same two functions. */}
-                  <strong className={"mono my-1 text-[16px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
-                  <small className="mono text-[10.5px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
-                </div>
-              ))}
-              {detail.outcomes.length === 0 && <p className={EMPTY_NOTE}>No outcome recorded yet.</p>}
+      <div className={BLOCK}>
+        <h3 className={BLOCK_HEADING}>Outcome</h3>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+          {detail.outcomes.map((outcome) => (
+            <div key={`${outcome.window_days}-${outcome.observed_at}`} className="flex flex-col rounded-[4px] border border-border bg-card p-2.5">
+              <span className="mono text-[10px] text-muted-foreground">{outcome.window_days ?? "?"}-day window</span>
+              {/* Tone and word both come from the shared rule, so this tile
+                  and the outcome column above cannot describe the same row
+                  differently — and neither can the console, which renders
+                  through the very same two functions. */}
+              <strong className={"mono my-1 text-[15px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
+              <small className="mono text-[10px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
             </div>
-          </section>
+          ))}
+          {detail.outcomes.length === 0 && <p className={EMPTY_NOTE}>No outcome recorded yet.</p>}
         </div>
       </div>
     </section>
   );
 }
 
-/** The state that used to be silence. The API can still see these connections;
- *  what expired is the repository scope derived from GitHub at sign-in, which
- *  `entitlements.TTL` caps at 8h. Showing the connection and naming what went
- *  stale is the whole point — the alternative, shipped until now, was to drop
- *  these rows and greet a bound operator as though they had never connected.
- *
- *  No repository names are listed, and that is not an oversight: the API sends
- *  none for an expired connection, because the 8h ceiling exists precisely so a
- *  scope nobody has re-proven stops being repeated back. */
 function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) {
   return (
     <main className={EMPTY_PAGE}>
@@ -880,12 +1172,30 @@ export default async function DashboardPage({
   let atCap = false;
   let facets: Facet[] = [];
   let groups: PrGroup[] = [];
+  /** The flat rows the table is rendering, before they are grouped by PR. The
+   *  census panel and the rail readout both count THIS array — not `fetched`,
+   *  and not the page slice. Not `fetched`, because a reader who has narrowed
+   *  to one repository is asking about that repository; not the page slice,
+   *  because page 2 of the same filter is the same question with a different
+   *  fifty rows in front of it. `censusScope` names whichever set this is. */
+  let visible: RunSummary[] = [];
+  /** Every repository the installation covers, joined to what the fetched
+   *  ledger says about each. Built even in the runs view — it is a `map` over
+   *  data already in memory, and computing it in one place keeps the two views
+   *  reading one join rather than two. */
+  let repoRows: RepoRowView[] = [];
   let shown = 0;
   let reband = 0;
   let selectedSummary: RunSummary | null = null;
   let detail: RunDetail | null = null;
 
   const filters = dashboardFilters(params);
+  /** Which of the two ledger views is open. A query param rather than a route:
+   *  both views read the SAME fetch, the same filters and the same lens, and a
+   *  second route would either duplicate this page's shell or need a layout
+   *  that cannot see the page's own rows to fill the rail's readout. Unknown
+   *  values fall back to runs — `?view=nonsense` must not blank the page. */
+  const view = value(params, "view") === "repositories" ? "repositories" : "runs";
   const query = normalizeQuery(value(params, "q"));
   const sort = parseSort(value(params, "sort") ?? null);
   const lens = parseThresholdLens(value(params, "threshold"));
@@ -900,156 +1210,307 @@ export default async function DashboardPage({
     fetched = response.items;
     limit = response.limit;
     atCap = isAtCap(fetched.length, limit);
-    // THE LENS IS APPLIED HERE, at the boundary, and everything below reads the
-    // rewritten rows. That is what makes the pills, their counts, the chips and
-    // the count line agree: there is no state where the "needs you" pill says
-    // 12 and the table shows a different 12. See lib/threshold-lens.ts for why
-    // this is a rewrite rather than a parameter (five byte-locked modules).
+    // The lens re-bands a COPY. Everything downstream of this line — the pill
+    // counts, the table, the census — reads the lensed rows, so the whole view
+    // agrees about every row's band; the selected run is deliberately resolved
+    // from `fetched` below, so the evidence pane still shows the recorded
+    // verdict rather than the one being looked through.
     const lensed = applyLens(fetched, lens);
     reband = rebandedCount(fetched, lensed);
-    // Facets are built from `lensed` — the FULL set, post-lens but still
-    // unfiltered — so a pill's count does not change as other pills are
-    // pressed. Recomputing them against the filtered set would zero out every
-    // unselected option the moment one selection excluded it, which reads as
-    // "no such runs exist" rather than "you have filtered them out".
-    // Built from that same set, then merged with any selection the data does
-    // not carry — a stale `?band=foo` is a real constraint and has to be
-    // visible and clickable, not just true (Doug PR 102,
-    // reader:query-param-contract-change).
     facets = withSelectedOptions(buildFacets(lensed), filters.facets);
-    groups = sortGroups(
-      groupRunsByPr(filterRunsByQuery(filterRuns(lensed, filters), query), atCap),
-      sort,
-    );
+    visible = filterRunsByQuery(filterRuns(lensed, filters), query);
+    groups = sortGroups(groupRunsByPr(visible, atCap), sort);
     shown = groups.reduce((total, group) => total + group.runCount, 0);
-    // Resolved from `fetched`, NOT `lensed`. The evidence pane is a record of
-    // what Doug did, and `detail.threshold` is the line it actually scored
-    // against; feeding it a re-banded summary would destroy the one place on
-    // the page where the real verdict can still be read.
+    // The connection's list is authoritative about what Doug COULD review; the
+    // rollup is only ever about the runs that came back. `repositoryTable`
+    // keeps both sides, which is what lets this screen show a connected repo
+    // with no runs at all.
+    repoRows = repositoryTable(
+      door.current.repositories.map((repository) => repository.full_name),
+      repoRollup(visible),
+    );
+    // Resolved from the UNLENSED set: the evidence pane is a record of one run
+    // and `detail.threshold` is the line Doug actually scored it against.
     const selectedId = Number(value(params, "run"));
     selectedSummary = Number.isInteger(selectedId)
       ? fetched.find((run) => run.verdict_id === selectedId) ?? null
       : null;
     if (selectedSummary) detail = await getSessionRun(accessToken, selectedSummary.verdict_id);
   }
-  const pageWindow = pageSlice(groups, parsePage(value(params, "page")));
+  // One page number, two windows — only one is ever rendered. `pageSlice`
+   // clamps out of range, so landing on page 7 of the runs view and switching
+   // to a two-page repositories list shows page 2 rather than nothing; the nav
+   // links drop `page` anyway, because a page number does not survive a change
+   // of what is being paged.
+  const pageNumber = parsePage(value(params, "page"));
+  const pageWindow = pageSlice(groups, pageNumber);
+  const repoWindow = pageSlice(repoRows, pageNumber);
+  const scope = censusScope({ shown, fetched: fetched.length, limit, atCap, filtering });
 
   return (
     <div className="dashboard-surface">
-      <header className={`${CANVAS} sticky top-0 z-20 flex min-h-[52px] items-center gap-[18px] border-b border-border bg-background/[.88] px-5 py-2 backdrop-blur-[10px] max-[900px]:static max-[900px]:flex-wrap max-[900px]:items-start`}>
-        <Link href="/" className="font-heading flex items-center gap-2 text-base font-bold text-inherit no-underline">
-          <DougLogo size={20} /> doug <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">dashboard</span>
-        </Link>
-        <ScopePicker connections={connections} current={current} />
-        {current && <form method="GET" className="flex items-center gap-1.5">
-          <label className={SWITCH_CONTROL}>
-            <span className={SWITCH_LABEL}>repo</span>
-            <select name="repo" defaultValue={filters.repo} aria-label="Repository" className={SWITCH_SELECT}>
-              {repositoryOptions(current).map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" className={SUBMIT_BUTTON}>filter</button>
-        </form>}
-        <Link href="/install/start" prefetch={false} className={CONNECT_LINK}>Connect repositories</Link>
-        <div className="mono ml-auto flex items-center gap-2.5 text-[11.5px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
-          <span>{user.email}</span>
-          <form action={signOutAction}><button type="submit" className="cursor-pointer border-0 bg-transparent text-inherit underline">sign out</button></form>
-        </div>
-      </header>
-      <nav className={`${CANVAS} flex gap-0.5 border-b border-border bg-background px-5`} aria-label="Dashboard sections">
-        <Link href="/dashboard" aria-current="page" className={TAB}>Runs</Link>
-        <span className={TAB}>Repositories <small className="text-[8px]">later</small></span>
-        <span className={TAB}>Evidence <small className="text-[8px]">later</small></span>
-      </nav>
-      <PendingConnections connections={connections} />
+      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[212px_minmax(0,1fr)]">
+        {/* THE RAIL. Scope lives here and filters do not: what this column
+            holds — which space, which repository — decides what the server
+            fetches, and everything over the ledger narrows what came back.
+            Separating them by a border rather than by wording is what stops a
+            pill being read as a change of scope.
 
-      {/* Four states, not three (#99). `frontDoor` owns the precedence and the
-          selectability of an expired connection; this only dispatches. */}
-      {door.state === "welcome" ? <NoConnection userLabel={userLabel} scopeUnconfirmed={scopeUnconfirmed} />
-        : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
-        : door.state === "choose" ? (
-        <main className={EMPTY_PAGE}>
-          <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
-          <h1 className={EMPTY_HEADING}>Choose a connected space.</h1>
-          <p className={EMPTY_BODY}>Each space stays separate. Runs from one installation never join another.</p>
-          <div className="mt-7"><ScopePicker connections={connections} current={null} /></div>
-        </main>
-      ) : (
-        <main>
-          <div className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[11px] uppercase tracking-[.15em] text-muted-foreground`}>
-            {/* `door.current`, not the hoisted `current`: only the discriminated
-                union narrows away null on this arm, which is the reason #99
-                gave one member per state instead of Exclude<> on a shared one.
-                The hoisted binding is widened and would need an assertion. */}
-            <span className={ROUTE}>/runs</span> Verdict history for {connectionLabel(door.current)}
-            <span className="h-px flex-1 bg-border" />
+            Sticky and viewport-tall from `lg` up, a plain block below it, so
+            on a narrow screen the whole page is one document again. */}
+        {/* Below `lg` the rail is not a rail. Stacked as a column it filled an
+            entire 800px-tall screen with chrome and pushed the ledger under the
+            fold — so under 1024 it lays itself out as one wrapping horizontal
+            bar, which is the header this page had before the redesign. The
+            in-view readout is the one thing dropped rather than reflowed: it is
+            a convenience duplicate of numbers the census panel states in full,
+            and at this width the census panel is directly below the table. */}
+        <aside
+          aria-label="Dashboard navigation"
+          className="flex flex-col border-b border-border bg-card max-lg:flex-row max-lg:flex-wrap max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-2 max-lg:px-4 max-lg:py-2.5 lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-y-auto lg:border-r lg:border-b-0"
+        >
+          <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
+            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
+              <DougLogo size={19} /> doug
+              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">dashboard</span>
+            </Link>
           </div>
-          <section className={`${CANVAS} px-5 pb-6`}>
-            {lens !== null && <LensBanner lens={lens} reband={reband} atCap={atCap} limit={limit} params={params} />}
-            <FacetBar
-              facets={facets}
-              selection={filters.facets}
-              // The pill counts were computed over `lensed` (post-lens, still
-              // unfiltered), so their denominator must match its length —
-              // which is `fetched.length`: applyLens is a `map`, so
-              // `lensed.length === fetched.length` always, lens or no lens.
-              // Passing the filtered count here would pair an unfiltered
-              // numerator with a filtered denominator, and could print a count
-              // larger than the total beside it.
-              totalFetched={fetched.length}
-              atCap={atCap}
-              params={params}
-            />
-            <div className="flex flex-wrap items-center gap-[7px] py-3">
-              {/* The dashboard's own two predicates. Not pills in the bar
-                  above: neither is a value a run carries on some dimension, so
-                  neither has a partition to count over. */}
-              <FilterChip active={filters.lowCoverage} target={href(params, predicateChanges("coverage", filters.lowCoverage ? null : "low"))}>coverage &lt; 50%</FilterChip>
-              <FilterChip active={filters.hasError} target={href(params, predicateChanges("error", filters.hasError ? null : "yes"))}>has error</FilterChip>
-              <form method="GET" action="/dashboard" className="flex items-center gap-1.5">
-                {/* A GET form submits ONLY its own controls, so without these
-                    the search box would silently clear every pill set above
-                    it. `run` is deliberately not carried: a search can exclude
-                    the very run whose evidence pane is open. */}
-                {carriedParams(params, ["q", "page"]).map(([key, item]) => (
-                  <input key={key} type="hidden" name={key} value={item} />
-                ))}
-                <label className="sr-only" htmlFor="runs-search">Search runs</label>
-                <input
-                  id="runs-search"
-                  type="search"
-                  name="q"
-                  defaultValue={query}
-                  placeholder="Search repo, PR, title…"
-                  className="mono h-[30px] w-[220px] rounded-[5px] border border-border bg-card px-2 text-[12.5px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+
+          <div className="flex flex-col gap-2 border-b border-border px-4 py-3.5 max-lg:flex-row max-lg:items-start max-lg:border-0 max-lg:p-0">
+            <ScopePicker connections={connections} current={current} />
+            {/* Stacked, not side by side: a 212px rail minus a submit button
+                leaves ~115px of select, and "all repositories" — the DEFAULT
+                value — truncates inside it. A scope control whose current value
+                cannot be read is one you have to open to learn the state of. */}
+            {current && <form method="GET" className="flex flex-col gap-1.5 max-lg:w-[210px]">
+              <label className={SWITCH_CONTROL}>
+                <span className={SWITCH_LABEL}>repo</span>
+                <select name="repo" defaultValue={filters.repo} aria-label="Repository" className={SWITCH_SELECT}>
+                  {repositoryOptions(current).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className={`${SUBMIT_BUTTON} w-full`}>filter</button>
+            </form>}
+          </div>
+
+          <nav className="flex flex-col border-b border-border py-1.5 max-lg:flex-row max-lg:border-0 max-lg:py-0" aria-label="Dashboard sections">
+            {/* Both entries carry the current filters across, and both drop
+                `page`: a page number is a position in one list and means
+                nothing in the other. */}
+            <Link
+              href={href(params, { view: null, page: null })}
+              aria-current={view === "runs" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Runs</Link>
+            <Link
+              href={href(params, { view: "repositories", page: null })}
+              aria-current={view === "repositories" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Repositories</Link>
+            {/* Still not built, and still said so. A nav entry that navigates
+                nowhere is a lie about the product; one that names itself as
+                unbuilt is a roadmap. */}
+            <span className={RAIL_ITEM}>Evidence <small className="ml-auto text-[8px] tracking-normal normal-case">later</small></span>
+            {/* Docs is a REAL destination and the only entry here that leaves
+                the dashboard, so it sits below a rule rather than in the run of
+                sections — and it takes no `aria-current`, because no /dashboard
+                URL is ever the docs page. Grouping it with the two unbuilt
+                placeholders would read as a fourth thing that might also be a
+                promise; it is the one link on this list that works today. */}
+            <Link href="/docs" className={`${RAIL_ITEM} mt-1.5 border-t border-t-border pt-[9px] max-lg:mt-0 max-lg:border-t-0 max-lg:pt-[7px]`}>Docs</Link>
+          </nav>
+
+          {door.state === "runs" && <div className="border-b border-border max-lg:hidden"><RailReadout runs={visible} scope={scope} /></div>}
+
+          {/* THE SETTINGS MENU is a <details>, not a popover.
+              /dashboard is a server component and must stay one (RULING 2), and
+              the two things behind this gear are the two that most need to work
+              on an unhydrated page: signing out, and connecting a repository.
+              The threshold gear can afford to be a Radix client leaf because a
+              view control that does not load costs you a view; a sign-out that
+              does not load strands you signed in. <details> is HTML, so the
+              menu works before hydration, after a bundle throws, and with
+              scripting off entirely.
+
+              It opens UPWARD on the rail (it sits at the bottom of a full-height
+              column) and downward in the narrow horizontal bar, where there is
+              nothing above it. Clicking away does not close it — the honest cost
+              of not reaching for JavaScript, and the gear toggles it back. */}
+          {/* `relative` is on the ROW, not on the <details>. The rail is an
+              overflow:auto container, so a panel that spills past it is clipped
+              rather than shown — and anchored to the gear (a ~25px box at the
+              right edge) a 196px panel hung 1px off the rail's left edge. Against
+              the row's padding box, `inset-x-4` makes the panel exactly the
+              rail's content width whatever that width becomes. */}
+          <div className="mono relative mt-auto flex items-center gap-2 border-t border-border px-4 py-3 text-[10.5px] text-muted-foreground max-lg:mt-0 max-lg:border-0 max-lg:p-0">
+            <span className="min-w-0 flex-1 truncate" title={user.email}>{user.email}</span>
+            <details className="flex-none">
+              <summary
+                aria-label="Settings"
+                className="flex cursor-pointer list-none items-center rounded-[4px] border border-transparent p-1 text-muted-foreground hover:border-border hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)] [&::-webkit-details-marker]:hidden"
+              >
+                {/* The same cog the threshold gear draws, at the same weight —
+                    two gears on one screen that were drawn differently would
+                    read as two different kinds of control. */}
+                <svg viewBox="0 0 16 16" aria-hidden className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <circle cx="8" cy="8" r="2.1" />
+                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" strokeLinecap="round" />
+                </svg>
+              </summary>
+              <div className="absolute inset-x-4 bottom-[calc(100%+6px)] z-30 rounded-[5px] border border-border bg-card p-1 shadow-[0_10px_28px_-10px_rgba(0,0,0,.22)] max-lg:inset-x-auto max-lg:right-0 max-lg:top-[calc(100%+6px)] max-lg:bottom-auto max-lg:w-[196px]">
+                <Link href="/install/start" prefetch={false} className={MENU_ITEM}>Connect repositories</Link>
+                <form action={signOutAction}><button type="submit" className={MENU_ITEM}>Sign out</button></form>
+              </div>
+            </details>
+          </div>
+        </aside>
+
+        <div className="min-w-0">
+          <PendingConnections connections={connections} />
+
+          {/* Four states, not three (#99). `frontDoor` owns the precedence and
+              the selectability of an expired connection; this only dispatches. */}
+          {door.state === "welcome" ? <NoConnection userLabel={userLabel} scopeUnconfirmed={scopeUnconfirmed} />
+            : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
+            : door.state === "choose" ? (
+            <main className={`${CANVAS} ${EMPTY_PAGE}`}>
+              <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
+              <h1 className={EMPTY_HEADING}>Choose a connected space.</h1>
+              <p className={EMPTY_BODY}>Each space stays separate. Runs from one installation never join another.</p>
+              <div className="mt-7 max-w-[320px]"><ScopePicker connections={connections} current={null} /></div>
+            </main>
+          ) : (
+            <main className="grid min-[1620px]:grid-cols-[minmax(0,1fr)_400px] min-[1800px]:grid-cols-[minmax(0,1fr)_480px]">
+              {/* THE LEDGER. Viewport-tall from 1620px up, so the table's own
+                  scroll is the only one on this column and the dock beside it
+                  never moves. */}
+              <section className="flex min-w-0 flex-col px-5 pt-4 pb-5 min-[1620px]:h-screen">
+                <div className="mono mb-2.5 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
+                  {/* `door.current`, not the hoisted `current`: only the
+                      discriminated union narrows away null on this arm, which is
+                      the reason #99 gave one member per state instead of
+                      Exclude<> on a shared one. The hoisted binding is widened
+                      and would need an assertion. */}
+                  <span className={ROUTE}>{view === "repositories" ? "/repositories" : "/runs"}</span>
+                  <span className="truncate">{connectionLabel(door.current)}</span>
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="mono flex-none normal-case tracking-normal text-muted-foreground">
+                    {view === "repositories" ? (
+                      // TWO SOURCES, SAID OUT LOUD. The repository count is
+                      // authoritative — it is the installation's own list. Every
+                      // other number on the row beside it is counted over the
+                      // runs that came back, which at the cap is a window and not
+                      // the scope. One line cannot be allowed to lend the first
+                      // number's completeness to the rest.
+                      <RepoCountLine
+                        repos={repoRows.length}
+                        connected={door.current.repositories.length}
+                        shown={shown}
+                        total={fetched.length}
+                        limit={limit}
+                        atCap={atCap}
+                        filtering={filtering}
+                      />
+                    ) : (
+                      <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
+                    )}
+                  </span>
+                </div>
+
+                {lens !== null && <LensBanner lens={lens} reband={reband} atCap={atCap} limit={limit} params={params} />}
+                <FacetBar
+                  facets={facets}
+                  selection={filters.facets}
+                  // The pill counts were computed over `lensed` (post-lens,
+                  // still unfiltered), so their denominator must match its
+                  // length — which is `fetched.length`: applyLens is a `map`,
+                  // so `lensed.length === fetched.length` always, lens or no
+                  // lens. Passing the filtered count here would pair an
+                  // unfiltered numerator with a filtered denominator, and could
+                  // print a count larger than the total beside it.
+                  totalFetched={fetched.length}
+                  atCap={atCap}
+                  params={params}
                 />
-                <button type="submit" className={SUBMIT_BUTTON}>search</button>
-              </form>
-              <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
-              <span className="mono ml-auto text-[12px] text-muted-foreground max-[900px]:ml-0 max-[900px]:mt-1 max-[900px]:w-full">
-                <CountLine shown={shown} total={fetched.length} groups={groups.length} limit={limit} atCap={atCap} filtering={filtering} />
-              </span>
-            </div>
-            {groups.length === 0 ? (
-              // An empty result under a filter and an empty ledger are
-              // different facts, and neither is a blank table under a header.
-              <p className="mono border-b border-border px-2.5 py-9 text-center text-[13px] text-muted-foreground">
-                {filtering
-                  ? "No run matches this filter. The runs are there — the filter excludes them."
-                  : "No runs in this space yet."}
-              </p>
-            ) : (
-              <>
-                <RunTable window={pageWindow} params={params} sort={sort} filtering={filtering} />
-                <Pager window={pageWindow} params={params} />
-              </>
-            )}
-          </section>
-          {detail && selectedSummary && <Evidence detail={detail} summary={selectedSummary} />}
-        </main>
-      )}
+                <div className="flex flex-wrap items-center gap-[7px] py-2.5">
+                  {/* The dashboard's own two predicates. Not pills in the bar
+                      above: neither is a value a run carries on some dimension,
+                      so neither has a partition to count over. */}
+                  <FilterChip active={filters.lowCoverage} target={href(params, predicateChanges("coverage", filters.lowCoverage ? null : "low"))}>coverage &lt; 50%</FilterChip>
+                  <FilterChip active={filters.hasError} target={href(params, predicateChanges("error", filters.hasError ? null : "yes"))}>has error</FilterChip>
+                  <form method="GET" action="/dashboard" className="flex items-center gap-1.5">
+                    {/* A GET form submits ONLY its own controls, so without
+                        these the search box would silently clear every pill set
+                        above it. `run` is deliberately not carried: a search can
+                        exclude the very run whose evidence pane is open. */}
+                    {carriedParams(params, ["q", "page"]).map(([key, item]) => (
+                      <input key={key} type="hidden" name={key} value={item} />
+                    ))}
+                    <label className="sr-only" htmlFor="runs-search">Search runs</label>
+                    <input
+                      id="runs-search"
+                      type="search"
+                      name="q"
+                      defaultValue={query}
+                      placeholder="Search repo, PR, title…"
+                      className="mono h-[28px] w-[200px] rounded-[5px] border border-border bg-card px-2 text-[12px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                    />
+                    <button type="submit" className={SUBMIT_BUTTON}>search</button>
+                  </form>
+                  <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
+                </div>
+                {view === "repositories" ? (
+                  repoRows.length === 0 ? (
+                    // Reachable only when the installation lists no repositories
+                    // AND the ledger holds none either — a bound install that
+                    // covers nothing. Not the same as "no runs yet", which is a
+                    // repository list with an empty ledger and still has rows.
+                    <p className="mono rounded-[5px] border border-border px-2.5 py-9 text-center text-[12.5px] text-muted-foreground">
+                      This space has no repositories. Connect one to give Doug something to review.
+                    </p>
+                  ) : (
+                    <>
+                      <RepositoryTable window={repoWindow} params={params} />
+                      <Pager window={repoWindow} params={params} />
+                    </>
+                  )
+                ) : groups.length === 0 ? (
+                  // An empty result under a filter and an empty ledger are
+                  // different facts, and neither is a blank table under a header.
+                  <p className="mono rounded-[5px] border border-border px-2.5 py-9 text-center text-[12.5px] text-muted-foreground">
+                    {filtering
+                      ? "No run matches this filter. The runs are there — the filter excludes them."
+                      : "No runs in this space yet."}
+                  </p>
+                ) : (
+                  <>
+                    <RunTable
+                      window={pageWindow}
+                      params={params}
+                      sort={sort}
+                      filtering={filtering}
+                      selectedId={selectedSummary?.verdict_id ?? null}
+                    />
+                    <Pager window={pageWindow} params={params} />
+                  </>
+                )}
+              </section>
+
+              {/* THE DOCK. A run's record when one is open, and what the rows
+                  in view add up to when none is — never blank. Its own scroll
+                  container from 1620px up, so reading evidence never moves the
+                  ledger and paging the ledger never moves the evidence. */}
+              <aside className="border-border bg-card max-[1619px]:border-t min-[1620px]:sticky min-[1620px]:top-0 min-[1620px]:h-screen min-[1620px]:self-start min-[1620px]:overflow-y-auto min-[1620px]:border-l">
+                {detail && selectedSummary
+                  ? <Evidence detail={detail} summary={selectedSummary} params={params} />
+                  : <CensusPanel runs={visible} scope={scope} />}
+              </aside>
+            </main>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
