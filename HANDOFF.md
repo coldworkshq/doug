@@ -8,10 +8,10 @@ State:    building — design-lock.md AND build-plan.md both LOCKED
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     Plan Task 2 — extract the byte-slice+sha256 receipt helper from
-          example_pack_verifiers.py:133-172 to take BYTES not a Path (settle/
-          review get content from the GitHub contents API, not a worktree).
-          Spec + plan are written; Task 1 is DONE and verified.
+Next:     Task 3 — the separate frozen verify prompt (VERIFY_SYSTEM /
+          VERIFY_SCHEMA) alongside DECISION_INTENT_SYSTEM at reader.py:135-138.
+          `predicate` enum with exactly one member, constant_value_is; NO
+          `refuted` field; additionalProperties: False. Tasks 1-2 DONE.
           ONE BLOCKER, Andrew's hands, gates MERGE not work: P0.1 — publish
           the LOCKED v9 pre-registration + deploy its hash. Zero code, zero
           rows; the one artifact whose value decreases with calendar time.
@@ -65,7 +65,7 @@ Decisions this session:
   the words leaves a false completeness claim looking rigorous — rejected:
   round 1's either/or framing.
 
-Task 1 DONE (verified 2026-08-18, uncommitted):
+Tasks 1-2 DONE (verified 2026-08-18; Task 1 committed afcb77c):
 - reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
   = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
   PROMPT_HASH untouched (8bd26c67...), freeze tests green.
@@ -74,7 +74,16 @@ Task 1 DONE (verified 2026-08-18, uncommitted):
 - api: 1405/1405 passed (was 1402), ruff clean.
 - Mutation-checked BOTH new store tests: flipping the default to
   "head-cited" kills one; adding exclude=True to citations kills the other.
-  They can fail.
+- Task 2: reader.cite() — pure, returns Citation|None, NEVER raises (a bad
+  line number must be a no-op leaving the finding ungrounded, not a failed
+  review). Deliberately NOT shared with example_pack_verifiers.
+  _accepted_contract_receipt: that one resolves a Path under a repo root and
+  its ref-less locator is an Example Pack contract.
+- Task 2 tests: the load-bearing one re-derives the same bytes via
+  `git show <sha>:<path> | sed -n 'a,bp'` and compares hashes — a different
+  tool, no shared code. Confirmed it RUNS (not skipped). Mutation-checked:
+  exclusive-end and splitlines()-without-keepends each kill both tests.
+- api: 1408/1408 passed, ruff clean across the whole package.
 
 Pointers: docs/design/competitor-imports/ (six artifacts) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·

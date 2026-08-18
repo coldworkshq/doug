@@ -1,5 +1,8 @@
+import hashlib
 import json
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1084,3 +1087,86 @@ def test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes(monkeypatch):
 
     monkeypatch.setattr(reader, "SYSTEM", reader.SYSTEM + " ")
     assert reader._compute_prompt_hash() != reader.PROMPT_HASH
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git_show(ref_path: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "show", ref_path],
+            cwd=_REPO_ROOT, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout.decode("utf-8")
+
+
+def test_a_citation_is_re_derivable_by_a_third_party_with_git_and_sed():
+    """The receipt has to survive leaving this process, or it establishes nothing.
+
+    D6 says a citation is `path@sha#Lstart-Lend` + sha256 so someone else can get
+    the same bytes. That claim is only worth anything if a DIFFERENT tool reaches
+    the same hash — so this fetches the blob with git, cites a range from it, then
+    re-derives the same range with sed and compares. If cite() ever drifts in how
+    it slices (0-based, exclusive end, stripped newlines), the two disagree and
+    this fails, which is the whole point.
+
+    A locator without the ref is what makes this impossible, which is why
+    Citation carries head_sha: `git show <path>` alone has nothing to resolve.
+    """
+    rel = "api/doug/models.py"
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True
+    )
+    if sha.returncode != 0:
+        pytest.skip("not a git checkout")
+    head_sha = sha.stdout.decode().strip()
+
+    text = _git_show(f"{head_sha}:{rel}")
+    if text is None:
+        pytest.skip(f"{rel} is not committed at HEAD")
+
+    c = reader.cite(path=rel, head_sha=head_sha, text=text, line_start=10, line_end=14)
+    assert c is not None
+    assert c.locator() == f"{rel}@{head_sha}#L10-L14"
+
+    # The third party's route: same blob, different tool, no shared code.
+    piped = subprocess.run(
+        f"git show {head_sha}:{rel} | sed -n '10,14p'",
+        cwd=_REPO_ROOT, shell=True, capture_output=True, check=True,
+    ).stdout
+    assert c.sha256 == hashlib.sha256(piped).hexdigest()
+
+
+def test_an_off_by_one_range_does_not_hash_the_same():
+    """A receipt that survives the wrong range is not a receipt.
+
+    This is the property that makes a fabricated or mis-aimed citation a no-op
+    instead of a false ground: the honor check compares hashes, so it can only
+    pass for the exact bytes claimed.
+    """
+    text = "alpha\nbravo\ncharlie\ndelta\n"
+    right = reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=2, line_end=3)
+    wide = reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=2, line_end=4)
+    shifted = reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=1, line_end=2)
+    assert right is not None and wide is not None and shifted is not None
+    assert right.sha256 != wide.sha256
+    assert right.sha256 != shifted.sha256
+    assert right.sha256 == hashlib.sha256(b"bravo\ncharlie\n").hexdigest()
+
+
+def test_an_impossible_range_leaves_the_finding_ungrounded():
+    """A bad line number must be a no-op, never an exception.
+
+    design-lock L1: the model picks where to look and code checks the pick.
+    Raising here would turn a hallucinated line number into a failed review
+    instead of an ungrounded finding, which inverts the safety property — the
+    finding still ships, it just carries no citation.
+    """
+    text = "alpha\nbravo\n"
+    assert reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=0, line_end=1) is None
+    assert reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=2, line_end=1) is None
+    assert reader.cite(path="f.py", head_sha="a" * 40, text=text, line_start=1, line_end=99) is None
+    assert reader.cite(path="f.py", head_sha="a" * 40, text="", line_start=1, line_end=1) is None

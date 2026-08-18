@@ -37,6 +37,7 @@ from .example_pack import (
     NameVersionV0,
     UsageV0,
     canonical_json_bytes,
+    sha256_hex,
 )
 from .models import Band, Reason, Verdict
 
@@ -348,6 +349,42 @@ class Citation(BaseModel):
 
     def locator(self) -> str:
         return f"{self.path}@{self.head_sha}#L{self.line_start}-L{self.line_end}"
+
+
+def cite(
+    *, path: str, head_sha: str, text: str, line_start: int, line_end: int
+) -> Citation | None:
+    """Address exactly the bytes at `line_start..line_end`, or return None.
+
+    Line numbers are 1-based and inclusive, matching git, every editor, and the
+    `#L10-L12` fragment GitHub itself uses — so a reader can check the locator by
+    eye against the page it names.
+
+    Returns None rather than raising on a range the text cannot support. That is
+    the whole safety property of this increment (design-lock L1): the model picks
+    where to look and code checks the pick, so a bad pick has to be a no-op that
+    leaves the finding ungrounded, never a wrong receipt. Raising here would turn
+    a hallucinated line number into a failed review.
+
+    Deliberately NOT shared with example_pack_verifiers._accepted_contract_receipt,
+    which slices the same way. That one resolves a Path under a repo root and emits
+    a locator carrying no ref, and its format is a contract in the Example Pack
+    lane. Merging them would drag that ref-less format into this one, and a locator
+    without a ref is not re-derivable — `git show` has nothing to resolve.
+    """
+    if line_start < 1 or line_end < line_start:
+        return None
+    lines = text.splitlines(keepends=True)
+    if line_end > len(lines):
+        return None
+    exact = "".join(lines[line_start - 1 : line_end]).encode("utf-8")
+    return Citation(
+        path=path,
+        head_sha=head_sha,
+        line_start=line_start,
+        line_end=line_end,
+        sha256=sha256_hex(exact),
+    )
 
 
 class ReaderFinding(BaseModel):
