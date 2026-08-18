@@ -12,9 +12,10 @@ export const metadata: Metadata = {
     "Why a pull-request router is named after a Saint Bernard, who built it, and how to get involved.",
 };
 
-// Four real photos of the real Doug. Filenames are placeholders — drop the
-// actual files into web/public/about/doug/ with these exact names and the
-// gallery below picks them up with no code change.
+// Four real photos of the real Doug, served from web/public/about/doug/.
+// Sources were screenshots (PNG); converted to JPEG and capped at 800px on
+// the long edge — the tiles render ~470px at 2x, so that is ample. The
+// kitchen shot had a ~20px black screenshot bar cropped off its right edge.
 const PHOTOS = [
   {
     src: "/about/doug/kitchen-selfie.jpg",
@@ -28,7 +29,7 @@ const PHOTOS = [
   },
   {
     src: "/about/doug/rock-hike.jpg",
-    alt: "Doug and Andrew sitting on rocks after a hike",
+    alt: "Andrew crouched next to Doug on the rocks by a creek",
     caption: "Post-hike, still working the smile.",
   },
   {
