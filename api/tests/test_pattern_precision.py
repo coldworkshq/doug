@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from doug.adjudicate import OutcomeKind
 from doug.precision import corpus_table, fold, wilson
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -141,3 +142,91 @@ def test_population_precision_is_nan_on_an_empty_stratum():
     """Better an obvious NaN than a silent 0% for a repo whose strata were
     never populated."""
     assert _pop_precision(0, 0, 0, 10, 0.02) != _pop_precision(0, 0, 0, 10, 0.02)
+
+
+def test_fold_does_not_count_a_censored_outcome_as_a_defect():
+    """Prereg §3 rejects this outright — "counting censored as misses ... a
+    censoring rate wearing a miss rate's name". A censored row means the PR
+    LEFT the risk set (merged to a non-default branch), so nothing was
+    observed about it and there is no defect to report.
+
+    Live on 2026-08-18: /v1/patterns returned defects: 2 for drewjst/doug
+    when both were gh-pages merges and the observed defect count was zero.
+    """
+    join = {
+        "prs": [{"repo": "o/r", "pr_number": 1, "kind": "censored"}],
+        "hits": [],
+    }
+    is_defect, _ = fold(join)
+    assert is_defect == {}
+
+
+def test_fold_drops_a_censored_pr_from_the_denominator_entirely():
+    """§3's arithmetic is `N_at_risk = N_done - censored`, not
+    `N_at_risk = N_done`. Keeping a censored PR as a non-defect would
+    dilute the base rate every published lift is measured against — the
+    same error in the flattering direction that §3 names and rejects."""
+    join = {
+        "prs": [
+            {"repo": "o/r", "pr_number": 1, "kind": "clean"},
+            {"repo": "o/r", "pr_number": 2, "kind": "censored"},
+            {"repo": "o/r", "pr_number": 3, "kind": "revert"},
+        ],
+        "hits": [],
+    }
+    is_defect, _ = fold(join)
+    assert is_defect == {("o/r", 1): False, ("o/r", 3): True}
+    base = sum(is_defect.values()) / len(is_defect)
+    assert base == 0.5  # 1 of 2 at risk, NOT 1 of 3 done
+
+
+def test_fold_keeps_a_pr_observed_in_one_window_and_censored_in_another():
+    """`outcomes` carries `window_days`, so one PR can hold a 14-day row and
+    a 60-day row. Censoring in one window does not unobserve the other, and
+    a revert seen in either window is still a revert."""
+    observed_clean = {
+        "prs": [
+            {"repo": "o/r", "pr_number": 1, "kind": "censored"},
+            {"repo": "o/r", "pr_number": 1, "kind": "clean"},
+        ],
+        "hits": [],
+    }
+    assert fold(observed_clean)[0] == {("o/r", 1): False}
+
+    observed_revert = {
+        "prs": [
+            {"repo": "o/r", "pr_number": 2, "kind": "censored"},
+            {"repo": "o/r", "pr_number": 2, "kind": "revert"},
+        ],
+        "hits": [],
+    }
+    assert fold(observed_revert)[0] == {("o/r", 2): True}
+
+
+def test_fold_drops_hits_on_a_censored_pr():
+    """A pattern must not gain a carrier from a PR that is not in the
+    denominator, or its precision would have a numerator the base rate
+    cannot see."""
+    join = {
+        "prs": [{"repo": "o/r", "pr_number": 1, "kind": "censored"}],
+        "hits": [{"repo": "o/r", "pr_number": 1, "rule": "reader:race-condition"}],
+    }
+    _, carriers = fold(join)
+    assert carriers == {}
+
+
+def test_fold_classifies_every_outcome_kind_the_adjudicator_can_write():
+    """`censored` was mishandled for as long as it existed because nothing
+    forced fold() to have an opinion about each kind — `!= "clean"` silently
+    absorbed a vocabulary it predated. A fourth kind must not repeat that:
+    this fails and names it rather than letting it default into a bucket."""
+    expected = {
+        OutcomeKind.CLEAN: False,
+        OutcomeKind.REVERT: True,
+        OutcomeKind.CENSORED: None,  # excluded — not at risk
+    }
+    assert set(OutcomeKind) == set(expected), "a new OutcomeKind needs a fold() decision"
+    for kind, want in expected.items():
+        rows = {"prs": [{"repo": "o/r", "pr_number": 1, "kind": str(kind)}], "hits": []}
+        is_defect, _ = fold(rows)
+        assert is_defect == ({} if want is None else {("o/r", 1): want}), kind

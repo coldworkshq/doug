@@ -3,8 +3,12 @@
 State:    **LOOP LIVE + EXIT-GATE AUDIT PASSED (18/18), and the audit found
           a live defect in `/v1/patterns`.**
 
-Next:     1. Fix `precision.fold` — it counts `censored` as a defect. NOT
-             started, no approval yet. See below.
+Next:     1. ~~Fix `precision.fold`~~ DONE — PR open, see below. With it,
+             `/v1/patterns` for drewjst/doug becomes `prs: 16, defects: 0,
+             base_rate: 0.0`: honest, and correctly uninformative. Sixteen
+             observations with zero defects cannot say which patterns
+             predict defects. The pattern display has nothing to show YET —
+             that is the finding, not a blocker.
           2. **2026-08-21: the first real detector test.** PR #68 merged to
              main 2026-08-07 and was reverted by #70 the same day. Its 14d
              adjudication is `pending`, due 2026-08-21. It is the only PR in
@@ -60,9 +64,16 @@ miss") — fixed in the console then, not here. `precision.fold` is the ONLY
 consumer of `kind != "clean"` in the package, so the blast radius is
 `/v1/patterns` and nothing else.
 
-Not yet fixed — needs a decision on the right semantics (exclude censored
-from the denominator vs. count it clean) and that is a prereg question, not
-just a code one. §2/§6.2 govern.
+FIXED on `fix/censored-is-not-a-defect`. The semantics were not a judgement
+call — prereg §3 already rules it: `N_at_risk = N_done - censored`, and it
+names and rejects the alternative ("counting censored as misses ... a
+censoring rate wearing a miss rate's name"). So censored leaves BOTH the
+numerator and the denominator. A censored row in one window does not
+unobserve another (`outcomes` carries `window_days`). Kept as `!= CLEAN`
+rather than `== REVERT` on purpose: a kind added to the enum later surfaces
+as a defect (loud) instead of dissolving into clean (flattering), and
+`test_fold_classifies_every_outcome_kind_the_adjudicator_can_write` fails
+until someone gives the new kind a decision.
 
 ## What the three defects had in common — worth keeping
 
