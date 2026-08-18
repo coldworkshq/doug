@@ -1380,7 +1380,9 @@ def test_session_connection_projection_intersects_claims_with_live_rows(
     assert len(rows) == 1
     assert rows[0]["organization_id"] == "org_acme"
     assert rows[0]["claimed_repo_ids"] == frozenset({11, 999})
-    assert rows[0]["repositories"] == [{"id": 11, "full_name": "acme/one"}]
+    assert rows[0]["repositories"] == [
+        {"id": 11, "full_name": "acme/one", "needs_you_threshold": None}
+    ]
 
 
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):

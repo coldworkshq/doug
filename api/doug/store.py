@@ -3273,6 +3273,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                     installations.c.account_type,
                     installation_repos.c.github_repo_id,
                     installation_repos.c.full_name,
+                    installation_repos.c.needs_you_threshold,
                 )
                 .select_from(joined)
                 .where(
@@ -3305,7 +3306,14 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
         repo_id = row["github_repo_id"]
         if repo_id is not None and int(repo_id) in connection["claimed_repo_ids"]:
             connection["repositories"].append(
-                {"id": int(repo_id), "full_name": row["full_name"]}
+                {
+                    "id": int(repo_id),
+                    "full_name": row["full_name"],
+                    "needs_you_threshold": (
+                        None if row["needs_you_threshold"] is None
+                        else float(row["needs_you_threshold"])
+                    ),
+                }
             )
     return list(projected.values())
 

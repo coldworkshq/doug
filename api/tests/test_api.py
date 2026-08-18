@@ -4935,7 +4935,10 @@ def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monke
     response = TestClient(app).get("/v1/sessions/connections", headers=_session())
 
     assert response.status_code == 200
-    assert response.json() == {"connections": []}
+    assert response.json() == {
+        "connections": [],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
+    }
 
 
 def test_connections_project_several_installations_and_explicit_live_repos(
@@ -4973,8 +4976,8 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": None,
                 "repositories": [
-                    {"id": 11, "full_name": "drewjst/doug"},
-                    {"id": 12, "full_name": "drewjst/notes"},
+                    {"id": 11, "full_name": "drewjst/doug", "needs_you_threshold": None},
+                    {"id": 12, "full_name": "drewjst/notes", "needs_you_threshold": None},
                 ],
             },
             {
@@ -4986,11 +4989,12 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": "Lema — separate product",
                 "repositories": [
-                    {"id": 21, "full_name": "lemahq/lema"},
-                    {"id": 22, "full_name": "lemahq/lema-verify"},
+                    {"id": 21, "full_name": "lemahq/lema", "needs_you_threshold": None},
+                    {"id": 22, "full_name": "lemahq/lema-verify", "needs_you_threshold": None},
                 ],
             },
-        ]
+        ],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
     }
 
 
@@ -5019,7 +5023,9 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
             "account_type": "Organization",
             "status": "setup_required",
             "label": None,
-            "repositories": [{"id": 11, "full_name": "coldworkshq/coldworks"}],
+            "repositories": [
+                {"id": 11, "full_name": "coldworkshq/coldworks", "needs_you_threshold": None}
+            ],
         }
     ]
 
@@ -5069,7 +5075,8 @@ def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
                 # Withheld, not forgotten — see the test below.
                 "repositories": [],
             }
-        ]
+        ],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
     }
 
 
@@ -5132,7 +5139,29 @@ def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(
     response = TestClient(app).get("/v1/sessions/connections", headers=_session())
 
     assert response.status_code == 200
-    assert response.json() == {"connections": []}
+    assert response.json() == {
+        "connections": [],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
+    }
+
+
+def test_connections_carry_each_repos_flag_line_and_both_process_defaults(
+    tmp_path, monkeypatch
+):
+    """Production runs the reader, so the unset line on most verdicts is
+    0.30, not 0.62 — printing one 'default' number is the lie
+    _banding_threshold was built to end. Both are sent; the web prints both."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11, 12))
+    monkeypatch.setenv("DOUG_THRESHOLD", "0.62")
+    monkeypatch.setenv("DOUG_READER_THRESHOLD", "30")
+    store.set_repo_threshold(101, 11, 0.9)
+
+    body = TestClient(app).get("/v1/sessions/connections", headers=headers).json()
+
+    assert body["default_needs_you_threshold"] == {"reader": 0.3, "fallback": 0.62}
+    repos = {r["id"]: r for r in body["connections"][0]["repositories"]}
+    assert repos[11] == {"id": 11, "full_name": "acme/repo11", "needs_you_threshold": 0.9}
+    assert repos[12] == {"id": 12, "full_name": "acme/repo12", "needs_you_threshold": None}
 
 
 def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):

@@ -2021,7 +2021,16 @@ def session_connections(authorization: str = Header("")) -> dict:
                 "repositories": row["repositories"],
             }
         )
-    return {"connections": connections}
+    return {
+        "connections": connections,
+        # Both process defaults, per spec D4: the reader's line is what most
+        # unset verdicts are actually scored against in production; the
+        # deterministic one applies only on fallback. One number would lie.
+        "default_needs_you_threshold": {
+            "reader": reader.reader_threshold() / 100,
+            "fallback": default_threshold(),
+        },
+    }
 
 
 @app.post("/v1/sessions/entitlements", status_code=204)
