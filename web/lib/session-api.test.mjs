@@ -378,3 +378,39 @@ test("getReceipt sends repo as a query parameter, encoded", async () => {
     globalThis.fetch = original;
   }
 });
+
+test("the connections validator accepts bodies with and without the per-repo flag line fields", async () => {
+  // DEPLOY-ORDER SAFETY, same reason as the reauthorize_required test above:
+  // the API goes live first, so web must accept the new keys before the API
+  // emits them, or every dashboard load fails between the two promotions.
+  const { getConnections } = await import("./session-api.ts");
+  const withFields = {
+    connections: [{
+      ...validConnections.connections[0],
+      repositories: [
+        { id: 11, full_name: "acme/one", needs_you_threshold: 0.9 },
+        { id: 12, full_name: "acme/two", needs_you_threshold: null },
+      ],
+    }],
+    default_needs_you_threshold: { reader: 0.3, fallback: 0.62 },
+  };
+  for (const [label, body] of [["old api", validConnections], ["new api", withFields]]) {
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try {
+      const result = await getConnections("token");
+      assert.equal(result.connections.length, 1, label);
+    } finally {
+      globalThis.fetch = oldFetch;
+    }
+  }
+  // Still exact on everything else: an unknown key is still rejected.
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ...validConnections, surprise: 1 }), { status: 200 });
+  try {
+    await assert.rejects(() => getConnections("token"));
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
