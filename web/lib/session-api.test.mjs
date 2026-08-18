@@ -437,9 +437,10 @@ test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and 
     assert.equal(stored, 0.62);
     assert.equal(calls[0].url, `${process.env.DOUG_API_URL ?? "http://localhost:8000"}/v1/sessions/repositories/11`);
     assert.equal(calls[0].options.method, "PATCH");
-    assert.deepEqual(JSON.parse(calls[0].options.body), { needs_you_threshold: 0.6249 });
+    assert.deepStrictEqual(JSON.parse(calls[0].options.body), { needs_you_threshold: 0.6249 });
+    assert.equal(typeof JSON.parse(calls[0].options.body).needs_you_threshold, "number");
     await setRepositoryThreshold("token", 11, null);
-    assert.deepEqual(JSON.parse(calls[1].options.body), { needs_you_threshold: null });
+    assert.deepStrictEqual(JSON.parse(calls[1].options.body), { needs_you_threshold: null });
     // Out-of-range never leaves the client.
     await assert.rejects(() => setRepositoryThreshold("token", 11, 1.5));
     await assert.rejects(() => setRepositoryThreshold("token", 11, Number.NaN));
