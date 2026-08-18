@@ -33,11 +33,20 @@ def _github_context(installation_id: int, repo_full_name: str) -> tuple[str, str
     owner, separator, repo = repo_full_name.partition("/")
     if not separator or not owner or not repo:
         raise ValueError(f"invalid repository full name {repo_full_name!r}")
-    token_response = app_auth.app_client().rest.apps.create_installation_access_token(
-        installation_id
-    )
+    # Both clients are bound to a local for the duration of their call.
+    # githubkit's .rest namespace holds its client with a weakref, so a
+    # construct-and-chain temporary is collected the instant .rest is
+    # evaluated and the next attribute raises "GitHub client has already
+    # been collected" — before any request, so no stub or fixture sees it.
+    # tenancy.py:220 stated the rule after #52 hit the dispense identity
+    # check in prod on 2026-08-05; this function was written with the defect
+    # anyway and failed every adjudication from 2026-08-17 until 2026-08-18.
+    # test_client_lifetime.py now enforces it across the package.
+    app = app_auth.app_client()
+    token_response = app.rest.apps.create_installation_access_token(installation_id)
     token = token_response.parsed_data.token
-    repo_response = app_auth.installation_client(installation_id).rest.repos.get(owner, repo)
+    installation = app_auth.installation_client(installation_id)
+    repo_response = installation.rest.repos.get(owner, repo)
     default_branch = repo_response.parsed_data.default_branch
     if not token or not default_branch:
         raise RuntimeError("GitHub returned an empty installation token or default branch")
