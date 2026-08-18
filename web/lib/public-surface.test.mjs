@@ -2,6 +2,7 @@
 // undocumented, unreachable on a phone, or described as if they did not
 // exist. Source-text pins, not render tests (house rule).
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -114,9 +115,20 @@ test("about page exists, wears the shared chrome, and is reachable from the head
   assert.equal(about.includes('className="dark'), false);
 });
 
-test("about page tells the naming story and wires the photo gallery to a real path", () => {
+test("about page tells the naming story, and every gallery photo actually exists", () => {
   assert.match(about, /Saint Bernard/);
-  assert.match(about, /\/about\/doug\//);
+
+  // Matching the `/about/doug/` prefix in source text proved nothing: it
+  // stayed true for weeks while the directory held only a README and the
+  // page shipped four broken-image icons. Resolve each src against
+  // web/public and stat it, so a missing file or a typo'd extension fails
+  // here instead of in a visitor's browser.
+  const srcs = [...about.matchAll(/src: "(\/about\/doug\/[^"]+)"/g)].map((m) => m[1]);
+  assert.equal(srcs.length, 4, "expected four gallery photos in PHOTOS");
+  for (const src of srcs) {
+    const onDisk = new URL(`../public${src}`, import.meta.url);
+    assert.ok(existsSync(onDisk), `${src} is referenced but not in web/public`);
+  }
 });
 
 test("the landing miss-rate panel points at the live scoreboard", () => {
