@@ -37,7 +37,29 @@ export const NEAR_LINE = 0.05;
 
 export const SCORE_BUCKET = 0.05;
 
-export type Severity = { total: number; high: number; medium: number; low: number };
+export type Severity = {
+  total: number;
+  high: number;
+  medium: number;
+  low: number;
+  /** Findings counted in `total` that carry none of the three named severities.
+   *
+   *  NOT a rounding artefact and not defensive padding — it is a value the API
+   *  produces today. `findings.severity` is `Column("severity", String(10))`,
+   *  nullable, written straight off a Reason whose severity is `str | None`; and
+   *  store.py counts `total` as COUNT(*) while high/medium/low are
+   *  SUM(CASE WHEN severity = 'x' THEN 1 ELSE 0 END) with else_=0. A finding
+   *  with no recorded severity therefore lands in `total` and in none of the
+   *  three buckets.
+   *
+   *  Returned as its own number rather than left for the caller to subtract,
+   *  because that subtraction is exactly what got dropped: the panel drew three
+   *  segments over `total` and the shortfall rendered as empty track — which the
+   *  bar's own contract defines as "not yet observed". A finding that happened,
+   *  drawn as one that did not. `high + medium + low + unclassified === total`
+   *  is the invariant the bar is allowed to draw against. */
+  unclassified: number;
+};
 
 /** One bucket of the score histogram, split by the band each run actually
  *  carries — NOT by comparing the bucket's own range to a threshold. Rows in
@@ -200,7 +222,12 @@ export function severityCensus(runs: RunSummary[]): Severity & { runsWithFinding
     low += counts.low;
     if (counts.total > 0) runsWithFindings += 1;
   }
-  return { total, high, medium, low, runsWithFindings };
+  // Clamped at zero. `total < high + medium + low` should be impossible from the
+  // aggregation above, but a negative remainder would render as a negative-width
+  // segment and a caption claiming fewer findings than were counted — a different
+  // lie from the one this number exists to prevent.
+  const unclassified = Math.max(0, total - high - medium - low);
+  return { total, high, medium, low, unclassified, runsWithFindings };
 }
 
 export function readCensus(runs: RunSummary[]): ReadCensus {
@@ -465,24 +492,51 @@ export function durationLabel(value: number | null): string {
  *  they all share one denominator. Repeating it per readout would be noise;
  *  omitting it would leave six unqualified counts on a surface whose entire
  *  claim is that it does not make unqualified counts. */
-export function censusScope(input: {
+export type CountScope = {
   shown: number;
   fetched: number;
   limit: number;
   atCap: boolean;
   filtering: boolean;
-}): string {
+};
+
+/** The set a count was taken over, as a noun phrase.
+ *
+ *  BRANCH ON `filtering` FIRST. This order is the whole point of the function.
+ *  The ledger header used to test `atCap` first and, with a filter active at the
+ *  page cap, announced "counts over the latest 500 runs fetched" while the
+ *  numbers beside it were counted over the filtered subset — and `censusScope`,
+ *  branching the other way, printed a different denominator for the same rows on
+ *  the same screen. The cap only ever qualifies the SECOND number; it can never
+ *  replace the first.
+ *
+ *  Both sentences on the dashboard now come through here, which is what makes
+ *  the disagreement unrepresentable rather than merely fixed. */
+export function countedOver(input: CountScope): string {
   const fetched = input.atCap ? `the latest ${input.limit} fetched` : `${input.fetched} fetched`;
-  if (input.filtering) return `Over the ${input.shown} runs in view, of ${fetched}`;
-  return input.atCap
-    ? `Over the latest ${input.limit} runs fetched — the scope may hold more`
-    : `Over all ${input.fetched} runs fetched`;
+  if (input.filtering) return `the ${input.shown} runs in view, of ${fetched}`;
+  return input.atCap ? `the latest ${input.limit} runs fetched` : `all ${input.fetched} runs fetched`;
+}
+
+/** The census panel's full sentence, over the same phrase. */
+export function censusScope(input: CountScope): string {
+  const over = countedOver(input);
+  return input.atCap && !input.filtering
+    ? `Over ${over} — the scope may hold more`
+    : `Over ${over}`;
 }
 
 /** "1.2M" / "834k" / "512" — chars, at a glance. Below 1000 the exact number
  *  is shorter than any abbreviation of it, so it stays exact. */
 export function charsLabel(value: number): string {
   if (value < 1_000) return String(value);
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  if (value < 1_000_000) {
+    const text = (value / 1_000).toFixed(value < 10_000 ? 1 : 0);
+    // Rounding can cross the unit the branch was chosen on: 999,999 is under a
+    // million, but `(999.999).toFixed(0)` is "1000", and "1000k" is a label
+    // claiming the next unit was not reached when the rounding already reached
+    // it. Fall through and let the M branch say so.
+    if (Number(text) < 1_000) return `${text}k`;
+  }
   return `${(value / 1_000_000).toFixed(1)}M`;
 }

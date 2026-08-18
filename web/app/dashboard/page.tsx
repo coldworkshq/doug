@@ -37,6 +37,7 @@ import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import {
   bandCensus,
   censusScope,
+  countedOver,
   repoRollup,
   repositoryTable,
   type RepoRowView,
@@ -554,9 +555,13 @@ function RepoCountLine({
   filtering: boolean;
 }) {
   const orphans = repos - connected;
-  const over = atCap
-    ? <>the latest <b className="text-foreground">{limit}</b> runs fetched</>
-    : <><b className="text-foreground">{filtering ? shown : total}</b> {filtering ? "runs in view" : "runs fetched"}</>;
+  // `countedOver` owns the branch order. This line used to test `atCap` first and,
+  // with a filter active at the page cap, announced "counts over the latest 500
+  // runs fetched" while every number beside it was counted over the filtered
+  // subset — and the dock's census panel, branching the other way, printed a
+  // different denominator for the same rows on the same screen. One function now
+  // answers for both, so the disagreement is unrepresentable rather than fixed.
+  const over = countedOver({ shown, fetched: total, limit, atCap, filtering });
   return (
     <span>
       <b className="text-foreground">{connected}</b> {connected === 1 ? "repository" : "repositories"} connected

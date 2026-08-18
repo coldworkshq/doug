@@ -250,7 +250,13 @@ test("severity counts survive as three separate numbers plus their own total", a
     run({ finding_counts: { total: 0, high: 0, medium: 0, low: 0 } }),
     run({ finding_counts: { total: 2, high: 0, medium: 0, low: 2 } }),
   ]);
-  assert.deepEqual(census, { total: 5, high: 1, medium: 1, low: 3, runsWithFindings: 2 });
+  // deepEqual, not a field-by-field check: the shape is the contract, and a new
+  // bucket appearing without this test moving is how the panel ends up drawing
+  // against a total it no longer accounts for. `unclassified: 0` here is the
+  // normal case — every finding in this fixture carries one of the three.
+  assert.deepEqual(census, {
+    total: 5, high: 1, medium: 1, low: 3, unclassified: 0, runsWithFindings: 2,
+  });
 });
 
 test("at the page cap the census names the window, never a total it cannot see", async () => {
@@ -344,6 +350,103 @@ test("repositories sort busiest first, so silent ones land in one block at the e
     repoRollup([run({ repo: "m/busy" }), run({ repo: "m/busy", pr_number: 2 })]),
   );
   assert.deepEqual(rows.map((r) => r.repo), ["m/busy", "a/quiet", "z/quiet"]);
+});
+
+test("a finding whose severity was never recorded is counted, not dropped", async () => {
+  // REVIEW FINDING (Doug, reader:aggregate-mismatch — its one true finding).
+  // `findings.severity` is `Column("severity", String(10))` in store.py — nullable —
+  // and store.py:852 writes it straight off the Reason, whose severity is
+  // `str | None`. The aggregation makes total = COUNT(*) while high/medium/low are
+  // SUM(CASE WHEN severity = 'x' THEN 1 ELSE 0 END) with else_=0, so a null-severity
+  // finding lands in `total` and in none of the three buckets.
+  //
+  // The census must surface that gap as its own number. Leaving the caller to
+  // subtract is what produced the bug: the panel drew three segments over `total`
+  // and the shortfall rendered as empty track, which Bar's own docstring defines as
+  // "a quantity that has not happened yet" — a finding that DID happen, drawn as one
+  // that did not.
+  const { severityCensus } = await import("./ledger-census.ts?unclassified");
+  const census = severityCensus([
+    run({ finding_counts: { total: 3, high: 1, medium: 0, low: 0 } }),
+    run({ finding_counts: { total: 1, high: 0, medium: 0, low: 1 } }),
+  ]);
+  assert.equal(census.total, 4);
+  assert.equal(census.unclassified, 2);
+  // The three named buckets plus the unnamed remainder ALWAYS reconstruct the
+  // total. This is the invariant the bar draws against.
+  assert.equal(census.high + census.medium + census.low + census.unclassified, census.total);
+});
+
+test("unclassified is never negative, even if the API's own counts disagree", async () => {
+  // total < high+medium+low should not happen, but a negative remainder would render
+  // as a negative-width bar segment and a nonsense caption. Clamped at zero: the
+  // panel's job is to not lie, and inventing a negative quantity is a different lie
+  // from the one this fixes.
+  const { severityCensus } = await import("./ledger-census.ts?unclassified-clamp");
+  const census = severityCensus([run({ finding_counts: { total: 1, high: 2, medium: 0, low: 0 } })]);
+  assert.equal(census.unclassified, 0);
+});
+
+test("the counted-over phrase names the filtered set FIRST, cap or no cap", async () => {
+  // REVIEW FINDING (mine; Doug missed it). RepoCountLine branched on `atCap` before
+  // consulting `filtering`, so at the cap it claimed counts were over all 500 fetched
+  // runs while they were over the filtered subset — and `censusScope`, which branches
+  // the other way round, printed a different denominator for the same numbers on the
+  // same screen.
+  //
+  // Both now go through one branch order. The `filtering` case must name `shown`
+  // whatever `atCap` says; the cap only ever qualifies the SECOND number.
+  const { countedOver } = await import("./ledger-census.ts?counted-over");
+  assert.equal(
+    countedOver({ shown: 90, fetched: 500, limit: 500, atCap: true, filtering: true }),
+    "the 90 runs in view, of the latest 500 fetched",
+  );
+  assert.equal(
+    countedOver({ shown: 90, fetched: 155, limit: 500, atCap: false, filtering: true }),
+    "the 90 runs in view, of 155 fetched",
+  );
+  assert.equal(
+    countedOver({ shown: 500, fetched: 500, limit: 500, atCap: true, filtering: false }),
+    "the latest 500 runs fetched",
+  );
+  assert.equal(
+    countedOver({ shown: 155, fetched: 155, limit: 500, atCap: false, filtering: false }),
+    "all 155 runs fetched",
+  );
+});
+
+test("the two denominator sentences can never name different sets", async () => {
+  // The parity guard, in the spirit of outcome-tone-parity.test.mjs. The ledger
+  // header and the dock's census sit on one screen describing one set of rows; the
+  // failure this pins is not a wrong string but two surfaces disagreeing about what
+  // was counted. Whenever a filter is on, BOTH must name the filtered count and
+  // NEITHER may present the fetched total as the denominator.
+  const { countedOver, censusScope } = await import("./ledger-census.ts?parity");
+  for (const atCap of [true, false]) {
+    const input = { shown: 90, fetched: 500, limit: 500, atCap, filtering: true };
+    const phrase = countedOver(input);
+    const sentence = censusScope(input);
+    assert.ok(phrase.includes("90"), `countedOver dropped the filtered count: ${phrase}`);
+    assert.ok(sentence.includes("90"), `censusScope dropped the filtered count: ${sentence}`);
+    // "the latest 500 fetched" is allowed as the SECOND clause; what is banned is
+    // either sentence opening on the unfiltered total as though it were the set.
+    assert.equal(phrase.startsWith("the latest"), false, `countedOver leads with the cap: ${phrase}`);
+    assert.equal(sentence.startsWith("Over the latest"), false, `censusScope leads with the cap: ${sentence}`);
+  }
+});
+
+test("a char count just under a million rolls into M rather than printing 1000k", async () => {
+  // REVIEW FINDING (mine). The kilo branch covers everything below 1,000,000 and
+  // rounds to zero decimals above 10,000, so 999,999 renders "1000k" — a label
+  // implying the next unit was never reached when rounding has already crossed it.
+  const { charsLabel } = await import("./ledger-census.ts?chars-rollover");
+  assert.equal(charsLabel(999_999), "1.0M");
+  assert.equal(charsLabel(999_500), "1.0M");
+  // The boundaries either side still behave.
+  assert.equal(charsLabel(999_400), "999k");
+  assert.equal(charsLabel(1_000_000), "1.0M");
+  assert.equal(charsLabel(9_999), "10.0k");
+  assert.equal(charsLabel(999), "999");
 });
 
 test("an empty ledger censuses to zeros and nulls, never to a divide-by-zero", async () => {

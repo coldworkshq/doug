@@ -265,15 +265,42 @@ export function CensusPanel({ runs, scope }: { runs: RunSummary[]; scope: string
           <Tally value={severity.low} word="low" />
         </div>
         <Bar
-          label={`${severity.high} high, ${severity.medium} medium, ${severity.low} low`}
+          label={`${severity.high} high, ${severity.medium} medium, ${severity.low} low${
+            severity.unclassified > 0 ? `, ${severity.unclassified} with no recorded severity` : ""
+          }`}
           segments={[
             { pct: (severity.high / findingsTotal) * 100, fill: ink(0), word: "high" },
             { pct: (severity.medium / findingsTotal) * 100, fill: ink(1), word: "medium" },
             { pct: (severity.low / findingsTotal) * 100, fill: ink(2), word: "low" },
+            {
+              // The fourth segment exists because the first three do NOT have to
+              // sum to `total`: `findings.severity` is nullable, and store.py
+              // counts total as COUNT(*) against three conditional SUMs. Without
+              // it the shortfall rendered as empty track — which this component
+              // documents as "a quantity that has not happened yet", i.e. a
+              // finding that happened drawn as one that did not.
+              //
+              // Hatched, borrowing the censored outcome's treatment below for the
+              // same reason: this is not a fourth severity, it is the absence of
+              // a recorded one, and giving it a solid step of the ramp would rank
+              // it against the three that are real.
+              pct: (severity.unclassified / findingsTotal) * 100,
+              fill: `repeating-linear-gradient(135deg, ${ink(2)} 0 2px, transparent 2px 4px)`,
+              word: "unclassified",
+            },
           ]}
         />
         <p className={CAPTION}>
           Severity is a magnitude, not a verdict — it renders on the neutral ramp, darkest first.
+          {severity.unclassified > 0 && (
+            <>
+              {" "}
+              <b className="font-medium text-foreground">{severity.unclassified}</b>
+              {severity.unclassified === 1 ? " finding carries" : " findings carry"} no recorded
+              severity and {severity.unclassified === 1 ? "is" : "are"} hatched above — counted,
+              not classified.
+            </>
+          )}
         </p>
       </div>
 
