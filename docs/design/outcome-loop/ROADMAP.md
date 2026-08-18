@@ -348,7 +348,9 @@ path, no cross-tenant read, no silent partial reads.
   `verdicts.prompt_hash` backfill over historical reader rows) —
   ~~**MT3's `installations.reconciled_at` is migration 9.**~~ **Superseded
   2026-08-17:** 9 went to Front Door Phase 1a and 10 to `review_jobs.base_sha`,
-  so MT3 takes **11**. MT3 also does not use `installations.reconciled_at`: a
+  so MT3 takes **12** (11 went to the per-repo needs-you threshold,
+  `installation_repos.needs_you_threshold`). MT3 also does not use
+  `installations.reconciled_at`: a
   per-*installation* timestamp cannot say *which* repos were swept, and the
   defect it must close is a per-repo coverage hole. See
   `docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md` §4.5.
@@ -489,8 +491,11 @@ would bite a real tenant.
   not a future risk. Decide deliberately rather than by omission — D2 moves the
   full sweep INTO that Job, so leaving it unscheduled until MT3 lands is a
   defensible choice and an unrecorded one is not.
-  (Next free migration: **11** — 9 is Front Door Phase 1a and 10 is
-  `review_jobs.base_sha`; the earlier "next free: 9" note here was stale.)
+  (Next free migration: **12** — 9 is Front Door Phase 1a, 10 is
+  `review_jobs.base_sha` and 11 is `installation_repos.needs_you_threshold`
+  (the per-repo needs-you threshold,
+  `docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md`);
+  the earlier "next free: 9" and "next free: 11" notes here were stale.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as

@@ -30,7 +30,7 @@ docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md.
   (installer); accepted because org membership is operator-curated and
   the setting is reversible and audited by the verdicts it produces.
 - Two-PR deploy: web response guards tolerate the new fields first, because
-  the backend is promoted before web.
+  the API is promoted before web.
 
 ## Rejected
 
@@ -59,5 +59,6 @@ docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md.
   stock handler, with non-finite floats stringified before the response
   is serialised).
 - Reader-fed: this record is `accepted`, so the reader will flag PRs that
-  reintroduce a process-wide-only line or modify `updated_at` outside
-  the PATCH.
+  reintroduce a process-wide-only line, or make the settings PATCH advance
+  `installation_repos.updated_at` (webhook reconciliation legitimately does;
+  the settings write must not).

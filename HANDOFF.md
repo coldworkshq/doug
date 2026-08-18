@@ -282,7 +282,8 @@ empty state it was designed to render. **Nothing said anything.**
   every other tenant 200x, which is MT3's own complaint.
 - REFUTED: that global interleaving re-mints a token per repo. githubkit's
   DEFAULT_CACHE_STRATEGY is a module-level singleton — verified empirically.
-- MT3 takes migration **11** (9 = Front Door 1a, 10 = review_jobs.base_sha).
+- MT3 takes migration **12** (9 = Front Door 1a, 10 = review_jobs.base_sha,
+  11 = installation_repos.needs_you_threshold, taken 2026-08-18).
   `installations.reconciled_at` cannot close it: sweep state is per REPO.
 - MT3 is a CORRECTNESS item: `active_repos` has no ORDER BY and
   `reconcile_all`'s only caller is a reaped daemon thread, so the tail is
