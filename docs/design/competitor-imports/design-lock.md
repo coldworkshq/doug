@@ -1,0 +1,64 @@
+# Design lock — cited head reads
+
+**Date:** 2026-08-18 · **Method:** design-debate (4 grounding agents · 3 cold positions · 3 cross-examiners · 3 red-team skeptics, all WARRANTED) · **Status:** LOCKED · **Baseline:** worktree @ `b8e3659`
+
+Supporting record in this directory: [`ground-truth.md`](ground-truth.md) · [`positions.md`](positions.md) · [`decisions.md`](decisions.md) (round-1 rulings, three of which the red-team overturned — superseded here).
+
+---
+
+## 1. The converged design, in one paragraph
+
+Doug's reader receives `f.patch` and nothing else (`review.py:190`, `:267`). Doug *has* an outside-the-diff fetcher — `review.py:273 head_file_text`, `store.columns_of` — wired exclusively into `settle.py`, whose docstring reads *"The model still saw only the diff"* and whose every entry point is `drop_disproved_*`. **The system's one outside-the-diff capability is licensed to subtract findings and forbidden to raise them.** On the only rater-independent evidence in the repo, that asymmetry produced 7 of 8 misses. The lock reverses the license: the model may cite bounded reads at head to *ground* a finding, under a closed vocabulary of existence-class predicates, with the evidence class machine-separable from diff-proved findings. Nothing else in the briefed concept survives.
+
+## 2. Resolved tensions
+
+| # | Tension | Call | Killed | Why |
+|---|---|---|---|---|
+| **L1** | How is the LLM's judgment honored? | Closed vocabulary of deterministic predicates; the model supplies `{file, line_start, line_end, quoted_text, predicate}` and `settle.py`-style code runs **the predicate, not the conclusion**. `refuted` is absent from the schema. | `{refuted: bool}` behind a byte-match; model-authored `Narrowed` prose on the customer surface | A byte-match proves the model didn't hallucinate file contents, not that the claim is settled. Measured, zero adversarial effort: PR #107 `serialization-contract` — quoting `models.py:133` byte-matches, is grep-re-derivable and **factually true**, and the refutation is still wrong because `models.py:113-125` records `exclude` is honored by `model_dump`/FastAPI *"and by nothing else."* `ReaderFinding` (`reader.py:330-334`) carries no line numbers, so the refuter picks its own target with nothing to check it against. |
+| **L2** | Precision or recall? | Recall, and specifically **reading outside the diff** — not rendering, not precision. | "Render the output" as the capability; the disposition surface as the headline; `settle.py` extension as the lead | 0/8 needed render as the only route; 1/8 was fully inside Doug's bytes; **7/8 required ≥1 byte Doug never received**; 4/8 were in files absent from the PR. Rendering misses exhibit #2 — a footer reading `deep reads 37/200` looks correct; the bug lives at `reader.py:230`, a file not in the PR. |
+| **L3** | Existence vs absence claims — **the red-team's sharpest hit** | The predicate vocabulary certifies **existence and value claims only**. Absence and universality claims ("nothing else reads this", "no caller guards it") are **out of scope for citation** and must render as unresolved. | Any predicate whose truth depends on an unbounded complement the model itself selected | The C1 failure is direction-independent: the model chose which five lines to look at and the answer lived in the lines it didn't choose. `settle.py:1-7` already polices exactly this — *"a claim about an absence cannot be settled by re-reading the diff; the check and the error are the same observation."* Reading one self-chosen head file is the same observation with a different `path`. |
+| **L4** | Does the disposition surface carry v1? | No. It already ships. | Three-state Held/Refuted/Narrowed as a v1 deliverable | `check_run.py:176-186` already renders suppressed findings as weight-0 `settled-*` reasons with `SETTLED_NOTE` on the flagged-and-empty case. The proposed surface is the status quo plus a substring. Separately, the 13-of-39 claim that justified it does not survive: `changed` ≠ "changed code" (`REVIEWING.md:275-277`), 8 of 13 changed nothing that executes, ~2 clean instances in 123 rows, and the corpus is the one dataset in the repo structurally incapable of recording a miss. |
+| **L5** | Part 3 (per-source grading) | **The table is out; the pre-registered rule is in and ships first.** | "Empty and dated" table; the unfireable trigger | The table cannot fill: 461 `Co-authored-by` and **zero `Reviewed-by`**; `commented` dropped as stance-less (`api.py:2392`); `issue_comment` unsubscribed. But §7 of `publication-preregistration.md` is **LOCKED v9, written, and undeployed** — and publishing a rule requires **zero rows**. See L8. |
+| **L6** | Part 2 (agentic reader instrument) | Deferred. P0 is a ruling on whether `application_revision` belongs in `instrument_id`, not an env flip. | "Turn Example Pack capture on" as P0 | `instrument_id()` hashes `application_revision`; merge-to-main deploys; measured **88 PRs 2026-08-01→08-18 = 4.9/day**, so partitions are n≈1. A paired n=100 needs main frozen ~20 days across MT3. |
+| **L7** | Sequencing: does a citation-receipt PR make the model PR safe? | **No. Overturned.** The receipt PR is cut. | `decisions.md` C6's ordering argument | It emits a receipt, not a gate — nothing rejects, and no model is in its loop. **Measured: `settle.py` has fired zero times since it landed.** Code shipped `7b222c4` 2026-08-03, schema class `f065f0d` 2026-08-04; all six settle-eligible rows predate both; **zero rows in either slug family across 113 prospective dispositions on PRs #49–#107**. Its dominant class (5 of 6) resolves through `store.columns_of`, a live DB query `git show` cannot reproduce, and `store.py:692-703` calls it *"a silent no-op"* against a genuine tenant repo. |
+| **L9** | Coverage: scope in words, or build the read-log gate? | **Both, in order — they are not alternatives.** The scoped sentence ships with the increment; the zero-call read-log gate is vNext. | Treating them as an either/or (as round 1 did) | The gate proves *citation honesty* — every file cited appears in the read log. It does **not** supply a denominator for what the model *should* have opened. `Coverage.complete` is `sent_chars >= diff_chars and not files_dropped` (diff-only), and `check_run.py:138,154` render the caveat *only when incomplete* — so on nearly every PR today it does not render at all, and after this change the second channel would be silent by default. The words are required either way; the gate is an additional integrity check on top. Shipping the gate instead of the words would leave the denominator claim false while looking rigorous. |
+| **L8** | Altitude: is this buying commodity? | **Partly, and it is not the increment that expires.** The pre-registration ships first. | Treating the reader increment as the lane's identity | All three ranked moat assets are at zero and two are time-integrals; reader capability is a stock that gets cheaper every model release. `publication-preregistration.md:5-8` — *"neither the catch-up nor the v9 hash deployment has occurred in production."* Publishing the locked rule needs no data, is fully dogfoodable on a solo repo, and its value drops discontinuously to zero the day an incumbent announces. |
+
+## 3. Supersessions
+
+- **L7 supersedes `decisions.md` C6.** The "PR 1 makes PR 2 safe" ordering was a rationalization; the citation-receipt PR is cut, not resequenced.
+- **L5 supersedes `decisions.md` C4** in one direction only: C4 correctly killed the *table*, and wrongly generalized to killing the *position*. The locked §7 rule ships.
+- **L3 is new** — it did not exist in round 1 and is the red-team's contribution.
+- **Correction to `decisions.md:31`.** It claimed the PM's red-lines were "retained in full." Four of seven were. The **coverage red-line** and the **unspent-holdout red-line** were dropped, and live tension **T-E** was recorded as resolved when it had in fact been lost. Both are reinstated: T-E is now open risk #1.
+
+## 4. Warranted mitigations applied
+
+1. Citation-receipt PR **cut** (RT1).
+2. Predicate vocabulary cut to what the evidence supports: **`constant_value_is`** is the only named predicate that cleanly recovers a target finding (#2). At most one more, named for what it does — **`symbol_referenced_at`** (find-references), which is what #4/#6/#7 actually need. `name_is_runtime_imported`, `column_exists_in_live_schema`, `path_does_not_exist` and `symbol_defined_in_file` score **0/8** and are not named. The verify prompt is a *separate frozen prompt* under do-not-reopen #3, so **every named predicate is permanent** — vocabulary is not free (RT1).
+3. **Existence-class only** (RT2, L3).
+4. **`evidence` discriminator** — `diff` | `head-cited` — on `ReaderFinding`. Rides `verdicts.raw` (unvalidated, absent from the run-detail key list), so zero wire change and no TS edit. Without it `REVIEWING.md:47`'s ⚠️ rule is unenforceable by construction and a sha256 makes the weaker claim class look like the stronger one (RT2).
+5. **Receipts carry the head SHA**: `path@<sha>#Lstart-Lend` + sha256. `git show` needs a ref; the round-1 spec omitted it, making its own bar unverifiable (RT2).
+6. **Suppression bars replaced with one superset assertion** — an additive change cannot suppress. The ~1-day corpus-reconstruction fixture is cut with it (RT1).
+7. **The ≥3-of-8 replay is demoted to a labeled smoke test.** It is not a pre-registration: the answer key is committed in-repo, its "deltas worth encoding" *specified this capability*, all 8 were scored before the bar was written, and the denominator was edited after the answers were known (RT2).
+8. **Coverage scoped in words, or gated.** See open risk #1 (RT2, Architect T5).
+9. **Publish the locked v9 pre-registration, §7 included, first** (RT3 M1).
+10. **Part 3's trigger becomes data-checkable**: the first installation accumulating a `tier='external'` row from a second reviewer of any kind. The old trigger — *"a design partner running Bugbot/CodeRabbit asks"* — cannot fire before the competitive event, because a partner cannot ask for a capability with no surface (RT3 M2).
+
+**Deliberately not applied.** Cutting PR 2 (no skeptic asked for it; RT3: *"do not read this as cut PR 2"*). Restructuring the lane's identity beyond the framing correction. Any manifest/orchestration work — L6 defers the instrument, so a collision in an unpopulated partition scheme is not a v1 risk.
+
+## 5. Non-goals / do-not-reopen
+
+- The model never deletes a finding, and never emits a bare `refuted`.
+- Nothing agentic writes `verdicts` — not `tier='app'` (silently swallowed → bogus check-run replay), not `tier='external'` (score/threshold hardcoded 0.0, no findings by contract).
+- Verify spend never charges `installation:<id>`. `instrument_snapshot` renders that counter as `deep reads N/200` on the customer's check run and clamps at 200 — overspend would render as an allowance the customer never used.
+- No absence or universality claim is ever citation-certified.
+- No new predicate name without accepting it is permanent.
+- Doug does not render the output surface, open a PR, write code, or return anything but `neutral`.
+- Everything on `ground-truth.md` §2 remains binding.
+
+## 6. Open risks (unresolved, recorded)
+
+1. ~~**The coverage line becomes false by omission.**~~ **RESOLVED 2026-08-18 — see L9.** The residual risk is narrower and stays open: after this change `read_budget_gate.py` governs one channel of two, so ADR-0012's freeze-replacement argument — which assumed the gate governed *the read* — now holds only over the diff channel. That is a scope reduction in an existing guarantee, disclosed in words (L9), not repaired by the words.
+2. **Nondeterminism.** Convergence Bar 1 already FAILed with reader nondeterminism named as root cause. This adds a nondeterministic call that *adds* published findings. The citation gate makes a fabricated citation a no-op; it does not make the choice of what to read stable. Must be measured over n replays, not assumed.
+3. **Eight rows, load-bearing in two directions.** PR #106's external review is simultaneously the evidence that demotes the disposition surface (L4) and the evidence that justifies the capability (L2). n=1 PR. Fragile; record it, don't lean harder on it.
+4. **The AUC panel is a publishing precondition, not a build item.** `web/app/page.tsx:248-259` renders "0.69 / 0.67" under "What's actually measured"; the shipped reader has never been AUC-measured. The correction sentence ships before any new-reader capability is announced.
