@@ -8,12 +8,34 @@ State:    review — PR OPEN for Tasks 1-6. design-lock.md and build-plan.md LOC
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     P0.1 — publish the LOCKED v9 pre-registration + deploy its hash.
-          GATES MERGE of the PR. Then Tasks 7 (surface), 8 (ADR-0013),
-          9 (labeled smoke test). Andrew's earlier call stands: run Task 9
-          before Task 7, so the nondeterminism spread is known before
-          anything renders to a customer.
+Next:     ONE THING FOR ANDREW: confirm DOUG_PREREG_HASH is set on the API
+          SERVICE, not only the adjudicator Job. ROADMAP:330 records the hash
+          pinned "into the Job env"; api.py:931 reads the same var for the
+          receipt's `in_force` flag and that is a different Cloud Run service.
+          Cannot be checked from here.
+          Then Tasks 9 (labeled smoke test) -> 7 (surface) -> 8 (ADR-0013).
+          Andrew's earlier call stands: 9 before 7, so the nondeterminism
+          spread is known before anything renders to a customer.
           Main lane unchanged: MT3 is still the critical path.
+
+## P0.1 IS LARGELY ALREADY DONE — I was wrong that it was outstanding
+
+- Digest recomputed at 44b409c per the doc's own S12 protocol (sha256 of the
+  committed bytes):
+  c8e30da386362351a8d320e1ce91e725655a2f6517e5568c61cd9ad0168e60f2
+  It MATCHES `c8e30da3...60f2` in ROADMAP:330, which records "Task 7
+  production catch-up: COMPLETE 2026-08-11. Deploy pinned the v9 lock hash
+  into the Job env." So the hash is deployed to the adjudicator Job.
+- publication-preregistration.md:8 still says "neither the catch-up nor the
+  v9 hash deployment has occurred in production." STALE — contradicted by
+  ROADMAP:330.
+- **It cannot be fixed in place.** S12: "Any change produces a new dated
+  version and a new hash." Editing the doc changes its sha256 and invalidates
+  the deployed DOUG_PREREG_HASH. A hashed document is structurally unable to
+  record its own deployment. ROADMAP is the correct home and is already right.
+  DO NOT "correct" that line.
+- Still open: the ROADMAP parent bullet is [~] not [x], and the API-service
+  env var is unverified from here.
 
 Merged origin/main @ 3eddbf0 (4 commits: #113 #114 #115 #116) into the lane
 2026-08-18 — only HANDOFF.md conflicted; no code overlap. Re-verified after.
