@@ -141,7 +141,9 @@ def _wire(
     monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
 
-    def _score_one(meta, diff, *, scope, resolve_file=None, resolve_schema=None):
+    def _score_one(
+        meta, diff, *, scope, threshold=None, resolve_file=None, resolve_schema=None
+    ):
         if scopes is not None:
             scopes.append(("risk", scope))
         return (
@@ -1010,7 +1012,7 @@ def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff, *, scope: calls.append("score_one")
+        lambda meta, diff, *, scope, threshold=None: calls.append("score_one")
         or ("reader", VERDICT.model_copy(deep=True), RV, COV),
     )
     monkeypatch.setattr(
@@ -1094,6 +1096,55 @@ def test_a_lost_claim_after_save_skips_the_check_run(tmp_path, monkeypatch):
     monkeypatch.setattr(ingest, "complete", lambda *a, **k: False)
     assert worker.process_job(job) is not None
     assert posted == []
+
+
+def test_worker_passes_the_repos_line_into_scoring_and_logs_its_source(
+    tmp_path, monkeypatch, capsys
+):
+    """The setting must reach the scoring seam; and the log must say whether
+    a stamped 0.62 was the repo's own line or the default, which the row
+    alone cannot tell once the tenant clears it."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    job = dict(
+        installation_id=101,
+        github_repo_id=11,
+        repo_full_name="acme/one",
+        pr_number=7,
+        base_sha="0" * 40,
+        head_sha="b" * 40,
+    )
+
+    seen: list[float | None] = []
+
+    def _score_one(
+        meta, diff, *, scope, threshold=None, resolve_file=None, resolve_schema=None
+    ):
+        seen.append(threshold)
+        v = VERDICT.model_copy(deep=True)
+        if threshold is not None:
+            v.threshold = threshold
+        return ("deterministic", v, None, None)
+
+    monkeypatch.setattr(review, "score_one", _score_one)
+
+    store.set_repo_threshold(101, 11, 0.9)
+    ingest.enqueue(**job)
+    worker.process_job(ingest.claim())
+
+    assert seen == [0.9]
+    err = capsys.readouterr().err
+    assert "line=0.90 line_source=repo" in err
+
+    seen.clear()
+    store.set_repo_threshold(101, 11, None)
+    ingest.enqueue(**{**job, "head_sha": "c" * 40})
+    worker.process_job(ingest.claim())
+
+    assert seen == [None]
+    assert "line_source=default" in capsys.readouterr().err
 
 
 # --- reconcile: the healing path for missed deliveries --------------------
@@ -2036,7 +2087,10 @@ def test_a_fresh_review_logs_the_read_it_paid_for(tmp_path, monkeypatch, capsys)
     (line,) = _pr_lines(capsys)
     assert "reviewed" in line
     assert "paid read" in line
-    assert f"tier=reader band=flagged risk=0.62 verdict={verdict_id}" in line
+    assert (
+        f"tier=reader band=flagged risk=0.62 line=0.30 line_source=default "
+        f"verdict={verdict_id}" in line
+    )
     # Short SHA, not the whole 40 — enough to identify the commit by eye.
     assert "@" + "a" * 12 in line
     assert "a" * 40 not in line
@@ -2279,9 +2333,12 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
     assert len(lines) == 2, f"expected one outcome line per pass, got {lines}"
 
     # Identical facts on both lines, so nothing incidental can be doing the
-    # distinguishing for the wording.
+    # distinguishing for the wording. line=/line_source= is not part of that
+    # shared set: only the fresh pass reads the repo's line INSIDE the job
+    # (worker.py), so only its line carries those fields.
     for ln in lines:
-        assert f"tier=reader band=flagged risk=0.62 verdict={v['id']}" in ln
+        assert "tier=reader band=flagged risk=0.62" in ln
+        assert f"verdict={v['id']}" in ln
 
     assert lines[0] != lines[1]
     # Exactly one paid read happened, and it is countable: the first pass.
