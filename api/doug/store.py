@@ -227,6 +227,12 @@ installation_repos = Table(
     Column("full_name", String(200), nullable=False),  # display only
     Column("state", String(20), nullable=False),  # active | removed
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # The repo's own needs-you line, 0..1, or NULL to inherit the process
+    # defaults (DOUG_THRESHOLD / DOUG_READER_THRESHOLD). Read by the worker
+    # at scoring time and stamped on the verdict; forward-only by design
+    # (spec 2026-08-18-per-repo-needs-you-threshold). Written ONLY by
+    # set_repo_threshold — set_installation_repos must never touch it.
+    Column("needs_you_threshold", Float, nullable=True),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
 )
 

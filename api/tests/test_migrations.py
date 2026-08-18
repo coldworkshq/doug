@@ -82,6 +82,13 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
             "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
             "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
         )
+        # Stub for installation_repos before the per-repo needs-you threshold column.
+        conn.exec_driver_sql(
+            "CREATE TABLE installation_repos ("
+            "id INTEGER PRIMARY KEY, installation_id BIGINT NOT NULL, "
+            "github_repo_id BIGINT NOT NULL, full_name VARCHAR(200) NOT NULL, "
+            "state VARCHAR(20) NOT NULL, updated_at TIMESTAMP NOT NULL)"
+        )
     assert migrations.apply(engine) == ALL_VERSIONS
     assert APP_COLUMNS <= _columns(engine, "verdicts")
     assert {"prompt_hash"} <= _columns(engine, "verdicts")
@@ -95,6 +102,8 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
     for table, columns in M9_COLUMNS.items():
         assert columns <= _columns(engine, table)
     for table, columns in M10_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+    for table, columns in M11_COLUMNS.items():
         assert columns <= _columns(engine, table)
 
 
@@ -157,6 +166,13 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
             "updated_at TIMESTAMP NOT NULL)"
         )
+        # Stub for installation_repos before the per-repo needs-you threshold column.
+        conn.exec_driver_sql(
+            "CREATE TABLE installation_repos ("
+            "id INTEGER PRIMARY KEY, installation_id BIGINT NOT NULL, "
+            "github_repo_id BIGINT NOT NULL, full_name VARCHAR(200) NOT NULL, "
+            "state VARCHAR(20) NOT NULL, updated_at TIMESTAMP NOT NULL)"
+        )
         conn.execute(
             migrations.schema_migrations.insert(),
             [
@@ -165,8 +181,9 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9]
+    assert migrations.apply(engine) == [9, 11]
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
+    assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
     assert indexes["ix_installations_workos_org_id"].get("unique")
     with engine.connect() as conn:
@@ -233,6 +250,8 @@ M9_COLUMNS = {
     "installations": {"workos_org_id", "installed_by_github_user_id"},
 }
 M10_COLUMNS = {"review_jobs": {"base_sha"}}
+
+M11_COLUMNS = {"installation_repos": {"needs_you_threshold"}}
 
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
@@ -338,6 +357,17 @@ def test_migration_010_declares_the_same_columns_as_their_tables(tmp_path):
     assert column.type.length == 64
     assert column.nullable
     assert M10_COLUMNS["review_jobs"] <= _columns(engine, "review_jobs")
+
+
+def test_migration_011_declares_the_same_columns_as_their_tables(tmp_path):
+    """Two homes (migrations.py docstring): the Table gets a fresh database
+    the column; the migration gets production the same column. A drift
+    between them is a green suite and a broken production write."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl11.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[11]) == M11_COLUMNS
+    for table, columns in M11_COLUMNS.items():
+        assert columns <= _columns(engine, table)
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -630,6 +660,13 @@ def test_migration_004_adds_claim_generation(tmp_path):
             "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
             "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
         )
+        # Stub for installation_repos before the per-repo needs-you threshold column.
+        conn.exec_driver_sql(
+            "CREATE TABLE installation_repos ("
+            "id INTEGER PRIMARY KEY, installation_id BIGINT NOT NULL, "
+            "github_repo_id BIGINT NOT NULL, full_name VARCHAR(200) NOT NULL, "
+            "state VARCHAR(20) NOT NULL, updated_at TIMESTAMP NOT NULL)"
+        )
     assert 4 in migrations.apply(engine)
     assert "claim_generation" in _columns(engine, "review_jobs")
 
@@ -776,9 +813,9 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
 
     # store.metadata.create_all() above already built the current table shapes,
-    # so migrations 6 through 10 all find their ALTER work satisfied and
+    # so migrations 6 through 11 all find their ALTER work satisfied and
     # still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11]
     with engine.connect() as conn:
         app_ids = [
             r[0]
