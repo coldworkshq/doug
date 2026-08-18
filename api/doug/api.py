@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 import sys
 import threading
@@ -14,7 +15,9 @@ from typing import Literal
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -199,6 +202,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _json_safe(value):
+    """Stringify IEEE-754 specials so they can round-trip through strict JSON.
+
+    FastAPI's default 422 body echoes each field's raw offending value back
+    as `detail[].input`. A body value pydantic rejects for allow_inf_nan=False
+    (NaN/Infinity) is exactly the kind of value that gets echoed there, and
+    Starlette's JSONResponse renders with allow_nan=False — so without this,
+    the intended 422 becomes an unhandled 500 the moment the response tries
+    to serialize the very value it is reporting as invalid.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Byte-identical to FastAPI's stock handler except for _json_safe above."""
+    return JSONResponse(
+        status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))}
+    )
 
 
 @app.get("/healthz")
@@ -1186,6 +1218,58 @@ def _session_read_context(authorization: str, scope: str) -> tenancy.SessionCont
     if ctx is None or scope not in ctx.scopes:
         raise HTTPException(status_code=401, detail="bad session")
     return ctx
+
+
+def _session_write_context(authorization: str) -> tenancy.SessionContext:
+    """A session allowed to change per-repo settings. Same resolver as reads
+    (org-bound, live-scoped, fails closed on stale entitlement) — the scope
+    string is what makes a write route greppable and keeps a read-only
+    context from ever satisfying it."""
+    return _session_read_context(authorization, "settings:write")
+
+
+class RepositorySettingsPatch(BaseModel):
+    # Required (no default): `{}` must be a 422, not a silent clear.
+    # strict: "0.9", "62" and true are refused rather than coerced.
+    needs_you_threshold: float | None = Field(
+        ..., strict=True, allow_inf_nan=False, ge=0, le=1
+    )
+
+
+class RepositorySettings(BaseModel):
+    needs_you_threshold: float | None
+
+
+@app.patch("/v1/sessions/repositories/{github_repo_id}")
+def set_repository_flag_line(
+    github_repo_id: int,
+    body: RepositorySettingsPatch,
+    authorization: str = Header(""),
+) -> RepositorySettings:
+    """Set (or clear, with null) the repo's needs-you line. Forward-only:
+    verdicts already scored keep the line they were scored against.
+
+    installation_id comes from the session, never the request; the write is
+    keyed on (installation_id, github_repo_id, state='active'), so another
+    tenant's row under the same github_repo_id is unreachable and a removed
+    repo is 404 like one that never existed.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    ctx = _session_write_context(authorization)
+    if github_repo_id not in ctx.repo_ids:
+        raise _not_found()
+    before = store.repo_threshold(ctx.installation_id, github_repo_id)
+    if not store.set_repo_threshold(ctx.installation_id, github_repo_id, body.needs_you_threshold):
+        raise _not_found()
+    after = store.repo_threshold(ctx.installation_id, github_repo_id)
+    sub = session_auth.verify_session_claims(authorization).get("sub")
+    print(
+        f"doug: needs_you_threshold installation={ctx.installation_id} "
+        f"repo={github_repo_id} {before}->{after} by sub={sub}",
+        file=sys.stderr,
+    )
+    return RepositorySettings(needs_you_threshold=after)
 
 
 @app.get("/v1/sessions/runs")

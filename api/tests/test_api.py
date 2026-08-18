@@ -5305,6 +5305,79 @@ def test_session_bearer_remains_refused_on_operator_run_routes(tmp_path, monkeyp
     assert TestClient(app).get("/v1/runs/1", headers=headers).status_code == 401
 
 
+def _patch_line(headers, repo_id, body):
+    return TestClient(app).patch(
+        f"/v1/sessions/repositories/{repo_id}", headers=headers, json=body
+    )
+
+
+def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
+    tmp_path, monkeypatch, capsys
+):
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11,))
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": 0.9})
+    assert r.status_code == 200 and r.json() == {"needs_you_threshold": 0.9}
+    assert store.repo_threshold(101, 11) == 0.9
+    assert (
+        "needs_you_threshold installation=101 repo=11 None->0.9 by sub=user_01ABC"
+        in capsys.readouterr().err
+    )
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": 0.6249})
+    assert r.json() == {"needs_you_threshold": 0.62}  # the STORED value comes back
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": None})
+    assert r.status_code == 200 and r.json() == {"needs_you_threshold": None}
+    assert store.repo_threshold(101, 11) is None
+
+
+def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, monkeypatch):
+    """404 not 403 for a repo the session cannot see (do not confirm it
+    exists); 422 for anything that is not a JSON number in 0..1 or null —
+    '{}' would otherwise silently clear, and '62' is someone typing a
+    percentage."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11,))
+    live_not_claimed = _patch_line(headers, 12, {"needs_you_threshold": 0.5})
+    assert live_not_claimed.status_code == 404  # live but not claimed
+    assert _patch_line(headers, 999, {"needs_you_threshold": 0.5}).status_code == 404
+    for bad in (1.5, -0.1, "0.9", "62", True):
+        assert _patch_line(headers, 11, {"needs_you_threshold": bad}).status_code == 422, bad
+    for literal in ("NaN", "Infinity"):
+        r = TestClient(app).patch(
+            "/v1/sessions/repositories/11",
+            headers={**headers, "Content-Type": "application/json"},
+            content=f'{{"needs_you_threshold": {literal}}}',
+        )
+        assert r.status_code == 422, literal
+    assert _patch_line(headers, 11, {}).status_code == 422
+    assert store.repo_threshold(101, 11) is None
+    # ints at the endpoints are numbers, not strings — accepted.
+    assert _patch_line(headers, 11, {"needs_you_threshold": 1}).status_code == 200
+
+
+def test_flag_line_write_refuses_tenant_api_keys_and_orgless_sessions(tmp_path, monkeypatch):
+    _session_scope(tmp_path, monkeypatch)
+    orgless = _session()  # no org_id → resolve_session is None
+    assert _patch_line(orgless, 11, {"needs_you_threshold": 0.5}).status_code == 401
+    # A minted tenant key is a TokenContext, never a SessionContext — this
+    # route must not use the dual-context resolution shape. Confirm at the
+    # source (mint_key's scopes never include settings:write) and at the
+    # route (a tenant bearer still gets a uniform 401).
+    _pepper_env(monkeypatch)
+    tenant_key = tenancy.mint_key(
+        101,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="acme",
+    ).token
+    assert "settings:write" not in tenancy.resolve(tenant_key).scopes
+    key_headers = {"Authorization": f"Bearer {tenant_key}"}
+    assert _patch_line(key_headers, 11, {"needs_you_threshold": 0.5}).status_code == 401
+
+
 def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):
     """Signed with a key JWKS never reported. Nothing is derived and nothing
     is written — a forged session must not even spend a GitHub call."""
