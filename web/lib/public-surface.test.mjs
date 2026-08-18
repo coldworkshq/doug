@@ -82,6 +82,32 @@ test("nav order puts the live product surfaces before reference material, About 
   }
 });
 
+test("the links NOT carried by NAV_LINKS still exist in BOTH navs", () => {
+  // NAV_LINKS entries get mobile reachability for free — the test above pins
+  // that both navs iterate it. GitHub and About are hardcoded per-nav
+  // instead, so they have no such guarantee: deleting either one from the
+  // <details> block leaves a link that is unreachable on a phone, which is
+  // the exact bug class this file was opened to catch. Verified by mutation:
+  // dropping the mobile About link passed all 15 tests before this pin.
+  // Anchor on `<details className=` — the docblock above the component also
+  // says the word "<details>" in prose, and matching that instead silently
+  // slices the desktop region down to just the imports, which fails for a
+  // reason that has nothing to do with the nav.
+  const detailsAt = header.indexOf("<details className=");
+  const detailsEnd = header.indexOf("</details>");
+  assert.ok(detailsAt !== -1 && detailsEnd > detailsAt, "mobile disclosure must exist");
+  const desktopNav = header.slice(0, detailsAt);
+  const mobileNav = header.slice(detailsAt, detailsEnd);
+
+  for (const [label, marker] of [
+    ["GitHub", "href={GITHUB_REPO_URL}"],
+    ["About", 'href="/about"'],
+  ]) {
+    assert.ok(desktopNav.includes(marker), `${label} must be in the desktop nav`);
+    assert.ok(mobileNav.includes(marker), `${label} must be in the mobile disclosure`);
+  }
+});
+
 test("about page exists, wears the shared chrome, and is reachable from the header", () => {
   assert.match(header, /href="\/about"/);
   assert.match(about, /<SiteHeader/);
