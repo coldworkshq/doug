@@ -12,13 +12,9 @@ export const metadata: Metadata = {
     "Why a pull-request router is named after a Saint Bernard, who built it, and how to get involved.",
 };
 
-// Five real photos of the real Doug. Filenames are placeholders — drop the
+// Four real photos of the real Doug. Filenames are placeholders — drop the
 // actual files into web/public/about/doug/ with these exact names and the
 // gallery below picks them up with no code change.
-//
-// Position 0 is not just "first" — the gallery grid below spans it across
-// two columns/rows as the hero tile (`first:col-span-2 first:row-span-2`).
-// Reordering this array moves that hero tile with it.
 const PHOTOS = [
   {
     src: "/about/doug/kitchen-selfie.jpg",
@@ -29,11 +25,6 @@ const PHOTOS = [
     src: "/about/doug/couch-loaf.jpg",
     alt: "Doug loafed over the back of the couch",
     caption: "Off duty, guarding the back of the couch.",
-  },
-  {
-    src: "/about/doug/pasture-lookout.jpg",
-    alt: "Doug and a friend looking out over a pasture with cows",
-    caption: "On lookout, in case a cow needs finding.",
   },
   {
     src: "/about/doug/rock-hike.jpg",
@@ -110,11 +101,11 @@ export default function AboutPage() {
             </p>
           </div>
 
-          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {PHOTOS.map((p) => (
               <figure
                 key={p.src}
-                className="panel group overflow-hidden rounded-2xl first:col-span-2 first:row-span-2 sm:first:col-span-1 sm:first:row-span-1"
+                className="panel group overflow-hidden rounded-2xl"
               >
                 <img
                   src={p.src}
