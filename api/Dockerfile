@@ -12,6 +12,21 @@ COPY . .
 RUN uv sync --locked --no-dev
 
 FROM python:3.14-slim-trixie@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+# git is a RUNTIME dependency of this image, not a build tool. The API
+# service never shells out, but doug-adjudicator runs `python -m
+# doug.outcome_worker` from this very image and its drain path calls
+# git_labels.clone_treeless -> `git clone --filter=tree:0` / `git fetch` /
+# `git log`. Without it the Job dies with FileNotFoundError: 'git' the first
+# time a repository has due work — which is exactly what happened on
+# 2026-08-18, because every execution before that one had nothing due and
+# returned before reaching the clone.
+# Unpinned against the pinned base on purpose: pinning a Debian package
+# version here rots into an unbuildable image at the next point release, and
+# git moving within trixie is a smaller risk than an image that cannot be
+# rebuilt during an incident.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"

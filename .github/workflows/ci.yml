@@ -72,7 +72,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: docker build api
+      - run: docker build -t doug-api-candidate api
+      # Building proves the image assembles; it does not prove the image can
+      # do its job. doug-adjudicator runs from this image and shells out to
+      # git, and a `docker build` that never runs the result stayed green
+      # through every day the Job spent dying on FileNotFoundError: 'git'.
+      # Assert the runtime contract, not the build.
+      - name: The image carries the binaries its workloads shell out to
+        run: docker run --rm doug-api-candidate git --version
 
   web-image:
     runs-on: ubuntu-latest

@@ -276,13 +276,17 @@ path, no cross-tenant read, no silent partial reads.
   boundary corrected in #65, and verified in production on 2026-08-07:
   `doug-adjudicator-nvwqn` succeeded with an all-zero no-op summary before the
   first due clock; both session-independent SQL audits returned zero rows.
-  **Deploy trap, recorded 2026-08-18:** `gcp.sh adjudicator` pins the Job to
-  the digest `doug-api` is serving *at the moment the command runs*, and CI
-  runs only `deploy` and `web` on merge to main. So a merge advances the API
-  and leaves the Job on its old image: **merging a fix to the adjudicator
-  does not deploy it.** Someone must run `gcp.sh adjudicator` afterwards.
-  Both are `@sha256:3d784c2c` today only because nothing has merged since the
-  last Job deploy — the coupling is a habit, not a mechanism.
+  ~~**Deploy trap, recorded 2026-08-18:** `gcp.sh adjudicator` pins the Job to
+  the digest `doug-api` is serving at the moment the command runs, and CI runs
+  only `deploy` and `web`, so merging a fix to the adjudicator does not deploy
+  it.~~ **RETRACTED the same day — this hazard does not exist.** `deploy()`
+  calls `adjudicator` and `reconcile_job` at its end and `deploy.yml:132` says
+  so ("then refreshes doug-adjudicator from the promoted image"); after #113
+  merged, API and Job both moved to `@sha256:d12a4f4c` with no manual step.
+  It was asserted from a truncated `grep` and from reading gcp.sh's header
+  list of CI entry points as the full list of what `deploy` does. Left visible
+  rather than deleted: a roadmap that quietly swallows its own wrong claims is
+  worth less than one that shows them.
 - [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
   Pure fixtures and the scheduled worker path are built; production execution
   remains the live gate.
@@ -324,7 +328,16 @@ path, no cross-tenant read, no silent partial reads.
   package that chains off a client factory, and
   `test_github_context_holds_each_client_alive_across_its_own_call`
   reproduces the production error against a client held the way githubkit
-  holds it. **No data was lost and no attempt was burned:**
+  holds it. **And it was not the only thing hiding there.** With the clients
+  bound, the 2026-08-18T14:20Z execution got past `_github_context` and died
+  on `FileNotFoundError: 'git'`: the runtime image is `python:3.14-slim-trixie`
+  and installs nothing, while the drain path shells out to
+  `git clone --filter=tree:0` / `git fetch` / `git log`. CI's `docker build
+  api` never ran the image it built, so it was green throughout. Both are the
+  same structural fact — **this path had never executed against real work, so
+  no green anywhere in the system carried evidence about it.** Fixed by
+  installing git in the final stage and by making CI run the built image.
+  **No data was lost and no attempt was burned:**
   `reclaim_stalled` returns an expired lease "without spending an attempt",
   so the pre-registered ten attempts are intact and the clocks are stalled,
   not spent. What it did cost is two days of a dead instrument that every

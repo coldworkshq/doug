@@ -1,31 +1,83 @@
 # HANDOFF — doug
 
-State:    review — TWO things open, and they do not touch each other.
-          1. **PR #114 (this branch)** — dashboard redesign, web only.
-             https://github.com/drewjst/doug/pull/114
-             `claude/dashboard-redesign-left-nav-efb4d7` @ 4 commits off main
-             @ 383daf6, pushed, MERGEABLE. Reviewed and the findings fixed.
-             Verified at 03af44a: web 310/310 · console 113/113 · tsc clean ·
-             eslint 0 errors · next build 23 routes.
-          2. **#113 IS MERGED** (383daf6) but its deploy step is NOT done.
-             Production stays down until step 1 below runs by hand.
+State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
+          never-executed path. #113 (383daf6), #114 (8e1d774) and #115
+          (22156d9) are all MERGED. **PR #116 IS OPEN** and is the last thing
+          between here and a live loop:
+          https://github.com/drewjst/doug/pull/116
+          Branch `fix/adjudicator-needs-git`, verified locally red→green
+          (pre-fix image: `exec: "git": executable file not found`, exit 127;
+          fixed image: git 2.47.3 + a real `--filter=tree:0` clone of a public
+          repo, which also proves TLS/CA).
 
-Next:     1. **Run `gcp.sh adjudicator` BY HAND** — CI runs only `deploy` and
-             `web`, and the Job is pinned to the API image digest at the moment
-             that command last ran, so **merging #113 did not deploy the
-             adjudicator**. This is what restarts the loop:
-             PROJECT=doug-prod0 REGION=us-central1 ./api/deploy/gcp.sh adjudicator
-          2. Execute the Job manually; confirm a non-zero `done` in the
-             DrainSummary and one receipt end-to-end. Closes the last open half
-             of the M3 exit gate.
-          3. Review/merge #114 (independent of the above — web only, no API).
-          4. The liveness item — NOT built, recorded in the roadmap under M3.
-          5. MT3 (spec approved, decisions locked below).
+Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
+             do NOT run `gcp.sh adjudicator` by hand, that instruction was
+             mine and it was wrong.
+          2. **At or after 16:25 UTC / 9:25 AM PDT**, execute the Job:
+             gcloud run jobs execute doug-adjudicator \
+               --project doug-prod0 --region us-central1 --wait
+             Earlier than that it exits 0 having done nothing — see the lease
+             note below. Success = non-zero `done` in the DrainSummary and
+             `/v1/showcase/scoreboard` leaving `adjudicated 0`.
+          3. The liveness item — NOT built, recorded in the roadmap under M3.
+          4. MT3 (spec approved, decisions locked below).
 
-Blockers: none in code. Steps 1-2 are Andrew's hands and are the real critical
-          path; #114 is not gated on them and does not affect them.
+Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
 
-## Dashboard redesign — PR #114, four commits (web only)
+## THE LEASE — why re-running early "succeeds" and does nothing
+
+The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
+`status='running'`. `drain()` opens with `reclaim_stalled()`, which only
+returns rows older than `STALL_LEASE_SECONDS = 7200`, and
+`due_repositories()` selects `status == 'pending'` only. The claim landed at
+~14:22:40Z (the traceback is 14:22:44Z), so the lease clears at ~16:22:40Z and
+9:25 AM PDT carries a margin. Every execution before then finds nothing due
+and exits 0 — exactly what
+`-m7vmr` (14:27Z, "Execution completed successfully") did. Scoreboard right
+after it: `adjudicated 0 · pending 170`. The lease RESETS on each crash: if
+the next run dies mid-way, add another two hours.
+
+## CORRECTION — I was wrong about the deploy trap, and it spread
+
+The "merging does not deploy the adjudicator" claim in commit 86807ee, PR
+#113's body, this file, and the ROADMAP is **FALSE**. `deploy()` in `gcp.sh`
+calls `adjudicator` and `reconcile_job` at its end, and `deploy.yml:132` says
+so: "then refreshes doug-adjudicator from the promoted image". Proven: after
+#113 merged, API and Job both moved to `@sha256:d12a4f4c` with no manual step.
+Origin of the error: a `grep | head -20` that truncated before those lines,
+plus reading gcp.sh's header ("`deploy` and `web` are what CI runs") as the
+full list of what deploy does.
+
+**It propagated.** main's HANDOFF carried it forward as its step 1 ("Run
+`gcp.sh adjudicator` BY HAND ... merging #113 did not deploy the
+adjudicator"), so a second session was about to act on my wrong claim. Fixed
+here, struck through in the ROADMAP (#116), and corrected on #113 itself:
+https://github.com/drewjst/doug/pull/113#issuecomment-5329880253
+
+What survives: `doug-outcome-reconciler` still has ZERO executions and Cloud
+Scheduler still holds only `doug-adjudicator-daily`. That was about the
+scheduler, and `deploy` does not create schedulers.
+
+## THE SECOND DEFECT — 2026-08-18, verified in prod (fix = #116)
+
+    doug-adjudicator-hvdfn  14:20Z  exit 1
+      File "/app/doug/backtest/git_labels.py", line 112, in clone_treeless
+        subprocess.run([...])
+      FileNotFoundError: [Errno 2] No such file or directory: 'git'
+
+- Final stage is `python:3.14-slim-trixie`, copies only `/app`, installs
+  nothing. The Job runs `python -m doug.outcome_worker` from that image.
+- `git` is the ONLY missing binary: the import closure of `outcome_worker`
+  reaches `backtest.git_labels` (git clone/fetch/log) and never `harvest`
+  (the only `gh` caller). `_git_auth_env` injects `GIT_CONFIG_*` — no
+  credential helper, no netrc, nothing else needed.
+- Hidden by the SAME structural fact as the client bug, third time running:
+  the drain path had never executed against real work, so twelve green Job
+  executions carried no evidence about any of it.
+- `docker build api` in CI never ran the image it built. #116 makes it run
+  `git --version` against the built image.
+
+## Dashboard redesign — PR #114 (MERGED as 8e1d774)
 
 04df04a shell + census · 262f8e7 Repositories view · 3461657 the doc ·
 03af44a the three review findings, fixed.
@@ -165,10 +217,8 @@ empty state it was designed to render. **Nothing said anything.**
   (Check intent first: MT3's D2 moves the full sweep INTO that Job, so
   leaving it unscheduled may be deliberate.)
 - **Zero alert policies, zero notification channels** in doug-prod0.
-- **The Job runs stale code after every merge.** `gcp.sh adjudicator` pins
-  the Job to whatever digest `doug-api` serves at that instant, and CI runs
-  only `deploy` + `web`. Both are `@sha256:3d784c2c` today only because
-  nothing has merged since the last Job deploy. Recorded in the roadmap.
+- ~~The Job runs stale code after every merge.~~ **WRONG — see the
+  correction at the top of this file.** `deploy()` refreshes both Jobs.
 - `deep_reads 200/200` on the public meter is `PLAN_DEEP_READ_CAP`
   saturating for display only; enforcement is `INSTALLATION_MONTHLY_READ_CAP
   = 4000`. Not blocking, but the public meter reads pegged for August.
