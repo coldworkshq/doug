@@ -581,8 +581,149 @@ class ReaderVerdict(BaseModel):
     findings: list[ReaderFinding]
 
 
+def _verify_user_text(finding: ReaderFinding) -> str:
+    return (
+        f"Finding: {finding.category_slug}\n"
+        f"File named by the finding: {finding.file}\n"
+        f"Claim: {finding.description}\n"
+    )
+
+
+def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> VerifyResponse:
+    """Ask where to look to ground one finding. One charged model call.
+
+    Deliberately NOT routed through _record_attempt. The Example Pack lane's
+    attempt_kind is a closed two-value Literal that raises at five sites for
+    anything else, and WholeInstrumentManifestV0 is extra="forbid" with no field
+    that could describe this tier — so a verify attempt has no honest
+    representation there. Emitting one would mean either widening a frozen
+    schema or mislabelling this as a risk read. It stays out until the
+    instrument question in design-lock L6 is answered.
+    """
+    _charge(scope)
+    if client is None:
+        client = _verify_client()
+    request = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "output_config": {
+            "effort": EFFORT,
+            "format": {"type": "json_schema", "schema": VERIFY_SCHEMA},
+        },
+        "system": VERIFY_SYSTEM,
+        "messages": [{"role": "user", "content": _verify_user_text(finding)}],
+    }
+    try:
+        response = client.messages.create(**request)
+    except Exception as e:  # noqa: BLE001 — same contract as read_diff
+        raise ReaderError(f"{type(e).__name__}: {e}") from e
+    _report_cost(response, kind="verify", scope=scope, pr=None)
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    if response.stop_reason != "end_turn":
+        raise ReaderError(f"verify stopped with {response.stop_reason}")
+    try:
+        return VerifyResponse.model_validate_json(text)
+    except Exception as e:  # noqa: BLE001
+        raise ReaderError(f"verify parse failed: {type(e).__name__}: {e}") from e
+
+
+def ground_findings(
+    rv: ReaderVerdict,
+    *,
+    head_sha: str | None,
+    resolve_file,
+    scope: str,
+    client=None,
+) -> tuple[ReaderVerdict, int]:
+    """Attach citations to findings a head read can ground. Returns (rv, n_grounded).
+
+    Additive and total: every finding that goes in comes out. The only change a
+    finding can undergo here is gaining an evidence class and a citation — there
+    is no path that removes one, and the assertion below states that as a
+    property rather than trusting the loop to stay that way.
+
+    Fails soft on everything. A spend cap, a transport error, a stopped
+    generation, an unparseable response — all of them leave the review exactly
+    as it was, with every finding published and diff-classed. The model chooses
+    where to look, so a bad choice must cost nothing; the alternative is a
+    hallucinated line number taking down a review.
+    """
+    if head_sha is None or resolve_file is None or not rv.findings:
+        return rv, 0
+
+    from . import verify as verify_mod
+
+    grounded_count = 0
+    spent = 0
+    out: list[ReaderFinding] = []
+
+    for i, finding in enumerate(rv.findings):
+        if spent >= MAX_VERIFY_READS_PER_REVIEW:
+            out.extend(rv.findings[i:])
+            break
+        try:
+            spent += 1
+            response = verify_finding(finding, scope=scope, client=client)
+        except SpendCapExceeded as e:
+            print(f"doug: verify capped ({e}); findings stay ungrounded", file=sys.stderr)
+            out.extend(rv.findings[i:])
+            break
+        except ReaderError as e:
+            print(f"doug: verify failed ({e}); finding stays ungrounded", file=sys.stderr)
+            out.append(finding)
+            continue
+        except Exception as e:  # noqa: BLE001 — grounding must never break a review
+            print(f"doug: verify errored ({type(e).__name__}: {e})", file=sys.stderr)
+            out.append(finding)
+            continue
+
+        citations: list[Citation] = []
+        for check in response.checks:
+            outcome = verify_mod.run_check(
+                check, head_sha=head_sha, resolve_file=resolve_file
+            )
+            if outcome.citation is not None:
+                citations.append(outcome.citation)
+            else:
+                print(
+                    f"doug: verify abstained for reader:{finding.category_slug} "
+                    f"({outcome.abstained_because})",
+                    file=sys.stderr,
+                )
+        if citations:
+            grounded_count += 1
+            out.append(
+                finding.model_copy(
+                    update={"evidence": "head-cited", "citations": citations}
+                )
+            )
+        else:
+            out.append(finding)
+
+    # Identity, not count. An earlier draft repaired a short list by re-slicing
+    # from the original, which restored the LENGTH while losing one finding and
+    # duplicating another — the assertion passed and the corruption was silent.
+    # A mutation test caught it. Compare what came out against what went in.
+    assert [f.category_slug for f in out] == [
+        f.category_slug for f in rv.findings
+    ], "grounding must be additive: every finding in, the same findings out"
+    return rv.model_copy(update={"findings": out}), grounded_count
+
+
 def enabled() -> bool:
     return os.environ.get("DOUG_READER") == "1"
+
+
+def verify_enabled() -> bool:
+    """Opt-in, default off, and separate from DOUG_READER on purpose.
+
+    Grounding adds paid model calls to the live path and changes what renders on
+    a check run. Landing the code dark means the PR that introduces it can be
+    reviewed and merged without changing what Doug does to anyone, and the
+    capability is switched on deliberately — the same posture DOUG_READER and
+    DOUG_INTENT_INSTALLATIONS already take for the tiers below it.
+    """
+    return os.environ.get("DOUG_VERIFY") == "1"
 
 
 def reader_threshold() -> float:
@@ -606,6 +747,13 @@ def _client():
     import anthropic
 
     return anthropic.Anthropic(timeout=read_timeout())
+
+
+def _verify_client():
+    """Same posture as _client, on the tighter verify budget."""
+    import anthropic
+
+    return anthropic.Anthropic(timeout=verify_timeout())
 
 
 def _sent_slice(diff: str, *, budget: int | None = None) -> str:

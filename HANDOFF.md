@@ -1,6 +1,6 @@
 # HANDOFF — doug
 
-State:    building — design-lock.md AND build-plan.md both LOCKED
+State:    review — PR OPEN for Tasks 1-6. design-lock.md and build-plan.md LOCKED
           2026-08-18. Side lane, isolated in worktree
           `managed-agent-pr-review-76fe26` (branch
           `claude/managed-agent-pr-review-76fe26`, base b8e3659). Main lane
@@ -8,13 +8,11 @@ State:    building — design-lock.md AND build-plan.md both LOCKED
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     Task 6 — wire into the review path (review.py, worker.py). This is
-          the FIRST task that touches the live path; everything through Task 5
-          is inert. The superset assertion lands here: the finding set out must
-          be a superset of the finding set in. Tasks 1-5 DONE.
-          ONE BLOCKER, Andrew's hands, gates MERGE not work: P0.1 — publish
-          the LOCKED v9 pre-registration + deploy its hash. Zero code, zero
-          rows; the one artifact whose value decreases with calendar time.
+Next:     P0.1 — publish the LOCKED v9 pre-registration + deploy its hash.
+          GATES MERGE of the PR. Then Tasks 7 (surface), 8 (ADR-0013),
+          9 (labeled smoke test). Andrew's earlier call stands: run Task 9
+          before Task 7, so the nondeterminism spread is known before
+          anything renders to a customer.
           Main lane unchanged: MT3 is still the critical path.
 
 Blockers: MT0 blocks every prospective clock (main lane). This lane's only
@@ -65,8 +63,9 @@ Decisions this session:
   the words leaves a false completeness claim looking rigorous — rejected:
   round 1's either/or framing.
 
-Tasks 1-5 DONE (verified 2026-08-18; afcb77c a1411d3 b24c52d 6b270ca).
-NOTHING IS WIRED YET — all of it is inert until Task 6.
+Tasks 1-6 DONE (verified cold 2026-08-18: api 1438 · console 113 · web 286
+· lint clean). WIRED BUT DARK — DOUG_VERIFY is unset, so behavior is
+unchanged on merge; the flag is deliberately separate from DOUG_READER.
 - reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
   = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
   PROMPT_HASH untouched (8bd26c67...), freeze tests green.
@@ -118,7 +117,27 @@ NOTHING IS WIRED YET — all of it is inert until Task 6.
 - Task 5 mutation-checked: making verify_scope collide with
   installation_scope kills two tests; raising the verify timeout above the
   read timeout kills a third.
-- api: 1426/1426 passed, ruff clean across the whole package.
+- Task 6: reader.verify_finding() (one charged model call, NOT routed through
+  _record_attempt — attempt_kind is a closed Literal that raises for anything
+  but "risk", and WholeInstrumentManifestV0 is extra="forbid" with no field
+  that describes this tier) + reader.ground_findings() + wiring in
+  review.score_one behind reader.verify_enabled().
+  Scope is derived via installation_from_scope's inverse, so the verify scope
+  and the risk scope can never disagree about whose review it is.
+- **A MUTATION TEST CAUGHT A REAL BUG HERE.** My first draft repaired a short
+  output list by re-slicing the original from len(out). With 3 findings where
+  the middle went missing, that restored the LENGTH by dropping finding[1] and
+  appending finding[2] twice — count-based assertion passed, corruption
+  silent. Restructured so each finding is appended exactly once, and the
+  assertion now compares slug identity and ORDER, not length. Mutant 1 went
+  from surviving to killing 5 tests. Test pinned:
+  test_findings_come_out_in_order_and_none_is_duplicated.
+- Task 6 mutation-checked: dropping a finding kills 5; charging `scope`
+  instead of the verify scope kills the meter test; removing the per-review
+  ceiling kills the latency test.
+- Cold verify: api 1438 · console 113 · web 286 · lint 0 errors (2 pre-existing
+  web warnings). Note: this worktree had no node_modules — `npm ci` first, or
+  make lint/test fail with exit 127 and it is NOT a real failure.
 
 Pointers: docs/design/competitor-imports/ (six artifacts) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·
