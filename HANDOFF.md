@@ -1,23 +1,26 @@
 # HANDOFF — doug
 
-State:    **building — the fix is written and verified, NOT committed and
-          NOT deployed.** Branch `claude/doug-next-priorities-5851da`,
-          6 files dirty (1 new). main @ 412298e.
+State:    **review — PR #113 IS OPEN.** https://github.com/drewjst/doug/pull/113
+          Branch `claude/doug-next-priorities-5851da` @ 86807ee, 1 commit off
+          main @ 412298e. No file overlap with the other open PR (#112, web
+          only). Production is STILL DOWN until step 2 below.
 
-Next:     1. Commit + PR + merge.
-          2. **Then run `gcp.sh adjudicator` BY HAND.** CI runs only `deploy`
-             and `web`; the Job is pinned to the API image digest at the
+Next:     1. Review/merge #113.
+          2. **Then run `gcp.sh adjudicator` BY HAND** — CI runs only `deploy`
+             and `web`, and the Job is pinned to the API image digest at the
              moment that command last ran, so **merging does not deploy the
-             adjudicator**. This is the step that actually restarts the loop.
+             adjudicator**. This is the step that actually restarts the loop:
+             PROJECT=doug-prod0 REGION=us-central1 ./api/deploy/gcp.sh adjudicator
           3. Execute the Job manually; confirm a non-zero `done` in the
-             DrainSummary and one receipt end-to-end.
+             DrainSummary and one receipt end-to-end. That closes the last
+             open half of the M3 exit gate.
           4. The liveness item — NOT built, recorded in the roadmap under M3.
 
 Blockers: none in code. Steps 2-3 are Andrew's hands.
 
-Verified in this worktree at the dirty tree:
-  api 1406/1406 (1402 + 4 new) · ruff clean · web 285/285 · eslint 0 errors
-  (2 pre-existing warnings) · console untouched and not run.
+Verified cold at 86807ee: api 1406/1406 (1402 + 4 new) · ruff clean ·
+web 285/285 · eslint 0 errors (2 pre-existing warnings) · console untouched
+and not run.
 
 ## What was fixed
 
