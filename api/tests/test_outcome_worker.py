@@ -1,6 +1,7 @@
 """Executable M3 worker over the real queue and pure adjudicator."""
 
 import subprocess
+import weakref
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -361,3 +362,72 @@ def test_due_work_refuses_missing_prereg_hash_before_claiming(tmp_path, monkeypa
 
     [job] = _rows(url, store.outcome_jobs)
     assert (job["status"], job["attempts"]) == ("pending", 0)
+
+
+class _WeaklyHeldNamespace:
+    """githubkit's `.rest`, modelled at its one load-bearing property.
+
+    `RestVersionSwitcher.__init__` stores `ref(github)` and `_github` raises
+    when that weakref is dead — pinned against real githubkit by
+    `test_app_auth.py`. Reproduced here because the real client cannot answer
+    a mint without a network, and a stub that holds its client strongly (the
+    kind every other test in this file uses, correctly, for other questions)
+    is structurally incapable of failing on the defect this test exists for.
+    """
+
+    def __init__(self, client) -> None:
+        self._ref = weakref.ref(client)
+
+    def __getattr__(self, name):
+        client = self._ref()
+        if client is None:
+            raise RuntimeError(
+                "GitHub client has already been collected. "
+                "Do not use the namespace after the client has been collected."
+            )
+        return getattr(client.namespaces, name)
+
+
+class _WeaklyHeldClient:
+    def __init__(self, **namespaces) -> None:
+        self.namespaces = SimpleNamespace(**namespaces)
+
+    @property
+    def rest(self):
+        return _WeaklyHeldNamespace(self)
+
+
+def test_github_context_holds_each_client_alive_across_its_own_call(monkeypatch):
+    """The clients are used once each and never named again, which is exactly
+    the shape that invites `app_client().rest.apps.mint(...)` — and that shape
+    ran red in production for two days from 2026-08-17 while this file was
+    green. Unbind either client in `_github_context` and this fails with the
+    production error; nothing else in the suite does."""
+
+    def fresh_app():
+        return _WeaklyHeldClient(
+            apps=SimpleNamespace(
+                create_installation_access_token=lambda installation_id: SimpleNamespace(
+                    parsed_data=SimpleNamespace(token="minted")
+                )
+            )
+        )
+
+    def fresh_installation(installation_id):
+        return _WeaklyHeldClient(
+            repos=SimpleNamespace(
+                get=lambda owner, repo: SimpleNamespace(
+                    parsed_data=SimpleNamespace(default_branch="trunk")
+                )
+            )
+        )
+
+    # Returned, never stored: the caller's binding is the only strong
+    # reference there is, which is the production lifetime exactly.
+    monkeypatch.setattr(app_auth, "app_client", fresh_app)
+    monkeypatch.setattr(app_auth, "installation_client", fresh_installation)
+
+    assert outcome_worker._github_context(INSTALLATION_ID, "drewjst/doug") == (
+        "minted",
+        "trunk",
+    )

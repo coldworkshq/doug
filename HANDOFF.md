@@ -15,6 +15,9 @@ Next:     P0.1 — publish the LOCKED v9 pre-registration + deploy its hash.
           anything renders to a customer.
           Main lane unchanged: MT3 is still the critical path.
 
+Merged origin/main @ 3eddbf0 (4 commits: #113 #114 #115 #116) into the lane
+2026-08-18 — only HANDOFF.md conflicted; no code overlap. Re-verified after.
+
 Blockers: MT0 blocks every prospective clock (main lane). This lane's only
           blocker is P0.1, and it gates merge, not the spec/plan/first commit.
 

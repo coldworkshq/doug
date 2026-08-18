@@ -276,6 +276,17 @@ path, no cross-tenant read, no silent partial reads.
   boundary corrected in #65, and verified in production on 2026-08-07:
   `doug-adjudicator-nvwqn` succeeded with an all-zero no-op summary before the
   first due clock; both session-independent SQL audits returned zero rows.
+  ~~**Deploy trap, recorded 2026-08-18:** `gcp.sh adjudicator` pins the Job to
+  the digest `doug-api` is serving at the moment the command runs, and CI runs
+  only `deploy` and `web`, so merging a fix to the adjudicator does not deploy
+  it.~~ **RETRACTED the same day — this hazard does not exist.** `deploy()`
+  calls `adjudicator` and `reconcile_job` at its end and `deploy.yml:132` says
+  so ("then refreshes doug-adjudicator from the promoted image"); after #113
+  merged, API and Job both moved to `@sha256:d12a4f4c` with no manual step.
+  It was asserted from a truncated `grep` and from reading gcp.sh's header
+  list of CI entry points as the full list of what `deploy` does. Left visible
+  rather than deleted: a roadmap that quietly swallows its own wrong claims is
+  worth less than one that shows them.
 - [~] `base_ref` censoring: merge to non-default branch → `censored`, never `clean`.
   Pure fixtures and the scheduled worker path are built; production execution
   remains the live gate.
@@ -301,9 +312,37 @@ path, no cross-tenant read, no silent partial reads.
   due clock (2026-08-16), so the adjudicated half of the exit gate's "one
   receipt correct end-to-end" — a real adjudication block on a real merge —
   is carried today by `governing_verdict()`'s fixture pin against §2.2's SQL
-  and by the honesty-state tests, not by a production receipt. Nothing
+  and by the honesty-state tests, not by a production receipt. ~~Nothing
   further needs to ship for that gap to close: it closes itself the first
-  time a real merge clears its 60-day window.
+  time a real merge clears its 60-day window.~~ **DISPROVED IN PRODUCTION,
+  2026-08-18.** The first clock came due at 2026-08-16T04:24:51Z and the gap
+  did not close itself. `doug-adjudicator` exited 1 on both runs that had
+  work to do — `-swwhk` (08-17T03:00Z) and `-szjvw` (08-18T03:00Z) — with
+  `RuntimeError: GitHub client has already been collected` at
+  `outcome_worker.py:36`. That is the #52 defect (prod 2026-08-05), whose
+  rule was already written down at `tenancy.py:220`, reintroduced in the one
+  code path that had never run against real work. Every earlier run of this
+  Job succeeded because every earlier run was a no-op, so twelve green
+  executions carried no evidence at all. Fixed by binding both clients;
+  `tests/test_client_lifetime.py` now fails naming any call site in the
+  package that chains off a client factory, and
+  `test_github_context_holds_each_client_alive_across_its_own_call`
+  reproduces the production error against a client held the way githubkit
+  holds it. **And it was not the only thing hiding there.** With the clients
+  bound, the 2026-08-18T14:20Z execution got past `_github_context` and died
+  on `FileNotFoundError: 'git'`: the runtime image is `python:3.14-slim-trixie`
+  and installs nothing, while the drain path shells out to
+  `git clone --filter=tree:0` / `git fetch` / `git log`. CI's `docker build
+  api` never ran the image it built, so it was green throughout. Both are the
+  same structural fact — **this path had never executed against real work, so
+  no green anywhere in the system carried evidence about it.** Fixed by
+  installing git in the final stage and by making CI run the built image.
+  **No data was lost and no attempt was burned:**
+  `reclaim_stalled` returns an expired lease "without spending an attempt",
+  so the pre-registered ten attempts are intact and the clocks are stalled,
+  not spent. What it did cost is two days of a dead instrument that every
+  surface reported as `adjudicated 0` — the honest empty state, pixel for
+  pixel identical to the broken one. That is the liveness item below.
   Migration **8** is consumed by this slice (`verdicts.diff_budget`,
   `verdicts.read_order`, `outcome_jobs.merged_head_sha`, plus a one-time
   `verdicts.prompt_hash` backfill over historical reader rows) —
@@ -338,10 +377,24 @@ path, no cross-tenant read, no silent partial reads.
     Receipt: `/tmp/doug-60-day-backfill-20260811T224751Z`, durable copy at
     `workspace/research/task7-receipt-20260811T224751Z` (outside the repo).
 
+- [ ] **The instrument must be able to report its own silence.** `adjudicated 0`
+  renders identically whether nothing is due yet or the adjudicator is dead, and
+  from 2026-08-16 to 2026-08-18 it rendered the second while `doug-prod0` held
+  **zero alert policies and zero notification channels**. Nothing in the system
+  said anything; the defect was found by reading Cloud Run execution status by
+  hand. `first_due` in the past together with `adjudicated 0` is a contradiction
+  the system can compute on itself — both fields are already in
+  `instrument_snapshot` and already public on `GET /v1/showcase/scoreboard`.
+  Minimum: surface that contradiction where an operator sees it, and alert on
+  `doug-adjudicator` `failedCount >= 1`. "Empty is the product" holds only while
+  empty-because-broken is a different and louder thing.
+
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real
 receipt correct end-to-end; scoreboard rendering live counts; then one full webhook-started
-14-day cycle observed in prod.
+14-day cycle observed in prod. **"Observed" is load-bearing and was not implemented:** the first
+two days of the first cycle ran unobserved and red. The liveness item above is what makes the
+word mean anything.
 
 ---
 
@@ -371,9 +424,10 @@ User install" is baked in. Every item below was found by a review or a
 production check on 2026-08-04, not predicted; the ordering is by when each
 would bite a real tenant.
 
-- [ ] **MT0 — Populate `installations` for the existing install.** Production
-  holds **zero** rows in `installations` and `installation_repos` while
-  `verdicts` holds 33 rows for installation 150424894. Its only writer is the
+- [x] **MT0 — Populate `installations` for the existing install.** **As found
+  2026-08-04:** production held **zero** rows in `installations` and
+  `installation_repos` while `verdicts` held 33 rows for installation
+  150424894. Its only writer is the
   `installation` webhook handler (`api.py:730`), which never fired for an App
   installed before it existed. Consequences: `insert_installation_token`
   refuses when the `installations` row is absent, so dispense still 404s for
@@ -382,7 +436,16 @@ would bite a real tenant.
   real reason the startup sweep never enqueues (M1's soak criterion 2 recorded a
   different explanation and it was wrong). **Fix is operational** — redeliver
   the `installation` event; do **not** uninstall/reinstall, which mints a new
-  `installation_id` and orphans every existing verdict.
+  `installation_id` and orphans every existing verdict. **Closed** — the
+  suspend/unsuspend + repo re-add on 2026-08-05 fired fresh webhooks (see the
+  exit-gate note below); the box was never ticked, and the stale `- [ ]` was
+  still being read as the critical path twelve days later. **Re-verified
+  2026-08-18:** `api.py`'s cold-start drift check prints a DRIFT line naming
+  this item whenever `installations` is empty against referencing verdicts,
+  and seven days of `doug-api` logs contain none across repeated cold starts
+  (six startup sweeps in the last seven hours alone). The check is the
+  evidence; a tick without it would be the same untested green this roadmap
+  keeps finding.
 - [x] **MT1 — Repo-admin must not mint an installation-wide token.**
   `verify_admin` proves admin on **one repo**; `mint` issues a token scoped to
   the **whole installation**. Identical on a User install, which is why it was
@@ -418,6 +481,14 @@ would bite a real tenant.
   repos past the reaping point are never swept on *any* cold start. A silent,
   permanent coverage hole, not slowness.
   Design: `docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md`.
+  **Live in production, 2026-08-18:** `doug-outcome-reconciler` is deployed and
+  has **never executed** — Cloud Scheduler in us-central1 holds only
+  `doug-adjudicator-daily`, so `schedule-reconcile` was never run. The outcome
+  lane therefore reconciles only inside the reaped startup thread today, which
+  is exactly the coverage hole this item describes: it is current behaviour,
+  not a future risk. Decide deliberately rather than by omission — D2 moves the
+  full sweep INTO that Job, so leaving it unscheduled until MT3 lands is a
+  defensible choice and an unrecorded one is not.
   (Next free migration: **11** — 9 is Front Door Phase 1a and 10 is
   `review_jobs.base_sha`; the earlier "next free: 9" note here was stale.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
