@@ -5387,6 +5387,43 @@ def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, 
     assert r.json() == {"needs_you_threshold": 1.0}
 
 
+def test_the_custom_validation_handler_still_returns_the_stock_422_body():
+    """The NaN guard is GLOBAL, so every route's 422 body is now ours to keep.
+
+    `_validation_error_handler` replaces FastAPI's own handler for EVERY
+    RequestValidationError in the application — it was added for one field on
+    one PATCH (a NaN threshold that would otherwise 500 on serialisation), but
+    it is registered app-wide and there is no upper bound on the FastAPI
+    versions it will run under. Nothing else pins its output, so a `_json_safe`
+    that dropped or renamed a key, or a future FastAPI whose stock handler
+    grows a second top-level field, would silently change the error contract
+    the console and every CLI caller parse — on routes that have nothing to do
+    with the flag line.
+
+    /v1/score is deliberately an unrelated route with a plain pydantic body,
+    and the missing-field path is chosen because it is the one FastAPI itself
+    raises (not a hand-written HTTPException(422), which never reaches this
+    handler at all).
+    """
+    res = TestClient(app).post("/v1/score", json={"title": "no number, no author"})
+
+    assert res.status_code == 422
+    body = res.json()
+    # ONE top-level key. FastAPI's contract is `{"detail": [...]}` and callers
+    # read it positionally; an extra sibling key here means the handler drifted.
+    assert list(body) == ["detail"]
+    assert isinstance(body["detail"], list) and body["detail"]
+    for entry in body["detail"]:
+        # `input` is the field the NaN guard exists to rewrite, so it is the
+        # one that must still be present and unrewritten for ordinary values.
+        assert {"type", "loc", "msg", "input"} <= set(entry), entry
+    assert {tuple(e["loc"]) for e in body["detail"]} == {
+        ("body", "number"),
+        ("body", "author"),
+    }
+    assert all(e["input"] == {"title": "no number, no author"} for e in body["detail"])
+
+
 def test_flag_line_write_refuses_tenant_api_keys_and_orgless_sessions(tmp_path, monkeypatch):
     _session_scope(tmp_path, monkeypatch)
     orgless = _session()  # no org_id → resolve_session is None

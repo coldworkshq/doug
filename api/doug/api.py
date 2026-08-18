@@ -320,8 +320,13 @@ def _banding_threshold(items: list[QueueItem], fallback: float) -> float:
 
     Rows can disagree — a reader row is banded at 0.30, a deterministic
     fallback row at 0.62 — in which case no single line is honest and the
-    most common one is the least wrong. The per-item thresholds stay
-    authoritative either way; this only decides where the dashboard draws.
+    most common one is the least wrong. Since the per-repository flag line
+    (`installation_repos.needs_you_threshold`, ADR-0013), two repositories in
+    one installation can also carry two different lines, so the mode is a
+    coarser answer than it was; `/v1/queue?repo=` is exact, and making
+    `summary.threshold` nullable when the rows are mixed is deferred (spec
+    §3.5). The per-item thresholds stay authoritative either way; this only
+    decides where the dashboard draws.
     """
     if not items:
         return fallback

@@ -41,19 +41,31 @@ export function FlagLineControl({
       ? `default · ${defaults.reader.toFixed(2)} deep read / ${defaults.fallback.toFixed(2)} fallback`
       : value.toFixed(2);
   return (
-    <details className="group">
+    // `relative` is load-bearing: it makes this <details> the containing block
+    // for the panel below, which is absolutely positioned so the open form can
+    // be wider than the 210px table column it lives in. Laid out inside the
+    // cell, the label + input + save + reset row wrapped into four lines.
+    <details className="group relative">
       {/* The accessible name carries the VALUE as well as the word, because the
           value is the whole point of the row: a bare aria-label="flag line"
           would replace "default · 0.30 deep read / 0.62 fallback" for anyone
           reading by ear, leaving them a control whose current setting they
-          cannot hear. */}
+          cannot hear.
+
+          COLLAPSED, THIS IS ONE LINE. The unset summary is ~40 monospace
+          characters and the column is 210px, so without `truncate` it wrapped
+          to three lines and pushed every other cell in the row down. `title`
+          carries the full string for the mouse; `aria-label` already carried
+          it for the ear; opening the disclosure carries it for everyone else.
+          The marker rule matches the repo's other two <details>. */}
       <summary
-        className="mono cursor-pointer list-none text-[12px] text-muted-foreground hover:text-foreground"
+        className="mono cursor-pointer list-none truncate text-[12px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
         aria-label={`flag line — ${shown}`}
+        title={shown}
       >
         {shown}
       </summary>
-      <div className="mt-1 flex flex-col gap-1">
+      <div className="absolute z-10 mt-1 flex w-max max-w-[360px] flex-col gap-1 rounded-[5px] border border-border bg-card p-2 shadow-[0_10px_28px_-10px_rgba(0,0,0,.22)]">
         <p className="text-[10.5px] text-muted-foreground">
           One line for both scorers. Unset, Doug uses {defaults.reader.toFixed(2)} on deep reads and {defaults.fallback.toFixed(2)} when the reader didn&apos;t run.
           Applies to reviews from now on — past verdicts keep the line they were scored against, and open PRs keep their check until a new commit.

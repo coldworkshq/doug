@@ -846,7 +846,10 @@ const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
   { label: "runs", cls: "w-[58px] text-right" },
   { label: "prs", cls: "w-[52px] text-right" },
   { label: "needs you", cls: "w-[82px] text-right" },
-  { label: "flag line", cls: "w-[150px]" },
+  // 210px, not 150: the unset summary reads "default · 0.30 deep read / 0.62
+  // fallback" — ~40 monospace characters, which wrapped to three lines in a
+  // 150px table-fixed cell and took the whole row's height with it.
+  { label: "flag line", cls: "w-[210px]" },
   { label: "findings", cls: "w-[76px] text-right" },
   { label: "read", cls: "w-[104px]" },
   { label: "errors", cls: "w-[62px] text-right" },
@@ -908,7 +911,7 @@ function RepositoryTable({
   return (
     <Table
       containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
-      className="min-w-[760px] table-fixed border-separate border-spacing-0 text-xs"
+      className="min-w-[820px] table-fixed border-separate border-spacing-0 text-xs"
     >
       <TableHeader>
         <TableRow className="hover:bg-transparent">
