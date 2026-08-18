@@ -103,3 +103,25 @@ def test_clients_refuse_when_unconfigured(monkeypatch):
         app_auth.app_client()
     with pytest.raises(RuntimeError, match="DOUG_GITHUB_APP_ID"):
         app_auth.installation_client(INSTALLATION_ID)
+
+
+def test_a_chained_client_is_collected_mid_expression_but_a_bound_one_survives(monkeypatch):
+    """Characterization of githubkit, pinned because it has now cost
+    production twice: the dispense identity check on 2026-08-05 (#52) and
+    every adjudicator run from 2026-08-17.
+
+    `.rest` holds its client with a weakref (`githubkit_schemas/core/rest.py`,
+    `RestVersionSwitcher._github_ref`), so a construct-and-chain temporary is
+    deallocated the instant `.rest` is evaluated and the NEXT attribute raises.
+    Two consequences that a comment cannot enforce and this can: it fires
+    before any request, so no network stub or fixture makes it go away, and
+    the only fix is for the caller to bind the client to a local for the
+    duration of the call. `test_client_lifetime.py` holds that line.
+    """
+    _configured(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="has already been collected"):
+        _ = app_auth.app_client().rest.apps
+
+    bound = app_auth.app_client()
+    assert bound.rest.apps is not None
