@@ -1,37 +1,68 @@
 # HANDOFF — doug
 
-State:    **THE LOOP IS LIVE.** First real adjudications in the system's
-          history, 2026-08-18T16:49Z. #116 merged 15:00:21Z; execution
-          `doug-adjudicator-bdvxn` succeeded:
+State:    **LOOP LIVE + EXIT-GATE AUDIT PASSED (18/18), and the audit found
+          a live defect in `/v1/patterns`.**
 
-              {"done": 18, "failed_repositories": 0, "reclaimed": 17,
-               "repositories": 1, "retried": 0}
+Next:     1. Fix `precision.fold` — it counts `censored` as a defect. NOT
+             started, no approval yet. See below.
+          2. **2026-08-21: the first real detector test.** PR #68 merged to
+             main 2026-08-07 and was reverted by #70 the same day. Its 14d
+             adjudication is `pending`, due 2026-08-21. It is the only PR in
+             the repo's history with a revert against it, so it MUST come
+             back `kind=revert`. If it returns `clean`, the detector is
+             broken and M3 says stop.
+          3. The liveness item (roadmap M3, unbuilt). Zero alert policies
+             still exist in doug-prod0.
+          4. Then MT3, then M4's interviews.
 
-          Scoreboard 20:21Z: `adjudicated 18 · pending 158 ·
-          first_due 2026-08-18T21:53:26Z` (future — nothing overdue).
-          `reclaimed: 17` is the batch the 14:22Z crash had claimed, freed
-          after STALL_LEASE_SECONDS and then settled. Three defects closed:
-          bound clients (#113), git in the image (#116), and the lease that
-          made early re-runs report false success.
+Blockers: none.
 
-Next:     1. **THE EXIT-GATE AUDIT, and it is a STOP condition.** M3's gate
-             requires 100% agreement between these 18 adjudications and a
-             manual `git log` audit — "any disagreement = detector bug =
-             stop". Nothing has checked this yet. `done: 18` says the
-             pipeline ran, NOT that the labels are right. Needs either DB
-             read access or an operator token for
-             `GET /v1/prs/{n}/receipt`; the public scoreboard gives counts
-             only.
-          2. One real receipt correct end-to-end — the other half of the
-             gate, now finally checkable against a real adjudication block.
-          3. The liveness item (roadmap, M3, unbuilt): `first_due` in the
-             past + `adjudicated 0` is a contradiction the system can compute
-             on itself. Zero alert policies still exist in doug-prod0. This
-             outage was found by reading execution status by hand.
-          4. MT3. Then M4's 3 prospect interviews, which are what the live
-             scoreboard was for.
+## THE AUDIT — M3's exit gate, done 2026-08-18
 
-Blockers: none in code. Step 1 needs credentials I do not have.
+Gate: "100% agreement vs. a manual `git log` audit (any disagreement =
+detector bug = stop)". **18/18 agree.**
+
+  16 clean (PRs 28-32, 34-39, 41-45) — the ONLY revert in the entire repo
+     history since 2026-08-01 is `#70 Revert "...(#68)"` on 2026-08-07, and
+     #68 is not in this batch (its window is still pending). So no PR
+     labelled clean has a revert against it.
+  2 censored (PRs 40, 46) — both merged to `gh-pages`, `censor_reason:
+     base_ref`, `default_branch: main`. Independently checkable from the
+     receipt's own base_ref. This is the roadmap's rule working: "merge to
+     non-default branch -> censored, never clean".
+  Denominator complete — the one gap in an otherwise contiguous 28-46 run
+     is #33, which has `merges: 0`. Never merged, correctly not at risk.
+     (This is the check MT3 exists to protect: a missing job would look
+     identical to a clean sweep.)
+
+Method: receipts via `GET /v1/prs/{n}/receipt` with the operator token, swept
+over PRs 10-60; revert evidence read from `git log origin/main` by subject,
+NOT from `git_labels` (using the detector to audit the detector is circular).
+
+## THE DEFECT THE AUDIT FOUND — `/v1/patterns` counts censored as defect
+
+`precision.py:50`:
+
+    is_defect[key] = is_defect.get(key, False) or r["kind"] != "clean"
+
+The Outcome enum is REVERT / CLEAN / CENSORED. A censored row is a
+NON-OBSERVATION — the PR left the risk set — but it is `!= "clean"`, so it
+lands in the numerator as a defect.
+
+Live impact right now: `/v1/patterns?repo=drewjst/doug` returns
+`prs: 18, defects: 2, base_rate: 0.111`. The true observed defect count is
+**0 of 16**; 100% of the reported "defects" are non-observations, and the
+honest denominator is 16, not 18. Every precision, lift and `clears_base`
+value it publishes is computed against that manufactured base rate.
+
+Same defect class as #93 ("a censored outcome is a non-observation, not a
+miss") — fixed in the console then, not here. `precision.fold` is the ONLY
+consumer of `kind != "clean"` in the package, so the blast radius is
+`/v1/patterns` and nothing else.
+
+Not yet fixed — needs a decision on the right semantics (exclude censored
+from the denominator vs. count it clean) and that is a prereg question, not
+just a code one. §2/§6.2 govern.
 
 ## What the three defects had in common — worth keeping
 
