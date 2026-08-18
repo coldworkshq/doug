@@ -1,10 +1,11 @@
 # HANDOFF — doug
 
 State:    spec (this branch: per-repo needs-you threshold)
-Next:     Fold the three adversarial-review reports (correctness / tenancy /
-          product lenses, run 2026-08-18) into
-          docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md,
-          re-commit, get Andrew's read, then invoke writing-plans.
+Next:     Andrew reads the revised spec
+          docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md
+          (adversarial review folded in, D4–D6 added); on approval invoke
+          writing-plans. Plan must be TWO PRs (web guard tolerance first —
+          §3.6) and pick the next free migration number (MT3 spec claims 11).
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
@@ -12,6 +13,9 @@ Decisions this session:
 - D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
 - D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
 - D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
+- D4 unset shows both defaults (0.30 reader / 0.62 fallback) — prod runs DOUG_READER=1 — rejected: single 0.62
+- D5 write authority = org member + live repo entitlement, new settings:write scope — weaker than mint/bind, named — rejected: installer-only
+- D6 two PRs, web exact() guards first — API deploys before web — rejected: one PR (dashboard outage window)
 - Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
 Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
           seams: review.score_one (review.py:303), worker.py:250,
