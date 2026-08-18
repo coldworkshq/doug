@@ -55,26 +55,35 @@ test("the header's public routes survive below the sm breakpoint", () => {
   );
 });
 
-test("nav order puts the live product surfaces before reference material", () => {
-  // Scoreboard and Queue are the live showcase surfaces; Docs and About are
-  // reference material. Regressing this ordering is exactly the kind of
+test("nav order puts the live product surfaces before reference material, About last", () => {
+  // Scoreboard and Queue are the live showcase surfaces, Docs is reference
+  // material — those three are NAV_LINKS entries. GitHub and About are each
+  // hardcoded separately after the NAV_LINKS.map, in that order, so they're
+  // matched by their literal JSX (not the `href: "…"` object-literal shape
+  // NAV_LINKS entries use). Regressing this ordering is exactly the kind of
   // silent reshuffle a diff review wouldn't catch without a pin.
-  const order = ["/scoreboard", "/queue", "/docs", "/about"];
-  const positions = order.map((href) => header.indexOf(`href: "${href}"`));
+  const order = [
+    'href: "/scoreboard"',
+    'href: "/queue"',
+    'href: "/docs"',
+    "href={GITHUB_REPO_URL}",
+    'href="/about"',
+  ];
+  const positions = order.map((marker) => header.indexOf(marker));
   assert.ok(
     positions.every((p) => p !== -1),
-    "every nav link must be present in NAV_LINKS",
+    "every nav link must be present in the header",
   );
   for (let i = 1; i < positions.length; i++) {
     assert.ok(
       positions[i] > positions[i - 1],
-      `${order[i]} must come after ${order[i - 1]} in NAV_LINKS`,
+      `${order[i]} must come after ${order[i - 1]} in the header`,
     );
   }
 });
 
 test("about page exists, wears the shared chrome, and is reachable from the header", () => {
-  assert.match(header, /href: "\/about"/);
+  assert.match(header, /href="\/about"/);
   assert.match(about, /<SiteHeader/);
   assert.equal(about.includes('className="dark'), false);
 });
