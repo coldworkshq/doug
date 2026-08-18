@@ -27,10 +27,16 @@ export type RepositoryConnection = {
   account_type: "User" | "Organization";
   status: ConnectionStatus;
   label: string | null;
-  repositories: Array<{ id: number; full_name: string }>;
+  repositories: Array<{ id: number; full_name: string; needs_you_threshold: number | null }>;
 };
 
-export type ConnectionsResponse = { connections: RepositoryConnection[] };
+export type ConnectionsResponse = {
+  connections: RepositoryConnection[];
+  /** Both process defaults, because production scores most PRs with the
+   *  reader (0.30) and only falls back to the deterministic line (0.62). An
+   *  unset repo is shown as BOTH numbers, never one. */
+  default_needs_you_threshold: { reader: number; fallback: number };
+};
 
 export type RunCoverage = {
   diff_chars: number;
@@ -155,19 +161,6 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
-/** `exact` plus a set of keys that MAY be present. Used only where the API
- *  is about to start emitting a field and this build must not reject it
- *  before it learns to read it (deploy.yml promotes API before web). */
-function exactWithOptional(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[],
-): boolean {
-  const actual = Object.keys(value);
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => key in value) && actual.every((key) => allowed.has(key));
-}
-
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -202,13 +195,15 @@ function prMetadata(value: unknown): value is PRMetadata {
   );
 }
 
-function repository(value: unknown): value is { id: number; full_name: string } {
+function repository(
+  value: unknown,
+): value is { id: number; full_name: string; needs_you_threshold: number | null } {
   return (
     record(value) &&
-    exactWithOptional(value, ["id", "full_name"], ["needs_you_threshold"]) &&
+    exact(value, ["id", "full_name", "needs_you_threshold"]) &&
     Number.isInteger(value.id) &&
     typeof value.full_name === "string" &&
-    (!("needs_you_threshold" in value) || nullableNumber(value.needs_you_threshold))
+    nullableNumber(value.needs_you_threshold)
   );
 }
 
@@ -233,11 +228,15 @@ function connection(value: unknown): value is RepositoryConnection {
 }
 
 function isConnectionsResponse(value: unknown): value is ConnectionsResponse {
+  if (!record(value) || !exact(value, ["connections", "default_needs_you_threshold"])) return false;
+  const defaults = value.default_needs_you_threshold;
   return (
-    record(value) &&
-    exactWithOptional(value, ["connections"], ["default_needs_you_threshold"]) &&
     Array.isArray(value.connections) &&
-    value.connections.every(connection)
+    value.connections.every(connection) &&
+    record(defaults) &&
+    exact(defaults, ["reader", "fallback"]) &&
+    typeof defaults.reader === "number" && Number.isFinite(defaults.reader) &&
+    typeof defaults.fallback === "number" && Number.isFinite(defaults.fallback)
   );
 }
 
@@ -406,6 +405,36 @@ export async function bindInstallation(
     if (error instanceof SessionApiError) throw error;
     throw new SessionApiError(message);
   }
+}
+
+export async function setRepositoryThreshold(
+  accessToken: string,
+  githubRepoId: number,
+  value: number | null,
+): Promise<number | null> {
+  const message = "Doug could not save that flag line.";
+  if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
+  if (value !== null && !(Number.isFinite(value) && value >= 0 && value <= 1)) {
+    throw new SessionApiError(message);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${SESSION_API_URL}/v1/sessions/repositories/${githubRepoId}`, {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ needs_you_threshold: value }),
+      signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    throw new SessionApiError(message);
+  }
+  if (response.status !== 200) throw new SessionApiError(message, response.status);
+  const body: unknown = await response.json().catch(() => null);
+  if (!record(body) || !exact(body, ["needs_you_threshold"]) || !nullableNumber(body.needs_you_threshold)) {
+    throw new SessionApiError(message);
+  }
+  return body.needs_you_threshold as number | null;
 }
 
 /** The API's accepted maximum: `/v1/sessions/runs` rejects anything outside

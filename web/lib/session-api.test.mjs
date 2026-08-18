@@ -16,11 +16,12 @@ const validConnections = {
       status: "ready",
       label: null,
       repositories: [
-        { id: 11, full_name: "acme/one" },
-        { id: 12, full_name: "acme/two" },
+        { id: 11, full_name: "acme/one", needs_you_threshold: null },
+        { id: 12, full_name: "acme/two", needs_you_threshold: 0.5 },
       ],
     },
   ],
+  default_needs_you_threshold: { reader: 0.3, fallback: 0.62 },
 };
 
 test("session fetch is cacheless, bounded, and puts the WorkOS bearer only in a header", async () => {
@@ -135,6 +136,7 @@ test("the connections validator accepts the old API body and the reauthorize_req
     const oldFetch = globalThis.fetch;
     const body = {
       connections: [{ ...validConnections.connections[0], status }],
+      default_needs_you_threshold: validConnections.default_needs_you_threshold,
     };
     globalThis.fetch = async () =>
       new Response(JSON.stringify(body), { status: 200 });
@@ -379,37 +381,69 @@ test("getReceipt sends repo as a query parameter, encoded", async () => {
   }
 });
 
-test("the connections validator accepts bodies with and without the per-repo flag line fields", async () => {
-  // DEPLOY-ORDER SAFETY, same reason as the reauthorize_required test above:
-  // the API goes live first, so web must accept the new keys before the API
-  // emits them, or every dashboard load fails between the two promotions.
-  const { getConnections } = await import("./session-api.ts");
-  const withFields = {
-    connections: [{
-      ...validConnections.connections[0],
-      repositories: [
-        { id: 11, full_name: "acme/one", needs_you_threshold: 0.9 },
-        { id: 12, full_name: "acme/two", needs_you_threshold: null },
-      ],
-    }],
-    default_needs_you_threshold: { reader: 0.3, fallback: 0.62 },
-  };
-  for (const [label, body] of [["old api", validConnections], ["new api", withFields]]) {
-    const oldFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
-    try {
-      const result = await getConnections("token");
-      assert.equal(result.connections.length, 1, label);
-    } finally {
-      globalThis.fetch = oldFetch;
-    }
-  }
-  // Still exact on everything else: an unknown key is still rejected.
+test("the connections validator now requires the per-repo flag line and the process defaults", async () => {
+  // Task 1 made these keys TOLERATED so this build could deploy ahead of the
+  // API (deploy.yml gives the web job `needs: [changes, api]`, so the API
+  // revision is already live by the time this build runs). Task 7 shipped the
+  // API side, so the keys are load-bearing now: a body missing either one is
+  // as malformed as a body with an unknown key.
+  const { getConnections, SessionApiError } = await import(
+    "./session-api.ts?required-flag-fields"
+  );
   const oldFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ ...validConnections, surprise: 1 }), { status: 200 });
   try {
-    await assert.rejects(() => getConnections("token"));
+    // The full, current shape still round-trips.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(validConnections), { status: 200 });
+    assert.deepEqual(await getConnections("token"), validConnections);
+
+    // Missing the top-level process defaults: rejected.
+    const withoutDefaults = { connections: validConnections.connections };
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(withoutDefaults), { status: 200 });
+    await assert.rejects(() => getConnections("token"), SessionApiError);
+
+    // A repository missing its own flag line: rejected.
+    const missingRepoField = {
+      ...validConnections,
+      connections: [{
+        ...validConnections.connections[0],
+        repositories: [{ id: 11, full_name: "acme/one" }],
+      }],
+    };
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(missingRepoField), { status: 200 });
+    await assert.rejects(() => getConnections("token"), SessionApiError);
+
+    // Still exact on everything else: an unknown key is still rejected.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ...validConnections, surprise: 1 }), { status: 200 });
+    await assert.rejects(() => getConnections("token"), SessionApiError);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and returns the stored value", async () => {
+  const { setRepositoryThreshold } = await import("./session-api.ts");
+  const calls = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return new Response(JSON.stringify({ needs_you_threshold: 0.62 }), { status: 200 });
+  };
+  try {
+    const stored = await setRepositoryThreshold("token", 11, 0.6249);
+    assert.equal(stored, 0.62);
+    assert.equal(calls[0].url, `${process.env.DOUG_API_URL ?? "http://localhost:8000"}/v1/sessions/repositories/11`);
+    assert.equal(calls[0].options.method, "PATCH");
+    assert.deepEqual(JSON.parse(calls[0].options.body), { needs_you_threshold: 0.6249 });
+    await setRepositoryThreshold("token", 11, null);
+    assert.deepEqual(JSON.parse(calls[1].options.body), { needs_you_threshold: null });
+    // Out-of-range never leaves the client.
+    await assert.rejects(() => setRepositoryThreshold("token", 11, 1.5));
+    await assert.rejects(() => setRepositoryThreshold("token", 11, Number.NaN));
+    assert.equal(calls.length, 2);
   } finally {
     globalThis.fetch = oldFetch;
   }
