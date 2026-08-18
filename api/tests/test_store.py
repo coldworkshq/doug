@@ -3233,7 +3233,9 @@ def test_set_repo_threshold_rounds_to_two_decimals(tmp_path, monkeypatch):
     assert store.repo_threshold(101, 11) == 0.62
 
 
-def test_set_repo_threshold_touches_only_the_callers_row_and_only_active_ones(tmp_path, monkeypatch):
+def test_set_repo_threshold_touches_only_the_callers_row_and_only_active_ones(
+    tmp_path, monkeypatch
+):
     """A transferred repo legitimately has rows under two installations
     (repo_id_for). One tenant's PATCH must not reach the other's row, and a
     removed row is not writable (rowcount 0 -> 404 at the API)."""
@@ -3251,7 +3253,9 @@ def test_set_repo_threshold_touches_only_the_callers_row_and_only_active_ones(tm
     assert store.repo_threshold(101, 11) == 0.9  # still readable, unchanged
 
 
-def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(tmp_path, monkeypatch):
+def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(
+    tmp_path, monkeypatch
+):
     """Webhooks must not erase tenant configuration; and updated_at is the
     tiebreaker repo_id_for uses to pick between duplicate registrations, so
     a settings write must not be a lever over it."""
