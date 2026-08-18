@@ -1,30 +1,50 @@
 # HANDOFF — doug
 
-State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
-          never-executed path. #113 (383daf6), #114 (8e1d774) and #115
-          (22156d9) are all MERGED. **PR #116 IS OPEN** and is the last thing
-          between here and a live loop:
-          https://github.com/drewjst/doug/pull/116
-          Branch `fix/adjudicator-needs-git`, verified locally red→green
-          (pre-fix image: `exec: "git": executable file not found`, exit 127;
-          fixed image: git 2.47.3 + a real `--filter=tree:0` clone of a public
-          repo, which also proves TLS/CA).
+State:    **THE LOOP IS LIVE.** First real adjudications in the system's
+          history, 2026-08-18T16:49Z. #116 merged 15:00:21Z; execution
+          `doug-adjudicator-bdvxn` succeeded:
 
-Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
-             do NOT run `gcp.sh adjudicator` by hand, that instruction was
-             mine and it was wrong.
-          2. **At or after 16:25 UTC / 9:25 AM PDT**, execute the Job:
-             gcloud run jobs execute doug-adjudicator \
-               --project doug-prod0 --region us-central1 --wait
-             Earlier than that it exits 0 having done nothing — see the lease
-             note below. Success = non-zero `done` in the DrainSummary and
-             `/v1/showcase/scoreboard` leaving `adjudicated 0`.
-          3. The liveness item — NOT built, recorded in the roadmap under M3.
-          4. MT3 (spec approved, decisions locked below).
+              {"done": 18, "failed_repositories": 0, "reclaimed": 17,
+               "repositories": 1, "retried": 0}
 
-Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
+          Scoreboard 20:21Z: `adjudicated 18 · pending 158 ·
+          first_due 2026-08-18T21:53:26Z` (future — nothing overdue).
+          `reclaimed: 17` is the batch the 14:22Z crash had claimed, freed
+          after STALL_LEASE_SECONDS and then settled. Three defects closed:
+          bound clients (#113), git in the image (#116), and the lease that
+          made early re-runs report false success.
 
-## THE LEASE — why re-running early "succeeds" and does nothing
+Next:     1. **THE EXIT-GATE AUDIT, and it is a STOP condition.** M3's gate
+             requires 100% agreement between these 18 adjudications and a
+             manual `git log` audit — "any disagreement = detector bug =
+             stop". Nothing has checked this yet. `done: 18` says the
+             pipeline ran, NOT that the labels are right. Needs either DB
+             read access or an operator token for
+             `GET /v1/prs/{n}/receipt`; the public scoreboard gives counts
+             only.
+          2. One real receipt correct end-to-end — the other half of the
+             gate, now finally checkable against a real adjudication block.
+          3. The liveness item (roadmap, M3, unbuilt): `first_due` in the
+             past + `adjudicated 0` is a contradiction the system can compute
+             on itself. Zero alert policies still exist in doug-prod0. This
+             outage was found by reading execution status by hand.
+          4. MT3. Then M4's 3 prospect interviews, which are what the live
+             scoreboard was for.
+
+Blockers: none in code. Step 1 needs credentials I do not have.
+
+## What the three defects had in common — worth keeping
+
+Every one was invisible because **the drain path had never executed against
+real work in production**. Twelve green Job executions carried no evidence
+about any of it; `docker build api` built an image it never ran; and the
+public surface rendered `adjudicated 0`, the honest empty state, pixel-
+identical to the broken one. Each fix exposed the next defect rather than
+causing it. The general lesson is in the roadmap's M3 liveness item: a green
+check over a code path that cannot run is not evidence, and "empty is the
+product" only holds while empty-because-broken is a different, louder thing.
+
+## THE LEASE — why re-running early "succeeded" and did nothing (RESOLVED)
 
 The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
 `status='running'`. `drain()` opens with `reclaim_stalled()`, which only
