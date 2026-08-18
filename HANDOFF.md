@@ -8,10 +8,11 @@ State:    building — design-lock.md AND build-plan.md both LOCKED
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     Task 4 — the constant_value_is predicate runner (new module
-          api/doug/verify.py). Pure, resolvers injected, settle.py's shape.
-          MUST abstain on ambiguity per settle.py:239 ("we settle neither
-          rather than guess"). Tasks 1-3 DONE.
+Next:     Task 5 — spend isolation, and the plan says land it BEFORE wiring.
+          `verify:<id>` scope, third branch in cap_for (reader.py:267), hard
+          per-PR cap, timeout below 120s. The test that matters: a run doing
+          verify reads leaves instrument_snapshot's counter unchanged, so the
+          customer's `deep reads N/200` footer never moves. Tasks 1-4 DONE.
           ONE BLOCKER, Andrew's hands, gates MERGE not work: P0.1 — publish
           the LOCKED v9 pre-registration + deploy its hash. Zero code, zero
           rows; the one artifact whose value decreases with calendar time.
@@ -65,7 +66,7 @@ Decisions this session:
   the words leaves a false completeness claim looking rigorous — rejected:
   round 1's either/or framing.
 
-Tasks 1-3 DONE (verified 2026-08-18; committed afcb77c, a1411d3):
+Tasks 1-4 DONE (verified 2026-08-18; afcb77c, a1411d3, b24c52d):
 - reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
   = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
   PROMPT_HASH untouched (8bd26c67...), freeze tests green.
@@ -93,7 +94,18 @@ Tasks 1-3 DONE (verified 2026-08-18; committed afcb77c, a1411d3):
   no test behind it — a hash only anchors identity if edits move it.
 - Task 3 mutation-checked: adding `refuted`, loosening extra=forbid, and
   adding a second predicate each kill a test.
-- api: 1413/1413 passed, ruff clean across the whole package.
+- Task 4: doug/verify.py — run_check() returns CheckOutcome (citation or an
+  abstain reason), never raises. The load-bearing design point: a byte-match
+  is NOT the predicate. constant_value_is parses the range with ast and
+  requires exactly ONE simple binding of a LITERAL, so `LIMIT = CAP` quotes
+  perfectly and still abstains. Without that step the predicate degenerates
+  into "the quote matched" — the exact failure that killed the subtractive
+  gate. Abstains on: file unavailable, bad range, quote mismatch, non-Python,
+  unparseable, multi-statement range (how a universality claim would sneak in).
+- Task 4 mutation-checked: dropping the AST check kills 3 tests including the
+  byte-match one; allowing non-literal values kills it; skipping the quote
+  comparison kills the fabricated-quote test.
+- api: 1423/1423 passed, ruff clean across the whole package.
 
 Pointers: docs/design/competitor-imports/ (six artifacts) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·
