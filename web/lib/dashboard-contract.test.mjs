@@ -475,8 +475,27 @@ test("the ledger is bounded and its header stays put", async () => {
   assert.match(runTable, /border-spacing-0/);
 
   // Horizontal scrolling was already there and is NOT replaced by the vertical
-  // bound — eight columns still need it below 980px.
-  assert.match(runTable, /min-w-\[980px\]/);
+  // bound — nine columns still need it in any column narrower than they are.
+  //
+  // Was a hardcoded `min-w-[980px]`, which measured the ledger when it owned
+  // the full 1440 canvas. The split shell put a 400px dock beside it and every
+  // fixed column gave up what it could, so 980 became a number no layout used;
+  // the pin is now DERIVED from COLUMNS rather than restated, because the
+  // property that matters is not "980" but "the table refuses to shrink past
+  // what its own columns need". A future width change moves both together, and
+  // deleting a column cannot silently leave the floor above the content.
+  const widths = [...page.matchAll(/cls: "w-\[(\d+)px\]/g)].map((match) => Number(match[1]));
+  assert.ok(widths.length >= 7, `COLUMNS lost its fixed widths; found ${widths.length}`);
+  const fixed = widths.reduce((total, width) => total + width, 0);
+  const declared = Number(runTable.match(/min-w-\[(\d+)px\]/)?.[1] ?? 0);
+  assert.ok(declared > 0, "the ledger lost its horizontal minimum — narrow columns will crush");
+  // The pull request column is the one flexible column and holds a repo name, a
+  // PR number and a title. Below ~160px the title truncates to nothing and the
+  // row stops identifying the thing it is a row about.
+  assert.ok(
+    declared >= fixed + 160,
+    `min-w-[${declared}px] is under the ${fixed}px its fixed columns claim plus 160px for the title`,
+  );
 });
 
 test("the per-PR disclosure survives the table swap", async () => {
