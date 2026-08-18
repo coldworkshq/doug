@@ -1,11 +1,9 @@
 # HANDOFF — doug
 
-State:    spec (this branch: per-repo needs-you threshold)
-Next:     Andrew reads the revised spec
-          docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md
-          (adversarial review folded in, D4–D6 added); on approval invoke
-          writing-plans. Plan must be TWO PRs (web guard tolerance first —
-          §3.6) and pick the next free migration number (MT3 spec claims 11).
+State:    review (this branch: per-repo needs-you threshold)
+Next:     open PR 2 against main after PR 1 (commit f2a73f8, web guard
+          tolerance) is merged and deployed; PR body links the spec, the
+          ADR and the review disposition.
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
@@ -16,11 +14,14 @@ Decisions this session:
 - D4 unset shows both defaults (0.30 reader / 0.62 fallback) — prod runs DOUG_READER=1 — rejected: single 0.62
 - D5 write authority = org member + live repo entitlement, new settings:write scope — weaker than mint/bind, named — rejected: installer-only
 - D6 two PRs, web exact() guards first — API deploys before web — rejected: one PR (dashboard outage window)
+- D7 a global RequestValidationError handler on api.py (stock handler, non-finite floats stringified) so a NaN/Infinity threshold body 422s instead of 500 — recorded as an ADR-0013 consequence
 - Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
 Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
+          plan 098cf40 (11 tasks, two PRs) · ADR-0013
+          docs/decisions/ADR-0013-needs-you-line-is-a-per-repo-setting.md ·
           seams: review.score_one (review.py:303), worker.py:250,
           store.set_installation_repos, api.py:1877 connections,
-          web/lib/threshold-lens.ts (header must be rewritten), ADR-0013 to write
+          web/lib/threshold-lens.ts (header rewritten to name the setting)
 
 ---
 
