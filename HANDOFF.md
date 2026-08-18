@@ -3,8 +3,9 @@
 State:    review — TWO things open, and they do not touch each other.
           1. **PR #114 (this branch)** — dashboard redesign, web only.
              https://github.com/drewjst/doug/pull/114
-             `claude/dashboard-redesign-left-nav-efb4d7` @ 3 commits off main
-             @ 383daf6. Verified: web 305/305 · console 113/113 · tsc clean ·
+             `claude/dashboard-redesign-left-nav-efb4d7` @ 4 commits off main
+             @ 383daf6, pushed, MERGEABLE. Reviewed and the findings fixed.
+             Verified at 03af44a: web 310/310 · console 113/113 · tsc clean ·
              eslint 0 errors · next build 23 routes.
           2. **#113 IS MERGED** (383daf6) but its deploy step is NOT done.
              Production stays down until step 1 below runs by hand.
@@ -24,9 +25,26 @@ Next:     1. **Run `gcp.sh adjudicator` BY HAND** — CI runs only `deploy` and
 Blockers: none in code. Steps 1-2 are Andrew's hands and are the real critical
           path; #114 is not gated on them and does not affect them.
 
-## Dashboard redesign — PR #114, three commits (web only)
+## Dashboard redesign — PR #114, four commits (web only)
 
-04df04a shell + census · 262f8e7 Repositories view · this commit, the doc.
+04df04a shell + census · 262f8e7 Repositories view · 3461657 the doc ·
+03af44a the three review findings, fixed.
+
+REVIEW ROUND, dispositioned in docs/reviews/2026-08-18-pr-114-external-review.md:
+Doug scored 1 of 5. Its one true finding (severity bar drew three segments over
+a total the three buckets need not sum to — `findings.severity` is nullable and
+store.py counts total as COUNT(*) against three conditional SUMs) it ranked
+LOW; its two most confident findings both die to `session-api.ts`'s boundary
+validation, a file the diff never contained. The external pass found the defect
+Doug missed, and it was the one this PR was most at risk of: `RepoCountLine`
+branched on `atCap` before `filtering`, so at the cap with a filter on it named
+a denominator 5x larger than the set actually counted — and disagreed with the
+census panel on the same screen. Both fixed with tests watched failing first
+and proven by mutation; `countedOver()` now owns the branch order for both
+sentences and a parity test makes the disagreement unrepresentable.
+CALIBRATION: Doug's severity ranking is now anti-correlated with truth across
+#109, #106 and #114. That is the axis to work on, not its cross-file tracing,
+which was correct here.
 
 Tab-strip header → three-column instrument shell: a 212px left rail (scope,
 sections, live in-view readout, settings gear), the ledger, and a right dock
