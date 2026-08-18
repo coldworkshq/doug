@@ -1,26 +1,88 @@
 # HANDOFF — doug
 
-State:    **review — PR #113 IS OPEN.** https://github.com/drewjst/doug/pull/113
-          Branch `claude/doug-next-priorities-5851da` @ 86807ee, 1 commit off
-          main @ 412298e. No file overlap with the other open PR (#112, web
-          only). Production is STILL DOWN until step 2 below.
+State:    review — TWO things open, and they do not touch each other.
+          1. **PR #114 (this branch)** — dashboard redesign, web only.
+             https://github.com/drewjst/doug/pull/114
+             `claude/dashboard-redesign-left-nav-efb4d7` @ 3 commits off main
+             @ 383daf6. Verified: web 305/305 · console 113/113 · tsc clean ·
+             eslint 0 errors · next build 23 routes.
+          2. **#113 IS MERGED** (383daf6) but its deploy step is NOT done.
+             Production stays down until step 1 below runs by hand.
 
-Next:     1. Review/merge #113.
-          2. **Then run `gcp.sh adjudicator` BY HAND** — CI runs only `deploy`
-             and `web`, and the Job is pinned to the API image digest at the
-             moment that command last ran, so **merging does not deploy the
-             adjudicator**. This is the step that actually restarts the loop:
+Next:     1. **Run `gcp.sh adjudicator` BY HAND** — CI runs only `deploy` and
+             `web`, and the Job is pinned to the API image digest at the moment
+             that command last ran, so **merging #113 did not deploy the
+             adjudicator**. This is what restarts the loop:
              PROJECT=doug-prod0 REGION=us-central1 ./api/deploy/gcp.sh adjudicator
-          3. Execute the Job manually; confirm a non-zero `done` in the
-             DrainSummary and one receipt end-to-end. That closes the last
-             open half of the M3 exit gate.
+          2. Execute the Job manually; confirm a non-zero `done` in the
+             DrainSummary and one receipt end-to-end. Closes the last open half
+             of the M3 exit gate.
+          3. Review/merge #114 (independent of the above — web only, no API).
           4. The liveness item — NOT built, recorded in the roadmap under M3.
+          5. MT3 (spec approved, decisions locked below).
 
-Blockers: none in code. Steps 2-3 are Andrew's hands.
+Blockers: none in code. Steps 1-2 are Andrew's hands and are the real critical
+          path; #114 is not gated on them and does not affect them.
 
-Verified cold at 86807ee: api 1406/1406 (1402 + 4 new) · ruff clean ·
-web 285/285 · eslint 0 errors (2 pre-existing warnings) · console untouched
-and not run.
+## Dashboard redesign — PR #114, three commits (web only)
+
+04df04a shell + census · 262f8e7 Repositories view · this commit, the doc.
+
+Tab-strip header → three-column instrument shell: a 212px left rail (scope,
+sections, live in-view readout, settings gear), the ledger, and a right dock
+holding either the selected run's evidence or a census of the ledger. Rail and
+dock scroll independently, so the page itself does not scroll above 1620px.
+
+NO API CHANGE. `web/lib/ledger-census.ts` counts what `/v1/sessions/runs` has
+always returned and the dashboard never rendered: `finding_counts` (severity
+mix), the three job timestamps (queue wait, read duration, retries), `url` (the
+PR link, now an action), and the per-window outcome census including the
+CENSORING RATE prereg §3 requires. Every number is a count of the array the
+table is rendering, so the two cannot disagree; `censusScope()` prints the
+denominator once, above all of them.
+
+Decisions:
+- Repositories is `?view=`, not a route — both views read one fetch, one filter
+  set, one lens. Rejected: a second route (duplicates the shell) and a dashboard
+  layout (cannot see the page's rows to fill the rail readout).
+- The repository table is a FULL OUTER join. A connected repo with no runs is
+  the most useful row on the screen; a repo with runs but no connection entry
+  still holds real verdicts. Both directions mutation-proven. Rejected: joining
+  from either side alone — each hides a different truth.
+- Census is over the FILTERED rows in view, not `fetched`. Denominator stated.
+- Dock breakpoint 1620px, MEASURED. Arithmetic said 1600 and was 9px wrong
+  (chrome 669px + table 940px). At 1360 the PR title rendered 40px wide.
+  Rejected: crushing the title to keep a dock on a 1440 laptop.
+- Breakpoint classes written out literally at all five sites — a runtime
+  `${DOCK_AT}:h-screen` is invisible to Tailwind's scanner and ships no rule.
+- Settings gear is a `<details>`, not a popover. A view control that fails to
+  hydrate costs a view; a sign-out that fails to hydrate strands you signed in.
+- Band column did NOT shrink with the others — "needs you" wraps under 102px.
+  Severity renders on the NEUTRAL ramp; a finding's severity is not a verdict
+  about a PR. Two data colours still.
+- The `min-w` pin is DERIVED from each COLUMNS array and sliced PER ARRAY. The
+  first version scanned the whole file and REPO_COLUMNS broke it one commit
+  later — same cross-record defect class as #109's regexes.
+- The "health"/"tenant all"/"illustrative" bans stand untouched. This is one
+  tenant's own runs, not fleet health.
+
+VERIFICATION TRAPS, both hit on this branch and both look like real failures:
+`next build` fails while a dev server holds port 3000 (the auth integration
+tests shell out to it), and a stale `.next/dev/types/validator.ts` naming a
+deleted route fails it too. `rm -rf .next` and stop the server before believing
+a red suite.
+
+Pointers: web/lib/ledger-census.ts (+ .test.mjs, 19 tests; band, outcome tone
+          and both join directions mutation-proven) ·
+          web/components/census-panel.tsx · web/app/dashboard/page.tsx ·
+          web/lib/dashboard-contract.test.mjs
+          · fixture-data preview harness (shell, census, evidence pane and
+          repositories view, no auth or API needed) parked OUTSIDE the repo at
+          <scratchpad>/design-preview-harness.tsx — restore to
+          web/app/design-preview/page.tsx AND temporarily `export` Evidence +
+          RepositoryTable in page.tsx. Both must come off before committing;
+          the surface-token test catches the harness, nothing catches the
+          exports.
 
 ## What was fixed
 
