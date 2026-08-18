@@ -13,7 +13,7 @@ State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
 Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
              do NOT run `gcp.sh adjudicator` by hand, that instruction was
              mine and it was wrong.
-          2. **At or after 16:20 UTC / 09:20 PDT**, execute the Job:
+          2. **At or after 16:25 UTC / 9:25 AM PDT**, execute the Job:
              gcloud run jobs execute doug-adjudicator \
                --project doug-prod0 --region us-central1 --wait
              Earlier than that it exits 0 having done nothing — see the lease
@@ -29,8 +29,10 @@ Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
 The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
 `status='running'`. `drain()` opens with `reclaim_stalled()`, which only
 returns rows older than `STALL_LEASE_SECONDS = 7200`, and
-`due_repositories()` selects `status == 'pending'` only. So every execution
-between 14:20Z and 16:20Z finds nothing due and exits 0 — exactly what
+`due_repositories()` selects `status == 'pending'` only. The claim landed at
+~14:22:40Z (the traceback is 14:22:44Z), so the lease clears at ~16:22:40Z and
+9:25 AM PDT carries a margin. Every execution before then finds nothing due
+and exits 0 — exactly what
 `-m7vmr` (14:27Z, "Execution completed successfully") did. Scoreboard right
 after it: `adjudicated 0 · pending 170`. The lease RESETS on each crash: if
 the next run dies mid-way, add another two hours.
