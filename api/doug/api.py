@@ -1257,13 +1257,13 @@ def set_repository_flag_line(
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
     ctx = _session_write_context(authorization)
+    sub = _session_subject(authorization)
     if github_repo_id not in ctx.repo_ids:
         raise _not_found()
     before = store.repo_threshold(ctx.installation_id, github_repo_id)
     if not store.set_repo_threshold(ctx.installation_id, github_repo_id, body.needs_you_threshold):
         raise _not_found()
     after = store.repo_threshold(ctx.installation_id, github_repo_id)
-    sub = session_auth.verify_session_claims(authorization).get("sub")
     print(
         f"doug: needs_you_threshold installation={ctx.installation_id} "
         f"repo={github_repo_id} {before}->{after} by sub={sub}",

@@ -5353,7 +5353,9 @@ def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, 
     assert _patch_line(headers, 11, {}).status_code == 422
     assert store.repo_threshold(101, 11) is None
     # ints at the endpoints are numbers, not strings — accepted.
-    assert _patch_line(headers, 11, {"needs_you_threshold": 1}).status_code == 200
+    r = _patch_line(headers, 11, {"needs_you_threshold": 1})
+    assert r.status_code == 200
+    assert r.json() == {"needs_you_threshold": 1.0}
 
 
 def test_flag_line_write_refuses_tenant_api_keys_and_orgless_sessions(tmp_path, monkeypatch):
@@ -5376,6 +5378,17 @@ def test_flag_line_write_refuses_tenant_api_keys_and_orgless_sessions(tmp_path, 
     assert "settings:write" not in tenancy.resolve(tenant_key).scopes
     key_headers = {"Authorization": f"Bearer {tenant_key}"}
     assert _patch_line(key_headers, 11, {"needs_you_threshold": 0.5}).status_code == 401
+
+
+def test_flag_line_write_needs_the_settings_write_scope_specifically(tmp_path, monkeypatch):
+    """Every session currently gets all of SESSION_SCOPES, so a test that
+    only ever exercises a real session would stay green even if the route
+    were gated on the wrong scope (or not gated on scope at all). Strip
+    settings:write from the set resolve_session hands out and confirm the
+    route actually reads it."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+    monkeypatch.setattr(session_auth, "SESSION_SCOPES", ("queue:read", "receipt:read"))
+    assert _patch_line(headers, 11, {"needs_you_threshold": 0.5}).status_code == 401
 
 
 def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):
