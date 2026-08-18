@@ -1,9 +1,10 @@
 import Link from "next/link";
 
-import { DougLogo } from "@/components/doug-logo";
 import { ScoreStrip } from "@/components/score-strip";
+import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { getQueue } from "@/lib/api";
+import { GITHUB_REPO_URL } from "@/lib/links";
 
 const RULES = [
   {
@@ -334,7 +335,7 @@ export default async function Home() {
               Open the queue
             </Link>
             <a
-              href="https://github.com/drewjst/doug"
+              href={GITHUB_REPO_URL}
               className="panel rounded-full px-6 py-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               Star on GitHub
@@ -342,20 +343,7 @@ export default async function Home() {
           </div>
         </section>
 
-        <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border py-8 font-mono text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <DougLogo size={16} /> doug · routes, never blocks
-          </span>
-          <span>
-            FSL-1.1-ALv2 ·{" "}
-            <a
-              href="https://github.com/drewjst/doug"
-              className="transition-colors hover:text-foreground"
-            >
-              drewjst/doug
-            </a>
-          </span>
-        </footer>
+        <SiteFooter />
       </main>
     </>
   );

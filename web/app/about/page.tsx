@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 
 import { DougFactButton } from "@/components/about/doug-fact-button";
 import { DougLogo } from "@/components/doug-logo";
+import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { GITHUB_REPO_SLUG, GITHUB_REPO_URL } from "@/lib/links";
 
 export const metadata: Metadata = {
   title: "About — Doug",
@@ -10,7 +12,7 @@ export const metadata: Metadata = {
     "Why a pull-request router is named after a Saint Bernard, who built it, and how to get involved.",
 };
 
-// Five real photos of the real Doug. Filenames are placeholders — drop the
+// Four real photos of the real Doug. Filenames are placeholders — drop the
 // actual files into web/public/about/doug/ with these exact names and the
 // gallery below picks them up with no code change.
 const PHOTOS = [
@@ -23,11 +25,6 @@ const PHOTOS = [
     src: "/about/doug/couch-loaf.jpg",
     alt: "Doug loafed over the back of the couch",
     caption: "Off duty, guarding the back of the couch.",
-  },
-  {
-    src: "/about/doug/pasture-lookout.jpg",
-    alt: "Doug and a friend looking out over a pasture with cows",
-    caption: "On lookout, in case a cow needs finding.",
   },
   {
     src: "/about/doug/rock-hike.jpg",
@@ -44,11 +41,13 @@ const PHOTOS = [
 // GitHub's issue-compose prefill (?title=&body=) — no API call, no stored
 // template, just a URL. If the repo ever adds a real issue template this
 // can point at it with &template=story.md instead.
-const STORY_ISSUE_URL = `https://github.com/drewjst/doug/issues/new?title=${encodeURIComponent(
-  "A PR that needed a human",
-)}&body=${encodeURIComponent(
+const storyIssueUrl = new URL(`${GITHUB_REPO_URL}/issues/new`);
+storyIssueUrl.searchParams.set("title", "A PR that needed a human");
+storyIssueUrl.searchParams.set(
+  "body",
   "**What happened**\n\n\n**What Doug would have seen (if you know)**\n\n\n**Repo (optional)**\n",
-)}`;
+);
+const STORY_ISSUE_URL = storyIssueUrl.toString();
 
 export default function AboutPage() {
   return (
@@ -102,11 +101,11 @@ export default function AboutPage() {
             </p>
           </div>
 
-          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {PHOTOS.map((p) => (
               <figure
                 key={p.src}
-                className="panel group overflow-hidden rounded-2xl first:col-span-2 first:row-span-2 sm:first:col-span-1 sm:first:row-span-1"
+                className="panel group overflow-hidden rounded-2xl"
               >
                 <img
                   src={p.src}
@@ -171,12 +170,13 @@ export default function AboutPage() {
                 it&rsquo;s worth finishing.
               </p>
               <a
-                href="https://github.com/drewjst/doug"
+                href={GITHUB_REPO_URL}
                 className="mt-4 inline-flex w-fit items-center transition-opacity hover:opacity-80"
               >
                 <img
-                  src="https://img.shields.io/github/stars/drewjst/doug?style=flat-square&label=stars&color=D1571E"
-                  alt="GitHub stars for drewjst/doug"
+                  src={`https://img.shields.io/github/stars/${GITHUB_REPO_SLUG}?style=flat-square&label=stars&color=D1571E`}
+                  alt={`GitHub stars for ${GITHUB_REPO_SLUG}`}
+                  loading="lazy"
                   className="h-5"
                 />
               </a>
@@ -187,9 +187,7 @@ export default function AboutPage() {
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Ask Doug something
               </h3>
-              <div className="mt-3 flex grow flex-col">
-                <DougFactButton />
-              </div>
+              <DougFactButton className="mt-3" />
             </div>
 
             <div className="panel flex flex-col rounded-2xl p-8">
@@ -212,20 +210,7 @@ export default function AboutPage() {
           </div>
         </section>
 
-        <footer className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border py-8 font-mono text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <DougLogo size={16} /> doug · routes, never blocks
-          </span>
-          <span>
-            FSL-1.1-ALv2 ·{" "}
-            <a
-              href="https://github.com/drewjst/doug"
-              className="transition-colors hover:text-foreground"
-            >
-              drewjst/doug
-            </a>
-          </span>
-        </footer>
+        <SiteFooter />
       </main>
     </>
   );

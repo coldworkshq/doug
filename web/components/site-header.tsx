@@ -2,16 +2,16 @@ import Link from "next/link";
 
 import { DougLogo } from "@/components/doug-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { GITHUB_REPO_URL } from "@/lib/links";
 
 const NAV_LINKS = [
   { href: "/scoreboard", label: "Scoreboard" },
   { href: "/queue", label: "Queue" },
   { href: "/docs", label: "Docs" },
-  { href: "/about", label: "About" },
 ] as const;
 
 /** Floating site chrome for the public marketing surface (/, /docs/*,
- *  /scoreboard, /queue).
+ *  /scoreboard, /queue, /about).
  *
  *  Deliberately NOT used on /dashboard (its own signed-in "forensic ledger"
  *  shell with a tenant/repo selector) — that chrome earned its own design
@@ -24,14 +24,14 @@ const NAV_LINKS = [
  *  floating from the very first frame, not only once you scroll.
  *
  *  Sign in is the one filled, colored control in the bar — everything else
- *  (Scoreboard/Queue/Docs/About/GitHub, the theme toggle) stays low-contrast
+ *  (Scoreboard/Queue/Docs/GitHub/About, the theme toggle) stays low-contrast
  *  text until hovered, so the one action that actually converts a stranger
  *  doesn't have to compete with five links that don't. Below `sm` those
  *  links live in a native <details> disclosure rather than vanishing.
  *
  *  Order is deliberate: the two live product surfaces (Scoreboard, Queue)
- *  come first, reference material (Docs, About) after, GitHub last as the
- *  escape hatch to the source.
+ *  come first, Docs next as reference material, GitHub after that as the
+ *  escape hatch to source, About last.
  *
  *  Changing this bar's padding/height changes how much of the page it can
  *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
@@ -65,16 +65,22 @@ export function SiteHeader({
               </Link>
             ))}
             <a
-              href="https://github.com/drewjst/doug"
+              href={GITHUB_REPO_URL}
               className="rounded-full px-3 py-1.5 whitespace-nowrap transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               GitHub
             </a>
+            <Link
+              href="/about"
+              className="rounded-full px-3 py-1.5 transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              About
+            </Link>
           </nav>
 
           {/* Native disclosure, not a client menu: works without JS, matches
-              the dashboard's no-JS ethic, and is the only way Docs /
-              Scoreboard / Queue exist below `sm` — the nav above is
+              the dashboard's no-JS ethic, and is the only way Scoreboard /
+              Queue / Docs exist below `sm` — the nav above is
               `hidden sm:flex`. */}
           <details className="relative sm:hidden">
             <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
@@ -94,11 +100,17 @@ export function SiteHeader({
                 </Link>
               ))}
               <a
-                href="https://github.com/drewjst/doug"
+                href={GITHUB_REPO_URL}
                 className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 GitHub
               </a>
+              <Link
+                href="/about"
+                className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                About
+              </Link>
             </nav>
           </details>
 

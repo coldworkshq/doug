@@ -5,26 +5,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const header = await readFile(
-  new URL("../components/site-header.tsx", import.meta.url),
-  "utf8",
-);
-const landing = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-const queue = await readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8");
-const loading = await readFile(new URL("../app/loading.tsx", import.meta.url), "utf8");
-const intro = await readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8");
-const rest = await readFile(
-  new URL("../app/docs/rest-api/page.tsx", import.meta.url),
-  "utf8",
-);
-const mcp = await readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8");
-const changelog = await readFile(
-  new URL("../app/docs/changelog/page.tsx", import.meta.url),
-  "utf8",
-);
-const llms = await readFile(new URL("../public/llms.txt", import.meta.url), "utf8");
-const nav = await readFile(new URL("./docs-nav.ts", import.meta.url), "utf8");
-const about = await readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8");
+// None of these reads depend on another's result — run them concurrently
+// rather than paying 12 sequential round trips.
+const [header, landing, queue, loading, intro, rest, mcp, changelog, llms, nav, about] =
+  await Promise.all([
+    readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/rest-api/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/docs/changelog/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/llms.txt", import.meta.url), "utf8"),
+    readFile(new URL("./docs-nav.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
+  ]);
 
 /** The field of ONE record, or null.
  *
@@ -59,26 +55,61 @@ test("the header's public routes survive below the sm breakpoint", () => {
   );
 });
 
-test("nav order puts the live product surfaces before reference material", () => {
-  // Scoreboard and Queue are the live showcase surfaces; Docs and About are
-  // reference material. Regressing this ordering is exactly the kind of
+test("nav order puts the live product surfaces before reference material, About last", () => {
+  // Scoreboard and Queue are the live showcase surfaces, Docs is reference
+  // material — those three are NAV_LINKS entries. GitHub and About are each
+  // hardcoded separately after the NAV_LINKS.map, in that order, so they're
+  // matched by their literal JSX (not the `href: "…"` object-literal shape
+  // NAV_LINKS entries use). Regressing this ordering is exactly the kind of
   // silent reshuffle a diff review wouldn't catch without a pin.
-  const order = ["/scoreboard", "/queue", "/docs", "/about"];
-  const positions = order.map((href) => header.indexOf(`href: "${href}"`));
+  const order = [
+    'href: "/scoreboard"',
+    'href: "/queue"',
+    'href: "/docs"',
+    "href={GITHUB_REPO_URL}",
+    'href="/about"',
+  ];
+  const positions = order.map((marker) => header.indexOf(marker));
   assert.ok(
     positions.every((p) => p !== -1),
-    "every nav link must be present in NAV_LINKS",
+    "every nav link must be present in the header",
   );
   for (let i = 1; i < positions.length; i++) {
     assert.ok(
       positions[i] > positions[i - 1],
-      `${order[i]} must come after ${order[i - 1]} in NAV_LINKS`,
+      `${order[i]} must come after ${order[i - 1]} in the header`,
     );
   }
 });
 
+test("the links NOT carried by NAV_LINKS still exist in BOTH navs", () => {
+  // NAV_LINKS entries get mobile reachability for free — the test above pins
+  // that both navs iterate it. GitHub and About are hardcoded per-nav
+  // instead, so they have no such guarantee: deleting either one from the
+  // <details> block leaves a link that is unreachable on a phone, which is
+  // the exact bug class this file was opened to catch. Verified by mutation:
+  // dropping the mobile About link passed all 15 tests before this pin.
+  // Anchor on `<details className=` — the docblock above the component also
+  // says the word "<details>" in prose, and matching that instead silently
+  // slices the desktop region down to just the imports, which fails for a
+  // reason that has nothing to do with the nav.
+  const detailsAt = header.indexOf("<details className=");
+  const detailsEnd = header.indexOf("</details>");
+  assert.ok(detailsAt !== -1 && detailsEnd > detailsAt, "mobile disclosure must exist");
+  const desktopNav = header.slice(0, detailsAt);
+  const mobileNav = header.slice(detailsAt, detailsEnd);
+
+  for (const [label, marker] of [
+    ["GitHub", "href={GITHUB_REPO_URL}"],
+    ["About", 'href="/about"'],
+  ]) {
+    assert.ok(desktopNav.includes(marker), `${label} must be in the desktop nav`);
+    assert.ok(mobileNav.includes(marker), `${label} must be in the mobile disclosure`);
+  }
+});
+
 test("about page exists, wears the shared chrome, and is reachable from the header", () => {
-  assert.match(header, /href: "\/about"/);
+  assert.match(header, /href="\/about"/);
   assert.match(about, /<SiteHeader/);
   assert.equal(about.includes('className="dark'), false);
 });
