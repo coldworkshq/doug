@@ -130,17 +130,24 @@ export default function AboutPage() {
             Built by one person, for now.
           </h2>
           {/* Draft bio — Andrew, edit or replace freely. Facts as given:
-              82nd Airborne Division; 4th Brigade Combat Team (Airborne),
-              25th Infantry Division; signals intelligence analyst, then a
-              19D cavalry scout; Purdue; now a principal engineer in
-              insurtech. */}
+              82nd Airborne Division, 19D cavalry scout, deployed to Sadr
+              City, Baghdad; then 4th Brigade Combat Team (Airborne), 25th
+              Infantry Division, signals intelligence analyst, deployed to
+              Afghanistan working with units on the Pakistan border; Purdue;
+              now a principal engineer in insurtech. */}
           <div className="mt-6 grid gap-4 text-sm leading-relaxed text-muted-foreground md:max-w-2xl">
             <p>
-              Andrew served with the 82nd Airborne Division and later the
-              4th Brigade Combat Team (Airborne), 25th Infantry Division —
-              first as a signals intelligence analyst, then as a 19D cavalry
-              scout. Both jobs came down to the same thing: read the
-              terrain, work out what actually mattered, and let the rest go.
+              Andrew served first with the 82nd Airborne Division as a 19D
+              cavalry scout, deployed to Sadr City in Baghdad. He went on to
+              the 4th Brigade Combat Team (Airborne), 25th Infantry Division
+              as a signals intelligence analyst, deploying to Afghanistan
+              and working alongside units on the Pakistan border.
+            </p>
+            <p>
+              A scout and an intel analyst do the same job from opposite
+              ends: decide what deserves someone&rsquo;s attention, and let
+              the rest go. Getting that wrong in either direction costs
+              something.
             </p>
             <p>
               He studied at Purdue afterward and works today as a principal
