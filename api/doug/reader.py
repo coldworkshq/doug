@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import time
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -327,11 +328,40 @@ def _report_cost(response, *, kind: str, scope: str, pr) -> None:
     )
 
 
+class Citation(BaseModel):
+    """Bytes at head that a finding rests on, addressed so a third party can re-derive them.
+
+    `git show <head_sha>:<path>` plus the line range reproduces exactly the bytes
+    whose sha256 is recorded here. That is the whole of what a citation establishes —
+    the quote, never the conclusion. See ADR-0013 and design-lock L1/L3: the model
+    chooses where to look and code runs the check, and a citation may only carry an
+    existence-or-value claim. An absence ("nothing else reads this") is not citable,
+    because the citation shows one place out of a complement the model itself selected
+    and never reported.
+    """
+
+    path: str
+    head_sha: str
+    line_start: int
+    line_end: int
+    sha256: str
+
+    def locator(self) -> str:
+        return f"{self.path}@{self.head_sha}#L{self.line_start}-L{self.line_end}"
+
+
 class ReaderFinding(BaseModel):
     category_slug: str
     description: str
     file: str
     severity: str
+    # Defaulted so every finding the frozen SCHEMA produces is unchanged and
+    # PROMPT_HASH does not move: SCHEMA still emits exactly the four fields above.
+    # `evidence` is what makes REVIEWING.md's "a finding that depends on code outside
+    # the diff must say so" enforceable rather than a convention — the two claim
+    # classes have to be machine-separable before they can be governed differently.
+    evidence: Literal["diff", "head-cited"] = "diff"
+    citations: list[Citation] = Field(default_factory=list)
 
 
 class ReaderVerdict(BaseModel):
