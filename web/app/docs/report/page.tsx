@@ -21,11 +21,10 @@ export default function ReportPage() {
               title="The report"
               status="available"
             >
-              Every run prints four tables; <IC>--output</IC> writes the same
-              data as JSON. The report is designed to be{" "}
-              <b className="font-semibold text-foreground">checked</b>, not
-              admired — misses are listed by PR number so you can go read the
-              ones Doug got wrong.
+              Every run prints four tables; the same run writes JSON to{" "}
+              <IC>backtest-{"{owner}-{repo}"}.json</IC> (or{" "}
+              <IC>--output</IC>). The printed tables are the contract to
+              check. The JSON does not list missed PRs by number.
             </DocsPageHeader>
 
             <H2>Sections</H2>
@@ -72,28 +71,26 @@ export default function ReportPage() {
             {": "}
             <Str>&quot;getsentry/sentry&quot;</Str>
             {",\n  "}
-            <Str>&quot;window&quot;</Str>
-            {": { "}
             <Str>&quot;prs&quot;</Str>
             {": "}
             <Kw>5000</Kw>
-            {", "}
-            <Str>&quot;defects&quot;</Str>
-            {": "}
-            <Kw>67</Kw>
-            {" },\n  "}
-            <Str>&quot;capture&quot;</Str>
-            {": { "}
+            {",\n  "}
             <Str>&quot;auc&quot;</Str>
+            {": { "}
+            <Str>&quot;doug&quot;</Str>
             {": "}
             <Kw>0.640</Kw>
             {", "}
-            <Str>&quot;at&quot;</Str>
+            <Str>&quot;size_only&quot;</Str>
+            {": "}
+            <Kw>0.51</Kw>
+            {" },\n  "}
+            <Str>&quot;capture&quot;</Str>
             {": { "}
-            <Str>&quot;0.2&quot;</Str>
+            <Str>&quot;0.20&quot;</Str>
             {": "}
             <Kw>0.36</Kw>
-            {" } },\n  "}
+            {" },\n  "}
             <Str>&quot;cleared_band&quot;</Str>
             {": [ { "}
             <Str>&quot;flag_rate&quot;</Str>
@@ -110,7 +107,7 @@ export default function ReportPage() {
             {": [ { "}
             <Str>&quot;rule&quot;</Str>
             {": "}
-            <Str>&quot;hotspot_path&quot;</Str>
+            <Str>&quot;hotspot-path&quot;</Str>
             {",\n      "}
             <Str>&quot;lift&quot;</Str>
             {": "}
@@ -121,15 +118,7 @@ export default function ReportPage() {
             <Str>&quot;holdout&quot;</Str>
             {": { "}
             <Dim>&hellip;</Dim>
-            {" },\n  "}
-            <Str>&quot;misses&quot;</Str>
-            {": [ "}
-            <Kw>4821</Kw>
-            {", "}
-            <Kw>3977</Kw>
-            {", "}
-            <Dim>&hellip;</Dim>
-            {" ]\n}"}
+            {" }\n}"}
           </CodeBlock>
         }
       />

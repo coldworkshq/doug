@@ -8,20 +8,45 @@ import test from "node:test";
 
 // None of these reads depend on another's result — run them concurrently
 // rather than paying 12 sequential round trips.
-const [header, landing, queue, loading, intro, rest, mcp, changelog, llms, nav, about] =
-  await Promise.all([
-    readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/docs/rest-api/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/docs/changelog/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../public/llms.txt", import.meta.url), "utf8"),
-    readFile(new URL("./docs-nav.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
-  ]);
+const [
+  header,
+  landing,
+  queue,
+  loading,
+  intro,
+  rest,
+  mcp,
+  changelog,
+  llms,
+  nav,
+  about,
+  layout,
+  quickstart,
+  risk,
+  wrong,
+  report,
+  readme,
+  apiReadme,
+] = await Promise.all([
+  readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/rest-api/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/mcp/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/changelog/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../public/llms.txt", import.meta.url), "utf8"),
+  readFile(new URL("./docs-nav.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/quickstart/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/risk-routing/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/what-doug-gets-wrong/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/report/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../../README.md", import.meta.url), "utf8"),
+  readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
+]);
 
 /** The field of ONE record, or null.
  *
@@ -221,6 +246,57 @@ test("the changelog records the instrument becoming visible", () => {
   assert.match(changelog, /scoreboard/i);
 });
 
+test("about page does not call Doug pre-build", () => {
+  // The App path is live on this repo. "pre-build" on a header-linked page
+  // is the same class of publicly false maturity claim as README "Pre-build".
+  assert.equal(/pre-build/i.test(about), false);
+});
+
+test("root layout meta does not say scoring is from metadata", () => {
+  // Shipped path reads the diff (ADR-0004). OG/meta must not re-derive a
+  // different scoring story from the landing hero.
+  assert.equal(layout.includes("from metadata"), false);
+});
+
+test("landing rule 03 does not claim the miss rate is already published", () => {
+  assert.equal(landing.includes("Publishes its miss rate"), false);
+  assert.match(landing, /Will publish its miss rate/);
+});
+
+test("MCP garden is planned, not preview — no server exists to preview", () => {
+  assert.equal(fieldOf(nav, "href", "/docs/mcp", "status"), "planned");
+  assert.match(mcp, /status="planned"/);
+  assert.equal(mcp.includes("tool · preview"), false);
+  assert.match(llms, /MCP — Pattern Garden \(PLANNED/);
+});
+
+test("quickstart and llms.txt require Python 3.14, matching the API package", () => {
+  assert.equal(quickstart.includes("3.12"), false);
+  assert.match(quickstart, /3\.14/);
+  assert.equal(llms.includes("3.12"), false);
+  assert.match(llms, /3\.14/);
+});
+
+test("risk-routing does not present the live scorer as model-free", () => {
+  assert.equal(risk.includes("no model in the hot path"), false);
+});
+
+test("what Doug gets wrong uses the current findings-log counts", () => {
+  assert.equal(wrong.includes("Roughly half"), false);
+  assert.equal(wrong.includes("12 rows today"), false);
+  assert.equal(llms.includes("Roughly half"), false);
+});
+
+test("the report does not invent a misses-by-PR list the CLI does not print", () => {
+  assert.equal(report.includes("misses are listed by PR number"), false);
+  assert.equal(report.includes('"misses"'), false);
+});
+
+test("README is not the pre-build stub era", () => {
+  assert.equal(readme.includes("Pre-build"), false);
+  assert.equal(readme.includes("HMAC-verified stub"), false);
+});
+
 test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.equal(llms.includes("public surface today is the backtest CLI"), false);
   assert.match(llms, /\/v1\/showcase\/scoreboard/);
@@ -230,4 +306,48 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.match(llms, /tenant queue and receipt live/);
   assert.match(llms, /Planned: tenant-scoped GET \/v1\/scoreboard/);
   assert.equal(llms.includes("Planned: tenant-scoped GET /v1/queue"), false);
+});
+
+test("what Doug gets wrong does not claim every log row is backfill", () => {
+  // 123 of 135 rows are prospective. A callout that still says every row is
+  // backfill contradicts the rail on the same page.
+  assert.equal(wrong.includes("Every row in the log today is backfill"), false);
+  assert.match(wrong, /123 prospective/);
+});
+
+test("llms.txt does not present the July probe as the live scorer, or hotspots as a live learner", () => {
+  // ADR-0004: reader is the live path when enabled. ADR-0012: probe AUC is
+  // that probe, not a measurement of the shipped 100k-char reader.
+  assert.equal(llms.includes("not in the shipped scorer"), false);
+  assert.equal(llms.includes("research, not the shipped scorer"), false);
+  assert.match(llms, /static hotspot/);
+  assert.equal(llms.includes("learned per repo from a rolling window"), false);
+  // JSON is always written; --output only chooses the path.
+  assert.equal(llms.includes("also write the full JSON report"), false);
+});
+
+test("docs intro does not offer a self-serve GitHub App install", () => {
+  assert.equal(intro.includes("sign in to install"), false);
+  assert.match(intro, /not a self-serve product/);
+});
+
+test("MCP copy does not wear preview language for a server that does not exist", () => {
+  assert.equal(mcp.includes("In training."), false);
+  assert.equal(intro.includes("[in training]"), false);
+  assert.equal(landing.includes("preview · no dates promised"), false);
+  assert.match(landing, /planned · no dates promised/);
+});
+
+test("API README does not say the webhook scores inline through features.py", () => {
+  assert.equal(apiReadme.includes("the webhook both call this"), false);
+  assert.equal(apiReadme.includes("path the webhook will"), false);
+  assert.match(apiReadme, /enqueues a review job/);
+});
+
+test("quickstart does not offer pip next to a uv-only 3.14 pin", () => {
+  assert.equal(quickstart.includes("or pip"), false);
+});
+
+test("risk-routing meta does not call live hotspots learned", () => {
+  assert.equal(risk.includes("learned hotspots"), false);
 });

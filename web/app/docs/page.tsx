@@ -41,9 +41,10 @@ export default function DocsIntroductionPage() {
                 >
                   scoreboard
                 </Link>{" "}
-                (the counters are the product until the first window closes),
-                and install the GitHub App. The self-serve measurement tool is
-                still the{" "}
+                (the counters are the product until the first window closes).
+                The GitHub App is dogfooding on this repository and is{" "}
+                not a self-serve product for other orgs yet. The self-serve
+                measurement tool is still the{" "}
                 <b className="font-semibold text-foreground">
                   backtest CLI
                 </b>
@@ -73,7 +74,7 @@ export default function DocsIntroductionPage() {
             {"\n"}
             <Dim>62 open → 5 need you · rest cleared w/ receipts</Dim>
             {"\n\n"}
-            <Comment># 3 · ask before you write          [in training]</Comment>
+            <Comment># 3 · ask before you write             [planned]</Comment>
             {"\n"}
             <Fn>doug.ask</Fn>
             {"("}

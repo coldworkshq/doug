@@ -1,6 +1,6 @@
 # doug-api
 
-Deterministic routing service. No model reads a diff unless the score says it should.
+Routing service. LLM diff-reader when `DOUG_READER=1`; deterministic fallback otherwise.
 
 ```sh
 uv sync                 # install (pins Python 3.14 via uv)
@@ -28,9 +28,9 @@ uv run ruff check .     # lint
 
 ## Layout
 
-- `doug/features.py` — PR metadata → feature vector. Pure, no I/O. The backtest CLI and the webhook both call this; keep it that way.
+- `doug/features.py` — PR metadata → feature vector. Pure, no I/O. The backtest CLI and the deterministic fallback both call this; keep it that way.
 - `doug/scoring.py` — features → verdict, as legible weighted rules.
-- `doug/fixtures/queue.json` — demo queue used by `/v1/queue` until the Live Gate exists.
+- `doug/fixtures/queue.json` — bundled fixture used by `/v1/queue` and the showcase when the ledger is not configured.
 
 Env: `DOUG_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `DOUG_CORS_ORIGINS`.
 
@@ -48,8 +48,9 @@ outcome-dependent injection — that would bias capture@10%). Widen
 `--limit` to raise defect n. `--labels api|both` keeps the search-API path.
 
 **Features** are still harvested over the REST API (3 calls/PR, cached
-in `.backtest-cache/`). The replay uses the same extract/score path the
-webhook will. Report: capture curve vs size-only and random, plus
+in `.backtest-cache/`). The replay uses the deterministic extract/score
+path — the live App's fallback when the reader is off or fails. Report:
+capture curve vs size-only and random, plus
 per-rule precision.
 
 `--before` matters: young PRs haven't had time to be reverted, so

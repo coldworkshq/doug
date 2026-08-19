@@ -174,8 +174,8 @@ export default function AboutPage() {
                 Star it
               </h3>
               <p className="mt-3 grow text-sm leading-relaxed text-muted-foreground">
-                Doug is pre-build — a star is the cheapest way to tell us
-                it&rsquo;s worth finishing.
+                Doug is dogfooding on this repo. A star is the cheapest way
+                to say the live path is worth hardening for other installs.
               </p>
               <a
                 href={GITHUB_REPO_URL}

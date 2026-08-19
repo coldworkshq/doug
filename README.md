@@ -1,12 +1,12 @@
 <h1 align="center">Doug</h1>
 
-<p align="center"><em>62 open. 5 need you.</em></p>
+<p align="center"><em>Most pull requests don't need a human.</em></p>
 
 ---
 
-Most pull requests don't need a human. Doug works out which ones do.
+Doug works out which ones do.
 
-Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Doug inverts it: cheap deterministic analysis scores every PR, most are cleared, and only the small fraction that carries real risk gets a deep look.
+Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Doug inverts the *attention*: most PRs clear, and only the small fraction that carries real risk gets a human. When the reader is on, that routing verdict still comes from an LLM reading the diff — the deterministic rules are the labeled fallback, not a claim that production is model-free.
 
 Doug is a Saint Bernard. The breed has had one job for three centuries: find the traveler buried in the snow, and bring help. That's the product — find the pull request that's in trouble, and bring a human. Doug doesn't dig you out himself, and he doesn't bark at every hiker on the trail.
 
@@ -16,26 +16,25 @@ Doug is a Saint Bernard. The breed has had one job for three centuries: find the
 
 **Never write code, never open a PR.** The moment it authors, it owns the authorship.
 
-**Publish the miss rate.** Every quarter, including the incidents that came from PRs it cleared. A gate that never publishes its errors is a marketing claim; one that does can survive being wrong.
+**Publish the miss rate.** Every quarter, including the incidents that came from PRs it cleared. A gate that never publishes its errors is a marketing claim; one that does can survive being wrong. The scoreboard is live; the miss-rate number is not yet — `miss_rate` stays null until enough adjudications exist.
 
 ## What it looks at
 
-Routing is deterministic — no model invocation, fractions of a cent per PR:
+Live scoring (production sets `DOUG_READER=1`) is an LLM diff-read. The deterministic fallback looks at cheap structural signals, including:
 
-- Boundary crossings against a declared or harvested architecture
-- Schema migrations landing in the same diff as a boundary or auth change
-- Dependency major bumps where the tests mock the dependency (green CI is anti-signal here)
-- Approval latency relative to diff size
-- Test delta disproportionate to the change
-- Cross-repo blast radius from the org lockfile and config graph
-- Authorship (agent or human) against how recently a human touched the module
+- Sensitive paths (auth, billing, security) and schema migrations in the same diff
+- Runtime dependency bumps with no test delta
+- Fast single-reviewer approval on a large diff
+- Sizeable changes with no test files touched
+- Bot / agent authorship
+- Static hotspot path segments (historically high-revert areas)
 
-Diff size is deliberately de-weighted. It predicts poorly once the rest are controlled for.
+Diff size is deliberately de-weighted. It predicts poorly once the rest are controlled for. Rolling-window hotspot *learning* and several shape rules exist in the backtest CLI only, not in the live App path.
 
 ## Repo layout
 
-- `api/` — Python 3.14 + FastAPI, managed with uv. The routing core: `doug/features.py` (PR metadata → feature vector, pure) and `doug/scoring.py` (features → verdict, as named weighted rules). `GET /v1/queue` serves a scored demo queue; `POST /webhooks/github` is an HMAC-verified stub until the Live Gate phase.
-- `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing page and `/queue`, the scored review queue. Reads the live API when it's up, falls back to a bundled fixture when it isn't.
+- `api/` — Python 3.14 + FastAPI, managed with uv. `doug/reader.py` (LLM scoring when enabled), `doug/worker.py` (drain + check run), `doug/check_run.py`, `doug/features.py` + `doug/scoring.py` (deterministic fallback). `POST /webhooks/github` verifies, records, and enqueues a review job, then 202s. `GET /v1/queue` is the token-gated ledger queue; `GET /v1/showcase/queue` and `GET /v1/showcase/scoreboard` are the public dogfood surfaces.
+- `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing, `/queue`, `/docs`, `/scoreboard`, WorkOS sign-in. Public pages fetch `/v1/showcase/*` when the API is up, and fall back to a bundled fixture when it isn't.
 - `console/` — Operator console (Next.js). Shares the root npm workspaces lockfile with `web/`.
 
 ```sh
@@ -63,11 +62,13 @@ docker build -f console/Dockerfile -t doug-console .
 
 ## Status
 
-**Pre-build.** The scoring rules exist and are tested, but they encode priors, not measurements — no backtest has validated the weights yet.
+**Early preview, dogfooding on this repository.** Doug runs as a GitHub App (`dougs-review`): webhook ingest, a durable worker, a neutral check run on every PR (ADR-0010). Merge to `main` deploys API + web (ADR-0009). It is not a self-serve product for other orgs yet.
 
-The whole idea rests on one claim: that a small set of cheaply-computable structural features captures a disproportionate share of bad changes. If flagging 10% of PRs catches 40% of the trouble instead of 70%, this is an expensive random sampler and it should be abandoned.
+The LLM reader is the scoring path when enabled (ADR-0004). The 2026-07 probe's AUC 0.69 / 0.67 is that probe, not a measurement of the shipped 100k-char reader (ADR-0012). Deterministic rule weights remain priors.
 
-That's testable on public data before a service exists — reconstruct the features over historical PRs, label defect-inducing changes via revert anchors, and plot capture rate against flag rate. That measurement comes first. The first shippable thing after it is a CLI that replays your last 90 days and shows you which PRs it would have flagged, overlaid with the reverts you actually had.
+**Not yet:** outside installs, first published miss rate, Pattern Garden MCP server.
+
+The self-serve measurement tool is still `doug-backtest`: replay a public repo's merged history, label defect-inducing changes via revert anchors, and plot capture against a size-only baseline.
 
 ## License
 

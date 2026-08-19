@@ -12,7 +12,7 @@
 - PLANNED: described so you can see the direction; does not exist yet
 
 ## Quickstart (AVAILABLE)
-Requirements: Python 3.12+, uv, a GitHub token (env or `gh` CLI; unauthenticated = 60 req/hr).
+Requirements: Python 3.14+, uv, a GitHub token (env or `gh` CLI; unauthenticated = 60 req/hr).
 
     git clone https://github.com/drewjst/doug && cd doug/api
     uv sync
@@ -33,7 +33,7 @@ had time to be reverted).
 - --labels git|api|both (default git): defect label source
 - --token STR: GitHub token (default: env, then gh CLI)
 - --cache-dir PATH (default .backtest-cache): harvest cache; reusable, seeds bigger runs
-- --output PATH: also write the full JSON report
+- --output PATH: JSON report path (default: backtest-<owner>-<repo>.json). Always written.
 - --backfill-details: fetch per-file stats + patch text for cached PRs (~1 req/PR, resumable)
 
 Harvests are checkpointed — kill and relaunch with the same command to resume.
@@ -43,9 +43,10 @@ Harvests are checkpointed — kill and relaunch with the same command to resume.
   what share of defect-inducing PRs lands in that band? capture@budget is the
   headline routing metric; AUC summarizes across budgets. Every report includes a
   size-only baseline — if Doug can't beat "biggest diff first," don't pay for Doug.
-- Hotspots (AVAILABLE): path segments where the repo's own past defects cluster,
-  learned per repo from a rolling window. Measured on sentry: 2.34x revert lift.
-  Hotspot vocabulary does NOT transfer between repos; per-repo learning is the mechanism.
+- Hotspots (AVAILABLE): path segments where the repo's own past defects cluster.
+  Live App scoring uses static hotspot segments. Rolling-window learning is
+  backtest holdout only (older half of the harvest). Measured on sentry: 2.34x
+  revert lift. Hotspot vocabulary does NOT transfer between repos.
 - Defect labels (AVAILABLE): a PR is defect-inducing when later history reverts it.
   Sources: git (revert anchors in history; default), api (GitHub revert-PR search),
   both (union, intersected with the harvested window — no outcome-dependent injection).
@@ -61,12 +62,12 @@ Printed tables: capture curve (doug/size-only/random + AUC), cleared band
 (cleared, missed, miss rate, density_lift per budget), per-rule precision
 (fired/hit/precision/lift — dead rules stay in the table), time-split holdout
 (hotspots learned on the older half only; needs >=200 PRs, >=8 defects, >=4 per
-half, else honestly omitted). Misses are listed by PR number so you can read the
-ones Doug got wrong. JSON schema is early-preview; printed tables are the stable contract.
+half, else honestly omitted). The JSON does not list missed PRs by number.
+JSON schema is early-preview; printed tables are the stable contract.
 
 ## Doug's own findings (AVAILABLE — the log; there is no rate yet)
 Doug reviews every PR in his own repository and the dispositions are written down.
-Roughly half his findings are disproved by code he wasn't shown: he reads a diff,
+About a third of prospective findings are disproved by code he wasn't shown: he reads a diff,
 not a repository, and does not reliably separate what a diff PROVES from what it
 merely PERMITS. Two recurring failure classes: (1) a conclusion drawn from an
 absence in the diff ("this name is used and no import was added" — it was already
@@ -84,14 +85,14 @@ settled it. Two axes because one loses the interesting cases — a true finding 
 changed nothing is a re-report; a false finding that changed something found a real
 gap by the wrong route. Doug's strongest mode is "this code does not justify
 itself," and a single score would grade that as failure.
-NO RATE IS PUBLISHED. Every row today is backfill — reconstructed after the fact,
-not recorded at the time — and is excluded from every rate by construction; the
-denominator starts at the first prospectively logged finding. When a number exists
+NO RATE IS PUBLISHED. The log has 135 rows (123 prospective, 12 backfill). Backfill
+is excluded from every rate by construction; the denominator is the prospective
+rows. When a number exists
 it will NOT be called precision: whether a finding is TRUE is a different quantity
 from whether it PREDICTED A DEFECT, and a finding can be true and worthless or
 false and load-bearing.
 
-## MCP — Pattern Garden (PREVIEW, in training)
+## MCP — Pattern Garden (PLANNED — no server exists yet)
 An MCP server a coding agent queries BEFORE writing. Serves outcome-anchored
 patterns distilled from public-repo history: per problem shape, the solution
 variants people actually write, each carrying its revert record, survival record,
@@ -110,7 +111,7 @@ Live, session or token:
 - GET /v1/prs/:number/receipt — evidence trail, session or receipt:read token
 Planned: tenant-scoped GET /v1/scoreboard.
 
-## Research results — LLM diff-read probe (2026-07, PREVIEW — not in the shipped scorer)
+## Research results — LLM diff-read probe (2026-07, PREVIEW — probe AUC, not a measurement of the shipped reader)
 Pre-registered before any run (bars, samples, kill conditions frozen first).
 Setup: structured LLM reads of PR diffs (title + files + patch only — no author,
 dates, or outcome), findings stored per PR, evaluated against revert/hotfix labels.
@@ -132,10 +133,11 @@ dates, or outcome), findings stored per PR, evaluated against revert/hotfix labe
 
 ## Honesty notes
 All published numbers are scoped to the repo they were measured on (sentry unless
-stated). The shipped deterministic scorer is a single-repo result — its cross-repo
+stated). The deterministic scorer is a single-repo result — its cross-repo
 replication FAILED (grafana at random), which we publish rather than bury. The LLM
-diff-read result above is the piece that replicated across both repos, and it is
-research, not the shipped scorer. Misses are published, not buried. Doug never
+diff-read result above is the piece that replicated across both repos. Those AUC
+numbers are the 2026-07 probe (ADR-0012), not a measurement of the shipped
+100k-char reader that is the live scoring path when DOUG_READER=1. Misses are published, not buried. Doug never
 blocks a merge. What Doug himself gets wrong is written down too (see "Doug's own
 findings") — including the fact that there is not yet enough of it to quote a rate.
 A design for an agent review crew with a falsifier-adjudicated finding ledger was
