@@ -4,8 +4,9 @@ State:    spec (branch claude/sticky-pr-comment) · review (PR #120)
 Next:     1. PR #120 https://github.com/drewjst/doug/pull/120 — mergeable, CI on
              238ca5d; Andrew approves + merges. (#119 merged + deployed.)
           2. Sticky-PR-comment spec docs/superpowers/specs/2026-08-19-sticky-pr-comment-design.md
-             (061dbcb): three-lens adversarial review running; fold findings,
-             Andrew reads, then writing-plans. Rebase this branch onto main once
+             (a5f9cdf): review folded in (D6–D9 added). Andrew decides D3a
+             (staged allowlist rollout — recommended yes) and D3b (keep
+             never-delete + standing issue — recommended), then writing-plans. Rebase this branch onto main once
              #120 merges (it depends on #120's settings row/endpoint/UI).
           3. Manual step before that feature deploys: add `pull_requests: write`
              to the GitHub App permissions (installations must re-accept).
