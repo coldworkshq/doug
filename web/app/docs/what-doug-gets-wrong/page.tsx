@@ -83,12 +83,12 @@ export default function WhatDougGetsWrongPage() {
 
             <div className="mt-6">
               <Callout lead="There is no rate here yet, and that is the point.">
-                Every row in the log today is backfilled — reconstructed from
-                write-ups after the fact, not recorded at the time — so every
-                one of them is excluded from every rate by construction. The
-                denominator starts at the first finding logged prospectively.
-                When there is a number, it will not be called precision: whether
-                a finding is <i>true</i> is a different quantity from whether it{" "}
+                The log has 135 rows: 123 prospective and 12 backfill.
+                Backfill was reconstructed from write-ups after the fact and
+                is excluded from every rate by construction. The denominator
+                is the prospective rows. When there is a number, it will not
+                be called precision: whether a finding is <i>true</i> is a
+                different quantity from whether it{" "}
                 <i>predicted a defect</i>, and a finding can be true and
                 worthless or false and load-bearing.
               </Callout>

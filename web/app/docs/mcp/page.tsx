@@ -22,7 +22,7 @@ export default function McpPatternGardenPage() {
               title="MCP · Pattern Garden"
               status="planned"
             >
-              <i>In training.</i> The Pattern Garden is an MCP server your
+              <i>No server exists yet.</i> The Pattern Garden is an MCP server your
               coding agent queries{" "}
               <b className="font-semibold text-foreground">before it writes</b>.
               It serves{" "}

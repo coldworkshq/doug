@@ -26,6 +26,7 @@ const [
   wrong,
   report,
   readme,
+  apiReadme,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -44,6 +45,7 @@ const [
   readFile(new URL("../app/docs/what-doug-gets-wrong/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/report/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../../README.md", import.meta.url), "utf8"),
+  readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
 ]);
 
 /** The field of ONE record, or null.
@@ -304,4 +306,48 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.match(llms, /tenant queue and receipt live/);
   assert.match(llms, /Planned: tenant-scoped GET \/v1\/scoreboard/);
   assert.equal(llms.includes("Planned: tenant-scoped GET /v1/queue"), false);
+});
+
+test("what Doug gets wrong does not claim every log row is backfill", () => {
+  // 123 of 135 rows are prospective. A callout that still says every row is
+  // backfill contradicts the rail on the same page.
+  assert.equal(wrong.includes("Every row in the log today is backfill"), false);
+  assert.match(wrong, /123 prospective/);
+});
+
+test("llms.txt does not present the July probe as the live scorer, or hotspots as a live learner", () => {
+  // ADR-0004: reader is the live path when enabled. ADR-0012: probe AUC is
+  // that probe, not a measurement of the shipped 100k-char reader.
+  assert.equal(llms.includes("not in the shipped scorer"), false);
+  assert.equal(llms.includes("research, not the shipped scorer"), false);
+  assert.match(llms, /static hotspot/);
+  assert.equal(llms.includes("learned per repo from a rolling window"), false);
+  // JSON is always written; --output only chooses the path.
+  assert.equal(llms.includes("also write the full JSON report"), false);
+});
+
+test("docs intro does not offer a self-serve GitHub App install", () => {
+  assert.equal(intro.includes("sign in to install"), false);
+  assert.match(intro, /not a self-serve product/);
+});
+
+test("MCP copy does not wear preview language for a server that does not exist", () => {
+  assert.equal(mcp.includes("In training."), false);
+  assert.equal(intro.includes("[in training]"), false);
+  assert.equal(landing.includes("preview · no dates promised"), false);
+  assert.match(landing, /planned · no dates promised/);
+});
+
+test("API README does not say the webhook scores inline through features.py", () => {
+  assert.equal(apiReadme.includes("the webhook both call this"), false);
+  assert.equal(apiReadme.includes("path the webhook will"), false);
+  assert.match(apiReadme, /enqueues a review job/);
+});
+
+test("quickstart does not offer pip next to a uv-only 3.14 pin", () => {
+  assert.equal(quickstart.includes("or pip"), false);
+});
+
+test("risk-routing meta does not call live hotspots learned", () => {
+  assert.equal(risk.includes("learned hotspots"), false);
 });

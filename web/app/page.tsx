@@ -61,7 +61,7 @@ const LAYERS = [
     body: "Every verdict is a ledger row — dated, immutable, waiting to be graded. A repo running Doug for a year holds a calibrated risk record of itself that no point-in-time reviewer can replicate.",
   },
   {
-    tag: "preview · no dates promised",
+    tag: "planned · no dates promised",
     title: "Tells your agents",
     body: "The graded history, served to coding agents before they type: “this migration shape reverted here 7 of 9 times — the two that survived used dual-write.” Ships when there is adjudicated data to serve, not before.",
   },

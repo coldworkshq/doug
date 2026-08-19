@@ -6,7 +6,7 @@ import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 export const metadata = {
   title: "Risk routing — Doug Documentation",
   description:
-    "How Doug's capture curve, learned hotspots, and the mandatory size-only baseline work.",
+    "How Doug's capture curve, static hotspot segments, and the mandatory size-only baseline work.",
 };
 
 export default function RiskRoutingPage() {
