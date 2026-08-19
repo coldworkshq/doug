@@ -1,10 +1,11 @@
 # HANDOFF — doug
 
-State:    building (branch claude/sticky-pr-comment, rebased on main after #120 merged as 703e9f8)
-Next:     Execute docs/superpowers/plans/2026-08-19-sticky-pr-comment.md (0b4e1b5)
-          via subagent-driven development: Task 1 = PR A (web tolerance);
-          MANUAL gate = add `pull_requests: write` to the GitHub App; Tasks
-          2–10 = PR B. Spec: docs/superpowers/specs/2026-08-19-sticky-pr-comment-design.md (D1–D9; D3a yes, D3b keep).
+State:    building (branch claude/sticky-pr-comment; PR A #138 merged AND deployed)
+Next:     Finish plan docs/superpowers/plans/2026-08-19-sticky-pr-comment.md
+          (0b4e1b5) tasks 6-10, then open PR B. Ledger:
+          .superpowers/sdd/2026-08-19-sticky-pr-comment/progress.md
+          REMAINING GATE before PR B merges: set Pull requests: Read and write
+          on the GitHub App (installations must re-accept).
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
