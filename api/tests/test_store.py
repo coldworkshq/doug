@@ -3363,3 +3363,71 @@ def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(
     store.set_installation_repos(101, [], replace=True)          # removed
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)  # re-added
     assert store.repo_threshold(101, 11) == 0.9
+
+
+def test_repo_pr_comment_is_true_only_for_an_active_row_that_says_so(tmp_path, monkeypatch):
+    """D6: absent row -> False (a repo the tenant cannot see on the dashboard
+    must not get an un-disableable public comment); removed row -> False;
+    new active row -> True by server default; explicit False sticks."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    assert store.repo_pr_comment(101, 11) is False
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    assert store.repo_pr_comment(101, 11) is True
+    assert store.set_repo_pr_comment(101, 11, False) is True
+    assert store.repo_pr_comment(101, 11) is False
+    store.set_repo_pr_comment(101, 11, True)
+    store.set_installation_repos(101, [], replace=True)  # removed
+    assert store.repo_pr_comment(101, 11) is False
+    assert store.set_repo_pr_comment(101, 11, False) is False
+
+
+def test_set_repo_pr_comment_keys_on_the_installation_row_and_leaves_updated_at(
+    tmp_path, monkeypatch
+):
+    _db(tmp_path, monkeypatch)
+    for inst, login in ((101, "acme"), (202, "other")):
+        store.upsert_installation(inst, login, "Organization", "active")
+        store.set_installation_repos(inst, [(11, f"{login}/one")], replace=False)
+    with store._get_engine().connect() as conn:
+        before = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.installation_id == 101)
+        ).scalar_one()
+    assert store.set_repo_pr_comment(101, 11, False) is True
+    assert store.repo_pr_comment(202, 11) is True
+    with store._get_engine().connect() as conn:
+        after = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.installation_id == 101)
+        ).scalar_one()
+    assert after == before
+    # webhook re-add preserves an explicit False
+    store.set_installation_repos(101, [], replace=True)
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    assert store.repo_pr_comment(101, 11) is False
+
+
+def test_pr_comment_claim_round_trip(tmp_path, monkeypatch):
+    """D9: the claim row is what makes create_comment single-winner; forget
+    reopens it after a 404 (someone deleted Doug's comment)."""
+    _db(tmp_path, monkeypatch)
+    assert store.pr_comment_id(101, 11, 7) is None
+    assert store.claim_pr_comment(101, 11, 7) is True
+    assert store.claim_pr_comment(101, 11, 7) is False
+    store.set_pr_comment_id(101, 11, 7, 987654)
+    assert store.pr_comment_id(101, 11, 7) == 987654
+    store.forget_pr_comment(101, 11, 7)
+    assert store.pr_comment_id(101, 11, 7) is None
+    assert store.claim_pr_comment(101, 11, 7) is True
+
+
+def test_pr_comment_denied_marker_sets_and_clears(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    assert store.pr_comment_denied_at(101) is None
+    at = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    store.mark_pr_comment_denied(101, at)
+    assert store.pr_comment_denied_at(101) == at
+    store.mark_pr_comment_denied(101, None)
+    assert store.pr_comment_denied_at(101) is None

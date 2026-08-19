@@ -1184,6 +1184,186 @@ def set_repo_threshold(
     return result.rowcount == 1
 
 
+def repo_pr_comment(installation_id: int, github_repo_id: int) -> bool:
+    """Whether Doug keeps a sticky PR comment on this repo (spec
+    2026-08-19-sticky-pr-comment, D6).
+
+    True ONLY for an ACTIVE row whose `pr_comment` column is true — unlike
+    `repo_threshold` above, this does NOT read a removed row's last value.
+    An absent row (a repo the reader has verdicts for but that never made
+    it into installation_repos — the API's startup DRIFT line) or a
+    'removed' row is exactly the set of repos a tenant cannot see or
+    toggle on the dashboard, and a repo nobody can see must not get an
+    un-disableable public comment.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(installation_repos.c.pr_comment).where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+                installation_repos.c.state == "active",
+            )
+        ).scalar_one_or_none()
+    return bool(value) if value is not None else False
+
+
+def set_repo_pr_comment(installation_id: int, github_repo_id: int, value: bool) -> bool:
+    """Write the sticky-comment toggle on the ACTIVE row for
+    (installation_id, github_repo_id).
+
+    Returns False when no such active row exists — the API turns that into
+    404. Same shape as `set_repo_threshold`: writes ONLY this column, never
+    `updated_at`, because that column is repo_id_for's tiebreaker between
+    duplicate registrations (a transferred repo legitimately has rows under
+    two installations) and a settings write must not move it.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_repos)
+            .where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+                installation_repos.c.state == "active",
+            )
+            .values(pr_comment=bool(value))
+        )
+    return result.rowcount == 1
+
+
+_PR_COMMENT_IDENTITY = (
+    pr_comments.c.installation_id,
+    pr_comments.c.github_repo_id,
+    pr_comments.c.pr_number,
+)
+
+
+def _pr_comment_insert(conn):
+    if conn.dialect.name == "postgresql":
+        statement = postgresql_insert(pr_comments)
+    elif conn.dialect.name == "sqlite":
+        statement = sqlite_insert(pr_comments)
+    else:
+        raise RuntimeError(f"unsupported pr_comments dialect: {conn.dialect.name}")
+    return statement.on_conflict_do_nothing(index_elements=_PR_COMMENT_IDENTITY)
+
+
+def pr_comment_id(installation_id: int, github_repo_id: int, pr_number: int) -> int | None:
+    """The sticky comment's GitHub comment id for this PR, or None when
+    there is no claim row yet, the claim hasn't been followed by a create
+    yet, or storage is disabled."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(pr_comments.c.comment_id).where(
+                pr_comments.c.installation_id == installation_id,
+                pr_comments.c.github_repo_id == github_repo_id,
+                pr_comments.c.pr_number == pr_number,
+            )
+        ).scalar_one_or_none()
+    return None if value is None else int(value)
+
+
+def claim_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) -> bool:
+    """Claim the single sticky-comment slot for this PR (spec
+    2026-08-19-sticky-pr-comment, D9).
+
+    INSERT ... ON CONFLICT DO NOTHING on the natural (installation_id,
+    github_repo_id, pr_number) key: the row IS the claim, so this is what
+    makes create_comment single-winner across concurrent webhook
+    deliveries. Returns True iff this call actually inserted the row —
+    False means someone else already holds the claim.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.begin() as conn:
+        result = conn.execute(
+            _pr_comment_insert(conn).values(
+                installation_id=installation_id,
+                github_repo_id=github_repo_id,
+                pr_number=pr_number,
+                comment_id=None,
+                updated_at=datetime.now(UTC),
+            )
+        )
+    return result.rowcount == 1
+
+
+def set_pr_comment_id(
+    installation_id: int, github_repo_id: int, pr_number: int, comment_id: int
+) -> None:
+    """Record the GitHub comment id created for this PR's claim."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            update(pr_comments)
+            .where(
+                pr_comments.c.installation_id == installation_id,
+                pr_comments.c.github_repo_id == github_repo_id,
+                pr_comments.c.pr_number == pr_number,
+            )
+            .values(comment_id=comment_id, updated_at=datetime.now(UTC))
+        )
+
+
+def forget_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) -> None:
+    """Delete the claim row, reopening the slot — used after a 404 tells us
+    someone deleted Doug's comment out from under the claim."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            pr_comments.delete().where(
+                pr_comments.c.installation_id == installation_id,
+                pr_comments.c.github_repo_id == github_repo_id,
+                pr_comments.c.pr_number == pr_number,
+            )
+        )
+
+
+def mark_pr_comment_denied(installation_id: int, at: datetime | None) -> None:
+    """Set or clear installations.pr_comment_denied_at (spec
+    2026-08-19-sticky-pr-comment, D8). Cleared (at=None) on the next
+    successful create/update; set on a 403 that means permission was not
+    re-accepted, the conversation is locked, or the repo is archived."""
+    engine = _get_engine()
+    if engine is None:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            update(installations)
+            .where(installations.c.installation_id == installation_id)
+            .values(pr_comment_denied_at=at)
+        )
+
+
+def pr_comment_denied_at(installation_id: int) -> datetime | None:
+    """The last time a PR-comment write was refused with 403 for this
+    installation, or None when it has never been denied (or storage is
+    disabled). Drives the Repositories-view banner (D8)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(installations.c.pr_comment_denied_at).where(
+                installations.c.installation_id == installation_id
+            )
+        ).scalar_one_or_none()
+    return _as_utc(value)
+
+
 _OUTCOME_IDENTITY = (
     outcome_jobs.c.installation_id,
     outcome_jobs.c.github_repo_id,
