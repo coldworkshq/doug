@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from collections.abc import Iterable
@@ -24,9 +25,13 @@ Layer = Literal["doug", "agent-reviewer"]
 Verdict = Literal["real", "disproved", "adjacent"]
 Source = Literal["prospective", "backfill"]
 
-REQUIRED = frozenset(
-    {"date", "pr", "layer", "rule", "verdict", "changed", "settled_by", "source"}
-)
+REQUIRED = frozenset({"date", "pr", "layer", "rule", "verdict", "changed", "settled_by", "source"})
+# `repo` is optional in the file and defaulted, so the rows written before Doug
+# reviewed anything but itself stay valid: absence means "doug". It is REQUIRED
+# on the CLI, because a `pr` is only unique within a repository and a rate that
+# mixes two of them is not a rate of anything.
+DEFAULT_REPO = "doug"
+_REPO_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 LAYERS = frozenset({"doug", "agent-reviewer"})
 VERDICTS = frozenset({"real", "disproved", "adjacent"})
 SOURCES = frozenset({"prospective", "backfill"})
@@ -47,6 +52,7 @@ class FindingRow:
     changed: bool
     settled_by: str
     source: Source
+    repo: str = DEFAULT_REPO
     note: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -59,6 +65,7 @@ class FindingRow:
             "changed": self.changed,
             "settled_by": self.settled_by,
             "source": self.source,
+            "repo": self.repo,
         }
         if self.note:
             out["note"] = self.note
@@ -76,7 +83,7 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
     missing = REQUIRED - raw.keys()
     if missing:
         raise FindingsLogError(f"{where}: missing keys {sorted(missing)}")
-    extra = set(raw) - REQUIRED - {"note"}
+    extra = set(raw) - REQUIRED - {"note", "repo"}
     if extra:
         raise FindingsLogError(f"{where}: unknown keys {sorted(extra)}")
 
@@ -96,6 +103,12 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
     for key in ("date", "rule", "settled_by"):
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise FindingsLogError(f"{where}: {key} must be a non-empty string")
+    repo = raw.get("repo", DEFAULT_REPO)
+    if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        raise FindingsLogError(
+            f"{where}: repo must be a lowercase slug (got {repo!r}) — a typo here "
+            f"silently splits the denominator into two repositories"
+        )
     note = raw.get("note")
     if note is not None and (not isinstance(note, str) or not note.strip()):
         raise FindingsLogError(f"{where}: note must be a non-empty string when present")
@@ -109,6 +122,7 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
         changed=raw["changed"],
         settled_by=raw["settled_by"],
         source=source,
+        repo=repo,
         note=note,
     )
 
@@ -141,6 +155,7 @@ class Rates:
     n: int
     by_verdict: dict[str, int]
     by_layer: dict[str, int]
+    by_repo: dict[str, int]
     changed_true: int
 
     def as_dict(self) -> dict[str, Any]:
@@ -148,6 +163,7 @@ class Rates:
             "n": self.n,
             "by_verdict": dict(self.by_verdict),
             "by_layer": dict(self.by_layer),
+            "by_repo": dict(self.by_repo),
             "changed_true": self.changed_true,
             "share": {
                 v: (self.by_verdict.get(v, 0) / self.n if self.n else None)
@@ -156,14 +172,21 @@ class Rates:
         }
 
 
-def rates(rows: Iterable[FindingRow]) -> Rates:
+def rates(rows: Iterable[FindingRow], *, repo: str | None = None) -> Rates:
+    """Prospective-only. Pass `repo` to scope: a share computed across two
+    repositories describes neither, so `by_repo` is always reported and the
+    scoped call is what any published number should come from."""
     prospective = [r for r in rows if r.source == "prospective"]
+    if repo is not None:
+        prospective = [r for r in prospective if r.repo == repo]
     by_verdict = Counter(r.verdict for r in prospective)
     by_layer = Counter(r.layer for r in prospective)
+    by_repo = Counter(r.repo for r in prospective)
     return Rates(
         n=len(prospective),
         by_verdict=dict(by_verdict),
         by_layer=dict(by_layer),
+        by_repo=dict(by_repo),
         changed_true=sum(1 for r in prospective if r.changed),
     )
 
@@ -172,6 +195,7 @@ def append(
     *,
     pr: int,
     layer: Layer,
+    repo: str = DEFAULT_REPO,
     rule: str,
     verdict: Verdict,
     changed: bool,
@@ -191,6 +215,7 @@ def append(
         changed=changed,
         settled_by=settled_by,
         source="prospective",
+        repo=repo,
         note=note,
     )
     # Re-parse through the same gate a CI check will use.
@@ -211,11 +236,21 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("check", help="validate every line (exit 1 on fault)")
-    sub.add_parser("rate", help="print prospective-only rates as JSON")
+    rp = sub.add_parser("rate", help="print prospective-only rates as JSON")
+    rp.add_argument(
+        "--repo",
+        default=None,
+        help="scope the rate to one repository (default: all, with by_repo shown)",
+    )
 
     ap = sub.add_parser("append", help="append one prospective disposition")
     ap.add_argument("--pr", type=int, required=True)
     ap.add_argument("--layer", choices=sorted(LAYERS), required=True)
+    ap.add_argument(
+        "--repo",
+        required=True,
+        help="repository the PR belongs to, e.g. doug, coldworks",
+    )
     ap.add_argument("--rule", required=True)
     ap.add_argument("--verdict", choices=sorted(VERDICTS), required=True)
     ap.add_argument("--changed", action=argparse.BooleanOptionalAction, required=True)
@@ -231,12 +266,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ok: {len(rows)} rows", file=sys.stderr)
             return 0
         if args.cmd == "rate":
-            print(json.dumps(rates(check(path)).as_dict(), indent=2, sort_keys=True))
+            scoped = rates(check(path), repo=args.repo)
+            print(json.dumps(scoped.as_dict(), indent=2, sort_keys=True))
             return 0
         if args.cmd == "append":
             row = append(
                 pr=args.pr,
                 layer=args.layer,
+                repo=args.repo,
                 rule=args.rule,
                 verdict=args.verdict,
                 changed=args.changed,

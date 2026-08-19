@@ -202,18 +202,30 @@ time — when you already hold the answer, because the rule above already makes 
 file that settled it before dismissing anything. It is transcription, not new work.
 
 ```json
-{"date":"2026-08-02","pr":28,"layer":"doug","rule":"reader:missing-import",
+{"date":"2026-08-02","pr":28,"layer":"doug","repo":"doug","rule":"reader:missing-import",
  "verdict":"disproved","changed":false,
  "settled_by":"api/doug/api.py:7 — already imported; ruff F821 green before the finding",
  "source":"prospective","note":"optional, one line"}
 ```
 
+`repo` names the repository the PR belongs to, and it exists because `pr` does
+not identify a review on its own — a PR number is only unique inside one
+repository. Doug now reviews repositories it did not ship in (coldworks first),
+and a rate computed across two of them describes neither. It is **optional in
+the file and defaults to `doug`**, so the 135 rows written before that was true
+stay valid without being rewritten; it is **required on the CLI**, so a new row
+cannot land in doug's denominator by omission. `rate --repo <name>` is what any
+published number should come from; an unscoped `rate` still prints `by_repo` so
+a mixed figure cannot be quoted unaware. The value is a lowercase slug and the
+schema refuses anything else, because a typo does not fail loudly — it silently
+splits one repository's denominator in two.
+
 (Shown wrapped; it is one line in the file. `jq -e . docs/findings-log.jsonl` is the check.)
 
 The schema is also enforced in code: `uv run python -m doug.findings_log check`
 (and the pin in `api/tests/test_findings_log.py`). Append at disposition time with
-`uv run python -m doug.findings_log append --pr N --layer doug --rule … --verdict
-disproved|real|adjacent --changed|--no-changed --settled-by "…"`. Rates are
+`uv run python -m doug.findings_log append --pr N --layer doug --repo doug --rule …
+--verdict disproved|real|adjacent --changed|--no-changed --settled-by "…"`. Rates are
 prospective-only (`… rate`); backfill never enters the denominator.
 
 The product path also applies the resolution rule without editing the frozen
