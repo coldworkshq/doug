@@ -22,8 +22,12 @@ Three things this surface must never smooth over:
     did not pass (2026-07-31). The instrument is not validated, so they
     render in their own labelled section and never touch band or score
     (ADR-0007).
+
+`pr_comment.py` mirrors this summary byte-for-byte inside a PR comment; anything
+that must not reach a comment must be neutralised here, not there.
 """
 
+import re
 import sys
 
 from .models import Band, Verdict
@@ -56,6 +60,13 @@ FALLBACK_NOTE = (
     "from the deterministic scorer, which never opens the diff — it scores "
     "PR shape (size, paths, authorship) alone. Read it as routing, not as "
     "a judgment about this change."
+)
+# A Cleared band reads as "safe" to anyone skimming the checks list. It
+# means Doug's read found nothing worth a human's time — it is not a
+# statement about the change itself, and it must not be read as one.
+CLEARED_NOTE = (
+    "Cleared means Doug found nothing it wanted a human to look at; it is not a "
+    "statement that the change is safe."
 )
 DEVIATION_HEADING = "### Decision deviations (unvalidated)"
 DEVIATION_NOTE = (
@@ -107,8 +118,43 @@ def _headline(tier: str, verdict: Verdict) -> str:
     return f"Deterministic fallback · {band} · risk {verdict.score:.2f}"
 
 
+# Zero-width space. Invisible wherever this markdown renders, but it splits
+# a token in two so the tokeniser that would otherwise fire a side effect —
+# a mention, a cross-reference, a live link, an HTML comment — never sees
+# an intact one. r.label and d.description are free-form model output,
+# attacker-influenceable via a public repo's diff (Reason.label is the
+# reader's own description; truncation_reason splices file paths), and
+# `pr_comment.py` renders this same text live inside a PR conversation
+# where those tokens are not inert. Neutralising here, at the one
+# chokepoint every model-authored span already passes through, keeps the
+# check run and the comment byte-identical instead of diverging at the
+# surface that has to be safe.
+_ZWSP = "\u200b"
+
+# `@handle` notifies and subscribes that account in a PR comment. Exclude a
+# preceding word char or dot so `a@b.c` still reads as the email address it
+# is, not a mention of `b`.
+_MENTION_RE = re.compile(r"(?<![\w.])@(?=\w)")
+# `#123` on its own writes a cross-reference into issue #123's timeline.
+# Exclude a preceding word char or `/` so the digits after a repo-qualified
+# ref (`owner/repo#4`) are left to `_REPO_REF_RE`, which keeps the repo
+# name intact instead of also splitting it.
+_BARE_REF_RE = re.compile(r"(?<![\w/])#(?=\d)")
+# `owner/repo#4` — same cross-reference side effect, but the repo qualifier
+# is part of the reading and must survive; only the `#` needs the break.
+_REPO_REF_RE = re.compile(r"\w+/\w+#\d")
+# An unterminated `<!--` opens an HTML comment that swallows the rest of
+# the comment body.
+_COMMENT_OPEN_RE = re.compile(r"<!--")
+# `[text](url)` is a live, clickable link rendered under a bot identity
+# users are taught to trust.
+_LINK_RE = re.compile(r"\]\(")
+
+
 def _oneline(text: str) -> str:
-    """Collapse model-authored text to one physical line.
+    """Collapse model-authored text to one physical line and neutralise the
+    GitHub/markdown tokens that are inert here but have side effects when
+    this same text is mirrored into a PR comment (pr_comment.py).
 
     r.label and d.description are free-form model output. A literal
     newline followed by '### Findings' or '### Decision deviations' would
@@ -116,14 +162,25 @@ def _oneline(text: str) -> str:
     boundary — laundering injected text as this module's own structure.
     Collapsing whitespace keeps every finding inside its own list item.
     """
-    return " ".join(text.split())
+    collapsed = " ".join(text.split())
+    collapsed = _MENTION_RE.sub(f"@{_ZWSP}", collapsed)
+    collapsed = _REPO_REF_RE.sub(lambda m: m.group(0).replace("#", f"#{_ZWSP}", 1), collapsed)
+    collapsed = _BARE_REF_RE.sub(f"#{_ZWSP}", collapsed)
+    collapsed = _COMMENT_OPEN_RE.sub(f"<!-{_ZWSP}-", collapsed)
+    collapsed = _LINK_RE.sub(f"]{_ZWSP}(", collapsed)
+    return collapsed
 
 
 def _quote(reason) -> list[str]:
     # The label already opens "Partial read:" — reader.truncation_reason
     # writes the whole sentence. Adding a heading of our own printed the
     # words twice and broke the caveat's own once-and-only-once rule.
-    return ["", f"> {reason.label}"]
+    #
+    # Routed through _oneline: this label also splices file paths
+    # (truncation_reason, reader.py), which may themselves contain `@` or a
+    # newline. An unescaped newline here breaks out of the blockquote and
+    # lands at the top level of a public PR comment.
+    return ["", f"> {_oneline(reason.label)}"]
 
 
 def render(
@@ -147,6 +204,8 @@ def render(
         RISK_NOTE,
         NEUTRAL_NOTE,
     ]
+    if verdict.band is Band.CLEARED:
+        lines += ["", CLEARED_NOTE]
     if tier != "reader":
         lines += ["", FALLBACK_NOTE]
     if partial is not None:

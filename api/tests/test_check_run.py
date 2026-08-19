@@ -35,6 +35,8 @@ FLAGGED = reader.verdict_from_reader(
     ),
     threshold=30,
 )
+FLAGGED_VERDICT = FLAGGED
+CLEARED_VERDICT = FLAGGED.model_copy(update={"reasons": [], "band": Band.CLEARED, "score": 0.04})
 
 WHOLE = reader.Coverage(diff_chars=400, sent_chars=400, files_sent=2, files_unseen=[])
 PARTIAL = reader.Coverage(
@@ -558,4 +560,32 @@ def test_a_missing_meter_omits_the_deep_read_line():
 def test_the_footer_does_not_publish_a_miss_rate():
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, instrument=_snap())
     assert "miss rate" not in summary.lower()
+
+
+def test_oneline_neutralises_the_forms_that_have_side_effects_in_a_pr_comment():
+    """The same markdown renders in a check run and in a PR comment, but only
+    the comment notifies @mentions, writes #refs into other timelines, and
+    links under a trusted bot identity; an unterminated <!-- swallows the
+    rest of the body. Neutralised HERE so both surfaces stay byte-identical."""
+    z = "​"
+    assert check_run._oneline("ping @doug now") == f"ping @{z}doug now"
+    assert check_run._oneline("see #123 and owner/repo#4") == f"see #{z}123 and owner/repo#{z}4"
+    assert check_run._oneline("x <!-- y") == f"x <!-{z}- y"
+    assert check_run._oneline("[click](https://evil)") == f"[click]{z}(https://evil)"
+    # "a@b.c" is not a mention: "@" is preceded by a word char, not a space/start.
+    assert check_run._oneline("email a@b.c") == "email a@b.c"
+    assert check_run._oneline("line\nbreak") == "line break"
+
+
+def test_quote_goes_through_oneline():
+    reason = Reason(rule="x", label="Partial read: paths/@user\nfile", weight=0.0)
+    assert check_run._quote(reason) == ["", "> Partial read: paths/@​user file"]
+
+
+def test_render_carries_the_cleared_note_only_when_cleared():
+    # build a cleared verdict and a flagged one with the file's fixtures
+    _, cleared = check_run.render("reader", CLEARED_VERDICT, None, None)
+    _, flagged = check_run.render("reader", FLAGGED_VERDICT, None, None)
+    assert check_run.CLEARED_NOTE in cleared
+    assert check_run.CLEARED_NOTE not in flagged
 
