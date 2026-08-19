@@ -15,6 +15,7 @@ never quote `precision` as the precision a user would see.
 
 from math import sqrt
 
+from .adjudicate import OutcomeKind
 from .patterns import from_rule
 
 
@@ -37,9 +38,22 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def fold(join: dict) -> tuple[dict, dict]:
     """store.pattern_join() rows -> ({(repo, pr): is_defect}, {pattern: {keys}}).
 
-    Two rules worth stating, because both are silent corruptions:
-    - Any non-clean outcome makes a PR a defect. "clean" means "nothing
-      observed", so it must never overwrite an observed revert.
+    Three rules worth stating, because all three are silent corruptions:
+    - A CENSORED row is a NON-OBSERVATION, not a defect. The PR left the
+      risk set, so it belongs in neither the numerator nor the denominator:
+      prereg §3's arithmetic is `N_at_risk = N_done - censored`, and it
+      names and rejects the alternative outright — "counting censored as
+      misses ... a censoring rate wearing a miss rate's name". This module
+      did exactly that until 2026-08-18, when `/v1/patterns` reported
+      `defects: 2` for drewjst/doug and both were gh-pages merges: 100% of
+      the published base rate was non-observation. Censoring in ONE window
+      does not unobserve another — `outcomes` carries `window_days`, so a
+      PR can hold a censored 14-day row beside an observed 60-day one.
+    - A non-clean OBSERVATION makes a PR a defect. "clean" means "nothing
+      observed", so it must never overwrite an observed revert. Tested as
+      `!= CLEAN` rather than `== REVERT` deliberately: a kind added to the
+      enum later then surfaces as a defect, which is loud, instead of
+      dissolving into "clean", which flatters.
     - A PR is counted once per pattern. Two synonymous slugs that merge to
       one pattern are one piece of evidence, or the merge map would
       manufacture the recurrence it exists to measure.
@@ -47,7 +61,9 @@ def fold(join: dict) -> tuple[dict, dict]:
     is_defect: dict[tuple[str, int], bool] = {}
     for r in join["prs"]:
         key = (r["repo"], r["pr_number"])
-        is_defect[key] = is_defect.get(key, False) or r["kind"] != "clean"
+        if r["kind"] == OutcomeKind.CENSORED:
+            continue
+        is_defect[key] = is_defect.get(key, False) or r["kind"] != OutcomeKind.CLEAN
     carriers: dict[str, set] = {}
     for r in join["hits"]:
         pattern = from_rule(r["rule"])

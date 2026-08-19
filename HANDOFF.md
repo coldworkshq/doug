@@ -1,30 +1,92 @@
 # HANDOFF — doug
 
-State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
-          never-executed path. #113 (383daf6), #114 (8e1d774) and #115
-          (22156d9) are all MERGED. **PR #116 IS OPEN** and is the last thing
-          between here and a live loop:
-          https://github.com/drewjst/doug/pull/116
-          Branch `fix/adjudicator-needs-git`, verified locally red→green
-          (pre-fix image: `exec: "git": executable file not found`, exit 127;
-          fixed image: git 2.47.3 + a real `--filter=tree:0` clone of a public
-          repo, which also proves TLS/CA).
+State:    **LOOP LIVE + EXIT-GATE AUDIT PASSED (18/18), and the audit found
+          a live defect in `/v1/patterns`.**
 
-Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
-             do NOT run `gcp.sh adjudicator` by hand, that instruction was
-             mine and it was wrong.
-          2. **At or after 16:25 UTC / 9:25 AM PDT**, execute the Job:
-             gcloud run jobs execute doug-adjudicator \
-               --project doug-prod0 --region us-central1 --wait
-             Earlier than that it exits 0 having done nothing — see the lease
-             note below. Success = non-zero `done` in the DrainSummary and
-             `/v1/showcase/scoreboard` leaving `adjudicated 0`.
-          3. The liveness item — NOT built, recorded in the roadmap under M3.
-          4. MT3 (spec approved, decisions locked below).
+Next:     1. ~~Fix `precision.fold`~~ DONE — PR open, see below. With it,
+             `/v1/patterns` for drewjst/doug becomes `prs: 16, defects: 0,
+             base_rate: 0.0`: honest, and correctly uninformative. Sixteen
+             observations with zero defects cannot say which patterns
+             predict defects. The pattern display has nothing to show YET —
+             that is the finding, not a blocker.
+          2. **2026-08-21: the first real detector test.** PR #68 merged to
+             main 2026-08-07 and was reverted by #70 the same day. Its 14d
+             adjudication is `pending`, due 2026-08-21. It is the only PR in
+             the repo's history with a revert against it, so it MUST come
+             back `kind=revert`. If it returns `clean`, the detector is
+             broken and M3 says stop.
+          3. The liveness item (roadmap M3, unbuilt). Zero alert policies
+             still exist in doug-prod0.
+          4. Then MT3, then M4's interviews.
 
-Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
+Blockers: none.
 
-## THE LEASE — why re-running early "succeeds" and does nothing
+## THE AUDIT — M3's exit gate, done 2026-08-18
+
+Gate: "100% agreement vs. a manual `git log` audit (any disagreement =
+detector bug = stop)". **18/18 agree.**
+
+  16 clean (PRs 28-32, 34-39, 41-45) — the ONLY revert in the entire repo
+     history since 2026-08-01 is `#70 Revert "...(#68)"` on 2026-08-07, and
+     #68 is not in this batch (its window is still pending). So no PR
+     labelled clean has a revert against it.
+  2 censored (PRs 40, 46) — both merged to `gh-pages`, `censor_reason:
+     base_ref`, `default_branch: main`. Independently checkable from the
+     receipt's own base_ref. This is the roadmap's rule working: "merge to
+     non-default branch -> censored, never clean".
+  Denominator complete — the one gap in an otherwise contiguous 28-46 run
+     is #33, which has `merges: 0`. Never merged, correctly not at risk.
+     (This is the check MT3 exists to protect: a missing job would look
+     identical to a clean sweep.)
+
+Method: receipts via `GET /v1/prs/{n}/receipt` with the operator token, swept
+over PRs 10-60; revert evidence read from `git log origin/main` by subject,
+NOT from `git_labels` (using the detector to audit the detector is circular).
+
+## THE DEFECT THE AUDIT FOUND — `/v1/patterns` counts censored as defect
+
+`precision.py:50`:
+
+    is_defect[key] = is_defect.get(key, False) or r["kind"] != "clean"
+
+The Outcome enum is REVERT / CLEAN / CENSORED. A censored row is a
+NON-OBSERVATION — the PR left the risk set — but it is `!= "clean"`, so it
+lands in the numerator as a defect.
+
+Live impact right now: `/v1/patterns?repo=drewjst/doug` returns
+`prs: 18, defects: 2, base_rate: 0.111`. The true observed defect count is
+**0 of 16**; 100% of the reported "defects" are non-observations, and the
+honest denominator is 16, not 18. Every precision, lift and `clears_base`
+value it publishes is computed against that manufactured base rate.
+
+Same defect class as #93 ("a censored outcome is a non-observation, not a
+miss") — fixed in the console then, not here. `precision.fold` is the ONLY
+consumer of `kind != "clean"` in the package, so the blast radius is
+`/v1/patterns` and nothing else.
+
+FIXED on `fix/censored-is-not-a-defect`. The semantics were not a judgement
+call — prereg §3 already rules it: `N_at_risk = N_done - censored`, and it
+names and rejects the alternative ("counting censored as misses ... a
+censoring rate wearing a miss rate's name"). So censored leaves BOTH the
+numerator and the denominator. A censored row in one window does not
+unobserve another (`outcomes` carries `window_days`). Kept as `!= CLEAN`
+rather than `== REVERT` on purpose: a kind added to the enum later surfaces
+as a defect (loud) instead of dissolving into clean (flattering), and
+`test_fold_classifies_every_outcome_kind_the_adjudicator_can_write` fails
+until someone gives the new kind a decision.
+
+## What the three defects had in common — worth keeping
+
+Every one was invisible because **the drain path had never executed against
+real work in production**. Twelve green Job executions carried no evidence
+about any of it; `docker build api` built an image it never ran; and the
+public surface rendered `adjudicated 0`, the honest empty state, pixel-
+identical to the broken one. Each fix exposed the next defect rather than
+causing it. The general lesson is in the roadmap's M3 liveness item: a green
+check over a code path that cannot run is not evidence, and "empty is the
+product" only holds while empty-because-broken is a different, louder thing.
+
+## THE LEASE — why re-running early "succeeded" and did nothing (RESOLVED)
 
 The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
 `status='running'`. `drain()` opens with `reclaim_stalled()`, which only
