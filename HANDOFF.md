@@ -1,15 +1,10 @@
 # HANDOFF — doug
 
-State:    spec (branch claude/sticky-pr-comment) · review (PR #120)
-Next:     1. PR #120 https://github.com/drewjst/doug/pull/120 — mergeable, CI on
-             238ca5d; Andrew approves + merges. (#119 merged + deployed.)
-          2. Sticky-PR-comment spec docs/superpowers/specs/2026-08-19-sticky-pr-comment-design.md
-             (a5f9cdf): review folded in (D6–D9 added). Andrew decides D3a
-             (staged allowlist rollout — recommended yes) and D3b (keep
-             never-delete + standing issue — recommended), then writing-plans. Rebase this branch onto main once
-             #120 merges (it depends on #120's settings row/endpoint/UI).
-          3. Manual step before that feature deploys: add `pull_requests: write`
-             to the GitHub App permissions (installations must re-accept).
+State:    building (branch claude/sticky-pr-comment, rebased on main after #120 merged as 703e9f8)
+Next:     Execute docs/superpowers/plans/2026-08-19-sticky-pr-comment.md (0b4e1b5)
+          via subagent-driven development: Task 1 = PR A (web tolerance);
+          MANUAL gate = add `pull_requests: write` to the GitHub App; Tasks
+          2–10 = PR B. Spec: docs/superpowers/specs/2026-08-19-sticky-pr-comment-design.md (D1–D9; D3a yes, D3b keep).
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
