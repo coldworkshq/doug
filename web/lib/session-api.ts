@@ -161,6 +161,14 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
+/** `exact` plus keys that MAY be present. Only used while the API is about
+ *  to start emitting a field this build does not read yet (API promotes
+ *  before web). Tightened back to `exact` in the feature PR. */
+function exactWithOptional(value: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((k) => k in value) && Object.keys(value).every((k) => allowed.has(k));
+}
+
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -200,10 +208,11 @@ function repository(
 ): value is { id: number; full_name: string; needs_you_threshold: number | null } {
   return (
     record(value) &&
-    exact(value, ["id", "full_name", "needs_you_threshold"]) &&
+    exactWithOptional(value, ["id", "full_name", "needs_you_threshold"], ["pr_comment"]) &&
     Number.isInteger(value.id) &&
     typeof value.full_name === "string" &&
-    nullableNumber(value.needs_you_threshold)
+    nullableNumber(value.needs_you_threshold) &&
+    (!("pr_comment" in value) || typeof value.pr_comment === "boolean")
   );
 }
 
@@ -431,7 +440,7 @@ export async function setRepositoryThreshold(
   }
   if (response.status !== 200) throw new SessionApiError(message, response.status);
   const body: unknown = await response.json().catch(() => null);
-  if (!record(body) || !exact(body, ["needs_you_threshold"]) || !nullableNumber(body.needs_you_threshold)) {
+  if (!record(body) || !exactWithOptional(body, ["needs_you_threshold"], ["pr_comment"]) || !nullableNumber(body.needs_you_threshold) || ("pr_comment" in body && typeof body.pr_comment !== "boolean")) {
     throw new SessionApiError(message);
   }
   return body.needs_you_threshold as number | null;
