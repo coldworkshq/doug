@@ -45,7 +45,7 @@ import {
   severityCensus,
 } from "@/lib/ledger-census";
 import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
-import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
+import { outcomeLabel, outcomeToneClass, relativeAge, utcTimestamp } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
 import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
@@ -858,7 +858,7 @@ const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
 /** One repository's flag line, keyed by `full_name` because that is the only
  *  name the rollup rows carry — the ledger joins runs to repositories by name,
  *  and the numeric id exists only on the connection's own list. */
-type FlagLineSetting = { id: number; needs_you_threshold: number | null };
+type FlagLineSetting = { id: number; needs_you_threshold: number | null; pr_comment: boolean };
 
 /** The flag-line cell, and the one row shape that gets no control.
  *
@@ -879,8 +879,38 @@ function FlagLineCell({
     <FlagLineControl
       githubRepoId={setting.id}
       value={setting.needs_you_threshold}
+      prComment={setting.pr_comment}
       defaults={defaults}
     />
+  );
+}
+
+/** D8. The toggle above says "on"; this says whether anything is actually
+ *  landing. Without it the failure mode is a setting that reads on, a comment
+ *  that never appears, and a stderr line in a project with no alerting — the
+ *  operator's only evidence being an absence they would have to go looking for.
+ *
+ *  It names the USUAL cause and refuses to assert it. GitHub answers 403 for the
+ *  App permission never having been re-accepted, for a locked conversation, for
+ *  an archived repository and for secondary rate limiting alike; the token names
+ *  the code and nothing more, so the banner hedges exactly as far as the
+ *  evidence does. Naming one cause with confidence would send someone to the
+ *  App settings for a repository they archived last week.
+ *
+ *  The timestamp is the LAST refusal, not a count: `pr_comment_denied_at` is
+ *  cleared by the next successful post, so a stamp here means the most recent
+ *  attempt failed — which is the fact worth acting on. */
+function PrCommentDenialBanner({ deniedAt }: { deniedAt: string }) {
+  return (
+    <div className="mono mb-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[5px] border border-[var(--flag)] px-3 py-1.5 text-[11px] text-foreground">
+      <span className="font-medium data-flag">PR comments are not posting</span>
+      <span className="text-muted-foreground">
+        Doug&apos;s last attempt was refused (403) at{" "}
+        <b className="font-medium text-foreground">{utcTimestamp(deniedAt)}</b>. The usual cause is the
+        pull-requests write permission not being re-accepted in GitHub; a locked conversation, an
+        archived repository, or secondary rate limiting produce the same code.
+      </span>
+    </div>
   );
 }
 
@@ -1289,7 +1319,11 @@ export default async function DashboardPage({
     flagLines = new Map(
       door.current.repositories.map((repository): [string, FlagLineSetting] => [
         repository.full_name,
-        { id: repository.id, needs_you_threshold: repository.needs_you_threshold },
+        {
+          id: repository.id,
+          needs_you_threshold: repository.needs_you_threshold,
+          pr_comment: repository.pr_comment,
+        },
       ]),
     );
     // Resolved from the UNLENSED set: the evidence pane is a record of one run
@@ -1525,7 +1559,16 @@ export default async function DashboardPage({
                   <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
                 </div>
                 {view === "repositories" ? (
-                  repoRows.length === 0 ? (
+                  <>
+                  {/* Above the table, not inside it: the denial is a fact about
+                      the whole installation (`installations.pr_comment_denied_at`),
+                      not about one row, and it is shown on the empty-list arm too
+                      — a space whose repositories all fell away is exactly where a
+                      silent 403 would otherwise go unread. */}
+                  {door.current.pr_comment_denied_at && (
+                    <PrCommentDenialBanner deniedAt={door.current.pr_comment_denied_at} />
+                  )}
+                  {repoRows.length === 0 ? (
                     // Reachable only when the installation lists no repositories
                     // AND the ledger holds none either — a bound install that
                     // covers nothing. Not the same as "no runs yet", which is a
@@ -1543,7 +1586,8 @@ export default async function DashboardPage({
                       />
                       <Pager window={repoWindow} params={params} />
                     </>
-                  )
+                  )}
+                  </>
                 ) : groups.length === 0 ? (
                   // An empty result under a filter and an empty ledger are
                   // different facts, and neither is a blank table under a header.

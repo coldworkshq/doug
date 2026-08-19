@@ -1,4 +1,4 @@
-import { setFlagLineAction } from "@/app/dashboard/actions";
+import { setFlagLineAction, setFlagLineCommentAction } from "@/app/dashboard/actions";
 
 /** The per-repository FLAG LINE — Doug's setting, not the preview gear.
  *
@@ -26,14 +26,24 @@ import { setFlagLineAction } from "@/app/dashboard/actions";
  *  `formData.get` takes the first: pressing reset on a repository set to 0.75
  *  would have re-saved 0.75 and reported success. The gear can own its field
  *  from two buttons because it has no input; this one cannot, so clearing gets
- *  a form of its own where nothing else can travel. */
+ *  a form of its own where nothing else can travel.
+ *
+ *  THE PR COMMENT TOGGLE IS THE THIRD FORM, for that same reason and no other.
+ *  It posts `pr_comment` and the repository id and nothing else: sharing a form
+ *  with the input above would submit `needs_you_threshold` alongside it, and
+ *  `formData.get` takes the first entry — so every toggle click would re-save
+ *  whatever the flag-line box happened to hold, including an empty box, which
+ *  clears the override. The API's PATCH is field-set-gated on the same
+ *  principle: it writes the keys the body names and leaves the rest alone. */
 export function FlagLineControl({
   githubRepoId,
   value,
+  prComment,
   defaults,
 }: {
   githubRepoId: number;
   value: number | null;
+  prComment: boolean;
   defaults: { reader: number; fallback: number };
 }) {
   const shown =
@@ -104,7 +114,25 @@ export function FlagLineControl({
             <input type="hidden" name="needs_you_threshold" value="" />
             <button type="submit" className="mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] text-muted-foreground">reset to default</button>
           </form>
+          {/* The button READS the current state and SUBMITS the opposite. A
+              label showing the pending value would tell whoever is looking at
+              this repository the wrong thing about it, which on a setting whose
+              whole job is "does Doug speak on my PRs" is the one error that
+              matters. `aria-label` spells the action out, because "PR comment ·
+              on" alone does not say what pressing it does. */}
+          <form action={setFlagLineCommentAction}>
+            <input type="hidden" name="github_repo_id" value={githubRepoId} />
+            <input type="hidden" name="pr_comment" value={prComment ? "false" : "true"} />
+            <button
+              type="submit"
+              aria-label={`PR comment is ${prComment ? "on" : "off"} — turn it ${prComment ? "off" : "on"}`}
+              className={`mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] ${prComment ? "text-foreground" : "text-muted-foreground"}`}
+            >PR comment · {prComment ? "on" : "off"}</button>
+          </form>
         </div>
+        <p className="text-[10.5px] text-muted-foreground">
+          On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
+        </p>
       </div>
     </details>
   );

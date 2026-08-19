@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import {
   frontDoor,
   isFinishableSetupConnection,
+  parseBool,
   parseFlagLine,
   parseGithubRepoId,
   parseInstallationId,
@@ -15,6 +16,7 @@ import {
   SessionApiError,
   bindInstallation,
   getConnections,
+  setRepositoryPrComment,
   setRepositoryThreshold,
 } from "@/lib/session-api";
 
@@ -22,6 +24,7 @@ const SETUP_ERROR = "That repository connection is not available.";
 const FLAG_LINE_ERROR = "Doug could not save that flag line.";
 const FLAG_LINE_REAUTH =
   "Your session's repository access has aged out — sign in again to change settings.";
+const PR_COMMENT_ERROR = "Doug could not save that PR comment setting.";
 
 export async function finishSetupAction(formData: FormData): Promise<void> {
   let organizationId: string;
@@ -111,6 +114,50 @@ export async function setFlagLineAction(formData: FormData): Promise<void> {
       throw new Error(FLAG_LINE_REAUTH);
     }
     throw new Error(FLAG_LINE_ERROR);
+  }
+  revalidatePath("/dashboard");
+}
+
+/** Turn the sticky PR comment on or off for one repository.
+ *
+ *  Deliberately a SEPARATE action from `setFlagLineAction`, matching the
+ *  separate <form> that calls it. The control is JS-free, and `formData.get`
+ *  returns the first entry for a name — so one action reading both fields off
+ *  one form would let a toggle click re-save the flag line sitting beside it.
+ *  Two forms, two actions, two independent writes; the API's PATCH is
+ *  field-set-gated on the same principle.
+ *
+ *  An unreadable value is refused rather than defaulted. `parseBool` returns
+ *  undefined for anything that is not the literal "true" or "false", so
+ *  "turn this off" can never be performed by accident — `Boolean("false")`
+ *  being true is exactly the accident it exists to prevent. */
+export async function setFlagLineCommentAction(formData: FormData): Promise<void> {
+  const repoId = parseGithubRepoId(formData.get("github_repo_id"));
+  const value = parseBool(formData.get("pr_comment"));
+  if (repoId === null || value === undefined) throw new Error(PR_COMMENT_ERROR);
+
+  const auth = await withAuth();
+  if (!auth.user || !auth.accessToken) throw new Error(PR_COMMENT_ERROR);
+
+  // The API is authoritative about who may write this row; this pre-check only
+  // makes the failure legible when the id belongs to a connection other than
+  // the selected one — the same shape of check setFlagLineAction makes above.
+  const { connections } = await getConnections(auth.accessToken);
+  const door = frontDoor(connections, auth.organizationId ?? null);
+  if (!door.current?.repositories.some((repository) => repository.id === repoId)) {
+    throw new Error(PR_COMMENT_ERROR);
+  }
+
+  try {
+    await setRepositoryPrComment(auth.accessToken, repoId, value);
+  } catch (error) {
+    // 401 is the one failure with a different remedy: the session's derived
+    // repository scope has aged past entitlements.TTL, and no amount of
+    // retrying this form fixes it.
+    if (error instanceof SessionApiError && error.status === 401) {
+      throw new Error(FLAG_LINE_REAUTH);
+    }
+    throw new Error(PR_COMMENT_ERROR);
   }
   revalidatePath("/dashboard");
 }

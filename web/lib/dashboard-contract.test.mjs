@@ -484,6 +484,50 @@ test("setFlagLineAction is a server action wired to the repositories table", asy
   assert.match(page, /FlagLineControl/);
 });
 
+test("the PR comment toggle is its own form and cannot carry the flag line with it", async () => {
+  // THE WHOLE POINT OF A THIRD FORM. This control is deliberately JS-free, and
+  // `formData.get` returns the FIRST entry for a name — so a toggle sharing a
+  // <form> with the flag-line input would submit `needs_you_threshold` too, and
+  // every "PR comment · off" click would silently re-save (or clear) the line
+  // beside it. The assertion is on the toggle form's own slice, not the file:
+  // the file obviously contains that field name three lines up.
+  const control = await readFile(new URL("../components/flag-line-control.tsx", import.meta.url), "utf8");
+  assert.match(control, /PR comment/);
+  assert.match(control, /setFlagLineCommentAction/);
+  const toggleForm = control.match(/<form action=\{setFlagLineCommentAction\}[\s\S]*?<\/form>/)?.[0] ?? "";
+  assert.ok(toggleForm, "the toggle form is gone");
+  assert.equal(
+    toggleForm.includes('name="needs_you_threshold"'),
+    false,
+    "the toggle form carries the flag line field — every toggle would rewrite the line",
+  );
+  assert.match(toggleForm, /name="pr_comment"/);
+  assert.match(toggleForm, /name="github_repo_id"/);
+  // The button READS the current state and SUBMITS the opposite; a label that
+  // read the pending value would tell every operator the wrong thing about the
+  // repository in front of them.
+  assert.match(toggleForm, /PR comment · (\{|on|off)/);
+});
+
+test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setFlagLineCommentAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  // D8: a toggle that reads "on" while nothing ever posts, with the only trace
+  // a stderr line in a project with no alerting, is the failure this banner
+  // exists to refuse. It names the USUAL cause without claiming it is the only
+  // one — a locked conversation, an archived repository and secondary rate
+  // limiting all return the same 403.
+  assert.match(page, /PR comments are not posting/);
+  assert.match(page, /refused \(403\)/);
+  assert.match(page, /re-accepted in GitHub/);
+  assert.match(page, /secondary rate limiting/);
+  // Rendered only when the API says a denial happened, never unconditionally.
+  assert.match(page, /pr_comment_denied_at/);
+});
+
 test("the ledger is bounded and its header stays put", async () => {
   const page = await readFile(pageUrl, "utf8");
   const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
