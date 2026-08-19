@@ -121,9 +121,12 @@ def _headline(tier: str, verdict: Verdict) -> str:
 # Zero-width space. Invisible wherever this markdown renders, but it splits
 # a token in two so the tokeniser that would otherwise fire a side effect —
 # a mention, a cross-reference, a live link, an HTML comment — never sees
-# an intact one. r.label and d.description are free-form model output,
-# attacker-influenceable via a public repo's diff (Reason.label is the
-# reader's own description; truncation_reason splices file paths), and
+# an intact one. r.rule, r.label and d.description are free-form model
+# output (`reader:{category_slug}` is built from a schema field carrying no
+# enum and no pattern), and the `Judged against:` line splices
+# repo-controlled filenames; all four are attacker-influenceable via a
+# public repo's diff or its decisions directory (truncation_reason also
+# splices file paths), and
 # `pr_comment.py` renders this same text live inside a PR conversation
 # where those tokens are not inert. Neutralising here, at the one
 # chokepoint every model-authored span already passes through, keeps the
@@ -132,9 +135,14 @@ def _headline(tier: str, verdict: Verdict) -> str:
 _ZWSP = "\u200b"
 
 # `@handle` notifies and subscribes that account in a PR comment. Exclude a
-# preceding word char or dot so `a@b.c` still reads as the email address it
-# is, not a mention of `b`.
-_MENTION_RE = re.compile(r"(?<![\w.])@(?=\w)")
+# preceding word char so `a@b.c` still reads as the email address it is, not
+# a mention of `b` — in `a@b.c` the `@` follows `a`, which is all that case
+# ever needed. An earlier version excluded a preceding `.` as well, on the
+# same email rationale; the dot was pure loss, because GitHub linkifies
+# `@handle` after any non-word character, `.` included, so `foo.@octocat`
+# went out live. Same ruling as `_REF_RE` below: there is nothing to gain
+# from scoping the match, because the ZWSP is invisible either way.
+_MENTION_RE = re.compile(r"(?<!\w)@(?=\w)")
 # `#123` writes a cross-reference into that issue's timeline, whether bare
 # or repo-qualified (`owner/repo#4`). Earlier drafts tried to tell the two
 # apart by what precedes the `#` (a word char/`/` meant "already covered by
@@ -153,6 +161,12 @@ _COMMENT_OPEN_RE = re.compile(r"<!--")
 # `[text](url)` is a live, clickable link rendered under a bot identity
 # users are taught to trust.
 _LINK_RE = re.compile(r"\]\(")
+# GFM autolinks a bare `https://evil.example/login` with no `](` anywhere —
+# the same live link by a shorter route. The reference-style form
+# (`[text][id]` plus a trailing `[id]: url` definition) is deliberately not
+# chased: a link definition cannot sit mid-line, and `_oneline` collapses
+# everything to one line, so its definition half can never survive.
+_URL_RE = re.compile(r"://")
 
 
 def _oneline(text: str) -> str:
@@ -171,7 +185,27 @@ def _oneline(text: str) -> str:
     collapsed = _REF_RE.sub(f"#{_ZWSP}", collapsed)
     collapsed = _COMMENT_OPEN_RE.sub(f"<!-{_ZWSP}-", collapsed)
     collapsed = _LINK_RE.sub(f"]{_ZWSP}(", collapsed)
+    collapsed = _URL_RE.sub(f":{_ZWSP}//", collapsed)
     return collapsed
+
+
+def _rule_span(rule: str) -> str:
+    """A `Reason.rule` as it is rendered inside a code span.
+
+    `rule` is not a fixed vocabulary. On the reader tier it is
+    f"reader:{category_slug}" (reader.py:1349) and `category_slug` is a
+    free-form schema string — a description, no enum, no pattern
+    (reader.py:89-96) — so it is model output on exactly the same footing as
+    the label beside it, and it goes through the same chokepoint. Used for
+    the deviation `type` too: that one IS enum-constrained in the schema, but
+    the Python model types it `str` and validates nothing, and honouring the
+    rule everywhere costs nothing, while an exception in the middle of it is
+    what a later reader has to re-derive. The
+    backtick is dropped rather than split: it carries no meaning in a slug,
+    and it is the one character that would close the code span and hand the
+    rest of the rule to the markdown renderer as live text.
+    """
+    return _oneline(rule.replace("`", ""))
 
 
 def _quote(reason) -> list[str]:
@@ -246,7 +280,8 @@ def render(
         lines += [SETTLED_NOTE, ""]
     if risks:
         lines += [
-            f"- `{r.rule}` — {_oneline(r.label)}" + (f" _({r.severity})_" if r.severity else "")
+            f"- `{_rule_span(r.rule)}` — {_oneline(r.label)}"
+            + (f" _({_oneline(r.severity)})_" if r.severity else "")
             for r in risks
         ]
     else:
@@ -266,12 +301,18 @@ def render(
         lines += [""]
         if intent_read.findings:
             lines += [
-                f"- `{d.type}` — {_oneline(d.description)} _({d.severity})_"
+                f"- `{_rule_span(d.type)}` — {_oneline(d.description)} "
+                f"_({_oneline(d.severity)})_"
                 for d in intent_read.findings
             ]
         else:
             lines.append(f"- none (alignment {intent_read.alignment}/100)")
-        lines += ["", f"Judged against: {', '.join(intent_read.refs) or 'no records'}."]
+        # `refs` is [d.id for d in chosen], and IntentDoc.id falls back to the
+        # raw filename stem outside the ADR-NNNN convention
+        # (intent_providers.py:73) — a repo-controlled string, so it is
+        # spliced through the same chokepoint as everything else here.
+        joined = _oneline(", ".join(intent_read.refs)) or "no records"
+        lines += ["", f"Judged against: {joined}."]
 
     footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)

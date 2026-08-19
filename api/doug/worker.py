@@ -107,11 +107,15 @@ def _pr_comment_outcome(
     if not (pr_comment.allowed(inst) and store.repo_pr_comment(inst, repo_id)):
         return "skipped"
     # Replay only. process_job's fresh path has already fetched this PR and
-    # compared its head (it supersedes when they disagree), so the target is
-    # verified by the time it posts; spending a second pulls.get there would
-    # buy nothing. _replay_recorded runs BEFORE that check, and
-    # repo_full_name is display-only — stale after a rename — so on that path
-    # the PR number alone could address another repo's conversation.
+    # checked BOTH halves of the target — the head sha (it supersedes when
+    # they disagree) and `base.repo.id` against this job's github_repo_id (it
+    # retires the job when they disagree) — so the target is verified by the
+    # time it posts; spending a second pulls.get there would buy nothing.
+    # Head equality alone would not have been enough: it verifies the commit,
+    # while the call itself is addressed by repo_full_name, which is
+    # display-only and stale after a rename. _replay_recorded runs BEFORE both
+    # checks, so on that path the PR number alone could address another repo's
+    # conversation.
     if not fresh and not pr_comment.target_matches(gh, owner, name, pr, repo_id):
         return "skipped-target"
     body = pr_comment.render(
@@ -305,6 +309,30 @@ def process_job(job: dict) -> int | None:
     current = getattr(getattr(current_pr, "head", None), "sha", None)
     if not isinstance(current, str) or not current:
         raise RuntimeError("GitHub pull response carried no usable head.sha")
+
+    # ...and check it is the right REPO, not just the right commit. This call
+    # is addressed by `repo_full_name`, which is display-only and goes stale
+    # on a rename (there is no `repository` webhook handler), so a rename plus
+    # a reuse of the old name inside one installation points this PR number at
+    # another repo — and a supersede-then-requeue chain can reach head
+    # equality against it. Reading on would put this repo's findings and
+    # receipt link on that repo's PR, the same misdirection
+    # `pr_comment.target_matches` closes on the replay path. Retired rather
+    # than requeued: this job has no way to name the repo it meant, and
+    # 'superseded' is revivable, so the next webhook (which carries a current
+    # name) re-queues it.
+    base_repo = getattr(getattr(current_pr, "base", None), "repo", None)
+    base_repo_id = getattr(base_repo, "id", None)
+    if base_repo_id != job["github_repo_id"]:
+        ingest.supersede(job["id"], claim_generation=job["claim_generation"])
+        print(
+            f"doug: retired {job['repo_full_name']}#{job['pr_number']}"
+            f"@{job['head_sha'][:12]} (nothing read, nothing bought) "
+            f"base repo is {base_repo_id!r}, not this job's "
+            f"{job['github_repo_id']} — the name is stale",
+            file=sys.stderr,
+        )
+        return None
     if current != job["head_sha"]:
         current_base = getattr(getattr(current_pr, "base", None), "sha", None)
         if not isinstance(current_base, str) or not current_base:

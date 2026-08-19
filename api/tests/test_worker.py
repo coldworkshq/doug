@@ -90,17 +90,26 @@ def _gh(
     keeps every other test free of SHA bookkeeping. `heads` moves it, which
     is how a test simulates a push landing between enqueue and claim.
 
-    `base.repo.id` defaults to JOB's own github_repo_id, so
-    pr_comment.target_matches agrees with the job by default; a test passes
-    a different `base_repo_id` to stand in for a stale repo_full_name
-    pointing the PR number at another repo in the same installation.
+    `base.repo.id` defaults to the newest queued job's own github_repo_id,
+    so both target checks — pr_comment.target_matches on the replay path and
+    process_job's own base-repo assertion on the fresh one — agree with the
+    job by default; a test passes a different `base_repo_id` to stand in for
+    a stale repo_full_name pointing the PR number at another repo in the
+    same installation.
     """
     heads = heads or {}
     bases = bases or {}
-    if base_repo_id is None:
-        base_repo_id = JOB["github_repo_id"]
 
     def _get(*, owner, repo, pull_number):
+        repo_id = base_repo_id
+        if repo_id is None:
+            with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
+                repo_id = conn.execute(
+                    select(store.review_jobs.c.github_repo_id)
+                    .where(store.review_jobs.c.pr_number == pull_number)
+                    .order_by(store.review_jobs.c.id.desc())
+                    .limit(1)
+                ).scalar_one()
         sha = heads.get(pull_number)
         if sha is None:
             with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
@@ -123,9 +132,7 @@ def _gh(
         return SimpleNamespace(
             parsed_data=SimpleNamespace(
                 head=SimpleNamespace(sha=sha),
-                base=SimpleNamespace(
-                    sha=base_sha, repo=SimpleNamespace(id=base_repo_id)
-                ),
+                base=SimpleNamespace(sha=base_sha, repo=SimpleNamespace(id=repo_id)),
             )
         )
 
@@ -858,6 +865,62 @@ def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monke
     assert posted == []
 
 
+def test_a_pr_whose_base_repo_is_not_this_job_s_repo_is_retired_unread(
+    tmp_path, monkeypatch, capsys
+):
+    """The head comparison verifies the COMMIT, not the repo. `pulls.get` is
+    addressed by `repo_full_name`, which is display-only and goes stale on a
+    rename (there is no `repository` webhook handler), so a rename plus a
+    reuse of the old name inside one installation can point this job's PR
+    number at another repo — and a supersede-then-requeue chain can then
+    reach head equality against it. Reading on would put this repo's findings
+    and receipt link on that repo's PR. The repo id is the only field in the
+    response that answers "is this the repo the job means".
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch, base_repo_id=JOB["github_repo_id"] + 1)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "superseded"
+    # Nothing read, nothing published, on either surface.
+    assert _rows(url, store.verdicts) == []
+    assert posted == [] and upserts == []
+    err = capsys.readouterr().err
+    assert "base repo" in err and "drewjst/doug#7" in err
+
+
+def test_the_fresh_path_buys_exactly_one_pulls_get(tmp_path, monkeypatch):
+    """The fresh path deliberately does NOT call `pr_comment.target_matches`:
+    its own `pulls.get` already verified both the head and the base repo id,
+    which is everything target_matches checks and more. Pinned so a later
+    refactor cannot quietly add a second paid round-trip per review — or,
+    worse, drop the identity check here on the belief that target_matches is
+    covering the fresh path too."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    monkeypatch.setattr(
+        pr_comment,
+        "target_matches",
+        lambda *a, **k: pytest.fail("fresh path must not re-verify the target"),
+    )
+    gh = app_auth.installation_client(JOB["installation_id"])
+    calls: list[int] = []
+    inner = gh.rest.pulls.get
+    gh.rest.pulls.get = lambda **kw: (calls.append(kw["pull_number"]), inner(**kw))[1]
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    assert calls == [JOB["pr_number"]]
+
+
 def test_stale_head_without_a_replacement_base_is_retried_before_supersede(
     tmp_path, monkeypatch
 ):
@@ -930,7 +993,9 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
         return SimpleNamespace(
             parsed_data=SimpleNamespace(
                 head=SimpleNamespace(sha=next(flip)),
-                base=SimpleNamespace(sha="2" * 40),
+                base=SimpleNamespace(
+                    sha="2" * 40, repo=SimpleNamespace(id=JOB["github_repo_id"])
+                ),
             )
         )
 
