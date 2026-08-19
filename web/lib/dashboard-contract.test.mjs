@@ -485,9 +485,9 @@ test("setFlagLineAction is a server action wired to the repositories table", asy
 });
 
 test("the runs table does not spend a column on scoring tier", async () => {
-  // Hosted production is DOUG_READER=1, so every ledger row reads "reader".
-  // The grade still exists — a deterministic fallback must remain visible —
-  // but the selected-run pane is the surface, not an always-on table column.
+  // Hosted production sets DOUG_READER=1, so most ledger rows read "reader".
+  // A deterministic fallback still exists — the selected-run pane is the
+  // surface for the grade, not an always-on table column.
   const page = await readFile(pageUrl, "utf8");
   const columns = page.match(/const COLUMNS[^=]*=\s*\[([\s\S]*?)\n\];/)?.[1];
   assert.ok(columns, "COLUMNS is gone");
@@ -499,7 +499,15 @@ test("the runs table does not spend a column on scoring tier", async () => {
 
   const cells = page.match(/function RunCells\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(cells, "RunCells is gone");
-  assert.equal(cells.includes("{run.tier}"), false, "RunCells still prints run.tier");
+  assert.equal(/\{\s*run\.tier\s*\}/.test(cells), false, "RunCells still prints run.tier");
+
+  const headerCount = [...columns.matchAll(/label: "/g)].length;
+  const cellCount = [...cells.matchAll(/<TableCell\b/g)].length;
+  assert.equal(
+    cellCount,
+    headerCount,
+    `RunCells has ${cellCount} cells against COLUMNS' ${headerCount} headers`,
+  );
 
   assert.match(page, /<dt className="uppercase text-muted-foreground">tier<\/dt>/);
 

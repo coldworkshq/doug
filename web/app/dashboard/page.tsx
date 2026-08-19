@@ -83,22 +83,23 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
  *  under the ledger and the page scrolls as one document — the layout this page
  *  had before, kept as the narrow-viewport answer rather than reinvented.
  *
- *  1620 IS MEASURED, not chosen. The ledger's chrome — 212 of rail, a 400 dock,
- *  40 of gutter, two container borders and the table's own ~15px vertical
- *  scrollbar — costs 669px, and the table needs 876 (see COLUMNS), so the dock
- *  can appear from 1545 up; 1620 still carries the slack measured when the
- *  ledger was 940px (a 64px scoring-tier column that every hosted row filled
- *  with "reader"). Arithmetic alone said 1600 and was wrong by 9px, which
- *  is exactly the kind of error that ships as "why does this scroll sideways".
+ *  1620 was MEASURED against a 940px table, not chosen. The ledger's chrome —
+ *  212 of rail, a 400 dock, 40 of gutter, two container borders and the
+ *  table's own ~15px vertical scrollbar — costs 669px. The table now needs
+ *  876 (see COLUMNS) after dropping a 64px scoring-tier column, so the dock
+ *  can appear from 1545 up. 1620 stays: it is the measured stop, and it
+ *  still carries slack for a platform whose scrollbars are wider.
+ *  Arithmetic alone said 1600 and was wrong by 9px, which is exactly the
+ *  kind of error that ships as "why does this scroll sideways".
  *
  *  Tried at 1360 first, which was worse than a small scroll: the ledger got 708,
- *  the seven fixed columns do not shrink, and the whole shortfall came out of
- *  the one flexible column — the pull request title rendered 40px wide, i.e.
- *  "feat(…". A split view whose master column cannot say what a row is about is
- *  not a split view, so the dock waits until there is room for both. Eight data
- *  columns and a 400px pane genuinely do not fit a 1440 laptop; below 1620 the
- *  ledger takes the whole width and the title is generous, which is the better
- *  half of a trade that has no free side. */
+ *  the eight fixed columns then in the grid do not shrink, and the whole
+ *  shortfall came out of the one flexible column — the pull request title
+ *  rendered 40px wide, i.e. "feat(…". A split view whose master column cannot
+ *  say what a row is about is not a split view, so the dock waits until there
+ *  is room for both. Eight data columns and a 400px pane genuinely do not fit
+ *  a 1440 laptop; below 1620 the ledger takes the whole width and the title
+ *  is generous, which is the better half of a trade that has no free side. */
 
 /** A bordered control that wraps a <select>. The focus ring is on the wrapper,
  *  not the select, because the label and its value read as one control — and
@@ -593,8 +594,9 @@ function RepoCountLine({
  *  number: the seven fixed columns claim 562, the cell padding 16, and the pull
  *  request cell spends 200 more on its disclosure slot, its `repo #n`, its
  *  receipt link and three gaps before the title gets anything. 876 is the
- *  previous 940px floor minus the 64px scoring-tier column, which every hosted
- *  row filled with "reader". The grade still lives on the selected-run pane.
+ *  previous 940px floor minus the 64px scoring-tier column. Hosted production
+ *  sets DOUG_READER=1, so most rows are reader-grade; a deterministic fallback
+ *  still exists, and the selected-run pane is the surface for it.
  *  Below that the table scrolls horizontally, which states the
  *  shortfall; crushing the title hides it.
  *
