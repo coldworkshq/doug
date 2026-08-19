@@ -449,3 +449,35 @@ test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and 
     globalThis.fetch = oldFetch;
   }
 });
+
+test("the connections and PATCH guards accept bodies with and without pr_comment (deploy-order safety)", async () => {
+  // API promotes before web (deploy.yml); the API will start emitting
+  // `pr_comment` on repositories[] and on the PATCH response. Web must accept
+  // both shapes before that, or every dashboard load / every flag-line save
+  // fails between the two promotions — the #119 lesson, second verse.
+  const { getConnections, setRepositoryThreshold } = await import("./session-api.ts?pr-comment-tolerance");
+  const withField = {
+    ...validConnections,
+    connections: [{
+      ...validConnections.connections[0],
+      repositories: validConnections.connections[0].repositories.map((r, i) => ({ ...r, pr_comment: i === 0 })),
+    }],
+  };
+  for (const [label, body] of [["old", validConnections], ["new", withField]]) {
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try { assert.equal((await getConnections("t")).connections.length, 1, label); }
+    finally { globalThis.fetch = oldFetch; }
+  }
+  for (const body of [{ needs_you_threshold: 0.5 }, { needs_you_threshold: 0.5, pr_comment: true }]) {
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try { assert.equal(await setRepositoryThreshold("t", 11, 0.5), 0.5); }
+    finally { globalThis.fetch = oldFetch; }
+  }
+  // Unknown keys still reject on both.
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ needs_you_threshold: 0.5, surprise: 1 }), { status: 200 });
+  try { await assert.rejects(() => setRepositoryThreshold("t", 11, 0.5)); }
+  finally { globalThis.fetch = oldFetch; }
+});
