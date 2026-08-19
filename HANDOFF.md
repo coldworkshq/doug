@@ -315,3 +315,109 @@ Pointers: branch `claude/doug-next-priorities-5851da` off main @ 412298e ·
           · roadmap docs/design/outcome-loop/ROADMAP.md (grep item names,
           line numbers shift) · prereg §3
           docs/design/outcome-loop/publication-preregistration.md:337
+
+---
+
+# SIDE LANE — cited head reads (PR #118)
+
+Isolated in worktree `managed-agent-pr-review-76fe26`, branch
+`claude/managed-agent-pr-review-76fe26`. Touches nothing the main lane above
+holds. Read the main lane's Next list first — the 2026-08-21 detector test is
+time-critical and this lane is not.
+
+State:    review — PR #118 open, Tasks 1-6 of 9 done. WIRED BUT DARK:
+          DOUG_VERIFY is unset, so merging changes nothing for anyone.
+
+Next:     Task 9 HARNESS DONE, not yet run — needs ANTHROPIC_API_KEY and
+          costs real money (1 risk read + up to 2 verify reads per run).
+          `uv run python scripts/smoke_cited_reads.py --dry-run` verifies the
+          wiring for free. Then Task 7 (surface) -> Task 8 (ADR-0013).
+          9 before 7 deliberately: Convergence Bar 1 already
+          FAILED with reader nondeterminism as root cause, and this adds a
+          nondeterministic call that ADDS published findings, so the spread
+          must be known before anything renders to a customer.
+
+Blockers: none. P0.1 is NOT a blocker — see below.
+
+## The design, in one paragraph
+
+Doug's reader gets `f.patch` and nothing else (review.py:190,267), yet
+review.py:273 head_file_text is wired only into settle.py's drop_disproved_*
+— so the system's one outside-the-diff capability is licensed to SUBTRACT
+findings and forbidden to RAISE them. 7 of PR #106's 8 external findings
+needed >=1 byte Doug never received. This reverses that licence: a finding
+may CITE bounded head reads to ground an existence-or-value claim.
+
+## Locked decisions (do not reopen — design-lock L1-L9)
+
+- Model has ZERO delete authority. VERIFY_SCHEMA has no `refuted` field and
+  no boolean. Why: PR #107 serialization-contract — a byte-matching,
+  grep-derivable, factually TRUE quote carrying a FALSE refutation
+  (models.py:113-125). A true quote can carry a false conclusion.
+- A byte-match is NOT the predicate. constant_value_is parses the range with
+  ast and needs exactly ONE binding of a LITERAL, so `LIMIT = CAP` quotes
+  perfectly and still abstains. Drop that step and it degenerates to "the
+  quote matched".
+- Existence-and-value claims only. Absence/universality claims are never
+  citation-certified — the citation shows one place out of a complement the
+  model chose and never reported.
+- Verify spend uses a DIFFERENT scope prefix so instrument_snapshot cannot
+  see it; charging installation:<id> would render allowance the customer
+  never spent, and at the 200 clamp reads as an exhausted plan.
+- CUT: the citation-receipt PR (settle.py has fired ZERO times since it
+  landed) and the per-source grading table (461 Co-authored-by, zero
+  Reviewed-by).
+
+## P0.1 is DONE — I was wrong twice; do not re-raise it
+
+- Digest at 44b409c per the doc's own S12 protocol:
+  c8e30da386362351a8d320e1ce91e725655a2f6517e5568c61cd9ad0168e60f2 —
+  matches ROADMAP:330's `c8e30da3...60f2`, deployed 2026-08-11.
+- deploy/gcp.sh:611 derives it from the document at deploy time; :674 sets it
+  on doug-api and :719 on the adjudicator Job, from the SAME call site
+  (:606-610 explains why one call site). deploy() runs
+  preregistration_preflight, which refuses unless the doc is LOCKED.
+  deploy.yml fires on push to main. The repo is PUBLIC, so it is published.
+- publication-preregistration.md:8 still says the deployment has not
+  happened. STALE, and UNFIXABLE: S12 makes any edit a new version with a new
+  hash, invalidating the deployed value. DO NOT "correct" that line.
+
+## Task 9 — scripts/smoke_cited_reads.py
+
+Labeled a SMOKE TEST everywhere, in the docstring and in its own output,
+because it is not a bar: the answer key is committed in-repo, its "deltas
+worth encoding" named the gap this capability closes, and all 8 findings were
+classified before the spec was written.
+
+The ceiling is 1 of 8 and a low number is NOT a failure. 4 of the 8 live in
+files absent from the PR (api.py, worker.py, test_deploy_gcp.py,
+web/lib/api.ts) so no reader handed a diff can reach them. Of the 4 in files
+Doug saw, only #2 (meter vs cap 200 while spend enforces 4000) is an
+existence-and-value claim, the only shape constant_value_is can ground.
+
+Dry run confirms the path exists without spending: 7/7 files with patches,
+10,206-char diff, and the resolver returns api/doug/reader.py — a file NOT in
+the PR — with INSTALLATION_MONTHLY_READ_CAP at line 230, which is exactly the
+byte finding #2 needs.
+
+No matching is automated. Deciding whether a Doug finding "is" an external
+finding takes judgement, and a script that guessed would invent a metric.
+Runs >=3 times by default and reports the spread, because open risk #2
+(nondeterminism) must be measured rather than assumed.
+
+## A mutation test caught a real bug in my own code
+
+ground_findings' first draft repaired a short output list by re-slicing the
+original from len(out). With 3 findings where the middle went missing, that
+restored the LENGTH by dropping finding[1] and appending finding[2] twice —
+count assertion passed, corruption silent. Restructured so each finding is
+appended exactly once; the assertion now compares slug identity and ORDER.
+Same mutant now kills 5 tests. Every task in the PR was mutation-checked.
+
+Pointers: docs/design/competitor-imports/ (6 artifacts, design-lock L1-L9) ·
+          docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·
+          docs/superpowers/plans/2026-08-18-cited-head-reads.md (Tasks 1-9) ·
+          api/doug/{reader,verify,review}.py · api/tests/test_ground.py ·
+          docs/reviews/2026-08-12-pr-106-external-review.md (the answer key —
+          SPENT, it shaped this design; the replay is a smoke test not a bar) ·
+          docs/design/plan-lane/idea.md (captured, unevaluated)

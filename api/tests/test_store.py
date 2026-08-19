@@ -262,6 +262,73 @@ def test_save_review_persists_verdict_and_findings(tmp_path, monkeypatch):
         assert f["severity"] == "high" and f["file"] == "cache.py"
 
 
+def test_head_cited_finding_round_trips_its_citation_through_raw(tmp_path, monkeypatch):
+    """A citation has to survive to somewhere a third party can read it.
+
+    verdicts.raw is that place: it takes the whole ReaderVerdict dump and is
+    unvalidated JSON, so the evidence class rides there rather than on Reason,
+    which web/lib/session-api.ts validates with an exact key set. If this test
+    fails because raw lost a field, the citation stopped being re-derivable —
+    the locator is the entire receipt, and without head_sha `git show` has no
+    ref to resolve.
+    """
+    url = _db(tmp_path, monkeypatch)
+    cited = reader.ReaderVerdict.model_validate(
+        {
+            "risk_score": 62,
+            "rationale": "Meter renders against the wrong cap.",
+            "findings": [
+                {
+                    "category_slug": "cap-mismatch",
+                    "description": "Footer renders against 200; spend enforces 4000",
+                    "file": "api/doug/check_run.py",
+                    "severity": "high",
+                }
+            ],
+        }
+    )
+    f = cited.findings[0]
+    f.evidence = "head-cited"
+    f.citations = [
+        reader.Citation(
+            path="api/doug/reader.py",
+            head_sha="b" * 40,
+            line_start=230,
+            line_end=230,
+            sha256="9f3c",
+        )
+    ]
+
+    store.save_review("o/r", 8, "reader", VERDICT, cited, model=reader.MODEL)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        raw = conn.execute(select(store.verdicts)).mappings().one()["raw"]
+    got = raw["findings"][0]
+    assert got["evidence"] == "head-cited"
+    assert got["citations"][0]["head_sha"] == "b" * 40
+    assert got["citations"][0]["line_start"] == 230
+
+
+def test_a_finding_without_a_citation_stays_diff_classed(tmp_path, monkeypatch):
+    """The default is what keeps every shipped finding unchanged.
+
+    The frozen SCHEMA emits four keys and knows nothing about evidence, so a
+    finding the model produced today must land as `diff` with no citations.
+    If this ever defaults the other way, every diff-only finding starts
+    claiming evidence it does not have — which is the exact overclaim the
+    evidence class exists to prevent.
+    """
+    url = _db(tmp_path, monkeypatch)
+    store.save_review("o/r", 9, "reader", VERDICT, RV, model=reader.MODEL)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        raw = conn.execute(select(store.verdicts)).mappings().one()["raw"]
+    assert raw["findings"][0]["evidence"] == "diff"
+    assert raw["findings"][0]["citations"] == []
+
+
 def test_reader_verdict_fixture_matches_the_production_builder():
     """VERDICT must stay what the reader tier actually emits for RV.
 

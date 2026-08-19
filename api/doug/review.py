@@ -371,6 +371,23 @@ def score_one(
                         f"finding(s) against the live schema ({rules})",
                         file=sys.stderr,
                     )
+            if reader.verify_enabled() and resolve_file is not None:
+                # verify_scope is derived from the SAME string the risk read
+                # charged, via installation_from_scope's inverse, so the two can
+                # never disagree about whose review this is. The prefix differs,
+                # which is what keeps this spend off the customer's published
+                # `deep reads N/200` meter (design-lock, Task 5).
+                rv, grounded = reader.ground_findings(
+                    rv,
+                    head_sha=meta.head_sha,
+                    resolve_file=resolve_file,
+                    scope=reader.verify_scope(reader.installation_from_scope(scope)),
+                )
+                if grounded:
+                    print(
+                        f"doug: grounded {grounded} finding(s) against head",
+                        file=sys.stderr,
+                    )
             verdict = reader.verdict_from_reader(rv, threshold=reader_line)
             if settled := settle.settlement_notice(dropped):
                 verdict.reasons.append(settled)

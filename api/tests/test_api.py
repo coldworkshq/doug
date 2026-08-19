@@ -23,6 +23,7 @@ from doug import (
     ingest,
     install_flow,
     outcome_queue,
+    reader,
     session_auth,
     store,
     tenancy,
@@ -3341,6 +3342,35 @@ def test_run_detail_reason_carries_exactly_the_keys_the_client_validates(
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
         "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    body = client_get_detail(vid)
+    assert sorted(body["reasons"][0]) == ["label", "rule", "severity", "weight"]
+
+
+def test_a_head_cited_finding_adds_no_key_to_the_validated_reason(tmp_path, monkeypatch):
+    """The evidence class must not reach the wire the client validates.
+
+    web/lib/session-api.ts checks a reason against an EXACT key set, so a fifth
+    key is a rejected run-detail payload — the whole page, not just the field.
+    The citation therefore rides verdicts.raw. This pins that boundary against a
+    plausible future edit: surfacing the citation by hanging it on Reason looks
+    like a one-line change and would break the page for every run.
+    """
+    _db(tmp_path, monkeypatch)
+    cited = reader.ReaderVerdict.model_validate(RV.model_dump())
+    cited.findings[0].evidence = "head-cited"
+    cited.findings[0].citations = [
+        reader.Citation(
+            path="api/doug/reader.py",
+            head_sha="a" * 40,
+            line_start=230,
+            line_end=230,
+            sha256="9f3c",
+        )
+    ]
+    vid = store.save_review(
+        "o/r", 7, "reader", VERDICT, reader_verdict=cited, model="claude-opus-5",
         github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
     )
     body = client_get_detail(vid)
