@@ -204,3 +204,59 @@ def test_snapshot_for_an_unknown_repo_is_the_empty_instrument(tmp_path, monkeypa
     assert snap.pending == 0
     assert snap.deep_reads == 0
 
+
+
+def test_verify_reads_never_move_the_customers_published_meter(tmp_path, monkeypatch):
+    """The loud test. If anyone reroutes verify spend, this fails immediately.
+
+    instrument_snapshot resolves its meter with installation_scope() and the
+    check-run footer renders it as `deep reads N/200`, clamped at 200. A verify
+    read charged to installation:<id> would therefore appear on the customer's
+    check run as allowance they never spent — and at the clamp it reads as an
+    exhausted plan. That is a pricing change disguised as a feature, on a public
+    surface, which is exactly the class of defect PR #106 row 2 already caught
+    once (meter rendered against 200 while spend enforced at 4000).
+
+    Charging a different prefix makes it structurally impossible rather than a
+    convention: installation_from_scope does not recognise "verify:", so a
+    verify read names nobody and the snapshot cannot see it.
+    """
+    _db(tmp_path, monkeypatch)
+    paid = reader.installation_scope(INSTALLATION_ID)
+    verify = reader.verify_scope(INSTALLATION_ID)
+
+    for _ in range(3):
+        assert store.record_deep_read(paid, reader.cap_for(paid), now=NOW)
+    for _ in range(7):
+        assert store.record_deep_read(verify, reader.cap_for(verify), now=NOW)
+
+    snap = store.instrument_snapshot(INSTALLATION_ID, REPO_ID, now=NOW)
+    assert snap is not None
+    assert snap.deep_reads == 3
+
+
+def test_a_verify_scope_names_nobody(tmp_path, monkeypatch):
+    """installation_from_scope is how a per-installation policy reads the SAME
+    string the cap charges. A verify scope must not resolve to an installation,
+    or verify traffic could inherit that installation's entitlements."""
+    assert reader.installation_from_scope(reader.verify_scope(INSTALLATION_ID)) is None
+    assert reader.installation_from_scope(reader.verify_scope(None)) is None
+    assert reader.verify_scope(INSTALLATION_ID) != reader.installation_scope(INSTALLATION_ID)
+
+
+def test_verify_spends_from_its_own_budget_and_is_bounded_per_review():
+    """Two separate guards, and they are guarding different things.
+
+    The monthly cap bounds a runaway install; the per-review ceiling bounds
+    latency, because every verify read is a model call inside worker.drain's
+    20-jobs-sequential loop on the pool /healthz shares. Raising the per-review
+    number is a throughput change as much as a spend one.
+    """
+    verify = reader.verify_scope(INSTALLATION_ID)
+    assert reader.cap_for(verify) == reader.VERIFY_MONTHLY_READ_CAP
+    assert reader.cap_for(reader.SENTINEL_SCOPE) == reader.SENTINEL_MONTHLY_READ_CAP
+    assert reader.cap_for(reader.installation_scope(INSTALLATION_ID)) == (
+        reader.INSTALLATION_MONTHLY_READ_CAP
+    )
+    assert reader.MAX_VERIFY_READS_PER_REVIEW == 2
+    assert reader.verify_timeout() < reader.read_timeout()

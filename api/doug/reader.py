@@ -26,8 +26,9 @@ import os
 import re
 import sys
 import time
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import example_pack_capture
 from .example_pack import (
@@ -36,6 +37,7 @@ from .example_pack import (
     NameVersionV0,
     UsageV0,
     canonical_json_bytes,
+    sha256_hex,
 )
 from .models import Band, Reason, Verdict
 
@@ -119,6 +121,133 @@ def _compute_prompt_hash() -> str:
 
 
 PROMPT_HASH = _compute_prompt_hash()
+
+
+# --- Verify tier -----------------------------------------------------------
+#
+# A third, separate read: given ONE finding the diff-reader already produced,
+# name the place in the repo whose bytes would ground it. Frozen from creation
+# on ADR-0002's terms, like DECISION_INTENT_SYSTEM, and carrying its own hash
+# so a receipt can say which verify instrument ran.
+#
+# Two things are deliberately absent from VERIFY_SCHEMA and must stay absent.
+#
+# There is no `refuted` field, and no boolean of any kind. The model cannot
+# express a conclusion here, so no conclusion of its can be honored. This is
+# not defensiveness about hallucination — it is a measured failure. On PR #107
+# a refutation of `reader:serialization-contract` quoted models.py's
+# `exclude=True` line: byte-matching, grep-re-derivable, and factually true.
+# The refutation was still wrong, because models.py records that `exclude` is
+# honored by model_dump/FastAPI "and by nothing else". A true quote carried a
+# false conclusion. Byte-matching proves the model did not invent the file; it
+# proves nothing about the claim.
+#
+# There is no predicate for absence. `constant_value_is` is an existence-and-
+# value claim, and a byte range discharges it completely. "Nothing else reads
+# this" is not that shape: the citation shows one place out of a complement the
+# model itself chose and never reported, which is exactly the error settle.py's
+# docstring names — the check and the error are the same observation. Adding an
+# absence predicate later is a new frozen prompt, not an edit to this one.
+#
+# `checks` is a list so that declining is the natural answer. An empty list
+# means the finding needs no read outside the diff, or that no specific
+# location can be named. Both leave the finding published and ungrounded,
+# which is the only safe default: nothing here may remove a finding.
+
+VERIFY_SYSTEM = (
+    "You are given one finding from a code review of a pull request diff, and "
+    "you decide what to read to ground it. Do not judge whether the finding is "
+    "right or wrong — you are not being asked for a verdict, and nothing you "
+    "return can remove the finding. Return the location whose contents would "
+    "settle a claim about a specific named value or definition: the file, the "
+    "line range, and the exact text you expect to find there. Only claims of "
+    "the form 'this named thing is defined here and holds this value' can be "
+    "grounded this way. A claim that something does not exist, that no other "
+    "caller does X, or that a place is the only one of its kind cannot be "
+    "settled by reading one location, and you must return no check for it. "
+    "Return no check whenever the finding rests entirely on the diff, or when "
+    "you cannot name a specific file and line range with confidence. Returning "
+    "nothing is a correct and common answer."
+)
+
+VERIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "checks": {
+            "type": "array",
+            "description": (
+                "Locations to read, or empty. Empty when the finding rests on "
+                "the diff alone, when the claim is about an absence, or when no "
+                "specific location can be named."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Repo-relative path, as it appears in the tree.",
+                    },
+                    "line_start": {
+                        "type": "integer",
+                        "description": "1-based, inclusive.",
+                    },
+                    "line_end": {
+                        "type": "integer",
+                        "description": "1-based, inclusive. Equal to line_start for one line.",
+                    },
+                    "quoted_text": {
+                        "type": "string",
+                        "description": (
+                            "The exact text you expect at that range, verbatim and "
+                            "including indentation. It is compared byte for byte; a "
+                            "mismatch discards the check and the finding stands."
+                        ),
+                    },
+                    "predicate": {
+                        "type": "string",
+                        "enum": ["constant_value_is"],
+                        "description": (
+                            "The only supported check: the named constant is defined "
+                            "at this range and holds the value shown."
+                        ),
+                    },
+                },
+                "required": [
+                    "file",
+                    "line_start",
+                    "line_end",
+                    "quoted_text",
+                    "predicate",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["checks"],
+    "additionalProperties": False,
+}
+
+VERIFY_PROMPT_HASH = hashlib.sha256(
+    (VERIFY_SYSTEM + repr(VERIFY_SCHEMA)).encode()
+).hexdigest()
+
+
+class VerifyCheck(BaseModel):
+    """One location the model asks to have read. A request, never a conclusion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file: str
+    line_start: int
+    line_end: int
+    quoted_text: str
+    predicate: Literal["constant_value_is"]
+
+
+class VerifyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    checks: list[VerifyCheck] = Field(default_factory=list)
 
 
 # --- Intent tier -----------------------------------------------------------
@@ -229,9 +358,33 @@ SENTINEL_SCOPE = "untenanted"
 # reviews to the deterministic tier.
 INSTALLATION_MONTHLY_READ_CAP = 4000
 SENTINEL_MONTHLY_READ_CAP = 1000
+# Verify reads spend on their OWN budget, and the separation is not tidiness.
+# store.instrument_snapshot resolves its meter with installation_scope() and
+# renders the result as `deep reads N/200` on the customer's check run, clamped
+# at 200 — so a verify read charged to installation:<id> would show up as
+# allowance the customer never used, and at the clamp it reads as exhausted.
+# That is a pricing change wearing a feature's clothes. A separate prefix makes
+# it structurally impossible rather than a rule someone has to remember.
+#
+# Same order of magnitude as the installation cap, by the same reasoning: at the
+# per-review ceiling below, 4,000 units is ~2,000 PRs from one installation in a
+# calendar month. A runaway guard, not a plan limit.
+VERIFY_MONTHLY_READ_CAP = 4000
+
+# Per review, not per month. Every verify read is a model call on the live path,
+# inside worker.drain's 20-jobs-sequential loop on Starlette's shared pool — so
+# this bounds latency as much as spend. Raising it is a repricing and a
+# throughput change together, and needs to be argued as both.
+MAX_VERIFY_READS_PER_REVIEW = 2
+
+# Strictly below DEFAULT_READ_TIMEOUT_S. A verify read is a small, bounded
+# question against one finding; if it has not answered in half the time the
+# whole-diff read gets, the finding ships ungrounded and nobody waits.
+DEFAULT_VERIFY_TIMEOUT_S = 60
 
 
 _SCOPE_PREFIX = "installation:"
+_VERIFY_SCOPE_PREFIX = "verify:"
 
 
 def installation_scope(installation_id: int) -> str:
@@ -264,8 +417,31 @@ def installation_from_scope(scope: str) -> int | None:
     return value if str(value) == rest else None
 
 
+def verify_scope(installation_id: int | None) -> str:
+    """The one place a verify read's scope string is built.
+
+    Deliberately NOT installation_scope's prefix: installation_from_scope only
+    recognises "installation:", and instrument_snapshot only ever meters what
+    installation_scope emits, so a verify read cannot reach the customer's
+    published counter by construction.
+    """
+    if installation_id is None:
+        return f"{_VERIFY_SCOPE_PREFIX}{SENTINEL_SCOPE}"
+    return f"{_VERIFY_SCOPE_PREFIX}{installation_id}"
+
+
+def is_verify_scope(scope: str) -> bool:
+    return scope.startswith(_VERIFY_SCOPE_PREFIX)
+
+
 def cap_for(scope: str) -> int:
+    if is_verify_scope(scope):
+        return VERIFY_MONTHLY_READ_CAP
     return SENTINEL_MONTHLY_READ_CAP if scope == SENTINEL_SCOPE else INSTALLATION_MONTHLY_READ_CAP
+
+
+def verify_timeout() -> float:
+    return float(os.environ.get("DOUG_VERIFY_TIMEOUT_S", DEFAULT_VERIFY_TIMEOUT_S))
 
 
 def _charge(scope: str) -> None:
@@ -327,11 +503,76 @@ def _report_cost(response, *, kind: str, scope: str, pr) -> None:
     )
 
 
+class Citation(BaseModel):
+    """Bytes at head that a finding rests on, addressed so a third party can re-derive them.
+
+    `git show <head_sha>:<path>` plus the line range reproduces exactly the bytes
+    whose sha256 is recorded here. That is the whole of what a citation establishes —
+    the quote, never the conclusion. See ADR-0013 and design-lock L1/L3: the model
+    chooses where to look and code runs the check, and a citation may only carry an
+    existence-or-value claim. An absence ("nothing else reads this") is not citable,
+    because the citation shows one place out of a complement the model itself selected
+    and never reported.
+    """
+
+    path: str
+    head_sha: str
+    line_start: int
+    line_end: int
+    sha256: str
+
+    def locator(self) -> str:
+        return f"{self.path}@{self.head_sha}#L{self.line_start}-L{self.line_end}"
+
+
+def cite(
+    *, path: str, head_sha: str, text: str, line_start: int, line_end: int
+) -> Citation | None:
+    """Address exactly the bytes at `line_start..line_end`, or return None.
+
+    Line numbers are 1-based and inclusive, matching git, every editor, and the
+    `#L10-L12` fragment GitHub itself uses — so a reader can check the locator by
+    eye against the page it names.
+
+    Returns None rather than raising on a range the text cannot support. That is
+    the whole safety property of this increment (design-lock L1): the model picks
+    where to look and code checks the pick, so a bad pick has to be a no-op that
+    leaves the finding ungrounded, never a wrong receipt. Raising here would turn
+    a hallucinated line number into a failed review.
+
+    Deliberately NOT shared with example_pack_verifiers._accepted_contract_receipt,
+    which slices the same way. That one resolves a Path under a repo root and emits
+    a locator carrying no ref, and its format is a contract in the Example Pack
+    lane. Merging them would drag that ref-less format into this one, and a locator
+    without a ref is not re-derivable — `git show` has nothing to resolve.
+    """
+    if line_start < 1 or line_end < line_start:
+        return None
+    lines = text.splitlines(keepends=True)
+    if line_end > len(lines):
+        return None
+    exact = "".join(lines[line_start - 1 : line_end]).encode("utf-8")
+    return Citation(
+        path=path,
+        head_sha=head_sha,
+        line_start=line_start,
+        line_end=line_end,
+        sha256=sha256_hex(exact),
+    )
+
+
 class ReaderFinding(BaseModel):
     category_slug: str
     description: str
     file: str
     severity: str
+    # Defaulted so every finding the frozen SCHEMA produces is unchanged and
+    # PROMPT_HASH does not move: SCHEMA still emits exactly the four fields above.
+    # `evidence` is what makes REVIEWING.md's "a finding that depends on code outside
+    # the diff must say so" enforceable rather than a convention — the two claim
+    # classes have to be machine-separable before they can be governed differently.
+    evidence: Literal["diff", "head-cited"] = "diff"
+    citations: list[Citation] = Field(default_factory=list)
 
 
 class ReaderVerdict(BaseModel):
@@ -340,8 +581,149 @@ class ReaderVerdict(BaseModel):
     findings: list[ReaderFinding]
 
 
+def _verify_user_text(finding: ReaderFinding) -> str:
+    return (
+        f"Finding: {finding.category_slug}\n"
+        f"File named by the finding: {finding.file}\n"
+        f"Claim: {finding.description}\n"
+    )
+
+
+def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> VerifyResponse:
+    """Ask where to look to ground one finding. One charged model call.
+
+    Deliberately NOT routed through _record_attempt. The Example Pack lane's
+    attempt_kind is a closed two-value Literal that raises at five sites for
+    anything else, and WholeInstrumentManifestV0 is extra="forbid" with no field
+    that could describe this tier — so a verify attempt has no honest
+    representation there. Emitting one would mean either widening a frozen
+    schema or mislabelling this as a risk read. It stays out until the
+    instrument question in design-lock L6 is answered.
+    """
+    _charge(scope)
+    if client is None:
+        client = _verify_client()
+    request = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "output_config": {
+            "effort": EFFORT,
+            "format": {"type": "json_schema", "schema": VERIFY_SCHEMA},
+        },
+        "system": VERIFY_SYSTEM,
+        "messages": [{"role": "user", "content": _verify_user_text(finding)}],
+    }
+    try:
+        response = client.messages.create(**request)
+    except Exception as e:  # noqa: BLE001 — same contract as read_diff
+        raise ReaderError(f"{type(e).__name__}: {e}") from e
+    _report_cost(response, kind="verify", scope=scope, pr=None)
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    if response.stop_reason != "end_turn":
+        raise ReaderError(f"verify stopped with {response.stop_reason}")
+    try:
+        return VerifyResponse.model_validate_json(text)
+    except Exception as e:  # noqa: BLE001
+        raise ReaderError(f"verify parse failed: {type(e).__name__}: {e}") from e
+
+
+def ground_findings(
+    rv: ReaderVerdict,
+    *,
+    head_sha: str | None,
+    resolve_file,
+    scope: str,
+    client=None,
+) -> tuple[ReaderVerdict, int]:
+    """Attach citations to findings a head read can ground. Returns (rv, n_grounded).
+
+    Additive and total: every finding that goes in comes out. The only change a
+    finding can undergo here is gaining an evidence class and a citation — there
+    is no path that removes one, and the assertion below states that as a
+    property rather than trusting the loop to stay that way.
+
+    Fails soft on everything. A spend cap, a transport error, a stopped
+    generation, an unparseable response — all of them leave the review exactly
+    as it was, with every finding published and diff-classed. The model chooses
+    where to look, so a bad choice must cost nothing; the alternative is a
+    hallucinated line number taking down a review.
+    """
+    if head_sha is None or resolve_file is None or not rv.findings:
+        return rv, 0
+
+    from . import verify as verify_mod
+
+    grounded_count = 0
+    spent = 0
+    out: list[ReaderFinding] = []
+
+    for i, finding in enumerate(rv.findings):
+        if spent >= MAX_VERIFY_READS_PER_REVIEW:
+            out.extend(rv.findings[i:])
+            break
+        try:
+            spent += 1
+            response = verify_finding(finding, scope=scope, client=client)
+        except SpendCapExceeded as e:
+            print(f"doug: verify capped ({e}); findings stay ungrounded", file=sys.stderr)
+            out.extend(rv.findings[i:])
+            break
+        except ReaderError as e:
+            print(f"doug: verify failed ({e}); finding stays ungrounded", file=sys.stderr)
+            out.append(finding)
+            continue
+        except Exception as e:  # noqa: BLE001 — grounding must never break a review
+            print(f"doug: verify errored ({type(e).__name__}: {e})", file=sys.stderr)
+            out.append(finding)
+            continue
+
+        citations: list[Citation] = []
+        for check in response.checks:
+            outcome = verify_mod.run_check(
+                check, head_sha=head_sha, resolve_file=resolve_file
+            )
+            if outcome.citation is not None:
+                citations.append(outcome.citation)
+            else:
+                print(
+                    f"doug: verify abstained for reader:{finding.category_slug} "
+                    f"({outcome.abstained_because})",
+                    file=sys.stderr,
+                )
+        if citations:
+            grounded_count += 1
+            out.append(
+                finding.model_copy(
+                    update={"evidence": "head-cited", "citations": citations}
+                )
+            )
+        else:
+            out.append(finding)
+
+    # Identity, not count. An earlier draft repaired a short list by re-slicing
+    # from the original, which restored the LENGTH while losing one finding and
+    # duplicating another — the assertion passed and the corruption was silent.
+    # A mutation test caught it. Compare what came out against what went in.
+    assert [f.category_slug for f in out] == [
+        f.category_slug for f in rv.findings
+    ], "grounding must be additive: every finding in, the same findings out"
+    return rv.model_copy(update={"findings": out}), grounded_count
+
+
 def enabled() -> bool:
     return os.environ.get("DOUG_READER") == "1"
+
+
+def verify_enabled() -> bool:
+    """Opt-in, default off, and separate from DOUG_READER on purpose.
+
+    Grounding adds paid model calls to the live path and changes what renders on
+    a check run. Landing the code dark means the PR that introduces it can be
+    reviewed and merged without changing what Doug does to anyone, and the
+    capability is switched on deliberately — the same posture DOUG_READER and
+    DOUG_INTENT_INSTALLATIONS already take for the tiers below it.
+    """
+    return os.environ.get("DOUG_VERIFY") == "1"
 
 
 def reader_threshold() -> float:
@@ -365,6 +747,13 @@ def _client():
     import anthropic
 
     return anthropic.Anthropic(timeout=read_timeout())
+
+
+def _verify_client():
+    """Same posture as _client, on the tighter verify budget."""
+    import anthropic
+
+    return anthropic.Anthropic(timeout=verify_timeout())
 
 
 def _sent_slice(diff: str, *, budget: int | None = None) -> str:
