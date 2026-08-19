@@ -348,8 +348,9 @@ path, no cross-tenant read, no silent partial reads.
   `verdicts.prompt_hash` backfill over historical reader rows) —
   ~~**MT3's `installations.reconciled_at` is migration 9.**~~ **Superseded
   2026-08-17:** 9 went to Front Door Phase 1a and 10 to `review_jobs.base_sha`,
-  so MT3 takes **12** (11 went to the per-repo needs-you threshold,
-  `installation_repos.needs_you_threshold`). MT3 also does not use
+  so MT3 takes **13** (11 went to the per-repo needs-you threshold,
+  `installation_repos.needs_you_threshold`, and 12 to the sticky PR comment,
+  ADR-0014). MT3 also does not use
   `installations.reconciled_at`: a
   per-*installation* timestamp cannot say *which* repos were swept, and the
   defect it must close is a per-repo coverage hole. See
@@ -491,11 +492,15 @@ would bite a real tenant.
   not a future risk. Decide deliberately rather than by omission — D2 moves the
   full sweep INTO that Job, so leaving it unscheduled until MT3 lands is a
   defensible choice and an unrecorded one is not.
-  (Next free migration: **12** — 9 is Front Door Phase 1a, 10 is
-  `review_jobs.base_sha` and 11 is `installation_repos.needs_you_threshold`
+  (Next free migration: **13** — 9 is Front Door Phase 1a, 10 is
+  `review_jobs.base_sha`, 11 is `installation_repos.needs_you_threshold`
   (the per-repo needs-you threshold,
-  `docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md`);
-  the earlier "next free: 9" and "next free: 11" notes here were stale.)
+  `docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md`)
+  and 12 is the sticky PR comment (`installation_repos.pr_comment`,
+  `installations.pr_comment_denied_at`, `pr_comments`,
+  `docs/decisions/ADR-0014-one-sticky-pr-comment-mirrors-the-check-run.md`);
+  the earlier "next free: 9", "next free: 11" and "next free: 12" notes here
+  were stale.)
 - [x] **MT4 — One source of truth for repo authorization.** The `?repo=` scope
   check reads `installation_repos.full_name` (annotated *display only* in
   `store.py`) while row filtering reads `verdicts.installation_id`. Traced as

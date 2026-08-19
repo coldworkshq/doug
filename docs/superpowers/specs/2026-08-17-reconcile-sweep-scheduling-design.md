@@ -79,8 +79,12 @@ applied to both.
 `migrations.py` now carries entries through **10**: 9 is Front Door Phase 1a
 (`workos_org_id`, `installed_by_github_user_id`) and 10 is `review_jobs.base_sha`.
 
-**The next free migration is 12 (11 is taken by the per-repo needs-you
-threshold, `2026-08-18-per-repo-needs-you-threshold-design.md`).** The ROADMAP
+**The next free migration is 13** (11 is taken by the per-repo needs-you
+threshold, `2026-08-18-per-repo-needs-you-threshold-design.md`, and 12 by the
+sticky PR comment,
+`docs/decisions/ADR-0014-one-sticky-pr-comment-mirrors-the-check-run.md`;
+this section's own earlier "next free is 12" was overtaken by that branch).
+**MT3 is unstarted, so its schema below moves with this number.** The ROADMAP
 line must be corrected in the
 same change, or the next person to read it collides. (Corrected in this change,
 at `ROADMAP.md:404` and `:310`.)
@@ -191,7 +195,7 @@ The budgeted sweep and the install-time sweep must stay separate entry points.
 Folding them together silently gives new installs partial coverage — a
 regression that would look exactly like correct behaviour.
 
-### 4.5 Schema (migration 12)
+### 4.5 Schema (migration 13)
 
 Per-(lane, repo) sweep state. Two lanes with different cadences and different
 costs must not share one timestamp, or one lane's sweep hides the other's

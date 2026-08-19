@@ -90,10 +90,22 @@ not a customer's.
   un-disableable public comment.
 - **D7 — Model-authored text is neutralised once, upstream of both
   surfaces.** `check_run._oneline` neutralises `@` mentions, `#` /
-  `owner/repo#` cross-references, and unterminated `<!--` — forms that are
-  inert in a check-run summary but notify, cross-reference, or corrupt
-  rendering in a live PR comment. The check run loses nothing; the comment
-  inherits safe text without a second pass that could diverge from it.
+  `owner/repo#` cross-references, unterminated `<!--`, `](` links and bare
+  `://` URLs — forms that are inert in a check-run summary but notify,
+  cross-reference, link under a trusted identity, or corrupt rendering in a
+  live PR comment. Every span the summary splices goes through it, with no
+  exceptions — not only the obviously model-authored label and deviation
+  description, but equally the rule (`reader:{category_slug}`, built from a
+  free-form schema field carrying no enum and no pattern), the `Judged
+  against:` record ids (a repo-controlled filename stem — `IntentDoc.id`
+  falls back to a raw filename outside the `ADR-NNNN` convention), and the
+  two enum-constrained fields the Python models nonetheless type as bare
+  `str`. The absolute is the point: an exemption argued from a schema is a
+  bypass the next reader has to re-derive. Inside a code span the backtick
+  is dropped rather than split, since it is the one character that would
+  close the span and hand the rest to the renderer. The check run loses
+  nothing; the comment inherits safe text without a second pass that could
+  diverge from it.
 - **D8 — Permission denial is visible on the dashboard.**
   `installations.pr_comment_denied_at` is set when `upsert` returns
   `denied:403` and cleared on the next `created`/`updated`; a banner on the
@@ -169,8 +181,13 @@ not a customer's.
     while two drainers race the same PR seconds apart (the deployed
     configuration is `--max-instances 2` with `SKIP LOCKED`, so this is
     ordinary, not exotic): both can reach the create step before either's
-    write is visible to the other, producing two comments for one PR until
-    the next listing reconciles them.
+    write is visible to the other, producing two comments for one PR. The
+    duplicate is permanent absent manual removal, not self-healing: as soon
+    as either drainer's `set_pr_comment_id` lands, every later job takes the
+    stored-id branch and updates through it without listing again, so nothing
+    ever revisits the orphan. Only a human deleting the tracked comment — the
+    404 that forces `upsert` back to a listing — brings the surviving pair
+    back to one.
 - **Comments persist after opt-out and after uninstall.** D3 never deletes;
   there is no bulk-removal path. A repository that opts out, or a tenant
   that uninstalls the App entirely, leaves every comment Doug already
