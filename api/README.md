@@ -1,6 +1,6 @@
 # doug-api
 
-Deterministic routing service. No model reads a diff unless the score says it should.
+Routing service. LLM diff-reader when `DOUG_READER=1`; deterministic fallback otherwise.
 
 ```sh
 uv sync                 # install (pins Python 3.14 via uv)
@@ -30,7 +30,7 @@ uv run ruff check .     # lint
 
 - `doug/features.py` — PR metadata → feature vector. Pure, no I/O. The backtest CLI and the webhook both call this; keep it that way.
 - `doug/scoring.py` — features → verdict, as legible weighted rules.
-- `doug/fixtures/queue.json` — demo queue used by `/v1/queue` until the Live Gate exists.
+- `doug/fixtures/queue.json` — bundled fixture used by `/v1/queue` and the showcase when the ledger is not configured.
 
 Env: `DOUG_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `DOUG_CORS_ORIGINS`.
 

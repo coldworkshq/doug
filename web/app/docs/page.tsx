@@ -42,7 +42,11 @@ export default function DocsIntroductionPage() {
                   scoreboard
                 </Link>{" "}
                 (the counters are the product until the first window closes),
-                and install the GitHub App. The self-serve measurement tool is
+                and{" "}
+                <Link href="/sign-in" className="underline underline-offset-4">
+                  sign in to install the GitHub App
+                </Link>
+                . The self-serve measurement tool is
                 still the{" "}
                 <b className="font-semibold text-foreground">
                   backtest CLI

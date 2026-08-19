@@ -20,7 +20,7 @@ export default function McpPatternGardenPage() {
             <DocsPageHeader
               kicker="Coming up"
               title="MCP · Pattern Garden"
-              status="preview"
+              status="planned"
             >
               <i>In training.</i> The Pattern Garden is an MCP server your
               coding agent queries{" "}
@@ -46,7 +46,7 @@ export default function McpPatternGardenPage() {
               rows={[
                 {
                   name: "doug.ask",
-                  meta: "tool · preview",
+                  meta: "tool · planned",
                   description: (
                     <>
                       Describe the change you&rsquo;re about to make; get known
@@ -75,7 +75,7 @@ export default function McpPatternGardenPage() {
           </>
         }
         rail={
-          <CodeBlock title="MCP · PREVIEW">
+          <CodeBlock title="MCP · PLANNED">
             <Fn>doug.ask</Fn>
             {"("}
             <Str>&quot;backfill a NOT NULL column on a hot table&quot;</Str>

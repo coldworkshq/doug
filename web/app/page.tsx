@@ -19,7 +19,7 @@ const RULES = [
   },
   {
     n: "03",
-    title: "Publishes its miss rate",
+    title: "Will publish its miss rate",
     body: "Every escaped defect Doug cleared will be counted, dated, and published on the locked cadence. If the number is bad, you'll see it here first.",
   },
 ];
