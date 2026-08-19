@@ -1,14 +1,10 @@
 # HANDOFF — doug
 
 State:    review (this branch: per-repo needs-you threshold)
-Next:     Open the two PRs (branches are PUSHED; `gh pr create` and the GitHub
-          MCP token were both refused, so Andrew opens them):
-          1. PR 1: https://github.com/drewjst/doug/pull/new/web/tolerate-flag-line-fields
-             (branch web/tolerate-flag-line-fields = f2a73f8 cherry-picked
-             onto main as ded6975). Merge, CONFIRM the web revision deployed.
-          2. PR 2: https://github.com/drewjst/doug/pull/new/claude/per-repo-needs-you-threshold-f075db
-             (draft until PR 1 is deployed). Bodies drafted in the session
-             scratchpad (pr1-body.md / pr2-body.md) and in the final chat message.
+Next:     1. Merge PR 1 https://github.com/drewjst/doug/pull/119 (web guard
+             tolerance) and CONFIRM the web revision deployed.
+          2. Then un-draft and merge PR 2 https://github.com/drewjst/doug/pull/120
+             (the feature). Two parked follow-ups are in its body.
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
