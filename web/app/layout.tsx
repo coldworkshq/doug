@@ -23,7 +23,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Doug — most pull requests don't need you",
   description:
-    "Risk-routed code review. Doug scores every PR from metadata, routes the handful that need human eyes, and publishes its miss rate.",
+    "Risk-routed code review. Doug reads the diff, routes the handful that need human eyes, and will publish its miss rate.",
 };
 
 export default function RootLayout({

@@ -24,8 +24,8 @@ export default function WhatDougGetsWrongPage() {
               Doug reviews every pull request in his own repository, and we
               write down what he got wrong.{" "}
               <b className="font-semibold text-foreground">
-                Roughly half his findings are disproved by code he wasn&rsquo;t
-                shown
+                About a third of prospective findings are disproved by code he
+                wasn&rsquo;t shown
               </b>{" "}
               — he reads a diff, not a repository, and he does not reliably
               distinguish what the diff <i>proves</i> from what it merely{" "}
@@ -83,12 +83,12 @@ export default function WhatDougGetsWrongPage() {
 
             <div className="mt-6">
               <Callout lead="There is no rate here yet, and that is the point.">
-                Every row in the log today is backfilled — reconstructed from
-                write-ups after the fact, not recorded at the time — so every
-                one of them is excluded from every rate by construction. The
-                denominator starts at the first finding logged prospectively.
-                When there is a number, it will not be called precision: whether
-                a finding is <i>true</i> is a different quantity from whether it{" "}
+                The log has 135 rows: 123 prospective and 12 backfill.
+                Backfill was reconstructed from write-ups after the fact and
+                is excluded from every rate by construction. The denominator
+                is the prospective rows. When there is a number, it will not
+                be called precision: whether a finding is <i>true</i> is a
+                different quantity from whether it{" "}
                 <i>predicted a defect</i>, and a finding can be true and
                 worthless or false and load-bearing.
               </Callout>
@@ -118,7 +118,7 @@ export default function WhatDougGetsWrongPage() {
             <Bright>{"}"}</Bright>
             {"\n\n"}
             <Comment>
-              {"# 12 rows today, every one backfill:\n#   9 disproved · 2 adjacent · 1 real\n#\n# excluded from every rate.\n# the denominator starts at row 13."}
+              {"# 135 rows; 123 prospective (37 disproved,\n#   57 real, 29 adjacent); 12 backfill\n#   excluded from every rate."}
             </Comment>
           </CodeBlock>
         }

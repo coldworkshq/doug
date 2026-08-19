@@ -37,7 +37,7 @@ export default function QuickstartPage() {
             <H2>Requirements</H2>
             <UL>
               <li>
-                Python 3.12+ and <IC>uv</IC> (or pip)
+                Python 3.14+ and <IC>uv</IC>
               </li>
               <li>
                 A GitHub token — picked up from the environment or the{" "}

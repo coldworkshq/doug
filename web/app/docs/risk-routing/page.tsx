@@ -6,7 +6,7 @@ import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 export const metadata = {
   title: "Risk routing — Doug Documentation",
   description:
-    "How Doug's capture curve, learned hotspots, and the mandatory size-only baseline work.",
+    "How Doug's capture curve, static hotspot segments, and the mandatory size-only baseline work.",
 };
 
 export default function RiskRoutingPage() {
@@ -28,16 +28,16 @@ export default function RiskRoutingPage() {
             </DocsPageHeader>
 
             <P>
-              Scoring is{" "}
-              <b className="font-semibold text-foreground">deterministic</b> —
-              no model in the hot path, nothing leaves your machine. The signal
-              that carries most of the weight is{" "}
-              <b className="font-semibold text-foreground">learned hotspots</b>
-              : path segments where your repo&rsquo;s own past defects cluster.
-              On sentry, PRs touching learned hotspots revert at{" "}
-              <b className="font-semibold text-foreground">2.34×</b> the base
-              rate; hotspots drift over time, so they&rsquo;re learned from a
-              rolling window, not hard-coded.
+              The capture curve is measured on the{" "}
+              <b className="font-semibold text-foreground">backtest CLI</b>
+              : scoring there is deterministic, and the holdout half learns
+              hotspot path segments from the repo&rsquo;s own past defects.
+              Live GitHub App reviews use{" "}
+              <b className="font-semibold text-foreground">
+                static hotspot segments
+              </b>{" "}
+              plus, when enabled, an LLM diff-reader (ADR-0004) — not the
+              rolling-window learner, and not a model-free hot path.
             </P>
 
             <UL>
@@ -61,7 +61,7 @@ export default function RiskRoutingPage() {
           </>
         }
         rail={
-          <CodeBlock title="Per-rule precision (sentry, train half)">
+          <CodeBlock title="Per-rule precision (sentry backtest, train half)">
             <Bright>{"rule                    fired   hit   lift"}</Bright>
             {"\n"}
             {"hotspot_path              581    19  "}
