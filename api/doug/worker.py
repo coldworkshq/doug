@@ -24,7 +24,16 @@ import sys
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 
-from . import app_auth, check_run, example_pack_capture, ingest, reader, review, store
+from . import (
+    app_auth,
+    check_run,
+    example_pack_capture,
+    ingest,
+    pr_comment,
+    reader,
+    review,
+    store,
+)
 from .example_pack import CaptureScopeV0, NameVersionV0, PackScopeV0
 from .models import Band, Reason, Verdict, is_bot_author
 
@@ -77,6 +86,103 @@ def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
             or os.environ.get("K_REVISION")
             or None
         ),
+    )
+
+
+def _pr_comment_outcome(
+    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool
+) -> str:
+    """Decide and perform this job's sticky-comment write, returning the
+    outcome token for the log line. May raise; `_post_pr_comment` owns that.
+
+    Two gates, cheapest first: the interim install allowlist is an env read,
+    the repo's own `pr_comment` column is a query, and today the allowlist
+    excludes almost everyone — so a non-allowlisted install costs nothing.
+    Both must say yes. `store.repo_pr_comment` is False for an absent or
+    'removed' row on purpose (see its docstring): that is exactly the set of
+    repos a tenant cannot see or toggle on the dashboard, and a repo nobody
+    can see must not get a comment nobody can turn off.
+    """
+    inst, repo_id, pr = job["installation_id"], job["github_repo_id"], job["pr_number"]
+    if not (pr_comment.allowed(inst) and store.repo_pr_comment(inst, repo_id)):
+        return "skipped"
+    # Replay only. process_job's fresh path has already fetched this PR and
+    # compared its head (it supersedes when they disagree), so the target is
+    # verified by the time it posts; spending a second pulls.get there would
+    # buy nothing. _replay_recorded runs BEFORE that check, and
+    # repo_full_name is display-only — stale after a rename — so on that path
+    # the PR number alone could address another repo's conversation.
+    if not fresh and not pr_comment.target_matches(gh, owner, name, pr, repo_id):
+        return "skipped-target"
+    body = pr_comment.render(
+        summary,
+        head_sha=job["head_sha"],
+        seq=job["id"],
+        receipt_url=pr_comment.receipt_url(owner, name, pr),
+    )
+    outcome = pr_comment.upsert(
+        gh,
+        owner,
+        name,
+        pr,
+        body,
+        installation_id=inst,
+        github_repo_id=repo_id,
+        seq=job["id"],
+    )
+    # Exact tokens only. `upsert` returns seven, and the four that are
+    # neither a 403 nor a landed write (`skipped-stale`, `failed:<code>`,
+    # `failed:net`, `failed:page-bound`) are evidence of neither permission
+    # lost nor permission regained, so they must leave the marker alone —
+    # clearing it on a 500 would hide a live denial behind a transient fault.
+    if outcome == "denied:403":
+        store.mark_pr_comment_denied(inst, datetime.now(UTC))
+    elif outcome in ("created", "updated"):
+        store.mark_pr_comment_denied(inst, None)
+    return outcome
+
+
+def _post_pr_comment(
+    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool
+) -> None:
+    """The sticky PR comment mirroring the check run (spec 2026-08-19).
+
+    Posted from both sites, immediately after `check_run.post` and therefore
+    only after `ingest.complete` returned True — a lost claim must not write
+    a comment the second holder's replay will write too, which on this
+    surface means notifying every reviewer on the PR twice for one review.
+
+    Its own stderr line, rather than fields appended to the reviewed/replayed
+    lines: those are printed BEFORE `ingest.complete` on purpose (so a lost
+    claim cannot erase the record of what the attempt cost) and cannot carry
+    an outcome that has not happened yet.
+
+    Everything is caught. `check_run.post`'s contract applies with more force
+    here: by this point the read is paid for, the verdict durable and the job
+    marked done, and this surface is advisory — a raise would hand the job to
+    `ingest.fail`, re-pending a row whose work is finished. `upsert` is
+    deliberately narrow about what it swallows (its own docstring: a blanket
+    except there would report its own bugs as `failed` on 100% of PRs), and
+    `target_matches` reads githubkit's model shape with plain attribute
+    access, so a schema change raises AttributeError rather than returning
+    False. The line drawn is loudness, not scope: a caught error prints its
+    exception type and message, so a bug here is visible on the first PR
+    rather than after a month of comment-less reviews, and the outcome token
+    on the line below says `failed:internal` rather than reading as a skip.
+    """
+    try:
+        outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh)
+    except Exception as e:  # noqa: BLE001 — advisory surface; the verdict is durable
+        outcome = "failed:internal"
+        print(
+            f"doug: comment internal error on job {job['id']} "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+    print(
+        f"doug: comment {outcome} {job['repo_full_name']}"
+        f"#{job['pr_number']}@{job['head_sha'][:12]}",
+        file=sys.stderr,
     )
 
 
@@ -146,6 +252,7 @@ def _replay_recorded(
             file=sys.stderr,
         )
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
+    _post_pr_comment(gh, owner, name, job, summary, fresh=False)
     return existing["id"]
 
 
@@ -353,6 +460,7 @@ def process_job(job: dict) -> int | None:
         )
         return verdict_id
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
+    _post_pr_comment(gh, owner, name, job, summary, fresh=True)
     return verdict_id
 
 
