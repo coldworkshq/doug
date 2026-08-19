@@ -8,17 +8,13 @@ State:    review — PR OPEN for Tasks 1-6. design-lock.md and build-plan.md LOC
           ground-truth · positions · decisions · design-lock · product-spec ·
           build-plan.
 
-Next:     ONE THING FOR ANDREW: confirm DOUG_PREREG_HASH is set on the API
-          SERVICE, not only the adjudicator Job. ROADMAP:330 records the hash
-          pinned "into the Job env"; api.py:931 reads the same var for the
-          receipt's `in_force` flag and that is a different Cloud Run service.
-          Cannot be checked from here.
-          Then Tasks 9 (labeled smoke test) -> 7 (surface) -> 8 (ADR-0013).
+Next:     Task 9 (labeled smoke test) -> 7 (surface) -> 8 (ADR-0013).
+          NOTHING IS OUTSTANDING FOR ANDREW ON P0.1 — see below.
           Andrew's earlier call stands: 9 before 7, so the nondeterminism
           spread is known before anything renders to a customer.
           Main lane unchanged: MT3 is still the critical path.
 
-## P0.1 IS LARGELY ALREADY DONE — I was wrong that it was outstanding
+## P0.1 IS FULLY DONE — I was wrong twice about this; do not re-raise it
 
 - Digest recomputed at 44b409c per the doc's own S12 protocol (sha256 of the
   committed bytes):
@@ -34,8 +30,16 @@ Next:     ONE THING FOR ANDREW: confirm DOUG_PREREG_HASH is set on the API
   the deployed DOUG_PREREG_HASH. A hashed document is structurally unable to
   record its own deployment. ROADMAP is the correct home and is already right.
   DO NOT "correct" that line.
-- Still open: the ROADMAP parent bullet is [~] not [x], and the API-service
-  env var is unverified from here.
+- The API-service env var is NOT a gap either — my second guess was also
+  wrong. deploy/gcp.sh:611 compute_prereg_hash derives the digest from the
+  document at deploy time; :674 sets DOUG_PREREG_HASH on doug-api and :719
+  gives the adjudicator Job the same value from the SAME call site (:606-610
+  says a second copy of the one-liner would drift). deploy() runs
+  preregistration_preflight first, which refuses unless the doc is LOCKED.
+  deploy.yml fires on push to main, and main has taken 4 merges since
+  2026-08-11 (#113-#116). The repo is PUBLIC, so "published" is satisfied too.
+- Only leftover: the ROADMAP parent bullet is [~] not [x]. Bookkeeping, not a
+  gate.
 
 Merged origin/main @ 3eddbf0 (4 commits: #113 #114 #115 #116) into the lane
 2026-08-18 — only HANDOFF.md conflicted; no code overlap. Re-verified after.
