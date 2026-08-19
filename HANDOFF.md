@@ -361,8 +361,11 @@ time-critical and this lane is not.
 State:    review — PR #118 open, Tasks 1-6 of 9 done. WIRED BUT DARK:
           DOUG_VERIFY is unset, so merging changes nothing for anyone.
 
-Next:     Task 9 (labeled smoke test) -> Task 7 (surface) -> Task 8
-          (ADR-0013). 9 before 7 deliberately: Convergence Bar 1 already
+Next:     Task 9 HARNESS DONE, not yet run — needs ANTHROPIC_API_KEY and
+          costs real money (1 risk read + up to 2 verify reads per run).
+          `uv run python scripts/smoke_cited_reads.py --dry-run` verifies the
+          wiring for free. Then Task 7 (surface) -> Task 8 (ADR-0013).
+          9 before 7 deliberately: Convergence Bar 1 already
           FAILED with reader nondeterminism as root cause, and this adds a
           nondeterministic call that ADDS published findings, so the spread
           must be known before anything renders to a customer.
@@ -411,6 +414,29 @@ may CITE bounded head reads to ground an existence-or-value claim.
 - publication-preregistration.md:8 still says the deployment has not
   happened. STALE, and UNFIXABLE: S12 makes any edit a new version with a new
   hash, invalidating the deployed value. DO NOT "correct" that line.
+
+## Task 9 — scripts/smoke_cited_reads.py
+
+Labeled a SMOKE TEST everywhere, in the docstring and in its own output,
+because it is not a bar: the answer key is committed in-repo, its "deltas
+worth encoding" named the gap this capability closes, and all 8 findings were
+classified before the spec was written.
+
+The ceiling is 1 of 8 and a low number is NOT a failure. 4 of the 8 live in
+files absent from the PR (api.py, worker.py, test_deploy_gcp.py,
+web/lib/api.ts) so no reader handed a diff can reach them. Of the 4 in files
+Doug saw, only #2 (meter vs cap 200 while spend enforces 4000) is an
+existence-and-value claim, the only shape constant_value_is can ground.
+
+Dry run confirms the path exists without spending: 7/7 files with patches,
+10,206-char diff, and the resolver returns api/doug/reader.py — a file NOT in
+the PR — with INSTALLATION_MONTHLY_READ_CAP at line 230, which is exactly the
+byte finding #2 needs.
+
+No matching is automated. Deciding whether a Doug finding "is" an external
+finding takes judgement, and a script that guessed would invent a metric.
+Runs >=3 times by default and reports the spread, because open risk #2
+(nondeterminism) must be measured rather than assumed.
 
 ## A mutation test caught a real bug in my own code
 
