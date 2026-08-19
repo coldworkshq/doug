@@ -301,6 +301,32 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE installation_repos ADD COLUMN needs_you_threshold FLOAT",
         ),
     ),
+    (
+        12,
+        (
+            # Sticky PR comment (spec 2026-08-19-sticky-pr-comment). Existing
+            # repo rows default to TRUE — opted in, matching the Table's
+            # server_default (see store.py).
+            "ALTER TABLE installation_repos ADD COLUMN pr_comment BOOLEAN NOT NULL DEFAULT TRUE",
+            # Last 403 refusal on a PR-comment write; NULL for every existing
+            # row (nothing has been denied yet).
+            "ALTER TABLE installations ADD COLUMN pr_comment_denied_at TIMESTAMP WITH TIME ZONE",
+            # NEW table — create_all() alone would give a fresh database this
+            # (see module docstring), but production's existing database
+            # needs the same DDL here. IF NOT EXISTS: harmless if this ever
+            # runs against a database create_all() already built. No
+            # surrogate id: the natural key (installation_id, github_repo_id,
+            # pr_number) IS the uniqueness the design wants — same precedent
+            # as schema_migrations above (store.py:28-33).
+            "CREATE TABLE IF NOT EXISTS pr_comments ("
+            "installation_id BIGINT NOT NULL, "
+            "github_repo_id BIGINT NOT NULL, "
+            "pr_number INTEGER NOT NULL, "
+            "comment_id BIGINT, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+            "PRIMARY KEY (installation_id, github_repo_id, pr_number))",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

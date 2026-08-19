@@ -1509,6 +1509,21 @@ def test_a_duplicate_repo_id_in_one_call_updates_not_double_inserts(tmp_path, mo
     assert rows[0]["github_repo_id"] == 1 and rows[0]["state"] == "active"
 
 
+def test_a_new_repo_row_gets_pr_comment_true_from_the_server_default(tmp_path, monkeypatch):
+    """set_installation_repos inserts an explicit values dict that omits the
+    column; without server_default on the Table home, every repo insert on a
+    create_all() schema would raise NOT NULL constraint failed."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    with store._get_engine().connect() as conn:
+        value = conn.execute(
+            select(store.installation_repos.c.pr_comment)
+            .where(store.installation_repos.c.github_repo_id == 11)
+        ).scalar_one()
+    assert value is True or value == 1
+
+
 # --- Outcome-loop schema (M1 amendment) ---------------------------------------
 
 

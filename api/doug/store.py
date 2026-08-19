@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -49,6 +50,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    true,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -216,6 +218,10 @@ installations = Table(
     # on many accounts/orgs. NULL for every row created before this column,
     # and for any `created` delivery whose sender was missing or malformed.
     Column("installed_by_github_user_id", BigInteger, nullable=True),
+    # Last time a PR-comment write was refused with 403 (permission not
+    # re-accepted, locked conversation, archived repo). Cleared on the next
+    # successful create/update. Drives the Repositories-view banner (D8).
+    Column("pr_comment_denied_at", DateTime(timezone=True), nullable=True),
 )
 
 installation_repos = Table(
@@ -233,7 +239,27 @@ installation_repos = Table(
     # (spec 2026-08-18-per-repo-needs-you-threshold). Written ONLY by
     # set_repo_threshold — set_installation_repos must never touch it.
     Column("needs_you_threshold", Float, nullable=True),
+    # Whether Doug keeps one sticky PR comment mirroring its check run on
+    # this repo's PRs (spec 2026-08-19-sticky-pr-comment, D3). server_default
+    # is load-bearing: set_installation_repos inserts an explicit values dict
+    # that omits this column, so a bare NOT NULL breaks every repo insert on
+    # a create_all() schema. Written ONLY by set_repo_pr_comment.
+    Column("pr_comment", Boolean, nullable=False, server_default=true()),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
+)
+
+# The sticky PR comment's claim (spec 2026-08-19-sticky-pr-comment, D9). No
+# surrogate id: the natural key IS the uniqueness the design wants, same
+# precedent as schema_migrations above. comment_id is NULL between claim and
+# create — the row is the claim, the id arrives once create_comment returns.
+pr_comments = Table(
+    "pr_comments",
+    metadata,
+    Column("installation_id", BigInteger, nullable=False, primary_key=True),
+    Column("github_repo_id", BigInteger, nullable=False, primary_key=True),
+    Column("pr_number", Integer, nullable=False, primary_key=True),
+    Column("comment_id", BigInteger, nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 # Tenant API keys (spec 2026-08-04). Multiple keys per installation; each
