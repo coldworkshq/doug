@@ -135,14 +135,18 @@ _ZWSP = "\u200b"
 # preceding word char or dot so `a@b.c` still reads as the email address it
 # is, not a mention of `b`.
 _MENTION_RE = re.compile(r"(?<![\w.])@(?=\w)")
-# `#123` on its own writes a cross-reference into issue #123's timeline.
-# Exclude a preceding word char or `/` so the digits after a repo-qualified
-# ref (`owner/repo#4`) are left to `_REPO_REF_RE`, which keeps the repo
-# name intact instead of also splitting it.
-_BARE_REF_RE = re.compile(r"(?<![\w/])#(?=\d)")
-# `owner/repo#4` — same cross-reference side effect, but the repo qualifier
-# is part of the reading and must survive; only the `#` needs the break.
-_REPO_REF_RE = re.compile(r"\w+/\w+#\d")
+# `#123` writes a cross-reference into that issue's timeline, whether bare
+# or repo-qualified (`owner/repo#4`). Earlier drafts tried to tell the two
+# apart by what precedes the `#` (a word char/`/` meant "already covered by
+# the repo-qualified case") and by requiring a contiguous `\w+/\w+` repo
+# segment — both gaps: a hyphenated or dotted repo name (`hello-world`,
+# `repo.js`, the GitHub-common case) isn't `\w+`, so the digits after its
+# `#` fell through both regexes untouched, and a `/` with no repo segment
+# at all (`docs/#123`) fell through the same way. A ZWSP is invisible in
+# rendered markdown either way, so there is nothing to gain from trying to
+# scope the match to "real" refs: every `#` immediately followed by a
+# digit gets one, unconditionally.
+_REF_RE = re.compile(r"#(?=\d)")
 # An unterminated `<!--` opens an HTML comment that swallows the rest of
 # the comment body.
 _COMMENT_OPEN_RE = re.compile(r"<!--")
@@ -164,8 +168,7 @@ def _oneline(text: str) -> str:
     """
     collapsed = " ".join(text.split())
     collapsed = _MENTION_RE.sub(f"@{_ZWSP}", collapsed)
-    collapsed = _REPO_REF_RE.sub(lambda m: m.group(0).replace("#", f"#{_ZWSP}", 1), collapsed)
-    collapsed = _BARE_REF_RE.sub(f"#{_ZWSP}", collapsed)
+    collapsed = _REF_RE.sub(f"#{_ZWSP}", collapsed)
     collapsed = _COMMENT_OPEN_RE.sub(f"<!-{_ZWSP}-", collapsed)
     collapsed = _LINK_RE.sub(f"]{_ZWSP}(", collapsed)
     return collapsed

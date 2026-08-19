@@ -577,6 +577,21 @@ def test_oneline_neutralises_the_forms_that_have_side_effects_in_a_pr_comment():
     assert check_run._oneline("line\nbreak") == "line break"
 
 
+def test_oneline_neutralises_repo_refs_the_word_char_class_would_miss():
+    """A prior version scoped the repo-qualified case to a contiguous word-
+    char repo segment, and excluded any '#' preceded by '/' from the bare-ref
+    fallback on the assumption the repo-qualified regex covered it. Neither
+    is true for a hyphenated or dotted repo name (the dominant GitHub
+    naming convention) or for a '/' with no repo segment at all — every one
+    of these left the '#123' side effect live. Scoping was never load-
+    bearing: the ZWSP is invisible either way, so every '#' immediately
+    followed by a digit is neutralised, unconditionally."""
+    z = "​"
+    assert check_run._oneline("see owner/hello-world#42") == f"see owner/hello-world#{z}42"
+    assert check_run._oneline("see owner/repo.js#4") == f"see owner/repo.js#{z}4"
+    assert check_run._oneline("see docs/#123") == f"see docs/#{z}123"
+
+
 def test_quote_goes_through_oneline():
     reason = Reason(rule="x", label="Partial read: paths/@user\nfile", weight=0.0)
     assert check_run._quote(reason) == ["", "> Partial read: paths/@​user file"]
