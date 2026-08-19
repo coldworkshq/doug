@@ -650,6 +650,21 @@ deploy() {
   # drewjst. Adding an id here opts a real tenant into an experiment and
   # charges them for it, so it is a deliberate act, not a default.
   #
+  # DOUG_WEB_URL: the base URL of the doug-web service, used by receipt_url()
+  # to build links to the PR comment dashboard (/dashboard/pr/{n}?repo=…).
+  # Empty or unset → no link, and receipts degrade silently. The web_url()
+  # helper queries the live doug-web service, so on a bootstrap deploy where
+  # doug-web does not exist yet, $(web_url) is empty and DOUG_WEB_URL gets
+  # set to an empty string — exactly why the code tolerates empty values.
+  #
+  # DOUG_PR_COMMENT_INSTALLATIONS is an ALLOWLIST, not a switch. Same shape
+  # as DOUG_INTENT_INSTALLATIONS (this line), gated to the same dogfood
+  # installation id. TEMPORARY (D3a): the design ships PR comments on-by-
+  # default but gates the first release to dogfood, and this allowlist is
+  # removed in a follow-up PR once a week of real comments looks right. Empty
+  # → no comments anywhere; the allowlist must not be removed prematurely or
+  # comments silently start everywhere without a gate.
+  #
   # DOUG_PREREG_HASH: same value the adjudicator Job below carries, from the
   # same compute_prereg_hash call site. The receipt endpoint reports this as
   # the methodology document currently in force — never a value it reads
@@ -671,7 +686,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_PR_COMMENT_INSTALLATIONS=150424894${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

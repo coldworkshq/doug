@@ -141,6 +141,28 @@ def test_api_deploy_carries_the_showcase_repo():
     assert "DOUG_SHOWCASE_REPO=" in _function_body("deploy")
 
 
+def test_api_deploy_carries_the_web_url_for_receipt_links():
+    """The receipt URL builds a dashboard link from DOUG_WEB_URL. If unset or
+    empty, no link is generated and receipts degrade silently — the code
+    tolerates this because a bootstrap deploy where doug-web does not exist yet
+    sets DOUG_WEB_URL=empty string via $(web_url). The link silently disappears
+    if this env var is dropped."""
+    body = _function_body("deploy")
+    assert "DOUG_WEB_URL=$(web_url)" in body
+
+
+def test_api_deploy_carries_the_temporary_pr_comment_installations_allowlist():
+    """PR comments gate first to the dogfood installation (150424894, same id
+    DOUG_INTENT_INSTALLATIONS uses) via an allowlist. Empty → no comments
+    anywhere. This is temporary (D3a): the design ships the setting on-by-default
+    but gates the first release to dogfood, and the allowlist is removed in a
+    follow-up PR once a week of real comments looks right. Comments silently
+    stop everywhere if this allowlist is dropped (and, later, silently start
+    everywhere if it is removed prematurely)."""
+    body = _function_body("deploy")
+    assert "DOUG_PR_COMMENT_INSTALLATIONS=150424894" in body
+
+
 def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy():
     """DOUG_SHOWCASE_REPO reaches the service only through this deploy. If
     it is wrong, /v1/showcase/queue 404s while /openapi.json and / both
