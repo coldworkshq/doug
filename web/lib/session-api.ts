@@ -155,6 +155,19 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
+/** `exact` plus a set of keys that MAY be present. Used only where the API
+ *  is about to start emitting a field and this build must not reject it
+ *  before it learns to read it (deploy.yml promotes API before web). */
+function exactWithOptional(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => key in value) && actual.every((key) => allowed.has(key));
+}
+
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -192,9 +205,10 @@ function prMetadata(value: unknown): value is PRMetadata {
 function repository(value: unknown): value is { id: number; full_name: string } {
   return (
     record(value) &&
-    exact(value, ["id", "full_name"]) &&
+    exactWithOptional(value, ["id", "full_name"], ["needs_you_threshold"]) &&
     Number.isInteger(value.id) &&
-    typeof value.full_name === "string"
+    typeof value.full_name === "string" &&
+    (!("needs_you_threshold" in value) || nullableNumber(value.needs_you_threshold))
   );
 }
 
@@ -221,7 +235,7 @@ function connection(value: unknown): value is RepositoryConnection {
 function isConnectionsResponse(value: unknown): value is ConnectionsResponse {
   return (
     record(value) &&
-    exact(value, ["connections"]) &&
+    exactWithOptional(value, ["connections"], ["default_needs_you_threshold"]) &&
     Array.isArray(value.connections) &&
     value.connections.every(connection)
   );
