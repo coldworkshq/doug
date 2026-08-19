@@ -85,16 +85,17 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
  *
  *  1620 IS MEASURED, not chosen. The ledger's chrome — 212 of rail, a 400 dock,
  *  40 of gutter, two container borders and the table's own ~15px vertical
- *  scrollbar — costs 669px, and the table needs 940 (see COLUMNS), so the dock
- *  can only appear from 1609 up; 1620 carries the slack for a platform whose
- *  scrollbars are wider. Arithmetic alone said 1600 and was wrong by 9px, which
+ *  scrollbar — costs 669px, and the table needs 876 (see COLUMNS), so the dock
+ *  can appear from 1545 up; 1620 still carries the slack measured when the
+ *  ledger was 940px (a 64px scoring-tier column that every hosted row filled
+ *  with "reader"). Arithmetic alone said 1600 and was wrong by 9px, which
  *  is exactly the kind of error that ships as "why does this scroll sideways".
  *
  *  Tried at 1360 first, which was worse than a small scroll: the ledger got 708,
- *  the eight fixed columns do not shrink, and the whole shortfall came out of
+ *  the seven fixed columns do not shrink, and the whole shortfall came out of
  *  the one flexible column — the pull request title rendered 40px wide, i.e.
  *  "feat(…". A split view whose master column cannot say what a row is about is
- *  not a split view, so the dock waits until there is room for both. Nine data
+ *  not a split view, so the dock waits until there is room for both. Eight data
  *  columns and a 400px pane genuinely do not fit a 1440 laptop; below 1620 the
  *  ledger takes the whole width and the title is generous, which is the better
  *  half of a trade that has no free side. */
@@ -588,15 +589,16 @@ function RepoCountLine({
  *  `read` gave up 8px it was not using (a 46px bar and a 4-character percentage)
  *  and `job` gave up 8px it wraps anyway.
  *
- *  THE TABLE'S 940px MINIMUM falls out of these widths and is not a round
- *  number: the eight fixed columns claim 626, the cell padding 16, and the pull
+ *  THE TABLE'S 876px MINIMUM falls out of these widths and is not a round
+ *  number: the seven fixed columns claim 562, the cell padding 16, and the pull
  *  request cell spends 200 more on its disclosure slot, its `repo #n`, its
- *  receipt link and three gaps before the title gets anything. 940 is what
- *  leaves the title ~85px at the narrowest width the ledger is ever asked to
- *  render at — measured, not projected. Below that the table scrolls horizontally, which states the
+ *  receipt link and three gaps before the title gets anything. 876 is the
+ *  previous 940px floor minus the 64px scoring-tier column, which every hosted
+ *  row filled with "reader". The grade still lives on the selected-run pane.
+ *  Below that the table scrolls horizontally, which states the
  *  shortfall; crushing the title hides it.
  *
- *  Only three columns are sortable. band, tier and the two outcome columns are
+ *  Only three columns are sortable. band and the two outcome columns are
  *  categories, and sorting a category alphabetically implies a ranking that
  *  does not exist — narrowing those is what the pills do.
  *
@@ -610,7 +612,6 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
   { label: "score", cls: "w-[58px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
   { label: "band", cls: "w-[106px]" },
-  { label: "tier", cls: "w-[64px]" },
   { label: "read", cls: "w-[104px]", sort: "coverage" },
   { label: "14d outcome", cls: "w-[88px]" },
   { label: "60d outcome", cls: "w-[88px]" },
@@ -631,7 +632,7 @@ const TH =
   "text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
 const TD = "h-[34px] border-b border-[var(--rule-soft)] px-2 align-middle";
 
-/** The nine cells of one run. Children render the identical columns — an
+/** The eight cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
  *  history by indentation and a tint, never by dropping data. */
 function RunCells({
@@ -692,13 +693,6 @@ function RunCells({
         </div>
       </TableCell>
       <TableCell className={TD}><BandChip band={run.band} /></TableCell>
-      {/* truncate on the two columns whose text comes from the API rather than
-          from a closed set this page controls. shadcn's TableCell brings
-          `whitespace-nowrap`, which the hand-rolled <td>s did not have, so a
-          longer-than-expected tier or outcome now overflows its fixed column
-          instead of wrapping. Truncating states the overflow; spilling into the
-          next column hides it (Doug PR 103, reader:style-default-change). */}
-      <TableCell className={`mono ${TD} truncate text-[11px] text-muted-foreground`}>{run.tier}</TableCell>
       <TableCell className={TD}><CoverageCell run={run} /></TableCell>
       {/* Two independent cells — deliberately not one window falling back to
           the other. 14d and 60d are different observations of different
@@ -706,7 +700,9 @@ function RunCells({
           in for the other's "pending" (see COLUMNS' docstring). Each goes
           through the same outcomeTone/outcomeLabel rule the detail tile
           uses, so all three render sites cannot drift into describing one
-          row differently. */}
+          row differently. truncate: shadcn's TableCell brings
+          `whitespace-nowrap`, so a longer-than-expected outcome overflows
+          its fixed column instead of wrapping (Doug PR 103). */}
       <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
@@ -748,7 +744,7 @@ function RunTable({
     // that still has it.
     <Table
       containerClassName="min-h-0 max-h-[62vh] flex-1 overflow-auto rounded-[5px] border border-border bg-background min-[1620px]:max-h-none"
-      className="min-w-[940px] table-fixed border-separate border-spacing-0 text-xs"
+      className="min-w-[876px] table-fixed border-separate border-spacing-0 text-xs"
     >
       <TableHeader>
         <TableRow className="hover:bg-transparent">

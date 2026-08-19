@@ -484,6 +484,39 @@ test("setFlagLineAction is a server action wired to the repositories table", asy
   assert.match(page, /FlagLineControl/);
 });
 
+test("the runs table does not spend a column on scoring tier", async () => {
+  // Hosted production is DOUG_READER=1, so every ledger row reads "reader".
+  // The grade still exists — a deterministic fallback must remain visible —
+  // but the selected-run pane is the surface, not an always-on table column.
+  const page = await readFile(pageUrl, "utf8");
+  const columns = page.match(/const COLUMNS[^=]*=\s*\[([\s\S]*?)\n\];/)?.[1];
+  assert.ok(columns, "COLUMNS is gone");
+  assert.equal(
+    /label: "tier"/.test(columns),
+    false,
+    "COLUMNS still declares a tier column",
+  );
+
+  const cells = page.match(/function RunCells\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(cells, "RunCells is gone");
+  assert.equal(cells.includes("{run.tier}"), false, "RunCells still prints run.tier");
+
+  assert.match(page, /<dt className="uppercase text-muted-foreground">tier<\/dt>/);
+
+  // 154px was the slack 940 carried above fixed+160 with the tier column
+  // still in COLUMNS. Deleting the column and leaving min-w at 940 would
+  // leave the floor above the content — which the header-pin test's comment
+  // forbids and does not enforce.
+  const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  const widths = [...columns.matchAll(/cls: "w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
+  const fixed = widths.reduce((total, width) => total + width, 0);
+  const declared = Number(runTable.match(/min-w-\[(\d+)px\]/)?.[1] ?? 0);
+  assert.ok(
+    declared <= fixed + 160 + 154,
+    `min-w-[${declared}px] is ${declared - fixed - 160}px above the columns; deleting tier left the floor behind`,
+  );
+});
+
 test("the ledger is bounded and its header stays put", async () => {
   const page = await readFile(pageUrl, "utf8");
   const runTable = page.match(/function RunTable\([\s\S]*?\n\}\n/)?.[0] ?? "";
@@ -515,7 +548,7 @@ test("the ledger is bounded and its header stays put", async () => {
   assert.match(runTable, /border-spacing-0/);
 
   // Horizontal scrolling was already there and is NOT replaced by the vertical
-  // bound — nine columns still need it in any column narrower than they are.
+  // bound — eight columns still need it in any column narrower than they are.
   //
   // Was a hardcoded `min-w-[980px]`, which measured the ledger when it owned
   // the full 1440 canvas. The split shell put a 400px dock beside it and every
