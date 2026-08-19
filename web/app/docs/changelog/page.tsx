@@ -20,6 +20,18 @@ export default function ChangelogPage() {
             <ParamsTable
               rows={[
                 {
+                  name: "2026-08-19",
+                  description: (
+                    <>
+                      Doug leaves one sticky comment on each reviewed PR that
+                      repeats its check run word for word, edited in place on
+                      every push — on by default, opt-out per repository
+                      beside the flag line. Rolling out to Doug&rsquo;s own
+                      repositories first.
+                    </>
+                  ),
+                },
+                {
                   name: "2026-08-13",
                   description: (
                     <>

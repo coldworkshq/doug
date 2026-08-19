@@ -1,11 +1,17 @@
 # HANDOFF — doug
 
-State:    building (branch claude/sticky-pr-comment; PR A #138 merged AND deployed)
-Next:     Finish plan docs/superpowers/plans/2026-08-19-sticky-pr-comment.md
-          (0b4e1b5) tasks 6-10, then open PR B. Ledger:
-          .superpowers/sdd/2026-08-19-sticky-pr-comment/progress.md
-          REMAINING GATE before PR B merges: set Pull requests: Read and write
-          on the GitHub App (installations must re-accept).
+State:    review (branch claude/sticky-pr-comment; PR A #138 merged AND
+          deployed; tasks 1-10 of docs/superpowers/plans/2026-08-19-sticky-pr-comment.md
+          complete)
+Next:     Open PR B (`feat: one sticky PR comment that mirrors the check
+          run`). Both gates are already satisfied — PR A #138 is merged and
+          deployed, and the `pull_requests: write` App permission was set on
+          2026-08-19 (installations must still individually re-accept; until
+          an installation does, its comment writes 403 and the dashboard
+          banner says so — this is expected, not a blocker for opening the
+          PR). Ledger: .superpowers/sdd/2026-08-19-sticky-pr-comment/progress.md
+          Follow-up PR after this: remove the `DOUG_PR_COMMENT_INSTALLATIONS`
+          allowlist (D3a) once a week of dogfood comments look right.
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
