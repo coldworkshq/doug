@@ -1,14 +1,19 @@
 # HANDOFF — doug
 
-State:    review (this branch: per-repo needs-you threshold)
-Next:     1. Merge PR 1 https://github.com/drewjst/doug/pull/119 (web guard
-             tolerance) and CONFIRM the web revision deployed.
-          2. Then un-draft and merge PR 2 https://github.com/drewjst/doug/pull/120
-             (the feature). Two parked follow-ups are in its body.
+State:    spec (branch claude/sticky-pr-comment) · review (PR #120)
+Next:     1. PR #120 https://github.com/drewjst/doug/pull/120 — mergeable, CI on
+             238ca5d; Andrew approves + merges. (#119 merged + deployed.)
+          2. Sticky-PR-comment spec docs/superpowers/specs/2026-08-19-sticky-pr-comment-design.md
+             (061dbcb): three-lens adversarial review running; fold findings,
+             Andrew reads, then writing-plans. Rebase this branch onto main once
+             #120 merges (it depends on #120's settings row/endpoint/UI).
+          3. Manual step before that feature deploys: add `pull_requests: write`
+             to the GitHub App permissions (installations must re-accept).
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
 Decisions this session:
+- Sticky PR comment: D1 one comment/PR edited in place · D2 body = check-run summary verbatim in a header/footer frame · D3 on by default, opt-out per repo · D4 link = dashboard receipt page · D5 403 swallowed, check run unaffected — rejected: per-push comments, flagged-only, short card, public receipt, gating
 - D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
 - D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
 - D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
