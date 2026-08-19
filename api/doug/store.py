@@ -3480,6 +3480,8 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                     installation_repos.c.github_repo_id,
                     installation_repos.c.full_name,
                     installation_repos.c.needs_you_threshold,
+                    installation_repos.c.pr_comment,
+                    installations.c.pr_comment_denied_at,
                 )
                 .select_from(joined)
                 .where(
@@ -3506,6 +3508,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                 "account_type": row["account_type"],
                 "derived_at": _as_utc(row["derived_at"]),
                 "claimed_repo_ids": _stored_repo_ids(row["repo_ids"]),
+                "pr_comment_denied_at": _as_utc(row["pr_comment_denied_at"]),
                 "repositories": [],
             },
         )
@@ -3519,6 +3522,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                         None if row["needs_you_threshold"] is None
                         else float(row["needs_you_threshold"])
                     ),
+                    "pr_comment": bool(row["pr_comment"]),
                 }
             )
     return list(projected.values())
