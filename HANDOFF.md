@@ -22,7 +22,60 @@ Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
           3. The liveness item — NOT built, recorded in the roadmap under M3.
           4. MT3 (spec approved, decisions locked below).
 
-Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
+Blockers: the claim lease until 16:20 UTC.
+
+> **CORRECTION 2026-08-18 (later session):** "#116 IS OPEN" above is now false —
+> #116 is MERGED and is `main`'s HEAD (`3eddbf0`). Step 1 of Next is done.
+> Steps 2-4 are UNVERIFIED from here: this session did not execute the Job and
+> cannot say whether production is live. Check the scoreboard before trusting
+> any of the narrative below that assumes #116 unmerged.
+
+## LANE: plan-lane design — verticals, lanes, checkpoints (2026-08-18)
+
+Branch `claude/great-villani-bb55c4` · worktree `dashboard-redesign-left-nav-efb4d7`
+**Separate lane from everything below.** Nothing here touches production, MT3,
+or the incident narrative.
+
+State:    **design LOCKED by Andrew.** Nothing built, nothing committed.
+          `docs/design/plan-lane/` is untracked.
+Next:     Build §9 step 1 — `verticals.toml` (declared path→area map) plus a
+          read-only CLI over `git worktree list`. One day, no infra, no model.
+Blockers: none.
+
+Read in this order — the design opens with §0, which is the entry point:
+  docs/design/plan-lane/idea.md              the capture (lives on MT3's branch,
+                                             commit 1b5a617 — not on main)
+  docs/design/plan-lane/deterministic-half.md  the MEASUREMENT record
+  docs/design/plan-lane/design.md            the locked design (§0 = why Doug)
+
+Decisions this session:
+- The unit is the BRANCH, not the plan — a plan can have several lanes
+  (`lane1-phase-b` + `-rebuild`). Rejected: plan as the unit.
+- Verticals are DECLARED, never inferred — inference filed `console-design`
+  under Deploy at 11% and left 6 lanes unmatched. Rejected: path heuristics.
+- Lane→plan join = the plan file is ON the branch: 15/38 lanes, zero false
+  positives. Rejected: file-overlap inference (24/38, obvious garbage —
+  `landing-brand-match` → the dual-run plan at 44%).
+- INTERNAL tooling, explicitly. Rejected: a check-run surface, which would
+  inherit the whole honesty contract and collide with session-lane's §6 claim.
+- Drift/stale-doc detection stays OUT — rides the `unvalidated` deviation
+  instrument (ADR-0007). Its deterministic cousin, plan churn, is in.
+
+Findings that constrain any build (all reproducible, commands in design.md §0):
+- **The checkbox is dead.** 76 `- [x]` lines ever added across 31 plans, every
+  one in the commit that created the file. Never once flipped. Do not build
+  progress on it.
+- 36/116 tasks (31%) declare no file unique within their plan → `unresolved`,
+  which must render differently from `not started`.
+- 41 of 45 branches with unmerged commits are 5+ days cold. That is the
+  rescue case and the reason the board earns its keep.
+- **This file is contested by 12 live lanes** and is the 5th-hottest merge
+  conflict in the tree — which is exactly the cardinality problem design.md §7
+  describes. The slots are right; one-per-repo is wrong.
+
+Mock (real repo data, iterated to a locked direction):
+  https://claude.ai/code/artifact/351031ae-5947-4cb5-8269-c8c1e9237a24
+  Working files: <scratchpad>/canvas/{Main.dc.html, canvas.json}
 
 ## THE LEASE — why re-running early "succeeds" and does nothing
 
