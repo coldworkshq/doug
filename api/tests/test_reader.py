@@ -130,6 +130,12 @@ def _pr(**kw) -> PRMetadata:
     return PRMetadata.model_validate(base)
 
 
+def _rv(risk_score: int, findings: list | None = None) -> reader.ReaderVerdict:
+    return reader.ReaderVerdict(
+        risk_score=risk_score, rationale="test", findings=findings or []
+    )
+
+
 def test_disabled_without_env(monkeypatch):
     monkeypatch.delenv("DOUG_READER", raising=False)
     assert not reader.enabled()
@@ -584,6 +590,20 @@ def test_verdict_from_reader_carries_each_findings_own_file():
     reasons = reader.verdict_from_reader(rv).reasons
     assert [r.file for r in reasons] == ["a.py", "b.py"]
     assert [r.severity for r in reasons] == ["high", "low"]
+
+
+def test_verdict_from_reader_on_the_line_needs_you_at_every_two_decimal_stop():
+    """0.55*100 == 55.00000000000001; with an integer risk_score and >=, a PR
+    sitting exactly on the line would clear while the check run printed
+    'Risk 0.55 against a flag line of 0.55'. The caller passes round(t*100);
+    this pins the two sides agree at the stops that would otherwise fail."""
+    for line in (0.07, 0.14, 0.28, 0.55, 0.56):
+        points = round(line * 100)
+        on = reader.verdict_from_reader(_rv(risk_score=points), threshold=points)
+        under = reader.verdict_from_reader(_rv(risk_score=points - 1), threshold=points)
+        assert on.band is Band.FLAGGED, line
+        assert under.band is Band.CLEARED, line
+        assert on.threshold == line, line
 
 
 # --- The spend cap, at the one place money is actually spent -------------

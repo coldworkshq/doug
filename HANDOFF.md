@@ -1,92 +1,58 @@
 # HANDOFF — doug
 
-State:    **LOOP LIVE + EXIT-GATE AUDIT PASSED (18/18), and the audit found
-          a live defect in `/v1/patterns`.**
+State:    review (this branch: per-repo needs-you threshold)
+Next:     1. Merge PR 1 https://github.com/drewjst/doug/pull/119 (web guard
+             tolerance) and CONFIRM the web revision deployed.
+          2. Then un-draft and merge PR 2 https://github.com/drewjst/doug/pull/120
+             (the feature). Two parked follow-ups are in its body.
+Blockers: none on this branch. (Production-dark stream: #116 MERGED as
+          3eddbf0; its remaining steps are kept verbatim under "Prior stream"
+          below — verify the adjudicator Job actually drained before deleting.)
+Decisions this session:
+- D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
+- D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
+- D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
+- D4 unset shows both defaults (0.30 reader / 0.62 fallback) — prod runs DOUG_READER=1 — rejected: single 0.62
+- D5 write authority = org member + live repo entitlement, new settings:write scope — weaker than mint/bind, named — rejected: installer-only
+- D6 two PRs, web exact() guards first — API deploys before web — rejected: one PR (dashboard outage window)
+- D7 a global RequestValidationError handler on api.py (stock handler, non-finite floats stringified) so a NaN/Infinity threshold body 422s instead of 500 — recorded as an ADR-0013 consequence
+- Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
+Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
+          plan 098cf40 (11 tasks, two PRs) · ADR-0013
+          docs/decisions/ADR-0013-needs-you-line-is-a-per-repo-setting.md ·
+          seams: review.score_one (review.py:303), worker.py:250,
+          store.set_installation_repos, api.py:1877 connections,
+          web/lib/threshold-lens.ts (header rewritten to name the setting)
 
-Next:     1. ~~Fix `precision.fold`~~ DONE — PR open, see below. With it,
-             `/v1/patterns` for drewjst/doug becomes `prs: 16, defects: 0,
-             base_rate: 0.0`: honest, and correctly uninformative. Sixteen
-             observations with zero defects cannot say which patterns
-             predict defects. The pattern display has nothing to show YET —
-             that is the finding, not a blocker.
-          2. **2026-08-21: the first real detector test.** PR #68 merged to
-             main 2026-08-07 and was reverted by #70 the same day. Its 14d
-             adjudication is `pending`, due 2026-08-21. It is the only PR in
-             the repo's history with a revert against it, so it MUST come
-             back `kind=revert`. If it returns `clean`, the detector is
-             broken and M3 says stop.
-          3. The liveness item (roadmap M3, unbuilt). Zero alert policies
-             still exist in doug-prod0.
-          4. Then MT3, then M4's interviews.
+---
 
-Blockers: none.
+## Prior stream (production-dark; #116 merged) — original head kept for context
 
-## THE AUDIT — M3's exit gate, done 2026-08-18
+State:    **blocked — PRODUCTION STILL DARK.** Second defect in the same
+          never-executed path. #113 (383daf6), #114 (8e1d774) and #115
+          (22156d9) are all MERGED. **PR #116 IS OPEN** and is the last thing
+          between here and a live loop:
+          https://github.com/drewjst/doug/pull/116
+          Branch `fix/adjudicator-needs-git`, verified locally red→green
+          (pre-fix image: `exec: "git": executable file not found`, exit 127;
+          fixed image: git 2.47.3 + a real `--filter=tree:0` clone of a public
+          repo, which also proves TLS/CA).
 
-Gate: "100% agreement vs. a manual `git log` audit (any disagreement =
-detector bug = stop)". **18/18 agree.**
+Next:     1. Merge #116. **Deploy is AUTOMATIC** — see the correction below;
+             do NOT run `gcp.sh adjudicator` by hand, that instruction was
+             mine and it was wrong.
+          2. **At or after 16:25 UTC / 9:25 AM PDT**, execute the Job:
+             gcloud run jobs execute doug-adjudicator \
+               --project doug-prod0 --region us-central1 --wait
+             Earlier than that it exits 0 having done nothing — see the lease
+             note below. Success = non-zero `done` in the DrainSummary and
+             `/v1/showcase/scoreboard` leaving `adjudicated 0`.
+          3. The liveness item — NOT built, recorded in the roadmap under M3.
+          4. MT3 (spec approved, decisions locked below).
 
-  16 clean (PRs 28-32, 34-39, 41-45) — the ONLY revert in the entire repo
-     history since 2026-08-01 is `#70 Revert "...(#68)"` on 2026-08-07, and
-     #68 is not in this batch (its window is still pending). So no PR
-     labelled clean has a revert against it.
-  2 censored (PRs 40, 46) — both merged to `gh-pages`, `censor_reason:
-     base_ref`, `default_branch: main`. Independently checkable from the
-     receipt's own base_ref. This is the roadmap's rule working: "merge to
-     non-default branch -> censored, never clean".
-  Denominator complete — the one gap in an otherwise contiguous 28-46 run
-     is #33, which has `merges: 0`. Never merged, correctly not at risk.
-     (This is the check MT3 exists to protect: a missing job would look
-     identical to a clean sweep.)
+Blockers: #116 unmerged, and the claim lease until 16:20 UTC.
 
-Method: receipts via `GET /v1/prs/{n}/receipt` with the operator token, swept
-over PRs 10-60; revert evidence read from `git log origin/main` by subject,
-NOT from `git_labels` (using the detector to audit the detector is circular).
-
-## THE DEFECT THE AUDIT FOUND — `/v1/patterns` counts censored as defect
-
-`precision.py:50`:
-
-    is_defect[key] = is_defect.get(key, False) or r["kind"] != "clean"
-
-The Outcome enum is REVERT / CLEAN / CENSORED. A censored row is a
-NON-OBSERVATION — the PR left the risk set — but it is `!= "clean"`, so it
-lands in the numerator as a defect.
-
-Live impact right now: `/v1/patterns?repo=drewjst/doug` returns
-`prs: 18, defects: 2, base_rate: 0.111`. The true observed defect count is
-**0 of 16**; 100% of the reported "defects" are non-observations, and the
-honest denominator is 16, not 18. Every precision, lift and `clears_base`
-value it publishes is computed against that manufactured base rate.
-
-Same defect class as #93 ("a censored outcome is a non-observation, not a
-miss") — fixed in the console then, not here. `precision.fold` is the ONLY
-consumer of `kind != "clean"` in the package, so the blast radius is
-`/v1/patterns` and nothing else.
-
-FIXED on `fix/censored-is-not-a-defect`. The semantics were not a judgement
-call — prereg §3 already rules it: `N_at_risk = N_done - censored`, and it
-names and rejects the alternative ("counting censored as misses ... a
-censoring rate wearing a miss rate's name"). So censored leaves BOTH the
-numerator and the denominator. A censored row in one window does not
-unobserve another (`outcomes` carries `window_days`). Kept as `!= CLEAN`
-rather than `== REVERT` on purpose: a kind added to the enum later surfaces
-as a defect (loud) instead of dissolving into clean (flattering), and
-`test_fold_classifies_every_outcome_kind_the_adjudicator_can_write` fails
-until someone gives the new kind a decision.
-
-## What the three defects had in common — worth keeping
-
-Every one was invisible because **the drain path had never executed against
-real work in production**. Twelve green Job executions carried no evidence
-about any of it; `docker build api` built an image it never ran; and the
-public surface rendered `adjudicated 0`, the honest empty state, pixel-
-identical to the broken one. Each fix exposed the next defect rather than
-causing it. The general lesson is in the roadmap's M3 liveness item: a green
-check over a code path that cannot run is not evidence, and "empty is the
-product" only holds while empty-because-broken is a different, louder thing.
-
-## THE LEASE — why re-running early "succeeded" and did nothing (RESOLVED)
+## THE LEASE — why re-running early "succeeds" and does nothing
 
 The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
 `status='running'`. `drain()` opens with `reclaim_stalled()`, which only
@@ -317,7 +283,8 @@ empty state it was designed to render. **Nothing said anything.**
   every other tenant 200x, which is MT3's own complaint.
 - REFUTED: that global interleaving re-mints a token per repo. githubkit's
   DEFAULT_CACHE_STRATEGY is a module-level singleton — verified empirically.
-- MT3 takes migration **11** (9 = Front Door 1a, 10 = review_jobs.base_sha).
+- MT3 takes migration **12** (9 = Front Door 1a, 10 = review_jobs.base_sha,
+  11 = installation_repos.needs_you_threshold, taken 2026-08-18).
   `installations.reconciled_at` cannot close it: sweep state is per REPO.
 - MT3 is a CORRECTNESS item: `active_repos` has no ORDER BY and
   `reconcile_all`'s only caller is a reaped daemon thread, so the tail is

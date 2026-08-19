@@ -232,6 +232,9 @@ def process_job(job: dict) -> int | None:
     # charges a real tenant: both reads below come out of this
     # installation's monthly budget rather than the shared sentinel one.
     scope = reader.installation_scope(job["installation_id"])
+    # The repo's own needs-you line, read INSIDE the job at scoring time (not
+    # at admission) so the line in effect when Doug scores is the one stamped.
+    threshold = store.repo_threshold(job["installation_id"], job["github_repo_id"])
     # Settle resolution findings against the reviewed head — not the PR tip
     # pulls.get might now show (we already refused a moved head above).
     def resolve(path: str) -> str | None:
@@ -248,7 +251,12 @@ def process_job(job: dict) -> int | None:
     )
     with pack_context:
         tier, verdict, rv, cov = review.score_one(
-            meta, diff, scope=scope, resolve_file=resolve, resolve_schema=store.columns_of
+            meta,
+            diff,
+            scope=scope,
+            threshold=threshold,
+            resolve_file=resolve,
+            resolve_schema=store.columns_of,
         )
         intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
     intent_read: review.IntentRead | None
@@ -328,7 +336,9 @@ def process_job(job: dict) -> int | None:
         f"doug: reviewed {job['repo_full_name']}#{job['pr_number']}"
         f"@{job['head_sha'][:12]} (paid read) "
         f"tier={tier} band={verdict.band.value} "
-        f"risk={verdict.score:.2f} verdict={verdict_id}",
+        f"risk={verdict.score:.2f} line={verdict.threshold:.2f} "
+        f"line_source={'repo' if threshold is not None else 'default'} "
+        f"verdict={verdict_id}",
         file=sys.stderr,
     )
     # complete before post — see the identity-replay path above. The job's

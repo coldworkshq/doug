@@ -1447,7 +1447,9 @@ def test_session_connection_projection_intersects_claims_with_live_rows(
     assert len(rows) == 1
     assert rows[0]["organization_id"] == "org_acme"
     assert rows[0]["claimed_repo_ids"] == frozenset({11, 999})
-    assert rows[0]["repositories"] == [{"id": 11, "full_name": "acme/one"}]
+    assert rows[0]["repositories"] == [
+        {"id": 11, "full_name": "acme/one", "needs_you_threshold": None}
+    ]
 
 
 def test_installation_created_replaces_the_whole_repo_list(tmp_path, monkeypatch):
@@ -3275,3 +3277,74 @@ def _force_running(table, job_id, when):
             .where(table.c.id == job_id)
             .values(status="running", started_at=when)
         )
+
+
+def test_repo_threshold_round_trips_and_is_none_when_unset_or_unknown(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+
+    assert store.repo_threshold(101, 11) is None
+    assert store.set_repo_threshold(101, 11, 0.9) is True
+    assert store.repo_threshold(101, 11) == 0.9
+    assert store.repo_threshold(101, 999) is None
+    assert store.set_repo_threshold(101, 11, None) is True
+    assert store.repo_threshold(101, 11) is None
+
+
+def test_set_repo_threshold_rounds_to_two_decimals(tmp_path, monkeypatch):
+    """Verdict.score is 2dp (scoring.py) and the reader conversion is
+    round(t*100): a stored 0.6249 would compare in a way no surface shows."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    store.set_repo_threshold(101, 11, 0.6249)
+    assert store.repo_threshold(101, 11) == 0.62
+
+
+def test_set_repo_threshold_touches_only_the_callers_row_and_only_active_ones(
+    tmp_path, monkeypatch
+):
+    """A transferred repo legitimately has rows under two installations
+    (repo_id_for). One tenant's PATCH must not reach the other's row, and a
+    removed row is not writable (rowcount 0 -> 404 at the API)."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.upsert_installation(202, "other", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    store.set_installation_repos(202, [(11, "other/one")], replace=False)
+
+    assert store.set_repo_threshold(101, 11, 0.9) is True
+    assert store.repo_threshold(202, 11) is None
+
+    store.set_installation_repos(101, [], replace=True)  # 11 -> removed
+    assert store.set_repo_threshold(101, 11, 0.5) is False
+    assert store.repo_threshold(101, 11) == 0.9  # still readable, unchanged
+
+
+def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(
+    tmp_path, monkeypatch
+):
+    """Webhooks must not erase tenant configuration; and updated_at is the
+    tiebreaker repo_id_for uses to pick between duplicate registrations, so
+    a settings write must not be a lever over it."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    with store._get_engine().connect() as conn:
+        before = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.github_repo_id == 11)
+        ).scalar_one()
+
+    store.set_repo_threshold(101, 11, 0.9)
+    with store._get_engine().connect() as conn:
+        after = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.github_repo_id == 11)
+        ).scalar_one()
+    assert after == before
+
+    store.set_installation_repos(101, [], replace=True)          # removed
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)  # re-added
+    assert store.repo_threshold(101, 11) == 0.9

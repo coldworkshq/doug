@@ -332,7 +332,10 @@ def test_deviations_move_neither_the_band_nor_the_score():
     bare_title, bare = check_run.render("reader", FLAGGED, None, WHOLE)
     dev_title, dev = check_run.render("reader", FLAGGED, DEVIATIONS, WHOLE)
     assert bare_title == dev_title
-    risk_line = "Risk 0.62 against a flag line of 0.30."
+    risk_line = (
+        "Risk 0.62 against a flag line of 0.30. "
+        "The flag line is set per repository on the Doug dashboard."
+    )
     assert risk_line in bare and risk_line in dev
     assert dev.startswith(bare[: bare.index("### Findings")])
 

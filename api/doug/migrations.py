@@ -293,6 +293,14 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE review_jobs ADD COLUMN base_sha VARCHAR(64)",
         ),
     ),
+    (
+        11,
+        (
+            # Per-repo needs-you line (spec 2026-08-18). Nullable: NULL is
+            # "inherit the defaults", which is every existing row.
+            "ALTER TABLE installation_repos ADD COLUMN needs_you_threshold FLOAT",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

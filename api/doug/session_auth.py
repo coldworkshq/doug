@@ -24,7 +24,7 @@ from jwt import PyJWKClient
 
 from . import entitlements, store, tenancy
 
-SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read")
+SESSION_SCOPES: tuple[str, ...] = ("queue:read", "receipt:read", "settings:write")
 
 # WorkOS documents api.workos.com as the legacy access-token issuer; Doug's
 # earlier live AuthKit receipt used auth.workos.com. Current hosted tokens

@@ -325,6 +325,41 @@ test("a live connection still opens its ledger, and a stale sibling never blocks
   assert.equal(choosing.current, null);
 });
 
+test("parseFlagLine: 0..1 numbers, '' clears, everything else is invalid", async () => {
+  // The FLAG LINE is a setting, not the lens — but it shares the lens's
+  // grammar on purpose. `Number()` alone accepts "", " ", "0x1f" and
+  // "Infinity", and a percentage typed as "62" would sail through a bare
+  // `>= 0` check and silently mean "flag nothing" on every future review of
+  // that repository. Refusing it is the only reading that fails closed.
+  //
+  // The three-way return is the point: "" is a real instruction (clear the
+  // override, go back to Doug's defaults) and must never be confused with
+  // garbage, which the action refuses outright rather than treating as a clear.
+  const { parseFlagLine } = await import("./dashboard-model.ts?flag-line");
+  assert.equal(parseFlagLine("0.9"), 0.9);
+  assert.equal(parseFlagLine("0"), 0);
+  assert.equal(parseFlagLine("1"), 1);
+  assert.equal(parseFlagLine(""), null);
+  for (const bad of ["62", "1.5", "-0.1", "abc", "0x1", " ", null]) {
+    assert.equal(parseFlagLine(bad), undefined, String(bad));
+  }
+});
+
+test("parseGithubRepoId: only a positive safe integer names a repository", async () => {
+  // This id is the path segment of a PATCH against another person's data. The
+  // API authorises it, but a parser that let "1e3", "0" or a float through
+  // would send a request Doug cannot describe — so the id that reaches
+  // setRepositoryThreshold is either a real repository id or nothing at all.
+  const { parseGithubRepoId } = await import("./dashboard-model.ts?repo-id");
+  assert.equal(parseGithubRepoId("42"), 42);
+  for (const bad of ["0", "-1", "1.5", "1e3", " 42", "", "abc", null, undefined]) {
+    assert.equal(parseGithubRepoId(bad), null, String(bad));
+  }
+  // Past 2^53 the digits stop naming one integer, so the value cannot be
+  // trusted to be the repository the operator was looking at.
+  assert.equal(parseGithubRepoId("9007199254740993"), null);
+});
+
 test("a connection still waiting on setup outranks a stale one for the front door", async () => {
   const { frontDoor } = await import("./dashboard-model.ts?front-door-setup");
   const pending = {

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from doug import reader, review
-from doug.models import Band
+from doug.models import Band, PRMetadata
 
 PAYLOAD = {
     "risk_score": 55,
@@ -45,6 +45,62 @@ class FakeGH:
                 list_files=lambda **kw: SimpleNamespace(parsed_data=files),
             )
         )
+
+
+def _rv(risk_score: int, findings: list | None = None) -> reader.ReaderVerdict:
+    return reader.ReaderVerdict(
+        risk_score=risk_score, rationale="test", findings=findings or []
+    )
+
+
+def _pr_with_deterministic_score_0_79() -> PRMetadata:
+    """boundary-plus-migration (0.35) + dep-change-no-test-delta (0.25) +
+    sensitive-path (0.15) + base (0.04) = 0.79 — strictly between the env
+    default threshold (0.62) and the repo line this test raises it to
+    (0.9), so the test can tell "threaded" from "ignored" by which side of
+    0.79 the passed-in threshold lands on."""
+    return PRMetadata(
+        number=1,
+        title="Add session migration and bump deps",
+        author="dev",
+        files=["auth/session.go", "migrations/0042.sql", "package.json", "package-lock.json"],
+        additions=50,
+        deletions=10,
+    )
+
+
+def test_score_one_threads_the_repo_line_to_every_exit(monkeypatch):
+    """A capped or broken read on a 0.9 repo must not band at 0.62 because
+    the fallback forgot the argument — that would make the tenant's line
+    fiction on exactly the reviews they can't see happening."""
+    meta = _pr_with_deterministic_score_0_79()  # migration + sensitive path etc.
+
+    monkeypatch.setattr(reader, "enabled", lambda: False)
+    tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9)
+    assert v.score == 0.79  # pins the fixture: strictly between 0.62 and 0.9
+    assert (tier, v.band, v.threshold) == ("deterministic", Band.CLEARED, 0.9)
+    _, v0, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE)
+    assert v0.band is Band.FLAGGED  # unset: env default 0.62
+
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(
+        reader, "read_diff",
+        lambda *a, **k: (_ for _ in ()).throw(reader.ReaderError("down")),
+    )
+    tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9)
+    assert (tier, v.band, v.threshold) == ("deterministic", Band.CLEARED, 0.9)
+    assert any(r.rule == "reader-unavailable" for r in v.reasons)
+
+    monkeypatch.setattr(
+        reader, "read_diff",
+        lambda *a, **k: (_ for _ in ()).throw(reader.SpendCapExceeded("cap")),
+    )
+    tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9)
+    assert (tier, v.band, v.threshold) == ("deterministic", Band.CLEARED, 0.9)
+
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(risk_score=55))
+    tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.55)
+    assert (tier, v.band, v.threshold) == ("reader", Band.FLAGGED, 0.55)
 
 
 def test_metadata_mapping_marks_bots():

@@ -303,7 +303,20 @@ def test_configured_workos_issuer_narrows_acceptance_to_that_origin(monkeypatch)
 def test_session_scopes_cannot_exceed_the_enumerated_set():
     """A session has no scopes of its own. Synthesising them is inventing
     authority; the set is fixed and pinned."""
-    assert set(session_auth.SESSION_SCOPES) <= {"queue:read", "receipt:read"}
+    assert set(session_auth.SESSION_SCOPES) <= {
+        "queue:read",
+        "receipt:read",
+        "settings:write",
+    }
+
+
+def test_session_scopes_include_the_settings_write_scope():
+    """The PATCH on a repo's flag line is gated on this exact string. A
+    minted tenant key never gets it — mint_key's scopes are a literal list
+    at tenancy.py:390 with no named constant, so that half of the contrast
+    is pinned in test_api.py's tenant-key test instead (which can mint a
+    real key against a throwaway DB), rather than duplicated here."""
+    assert "settings:write" in session_auth.SESSION_SCOPES
 
 
 def test_missing_workos_client_id_raises_configuration_exception(monkeypatch):

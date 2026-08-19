@@ -79,7 +79,9 @@ applied to both.
 `migrations.py` now carries entries through **10**: 9 is Front Door Phase 1a
 (`workos_org_id`, `installed_by_github_user_id`) and 10 is `review_jobs.base_sha`.
 
-**The next free migration is 11.** The ROADMAP line must be corrected in the
+**The next free migration is 12 (11 is taken by the per-repo needs-you
+threshold, `2026-08-18-per-repo-needs-you-threshold-design.md`).** The ROADMAP
+line must be corrected in the
 same change, or the next person to read it collides. (Corrected in this change,
 at `ROADMAP.md:404` and `:310`.)
 
@@ -189,7 +191,7 @@ The budgeted sweep and the install-time sweep must stay separate entry points.
 Folding them together silently gives new installs partial coverage — a
 regression that would look exactly like correct behaviour.
 
-### 4.5 Schema (migration 11)
+### 4.5 Schema (migration 12)
 
 Per-(lane, repo) sweep state. Two lanes with different cadences and different
 costs must not share one timestamp, or one lane's sweep hides the other's

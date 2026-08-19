@@ -4965,7 +4965,10 @@ def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monke
     response = TestClient(app).get("/v1/sessions/connections", headers=_session())
 
     assert response.status_code == 200
-    assert response.json() == {"connections": []}
+    assert response.json() == {
+        "connections": [],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
+    }
 
 
 def test_connections_project_several_installations_and_explicit_live_repos(
@@ -5003,8 +5006,8 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": None,
                 "repositories": [
-                    {"id": 11, "full_name": "drewjst/doug"},
-                    {"id": 12, "full_name": "drewjst/notes"},
+                    {"id": 11, "full_name": "drewjst/doug", "needs_you_threshold": None},
+                    {"id": 12, "full_name": "drewjst/notes", "needs_you_threshold": None},
                 ],
             },
             {
@@ -5016,11 +5019,12 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": "Lema — separate product",
                 "repositories": [
-                    {"id": 21, "full_name": "lemahq/lema"},
-                    {"id": 22, "full_name": "lemahq/lema-verify"},
+                    {"id": 21, "full_name": "lemahq/lema", "needs_you_threshold": None},
+                    {"id": 22, "full_name": "lemahq/lema-verify", "needs_you_threshold": None},
                 ],
             },
-        ]
+        ],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
     }
 
 
@@ -5049,7 +5053,9 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
             "account_type": "Organization",
             "status": "setup_required",
             "label": None,
-            "repositories": [{"id": 11, "full_name": "coldworkshq/coldworks"}],
+            "repositories": [
+                {"id": 11, "full_name": "coldworkshq/coldworks", "needs_you_threshold": None}
+            ],
         }
     ]
 
@@ -5099,7 +5105,8 @@ def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
                 # Withheld, not forgotten — see the test below.
                 "repositories": [],
             }
-        ]
+        ],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
     }
 
 
@@ -5162,7 +5169,29 @@ def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(
     response = TestClient(app).get("/v1/sessions/connections", headers=_session())
 
     assert response.status_code == 200
-    assert response.json() == {"connections": []}
+    assert response.json() == {
+        "connections": [],
+        "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
+    }
+
+
+def test_connections_carry_each_repos_flag_line_and_both_process_defaults(
+    tmp_path, monkeypatch
+):
+    """Production runs the reader, so the unset line on most verdicts is
+    0.30, not 0.62 — printing one 'default' number is the lie
+    _banding_threshold was built to end. Both are sent; the web prints both."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11, 12))
+    monkeypatch.setenv("DOUG_THRESHOLD", "0.62")
+    monkeypatch.setenv("DOUG_READER_THRESHOLD", "30")
+    store.set_repo_threshold(101, 11, 0.9)
+
+    body = TestClient(app).get("/v1/sessions/connections", headers=headers).json()
+
+    assert body["default_needs_you_threshold"] == {"reader": 0.3, "fallback": 0.62}
+    repos = {r["id"]: r for r in body["connections"][0]["repositories"]}
+    assert repos[11] == {"id": 11, "full_name": "acme/repo11", "needs_you_threshold": 0.9}
+    assert repos[12] == {"id": 12, "full_name": "acme/repo12", "needs_you_threshold": None}
 
 
 def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):
@@ -5333,6 +5362,129 @@ def test_session_bearer_remains_refused_on_operator_run_routes(tmp_path, monkeyp
 
     assert TestClient(app).get("/v1/runs", headers=headers).status_code == 401
     assert TestClient(app).get("/v1/runs/1", headers=headers).status_code == 401
+
+
+def _patch_line(headers, repo_id, body):
+    return TestClient(app).patch(
+        f"/v1/sessions/repositories/{repo_id}", headers=headers, json=body
+    )
+
+
+def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
+    tmp_path, monkeypatch, capsys
+):
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11,))
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": 0.9})
+    assert r.status_code == 200 and r.json() == {"needs_you_threshold": 0.9}
+    assert store.repo_threshold(101, 11) == 0.9
+    assert (
+        "needs_you_threshold installation=101 repo=11 None->0.9 by sub=user_01ABC"
+        in capsys.readouterr().err
+    )
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": 0.6249})
+    assert r.json() == {"needs_you_threshold": 0.62}  # the STORED value comes back
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": None})
+    assert r.status_code == 200 and r.json() == {"needs_you_threshold": None}
+    assert store.repo_threshold(101, 11) is None
+
+
+def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, monkeypatch):
+    """404 not 403 for a repo the session cannot see (do not confirm it
+    exists); 422 for anything that is not a JSON number in 0..1 or null —
+    '{}' would otherwise silently clear, and '62' is someone typing a
+    percentage."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11,))
+    live_not_claimed = _patch_line(headers, 12, {"needs_you_threshold": 0.5})
+    assert live_not_claimed.status_code == 404  # live but not claimed
+    assert _patch_line(headers, 999, {"needs_you_threshold": 0.5}).status_code == 404
+    for bad in (1.5, -0.1, "0.9", "62", True):
+        assert _patch_line(headers, 11, {"needs_you_threshold": bad}).status_code == 422, bad
+    for literal in ("NaN", "Infinity"):
+        r = TestClient(app).patch(
+            "/v1/sessions/repositories/11",
+            headers={**headers, "Content-Type": "application/json"},
+            content=f'{{"needs_you_threshold": {literal}}}',
+        )
+        assert r.status_code == 422, literal
+    assert _patch_line(headers, 11, {}).status_code == 422
+    assert store.repo_threshold(101, 11) is None
+    # ints at the endpoints are numbers, not strings — accepted.
+    r = _patch_line(headers, 11, {"needs_you_threshold": 1})
+    assert r.status_code == 200
+    assert r.json() == {"needs_you_threshold": 1.0}
+
+
+def test_the_custom_validation_handler_still_returns_the_stock_422_body():
+    """The NaN guard is GLOBAL, so every route's 422 body is now ours to keep.
+
+    `_validation_error_handler` replaces FastAPI's own handler for EVERY
+    RequestValidationError in the application — it was added for one field on
+    one PATCH (a NaN threshold that would otherwise 500 on serialisation), but
+    it is registered app-wide and there is no upper bound on the FastAPI
+    versions it will run under. Nothing else pins its output, so a `_json_safe`
+    that dropped or renamed a key, or a future FastAPI whose stock handler
+    grows a second top-level field, would silently change the error contract
+    the console and every CLI caller parse — on routes that have nothing to do
+    with the flag line.
+
+    /v1/score is deliberately an unrelated route with a plain pydantic body,
+    and the missing-field path is chosen because it is the one FastAPI itself
+    raises (not a hand-written HTTPException(422), which never reaches this
+    handler at all).
+    """
+    res = TestClient(app).post("/v1/score", json={"title": "no number, no author"})
+
+    assert res.status_code == 422
+    body = res.json()
+    # ONE top-level key. FastAPI's contract is `{"detail": [...]}` and callers
+    # read it positionally; an extra sibling key here means the handler drifted.
+    assert list(body) == ["detail"]
+    assert isinstance(body["detail"], list) and body["detail"]
+    for entry in body["detail"]:
+        # `input` is the field the NaN guard exists to rewrite, so it is the
+        # one that must still be present and unrewritten for ordinary values.
+        assert {"type", "loc", "msg", "input"} <= set(entry), entry
+    assert {tuple(e["loc"]) for e in body["detail"]} == {
+        ("body", "number"),
+        ("body", "author"),
+    }
+    assert all(e["input"] == {"title": "no number, no author"} for e in body["detail"])
+
+
+def test_flag_line_write_refuses_tenant_api_keys_and_orgless_sessions(tmp_path, monkeypatch):
+    _session_scope(tmp_path, monkeypatch)
+    orgless = _session()  # no org_id → resolve_session is None
+    assert _patch_line(orgless, 11, {"needs_you_threshold": 0.5}).status_code == 401
+    # A minted tenant key is a TokenContext, never a SessionContext — this
+    # route must not use the dual-context resolution shape. Confirm at the
+    # source (mint_key's scopes never include settings:write) and at the
+    # route (a tenant bearer still gets a uniform 401).
+    _pepper_env(monkeypatch)
+    tenant_key = tenancy.mint_key(
+        101,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="acme",
+    ).token
+    assert "settings:write" not in tenancy.resolve(tenant_key).scopes
+    key_headers = {"Authorization": f"Bearer {tenant_key}"}
+    assert _patch_line(key_headers, 11, {"needs_you_threshold": 0.5}).status_code == 401
+
+
+def test_flag_line_write_needs_the_settings_write_scope_specifically(tmp_path, monkeypatch):
+    """Every session currently gets all of SESSION_SCOPES, so a test that
+    only ever exercises a real session would stay green even if the route
+    were gated on the wrong scope (or not gated on scope at all). Strip
+    settings:write from the set resolve_session hands out and confirm the
+    route actually reads it."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+    monkeypatch.setattr(session_auth, "SESSION_SCOPES", ("queue:read", "receipt:read"))
+    assert _patch_line(headers, 11, {"needs_you_threshold": 0.5}).status_code == 401
 
 
 def test_entitlements_refuse_a_forged_session(tmp_path, monkeypatch):

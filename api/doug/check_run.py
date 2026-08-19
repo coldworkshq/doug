@@ -140,7 +140,10 @@ def render(
     lines = [
         f"**{title}**",
         "",
-        f"Risk {verdict.score:.2f} against a flag line of {verdict.threshold:.2f}.",
+        (
+            f"Risk {verdict.score:.2f} against a flag line of {verdict.threshold:.2f}. "
+            "The flag line is set per repository on the Doug dashboard."
+        ),
         RISK_NOTE,
         NEUTRAL_NOTE,
     ]

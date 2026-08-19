@@ -305,6 +305,7 @@ def score_one(
     diff: str,
     *,
     scope: str,
+    threshold: float | None = None,
     resolve_file: settle.ResolveFile | None = None,
     resolve_schema: settle.ResolveSchema | None = None,
 ):
@@ -325,6 +326,12 @@ def score_one(
     "top up the budget" and "page someone, the reader is broken" are not
     the same instruction.
 
+    `threshold` is the repo's own needs-you line in 0..1 (store.repo_threshold),
+    or None for the process defaults. It reaches EVERY exit below — the reader
+    (as round(t*100): 0.55*100 is 55.00000000000001 and risk_score is an
+    integer compared with >=) and all three deterministic fallbacks — because
+    a capped read on a 0.9 repo must not quietly band at 0.62.
+
     `resolve_file`, when given, settles import/undefined-name findings
     against the full file at head (REVIEWING.md resolution rule). It does
     not change what the model was shown — ADR-0012's five-constant freeze
@@ -336,6 +343,7 @@ def score_one(
     schema is schema, not tied to a git commit, so this settles even when
     `resolve_file` is None.
     """
+    reader_line = None if threshold is None else round(threshold * 100)
     if reader.enabled():
         try:
             rv = reader.read_diff(meta, diff, scope=scope)
@@ -380,7 +388,7 @@ def score_one(
                         f"doug: grounded {grounded} finding(s) against head",
                         file=sys.stderr,
                     )
-            verdict = reader.verdict_from_reader(rv)
+            verdict = reader.verdict_from_reader(rv, threshold=reader_line)
             if settled := settle.settlement_notice(dropped):
                 verdict.reasons.append(settled)
             if schema_settled := settle.schema_settlement_notice(schema_dropped):
@@ -395,16 +403,16 @@ def score_one(
             # Before ReaderError: SpendCapExceeded is a subclass of it, so a
             # broader clause first would relabel every capped read as a
             # broken one.
-            verdict = score(meta)
+            verdict = score(meta, threshold=threshold)
             verdict.reasons.append(Reason(rule="reader-capped", label=str(e), weight=0.0))
             return "deterministic", verdict, None, None
         except reader.ReaderError as e:
-            verdict = score(meta)
+            verdict = score(meta, threshold=threshold)
             verdict.reasons.append(
                 Reason(rule="reader-unavailable", label=str(e), weight=0.0)
             )
             return "deterministic", verdict, None, None
-    return "deterministic", score(meta), None, None
+    return "deterministic", score(meta, threshold=threshold), None, None
 
 
 class IntentRead(BaseModel):

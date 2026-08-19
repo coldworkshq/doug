@@ -227,6 +227,12 @@ installation_repos = Table(
     Column("full_name", String(200), nullable=False),  # display only
     Column("state", String(20), nullable=False),  # active | removed
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # The repo's own needs-you line, 0..1, or NULL to inherit the process
+    # defaults (DOUG_THRESHOLD / DOUG_READER_THRESHOLD). Read by the worker
+    # at scoring time and stamped on the verdict; forward-only by design
+    # (spec 2026-08-18-per-repo-needs-you-threshold). Written ONLY by
+    # set_repo_threshold — set_installation_repos must never touch it.
+    Column("needs_you_threshold", Float, nullable=True),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
 )
 
@@ -1100,6 +1106,56 @@ def set_installation_repos(
                 # update, not insert again — `known` only reflects rows that
                 # existed before this call started.
                 known[repo_id] = result.inserted_primary_key[0]
+
+
+def repo_threshold(installation_id: int, github_repo_id: int) -> float | None:
+    """The repo's own needs-you line, or None to inherit the process defaults.
+
+    Read regardless of `state`: the worker calls this with the job's own
+    installation_id at scoring time, and a repo removed mid-job still
+    scores against the line it was configured with.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(installation_repos.c.needs_you_threshold).where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+            )
+        ).scalar_one_or_none()
+    return None if value is None else float(value)
+
+
+def set_repo_threshold(
+    installation_id: int, github_repo_id: int, value: float | None
+) -> bool:
+    """Write the line on the ACTIVE row for (installation_id, github_repo_id).
+
+    Returns False when no such active row exists — the API turns that into
+    404. Keyed on both columns, never github_repo_id alone: a transferred
+    repo has rows under two installations. Writes ONLY this column —
+    `updated_at` means "registration/state changed" and is repo_id_for's
+    tiebreaker between duplicate registrations; a settings write must not
+    move it. Rounds to 2dp to match Verdict.score and to make the reader's
+    round(t*100) an exact integer.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    stored = None if value is None else round(float(value), 2)
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_repos)
+            .where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+                installation_repos.c.state == "active",
+            )
+            .values(needs_you_threshold=stored)
+        )
+    return result.rowcount == 1
 
 
 _OUTCOME_IDENTITY = (
@@ -3217,6 +3273,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                     installations.c.account_type,
                     installation_repos.c.github_repo_id,
                     installation_repos.c.full_name,
+                    installation_repos.c.needs_you_threshold,
                 )
                 .select_from(joined)
                 .where(
@@ -3249,7 +3306,14 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
         repo_id = row["github_repo_id"]
         if repo_id is not None and int(repo_id) in connection["claimed_repo_ids"]:
             connection["repositories"].append(
-                {"id": int(repo_id), "full_name": row["full_name"]}
+                {
+                    "id": int(repo_id),
+                    "full_name": row["full_name"],
+                    "needs_you_threshold": (
+                        None if row["needs_you_threshold"] is None
+                        else float(row["needs_you_threshold"])
+                    ),
+                }
             )
     return list(projected.values())
 

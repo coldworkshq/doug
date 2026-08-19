@@ -1,15 +1,18 @@
-// The needs-you line as a VIEW, not a setting.
+// The needs-you line as a PREVIEW, distinct from the SETTING.
 //
-// It is not a setting because it cannot be: `api/doug/scoring.py:21` reads
-// DOUG_THRESHOLD (default 0.62) from the environment, `api/doug/reader.py:347`
-// reads DOUG_READER_THRESHOLD, and the resolved value is stamped onto each
-// verdict row at scoring time (`api/doug/store.py:74`). `band` is decided
-// server-side, once. Nothing on this page can change what Doug did, and a
-// control that implied otherwise would be the dishonesty this surface exists
-// to refuse.
+// The SETTING is per-repository, forward-only, and lives on
+// installation_repos.needs_you_threshold (api/doug/store.py); the worker
+// reads it at scoring time, both scorers honour it, and the resolved line
+// is stamped on each verdict row (`verdicts.threshold`). Past verdicts keep
+// the line they were scored against — see ADR-0013 and the Repositories
+// view's "flag line" column.
 //
-// What it CAN do is re-derive a band from a score Doug already recorded,
-// against a line the reader chooses — and say so on screen.
+// The LENS here does something else: it re-derives a band from a score Doug
+// already recorded, against a line the reader chooses, and says so on
+// screen. It never changes what Doug did. (/v1/queue?threshold= is the
+// API's equivalent preview.) The two are named differently on purpose —
+// "preview at…" on the gear, "flag line" on the setting — and a contract
+// test keeps it that way.
 //
 // WHY THE LENS IS APPLIED AT THE BOUNDARY, rewriting `band` on the rows,
 // rather than threaded through as a parameter: `buildFacets`, `matchesFacets`,
