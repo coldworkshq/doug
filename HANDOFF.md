@@ -1,177 +1,430 @@
 # HANDOFF — doug
 
-State:    review — PR OPEN for Tasks 1-6. design-lock.md and build-plan.md LOCKED
-          2026-08-18. Side lane, isolated in worktree
-          `managed-agent-pr-review-76fe26` (branch
-          `claude/managed-agent-pr-review-76fe26`, base b8e3659). Main lane
-          untouched. Design artifacts in docs/design/competitor-imports/:
-          ground-truth · positions · decisions · design-lock · product-spec ·
-          build-plan.
+State:    **LOOP LIVE + EXIT-GATE AUDIT PASSED (18/18), and the audit found
+          a live defect in `/v1/patterns`.**
 
-Next:     Task 9 (labeled smoke test) -> 7 (surface) -> 8 (ADR-0013).
-          NOTHING IS OUTSTANDING FOR ANDREW ON P0.1 — see below.
-          Andrew's earlier call stands: 9 before 7, so the nondeterminism
-          spread is known before anything renders to a customer.
-          Main lane unchanged: MT3 is still the critical path.
+Next:     1. ~~Fix `precision.fold`~~ DONE — PR open, see below. With it,
+             `/v1/patterns` for drewjst/doug becomes `prs: 16, defects: 0,
+             base_rate: 0.0`: honest, and correctly uninformative. Sixteen
+             observations with zero defects cannot say which patterns
+             predict defects. The pattern display has nothing to show YET —
+             that is the finding, not a blocker.
+          2. **2026-08-21: the first real detector test.** PR #68 merged to
+             main 2026-08-07 and was reverted by #70 the same day. Its 14d
+             adjudication is `pending`, due 2026-08-21. It is the only PR in
+             the repo's history with a revert against it, so it MUST come
+             back `kind=revert`. If it returns `clean`, the detector is
+             broken and M3 says stop.
+          3. The liveness item (roadmap M3, unbuilt). Zero alert policies
+             still exist in doug-prod0.
+          4. Then MT3, then M4's interviews.
 
-## P0.1 IS FULLY DONE — I was wrong twice about this; do not re-raise it
+Blockers: none.
 
-- Digest recomputed at 44b409c per the doc's own S12 protocol (sha256 of the
-  committed bytes):
-  c8e30da386362351a8d320e1ce91e725655a2f6517e5568c61cd9ad0168e60f2
-  It MATCHES `c8e30da3...60f2` in ROADMAP:330, which records "Task 7
-  production catch-up: COMPLETE 2026-08-11. Deploy pinned the v9 lock hash
-  into the Job env." So the hash is deployed to the adjudicator Job.
-- publication-preregistration.md:8 still says "neither the catch-up nor the
-  v9 hash deployment has occurred in production." STALE — contradicted by
-  ROADMAP:330.
-- **It cannot be fixed in place.** S12: "Any change produces a new dated
-  version and a new hash." Editing the doc changes its sha256 and invalidates
-  the deployed DOUG_PREREG_HASH. A hashed document is structurally unable to
-  record its own deployment. ROADMAP is the correct home and is already right.
-  DO NOT "correct" that line.
-- The API-service env var is NOT a gap either — my second guess was also
-  wrong. deploy/gcp.sh:611 compute_prereg_hash derives the digest from the
-  document at deploy time; :674 sets DOUG_PREREG_HASH on doug-api and :719
-  gives the adjudicator Job the same value from the SAME call site (:606-610
-  says a second copy of the one-liner would drift). deploy() runs
-  preregistration_preflight first, which refuses unless the doc is LOCKED.
-  deploy.yml fires on push to main, and main has taken 4 merges since
-  2026-08-11 (#113-#116). The repo is PUBLIC, so "published" is satisfied too.
-- Only leftover: the ROADMAP parent bullet is [~] not [x]. Bookkeeping, not a
-  gate.
+## THE AUDIT — M3's exit gate, done 2026-08-18
 
-Merged origin/main @ 3eddbf0 (4 commits: #113 #114 #115 #116) into the lane
-2026-08-18 — only HANDOFF.md conflicted; no code overlap. Re-verified after.
+Gate: "100% agreement vs. a manual `git log` audit (any disagreement =
+detector bug = stop)". **18/18 agree.**
 
-Blockers: MT0 blocks every prospective clock (main lane). This lane's only
-          blocker is P0.1, and it gates merge, not the spec/plan/first commit.
+  16 clean (PRs 28-32, 34-39, 41-45) — the ONLY revert in the entire repo
+     history since 2026-08-01 is `#70 Revert "...(#68)"` on 2026-08-07, and
+     #68 is not in this batch (its window is still pending). So no PR
+     labelled clean has a revert against it.
+  2 censored (PRs 40, 46) — both merged to `gh-pages`, `censor_reason:
+     base_ref`, `default_branch: main`. Independently checkable from the
+     receipt's own base_ref. This is the roadmap's rule working: "merge to
+     non-default branch -> censored, never clean".
+  Denominator complete — the one gap in an otherwise contiguous 28-46 run
+     is #33, which has `merges: 0`. Never merged, correctly not at risk.
+     (This is the check MT3 exists to protect: a missing job would look
+     identical to a clean sweep.)
 
-Decisions this session:
-- Reject managed-agent-in-reader.py — why: the addendum already rejects Agent
-  Engine for the live verdict path, and A2 makes toolset/graph/runtime part of
-  instrument identity while PROMPT_HASH would not notice — rejected: the
-  advisor roster entry (an Opus-5 primary can only pair with redacted
-  advisors, so advice can never enter a published receipt).
-- LOCKED: cited head reads. Reverse the directional license on the
-  outside-the-diff fetcher — review.py:273 head_file_text is wired only into
-  settle.py's drop_disproved_* — so a finding may CITE bounded head reads to
-  ground an existence-or-value claim. Why: 7 of PR #106's 8 external findings
-  needed ≥1 byte Doug never received (reader gets f.patch only,
-  review.py:190/267) — rejected: rendering the output surface (0/8 needed it
-  as the only route), and the disposition surface (already ships at
-  check_run.py:176-186).
-- Model gets ZERO delete authority; closed vocabulary of deterministic
-  predicates, `refuted` absent from the schema. Why: PR #107
-  serialization-contract — a byte-matching, grep-derivable, factually TRUE
-  quote carrying a FALSE refutation (models.py:113-125) — rejected: the
-  citation gate with {refuted: bool}, and model-authored Narrowed prose.
-- Existence-and-value claims only; absence/universality claims render
-  unresolved, never citation-certified. Why (red-team's sharpest hit): the
-  failure is direction-independent — the model chose which lines to look at
-  and the answer lived in the lines it didn't choose.
-- CUT after red-team: the citation-receipt PR. Why: settle.py has fired ZERO
-  times since it landed (code 7b222c4 2026-08-03, schema class f065f0d
-  2026-08-04; all 6 settle-eligible rows predate both; zero rows across 113
-  prospective dispositions on #49-#107), and its dominant class resolves
-  through a live DB query git show cannot reproduce.
-- Predicate vocabulary cut to `constant_value_is` (the only one of five
-  scoring >0/8). Why: the verify prompt is a separate FROZEN prompt, so every
-  named predicate is permanent — vocabulary is not free.
-- Part 3's table stays dead; its LOCKED §7 RULE ships first. Why: 461
-  Co-authored-by / zero Reviewed-by, and publishing a rule needs zero rows —
-  rejected: "empty and dated" (no clock can produce a first row) and the old
-  trigger (a partner cannot ask for a capability with no surface).
-- Corrected my own round-1 doc: it claimed the PM's red-lines were "retained
-  in full" — four of seven were, and tension T-E was recorded resolved when it
-  had been lost. Reinstated, then settled as L9.
-- L9 (settles former open risk #1): the scoped coverage sentence and the
-  zero-call read-log gate are NOT alternatives. Words ship with the increment;
-  gate is vNext. Why: the gate proves citation honesty but supplies no
-  denominator for what the model should have opened — shipping it instead of
-  the words leaves a false completeness claim looking rigorous — rejected:
-  round 1's either/or framing.
+Method: receipts via `GET /v1/prs/{n}/receipt` with the operator token, swept
+over PRs 10-60; revert evidence read from `git log origin/main` by subject,
+NOT from `git_labels` (using the detector to audit the detector is circular).
 
-Tasks 1-6 DONE (verified cold 2026-08-18: api 1438 · console 113 · web 286
-· lint clean). WIRED BUT DARK — DOUG_VERIFY is unset, so behavior is
-unchanged on merge; the flag is deliberately separate from DOUG_READER.
-- reader.py — added Citation model + `evidence: Literal["diff","head-cited"]
-  = "diff"` and `citations` (default_factory) to ReaderFinding. SCHEMA and
-  PROMPT_HASH untouched (8bd26c67...), freeze tests green.
-- tests/test_store.py +2, tests/test_api.py +1 (and `reader` added to its
-  doug import block — ruff F821 caught the omission).
-- api: 1405/1405 passed (was 1402), ruff clean.
-- Mutation-checked BOTH new store tests: flipping the default to
-  "head-cited" kills one; adding exclude=True to citations kills the other.
-- Task 2: reader.cite() — pure, returns Citation|None, NEVER raises (a bad
-  line number must be a no-op leaving the finding ungrounded, not a failed
-  review). Deliberately NOT shared with example_pack_verifiers.
-  _accepted_contract_receipt: that one resolves a Path under a repo root and
-  its ref-less locator is an Example Pack contract.
-- Task 2 tests: the load-bearing one re-derives the same bytes via
-  `git show <sha>:<path> | sed -n 'a,bp'` and compares hashes — a different
-  tool, no shared code. Confirmed it RUNS (not skipped). Mutation-checked:
-  exclusive-end and splitlines()-without-keepends each kill both tests.
-- Task 3: VERIFY_SYSTEM / VERIFY_SCHEMA / VERIFY_PROMPT_HASH + VerifyCheck,
-  VerifyResponse (both extra="forbid"). `checks` is a LIST so declining is
-  the natural answer — empty means diff-only, or an absence claim, or no
-  nameable location; all three leave the finding published and ungrounded.
-  NO `refuted` field and no boolean anywhere: the model cannot express a
-  conclusion at the type level. PROMPT_HASH unmoved (8bd26c67...).
-  VERIFY_PROMPT_HASH added because the intent tier is frozen by prose with
-  no test behind it — a hash only anchors identity if edits move it.
-- Task 3 mutation-checked: adding `refuted`, loosening extra=forbid, and
-  adding a second predicate each kill a test.
-- Task 4: doug/verify.py — run_check() returns CheckOutcome (citation or an
-  abstain reason), never raises. The load-bearing design point: a byte-match
-  is NOT the predicate. constant_value_is parses the range with ast and
-  requires exactly ONE simple binding of a LITERAL, so `LIMIT = CAP` quotes
-  perfectly and still abstains. Without that step the predicate degenerates
-  into "the quote matched" — the exact failure that killed the subtractive
-  gate. Abstains on: file unavailable, bad range, quote mismatch, non-Python,
-  unparseable, multi-statement range (how a universality claim would sneak in).
-- Task 4 mutation-checked: dropping the AST check kills 3 tests including the
-  byte-match one; allowing non-literal values kills it; skipping the quote
-  comparison kills the fabricated-quote test.
-- Task 5: verify_scope(id) -> "verify:<id>" — a DIFFERENT prefix from
-  installation_scope, so instrument_snapshot (which resolves its meter with
-  installation_scope) structurally cannot see verify spend. That keeps the
-  customer's `deep reads N/200` footer honest; charging installation:<id>
-  would render allowance they never spent, and at the 200 clamp it reads as
-  an exhausted plan — the same defect class as PR #106 row 2.
-  Also VERIFY_MONTHLY_READ_CAP=4000, MAX_VERIFY_READS_PER_REVIEW=2 (bounds
-  latency inside worker.drain's 20-jobs-sequential loop, not just spend),
-  DEFAULT_VERIFY_TIMEOUT_S=60 (< the 120s read timeout).
-  installation_from_scope("verify:99") is None — a verify read names nobody.
-- Task 5 mutation-checked: making verify_scope collide with
-  installation_scope kills two tests; raising the verify timeout above the
-  read timeout kills a third.
-- Task 6: reader.verify_finding() (one charged model call, NOT routed through
-  _record_attempt — attempt_kind is a closed Literal that raises for anything
-  but "risk", and WholeInstrumentManifestV0 is extra="forbid" with no field
-  that describes this tier) + reader.ground_findings() + wiring in
-  review.score_one behind reader.verify_enabled().
-  Scope is derived via installation_from_scope's inverse, so the verify scope
-  and the risk scope can never disagree about whose review it is.
-- **A MUTATION TEST CAUGHT A REAL BUG HERE.** My first draft repaired a short
-  output list by re-slicing the original from len(out). With 3 findings where
-  the middle went missing, that restored the LENGTH by dropping finding[1] and
-  appending finding[2] twice — count-based assertion passed, corruption
-  silent. Restructured so each finding is appended exactly once, and the
-  assertion now compares slug identity and ORDER, not length. Mutant 1 went
-  from surviving to killing 5 tests. Test pinned:
-  test_findings_come_out_in_order_and_none_is_duplicated.
-- Task 6 mutation-checked: dropping a finding kills 5; charging `scope`
-  instead of the verify scope kills the meter test; removing the per-review
-  ceiling kills the latency test.
-- Cold verify: api 1438 · console 113 · web 286 · lint 0 errors (2 pre-existing
-  web warnings). Note: this worktree had no node_modules — `npm ci` first, or
-  make lint/test fail with exit 127 and it is NOT a real failure.
+## THE DEFECT THE AUDIT FOUND — `/v1/patterns` counts censored as defect
 
-Pointers: docs/design/competitor-imports/ (six artifacts) ·
+`precision.py:50`:
+
+    is_defect[key] = is_defect.get(key, False) or r["kind"] != "clean"
+
+The Outcome enum is REVERT / CLEAN / CENSORED. A censored row is a
+NON-OBSERVATION — the PR left the risk set — but it is `!= "clean"`, so it
+lands in the numerator as a defect.
+
+Live impact right now: `/v1/patterns?repo=drewjst/doug` returns
+`prs: 18, defects: 2, base_rate: 0.111`. The true observed defect count is
+**0 of 16**; 100% of the reported "defects" are non-observations, and the
+honest denominator is 16, not 18. Every precision, lift and `clears_base`
+value it publishes is computed against that manufactured base rate.
+
+Same defect class as #93 ("a censored outcome is a non-observation, not a
+miss") — fixed in the console then, not here. `precision.fold` is the ONLY
+consumer of `kind != "clean"` in the package, so the blast radius is
+`/v1/patterns` and nothing else.
+
+FIXED on `fix/censored-is-not-a-defect`. The semantics were not a judgement
+call — prereg §3 already rules it: `N_at_risk = N_done - censored`, and it
+names and rejects the alternative ("counting censored as misses ... a
+censoring rate wearing a miss rate's name"). So censored leaves BOTH the
+numerator and the denominator. A censored row in one window does not
+unobserve another (`outcomes` carries `window_days`). Kept as `!= CLEAN`
+rather than `== REVERT` on purpose: a kind added to the enum later surfaces
+as a defect (loud) instead of dissolving into clean (flattering), and
+`test_fold_classifies_every_outcome_kind_the_adjudicator_can_write` fails
+until someone gives the new kind a decision.
+
+## What the three defects had in common — worth keeping
+
+Every one was invisible because **the drain path had never executed against
+real work in production**. Twelve green Job executions carried no evidence
+about any of it; `docker build api` built an image it never ran; and the
+public surface rendered `adjudicated 0`, the honest empty state, pixel-
+identical to the broken one. Each fix exposed the next defect rather than
+causing it. The general lesson is in the roadmap's M3 liveness item: a green
+check over a code path that cannot run is not evidence, and "empty is the
+product" only holds while empty-because-broken is a different, louder thing.
+
+## THE LEASE — why re-running early "succeeded" and did nothing (RESOLVED)
+
+The 14:20Z crash died AFTER `claim_repository`, so those rows sit at
+`status='running'`. `drain()` opens with `reclaim_stalled()`, which only
+returns rows older than `STALL_LEASE_SECONDS = 7200`, and
+`due_repositories()` selects `status == 'pending'` only. The claim landed at
+~14:22:40Z (the traceback is 14:22:44Z), so the lease clears at ~16:22:40Z and
+9:25 AM PDT carries a margin. Every execution before then finds nothing due
+and exits 0 — exactly what
+`-m7vmr` (14:27Z, "Execution completed successfully") did. Scoreboard right
+after it: `adjudicated 0 · pending 170`. The lease RESETS on each crash: if
+the next run dies mid-way, add another two hours.
+
+## CORRECTION — I was wrong about the deploy trap, and it spread
+
+The "merging does not deploy the adjudicator" claim in commit 86807ee, PR
+#113's body, this file, and the ROADMAP is **FALSE**. `deploy()` in `gcp.sh`
+calls `adjudicator` and `reconcile_job` at its end, and `deploy.yml:132` says
+so: "then refreshes doug-adjudicator from the promoted image". Proven: after
+#113 merged, API and Job both moved to `@sha256:d12a4f4c` with no manual step.
+Origin of the error: a `grep | head -20` that truncated before those lines,
+plus reading gcp.sh's header ("`deploy` and `web` are what CI runs") as the
+full list of what deploy does.
+
+**It propagated.** main's HANDOFF carried it forward as its step 1 ("Run
+`gcp.sh adjudicator` BY HAND ... merging #113 did not deploy the
+adjudicator"), so a second session was about to act on my wrong claim. Fixed
+here, struck through in the ROADMAP (#116), and corrected on #113 itself:
+https://github.com/drewjst/doug/pull/113#issuecomment-5329880253
+
+What survives: `doug-outcome-reconciler` still has ZERO executions and Cloud
+Scheduler still holds only `doug-adjudicator-daily`. That was about the
+scheduler, and `deploy` does not create schedulers.
+
+## THE SECOND DEFECT — 2026-08-18, verified in prod (fix = #116)
+
+    doug-adjudicator-hvdfn  14:20Z  exit 1
+      File "/app/doug/backtest/git_labels.py", line 112, in clone_treeless
+        subprocess.run([...])
+      FileNotFoundError: [Errno 2] No such file or directory: 'git'
+
+- Final stage is `python:3.14-slim-trixie`, copies only `/app`, installs
+  nothing. The Job runs `python -m doug.outcome_worker` from that image.
+- `git` is the ONLY missing binary: the import closure of `outcome_worker`
+  reaches `backtest.git_labels` (git clone/fetch/log) and never `harvest`
+  (the only `gh` caller). `_git_auth_env` injects `GIT_CONFIG_*` — no
+  credential helper, no netrc, nothing else needed.
+- Hidden by the SAME structural fact as the client bug, third time running:
+  the drain path had never executed against real work, so twelve green Job
+  executions carried no evidence about any of it.
+- `docker build api` in CI never ran the image it built. #116 makes it run
+  `git --version` against the built image.
+
+## Dashboard redesign — PR #114 (MERGED as 8e1d774)
+
+04df04a shell + census · 262f8e7 Repositories view · 3461657 the doc ·
+03af44a the three review findings, fixed.
+
+REVIEW ROUND, dispositioned in docs/reviews/2026-08-18-pr-114-external-review.md:
+Doug scored 1 of 5. Its one true finding (severity bar drew three segments over
+a total the three buckets need not sum to — `findings.severity` is nullable and
+store.py counts total as COUNT(*) against three conditional SUMs) it ranked
+LOW; its two most confident findings both die to `session-api.ts`'s boundary
+validation, a file the diff never contained. The external pass found the defect
+Doug missed, and it was the one this PR was most at risk of: `RepoCountLine`
+branched on `atCap` before `filtering`, so at the cap with a filter on it named
+a denominator 5x larger than the set actually counted — and disagreed with the
+census panel on the same screen. Both fixed with tests watched failing first
+and proven by mutation; `countedOver()` now owns the branch order for both
+sentences and a parity test makes the disagreement unrepresentable.
+CALIBRATION: Doug's severity ranking is now anti-correlated with truth across
+#109, #106 and #114. That is the axis to work on, not its cross-file tracing,
+which was correct here.
+
+Tab-strip header → three-column instrument shell: a 212px left rail (scope,
+sections, live in-view readout, settings gear), the ledger, and a right dock
+holding either the selected run's evidence or a census of the ledger. Rail and
+dock scroll independently, so the page itself does not scroll above 1620px.
+
+NO API CHANGE. `web/lib/ledger-census.ts` counts what `/v1/sessions/runs` has
+always returned and the dashboard never rendered: `finding_counts` (severity
+mix), the three job timestamps (queue wait, read duration, retries), `url` (the
+PR link, now an action), and the per-window outcome census including the
+CENSORING RATE prereg §3 requires. Every number is a count of the array the
+table is rendering, so the two cannot disagree; `censusScope()` prints the
+denominator once, above all of them.
+
+Decisions:
+- Repositories is `?view=`, not a route — both views read one fetch, one filter
+  set, one lens. Rejected: a second route (duplicates the shell) and a dashboard
+  layout (cannot see the page's rows to fill the rail readout).
+- The repository table is a FULL OUTER join. A connected repo with no runs is
+  the most useful row on the screen; a repo with runs but no connection entry
+  still holds real verdicts. Both directions mutation-proven. Rejected: joining
+  from either side alone — each hides a different truth.
+- Census is over the FILTERED rows in view, not `fetched`. Denominator stated.
+- Dock breakpoint 1620px, MEASURED. Arithmetic said 1600 and was 9px wrong
+  (chrome 669px + table 940px). At 1360 the PR title rendered 40px wide.
+  Rejected: crushing the title to keep a dock on a 1440 laptop.
+- Breakpoint classes written out literally at all five sites — a runtime
+  `${DOCK_AT}:h-screen` is invisible to Tailwind's scanner and ships no rule.
+- Settings gear is a `<details>`, not a popover. A view control that fails to
+  hydrate costs a view; a sign-out that fails to hydrate strands you signed in.
+- Band column did NOT shrink with the others — "needs you" wraps under 102px.
+  Severity renders on the NEUTRAL ramp; a finding's severity is not a verdict
+  about a PR. Two data colours still.
+- The `min-w` pin is DERIVED from each COLUMNS array and sliced PER ARRAY. The
+  first version scanned the whole file and REPO_COLUMNS broke it one commit
+  later — same cross-record defect class as #109's regexes.
+- The "health"/"tenant all"/"illustrative" bans stand untouched. This is one
+  tenant's own runs, not fleet health.
+
+VERIFICATION TRAPS, both hit on this branch and both look like real failures:
+`next build` fails while a dev server holds port 3000 (the auth integration
+tests shell out to it), and a stale `.next/dev/types/validator.ts` naming a
+deleted route fails it too. `rm -rf .next` and stop the server before believing
+a red suite.
+
+Pointers: web/lib/ledger-census.ts (+ .test.mjs, 19 tests; band, outcome tone
+          and both join directions mutation-proven) ·
+          web/components/census-panel.tsx · web/app/dashboard/page.tsx ·
+          web/lib/dashboard-contract.test.mjs
+          · fixture-data preview harness (shell, census, evidence pane and
+          repositories view, no auth or API needed) parked OUTSIDE the repo at
+          <scratchpad>/design-preview-harness.tsx — restore to
+          web/app/design-preview/page.tsx AND temporarily `export` Evidence +
+          RepositoryTable in page.tsx. Both must come off before committing;
+          the surface-token test catches the harness, nothing catches the
+          exports.
+
+## What was fixed
+
+`api/doug/outcome_worker.py:36,40` — both GitHub clients now bound to a local
+for the life of their call. Three tests, each watched failing first except
+where noted:
+
+- `test_client_lifetime.py` (new) — AST guard over the whole `doug` package:
+  no attribute may be taken off a client factory's return value. RED before
+  the fix, naming `outcome_worker.py:36` and `:40`. Carries a second test
+  proving the walk can see the banned shape, so green means clean, not blind.
+- `test_outcome_worker.py::test_github_context_holds_each_client_alive_across_its_own_call`
+  — reproduces the production error at the production line against a client
+  held the way githubkit holds it (weakref namespace). RED before the fix
+  with the exact prod message.
+- `test_app_auth.py::test_a_chained_client_is_collected_mid_expression_but_a_bound_one_survives`
+  — characterization against REAL githubkit; passes immediately by design
+  (it pins upstream, it drives no production code). It is what justifies the
+  weakref fake in the test above.
+
+## THE LIVE DEFECT — verified against prod 2026-08-18
+
+`doug-adjudicator` exit 1 on both runs since the first job became due:
+
+    2026-08-18T03:00Z  doug-adjudicator-szjvw  failedCount 1
+    2026-08-17T03:00Z  doug-adjudicator-swwhk  failedCount 1
+    2026-08-16T03:00Z  doug-adjudicator-ncpws  succeeded (nothing due yet)
+
+    RuntimeError: GitHub client has already been collected.
+      outcome_worker.py:36 in _github_context
+      app_auth.app_client().rest.apps.create_installation_access_token(...)
+
+Live `GET /v1/showcase/scoreboard` (2026-08-18T05:00Z):
+`adjudicated 0 · pending 166 · first_due 2026-08-16T04:24:51Z` — two days
+past due, zero adjudications, and the surface reads exactly like the honest
+empty state it was designed to render. **Nothing said anything.**
+
+- `outcome_worker.py:36,40` are the ONLY two unbound `client().rest.x.y()`
+  chains left in `api/doug`. Every other call site binds to a local.
+- This is #52 again — `tenancy.py:220-225` documents the identical failure
+  from prod 2026-08-05, names the string, AND warns "Tests stub
+  _caller_client wholesale, so only prod traffic exercises this."
+- `test_outcome_worker.py:121` stubs `app_client` with a locally-bound fake,
+  so it is structurally incapable of reproducing the failure. Third
+  consecutive PR whose green check passes for the wrong reason — this one
+  escaped to prod, in the component whose only job is to tell the truth.
+- No data loss and no countdown: `reclaim_stalled` returns the lease
+  "without spending an attempt", so the pre-registered ten attempts are
+  intact. The clock is stalled, not burning.
+
+## Also found (2026-08-18, prod)
+
+- **MT0 is CLOSED.** Zero DRIFT lines in 7d of `doug-api` logs while the
+  cold-start check ran repeatedly (6 startup sweeps in the last 7h). The
+  roadmap already said so ("MT0 was closed operationally the same day",
+  2026-08-05); the unchecked `- [ ] MT0` box and the old handoff disagreed.
+  **Tick the box.**
+- **`doug-outcome-reconciler` has NEVER executed.** The Job is deployed;
+  Cloud Scheduler holds only `doug-adjudicator-daily`. `schedule-reconcile`
+  was never run. So the outcome-reconcile lane runs only in the reaped
+  startup thread → MT3's coverage hole is live today, not hypothetical.
+  (Check intent first: MT3's D2 moves the full sweep INTO that Job, so
+  leaving it unscheduled may be deliberate.)
+- **Zero alert policies, zero notification channels** in doug-prod0.
+- ~~The Job runs stale code after every merge.~~ **WRONG — see the
+  correction at the top of this file.** `deploy()` refreshes both Jobs.
+- `deep_reads 200/200` on the public meter is `PLAN_DEEP_READ_CAP`
+  saturating for display only; enforcement is `INSTALLATION_MONTHLY_READ_CAP
+  = 4000`. Not blocking, but the public meter reads pegged for August.
+
+## Recommended order
+
+1. ~~The two-line bind + a test that can fail~~ DONE, uncommitted.
+   Deploy + manual execution remain — see Next, and note that merging alone
+   does NOT deploy the Job.
+2. Watch one real adjudication land; check one receipt end-to-end. That
+   closes the last open half of the M3 exit gate.
+3. The liveness item: surface `first_due` in the past + `adjudicated 0` as
+   the contradiction it is, and alert on adjudicator `failedCount >= 1`.
+   Roadmap has it under M3; nothing is built.
+4. MT3 (spec approved, decisions locked below).
+5. M4's 3 prospect interviews — highest information per hour in the plan,
+   and they carry the standing kill criterion. Gated on a scoreboard that
+   shows a real number, which is gated on step 1.
+
+## MT3 — decisions locked (do not re-litigate)
+
+- D1 Design for the org-install case (10k repos), not design-partner scale.
+- D2 Full sweep moves to its own scheduled Cloud Run Job, mirroring
+     doug-outcome-reconciler. Startup thread drops the full sweep.
+- D3 Job ENQUEUES ONLY; drain stays in the API. Keeps the Job SA narrow.
+- D4 One shared primitive applied to BOTH lanes.
+- D5 Startup thread keeps a BOUNDED stalest-N pass — not nothing.
+     Rejected: accept the regression; shorten the Job cadence.
+- CONSEQUENCE: THREE entry points, three different bounds — unbounded
+  (installation.created), budgeted (Job), bounded (startup). Collapsing any
+  two is a regression that looks like correct behaviour. One test per site.
+- Design: staleness within a tenant, round-robin across tenants.
+- REJECTED: global staleness ordering — a 10k-repo tenant joining degrades
+  every other tenant 200x, which is MT3's own complaint.
+- REFUTED: that global interleaving re-mints a token per repo. githubkit's
+  DEFAULT_CACHE_STRATEGY is a module-level singleton — verified empirically.
+- MT3 takes migration **11** (9 = Front Door 1a, 10 = review_jobs.base_sha).
+  `installations.reconciled_at` cannot close it: sweep state is per REPO.
+- MT3 is a CORRECTNESS item: `active_repos` has no ORDER BY and
+  `reconcile_all`'s only caller is a reaped daemon thread, so the tail is
+  never swept on any cold start.
+
+## Decision debt — Andrew's call, blocks the scoreboard spec
+
+- #106 ships ten fields (`api.py:718-727`) and **none** of prereg §3's
+  disclosure columns — no `censoring_rate`, `N_at_risk`, `misses`,
+  `unverdicted_merges`, `partial_read_share`, `repos_withheld`. §3 says
+  "Published together, never separately."
+- Approach A §4.3 says the venue "can be the scoreboard page"; the later
+  ruling ("the scoreboard is proof, not venue") says the opposite. Later
+  ruling should govern and §4.3 should be amended. Neither is written down
+  outside a session transcript, so no code review can see it.
+- Latent trap live on main: the zero state is pinned in three coupled places
+  (`miss_rate: None` in Pydantic, `miss_rate: null` as a TS literal, and
+  `isScoreboardResponse` rejecting anything else), and on validation failure
+  `cachedShowcaseFetch` silently serves a fixture reading `adjudicated: 0`.
+  **Note the shape** — that fallback is the same mask as the defect above.
+
+Pointers: branch `claude/doug-next-priorities-5851da` off main @ 412298e ·
+          fix in `api/doug/outcome_worker.py:36,40` ·
+          precedent + lifetime note `api/doug/tenancy.py:220-225` · the
+          test that cannot fail `api/tests/test_outcome_worker.py:121` ·
+          MT3 spec
+          docs/superpowers/specs/2026-08-17-reconcile-sweep-scheduling-design.md
+          · roadmap docs/design/outcome-loop/ROADMAP.md (grep item names,
+          line numbers shift) · prereg §3
+          docs/design/outcome-loop/publication-preregistration.md:337
+
+---
+
+# SIDE LANE — cited head reads (PR #118)
+
+Isolated in worktree `managed-agent-pr-review-76fe26`, branch
+`claude/managed-agent-pr-review-76fe26`. Touches nothing the main lane above
+holds. Read the main lane's Next list first — the 2026-08-21 detector test is
+time-critical and this lane is not.
+
+State:    review — PR #118 open, Tasks 1-6 of 9 done. WIRED BUT DARK:
+          DOUG_VERIFY is unset, so merging changes nothing for anyone.
+
+Next:     Task 9 (labeled smoke test) -> Task 7 (surface) -> Task 8
+          (ADR-0013). 9 before 7 deliberately: Convergence Bar 1 already
+          FAILED with reader nondeterminism as root cause, and this adds a
+          nondeterministic call that ADDS published findings, so the spread
+          must be known before anything renders to a customer.
+
+Blockers: none. P0.1 is NOT a blocker — see below.
+
+## The design, in one paragraph
+
+Doug's reader gets `f.patch` and nothing else (review.py:190,267), yet
+review.py:273 head_file_text is wired only into settle.py's drop_disproved_*
+— so the system's one outside-the-diff capability is licensed to SUBTRACT
+findings and forbidden to RAISE them. 7 of PR #106's 8 external findings
+needed >=1 byte Doug never received. This reverses that licence: a finding
+may CITE bounded head reads to ground an existence-or-value claim.
+
+## Locked decisions (do not reopen — design-lock L1-L9)
+
+- Model has ZERO delete authority. VERIFY_SCHEMA has no `refuted` field and
+  no boolean. Why: PR #107 serialization-contract — a byte-matching,
+  grep-derivable, factually TRUE quote carrying a FALSE refutation
+  (models.py:113-125). A true quote can carry a false conclusion.
+- A byte-match is NOT the predicate. constant_value_is parses the range with
+  ast and needs exactly ONE binding of a LITERAL, so `LIMIT = CAP` quotes
+  perfectly and still abstains. Drop that step and it degenerates to "the
+  quote matched".
+- Existence-and-value claims only. Absence/universality claims are never
+  citation-certified — the citation shows one place out of a complement the
+  model chose and never reported.
+- Verify spend uses a DIFFERENT scope prefix so instrument_snapshot cannot
+  see it; charging installation:<id> would render allowance the customer
+  never spent, and at the 200 clamp reads as an exhausted plan.
+- CUT: the citation-receipt PR (settle.py has fired ZERO times since it
+  landed) and the per-source grading table (461 Co-authored-by, zero
+  Reviewed-by).
+
+## P0.1 is DONE — I was wrong twice; do not re-raise it
+
+- Digest at 44b409c per the doc's own S12 protocol:
+  c8e30da386362351a8d320e1ce91e725655a2f6517e5568c61cd9ad0168e60f2 —
+  matches ROADMAP:330's `c8e30da3...60f2`, deployed 2026-08-11.
+- deploy/gcp.sh:611 derives it from the document at deploy time; :674 sets it
+  on doug-api and :719 on the adjudicator Job, from the SAME call site
+  (:606-610 explains why one call site). deploy() runs
+  preregistration_preflight, which refuses unless the doc is LOCKED.
+  deploy.yml fires on push to main. The repo is PUBLIC, so it is published.
+- publication-preregistration.md:8 still says the deployment has not
+  happened. STALE, and UNFIXABLE: S12 makes any edit a new version with a new
+  hash, invalidating the deployed value. DO NOT "correct" that line.
+
+## A mutation test caught a real bug in my own code
+
+ground_findings' first draft repaired a short output list by re-slicing the
+original from len(out). With 3 findings where the middle went missing, that
+restored the LENGTH by dropping finding[1] and appending finding[2] twice —
+count assertion passed, corruption silent. Restructured so each finding is
+appended exactly once; the assertion now compares slug identity and ORDER.
+Same mutant now kills 5 tests. Every task in the PR was mutation-checked.
+
+Pointers: docs/design/competitor-imports/ (6 artifacts, design-lock L1-L9) ·
           docs/superpowers/specs/2026-08-18-cited-head-reads-design.md (D1-D9) ·
           docs/superpowers/plans/2026-08-18-cited-head-reads.md (Tasks 1-9) ·
+          api/doug/{reader,verify,review}.py · api/tests/test_ground.py ·
           docs/reviews/2026-08-12-pr-106-external-review.md (the answer key —
           SPENT, it shaped this design; the replay is a smoke test not a bar) ·
-          api/doug/{review,reader,settle,check_run,convergence}.py ·
-          publication-preregistration.md §7 (locked, written, undeployed)
+          docs/design/plan-lane/idea.md (captured, unevaluated)
