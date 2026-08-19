@@ -507,6 +507,20 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   // read the pending value would tell every operator the wrong thing about the
   // repository in front of them.
   assert.match(toggleForm, /PR comment · (\{|on|off)/);
+  // BOTH DIRECTIONS. Off is a STOP, not an undo (D3): the updates end and the
+  // last comment stays. Copy that described only the on-state left the one
+  // fact an operator needs at the moment of deciding unsaid, and a switch whose
+  // off-state you have to guess at is guessed at wrong.
+  assert.match(control, /Off, Doug stops updating the comment/);
+  assert.match(control, /the last one it posted stays where it is/);
+  // AND THE ROLLOUT IS STAGED (D3a). While `DOUG_PR_COMMENT_INSTALLATIONS`
+  // gates the worker's post, a space outside the first wave sees this toggle
+  // read "on", gets no comment, and gets no denial banner either — there is no
+  // 403 to report. Promising posting we cannot yet deliver is the same
+  // dishonesty D8 exists to refuse, one layer up. Phrased to match the
+  // /docs/changelog row so the two read as one message.
+  assert.match(control, /Rolling out to Doug&apos;s own repositories first/);
+  assert.match(control, /if this space isn&apos;t in the first wave/);
 });
 
 test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {

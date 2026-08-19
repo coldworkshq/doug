@@ -130,8 +130,24 @@ export function FlagLineControl({
             >PR comment · {prComment ? "on" : "off"}</button>
           </form>
         </div>
+        {/* BOTH DIRECTIONS, because the decision is made here. On is an edit
+            loop; off is a STOP, not an undo — D3: turning it off ends the
+            updates and leaves the last comment where Doug posted it. Stating
+            only the on-state would let someone switch this off expecting the
+            comment to disappear, which is the reading the flag-line paragraph
+            above already refuses to allow about itself.
+
+            The rollout sentence exists because the first release is gated by
+            `DOUG_PR_COMMENT_INSTALLATIONS` (D3a): outside the first wave this
+            toggle reads "on", nothing posts, and no denial banner fires,
+            because there is no 403 to report. A toggle that claims an effect
+            it cannot yet have is exactly what D8 exists to refuse, so the copy
+            says so until the allowlist goes — its wording stays true on the
+            day it does. Phrased to match the /docs/changelog row. */}
         <p className="text-[10.5px] text-muted-foreground">
           On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
+          Off, Doug stops updating the comment; the last one it posted stays where it is.
+          Rolling out to Doug&apos;s own repositories first — if this space isn&apos;t in the first wave, comments start when it is.
         </p>
       </div>
     </details>
