@@ -5,8 +5,8 @@ status: parked
 opened: 2026-08-18
 closed:
 next: build design.md §9 step 1 — verticals.toml (declared path→area map) plus a read-only CLI over `git worktree list`. One day, no infra, no model.
-branches: [claude/great-villani-bb55c4]
-prs: [129]
+branches: [claude/great-villani-bb55c4, docs/lane-convention]
+prs: [129, 130]
 supersedes:
 ---
 
