@@ -20,7 +20,10 @@ description-match and can lose it (store.py:825-838), and a lost file must
 not fabricate a resolution. Multiple findings sharing one identity within a
 verdict are matched by COUNT (2 before, 1 after ⇒ 1 resolved, 1 persisted).
 Line numbers do not exist in the schema and are NOT part of identity
-(adding one is an ADR-0012 experiment — out of scope).
+(adding one is an ADR-0012 experiment — out of scope). [Amended 2026-08-20:
+identity gains the cited file's hunk-hash multiset and, where stored, a
+validated per-finding attribution — see "Rule 5 replaced" below. The reader
+SCHEMA still carries no line numbers; ADR-0012 stays closed.]
 
 ## Classification of a prior finding, against the LATER verdict
 
@@ -32,6 +35,8 @@ Line numbers do not exist in the schema and are NOT part of identity
    names this finding's file and slug           → unknown(settled)
    [Doug disproved it; nobody fixed anything]
 5. otherwise                                    → resolved
+   [superseded 2026-08-20 — see "Rule 5 replaced" below; absence of a
+   mention is not evidence of a fix]
 
 Order matters: 2–4 are checked BEFORE 5 — every abstention beats a false
 "resolved". Findings first appearing in the later verdict count as `new`.
@@ -65,8 +70,11 @@ loosened by redefining what it counts.
 
 ## Invariants
 
-Not in score() (structural test); no new read; derived at query time — no
-schema change, no migration.
+Not in score() (structural test); no new paid re-read at classify time;
+derived from stored rows. [Amended 2026-08-20: one additive nullable JSON
+column on `reads` and one on `findings` (migration 12); reader `SCHEMA` and
+`PROMPT_HASH` untouched. The attribution pass (ADR-0014) is one small model
+call at read time, never at classify time.]
 
 ## Per-finding classification (amendment, 2026-08-11 — see the amendment log)
 
@@ -95,6 +103,108 @@ first `l` prior rows in input order are `persisted` and the remainder run rules
 3–5. The choice is arbitrary — the rows are indistinguishable under an identity
 that carries no line number — but it is fixed so the same ledger always yields
 the same labels.
+
+## Rule 5 replaced — hunk-evidence classification (amendment, 2026-08-20 — see the amendment log)
+
+Bar 1 of `convergence-eval-results.md` FAILED: 26 of 43 sampled findings were
+"resolved" on files nobody touched, because rule 5 reads the reader's silence
+as evidence. The redesign is locked in `docs/design/walked-out/design-lock.md`
+(the lane folder wins on conflict); this section is the note-resident
+pre-registration the implementation binds to.
+
+**Input rows.** `classify(prior_findings, later_findings, later_reasons,
+later_read, prior_read)` — both reads' rows now carry `hunks`
+(`{path: [sha256, …]}`, the content-hash index of the unified hunks each read
+was SENT; hash over `+`/`-` lines only, no `@@` numbers, no context), and each
+finding may carry `hunks` (the validated attribution: the subset of its file's
+hunk hashes the finding was attributed to at read time; NULL when absent).
+`classify` stays pure; every hash and attribution is an input, never derived
+here.
+
+**Rules 1–4 and their order are unchanged.** Rule 5 is replaced. For a prior
+identity absent from the later read and not abstained by rules 2–4:
+
+| Condition | State |
+|---|---|
+| `file` absent from the PRIOR index (prior read did not send it, or the path is model text that was never in a patch) | `unknown(file-uncovered)` — rule 3 extended to the prior side; an absent key is not an empty set |
+| either read has no index (pre-migration row; old revision) | `unknown(no-hunk-index)` |
+| prior multiset == later multiset | `persisted(basis=by-construction)`, with `pair_delta ∈ {unchanged, changed-elsewhere}` from whether any file's multiset differs between the reads |
+| every prior hash absent; `file` present in the later patch with ≥1 hunk | `resolved(basis=hunk-edited)` |
+| every prior hash absent; `file` absent from the later patch | `unknown(left-diff)` — covers file reverted to base, pure rename, and hunks absorbed into base |
+| some prior hashes survive, or prior ⊂ later | `unknown(not-reconfirmed)`, then the attribution refinement below |
+
+**Attribution refinement (span-verification verdict, 2026-08-20).** For a
+finding that would classify `unknown(not-reconfirmed)` and carries a stored
+attribution: every attributed hash still present in the later multiset →
+`persisted(basis=attributed-surviving)`; every attributed hash absent →
+`resolved(basis=attributed-edited)`; mixed, invalid against the prior index,
+or NULL → `unknown(not-reconfirmed)` unchanged. The attribution is model
+output validated at read time against the sent hunks
+(`docs/design/walked-out/span-verification.md`: 0/84 state flips across
+identical double runs, 42/42 controls, 0/25 danger-class contradictions,
+50/59 yield on the abstention class); it is stored once and never re-derived
+at classify time. ADR-0014 records the pass; generative model-emitted spans
+remain out (ADR-0015+, vNext).
+
+`new` findings carry `code_changed: bool` from the same indexes. Rule 4 keeps
+its output `unknown(settled)` in v1. `ratio` keeps its definition; `unknown`
+never enters it.
+
+**The `left-the-pr` label** (evaluation vocabulary, not a classifier state): a
+defect present in the `to_head` tree but absent from the PR's three-dot delta
+— neither fixed nor still-present in the change under review. Used when
+hand-labelling `unknown(left-diff)` units so "left the diff" is never graded
+as either a fix or a miss.
+
+**Emulation assumptions** (every historical-index number carries the label
+`hunk-emulated`): main is append-only, and PR ancestors reach main only
+through this PR's squash. The emulated base is `git merge-base origin/main
+<head>` per side.
+
+### Pre-registered bars for the replaced rule (declared before the re-run's labels)
+
+Bar 1 above stays FAILED as recorded; these are new bars on the redesigned
+rule, evaluated on the same immutable 43-unit sample (frame and seed per
+`convergence-eval-results.md`), and reported for BOTH classifiers: the pure
+file-delta table and the attribution-refined one (refined inputs join the
+frozen attributions from `docs/design/walked-out/span-verification/`, so the
+re-run stays $0 and offline).
+
+- **Bar A(B) — zero false `resolved`.** Every unit the redesigned rule calls
+  `resolved` is hand-checked; zero may be false. Pure-table n = 6 (the spike's
+  seventh, `#67 web/package-lock.json`, is `unknown(left-diff)` under the
+  lock); the licensed sentence is "0 of n retrospective `resolved` units were
+  false; self-labelled; hunk-emulated", with the Clopper-Pearson 95% upper
+  bound reported beside n. The refined classifier's additional `resolved`
+  units enter the same bar with the same zero-false requirement.
+- **Bar B — false `persisted` ≤ 1 of 26.** The 26 by-construction units are
+  labelled by Andrew (`hunk_multiplicity.csv`, `in_sample=True,
+  optB=by-construction`); a unit is false-`persisted` when the defect was in
+  fact addressed although the cited file's diff is byte-unchanged. `#75`
+  (deploy-ordering; fix landed in another file) is pre-declared as the
+  expected member of this class.
+- **Coverage covariate (bar 2's measurement, carried forward):** the re-run
+  reports whether any prior finding's `file` failed to string-match a path in
+  the later read's coverage lists.
+
+### Silence rate — sibling pre-registration (publication, v1.1)
+
+- **Numerator:** earlier findings on files whose diff is unchanged between
+  consecutive reader-tier reads of the same PR that the later read did not
+  mention again.
+- **Denominator:** all earlier findings on files whose diff is unchanged
+  between those reads.
+- **Population sentence (ADR-0005 form):** "On Doug's own repository,
+  supervised sessions, across consecutive reader reads of the same PR: of
+  {denominator} earlier findings on files unchanged between the reads, the
+  reader did not mention {numerator} ({rate}) again." File grain, emulated
+  from history (160/213 = 75% on the eval corpus); the prospective hunk-grain
+  figure replaces it when it exists.
+- The **per-PR silence count** is a fact on Doug's own check runs and ships in
+  v1 (Andrew's ruling 2, 2026-08-20). The rate goes to the scoreboard in
+  v1.1, web-validator-first. The reland-labeler gate does not apply — the
+  rate carries no defect labels (Andrew's ruling 3, 2026-08-20). No ratio or
+  rate appears on any check run.
 
 ---
 
@@ -219,3 +329,27 @@ labelable pairs, but the note never said what makes a pair labelable, which
 would have left the threshold to whatever the evaluation script happened to
 count. Defined under the bars above, before the script was written. The
 threshold itself is unchanged.
+
+**2026-08-20, after the Task 3 evaluation — rule 5 replaced; hunk-identity
+input; attribution refinement.** Bar 1 failed arithmetically (5 confirmed
+false-`resolved` in the 43-unit sample ⇒ precision ≤ 0.884 < 0.90), and the
+root cause was upstream of the rules: rule 5 reads the reader's silence as
+evidence, and the reader is nondeterministic — 26 of 43 sampled findings were
+"resolved" on files nobody touched. No repair of the sample or reordering of
+rules 1–4 can fix a rule that treats absence of a mention as a fix.
+
+The replacement (designed and locked in `docs/design/walked-out/`, debated,
+red-teamed, and measured there) makes `resolved` require deterministic
+evidence: the cited file's hunk-hash multiset changed, or — under the
+attribution refinement validated by the pre-registered span-verification pass
+— every hunk the finding was attributed to was edited. Byte-unchanged files
+carry forward by construction; everything else abstains with a named reason.
+The alternatives killed, with reasons, are in the lock's "Resolved tensions".
+
+This entry was recorded before any implementation code, per the discipline.
+The original bars 1–3 stand as recorded (bar 1 FAILED); the new bars and the
+silence-rate sibling pre-registration above were declared before the Phase 0
+re-run produced labels. The note's original "no schema change, no migration"
+invariant was rewritten honestly rather than silently violated: migration 12
+adds one nullable JSON column to `reads` and one to `findings`; the reader
+`SCHEMA` and `PROMPT_HASH` are untouched, and ADR-0012 stays closed.
