@@ -133,16 +133,13 @@ def _upsert(gh, **kw):
     return pr_comment.upsert(gh, "o", "r", PR, BODY, **{**KEY, **kw})
 
 
-# --- render / receipt_url -------------------------------------------------
+# --- render / receipt_links -----------------------------------------------
+
+LINKS = pr_comment.Links(base="https://hq", receipt="https://hq/dashboard/pr/3?repo=o%2Fr")
 
 
 def test_render_frames_the_summary_verbatim_with_pinned_joins():
-    body = pr_comment.render(
-        "**T**\n\n- none",
-        head_sha="a" * 40,
-        seq=7,
-        receipt_url="https://hq/dashboard/pr/3?repo=o%2Fr",
-    )
+    body = pr_comment.render("**T**\n\n- none", head_sha="a" * 40, seq=7, links=LINKS)
     lines = body.split("\n")
     assert lines[0] == f"<!-- doug:verdict head={'a' * 40} seq=7 -->"
     assert lines[1] == ""
@@ -154,16 +151,37 @@ def test_render_frames_the_summary_verbatim_with_pinned_joins():
     assert "**T**\n\n- none" in body
     receipt = "[full receipt on Doug HQ](https://hq/dashboard/pr/3?repo=o%2Fr)"
     assert f"{receipt} — sign-in required" in body
-    assert "/docs/what-doug-gets-wrong" in body
+    assert "[what Doug gets wrong](https://hq/docs/what-doug-gets-wrong)" in body
 
 
 def test_render_without_a_web_url_omits_both_links_and_still_renders():
-    body = pr_comment.render("**T**\n\n- none", head_sha="b" * 40, seq=1, receipt_url=None)
+    body = pr_comment.render("**T**\n\n- none", head_sha="b" * 40, seq=1, links=None)
     assert body.startswith(f"<!-- doug:verdict head={'b' * 40} seq=1 -->\n\n")
     assert "**T**\n\n- none\n\n---\n" in body
     assert "](" not in body.split("\n---\n")[1]
     assert "Doug HQ" not in body
     assert "what-doug-gets-wrong" not in body
+
+
+def test_the_docs_link_hangs_off_the_base_not_a_split_of_the_receipt(monkeypatch):
+    """The docs URL used to be derived by splitting the receipt at
+    '/dashboard/'. A DOUG_WEB_URL that itself contains that path — a reverse
+    proxy mounting doug-web under /dashboard/, say — truncated at the first
+    occurrence, and the "what Doug gets wrong" link in a PUBLIC PR comment
+    then pointed at a host Doug does not serve. The base is carried, not
+    reconstructed.
+    """
+    monkeypatch.setenv("DOUG_WEB_URL", "https://proxy.example/dashboard/doug")
+    links = pr_comment.receipt_links("o", "r", 3)
+    assert links == pr_comment.Links(
+        base="https://proxy.example/dashboard/doug",
+        receipt="https://proxy.example/dashboard/doug/dashboard/pr/3?repo=o%2Fr",
+    )
+    body = pr_comment.render("s", head_sha="a" * 40, seq=7, links=links)
+    assert (
+        "[what Doug gets wrong](https://proxy.example/dashboard/doug"
+        "/docs/what-doug-gets-wrong)" in body
+    )
 
 
 def test_frame_plus_summary_limit_fits_githubs_comment_cap():
@@ -175,24 +193,48 @@ def test_the_frame_of_a_worst_case_url_stays_inside_frame_max(monkeypatch):
     constant-vs-constant assertion above cannot fail on its own. Longest
     plausible inputs: GitHub's own owner (39) and repo (100) name caps."""
     monkeypatch.setenv("DOUG_WEB_URL", "https://doug-web-000000000000.us-central1.run.app/")
-    url = pr_comment.receipt_url("o" * 39, "r" * 100, 99_999_999)
-    assert url is not None
-    frame = pr_comment.render("", head_sha="c" * 40, seq=2_147_483_647, receipt_url=url)
+    links = pr_comment.receipt_links("o" * 39, "r" * 100, 99_999_999)
+    assert links is not None
+    frame = pr_comment.render("", head_sha="c" * 40, seq=2_147_483_647, links=links)
     assert len(frame) <= pr_comment.FRAME_MAX
 
 
-def test_receipt_url_encodes_the_repo_and_is_none_when_env_empty(monkeypatch):
+def test_a_pathological_base_url_drops_the_links_rather_than_bursting_the_cap(
+    monkeypatch, capsys
+):
+    """DOUG_WEB_URL is operator-controlled and unbounded, so the frame is the
+    only unbounded half of `SUMMARY_LIMIT + FRAME_MAX <= 65_536` (the summary
+    half is capped in check_run.render). Unchecked, a long enough base pushes
+    a full-length body past GitHub's 65,536-char cap and EVERY write for that
+    PR 422s — a total outage of the surface that reads like a GitHub fault.
+    Dropping the links keeps the mirror, which is the part that cannot be
+    recovered from anywhere else, and says so on stderr.
+    """
+    monkeypatch.setenv("DOUG_WEB_URL", "https://" + "u" * pr_comment.FRAME_MAX)
+    links = pr_comment.receipt_links("o", "r", 3)
+    assert links is not None
+    summary = "**T**\n\n- none"
+    body = pr_comment.render(summary, head_sha="a" * 40, seq=7, links=links)
+
+    assert len(body) - len(summary) <= pr_comment.FRAME_MAX
+    assert summary in body  # the mirror survives; only the links are dropped
+    assert "uuu" not in body
+    assert body.endswith("\n---\nDoug · not a gate")
+    assert "FRAME_MAX" in capsys.readouterr().err
+
+
+def test_receipt_links_encode_the_repo_and_are_none_when_env_empty(monkeypatch):
     monkeypatch.setenv("DOUG_WEB_URL", "")
-    assert pr_comment.receipt_url("o", "r", 3) is None
+    assert pr_comment.receipt_links("o", "r", 3) is None
     monkeypatch.setenv("DOUG_WEB_URL", "https://hq")
-    assert pr_comment.receipt_url("o", "r", 3) == "https://hq/dashboard/pr/3?repo=o%2Fr"
+    assert pr_comment.receipt_links("o", "r", 3) == LINKS
 
 
-def test_receipt_url_warns_once_per_process_when_the_web_url_is_unset(monkeypatch, capsys):
+def test_receipt_links_warn_once_per_process_when_the_web_url_is_unset(monkeypatch, capsys):
     monkeypatch.setattr(pr_comment, "_WARNED_NO_WEB_URL", False)
     monkeypatch.delenv("DOUG_WEB_URL", raising=False)
-    assert pr_comment.receipt_url("o", "r", 3) is None
-    assert pr_comment.receipt_url("o", "r", 4) is None
+    assert pr_comment.receipt_links("o", "r", 3) is None
+    assert pr_comment.receipt_links("o", "r", 4) is None
     assert capsys.readouterr().err.count("DOUG_WEB_URL") == 1
 
 

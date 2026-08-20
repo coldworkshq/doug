@@ -24,6 +24,7 @@ Three rules in `upsert` are load-bearing (D9, spec §3.2):
 import os
 import re
 import sys
+from typing import NamedTuple
 from urllib.parse import quote
 
 from githubkit.exception import RequestError, RequestFailed
@@ -42,9 +43,12 @@ _PER_PAGE = 100
 _PAGE_BOUND = 10
 
 # GitHub rejects a comment body over 65,536 chars outright. The frame is
-# bounded so `check_run.SUMMARY_LIMIT + FRAME_MAX <= 65_536` holds as an
-# asserted invariant rather than a second truncation branch — truncating
-# here would diverge the middle from the check run without saying so.
+# bounded so `check_run.SUMMARY_LIMIT + FRAME_MAX <= 65_536` holds, and
+# `render` ENFORCES that bound on the frame rather than trusting it: the
+# summary half is capped in `check_run.render`, but the frame carries
+# DOUG_WEB_URL, which is operator-controlled and unbounded. The middle is
+# never truncated here — that would diverge it from the check run without
+# saying so — so an oversized frame drops its links instead (see `render`).
 FRAME_MAX = 1_000
 
 _DOCS_PATH = "/docs/what-doug-gets-wrong"
@@ -62,8 +66,25 @@ def allowed(installation_id: int) -> bool:
     return str(installation_id) in {i.strip() for i in allow.split(",") if i.strip()}
 
 
-def receipt_url(owner: str, repo: str, pr_number: int) -> str | None:
-    """The dashboard receipt for this PR, or None when DOUG_WEB_URL is unset.
+class Links(NamedTuple):
+    """The footer's two destinations, carried together rather than one being
+    reconstructed from the other.
+
+    The docs URL used to be derived by splitting the receipt at
+    '/dashboard/', which silently pointed a link in a PUBLIC PR comment at
+    the wrong place whenever DOUG_WEB_URL itself contained that path. The
+    split existed so `render` would stay a pure function of its arguments —
+    a second os.environ read there could disagree with the URL the caller
+    was handed — and that motivation still holds: the caller supplies the
+    base too.
+    """
+
+    base: str
+    receipt: str
+
+
+def receipt_links(owner: str, repo: str, pr_number: int) -> Links | None:
+    """The footer's links for this PR, or None when DOUG_WEB_URL is unset.
 
     `or None` rather than a plain get: Cloud Run sets DOUG_WEB_URL="" on a
     bootstrap deploy, before doug-web exists, and an empty base would render
@@ -79,19 +100,28 @@ def receipt_url(owner: str, repo: str, pr_number: int) -> str | None:
                 file=sys.stderr,
             )
         return None
+    base = base.rstrip("/")
     slug = quote(f"{owner}/{repo}", safe="")
-    return f"{base.rstrip('/')}/dashboard/pr/{pr_number}?repo={slug}"
+    return Links(base=base, receipt=f"{base}/dashboard/pr/{pr_number}?repo={slug}")
 
 
-def _docs_url(receipt: str) -> str:
-    """The "what Doug gets wrong" link, taken from the receipt's own base so
-    `render` stays a pure function of its arguments (a second os.environ read
-    could disagree with the URL the caller was handed). Coupled to
-    `receipt_url`'s shape above, which is the only producer."""
-    return f"{receipt.split('/dashboard/', 1)[0]}{_DOCS_PATH}"
+def _body(summary: str, *, head_sha: str, seq: int, links: Links | None) -> str:
+    header = (
+        f"_The `Doug` check run for {head_sha[:7]}, repeated here in full. "
+        "Doug edits this comment in place on every review; it is never re-posted._"
+    )
+    if links is None:
+        footer = "Doug · not a gate"
+    else:
+        footer = (
+            f"Doug · [full receipt on Doug HQ]({links.receipt}) — sign-in required · "
+            f"[what Doug gets wrong]({links.base}{_DOCS_PATH})"
+        )
+    marker = f"{MARKER_PREFIX} head={head_sha} seq={seq} -->"
+    return f"{marker}\n\n{header}\n\n{summary}\n\n---\n{footer}"
 
 
-def render(summary: str, *, head_sha: str, seq: int, receipt_url: str | None) -> str:
+def render(summary: str, *, head_sha: str, seq: int, links: Links | None) -> str:
     """The comment body: marker line, blank line, one italic header line,
     blank line, the check-run summary VERBATIM, two newlines, `---`, footer.
 
@@ -99,20 +129,29 @@ def render(summary: str, *, head_sha: str, seq: int, receipt_url: str | None) ->
     list item (`- none`) or a plain paragraph, and a `---` on the very next
     line is a setext `<h2>` underline or a GFM lazy continuation — the same
     defect `check_run._footer` already documents having to avoid.
+
+    FRAME_MAX is checked, not assumed. The links carry DOUG_WEB_URL, which
+    no one bounds, and a frame over its budget puts a full-length body past
+    GitHub's 65,536-char cap — which fails EVERY write for that PR with a
+    422 that reads like a GitHub fault. Degrading to the no-link footer
+    (already the shape used when DOUG_WEB_URL is unset) keeps the mirror,
+    which is the half that exists nowhere else, and loses only two links
+    that a misconfigured base was pointing wrong anyway. The raise below is
+    a backstop for a frame that overruns without any links to drop: the
+    worker's `except Exception` turns it into a loud `failed:internal`.
     """
-    header = (
-        f"_The `Doug` check run for {head_sha[:7]}, repeated here in full. "
-        "Doug edits this comment in place on every review; it is never re-posted._"
-    )
-    if receipt_url is None:
-        footer = "Doug · not a gate"
-    else:
-        footer = (
-            f"Doug · [full receipt on Doug HQ]({receipt_url}) — sign-in required · "
-            f"[what Doug gets wrong]({_docs_url(receipt_url)})"
+    body = _body(summary, head_sha=head_sha, seq=seq, links=links)
+    if links is not None and len(body) - len(summary) > FRAME_MAX:
+        print(
+            f"doug: comment frame is {len(body) - len(summary)} chars, over FRAME_MAX "
+            f"({FRAME_MAX}) — check DOUG_WEB_URL; posting without links",
+            file=sys.stderr,
         )
-    marker = f"{MARKER_PREFIX} head={head_sha} seq={seq} -->"
-    return f"{marker}\n\n{header}\n\n{summary}\n\n---\n{footer}"
+        body = _body(summary, head_sha=head_sha, seq=seq, links=None)
+    frame = len(body) - len(summary)
+    if frame > FRAME_MAX:
+        raise RuntimeError(f"comment frame is {frame} chars with no links, over {FRAME_MAX}")
+    return body
 
 
 def _is_ours(comment) -> bool:
