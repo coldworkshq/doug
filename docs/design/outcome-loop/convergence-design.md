@@ -193,7 +193,7 @@ Bar A(B) **FAIL** on both classifiers — 4 of 6 pure `resolved(hunk-edited)`
 units and 2 of 5 `resolved(attributed-edited)` units are false (defect present
 at to_head; comment-only, adjacent-line, and single-hunk-file edits re-hash a
 hunk without touching the defect). `persisted(attributed-surviving)`: 0 of 4
-false. Coverage covariate: 0 suspects. Bar B: sheet with Andrew. Per the
+false. Coverage covariate: 0 suspects. **Bar B: PASS, 1/26** (signed by Andrew 2026-08-20; the one false-persisted is the pre-declared #75 deploy-ordering unit; evidence per unit in the lane folder). Per the
 discipline, no state that stops carrying a finding on edit evidence alone
 ships. **Andrew's ruling (2026-08-20): demote** — both edit-based `resolved`
 states become `unknown(edited-not-verified)` in v1 (table rows above amended

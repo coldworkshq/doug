@@ -10,8 +10,12 @@ pre-declared as the expected member.
 (21 evidence-checked by the adversarial pass, `span-verification/barb_evidence.json`;
 4 carried over from prior adjudications), 1 `addressed: yes` (#75 deploy-ordering —
 the pre-declared expected false-persisted). Bar B at the provisional labels: 1/26,
-exactly on the <= 1 bar. Andrew: review, override any line, and sign; Bar B records
-on your sign-off, not on the provisional labels.
+exactly on the <= 1 bar.
+
+**SIGNED — Andrew, 2026-08-20** (adopted the provisional labels as his own, in
+session). **Bar B: PASS, 1/26**, the one false-persisted being the pre-declared
+#75 deploy-ordering unit. Recorded in `convergence-design.md` and
+`phase0-results.md`.
 
 ## 1. PR#38 `api/doug/store.py` [reader:idempotency-scope-change]
 - pair 1020->1022, 05fafe2b3c..c8383dc3fc

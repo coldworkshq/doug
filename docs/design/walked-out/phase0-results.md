@@ -49,8 +49,11 @@ here) and its two false resolves are inherited from the same edit-inference.
 - **Carry-forward by construction**: all five of the original evaluation's
   confirmed false-`resolved` disasters (including #50 `input-validation`, the
   defect-verbatim killer) now correctly carry forward. 0 false persisted among
-  the 4 checked attributed-surviving units. Bar B's 26-unit sheet awaits
-  Andrew (`phase0_labeling_sheet.md`; 5 carry-over labels prefilled).
+  the 4 checked attributed-surviving units. **Bar B: PASS, 1/26** — all 21
+  blank units evidence-checked adversarially (21/21 `addressed: no`, 0
+  uncertain, quoted git evidence in `span-verification/barb_evidence.json`),
+  4 carry-overs, 1 pre-declared `yes` (#75 deploy-ordering); Andrew signed
+  2026-08-20 (`phase0_labeling_sheet.md`).
 - **The silence count and the abstentions**: unaffected — they never claimed
   edit evidence.
 - **Attribution stability and placement** (span-verification bars): unaffected.
