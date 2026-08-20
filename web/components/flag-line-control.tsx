@@ -1,4 +1,4 @@
-import { setFlagLineAction } from "@/app/dashboard/actions";
+import { setFlagLineAction, setFlagLineCommentAction } from "@/app/dashboard/actions";
 
 /** The per-repository FLAG LINE — Doug's setting, not the preview gear.
  *
@@ -26,14 +26,24 @@ import { setFlagLineAction } from "@/app/dashboard/actions";
  *  `formData.get` takes the first: pressing reset on a repository set to 0.75
  *  would have re-saved 0.75 and reported success. The gear can own its field
  *  from two buttons because it has no input; this one cannot, so clearing gets
- *  a form of its own where nothing else can travel. */
+ *  a form of its own where nothing else can travel.
+ *
+ *  THE PR COMMENT TOGGLE IS THE THIRD FORM, for that same reason and no other.
+ *  It posts `pr_comment` and the repository id and nothing else: sharing a form
+ *  with the input above would submit `needs_you_threshold` alongside it, and
+ *  `formData.get` takes the first entry — so every toggle click would re-save
+ *  whatever the flag-line box happened to hold, including an empty box, which
+ *  clears the override. The API's PATCH is field-set-gated on the same
+ *  principle: it writes the keys the body names and leaves the rest alone. */
 export function FlagLineControl({
   githubRepoId,
   value,
+  prComment,
   defaults,
 }: {
   githubRepoId: number;
   value: number | null;
+  prComment: boolean;
   defaults: { reader: number; fallback: number };
 }) {
   const shown =
@@ -104,7 +114,41 @@ export function FlagLineControl({
             <input type="hidden" name="needs_you_threshold" value="" />
             <button type="submit" className="mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] text-muted-foreground">reset to default</button>
           </form>
+          {/* The button READS the current state and SUBMITS the opposite. A
+              label showing the pending value would tell whoever is looking at
+              this repository the wrong thing about it, which on a setting whose
+              whole job is "does Doug speak on my PRs" is the one error that
+              matters. `aria-label` spells the action out, because "PR comment ·
+              on" alone does not say what pressing it does. */}
+          <form action={setFlagLineCommentAction}>
+            <input type="hidden" name="github_repo_id" value={githubRepoId} />
+            <input type="hidden" name="pr_comment" value={prComment ? "false" : "true"} />
+            <button
+              type="submit"
+              aria-label={`PR comment is ${prComment ? "on" : "off"} — turn it ${prComment ? "off" : "on"}`}
+              className={`mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] ${prComment ? "text-foreground" : "text-muted-foreground"}`}
+            >PR comment · {prComment ? "on" : "off"}</button>
+          </form>
         </div>
+        {/* BOTH DIRECTIONS, because the decision is made here. On is an edit
+            loop; off is a STOP, not an undo — D3: turning it off ends the
+            updates and leaves the last comment where Doug posted it. Stating
+            only the on-state would let someone switch this off expecting the
+            comment to disappear, which is the reading the flag-line paragraph
+            above already refuses to allow about itself.
+
+            The rollout sentence exists because the first release is gated by
+            `DOUG_PR_COMMENT_INSTALLATIONS` (D3a): outside the first wave this
+            toggle reads "on", nothing posts, and no denial banner fires,
+            because there is no 403 to report. A toggle that claims an effect
+            it cannot yet have is exactly what D8 exists to refuse, so the copy
+            says so until the allowlist goes — its wording stays true on the
+            day it does. Phrased to match the /docs/changelog row. */}
+        <p className="text-[10.5px] text-muted-foreground">
+          On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
+          Off, Doug stops updating the comment; the last one it posted stays where it is.
+          Rolling out to Doug&apos;s own repositories first — if this space isn&apos;t in the first wave, comments start when it is.
+        </p>
       </div>
     </details>
   );

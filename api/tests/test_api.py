@@ -5006,9 +5006,20 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": None,
                 "repositories": [
-                    {"id": 11, "full_name": "drewjst/doug", "needs_you_threshold": None},
-                    {"id": 12, "full_name": "drewjst/notes", "needs_you_threshold": None},
+                    {
+                        "id": 11,
+                        "full_name": "drewjst/doug",
+                        "needs_you_threshold": None,
+                        "pr_comment": True,
+                    },
+                    {
+                        "id": 12,
+                        "full_name": "drewjst/notes",
+                        "needs_you_threshold": None,
+                        "pr_comment": True,
+                    },
                 ],
+                "pr_comment_denied_at": None,
             },
             {
                 "provider": "github",
@@ -5019,9 +5030,20 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                 "status": "ready",
                 "label": "Lema — separate product",
                 "repositories": [
-                    {"id": 21, "full_name": "lemahq/lema", "needs_you_threshold": None},
-                    {"id": 22, "full_name": "lemahq/lema-verify", "needs_you_threshold": None},
+                    {
+                        "id": 21,
+                        "full_name": "lemahq/lema",
+                        "needs_you_threshold": None,
+                        "pr_comment": True,
+                    },
+                    {
+                        "id": 22,
+                        "full_name": "lemahq/lema-verify",
+                        "needs_you_threshold": None,
+                        "pr_comment": True,
+                    },
                 ],
+                "pr_comment_denied_at": None,
             },
         ],
         "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
@@ -5054,8 +5076,14 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
             "status": "setup_required",
             "label": None,
             "repositories": [
-                {"id": 11, "full_name": "coldworkshq/coldworks", "needs_you_threshold": None}
+                {
+                    "id": 11,
+                    "full_name": "coldworkshq/coldworks",
+                    "needs_you_threshold": None,
+                    "pr_comment": True,
+                }
             ],
+            "pr_comment_denied_at": None,
         }
     ]
 
@@ -5104,6 +5132,7 @@ def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
                 "label": None,
                 # Withheld, not forgotten — see the test below.
                 "repositories": [],
+                "pr_comment_denied_at": None,
             }
         ],
         "default_needs_you_threshold": {"reader": 0.3, "fallback": 0.62},
@@ -5190,8 +5219,18 @@ def test_connections_carry_each_repos_flag_line_and_both_process_defaults(
 
     assert body["default_needs_you_threshold"] == {"reader": 0.3, "fallback": 0.62}
     repos = {r["id"]: r for r in body["connections"][0]["repositories"]}
-    assert repos[11] == {"id": 11, "full_name": "acme/repo11", "needs_you_threshold": 0.9}
-    assert repos[12] == {"id": 12, "full_name": "acme/repo12", "needs_you_threshold": None}
+    assert repos[11] == {
+        "id": 11,
+        "full_name": "acme/repo11",
+        "needs_you_threshold": 0.9,
+        "pr_comment": True,
+    }
+    assert repos[12] == {
+        "id": 12,
+        "full_name": "acme/repo12",
+        "needs_you_threshold": None,
+        "pr_comment": True,
+    }
 
 
 def _session_scope(tmp_path, monkeypatch, *, repos=(11, 12), claim=(11,)):
@@ -5376,7 +5415,8 @@ def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
     headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11,))
 
     r = _patch_line(headers, 11, {"needs_you_threshold": 0.9})
-    assert r.status_code == 200 and r.json() == {"needs_you_threshold": 0.9}
+    assert r.status_code == 200
+    assert r.json() == {"needs_you_threshold": 0.9, "pr_comment": True}
     assert store.repo_threshold(101, 11) == 0.9
     assert (
         "needs_you_threshold installation=101 repo=11 None->0.9 by sub=user_01ABC"
@@ -5384,11 +5424,80 @@ def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
     )
 
     r = _patch_line(headers, 11, {"needs_you_threshold": 0.6249})
-    assert r.json() == {"needs_you_threshold": 0.62}  # the STORED value comes back
+    # the STORED value comes back; pr_comment untouched
+    assert r.json() == {"needs_you_threshold": 0.62, "pr_comment": True}
 
     r = _patch_line(headers, 11, {"needs_you_threshold": None})
-    assert r.status_code == 200 and r.json() == {"needs_you_threshold": None}
+    assert r.status_code == 200
+    assert r.json() == {"needs_you_threshold": None, "pr_comment": True}
     assert store.repo_threshold(101, 11) is None
+
+
+def test_patch_pr_comment_alone_does_not_touch_the_flag_line(tmp_path, monkeypatch):
+    """Optional fields: absent and explicit-null both arrive as None; the
+    write must be gated on model_fields_set or toggling comments would wipe
+    the repo's flag line."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+    assert _patch_line(headers, 11, {"needs_you_threshold": 0.75}).status_code == 200
+
+    r = _patch_line(headers, 11, {"pr_comment": False})
+
+    assert r.status_code == 200
+    assert r.json() == {"needs_you_threshold": 0.75, "pr_comment": False}
+    assert store.repo_threshold(101, 11) == 0.75
+    assert store.repo_pr_comment(101, 11) is False
+
+    r = _patch_line(headers, 11, {"needs_you_threshold": None})  # explicit null still clears
+
+    assert r.json() == {"needs_you_threshold": None, "pr_comment": False}
+    assert store.repo_threshold(101, 11) is None
+    assert store.repo_pr_comment(101, 11) is False
+
+
+def test_patch_rejects_empty_unknown_and_coerced_pr_comment_bodies(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+
+    assert _patch_line(headers, 11, {}).status_code == 422
+    assert _patch_line(headers, 11, {"pr_commnt": False}).status_code == 422
+    for bad in ("true", 1, 0, "false"):
+        assert _patch_line(headers, 11, {"pr_comment": bad}).status_code == 422, bad
+    # pr_comment has no "clear" meaning for null (unlike needs_you_threshold)
+    # — the column is a plain non-nullable bool, so an explicit null must
+    # 422 rather than silently coerce to False via bool(None).
+    assert _patch_line(headers, 11, {"pr_comment": None}).status_code == 422
+    assert store.repo_pr_comment(101, 11) is True
+
+
+def test_audit_line_names_only_the_written_field(tmp_path, monkeypatch, capsys):
+    """A pr_comment-only PATCH must not print a needs_you_threshold line
+    (and vice versa) — each field gets its own line, in its own existing
+    format, printed only when that field was actually written."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+
+    r = _patch_line(headers, 11, {"pr_comment": False})
+
+    assert r.status_code == 200
+    err = capsys.readouterr().err
+    assert "pr_comment installation=101 repo=11 True->False by sub=user_01ABC" in err
+    assert "needs_you_threshold" not in err
+
+
+def test_connections_carry_pr_comment_and_the_denial_timestamp(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11, 12))
+    at = datetime.now(UTC).replace(microsecond=0)
+    store.set_repo_pr_comment(101, 12, False)
+    store.mark_pr_comment_denied(101, at)
+
+    body = TestClient(app).get("/v1/sessions/connections", headers=headers).json()
+
+    repos = {r["id"]: r for r in body["connections"][0]["repositories"]}
+    assert repos[11]["pr_comment"] is True
+    assert repos[12]["pr_comment"] is False
+    # Format-agnostic: pydantic's JSON encoder renders UTC as "...Z", not
+    # "...+00:00", so round-trip through fromisoformat rather than pin a
+    # literal string.
+    denied_at = body["connections"][0]["pr_comment_denied_at"]
+    assert datetime.fromisoformat(denied_at) == at
 
 
 def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, monkeypatch):
@@ -5414,7 +5523,7 @@ def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, 
     # ints at the endpoints are numbers, not strings — accepted.
     r = _patch_line(headers, 11, {"needs_you_threshold": 1})
     assert r.status_code == 200
-    assert r.json() == {"needs_you_threshold": 1.0}
+    assert r.json() == {"needs_you_threshold": 1.0, "pr_comment": True}
 
 
 def test_the_custom_validation_handler_still_returns_the_stock_422_body():

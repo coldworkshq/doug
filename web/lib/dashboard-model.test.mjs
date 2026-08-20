@@ -345,6 +345,21 @@ test("parseFlagLine: 0..1 numbers, '' clears, everything else is invalid", async
   }
 });
 
+test("parseBool: only the two words a checkbox-free toggle can send", async () => {
+  // The toggle posts a hidden field carrying the literal "true" or "false" —
+  // the OPPOSITE of what the button reads — so those two strings are the whole
+  // grammar. Everything else is undefined, meaning INVALID, which the action
+  // refuses outright: the same fail-closed reading parseFlagLine takes, and for
+  // the same reason. `Boolean("false")` is true, so a parser that leaned on
+  // JavaScript's own coercion would turn "off" into "on" and report success.
+  const { parseBool } = await import("./dashboard-model.ts?pr-comment-bool");
+  assert.equal(parseBool("true"), true);
+  assert.equal(parseBool("false"), false);
+  for (const bad of ["TRUE", "False", "1", "0", "on", "off", "yes", "", " true", "true ", null, undefined]) {
+    assert.equal(parseBool(bad), undefined, String(bad));
+  }
+});
+
 test("parseGithubRepoId: only a positive safe integer names a repository", async () => {
   // This id is the path segment of a PATCH against another person's data. The
   // API authorises it, but a parser that let "1e3", "0" or a float through

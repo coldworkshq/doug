@@ -35,6 +35,8 @@ FLAGGED = reader.verdict_from_reader(
     ),
     threshold=30,
 )
+FLAGGED_VERDICT = FLAGGED
+CLEARED_VERDICT = FLAGGED.model_copy(update={"reasons": [], "band": Band.CLEARED, "score": 0.04})
 
 WHOLE = reader.Coverage(diff_chars=400, sent_chars=400, files_sent=2, files_unseen=[])
 PARTIAL = reader.Coverage(
@@ -559,3 +561,131 @@ def test_the_footer_does_not_publish_a_miss_rate():
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, instrument=_snap())
     assert "miss rate" not in summary.lower()
 
+
+def test_oneline_neutralises_the_forms_that_have_side_effects_in_a_pr_comment():
+    """The same markdown renders in a check run and in a PR comment, but only
+    the comment notifies @mentions, writes #refs into other timelines, and
+    links under a trusted bot identity; an unterminated <!-- swallows the
+    rest of the body. Neutralised HERE so both surfaces stay byte-identical."""
+    z = "​"
+    assert check_run._oneline("ping @doug now") == f"ping @{z}doug now"
+    assert check_run._oneline("see #123 and owner/repo#4") == f"see #{z}123 and owner/repo#{z}4"
+    assert check_run._oneline("x <!-- y") == f"x <!-{z}- y"
+    assert check_run._oneline("[click](https://evil)") == f"[click]{z}(https:{z}//evil)"
+    # "a@b.c" is not a mention: "@" is preceded by a word char, not a space/start.
+    assert check_run._oneline("email a@b.c") == "email a@b.c"
+    assert check_run._oneline("line\nbreak") == "line break"
+
+
+def test_oneline_neutralises_repo_refs_the_word_char_class_would_miss():
+    """A prior version scoped the repo-qualified case to a contiguous word-
+    char repo segment, and excluded any '#' preceded by '/' from the bare-ref
+    fallback on the assumption the repo-qualified regex covered it. Neither
+    is true for a hyphenated or dotted repo name (the dominant GitHub
+    naming convention) or for a '/' with no repo segment at all — every one
+    of these left the '#123' side effect live. Scoping was never load-
+    bearing: the ZWSP is invisible either way, so every '#' immediately
+    followed by a digit is neutralised, unconditionally."""
+    z = "​"
+    assert check_run._oneline("see owner/hello-world#42") == f"see owner/hello-world#{z}42"
+    assert check_run._oneline("see owner/repo.js#4") == f"see owner/repo.js#{z}4"
+    assert check_run._oneline("see docs/#123") == f"see docs/#{z}123"
+
+
+def test_quote_goes_through_oneline():
+    reason = Reason(rule="x", label="Partial read: paths/@user\nfile", weight=0.0)
+    assert check_run._quote(reason) == ["", "> Partial read: paths/@​user file"]
+
+
+def test_render_carries_the_cleared_note_only_when_cleared():
+    # build a cleared verdict and a flagged one with the file's fixtures
+    _, cleared = check_run.render("reader", CLEARED_VERDICT, None, None)
+    _, flagged = check_run.render("reader", FLAGGED_VERDICT, None, None)
+    assert check_run.CLEARED_NOTE in cleared
+    assert check_run.CLEARED_NOTE not in flagged
+
+
+
+def test_oneline_neutralises_a_mention_after_a_dot():
+    """The lookbehind used to exclude a preceding '.' as well as a word char,
+    on the theory that it kept "a@b.c" readable as an email. The word-char
+    half already does that — in "a@b.c" the '@' follows 'a'. The dot bought
+    nothing and cost coverage: GitHub linkifies '@handle' after any non-word
+    character, '.' included, so "foo.@octocat" notified that account."""
+    z = "​"
+    assert check_run._oneline("foo.@octocat") == f"foo.@{z}octocat"
+    # The case the dot was there for is unaffected, because '@' follows 'a'.
+    assert check_run._oneline("email a@b.c") == "email a@b.c"
+
+
+def test_oneline_neutralises_a_bare_url():
+    """GFM autolinks a bare URL. `](` was neutralised from the start; the
+    bare form is the same live link under Doug's identity by a shorter
+    route, in a surface whose whole premise is that it notifies.
+
+    The reference-style form ([x][y] with a trailing "[y]: url" definition)
+    is deliberately not chased: a link definition cannot sit mid-line and
+    _oneline collapses everything to one line, so the definition half can
+    never survive to be defined."""
+    z = "​"
+    assert check_run._oneline("go to https://evil.example/login") == (
+        f"go to https:{z}//evil.example/login"
+    )
+    assert check_run._oneline("ftp://x") == f"ftp:{z}//x"
+
+
+def test_the_rendered_rule_is_neutralised_like_the_label_beside_it():
+    """`Reason.rule` is not a fixed vocabulary. On the reader tier it is
+    f"reader:{category_slug}", and category_slug is a free-form schema
+    string (reader.py:89-96) — a description, no enum, no pattern — so it is
+    model output on the same footing as the label. It renders inside a code
+    span, which a backtick in the slug closes; everything after that backtick
+    is live markdown in a PR comment posted under Doug's identity."""
+    z = "​"
+    verdict = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(
+                    rule="reader:x` @octocat #12 <!-- ](http://e", label="l", weight=0.0
+                )
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    # The backtick is dropped rather than ZWSP'd — it carries no meaning in a
+    # slug, and a split code span still hands the rest to the renderer.
+    assert (
+        f"- `reader:x @{z}octocat #{z}12 <!-{z}- ]{z}(http:{z}//e` — l" in summary
+    )
+
+
+def test_every_spliced_span_in_the_deviation_section_is_neutralised():
+    """ADR-0014 D7 claims neutralisation happens once, upstream of both
+    surfaces, for everything this summary splices — so no span may be exempt
+    on the argument that its schema constrains it. `DeviationFinding.type`
+    and `.severity` are enum-constrained in the reader's JSON schema and
+    plain `str` in the Python model, which validates neither."""
+    z = "​"
+    read = DEVIATIONS.model_copy(
+        update={
+            "findings": [
+                reader.DeviationFinding(
+                    type="beyond-ticket @octocat", description="d", severity="high #1"
+                )
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", FLAGGED, read, WHOLE)
+    assert f"- `beyond-ticket @{z}octocat` — d _(high #{z}1)_" in summary
+
+
+def test_judged_against_neutralises_the_record_ids_it_splices():
+    """intent_read.refs is [d.id for d in chosen], and IntentDoc.id falls back
+    to the raw filename stem for anything outside the ADR-NNNN convention
+    (intent_providers.py:73). A decisions directory is repo-controlled, so a
+    file named "@octocat.md" reaches a live PR comment verbatim unless this
+    line goes through the same chokepoint every other spliced span does."""
+    z = "​"
+    read = DEVIATIONS.model_copy(update={"refs": ["@octocat", "x<!--y", "#42"]})
+    _, summary = check_run.render("reader", FLAGGED, read, WHOLE)
+    assert f"Judged against: @{z}octocat, x<!-{z}-y, #{z}42." in summary

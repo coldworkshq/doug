@@ -1,14 +1,18 @@
 # HANDOFF — doug
 
-State:    review (this branch: per-repo needs-you threshold)
-Next:     1. Merge PR 1 https://github.com/drewjst/doug/pull/119 (web guard
-             tolerance) and CONFIRM the web revision deployed.
-          2. Then un-draft and merge PR 2 https://github.com/drewjst/doug/pull/120
-             (the feature). Two parked follow-ups are in its body.
+State:    review — PR B is open: https://github.com/drewjst/doug/pull/148
+Next:     Andrew reviews and merges #148. Both gates already satisfied (PR A
+          #138 merged AND deployed; `Pull requests: Read and write` set on the
+          App — installations re-accept individually). After merge: watch the
+          dogfood week (grep the API logs for `doug: comment `; created/updated
+          should dominate, no PR should grow two Doug comments), then close out
+          #144 by removing DOUG_PR_COMMENT_INSTALLATIONS and the rollout
+          sentence in the toggle panel.
 Blockers: none on this branch. (Production-dark stream: #116 MERGED as
           3eddbf0; its remaining steps are kept verbatim under "Prior stream"
           below — verify the adjudicator Job actually drained before deleting.)
 Decisions this session:
+- Sticky PR comment: D1 one comment/PR edited in place · D2 body = check-run summary verbatim in a header/footer frame · D3 on by default, opt-out per repo · D4 link = dashboard receipt page · D5 403 swallowed, check run unaffected — rejected: per-push comments, flagged-only, short card, public receipt, gating
 - D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
 - D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
 - D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs

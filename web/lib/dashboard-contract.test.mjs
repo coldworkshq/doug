@@ -699,3 +699,61 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   // later without a reason.
   assert.match(page, /<select name="repo"/);
 });
+
+test("the PR comment toggle is its own form and cannot carry the flag line with it", async () => {
+  // THE WHOLE POINT OF A THIRD FORM. This control is deliberately JS-free, and
+  // `formData.get` returns the FIRST entry for a name — so a toggle sharing a
+  // <form> with the flag-line input would submit `needs_you_threshold` too, and
+  // every "PR comment · off" click would silently re-save (or clear) the line
+  // beside it. The assertion is on the toggle form's own slice, not the file:
+  // the file obviously contains that field name three lines up.
+  const control = await readFile(new URL("../components/flag-line-control.tsx", import.meta.url), "utf8");
+  assert.match(control, /PR comment/);
+  assert.match(control, /setFlagLineCommentAction/);
+  const toggleForm = control.match(/<form action=\{setFlagLineCommentAction\}[\s\S]*?<\/form>/)?.[0] ?? "";
+  assert.ok(toggleForm, "the toggle form is gone");
+  assert.equal(
+    toggleForm.includes('name="needs_you_threshold"'),
+    false,
+    "the toggle form carries the flag line field — every toggle would rewrite the line",
+  );
+  assert.match(toggleForm, /name="pr_comment"/);
+  assert.match(toggleForm, /name="github_repo_id"/);
+  // The button READS the current state and SUBMITS the opposite; a label that
+  // read the pending value would tell every operator the wrong thing about the
+  // repository in front of them.
+  assert.match(toggleForm, /PR comment · (\{|on|off)/);
+  // BOTH DIRECTIONS. Off is a STOP, not an undo (D3): the updates end and the
+  // last comment stays. Copy that described only the on-state left the one
+  // fact an operator needs at the moment of deciding unsaid, and a switch whose
+  // off-state you have to guess at is guessed at wrong.
+  assert.match(control, /Off, Doug stops updating the comment/);
+  assert.match(control, /the last one it posted stays where it is/);
+  // AND THE ROLLOUT IS STAGED (D3a). While `DOUG_PR_COMMENT_INSTALLATIONS`
+  // gates the worker's post, a space outside the first wave sees this toggle
+  // read "on", gets no comment, and gets no denial banner either — there is no
+  // 403 to report. Promising posting we cannot yet deliver is the same
+  // dishonesty D8 exists to refuse, one layer up. Phrased to match the
+  // /docs/changelog row so the two read as one message.
+  assert.match(control, /Rolling out to Doug&apos;s own repositories first/);
+  assert.match(control, /if this space isn&apos;t in the first wave/);
+});
+
+test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  const page = await readFile(pageUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setFlagLineCommentAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  // D8: a toggle that reads "on" while nothing ever posts, with the only trace
+  // a stderr line in a project with no alerting, is the failure this banner
+  // exists to refuse. It names the USUAL cause without claiming it is the only
+  // one — a locked conversation, an archived repository and secondary rate
+  // limiting all return the same 403.
+  assert.match(page, /PR comments are not posting/);
+  assert.match(page, /refused \(403\)/);
+  assert.match(page, /re-accepted in GitHub/);
+  assert.match(page, /secondary rate limiting/);
+  // Rendered only when the API says a denial happened, never unconditionally.
+  assert.match(page, /pr_comment_denied_at/);
+});

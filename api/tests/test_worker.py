@@ -19,6 +19,7 @@ from doug import (
     check_run,
     example_pack_capture,
     ingest,
+    pr_comment,
     reader,
     review,
     store,
@@ -80,6 +81,7 @@ def _pr() -> PRMetadata:
 def _gh(
     heads: dict[int, str] | None = None,
     bases: dict[int, str | None] | None = None,
+    base_repo_id: int | None = None,
 ):
     """A client whose pulls.get reports the PR's current head SHA.
 
@@ -87,11 +89,27 @@ def _gh(
     branch has not moved since enqueue, which is the ordinary case and
     keeps every other test free of SHA bookkeeping. `heads` moves it, which
     is how a test simulates a push landing between enqueue and claim.
+
+    `base.repo.id` defaults to the newest queued job's own github_repo_id,
+    so both target checks — pr_comment.target_matches on the replay path and
+    process_job's own base-repo assertion on the fresh one — agree with the
+    job by default; a test passes a different `base_repo_id` to stand in for
+    a stale repo_full_name pointing the PR number at another repo in the
+    same installation.
     """
     heads = heads or {}
     bases = bases or {}
 
     def _get(*, owner, repo, pull_number):
+        repo_id = base_repo_id
+        if repo_id is None:
+            with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
+                repo_id = conn.execute(
+                    select(store.review_jobs.c.github_repo_id)
+                    .where(store.review_jobs.c.pr_number == pull_number)
+                    .order_by(store.review_jobs.c.id.desc())
+                    .limit(1)
+                ).scalar_one()
         sha = heads.get(pull_number)
         if sha is None:
             with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
@@ -114,7 +132,7 @@ def _gh(
         return SimpleNamespace(
             parsed_data=SimpleNamespace(
                 head=SimpleNamespace(sha=sha),
-                base=SimpleNamespace(sha=base_sha),
+                base=SimpleNamespace(sha=base_sha, repo=SimpleNamespace(id=repo_id)),
             )
         )
 
@@ -130,6 +148,7 @@ def _wire(
     heads=None,
     bases=None,
     scopes=None,
+    base_repo_id=None,
 ) -> list[dict]:
     """Cut every seam that would touch the network. Returns the posted
     check runs, which is what a caller of this pipeline can observe.
@@ -137,7 +156,7 @@ def _wire(
     `scopes` collects what each paid read was charged to, for the tests
     that care which budget a job spends from."""
     posted: list[dict] = []
-    gh = _gh(heads, bases)
+    gh = _gh(heads, bases, base_repo_id)
     monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
 
@@ -168,6 +187,58 @@ def _wire(
         ),
     )
     return posted
+
+
+def _wire_pr_comment(monkeypatch, *, outcomes=("created",)) -> list[dict]:
+    """Cut the sixth network seam — the sticky PR comment. Returns the
+    upsert calls, which is the only place the comment's body can be read
+    without a live GitHub.
+
+    `outcomes` is consumed one per call and the last one repeats, so a test
+    can say "denied, then fine" without counting calls."""
+    calls: list[dict] = []
+    queued = list(outcomes)
+
+    def _upsert(
+        gh, owner, repo, pr_number, body, *, installation_id, github_repo_id, seq
+    ):
+        calls.append(
+            dict(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                body=body,
+                installation_id=installation_id,
+                github_repo_id=github_repo_id,
+                seq=seq,
+            )
+        )
+        return queued.pop(0) if len(queued) > 1 else queued[0]
+
+    monkeypatch.setattr(pr_comment, "upsert", _upsert)
+    return calls
+
+
+def _enable_pr_comment(monkeypatch, *, repo_setting=True, allowlisted=True) -> None:
+    """Both gates the comment hangs off: the repo's own `pr_comment` column
+    (an ACTIVE installation_repos row) and the interim install allowlist.
+    Needs DATABASE_URL already set — call after _db."""
+    store.upsert_installation(JOB["installation_id"], "drewjst", "Organization", "active")
+    store.set_installation_repos(
+        JOB["installation_id"],
+        [(JOB["github_repo_id"], JOB["repo_full_name"])],
+        replace=True,
+    )
+    if not repo_setting:
+        store.set_repo_pr_comment(JOB["installation_id"], JOB["github_repo_id"], False)
+    monkeypatch.setenv(
+        "DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]) if allowlisted else ""
+    )
+    monkeypatch.setenv("DOUG_WEB_URL", "https://doug.test")
+
+
+def _comment_lines(err: str) -> list[str]:
+    return [ln for ln in err.splitlines() if ln.startswith("doug: comment ")]
 
 
 class _ReaderMessages:
@@ -794,6 +865,112 @@ def test_a_stale_head_is_superseded_and_the_current_one_requeued(tmp_path, monke
     assert posted == []
 
 
+def test_a_pr_whose_base_repo_is_not_this_job_s_repo_is_retired_unread(
+    tmp_path, monkeypatch, capsys
+):
+    """The head comparison verifies the COMMIT, not the repo. `pulls.get` is
+    addressed by `repo_full_name`, which is display-only and goes stale on a
+    rename (there is no `repository` webhook handler), so a rename plus a
+    reuse of the old name inside one installation can point this job's PR
+    number at another repo — and a supersede-then-requeue chain can then
+    reach head equality against it. Reading on would put this repo's findings
+    and receipt link on that repo's PR. The repo id is the only field in the
+    response that answers "is this the repo the job means".
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch, base_repo_id=JOB["github_repo_id"] + 1)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "superseded"
+    # Nothing read, nothing published, on either surface.
+    assert _rows(url, store.verdicts) == []
+    assert posted == [] and upserts == []
+    err = capsys.readouterr().err
+    assert "base repo" in err and "drewjst/doug#7" in err
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        pytest.param(None, id="no base"),
+        pytest.param(SimpleNamespace(sha="0" * 40, repo=None), id="no base.repo"),
+        pytest.param(
+            SimpleNamespace(sha="0" * 40, repo=SimpleNamespace(full_name="drewjst/doug")),
+            id="base.repo carries no id",
+        ),
+    ],
+)
+def test_an_unreadable_base_repo_id_raises_instead_of_retiring_the_job(
+    tmp_path, monkeypatch, base
+):
+    """"I could not read the repo id" is not "this is the wrong repo".
+
+    The mismatch branch below retires the job unread, which is right when the
+    response NAMES another repo — the next webhook carries a current name and
+    re-queues it. An unreadable id names nothing, so retiring on it would
+    spend the only durable job on a response we failed to parse. Same posture
+    as the missing base.sha guard eleven lines down: raise, and let drain's
+    ordinary failure path keep the claim retryable.
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    def _get(*, owner, repo, pull_number):
+        return SimpleNamespace(
+            parsed_data=SimpleNamespace(head=SimpleNamespace(sha=JOB["head_sha"]), base=base)
+        )
+
+    monkeypatch.setattr(
+        app_auth,
+        "installation_client",
+        lambda i: SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get))),
+    )
+
+    with pytest.raises(RuntimeError, match="base.repo.id"):
+        worker.process_job(ingest.claim())
+
+    # Retryable, not retired: drain's failure path re-pends this row.
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "running"
+    assert _rows(url, store.verdicts) == []
+    assert posted == [] and upserts == []
+
+
+def test_the_fresh_path_buys_exactly_one_pulls_get(tmp_path, monkeypatch):
+    """The fresh path deliberately does NOT call `pr_comment.target_matches`:
+    its own `pulls.get` already verified both the head and the base repo id,
+    which is everything target_matches checks and more. Pinned so a later
+    refactor cannot quietly add a second paid round-trip per review — or,
+    worse, drop the identity check here on the belief that target_matches is
+    covering the fresh path too."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    monkeypatch.setattr(
+        pr_comment,
+        "target_matches",
+        lambda *a, **k: pytest.fail("fresh path must not re-verify the target"),
+    )
+    gh = app_auth.installation_client(JOB["installation_id"])
+    calls: list[int] = []
+    inner = gh.rest.pulls.get
+    gh.rest.pulls.get = lambda **kw: (calls.append(kw["pull_number"]), inner(**kw))[1]
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    assert calls == [JOB["pr_number"]]
+
+
 def test_stale_head_without_a_replacement_base_is_retried_before_supersede(
     tmp_path, monkeypatch
 ):
@@ -866,7 +1043,9 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
         return SimpleNamespace(
             parsed_data=SimpleNamespace(
                 head=SimpleNamespace(sha=next(flip)),
-                base=SimpleNamespace(sha="2" * 40),
+                base=SimpleNamespace(
+                    sha="2" * 40, repo=SimpleNamespace(id=JOB["github_repo_id"])
+                ),
             )
         )
 
@@ -2067,8 +2246,15 @@ def _pr_lines(capsys) -> list[str]:
 
     Filtered on the repo#pr the line leads with, which is what keeps drain's
     `doug: job N failed` line and the reclaim line (neither of which names a
-    PR) out of the assertions below."""
-    return [ln for ln in capsys.readouterr().err.splitlines() if "drewjst/doug#7" in ln]
+    PR) out of the assertions below. The sticky comment's line names the same
+    repo#pr but is a separate surface with its own outcome vocabulary, so it
+    is excluded here and asserted on by _comment_lines instead — these tests
+    are about which of process_job's three outcomes was reached."""
+    return [
+        ln
+        for ln in capsys.readouterr().err.splitlines()
+        if "drewjst/doug#7" in ln and not ln.startswith("doug: comment ")
+    ]
 
 
 def test_a_fresh_review_logs_the_read_it_paid_for(tmp_path, monkeypatch, capsys):
@@ -2343,3 +2529,219 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
     assert lines[0] != lines[1]
     # Exactly one paid read happened, and it is countable: the first pass.
     assert [("paid read" in ln) for ln in lines] == [True, False]
+
+
+def _save_existing_verdict() -> int:
+    """The durable verdict a replay finds, saved out of band exactly as a
+    worker that died between save_review and ingest.complete would leave it."""
+    return store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV,
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+
+
+def test_the_pr_comment_mirrors_the_check_run_summary_and_logs_its_own_line(
+    tmp_path, monkeypatch, capsys
+):
+    """The design's central claim, tested where it can actually fail: the
+    SAME summary string handed to check_run.post must appear, byte for byte,
+    inside the comment body. A render-only test compares render's output to
+    its own input and passes even if the worker hands the comment a
+    differently-rendered summary than the check run got.
+
+    The comment gets its OWN stderr line. The reviewed line is deliberately
+    printed before ingest.complete so a lost claim cannot erase the record
+    of what the attempt cost, so it must not grow a comment outcome it
+    cannot know yet — hence two lines, in that order."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    assert len(posted) == 1 and len(upserts) == 1
+    assert posted[0]["summary"] in upserts[0]["body"]
+    # The write is guarded by the job id and scoped to the job's tenancy —
+    # never repo_full_name, which is display-only.
+    assert upserts[0]["seq"] == job_id
+    assert upserts[0]["installation_id"] == JOB["installation_id"]
+    assert upserts[0]["github_repo_id"] == JOB["github_repo_id"]
+    assert upserts[0]["pr_number"] == JOB["pr_number"]
+    assert (upserts[0]["owner"], upserts[0]["repo"]) == ("drewjst", "doug")
+
+    err = capsys.readouterr().err
+    (comment_line,) = _comment_lines(err)
+    assert comment_line == "doug: comment created drewjst/doug#7@" + "a" * 12
+    (reviewed_line,) = [ln for ln in err.splitlines() if "doug: reviewed" in ln]
+    assert "comment" not in reviewed_line
+    assert err.index(reviewed_line) < err.index(comment_line)
+
+
+@pytest.mark.parametrize("case", ["no-repo-row", "setting-off", "not-allowlisted"])
+def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_allowlisted(
+    tmp_path, monkeypatch, capsys, case
+):
+    """Three ways to be off, one behaviour: nothing is written to the PR.
+
+    A missing installation_repos row is deliberately off rather than
+    defaulted on — that is the set of repos a tenant cannot see or toggle on
+    the dashboard, and a repo nobody can see must not get an un-disableable
+    public comment. The check run still posts in every case: the comment is
+    an extra surface, never a replacement."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    if case == "no-repo-row":
+        monkeypatch.setenv("DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]))
+    else:
+        _enable_pr_comment(
+            monkeypatch,
+            repo_setting=case != "setting-off",
+            allowlisted=case != "not-allowlisted",
+        )
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    assert upserts == []
+    assert len(posted) == 1
+    (line,) = _comment_lines(capsys.readouterr().err)
+    assert line == "doug: comment skipped drewjst/doug#7@" + "a" * 12
+
+
+def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(
+    tmp_path, monkeypatch
+):
+    """A 403 is the tenant-visible state — permission not re-accepted, the
+    conversation locked, the repo archived — so it is recorded on the
+    installation for the Repositories banner rather than only logged. And it
+    is cleared by the next write that lands, or the banner would outlive the
+    condition it describes and train people to ignore it."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("denied:403", "updated"))
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+    assert store.pr_comment_denied_at(JOB["installation_id"]) is not None
+
+    ingest.enqueue(**{**JOB, "head_sha": "b" * 40})
+    worker.process_job(ingest.claim())
+    assert len(upserts) == 2
+    assert store.pr_comment_denied_at(JOB["installation_id"]) is None
+
+
+def test_the_replay_path_posts_the_same_body_and_verifies_the_target(
+    tmp_path, monkeypatch, capsys
+):
+    """A replay is a full second delivery of the verdict, not a half one: the
+    comment is written from the replayed summary exactly as the fresh path
+    writes it from its own.
+
+    The replay path alone verifies the target. process_job's fresh path has
+    already fetched and compared this PR's head by the time it posts;
+    _replay_recorded runs before that check, so a stale repo_full_name could
+    otherwise put this repo's findings on another repo's PR number inside the
+    same installation. The check run cannot be misdirected that way — a
+    foreign head_sha 422s — but a comment needs only a PR number."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("updated",))
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    _save_existing_verdict()
+
+    worker.process_job(claimed)
+
+    assert len(posted) == 1 and len(upserts) == 1
+    assert posted[0]["summary"] in upserts[0]["body"]
+    (line,) = _comment_lines(capsys.readouterr().err)
+    assert line == "doug: comment updated drewjst/doug#7@" + "a" * 12
+
+
+def test_a_replay_onto_a_pr_belonging_to_another_repo_writes_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    """The other half of the target check: pulls.get says PR #7's base repo
+    is not the repo id this job is scoped to, so the comment is skipped
+    entirely rather than written to whatever PR #7 happens to be there."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch, base_repo_id=JOB["github_repo_id"] + 1)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    _save_existing_verdict()
+
+    worker.process_job(claimed)
+
+    assert upserts == []
+    assert len(posted) == 1  # the check run is safe by construction; it still posts
+    (line,) = _comment_lines(capsys.readouterr().err)
+    assert line == "doug: comment skipped-target drewjst/doug#7@" + "a" * 12
+
+
+def test_a_lost_claim_posts_no_comment(tmp_path, monkeypatch, capsys):
+    """Mirror of test_a_lost_claim_after_save_skips_the_check_run. When
+    complete() returns False the row belongs to a second holder, which will
+    identity-replay and write the comment itself; writing one here would
+    notify every reviewer on the PR twice for one review."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+    job = ingest.claim()
+    monkeypatch.setattr(ingest, "complete", lambda *a, **k: False)
+
+    assert worker.process_job(job) is not None
+
+    assert posted == [] and upserts == []
+    assert _comment_lines(capsys.readouterr().err) == []
+
+
+def test_a_broken_comment_path_cannot_fail_a_job_whose_verdict_is_durable(
+    tmp_path, monkeypatch, capsys
+):
+    """target_matches reads githubkit's shape with plain attribute access, so
+    a schema change there raises rather than returning False. By this point
+    the read is paid for, the verdict durable and the job marked done — an
+    advisory comment must not turn that into a retried job (check_run.post's
+    own contract). It must not go quiet either: the failure names its
+    exception type on stderr, so a bug here is visible on the first PR
+    instead of after a month of comment-less reviews."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+
+    def _shape_change(*a, **k):
+        raise AttributeError("'PullRequest' object has no attribute 'base'")
+
+    monkeypatch.setattr(pr_comment, "target_matches", _shape_change)
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    verdict_id = _save_existing_verdict()
+
+    assert worker.process_job(claimed) == verdict_id
+
+    (job,) = _rows(url, store.review_jobs)
+    assert job["status"] == "done" and job["verdict_id"] == verdict_id
+    assert len(posted) == 1 and upserts == []
+    err = capsys.readouterr().err
+    assert "AttributeError" in err
+    assert "doug: comment failed:internal drewjst/doug#7@" + "a" * 12 in err

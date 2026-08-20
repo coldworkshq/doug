@@ -27,8 +27,25 @@ export type RepositoryConnection = {
   account_type: "User" | "Organization";
   status: ConnectionStatus;
   label: string | null;
-  repositories: Array<{ id: number; full_name: string; needs_you_threshold: number | null }>;
+  /** When Doug's last attempt to post the PR comment came back 403, per
+   *  installation (D8). Null once a later post succeeds. It is a MARKER, not a
+   *  diagnosis: the same code covers the App permission never being
+   *  re-accepted, a locked conversation, an archived repository and secondary
+   *  rate limiting, so the banner that reads it names the usual cause and
+   *  hedges the rest rather than asserting one. */
+  pr_comment_denied_at: string | null;
+  repositories: Array<{
+    id: number;
+    full_name: string;
+    needs_you_threshold: number | null;
+    pr_comment: boolean;
+  }>;
 };
+
+/** What `PATCH /v1/sessions/repositories/{id}` answers with, whichever field it
+ *  was asked to write: the row's whole settable state, so a caller that wrote
+ *  one setting still learns the other's current value rather than assuming it. */
+export type RepositorySettings = { needs_you_threshold: number | null; pr_comment: boolean };
 
 export type ConnectionsResponse = {
   connections: RepositoryConnection[];
@@ -161,14 +178,6 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
-/** `exact` plus keys that MAY be present. Only used while the API is about
- *  to start emitting a field this build does not read yet (API promotes
- *  before web). Tightened back to `exact` in the feature PR. */
-function exactWithOptional(value: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((k) => k in value) && Object.keys(value).every((k) => allowed.has(k));
-}
-
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -203,23 +212,42 @@ function prMetadata(value: unknown): value is PRMetadata {
   );
 }
 
+/** TIGHTENED BACK, now that the API emits `pr_comment` (the API job promotes
+ *  first — `.github/workflows/deploy.yml:162`). PR A accepted the key as
+ *  optional so this build survived the window between the two promotions; an
+ *  entry arriving without it now is not an older API, it is a body this build
+ *  cannot render honestly — the row would draw a toggle whose state it invented. */
 function repository(
   value: unknown,
-): value is { id: number; full_name: string; needs_you_threshold: number | null } {
+): value is {
+  id: number;
+  full_name: string;
+  needs_you_threshold: number | null;
+  pr_comment: boolean;
+} {
   return (
     record(value) &&
-    exactWithOptional(value, ["id", "full_name", "needs_you_threshold"], ["pr_comment"]) &&
+    exact(value, ["id", "full_name", "needs_you_threshold", "pr_comment"]) &&
     Number.isInteger(value.id) &&
     typeof value.full_name === "string" &&
     nullableNumber(value.needs_you_threshold) &&
-    (!("pr_comment" in value) || typeof value.pr_comment === "boolean")
+    typeof value.pr_comment === "boolean"
+  );
+}
+
+function isRepositorySettings(value: unknown): value is RepositorySettings {
+  return (
+    record(value) &&
+    exact(value, ["needs_you_threshold", "pr_comment"]) &&
+    nullableNumber(value.needs_you_threshold) &&
+    typeof value.pr_comment === "boolean"
   );
 }
 
 function connection(value: unknown): value is RepositoryConnection {
   if (!record(value) || !exact(value, [
     "provider", "installation_id", "organization_id", "account_login",
-    "account_type", "status", "label", "repositories",
+    "account_type", "status", "label", "pr_comment_denied_at", "repositories",
   ])) return false;
   return (
     value.provider === "github" &&
@@ -231,6 +259,7 @@ function connection(value: unknown): value is RepositoryConnection {
       value.status === "setup_required" ||
       value.status === "reauthorize_required") &&
     nullableString(value.label) &&
+    nullableString(value.pr_comment_denied_at) &&
     Array.isArray(value.repositories) &&
     value.repositories.every(repository)
   );
@@ -440,10 +469,43 @@ export async function setRepositoryThreshold(
   }
   if (response.status !== 200) throw new SessionApiError(message, response.status);
   const body: unknown = await response.json().catch(() => null);
-  if (!record(body) || !exactWithOptional(body, ["needs_you_threshold"], ["pr_comment"]) || !nullableNumber(body.needs_you_threshold) || ("pr_comment" in body && typeof body.pr_comment !== "boolean")) {
+  if (!isRepositorySettings(body)) throw new SessionApiError(message);
+  return body.needs_you_threshold;
+}
+
+/** Turn the sticky PR comment on or off for one repository.
+ *
+ *  Sends ONLY `pr_comment`. The API's PATCH is field-set-gated — it writes what
+ *  the body names and leaves the rest alone — so a body that also carried
+ *  `needs_you_threshold` would rewrite the flag line on every toggle. The
+ *  response carries both settings because the API answers with the row's whole
+ *  state, and the caller gets it back rather than the single value it wrote. */
+export async function setRepositoryPrComment(
+  accessToken: string,
+  githubRepoId: number,
+  value: boolean,
+): Promise<RepositorySettings> {
+  const message = "Doug could not save that PR comment setting.";
+  if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
+  // `"true"` is not `true`: the API types this field strictly and would answer
+  // 422, but the refusal belongs here, where the mistake is legible.
+  if (typeof value !== "boolean") throw new SessionApiError(message);
+  let response: Response;
+  try {
+    response = await fetch(`${SESSION_API_URL}/v1/sessions/repositories/${githubRepoId}`, {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ pr_comment: value }),
+      signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
+    });
+  } catch {
     throw new SessionApiError(message);
   }
-  return body.needs_you_threshold as number | null;
+  if (response.status !== 200) throw new SessionApiError(message, response.status);
+  const body: unknown = await response.json().catch(() => null);
+  if (!isRepositorySettings(body)) throw new SessionApiError(message);
+  return body;
 }
 
 /** The API's accepted maximum: `/v1/sessions/runs` rejects anything outside

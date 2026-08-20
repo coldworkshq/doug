@@ -181,7 +181,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11]
+    assert migrations.apply(engine) == [9, 11, 12]
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
     assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
@@ -252,6 +252,11 @@ M9_COLUMNS = {
 M10_COLUMNS = {"review_jobs": {"base_sha"}}
 
 M11_COLUMNS = {"installation_repos": {"needs_you_threshold"}}
+
+M12_COLUMNS = {
+    "installation_repos": {"pr_comment"},
+    "installations": {"pr_comment_denied_at"},
+}
 
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
@@ -368,6 +373,18 @@ def test_migration_011_declares_the_same_columns_as_their_tables(tmp_path):
     assert _statements_by_table(dict(migrations.MIGRATIONS)[11]) == M11_COLUMNS
     for table, columns in M11_COLUMNS.items():
         assert columns <= _columns(engine, table)
+
+
+def test_migration_012_declares_the_same_columns_as_their_tables(tmp_path):
+    """Two homes: the Table gets a fresh database the columns; the migration
+    gets production the same columns. pr_comments is a NEW table and so is
+    create_all()'s alone — asserted present on a fresh schema below."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl12.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[12]) == M12_COLUMNS
+    for table, columns in M12_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+    assert "pr_comments" in inspect(engine).get_table_names()
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -813,9 +830,9 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         )
 
     # store.metadata.create_all() above already built the current table shapes,
-    # so migrations 6 through 11 all find their ALTER work satisfied and
-    # still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11]
+    # so migrations 6 through 12 all find their ALTER/CREATE work satisfied
+    # and still record their versions alongside migration 5.
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12]
     with engine.connect() as conn:
         app_ids = [
             r[0]

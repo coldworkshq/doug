@@ -22,8 +22,12 @@ Three things this surface must never smooth over:
     did not pass (2026-07-31). The instrument is not validated, so they
     render in their own labelled section and never touch band or score
     (ADR-0007).
+
+`pr_comment.py` mirrors this summary byte-for-byte inside a PR comment; anything
+that must not reach a comment must be neutralised here, not there.
 """
 
+import re
 import sys
 
 from .models import Band, Verdict
@@ -56,6 +60,13 @@ FALLBACK_NOTE = (
     "from the deterministic scorer, which never opens the diff — it scores "
     "PR shape (size, paths, authorship) alone. Read it as routing, not as "
     "a judgment about this change."
+)
+# A Cleared band reads as "safe" to anyone skimming the checks list. It
+# means Doug's read found nothing worth a human's time — it is not a
+# statement about the change itself, and it must not be read as one.
+CLEARED_NOTE = (
+    "Cleared means Doug found nothing it wanted a human to look at; it is not a "
+    "statement that the change is safe."
 )
 DEVIATION_HEADING = "### Decision deviations (unvalidated)"
 DEVIATION_NOTE = (
@@ -107,8 +118,61 @@ def _headline(tier: str, verdict: Verdict) -> str:
     return f"Deterministic fallback · {band} · risk {verdict.score:.2f}"
 
 
+# Zero-width space. Invisible wherever this markdown renders, but it splits
+# a token in two so the tokeniser that would otherwise fire a side effect —
+# a mention, a cross-reference, a live link, an HTML comment — never sees
+# an intact one. r.rule, r.label and d.description are free-form model
+# output (`reader:{category_slug}` is built from a schema field carrying no
+# enum and no pattern), and the `Judged against:` line splices
+# repo-controlled filenames; all four are attacker-influenceable via a
+# public repo's diff or its decisions directory (truncation_reason also
+# splices file paths), and
+# `pr_comment.py` renders this same text live inside a PR conversation
+# where those tokens are not inert. Neutralising here, at the one
+# chokepoint every model-authored span already passes through, keeps the
+# check run and the comment byte-identical instead of diverging at the
+# surface that has to be safe.
+_ZWSP = "\u200b"
+
+# `@handle` notifies and subscribes that account in a PR comment. Exclude a
+# preceding word char so `a@b.c` still reads as the email address it is, not
+# a mention of `b` — in `a@b.c` the `@` follows `a`, which is all that case
+# ever needed. An earlier version excluded a preceding `.` as well, on the
+# same email rationale; the dot was pure loss, because GitHub linkifies
+# `@handle` after any non-word character, `.` included, so `foo.@octocat`
+# went out live. Same ruling as `_REF_RE` below: there is nothing to gain
+# from scoping the match, because the ZWSP is invisible either way.
+_MENTION_RE = re.compile(r"(?<!\w)@(?=\w)")
+# `#123` writes a cross-reference into that issue's timeline, whether bare
+# or repo-qualified (`owner/repo#4`). Earlier drafts tried to tell the two
+# apart by what precedes the `#` (a word char/`/` meant "already covered by
+# the repo-qualified case") and by requiring a contiguous `\w+/\w+` repo
+# segment — both gaps: a hyphenated or dotted repo name (`hello-world`,
+# `repo.js`, the GitHub-common case) isn't `\w+`, so the digits after its
+# `#` fell through both regexes untouched, and a `/` with no repo segment
+# at all (`docs/#123`) fell through the same way. A ZWSP is invisible in
+# rendered markdown either way, so there is nothing to gain from trying to
+# scope the match to "real" refs: every `#` immediately followed by a
+# digit gets one, unconditionally.
+_REF_RE = re.compile(r"#(?=\d)")
+# An unterminated `<!--` opens an HTML comment that swallows the rest of
+# the comment body.
+_COMMENT_OPEN_RE = re.compile(r"<!--")
+# `[text](url)` is a live, clickable link rendered under a bot identity
+# users are taught to trust.
+_LINK_RE = re.compile(r"\]\(")
+# GFM autolinks a bare `https://evil.example/login` with no `](` anywhere —
+# the same live link by a shorter route. The reference-style form
+# (`[text][id]` plus a trailing `[id]: url` definition) is deliberately not
+# chased: a link definition cannot sit mid-line, and `_oneline` collapses
+# everything to one line, so its definition half can never survive.
+_URL_RE = re.compile(r"://")
+
+
 def _oneline(text: str) -> str:
-    """Collapse model-authored text to one physical line.
+    """Collapse model-authored text to one physical line and neutralise the
+    GitHub/markdown tokens that are inert here but have side effects when
+    this same text is mirrored into a PR comment (pr_comment.py).
 
     r.label and d.description are free-form model output. A literal
     newline followed by '### Findings' or '### Decision deviations' would
@@ -116,14 +180,44 @@ def _oneline(text: str) -> str:
     boundary — laundering injected text as this module's own structure.
     Collapsing whitespace keeps every finding inside its own list item.
     """
-    return " ".join(text.split())
+    collapsed = " ".join(text.split())
+    collapsed = _MENTION_RE.sub(f"@{_ZWSP}", collapsed)
+    collapsed = _REF_RE.sub(f"#{_ZWSP}", collapsed)
+    collapsed = _COMMENT_OPEN_RE.sub(f"<!-{_ZWSP}-", collapsed)
+    collapsed = _LINK_RE.sub(f"]{_ZWSP}(", collapsed)
+    collapsed = _URL_RE.sub(f":{_ZWSP}//", collapsed)
+    return collapsed
+
+
+def _rule_span(rule: str) -> str:
+    """A `Reason.rule` as it is rendered inside a code span.
+
+    `rule` is not a fixed vocabulary. On the reader tier it is
+    f"reader:{category_slug}" (reader.py:1349) and `category_slug` is a
+    free-form schema string — a description, no enum, no pattern
+    (reader.py:89-96) — so it is model output on exactly the same footing as
+    the label beside it, and it goes through the same chokepoint. Used for
+    the deviation `type` too: that one IS enum-constrained in the schema, but
+    the Python model types it `str` and validates nothing, and honouring the
+    rule everywhere costs nothing, while an exception in the middle of it is
+    what a later reader has to re-derive. The
+    backtick is dropped rather than split: it carries no meaning in a slug,
+    and it is the one character that would close the code span and hand the
+    rest of the rule to the markdown renderer as live text.
+    """
+    return _oneline(rule.replace("`", ""))
 
 
 def _quote(reason) -> list[str]:
     # The label already opens "Partial read:" — reader.truncation_reason
     # writes the whole sentence. Adding a heading of our own printed the
     # words twice and broke the caveat's own once-and-only-once rule.
-    return ["", f"> {reason.label}"]
+    #
+    # Routed through _oneline: this label also splices file paths
+    # (truncation_reason, reader.py), which may themselves contain `@` or a
+    # newline. An unescaped newline here breaks out of the blockquote and
+    # lands at the top level of a public PR comment.
+    return ["", f"> {_oneline(reason.label)}"]
 
 
 def render(
@@ -147,6 +241,8 @@ def render(
         RISK_NOTE,
         NEUTRAL_NOTE,
     ]
+    if verdict.band is Band.CLEARED:
+        lines += ["", CLEARED_NOTE]
     if tier != "reader":
         lines += ["", FALLBACK_NOTE]
     if partial is not None:
@@ -184,7 +280,8 @@ def render(
         lines += [SETTLED_NOTE, ""]
     if risks:
         lines += [
-            f"- `{r.rule}` — {_oneline(r.label)}" + (f" _({r.severity})_" if r.severity else "")
+            f"- `{_rule_span(r.rule)}` — {_oneline(r.label)}"
+            + (f" _({_oneline(r.severity)})_" if r.severity else "")
             for r in risks
         ]
     else:
@@ -204,12 +301,18 @@ def render(
         lines += [""]
         if intent_read.findings:
             lines += [
-                f"- `{d.type}` — {_oneline(d.description)} _({d.severity})_"
+                f"- `{_rule_span(d.type)}` — {_oneline(d.description)} "
+                f"_({_oneline(d.severity)})_"
                 for d in intent_read.findings
             ]
         else:
             lines.append(f"- none (alignment {intent_read.alignment}/100)")
-        lines += ["", f"Judged against: {', '.join(intent_read.refs) or 'no records'}."]
+        # `refs` is [d.id for d in chosen], and IntentDoc.id falls back to the
+        # raw filename stem outside the ADR-NNNN convention
+        # (intent_providers.py:73) — a repo-controlled string, so it is
+        # spliced through the same chokepoint as everything else here.
+        joined = _oneline(", ".join(intent_read.refs)) or "no records"
+        lines += ["", f"Judged against: {joined}."]
 
     footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)

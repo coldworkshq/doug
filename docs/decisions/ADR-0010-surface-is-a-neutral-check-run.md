@@ -62,7 +62,8 @@ it is not required it falsely signals failure. Doug's precision does not
 support either outcome.
 
 **PR comments.** Unchanged from ADR-0003: a wrong comment notifies every
-subscriber and it persists.
+subscriber and it persists. Amended by ADR-0014: one sticky, App-authored
+comment that mirrors this check run, edited in place.
 
 **Holding the surface until a precision number is published**, which is
 what ADR-0003's consequences asked for. That condition was written about

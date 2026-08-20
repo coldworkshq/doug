@@ -15,9 +15,10 @@ const validConnections = {
       account_type: "Organization",
       status: "ready",
       label: null,
+      pr_comment_denied_at: null,
       repositories: [
-        { id: 11, full_name: "acme/one", needs_you_threshold: null },
-        { id: 12, full_name: "acme/two", needs_you_threshold: 0.5 },
+        { id: 11, full_name: "acme/one", needs_you_threshold: null, pr_comment: false },
+        { id: 12, full_name: "acme/two", needs_you_threshold: 0.5, pr_comment: true },
       ],
     },
   ],
@@ -430,7 +431,7 @@ test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and 
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return new Response(JSON.stringify({ needs_you_threshold: 0.62 }), { status: 200 });
+    return new Response(JSON.stringify({ needs_you_threshold: 0.62, pr_comment: false }), { status: 200 });
   };
   try {
     const stored = await setRepositoryThreshold("token", 11, 0.6249);
@@ -450,34 +451,111 @@ test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and 
   }
 });
 
-test("the connections and PATCH guards accept bodies with and without pr_comment (deploy-order safety)", async () => {
-  // API promotes before web (deploy.yml); the API will start emitting
-  // `pr_comment` on repositories[] and on the PATCH response. Web must accept
-  // both shapes before that, or every dashboard load / every flag-line save
-  // fails between the two promotions — the #119 lesson, second verse.
-  const { getConnections, setRepositoryThreshold } = await import("./session-api.ts?pr-comment-tolerance");
-  const withField = {
+test("the connections and PATCH guards now REQUIRE the pr_comment fields", async () => {
+  // The tolerant half of this pair is over. PR A relaxed both guards so web
+  // survived the window between the API's promotion and its own (deploy.yml
+  // gives the web job `needs: [changes, api]`); the API now emits both keys, so
+  // an absent one is no longer an old API — it is a body this build cannot
+  // render honestly. A repositories entry with no `pr_comment` would render a
+  // toggle whose state is invented, which is the one thing the toggle must not
+  // do.
+  const { getConnections, setRepositoryThreshold, SessionApiError } =
+    await import("./session-api.ts?pr-comment-required");
+
+  // The full body still passes.
+  let oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(validConnections), { status: 200 });
+  try { assert.deepEqual(await getConnections("t"), validConnections); }
+  finally { globalThis.fetch = oldFetch; }
+
+  // A repositories entry missing `pr_comment`, and a connection missing
+  // `pr_comment_denied_at`, are each rejected outright.
+  const without = (object, key) =>
+    Object.fromEntries(Object.entries(object).filter(([name]) => name !== key));
+  const withoutRepoField = {
     ...validConnections,
     connections: [{
       ...validConnections.connections[0],
-      repositories: validConnections.connections[0].repositories.map((r, i) => ({ ...r, pr_comment: i === 0 })),
+      repositories: validConnections.connections[0].repositories.map(
+        (repository) => without(repository, "pr_comment"),
+      ),
     }],
   };
-  for (const [label, body] of [["old", validConnections], ["new", withField]]) {
-    const oldFetch = globalThis.fetch;
+  const withoutMarker = {
+    ...validConnections,
+    connections: [without(validConnections.connections[0], "pr_comment_denied_at")],
+  };
+  for (const [label, body] of [["repositories[].pr_comment", withoutRepoField], ["pr_comment_denied_at", withoutMarker]]) {
+    oldFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
-    try { assert.equal((await getConnections("t")).connections.length, 1, label); }
+    try { await assert.rejects(() => getConnections("t"), SessionApiError, label); }
     finally { globalThis.fetch = oldFetch; }
   }
-  for (const body of [{ needs_you_threshold: 0.5 }, { needs_you_threshold: 0.5, pr_comment: true }]) {
-    const oldFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
-    try { assert.equal(await setRepositoryThreshold("t", 11, 0.5), 0.5); }
-    finally { globalThis.fetch = oldFetch; }
-  }
-  // Unknown keys still reject on both.
-  const oldFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ needs_you_threshold: 0.5, surprise: 1 }), { status: 200 });
-  try { await assert.rejects(() => setRepositoryThreshold("t", 11, 0.5)); }
+
+  // Same on the PATCH response: both keys, or nothing.
+  oldFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: true }), { status: 200 });
+  try { assert.equal(await setRepositoryThreshold("t", 11, 0.5), 0.5); }
   finally { globalThis.fetch = oldFetch; }
+  for (const body of [{ needs_you_threshold: 0.5 }, { needs_you_threshold: 0.5, pr_comment: "true" }, { needs_you_threshold: 0.5, pr_comment: true, surprise: 1 }]) {
+    oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try { await assert.rejects(() => setRepositoryThreshold("t", 11, 0.5), SessionApiError, JSON.stringify(body)); }
+    finally { globalThis.fetch = oldFetch; }
+  }
+});
+
+test("setRepositoryPrComment PATCHes a JSON boolean, never a string, and returns both stored values", async () => {
+  // `false` and `"false"` are different instructions to the API — the second is
+  // truthy everywhere it is read, and the API refuses it with a 422 (strict
+  // types). deepStrictEqual plus the explicit typeof is what catches a
+  // stringified body; a loose deepEqual would let `{"pr_comment": "false"}`
+  // pass, which is exactly the bug this codebase has shipped before.
+  const { setRepositoryPrComment, SessionApiError } = await import("./session-api.ts?pr-comment-write");
+  const calls = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: false }), { status: 200 });
+  };
+  try {
+    const stored = await setRepositoryPrComment("token", 11, false);
+    assert.deepStrictEqual(stored, { needs_you_threshold: 0.5, pr_comment: false });
+    assert.equal(calls[0].url, `${process.env.DOUG_API_URL ?? "http://localhost:8000"}/v1/sessions/repositories/11`);
+    assert.equal(calls[0].options.method, "PATCH");
+    assert.equal(calls[0].options.cache, "no-store");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer token");
+    assert.equal(String(calls[0].url).includes("token"), false);
+    assert.ok(calls[0].options.signal instanceof AbortSignal);
+    // ONLY `pr_comment`: a body that also carried `needs_you_threshold` would
+    // rewrite the flag line on every toggle.
+    assert.deepStrictEqual(JSON.parse(calls[0].options.body), { pr_comment: false });
+    assert.equal(typeof JSON.parse(calls[0].options.body).pr_comment, "boolean");
+    await setRepositoryPrComment("token", 11, true);
+    assert.deepStrictEqual(JSON.parse(calls[1].options.body), { pr_comment: true });
+    assert.equal(typeof JSON.parse(calls[1].options.body).pr_comment, "boolean");
+    // A non-boolean and an unusable id never leave the client.
+    await assert.rejects(() => setRepositoryPrComment("token", 11, "true"), SessionApiError);
+    await assert.rejects(() => setRepositoryPrComment("token", 0, true), SessionApiError);
+    assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+test("setRepositoryPrComment carries the API's status so 401 keeps its own remedy", async () => {
+  // The action maps 401 to "sign in again"; every other failure is "could not
+  // save". That distinction only survives if the status reaches it.
+  const { setRepositoryPrComment, SessionApiError } = await import("./session-api.ts?pr-comment-status");
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("{}", { status: 401 });
+  try {
+    await assert.rejects(
+      () => setRepositoryPrComment("token", 11, true),
+      (error) => error instanceof SessionApiError && error.status === 401,
+    );
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
 });

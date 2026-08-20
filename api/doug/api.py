@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from githubkit.webhooks import verify as verify_webhook
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from . import (
@@ -1234,15 +1234,38 @@ def _session_write_context(authorization: str) -> tenancy.SessionContext:
 
 
 class RepositorySettingsPatch(BaseModel):
-    # Required (no default): `{}` must be a 422, not a silent clear.
-    # strict: "0.9", "62" and true are refused rather than coerced.
+    # Both optional now, but `{}` is still rejected below — a body must name
+    # at least one field. strict: "0.9", "62", "true", 1/0 are refused
+    # rather than coerced.
+    #
+    # Once a field has a default so it can be omitted, absent and explicit
+    # `null` both arrive here as `None`. The endpoint MUST gate each store
+    # write on `"field" in body.model_fields_set`, never on `is not None` —
+    # otherwise `PATCH {"pr_comment": false}` would silently clear
+    # needs_you_threshold too, since it would arrive as None either way.
+    model_config = ConfigDict(extra="forbid")
+
     needs_you_threshold: float | None = Field(
-        ..., strict=True, allow_inf_nan=False, ge=0, le=1
+        None, strict=True, allow_inf_nan=False, ge=0, le=1
     )
+    pr_comment: bool | None = Field(None, strict=True)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> RepositorySettingsPatch:
+        if not self.model_fields_set:
+            raise ValueError("at least one of needs_you_threshold, pr_comment is required")
+        # Unlike needs_you_threshold, pr_comment has no "clear" meaning for
+        # null — the column is a plain non-nullable bool. Without this,
+        # store.set_repo_pr_comment's `bool(value)` would silently coerce an
+        # explicit `{"pr_comment": null}` into False.
+        if "pr_comment" in self.model_fields_set and self.pr_comment is None:
+            raise ValueError("pr_comment does not accept null")
+        return self
 
 
 class RepositorySettings(BaseModel):
     needs_you_threshold: float | None
+    pr_comment: bool
 
 
 @app.patch("/v1/sessions/repositories/{github_repo_id}")
@@ -1251,13 +1274,18 @@ def set_repository_flag_line(
     body: RepositorySettingsPatch,
     authorization: str = Header(""),
 ) -> RepositorySettings:
-    """Set (or clear, with null) the repo's needs-you line. Forward-only:
-    verdicts already scored keep the line they were scored against.
+    """Set (or clear, with null) the repo's needs-you line and/or its sticky
+    PR-comment toggle. Forward-only: verdicts already scored keep the line
+    they were scored against.
 
-    installation_id comes from the session, never the request; the write is
+    installation_id comes from the session, never the request; each write is
     keyed on (installation_id, github_repo_id, state='active'), so another
     tenant's row under the same github_repo_id is unreachable and a removed
     repo is 404 like one that never existed.
+
+    Only fields present in the request body are written — see
+    RepositorySettingsPatch for why `model_fields_set` and not `is not None`
+    gates each write.
     """
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
@@ -1265,16 +1293,34 @@ def set_repository_flag_line(
     sub = _session_subject(authorization)
     if github_repo_id not in ctx.repo_ids:
         raise _not_found()
-    before = store.repo_threshold(ctx.installation_id, github_repo_id)
-    if not store.set_repo_threshold(ctx.installation_id, github_repo_id, body.needs_you_threshold):
-        raise _not_found()
-    after = store.repo_threshold(ctx.installation_id, github_repo_id)
-    print(
-        f"doug: needs_you_threshold installation={ctx.installation_id} "
-        f"repo={github_repo_id} {before}->{after} by sub={sub}",
-        file=sys.stderr,
-    )
-    return RepositorySettings(needs_you_threshold=after)
+    fields_set = body.model_fields_set
+    threshold = store.repo_threshold(ctx.installation_id, github_repo_id)
+    pr_comment = store.repo_pr_comment(ctx.installation_id, github_repo_id)
+    if "needs_you_threshold" in fields_set:
+        before = threshold
+        if not store.set_repo_threshold(
+            ctx.installation_id, github_repo_id, body.needs_you_threshold
+        ):
+            raise _not_found()
+        threshold = store.repo_threshold(ctx.installation_id, github_repo_id)
+        print(
+            f"doug: needs_you_threshold installation={ctx.installation_id} "
+            f"repo={github_repo_id} {before}->{threshold} by sub={sub}",
+            file=sys.stderr,
+        )
+    if "pr_comment" in fields_set:
+        before_flag = pr_comment
+        if not store.set_repo_pr_comment(
+            ctx.installation_id, github_repo_id, body.pr_comment
+        ):
+            raise _not_found()
+        pr_comment = store.repo_pr_comment(ctx.installation_id, github_repo_id)
+        print(
+            f"doug: pr_comment installation={ctx.installation_id} "
+            f"repo={github_repo_id} {before_flag}->{pr_comment} by sub={sub}",
+            file=sys.stderr,
+        )
+    return RepositorySettings(needs_you_threshold=threshold, pr_comment=pr_comment)
 
 
 @app.get("/v1/sessions/runs")
@@ -2011,6 +2057,7 @@ def session_connections(authorization: str = Header("")) -> dict:
                     "status": "reauthorize_required",
                     "label": _connection_label(account_login),
                     "repositories": [],
+                    "pr_comment_denied_at": row["pr_comment_denied_at"],
                 }
             )
             continue
@@ -2024,6 +2071,7 @@ def session_connections(authorization: str = Header("")) -> dict:
                 "status": "ready" if row["organization_id"] else "setup_required",
                 "label": _connection_label(account_login),
                 "repositories": row["repositories"],
+                "pr_comment_denied_at": row["pr_comment_denied_at"],
             }
         )
     return {

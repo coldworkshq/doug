@@ -291,6 +291,22 @@ export function parseFlagLine(value: FormDataEntryValue | null): number | null |
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : undefined;
 }
 
+/** '"true"' → true. '"false"' → false. Anything else → undefined, meaning
+ *  INVALID, which the action refuses outright.
+ *
+ *  Same fail-closed grammar as `parseFlagLine`, and for the same reason: this
+ *  writes a setting. JavaScript's own coercion is the trap — `Boolean("false")`
+ *  is `true`, so a parser leaning on it would read "turn the comment off" as
+ *  "turn it on" and report success. The two exact words are the entire
+ *  vocabulary because the toggle is JS-free and posts a hidden input carrying
+ *  one of them; a "1", an "on" or a padded " true" came from somewhere Doug
+ *  does not model, and guessing which way it meant is a write nobody asked for. */
+export function parseBool(value: FormDataEntryValue | null): boolean | undefined {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
 export function isFinishableSetupConnection(
   connections: SetupConnectionLike[],
   installationId: number,
