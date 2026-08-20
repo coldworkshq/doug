@@ -1,0 +1,198 @@
+[
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_00.md",
+  "fids": [
+   99,
+   100,
+   40,
+   108
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_01.md",
+  "fids": [
+   68,
+   69,
+   70,
+   71,
+   72,
+   113,
+   114,
+   120
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_02.md",
+  "fids": [
+   58,
+   59,
+   60,
+   61,
+   62,
+   82,
+   83
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_03.md",
+  "fids": [
+   63,
+   64,
+   65,
+   41,
+   42,
+   43,
+   110
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_04.md",
+  "fids": [
+   95,
+   96,
+   85,
+   86
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_05.md",
+  "fids": [
+   51,
+   52,
+   53,
+   54,
+   88,
+   109
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_06.md",
+  "fids": [
+   55,
+   56,
+   57,
+   44,
+   84
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_07.md",
+  "fids": [
+   106,
+   45,
+   46,
+   47,
+   48
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_08.md",
+  "fids": [
+   39,
+   20,
+   29,
+   30,
+   116
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_09.md",
+  "fids": [
+   24,
+   25,
+   27,
+   28,
+   89,
+   90,
+   91,
+   92,
+   112,
+   94
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_10.md",
+  "fids": [
+   66,
+   67,
+   87,
+   102,
+   33,
+   34,
+   36,
+   37,
+   115
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_11.md",
+  "fids": [
+   117,
+   31,
+   32,
+   21,
+   22,
+   23,
+   26,
+   81,
+   2,
+   3,
+   4,
+   7,
+   8,
+   103,
+   104,
+   101
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_12.md",
+  "fids": [
+   10,
+   11,
+   12,
+   13,
+   15,
+   16,
+   17,
+   0,
+   75,
+   124,
+   49,
+   50,
+   77,
+   74,
+   111,
+   1,
+   5,
+   6,
+   9
+  ]
+ },
+ {
+  "path": "/private/tmp/claude-501/-Users-andrew-Projects-doughq/f806f2a4-4c58-4850-b004-7fffa418cbec/scratchpad/span-verification/batch_13.md",
+  "fids": [
+   14,
+   97,
+   98,
+   78,
+   79,
+   107,
+   123,
+   121,
+   122,
+   18,
+   19,
+   93,
+   35,
+   38,
+   80,
+   118,
+   119,
+   105,
+   76,
+   73,
+   125
+  ]
+ }
+]
