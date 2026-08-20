@@ -573,7 +573,8 @@ def test_convergence_is_not_in_the_scoring_path():
     (doug/scoring.py:138) — that is what exempts it from the 2.34x bar and
     ADR-0012. Task 4 wires convergence into the RECEIPT path in store.py, and
     amends this test to allow exactly that importer; the scorer and the worker
-    stay forbidden either way."""
+    stay forbidden either way. Amended: store.convergence_for is that
+    importer, and the allowed list is exactly it."""
     import doug.convergence  # noqa: F401 — the module must import standalone
 
     importers = []
@@ -590,7 +591,7 @@ def test_convergence_is_not_in_the_scoring_path():
             )
         ):
             importers.append(path.name)
-    assert importers == [], importers
+    assert importers == ["store.py"], importers
 
 
 def test_convergence_is_pure():
