@@ -3506,3 +3506,39 @@ def test_pr_comment_denied_marker_sets_and_clears(tmp_path, monkeypatch):
     assert store.pr_comment_denied_at(101) == at
     store.mark_pr_comment_denied(101, None)
     assert store.pr_comment_denied_at(101) is None
+
+
+def test_save_review_persists_the_hunk_index_on_the_reads_row(tmp_path, monkeypatch):
+    """Walked Out (migration 014): the index the classifier will compare is
+    the one this read stored, in the same transaction as the verdict. A NULL
+    here must mean "not recorded" — the classifier abstains on it — so the
+    column round-trips the dict exactly, or stays NULL when coverage carries
+    none (old callers, deploy overlap)."""
+    _db(tmp_path, monkeypatch)
+    index = {"api.py": ["a" * 64, "b" * 64], "empty.py": []}
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=2,
+            files_unseen=[], file_cut=None, hunks=index,
+        ),
+    )
+    with store._get_engine().connect() as conn:
+        row = conn.execute(
+            select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid)
+        ).one()
+    assert row.hunks == index
+
+    vid2 = store.save_review(
+        "o/r", 2, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="b" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=0, files_unseen=[],
+        ),
+    )
+    with store._get_engine().connect() as conn:
+        row = conn.execute(
+            select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid2)
+        ).one()
+    assert row.hunks is None

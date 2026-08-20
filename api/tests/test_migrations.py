@@ -173,6 +173,11 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             "github_repo_id BIGINT NOT NULL, full_name VARCHAR(200) NOT NULL, "
             "state VARCHAR(20) NOT NULL, updated_at TIMESTAMP NOT NULL)"
         )
+        # Migration 14's targets. Production has both from create_all long
+        # before this era; the hand-built stub needs them so 14's ALTERs
+        # have real tables to land on.
+        conn.exec_driver_sql("CREATE TABLE reads (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
+        conn.exec_driver_sql("CREATE TABLE findings (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
         conn.execute(
             migrations.schema_migrations.insert(),
             [
@@ -181,7 +186,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11, 12, 13]
+    assert migrations.apply(engine) == [9, 11, 12, 13, 14]
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
     assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
@@ -259,6 +264,8 @@ M12_COLUMNS = {
 }
 
 M13_COLUMNS = {"pr_comments": {"last_seq"}}
+
+M14_COLUMNS = {"reads": {"hunks"}, "findings": {"hunks"}}
 
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
@@ -397,6 +404,18 @@ def test_migration_013_declares_the_same_columns_as_their_tables(tmp_path):
     store.metadata.create_all(engine)
     assert _statements_by_table(dict(migrations.MIGRATIONS)[13]) == M13_COLUMNS
     for table, columns in M13_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+
+
+def test_migration_014_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard as 002/007/008/009: a metadata-only column passes on
+    a fresh database and is silently absent from Cloud SQL. Walked Out's
+    classifier reads both columns; drift here would make every production
+    pair unknown(no-hunk-index) forever while tests stay green."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl14.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[14]) == M14_COLUMNS
+    for table, columns in M14_COLUMNS.items():
         assert columns <= _columns(engine, table)
     assert store.pr_comments.c.last_seq.nullable
 
@@ -846,7 +865,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
     # store.metadata.create_all() above already built the current table shapes,
     # so migrations 6 through 13 all find their ALTER/CREATE work satisfied
     # and still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     with engine.connect() as conn:
         app_ids = [
             r[0]

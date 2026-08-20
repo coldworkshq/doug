@@ -115,6 +115,13 @@ findings = Table(
     Column("weight", Float, nullable=False, default=0.0),
     Column("file", Text),
     Column("severity", String(10)),
+    # Migration 014 (Walked Out). The validated hunk attribution: the subset
+    # of the cited file's hunk hashes this finding was attributed to at read
+    # time, written only by the attribution pass (ADR-0014) after the read.
+    # NULL = no attribution (pre-migration rows, failed or abstained calls);
+    # the convergence classifier degrades NULL to unknown(not-reconfirmed)
+    # and never re-derives it.
+    Column("hunks", JSON),
 )
 
 # Written by the outcome-sync job (revert/hotfix anchoring), joined against
@@ -171,6 +178,13 @@ reads = Table(
     # lets a receipt distinguish prompt truncation from files GitHub omitted.
     Column("changed_files", Integer),
     Column("files_dropped", JSON),
+    # Migration 014 (Walked Out). {path: [sha256, ...]} over the hunks this
+    # read was actually SENT (reader.Coverage.hunks): the deterministic
+    # identity the convergence classifier compares. NULL on rows from before
+    # the migration and on rows written by old revisions during a deploy
+    # overlap — the classifier reads NULL as unknown(no-hunk-index), the old
+    # leak closing, never a guess.
+    Column("hunks", JSON),
 )
 
 # Intent-tier output, kept in its own table on purpose (ADR-0007). A
@@ -920,6 +934,7 @@ def save_review(
                         "file_cut": coverage.file_cut,
                         "changed_files": coverage.changed_files,
                         "files_dropped": coverage.files_dropped,
+                        "hunks": coverage.hunks,
                     },
                 )
         _mark(True)
@@ -1814,6 +1829,7 @@ def save_read(verdict_id: int | None, cov: Coverage) -> int:
                     "file_cut": cov.file_cut,
                     "changed_files": cov.changed_files,
                     "files_dropped": cov.files_dropped,
+                    "hunks": cov.hunks,
                 }
             ],
         )

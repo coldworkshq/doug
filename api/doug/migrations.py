@@ -342,6 +342,21 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE pr_comments ADD COLUMN last_seq BIGINT",
         ),
     ),
+    (
+        14,
+        (
+            # Walked Out (docs/design/walked-out/; convergence-design.md
+            # "Rule 5 replaced"). Both nullable JSON, both meaning "not
+            # recorded" when NULL: the classifier abstains on NULL
+            # (unknown(no-hunk-index) / unknown(not-reconfirmed)) rather
+            # than guessing, so no backfill exists that would be honest.
+            # The design docs call this "migration 12"; 12 and 13 were
+            # claimed on main between the lock and this commit — the column
+            # set, not the number, is what the design binds.
+            "ALTER TABLE reads ADD COLUMN hunks JSON",
+            "ALTER TABLE findings ADD COLUMN hunks JSON",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows
