@@ -98,12 +98,20 @@ def pair_payload(
     prior_findings = findings_by_verdict.get(prior["id"], [])
     later_findings = findings_by_verdict.get(later["id"], [])
     later_read = reads_by_verdict.get(later["id"])
+    prior_read = reads_by_verdict.get(prior["id"])
 
     # Findings and reasons are one table (store.py:104-114) — the settlement
     # notices sit among the later verdict's own rows. Handing the same list in
     # as both is what lets rule 4 fire; `compare` separates them by vocabulary.
-    entries = convergence.classify(prior_findings, later_findings, later_findings, later_read)
-    report = convergence.compare(prior_findings, later_findings, later_findings, later_read)
+    # Historical rows carry hunks=NULL, so under the replaced rule 5 the
+    # ledger's own pairs classify unknown(no-hunk-index) until the
+    # hunk-emulated indexes land (build-plan commit 6, `index_from_git`).
+    entries = convergence.classify(
+        prior_findings, later_findings, later_findings, later_read, prior_read
+    )
+    report = convergence.compare(
+        prior_findings, later_findings, later_findings, later_read, prior_read
+    )
 
     classifications = [
         {

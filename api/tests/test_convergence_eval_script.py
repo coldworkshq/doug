@@ -142,12 +142,15 @@ def test_pair_payload_carries_what_a_labeller_needs_without_db_access():
     assert payload["from_verdict_id"] == 1
     assert payload["to_verdict_id"] == 2
     assert (payload["from_head_sha"], payload["to_head_sha"]) == ("sha1", "sha2")
-    assert payload["report"]["resolved"] == 1
+    # Replaced rule 5: these historical rows carry hunks=NULL, so the honest
+    # classification is no-hunk-index — never the old rule's `resolved`.
+    assert payload["report"]["resolved"] == 0
+    assert payload["report"]["unknown"] == {"no-hunk-index": 1}
     assert payload["classifications"] == [
         {
             "side": "prior",
-            "state": "resolved",
-            "unknown_reason": None,
+            "state": "unknown",
+            "unknown_reason": "no-hunk-index",
             "rule": "reader:error-handling-gap",
             "label": "x",
             "file": FILE,
