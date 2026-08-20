@@ -119,12 +119,17 @@ not a customer's.
   **and** by App authorship before `upsert` will write to a comment it
   finds; a marked comment posted by a human is never touched. Within the
   matched, App-authored comment, `upsert` compares `seq` against the
-  existing marker and skips an update whose `seq` is not newer. The path
-  that writes through an already-stored comment id never lists, so it has no
-  marker to read: it compares against `pr_comments.last_seq` instead, a
-  high-water mark of the last `seq` written to the slot. As shipped, this
-  decision covered only the discovery path; issue #142 closed the gap and
-  added `last_seq`.
+  existing marker and skips an update whose `seq` is not newer — on the
+  path that discovers the comment by listing. *Amended by issue #142: as
+  accepted, this decision stopped there, and the sentence that followed
+  said the path writing through an already-stored comment id does not
+  repeat the comparison. It does now. That path never lists, so it has no
+  marker to read; it compares against `pr_comments.last_seq`, a high-water
+  mark of the last `seq` reserved for the slot, advanced by
+  `store.claim_pr_comment_seq` in the same statement that tests it and
+  before the GitHub write. The decision D9 records is unchanged — `seq`
+  guards the write — and the amendment is that it now holds on every path
+  rather than one.*
 
 ## Rejected
 
@@ -216,18 +221,31 @@ not a customer's.
   check run that never appeared. "Mirrors the check run" describes the
   comment's content, not a guarantee that both surfaces always exist
   together.
-- **The `seq` guard costs a write to the database before every comment
-  write.** *(Amended by issue #142. As originally accepted, this entry read
-  that the stored-`comment_id` path skipped the guard entirely and could let
-  an older verdict overwrite a newer one.)* Closing that gap made the guard
-  a reservation rather than a read: `store.claim_pr_comment_seq` advances
-  `pr_comments.last_seq` in a conditional UPDATE **before** the GitHub
-  write, so an older job loses the row rather than the race. The price is
-  that a `seq` reserved by a write that then fails is not rolled back — the
-  same job's retry keeps its id and passes on equality, but the mark stays
-  ahead of what GitHub actually shows until some job writes successfully.
-  The residual is the one this ADR already prices elsewhere: a stale comment
-  that self-heals on the next push.
+- **A reserved `seq` is not released when the write fails.** *(Amended by
+  issue #142. As originally accepted, this entry read that the
+  stored-`comment_id` path skipped the guard entirely and could let an older
+  verdict overwrite a newer one.)* Closing that gap made the guard a
+  reservation rather than a read: `store.claim_pr_comment_seq` advances
+  `pr_comments.last_seq` before the GitHub write, so an older job loses the
+  row rather than the race. Nothing rolls the mark back when that write then
+  fails, and that is the deliberate half. A failed PATCH is not proof the
+  edit did not land — a `5xx` or a dropped connection can follow a request
+  GitHub already applied — so releasing the reservation would clear an older
+  job to write over a newer verdict that is live on the PR, which is the
+  overwrite the guard exists to stop. The price paid instead is narrower: a
+  job whose `seq` falls between the last landed write and a failed
+  reservation is refused. The same job's retry keeps its id and passes on
+  equality, and every later push carries a higher one, so the residual is
+  the one priced elsewhere here — a stale comment that self-heals on the
+  next push.
+- **Comments that predate `last_seq` get one unguarded write each.** A
+  `pr_comments` row written before issue #142 carries a `comment_id` and a
+  NULL mark, and NULL never blocks. The seq such a comment carries is
+  legible only in its own body, so no backfill can set the mark from the
+  database. The residual is one write per pre-existing PR, after which the
+  mark is set and every later write is guarded. Forcing those rows through a
+  listing to read the marker was rejected: a PR past `pr_comment._PAGE_BOUND`
+  would then fail every write forever rather than once.
 - **Most PR readers hit sign-in on the receipt link.** The footer's
   dashboard link (D4) requires a Doug session; a reader who is not already
   a Doug user lands on a sign-in wall rather than the receipt, and signing

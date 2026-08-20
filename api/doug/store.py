@@ -261,6 +261,17 @@ installation_repos = Table(
 # in `pr_comment.upsert` with nothing to compare against (issue #142). NULL is
 # "nothing written yet" — a claim that has not created, or a row from before
 # this column existed — and never blocks a write.
+#
+# NULL on a row that already HAS a comment_id (a row predating this column)
+# therefore leaves that PR's first write after the migration unguarded, the
+# way every write was before it. Nothing can close that honestly: the seq
+# such a comment carries is legible only in its body, so the mark cannot be
+# backfilled from the database. Forcing those rows through a listing to read
+# the marker was rejected — a PR past `pr_comment._PAGE_BOUND` would then
+# fail EVERY write forever instead of once, because the mark it needs to
+# stop falling through is the one the listing was supposed to fetch. The
+# residual is one unguarded write per pre-existing PR, after which the mark
+# is set and every later write is guarded.
 pr_comments = Table(
     "pr_comments",
     metadata,
@@ -1367,6 +1378,17 @@ def claim_pr_comment_seq(
     that failed mid-write and re-pended keeps its id, and its retry is the
     same verdict, not an older one.
 
+    The answer is RE-READ from the row, never assumed from the rowcount —
+    the same rule `bind_installation_org` follows, and for a sharper reason
+    here: the equality case updates a row to the value it already holds, and
+    "matched but unchanged" is exactly where drivers disagree about what
+    rowcount means. Nothing in CI runs on Postgres, so a rowcount that
+    counted differently there would be invisible until production inverted a
+    win into a loss. Reading the mark back inside the same transaction
+    decides on the value instead: our own UPDATE holds the row lock until
+    commit, so what we read is either the mark we just set or the newer one
+    that beat us.
+
     Two cases return True that are not "we won a comparison":
 
       * Storage disabled (no engine). There is no mark to compare against
@@ -1377,6 +1399,18 @@ def claim_pr_comment_seq(
         a 404 proved the comment is gone — so the right answer is to let the
         write proceed and 404 into the re-create path, not to report a
         staleness that did not happen.
+
+    A reservation is NOT released when the GitHub write then fails, and that
+    is deliberate. A failed PATCH is not proof the edit did not land: a 5xx
+    or a dropped connection can follow a request GitHub already applied, so
+    rolling the mark back would re-open the overwrite this function exists
+    to close — an older job would be cleared to write over a newer verdict
+    that is live on the PR. The price of not releasing is the narrower one:
+    the mark can stand ahead of what GitHub shows until some job writes
+    successfully. The same job's retry keeps its id and passes on equality,
+    and every later push carries a higher one, so what is actually lost is a
+    job whose seq falls between the last landed write and the failed
+    reservation. See ADR-0014's consequences.
     """
     engine = _get_engine()
     if engine is None:
@@ -1387,7 +1421,7 @@ def claim_pr_comment_seq(
         pr_comments.c.pr_number == pr_number,
     )
     with engine.begin() as conn:
-        result = conn.execute(
+        conn.execute(
             update(pr_comments)
             .where(
                 *identity,
@@ -1395,11 +1429,8 @@ def claim_pr_comment_seq(
             )
             .values(last_seq=seq, updated_at=datetime.now(UTC))
         )
-        if result.rowcount == 1:
-            return True
-        # Lost, or the row is gone. One extra read, on the rare branch only.
         row = conn.execute(select(pr_comments.c.last_seq).where(*identity)).first()
-    return row is None
+    return row is None or row[0] == seq
 
 
 def forget_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) -> None:

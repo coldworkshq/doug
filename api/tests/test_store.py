@@ -3450,10 +3450,29 @@ def test_pr_comment_seq_claim_lets_the_newer_job_through_and_stops_the_older(
     assert store.claim_pr_comment_seq(101, 11, 7, 5) is False
     assert _last_seq(101, 11, 7) == 9
     # Equal passes: a job that failed mid-write keeps its id, and its retry
-    # carries the same verdict rather than an older one.
+    # carries the same verdict rather than an older one. This is also the
+    # case a rowcount-based answer gets wrong — the UPDATE sets the row to
+    # the value it already holds, and "matched but unchanged" is where
+    # drivers disagree. Nothing in CI runs on Postgres, so the answer is
+    # re-read from the row rather than counted.
     assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
     assert store.claim_pr_comment_seq(101, 11, 7, 12) is True
     assert _last_seq(101, 11, 7) == 12
+
+
+def test_pr_comment_seq_claim_does_not_release_the_mark_it_reserved(tmp_path, monkeypatch):
+    """A failed GitHub write leaves the reservation standing. Releasing it
+    would be worse: a failed PATCH is not proof the edit did not land, so an
+    older job cleared to write again could overwrite a newer verdict that is
+    live on the PR."""
+    _db(tmp_path, monkeypatch)
+    store.claim_pr_comment(101, 11, 7)
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    # No release exists to call; the mark stands, and the same job's retry
+    # still passes because it keeps its id.
+    assert _last_seq(101, 11, 7) == 9
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    assert store.claim_pr_comment_seq(101, 11, 7, 8) is False
 
 
 def test_pr_comment_seq_claim_allows_a_write_when_there_is_no_row(tmp_path, monkeypatch):

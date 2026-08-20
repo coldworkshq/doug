@@ -336,7 +336,9 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # value for every row that predates this column — the seq those
             # comments carry is knowable only from their bodies, and
             # `pr_comment.upsert` relearns it the next time it lists.
-            # Backfilling a 0 would say the same thing less clearly.
+            # Backfilling a 0 would say the same thing less clearly, and no
+            # backfill can do better — see store.pr_comments for the residual
+            # this leaves and why closing it costs more than it buys.
             "ALTER TABLE pr_comments ADD COLUMN last_seq BIGINT",
         ),
     ),
