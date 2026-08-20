@@ -327,6 +327,21 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "PRIMARY KEY (installation_id, github_repo_id, pr_number))",
         ),
     ),
+    (
+        13,
+        (
+            # The `seq` high-water mark that gates a write through an
+            # already-stored comment_id (issue #142). Nullable with no
+            # default: NULL is "nothing written yet", which is the honest
+            # value for every row that predates this column — the seq those
+            # comments carry is knowable only from their bodies, and
+            # `pr_comment.upsert` relearns it the next time it lists.
+            # Backfilling a 0 would say the same thing less clearly, and no
+            # backfill can do better — see store.pr_comments for the residual
+            # this leaves and why closing it costs more than it buys.
+            "ALTER TABLE pr_comments ADD COLUMN last_seq BIGINT",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

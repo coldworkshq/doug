@@ -1,5 +1,58 @@
 # HANDOFF — doug
 
+State:    review — PR for issue #142 is open:
+          https://github.com/drewjst/doug/pull/155
+          Rebuilt on main after #157 (db6d51c) landed; only HANDOFF.md
+          conflicted and both sides are kept below.
+Next:     Andrew reviews and merges #155. Migration 13 ships with it, so the
+          API deploy applies the ALTER on start — nothing manual. #157's own
+          open question (does a GitHub alert render inside a CHECK RUN
+          summary?) is unaffected by this branch and is kept verbatim under
+          "Prior stream: check-run relayout" below.
+Blockers: none.
+Decisions this session:
+- The stored-`comment_id` `seq` guard is a RESERVATION, not a read:
+  `store.claim_pr_comment_seq` tests `last_seq <= seq` and advances the mark
+  BEFORE the GitHub write — rejected: read last_seq, compare, then write,
+  which leaves the whole round trip as the window
+- The claim's win/loss answer is RE-READ from the row, never taken from the
+  UPDATE's rowcount — the equality retry writes a row the value it already
+  holds, which is the matched-but-unchanged case drivers disagree on, and no
+  CI job runs on Postgres — rejected: `rowcount == 1`, which Doug caught
+- A reservation is NOT released when the GitHub write fails — a failed PATCH
+  is not proof the edit did not land, so releasing would clear an older job
+  to overwrite a newer verdict live on the PR — rejected: CAS rollback to the
+  previous mark
+- `last_seq` is nullable with no backfill — NULL means "nothing written yet"
+  and never blocks; a row predating the column gets ONE unguarded write —
+  rejected: forcing those rows through a listing, which would make a PR past
+  `_PAGE_BOUND` fail every write forever instead of once
+- The discovery path keeps BOTH comparisons (the marker's seq and the
+  reservation): the marker is the only guard that survives storage being
+  disabled and reads GitHub's actual state, the reservation is the only one
+  that closes the window between deciding and writing — rejected: dropping
+  the marker check as redundant
+- All THREE of `upsert`'s update sites are gated, including the
+  claim-lost-then-read-the-winner's-id path the issue did not name
+- Doug's four findings on 6438a99 are dispositioned in
+  docs/findings-log.jsonl (1 real+fixed, 1 adjacent, 1 real+documented,
+  1 disproved) — the repo's rule is one row per finding at disposition time
+Pointers: branch claude/issue-142-verification-fix-1a077f ·
+          api/doug/store.py (pr_comments.last_seq, claim_pr_comment_seq,
+          set_pr_comment_id) · api/doug/pr_comment.py (upsert's three write
+          sites) · migration 13 · ADR-0014 D9 + Consequences amended ·
+          spec 2026-08-19-sticky-pr-comment-design.md §4 ·
+          docs/findings-log.jsonl
+
+---
+
+## Prior stream: check-run relayout (#157 merged as db6d51c) — kept verbatim
+
+> **CORRECTION 2026-08-19 (this session):** the block below says "building …
+> uncommitted". It shipped: #157 is merged and is what this branch rebased
+> onto. Its open question — whether a GitHub alert renders inside a check-run
+> summary — is still open, as is the `pr_comment.py` fold it names.
+
 State:    building — check-run summary relayout + the needs-you alert are in
           the working tree on claude/doug-pr-review-llm-b10317 (uncommitted).
           api/doug/check_run.py + api/tests/test_check_run.py. Full suite

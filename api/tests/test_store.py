@@ -3416,11 +3416,85 @@ def test_pr_comment_claim_round_trip(tmp_path, monkeypatch):
     assert store.pr_comment_id(101, 11, 7) is None
     assert store.claim_pr_comment(101, 11, 7) is True
     assert store.claim_pr_comment(101, 11, 7) is False
-    store.set_pr_comment_id(101, 11, 7, 987654)
+    store.set_pr_comment_id(101, 11, 7, 987654, seq=5)
     assert store.pr_comment_id(101, 11, 7) == 987654
     store.forget_pr_comment(101, 11, 7)
     assert store.pr_comment_id(101, 11, 7) is None
     assert store.claim_pr_comment(101, 11, 7) is True
+
+
+def _last_seq(installation_id: int, github_repo_id: int, pr_number: int):
+    with store._get_engine().connect() as conn:
+        return conn.execute(
+            select(store.pr_comments.c.last_seq).where(
+                store.pr_comments.c.installation_id == installation_id,
+                store.pr_comments.c.github_repo_id == github_repo_id,
+                store.pr_comments.c.pr_number == pr_number,
+            )
+        ).scalar_one_or_none()
+
+
+def test_pr_comment_seq_claim_lets_the_newer_job_through_and_stops_the_older(
+    tmp_path, monkeypatch
+):
+    """Issue #142. Without this, a write through a stored comment_id has
+    nothing to compare against, and an older drainer finishing last replaces
+    a newer verdict with a stale one."""
+    _db(tmp_path, monkeypatch)
+    store.claim_pr_comment(101, 11, 7)
+    # A fresh claim has written nothing, so nothing is stale against it.
+    assert _last_seq(101, 11, 7) is None
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    assert _last_seq(101, 11, 7) == 9
+    # The older job loses, and does not drag the mark backwards with it.
+    assert store.claim_pr_comment_seq(101, 11, 7, 5) is False
+    assert _last_seq(101, 11, 7) == 9
+    # Equal passes: a job that failed mid-write keeps its id, and its retry
+    # carries the same verdict rather than an older one. This is also the
+    # case a rowcount-based answer gets wrong — the UPDATE sets the row to
+    # the value it already holds, and "matched but unchanged" is where
+    # drivers disagree. Nothing in CI runs on Postgres, so the answer is
+    # re-read from the row rather than counted.
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    assert store.claim_pr_comment_seq(101, 11, 7, 12) is True
+    assert _last_seq(101, 11, 7) == 12
+
+
+def test_pr_comment_seq_claim_does_not_release_the_mark_it_reserved(tmp_path, monkeypatch):
+    """A failed GitHub write leaves the reservation standing. Releasing it
+    would be worse: a failed PATCH is not proof the edit did not land, so an
+    older job cleared to write again could overwrite a newer verdict that is
+    live on the PR."""
+    _db(tmp_path, monkeypatch)
+    store.claim_pr_comment(101, 11, 7)
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    # No release exists to call; the mark stands, and the same job's retry
+    # still passes because it keeps its id.
+    assert _last_seq(101, 11, 7) == 9
+    assert store.claim_pr_comment_seq(101, 11, 7, 9) is True
+    assert store.claim_pr_comment_seq(101, 11, 7, 8) is False
+
+
+def test_pr_comment_seq_claim_allows_a_write_when_there_is_no_row(tmp_path, monkeypatch):
+    """No row means `forget_pr_comment` ran — a 404 proved the comment is
+    gone. The write should proceed and 404 into the re-create path, not
+    report a staleness that never happened."""
+    _db(tmp_path, monkeypatch)
+    assert store.claim_pr_comment_seq(101, 11, 7, 5) is True
+
+
+def test_pr_comment_id_records_the_high_water_seq_and_never_lowers_it(
+    tmp_path, monkeypatch
+):
+    """Both callers can hold a stale view of the slot — the discovery path
+    passes the seq it read out of a listed comment's marker, which another
+    drainer may already have overwritten."""
+    _db(tmp_path, monkeypatch)
+    store.claim_pr_comment(101, 11, 7)
+    store.set_pr_comment_id(101, 11, 7, 987654, seq=9)
+    assert _last_seq(101, 11, 7) == 9
+    store.set_pr_comment_id(101, 11, 7, 987654, seq=4)
+    assert _last_seq(101, 11, 7) == 9
 
 
 def test_pr_comment_denied_marker_sets_and_clears(tmp_path, monkeypatch):

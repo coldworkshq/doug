@@ -13,9 +13,14 @@ Three rules in `upsert` are load-bearing (D9, spec §3.2):
   * Authorship, not the marker, decides ownership. With `pull_requests:
     write` the App can edit ANY comment on the PR, and anyone can post one
     starting with the marker on a public repo.
-  * `seq` (the job id) guards the write. Two drainers are the deployed
-    configuration (`--max-instances 2`, `SKIP LOCKED`), so an older job
-    finishing last is ordinary, not exotic.
+  * `seq` (the job id) guards EVERY write, not just the one that found its
+    comment by listing. Two drainers are the deployed configuration
+    (`--max-instances 2`, `SKIP LOCKED`), so an older job finishing last is
+    ordinary, not exotic. A discovered comment carries its seq in its own
+    marker; a comment reached through a stored `comment_id` — the common
+    case once a PR has one — carries it in `pr_comments.last_seq`, which
+    `store.claim_pr_comment_seq` tests and advances in a single conditional
+    UPDATE before the GitHub write (issue #142).
   * "No comment exists" is concluded only after a listing that COMPLETED.
     The wrong default there is a duplicate comment — and a fresh
     notification — on every push for as long as the fault lasts.
@@ -229,6 +234,8 @@ def upsert(
     try:
         stored = store.pr_comment_id(*key)
         if stored is not None:
+            if not store.claim_pr_comment_seq(*key, seq):
+                return "skipped-stale"
             try:
                 gh.rest.issues.update_comment(
                     owner=owner, repo=repo, comment_id=stored, body=body
@@ -261,11 +268,22 @@ def upsert(
             return "failed:page-bound"
 
         if found is not None:
-            # Record where it is even when the write is skipped: the next job
-            # should not have to list again to find it.
+            # Record where it is, and what it says, even when the write is
+            # skipped: the next job should not have to list again to find it,
+            # and the marker is the only place the comment's own seq is
+            # legible to a drainer that never listed.
             store.claim_pr_comment(*key)
-            store.set_pr_comment_id(*key, found.id)
-            if _seq_of(found) > seq:
+            found_seq = _seq_of(found)
+            store.set_pr_comment_id(*key, found.id, seq=found_seq)
+            # Both comparisons, and neither is the other's leftover. The
+            # marker is the only guard that survives storage being disabled,
+            # and it reads GitHub's actual state rather than our record of
+            # it; the reservation is the only one that closes the window
+            # between deciding and writing, and the only one that can see a
+            # write another drainer has already reserved but not yet made.
+            if found_seq > seq:
+                return "skipped-stale"
+            if not store.claim_pr_comment_seq(*key, seq):
                 return "skipped-stale"
             gh.rest.issues.update_comment(
                 owner=owner, repo=repo, comment_id=found.id, body=body
@@ -275,6 +293,8 @@ def upsert(
         if not store.claim_pr_comment(*key):
             other = store.pr_comment_id(*key)
             if other is not None:
+                if not store.claim_pr_comment_seq(*key, seq):
+                    return "skipped-stale"
                 gh.rest.issues.update_comment(
                     owner=owner, repo=repo, comment_id=other, body=body
                 )
@@ -286,7 +306,7 @@ def upsert(
         created = gh.rest.issues.create_comment(
             owner=owner, repo=repo, issue_number=pr_number, body=body
         ).parsed_data
-        store.set_pr_comment_id(*key, created.id)
+        store.set_pr_comment_id(*key, created.id, seq=seq)
         return "created"
     except RequestFailed as e:
         code = e.response.status_code

@@ -245,10 +245,81 @@ def test_upsert_updates_by_stored_id_and_never_lists(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
     store.claim_pr_comment(101, 11, PR)
-    store.set_pr_comment_id(101, 11, PR, 111)
+    store.set_pr_comment_id(101, 11, PR, 111, seq=1)
     issues = _Issues()
     assert _upsert(_gh(issues)) == "updated"
     assert issues.calls == [("update", 111)]
+
+
+def test_upsert_by_stored_id_skips_when_a_newer_job_already_wrote(tmp_path, monkeypatch):
+    """Issue #142. The stored-id path is the common case once a PR has a
+    comment, and it is the one that never lists — so the marker in the
+    comment's own body cannot guard it. Without `last_seq` an older drainer
+    finishing last replaces a newer verdict, and nothing notices until the
+    next push re-asserts it."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
+    store.claim_pr_comment(101, 11, PR)
+    store.set_pr_comment_id(101, 11, PR, 111, seq=9)
+    issues = _Issues()
+    assert _upsert(_gh(issues), seq=5) == "skipped-stale"
+    assert issues.calls == []
+
+
+def test_upsert_by_stored_id_writes_for_an_equal_or_newer_seq(tmp_path, monkeypatch):
+    """Equal is not stale: a job that failed mid-write and re-pended keeps
+    its id, and its retry carries the same verdict."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
+    store.claim_pr_comment(101, 11, PR)
+    store.set_pr_comment_id(101, 11, PR, 111, seq=5)
+    issues = _Issues()
+    assert _upsert(_gh(issues), seq=5) == "updated"
+    assert _upsert(_gh(issues), seq=6) == "updated"
+
+
+def test_upsert_records_the_seq_it_wrote_so_the_next_drainer_can_compare(
+    tmp_path, monkeypatch
+):
+    """A created comment and a discovered one both leave the mark behind:
+    the guard on the stored-id path is only as good as what the write before
+    it recorded."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
+    assert _upsert(_gh(_Issues()), seq=9) == "created"
+    # The older job arrives second and now takes the stored-id path.
+    issues = _Issues()
+    assert _upsert(_gh(issues), seq=5) == "skipped-stale"
+    assert issues.calls == []
+
+
+def test_upsert_discovery_records_the_found_comments_seq_not_its_own(
+    tmp_path, monkeypatch
+):
+    """The marker is the truth about what GitHub is showing. Recording our
+    own seq on discovery would let a stale listing lower the mark and unblock
+    the very overwrite it exists to stop."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
+    issues = _Issues(pages=[[_marked(42, seq=9)]])
+    assert _upsert(_gh(issues), seq=9) == "updated"
+    later = _Issues()
+    assert _upsert(_gh(later), seq=5) == "skipped-stale"
+    assert later.calls == []
+
+
+def test_upsert_claim_lost_skips_when_the_winner_wrote_a_newer_seq(tmp_path, monkeypatch):
+    """The third write site: the other drainer won the claim and created,
+    and we are the older job reading its id back."""
+    _db(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
+    store.claim_pr_comment(101, 11, PR)
+    store.set_pr_comment_id(101, 11, PR, 88, seq=9)
+    reads = iter([None, 88])
+    monkeypatch.setattr(pr_comment.store, "pr_comment_id", lambda *a: next(reads))
+    issues = _Issues()
+    assert _upsert(_gh(issues), seq=5) == "skipped-stale"
+    assert [c[0] for c in issues.calls] == ["list"]
 
 
 def test_upsert_on_a_404_for_the_stored_id_forgets_then_lists_then_creates(tmp_path, monkeypatch):
@@ -257,7 +328,7 @@ def test_upsert_on_a_404_for_the_stored_id_forgets_then_lists_then_creates(tmp_p
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
     store.claim_pr_comment(101, 11, PR)
-    store.set_pr_comment_id(101, 11, PR, 111)
+    store.set_pr_comment_id(101, 11, PR, 111, seq=1)
     issues = _Issues(update_errors={111: _failed(404)})
     assert _upsert(_gh(issues)) == "created"
     assert [c[0] for c in issues.calls] == ["update", "list", "create"]
@@ -272,7 +343,7 @@ def test_upsert_does_not_re_list_when_the_stored_id_fails_for_any_other_reason(
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_GITHUB_APP_ID", APP_ID)
     store.claim_pr_comment(101, 11, PR)
-    store.set_pr_comment_id(101, 11, PR, 111)
+    store.set_pr_comment_id(101, 11, PR, 111, seq=1)
     issues = _Issues(update_errors={111: _failed(403)})
     assert _upsert(_gh(issues)) == "denied:403"
     assert [c[0] for c in issues.calls] == ["update"]
