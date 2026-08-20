@@ -30,6 +30,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import hunks
+
 from . import example_pack_capture
 from .example_pack import (
     CoverageV0,
@@ -833,6 +835,13 @@ class Coverage(BaseModel):
     # match. None = not tracked (old callers).
     changed_files: int | None = None
     files_dropped: list[str] = Field(default_factory=list)
+    # Content-hash index over the hunks that were actually SENT — the
+    # Walked Out convergence identity (docs/design/walked-out/). Keyed by
+    # path; ordered sha256 list per file; only files whose whole chunk
+    # arrived within the budget appear (file_cut and unseen files do not),
+    # so a stored index bakes this read's coverage in. None = not computed
+    # (rows from before migration 12).
+    hunks: dict[str, list[str]] | None = None
 
     @property
     def complete(self) -> bool:
@@ -888,6 +897,25 @@ def coverage(
         next_start = matches[last + 1].start() if last + 1 < len(matches) else len(diff)
         if next_start - len(sent) > len(CHUNK_SEPARATOR):
             cut = names[-1]
+    # Hunk index over the SENT slice only. A file's chunk is fully sent when
+    # its content ends at or before the slice point; the cut file's content
+    # end lies past it by construction, so file_cut is never indexed, and a
+    # clean between-files cut leaves the last whole file indexed. Same
+    # geometry as the `cut` derivation above: chunks are joined with exactly
+    # CHUNK_SEPARATOR, so content ends CHUNK_SEPARATOR before the next
+    # header (or at len(diff) for the final file).
+    index: dict[str, list[str]] = {}
+    for i, m in enumerate(seen):
+        pos = matches.index(m)
+        content_end = (
+            matches[pos + 1].start() - len(CHUNK_SEPARATOR)
+            if pos + 1 < len(matches)
+            else len(diff)
+        )
+        if content_end > len(sent):
+            continue
+        patch = diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
+        index[m.group(1)] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
     return Coverage(
         diff_chars=len(diff),
         sent_chars=len(sent),
@@ -898,7 +926,20 @@ def coverage(
         file_cut=cut,
         changed_files=changed_files,
         files_dropped=files_dropped or [],
+        hunks=index,
     )
+
+
+def hunk_index(diff: str, *, budget: int | None = None) -> dict[str, list[str]]:
+    """The hunk index for `diff` under `budget` — coverage()'s, verbatim.
+
+    A wrapper rather than a second derivation: the index the ledger stores
+    and the index an offline caller computes from the same text must be the
+    same function or the eval grades labels the product never produced.
+    """
+    cov = coverage(diff, budget=budget)
+    assert cov.hunks is not None
+    return cov.hunks
 
 
 def truncation_reason(cov: Coverage) -> Reason | None:

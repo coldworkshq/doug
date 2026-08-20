@@ -208,11 +208,11 @@ def test_read_diff_captures_partial_status_and_exact_coverage(tmp_path, monkeypa
         reader.read_diff(pr, diff, scope=SCOPE, client=FakeClient())
 
     (pack,) = _captured_packs(tmp_path)
-    expected = reader.coverage(
-        diff, changed_files=pr.changed_files, files_dropped=pr.files_dropped
-    )
     assert pack.capture_status == "partial"
-    assert pack.coverage.model_dump(mode="json") == expected.model_dump(mode="json")
+    # The pack's coverage is the frozen V0 contract, projected field-by-field
+    # from the live model — additive live fields (hunks, migration 12) must
+    # not leak into it, so the comparison projects through the same function.
+    assert pack.coverage == reader._capture_coverage(pr, diff)
 
 
 def test_read_diff_captures_transport_stop_parse_and_spend_failures(
