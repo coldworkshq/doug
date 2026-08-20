@@ -1,12 +1,11 @@
 # HANDOFF — doug
 
-State:    review — issue #142 fixed on branch
-          claude/issue-142-verification-fix-1a077f; ready to open a PR.
-Next:     Open the PR (`Closes #142`), get it reviewed and merged. Migration
-          13 ships with it, so the API deploy applies the ALTER on start —
-          nothing manual. Unchanged from before: #148 (sticky PR comment)
-          is open and awaiting review, and the dogfood week / #144 cleanup
-          follows its merge.
+State:    review — PR for issue #142 is open:
+          https://github.com/drewjst/doug/pull/155
+Next:     Andrew reviews and merges #155. Migration 13 ships with it, so the
+          API deploy applies the ALTER on start — nothing manual. Unchanged
+          from before: #148 (sticky PR comment) is open and awaiting review,
+          and the dogfood week / #144 cleanup follows its merge.
 Blockers: none.
 Decisions this session:
 - The stored-`comment_id` `seq` guard is a RESERVATION, not a read: one
