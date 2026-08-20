@@ -87,9 +87,11 @@ class Classification:
     # Replaced rule 5. `basis`: how a persisted call knows (by-construction |
     # attributed-surviving; None for rule 1's re-report match). `pair_delta`:
     # on a by-construction persist, whether any file's delta moved between
-    # the reads. `code_changed`: on a `new` finding, whether its own file's
-    # delta differs between the reads (None when either index is missing) —
-    # the check run's "new on unchanged files" bucket reads it.
+    # the reads. `code_changed`: on a `new` finding and on a rule-1
+    # (re-reported) persist, whether the finding's own file's delta differs
+    # between the reads (None when either index is missing) — the check
+    # run's "new on unchanged files" bucket and its headline denominator
+    # read it.
     basis: str | None = None
     pair_delta: str | None = None
     code_changed: bool | None = None

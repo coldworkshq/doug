@@ -224,7 +224,10 @@ def _replay_recorded(
             coverage=cov,
         )
     title, summary = check_run.render(
-        existing["tier"], verdict, intent_read, cov, instrument=_instrument(job)
+        existing["tier"], verdict, intent_read, cov, instrument=_instrument(job),
+        convergence=(
+            store.convergence_for(existing["id"]) if existing["tier"] == "reader" else None
+        ),
     )
     # complete before post: a lost claim must not emit a check run that a
     # second holder will also post via this path.
@@ -466,7 +469,12 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(
-        tier, verdict, intent_read, cov, instrument=_instrument(job)
+        tier, verdict, intent_read, cov, instrument=_instrument(job),
+        convergence=(
+            store.convergence_for(verdict_id)
+            if tier == "reader" and verdict_id is not None
+            else None
+        ),
     )
     # The one outcome of the three that bought a model read, and the only
     # line that says "paid read" — see the replay branch above for why those
