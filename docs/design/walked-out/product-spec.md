@@ -56,13 +56,13 @@ Cliffs, each named on the check run:
 - **Still here** — by-construction, unchanged: "cited file's diff is byte-unchanged since `<sha12>`; carried forward, not re-verified."
 - **Still here** — by-construction, changed-elsewhere: "cited file's diff is byte-unchanged since `<sha12>`; other code in this PR changed. Carried forward, not re-verified. If you addressed it elsewhere, a human should look."
 - **Still here** — attributed-surviving: "the hunks this finding was attributed to are unchanged since `<sha12>`; other parts of the file changed. Carried forward, not re-verified."
-- **Cited hunks changed, not reported again** — attributed-edited: "the hunks this finding was attributed to changed since `<sha12>` and this read did not report the finding. Doug stops carrying it; this is not a verified fix."
+- **Can't say** — edited-not-verified (attributed): "the hunks this finding was attributed to changed since `<sha12>` and this read did not report it again; Doug has not verified a fix, so it stays listed."
 - **Can't say** — not-reconfirmed: "part of the cited file's diff changed since `<sha12>`; this read did not confirm or clear it, and Doug has no usable attribution for it."
 - **Can't say** — no-hunk-index: "Doug has no hunk record for one of the two reads, so it cannot compare."
 - **Can't say** — file-uncovered: "Doug did not read this file in one of the two reads (cut or unseen)."
 - **Can't say** — left-diff: "no longer in this PR's diff (reverted, renamed, or landed another way); Doug cannot tell which."
 - **Can't say** — settled: "Doug's own deterministic check disproved this finding at this head; not counted as your progress."
-- **Cited code changed, not reported again** — hunk-edited: "the cited file's diff changed since `<sha12>` and this read did not report the finding. Doug stops carrying it; this is not a verified fix."
+- **Can't say** — edited-not-verified: "the cited file's diff changed since `<sha12>` and this read did not report it again; Doug has not verified a fix, so it stays listed."
 - **New (N)** — as today.
 - **New on files unchanged since `<sha12>` (M)** — "this read reported a finding on a file whose diff did not change; the earlier read did not."
 
@@ -73,4 +73,4 @@ Cliffs, each named on the check run:
 1. **Identity: measured, ruled.** Andrew ordered a verification pass instead of confirming either option. The pass ran 2026-08-20 and all three pre-declared bars passed ([span-verification.md](span-verification.md)). **A-prime is in v1**: a validated attribution pass refines option B's hunk identity, so most multi-hunk partial edits now get an answer instead of an abstention (50 of 59 on the measured corpus). Reader schema untouched; ADR-0012 stays closed; ADR-0014 records the pass.
 2. **Per-PR count: keep.** The count on Doug's own check runs is a fact about that PR, not a published number under the prereg. Ships in v1 as specified.
 3. **Labeler gate: does not apply.** The silence rate carries no defect labels, so the reland-labeler fix does not gate it. The fix still gates any defect-labelled publication.
-4. **Pending (2026-08-20, after Phase 0): the `resolved` direction.** Bar A(B) failed — 6 of 11 sample `resolved` units were false ([phase0-results.md](phase0-results.md)). Until Andrew rules, v1's honest cut is: carry-forward, abstentions, and the silence count ship; no state stops carrying a finding on edit evidence alone; "Cited code changed, not reported again" renders as a can't-say, not a stop.
+4. **The `resolved` direction: demoted (Andrew's ruling, 2026-08-20).** Bar A(B) failed — 6 of 11 sample `resolved` units were false ([phase0-results.md](phase0-results.md)). v1 has no `resolved` state: edit-based calls render `unknown(edited-not-verified)`, and in v1 Doug never stops carrying a finding on its own inference. Verify-at-resolve is pre-registered for v1.1 (full prereg with its own bars before implementation).

@@ -129,7 +129,7 @@ identity absent from the later read and not abstained by rules 2–4:
 | `file` absent from the PRIOR index (prior read did not send it, or the path is model text that was never in a patch) | `unknown(file-uncovered)` — rule 3 extended to the prior side; an absent key is not an empty set |
 | either read has no index (pre-migration row; old revision) | `unknown(no-hunk-index)` |
 | prior multiset == later multiset | `persisted(basis=by-construction)`, with `pair_delta ∈ {unchanged, changed-elsewhere}` from whether any file's multiset differs between the reads |
-| every prior hash absent; `file` present in the later patch with ≥1 hunk | `resolved(basis=hunk-edited)` |
+| every prior hash absent; `file` present in the later patch with ≥1 hunk | `unknown(edited-not-verified)` [was `resolved(basis=hunk-edited)`; demoted by Andrew's 2026-08-20 ruling after Bar A(B) failed — see the recorded results below] |
 | every prior hash absent; `file` absent from the later patch | `unknown(left-diff)` — covers file reverted to base, pure rename, and hunks absorbed into base |
 | some prior hashes survive, or prior ⊂ later | `unknown(not-reconfirmed)`, then the attribution refinement below |
 
@@ -137,8 +137,9 @@ identity absent from the later read and not abstained by rules 2–4:
 finding that would classify `unknown(not-reconfirmed)` and carries a stored
 attribution: every attributed hash still present in the later multiset →
 `persisted(basis=attributed-surviving)`; every attributed hash absent →
-`resolved(basis=attributed-edited)`; mixed, invalid against the prior index,
-or NULL → `unknown(not-reconfirmed)` unchanged. The attribution is model
+`unknown(edited-not-verified)` [was `resolved(basis=attributed-edited)`;
+demoted by the same 2026-08-20 ruling]; mixed, invalid against the prior
+index, or NULL → `unknown(not-reconfirmed)` unchanged. The attribution is model
 output validated at read time against the sent hunks
 (`docs/design/walked-out/span-verification.md`: 0/84 state flips across
 identical double runs, 42/42 controls, 0/25 danger-class contradictions,
@@ -194,8 +195,20 @@ at to_head; comment-only, adjacent-line, and single-hunk-file edits re-hash a
 hunk without touching the defect). `persisted(attributed-surviving)`: 0 of 4
 false. Coverage covariate: 0 suspects. Bar B: sheet with Andrew. Per the
 discipline, no state that stops carrying a finding on edit evidence alone
-ships; the v1 response is Andrew's ruling (recommendation in the results
-file).
+ships. **Andrew's ruling (2026-08-20): demote** — both edit-based `resolved`
+states become `unknown(edited-not-verified)` in v1 (table rows above amended
+in place, marked). v1 therefore has NO `resolved` state at all: in v1 Doug
+never stops carrying a finding on its own inference.
+
+**Verify-at-resolve — pre-registration hook (v1.1).** Before any `resolved`
+state ships, this note must gain a full sibling pre-registration for a
+verify-at-resolve pass: given one carried finding and the repo at `to_head`,
+an adversarial model check must fail to find the defect (quoted-evidence
+protocol of `docs/design/walked-out/phase0-results.md`), the evidence is
+stored on the row, and a hand-checked fresh sample of ≥10 verified resolves
+must show zero false before the state renders anywhere. Declared here so the
+trigger cannot be met by a weaker check; the full bars are written when the
+pass is designed, before any run.
 
 ### Silence rate — sibling pre-registration (publication, v1.1)
 

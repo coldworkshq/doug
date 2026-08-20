@@ -4,7 +4,7 @@ vertical: Outcome loop
 status: parked
 opened: 2026-08-19
 closed:
-next: Andrew's ruling on the resolved direction — Phase 0 ran 2026-08-20 and Bar A(B) FAILED (phase0-results.md: 6/11 resolved units false; edit-evidence is not fix-evidence). Recommended: demote edit-based resolved to unknown(edited-not-verified) in v1, pre-register verify-at-resolve for v1.1. Also pending: Andrew's Bar B labels (phase0_labeling_sheet.md, 21 blanks). Phase 1 blocked on both. PR #163 is open (ADR-0008).
+next: Andrew confirms the Bar B sheet (phase0_labeling_sheet.md — evidence prefilled, review-and-sign), then Bar B is recorded and Phase 1 starts (7 commits, no resolved state in v1 per the 2026-08-20 demote ruling). Verify-at-resolve prereg is the v1.1 gate for any resolved state. PR #163 is open (ADR-0008).
 branches: [design/walked-out]
 prs: []
 supersedes:
@@ -14,7 +14,7 @@ supersedes:
 
 Doug's convergence lane marks an earlier finding `resolved` when the reader does not mention it again. Bar 1 of the convergence evaluation failed because the reader is nondeterministic: 26 of 43 sampled findings were "resolved" on files nobody touched. This lane replaces rule 5 so that Doug stops carrying a finding only with deterministic evidence (the cited file's diff changed in the PR and the reader did not report it again), carries it forward by construction when the cited file's diff is byte-unchanged, and abstains everywhere else. It adds one column (`reads.hunks`), no model calls, and no reader schema change, and it prints on every check run how many of Doug's own earlier findings on unchanged code the reader did not mention again. The name: a Saint Bernard leaves when it sees the traveler walk out, not when the snow shifts and it loses sight of them.
 
-**Status: locked, Phase 0 run, resolved-direction FAILED its bar.** Span-verification passed (attribution is stable and places findings correctly); Phase 0's hand-check then proved edit-evidence is not fix-evidence — Bar A(B) FAIL, carry-forward direction fully validated. See [span-verification.md](span-verification.md) then [phase0-results.md](phase0-results.md).
+**Status: locked; Phase 0 run; resolved direction demoted by ruling (v1 ships carry-forward + silence count; no resolved state).** Span-verification passed (attribution is stable and places findings correctly); Phase 0's hand-check then proved edit-evidence is not fix-evidence — Bar A(B) FAIL, carry-forward direction fully validated. See [span-verification.md](span-verification.md) then [phase0-results.md](phase0-results.md).
 
 ## Read in this order
 
