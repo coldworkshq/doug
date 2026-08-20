@@ -187,6 +187,16 @@ re-run stays $0 and offline).
   reports whether any prior finding's `file` failed to string-match a path in
   the later read's coverage lists.
 
+**Recorded results (2026-08-20, `docs/design/walked-out/phase0-results.md`):**
+Bar A(B) **FAIL** on both classifiers — 4 of 6 pure `resolved(hunk-edited)`
+units and 2 of 5 `resolved(attributed-edited)` units are false (defect present
+at to_head; comment-only, adjacent-line, and single-hunk-file edits re-hash a
+hunk without touching the defect). `persisted(attributed-surviving)`: 0 of 4
+false. Coverage covariate: 0 suspects. Bar B: sheet with Andrew. Per the
+discipline, no state that stops carrying a finding on edit evidence alone
+ships; the v1 response is Andrew's ruling (recommendation in the results
+file).
+
 ### Silence rate — sibling pre-registration (publication, v1.1)
 
 - **Numerator:** earlier findings on files whose diff is unchanged between

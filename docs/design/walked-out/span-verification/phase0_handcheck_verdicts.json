@@ -1,0 +1,152 @@
+[
+ {
+  "i": 0,
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:data-loss",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff ab8f25b9 17533f93 -- api/doug/migrations.py` returns exactly one hunk of +5 lines, and all five are comment text: \"# Closed FK set to verdicts.id (pinned by test): findings, reads, / # deviations, review_jobs. outcomes joins by (repo, pr_number) / / # identity columns \u2014 no verdict_id FK. External rows are verdicts / # themselves (tier='external'), not a dependent table.\" Not one SQL statement changed \u2014 extracting the destructive block from each head (`git show <head>:api/doug/migrations.py | sed -n '/DELETE FROM findings/,/uq_verdicts_app_identity/p'`) and diffing the two produces zero output, i.e. byte-for-byte identical. The flagged code is still verbatim at to_head 17533f93: `\"DELETE FROM findings WHERE verdict_id IN (\"`, `\"DELETE FROM reads WHERE verdict_id IN (\"`, `\"DELETE FROM deviations WHERE verdict_id IN (\"`, and `\"DELETE FROM verdicts WHERE id IN (\"` \u2014 each selecting every row whose `v.id NOT IN (SELECT MIN(id) ... GROUP BY installation_id, github_repo_id, pr_number, head_sha)`, with no archive, copy, or snapshot step anywhere in the migration. The specific sub-case the finding named also survives untouched: `tier` is still absent from that `GROUP BY`, so two legitimately distinct non-'external' tiers for one SHA still collapse and the loser's findings/reads/deviations are still hard-deleted. The pair's other artifacts confirm rather than remove the defect \u2014 the new tests are `test_migration_005_names_every_foreign_key_to_verdicts` and a collision-marker test (no archival test), and the new `docs/decisions/ADR-0011-migrations-preserve-in-flight-data.md` explicitly *accepts* the destructive cleanup (\"A destructive cleanup that is a prerequisite for a constraint is allowed when...\") while rejecting the alternatives, adding no backup requirement. The comment-only edit satisfied the classifier's hunk-edited trigger without altering the flagged behavior, so resolved(hunk-edited) is a false resolution."
+ },
+ {
+  "i": 1,
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "rule": "reader:api-contract-change",
+  "refined": "persisted(attributed-surviving)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "The refutation fails: the flagged construct is byte-identical at to_head. `git -C /Users/andrew/Projects/doughq/repo show 17533f9:api/doug/store.py | sed -n '345,415p'` still contains `*,\\n    created: list[bool] | None = None,` (line 382) and the same mutation helper `def _mark(was_created: bool) -> None:  if created is not None: created.clear(); created.append(was_created)` (lines 410-413) \u2014 the out-parameter API was never replaced with a tuple, dataclass, or sentinel return. `git diff ab8f25b9 17533f93 -- api/doug/store.py` touches only two unrelated regions of this file: the `_APP_IDENTITY_COLLISION` marker string (\"unique constraint failed: verdicts.\" -> \"...verdicts.installation_id\") and extraction of `_verdict_bundle` / addition of `find_verdict_by_id`; the save_review signature and body hunks appear nowhere in that diff. The nearest thing to a repair is in another file \u2014 worker.py changed `if created and not created[0]` to `if created == [False]` with the comment \"an empty list means storage was disabled (save_review returned without marking), which must not look like a race\" \u2014 but that is behaviorally a no-op for the empty-list case the finding names (`[]` was already falsy under the old test), so it pins the existing semantics in a comment rather than removing the fragility. Neither the added tests (`test_migration_005_names_every_foreign_key_to_verdicts`, `test_app_identity_collision_markers_match_sqlite_and_not_other_verdicts_uniques`) nor ADR-0011 pins the `created` out-parameter contract, and `git grep -n created 17533f93 -- api/` confirms worker.py:190 remains the only caller passing it, so the \"fragile against future refactors\" core of the finding survives the pair intact."
+ },
+ {
+  "i": 2,
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:lock-contention",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "The flagged code was not edited in the pair. `git -C /Users/andrew/Projects/doughq/repo diff --numstat ab8f25b9 17533f93 -- api/doug/migrations.py` reports `5\t0` \u2014 five inserted lines, zero deletions \u2014 and the sole hunk is a comment block about the FK closure of the dedupe DELETEs (\"Closed FK set to verdicts.id (pinned by test): findings, reads, deviations, review_jobs...\"), sitting ~75 lines above the flagged statement. The DDL the finding rests on is byte-identical at to_head; `git show 17533f93237d2731445c4073340e9392e0ad4912:api/doug/migrations.py | grep -A2 uq_verdicts_app_identity` yields exactly the same three lines as at from_head: `\"CREATE UNIQUE INDEX IF NOT EXISTS uq_verdicts_app_identity \"` / `\"ON verdicts (installation_id, github_repo_id, pr_number, head_sha) \"` / `\"WHERE installation_id IS NOT NULL AND tier <> 'external'\",` (to_head lines 185-187). `git grep -i concurrently 17533f93 -- api/` returns only two unrelated prose comments in harvest.py and ingest.py \u2014 CONCURRENTLY was never added, and the statement still executes inside `with engine.begin() as conn: conn.exec_driver_sql(statement)` in `_run`, driven by `apply()` off the startup path (`api/doug/store.py:339`, `api/doug/api.py:983`). The pair's other edits do not mitigate it either: the two tests added to `api/tests/test_migrations.py` cover FK closure (`test_migration_005_names_every_foreign_key_to_verdicts`) and sqlite collision-marker wording, not lock acquisition. `resolved(hunk-edited)` therefore fired on file-level or migration-tuple-level overlap rather than the flagged lines, and the exclusive-lock defect survives verbatim at to_head."
+ },
+ {
+  "i": 3,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:api-contract-change",
+  "refined": "persisted(attributed-surviving)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "I tried to refute and failed: the flagged contract survives byte-for-byte and nothing in the pair touches it. `git -C repo diff a0591d6 fe307ab -- api/doug/api.py` changes only `_startup_reconcile` (drift warnings) and `queue` (MT4 id-unified repo scope: `effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())`); the `dispense_token` region is absent from the diff. Extracting the models at both heads (`git show <rev>:api/doug/api.py | sed -n '/^class TokenRequest/,/^def _not_found/p'`) and diffing yields no output \u2014 20 identical lines, with `class TokenResponse` at to_head still reading `token / token_id / installation_id / selection / repos / last4 / expires_at` and no `repo`, and `TokenRequest` still falling through to `else: raise _not_found()` when neither `selection` nor `repo` is set. The pair's other files address unrelated defects: `store.py` adds `count_installations_referenced_by_verdicts` / `count_verdict_repos_missing_from_ledger`, `test_api.py` adds drift and MT4 queue tests, `gcp.sh` wires `DOUG_TOKEN_PEPPER`, and the ROADMAP/OPERATIONS.md edits are status flips and a runbook \u2014 the ROADMAP's \"MT5 \u2026 **Closed**\" note documents the append-only mint but adds no response-shape compatibility. The only real weakness is in the original finding, not the persist call: `git grep -n \"installations/token\" fe307ab` finds callers only in `api/tests/test_api.py` and docs, none under `web/`, so \"existing clients may break\" is unsubstantiated \u2014 but an over-severe finding that was never fixed still legitimately persists."
+ },
+ {
+  "i": 4,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:authz-scope-gap",
+  "refined": "resolved(attributed-edited)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff a0591d66 fe307ab6 -- api/doug/api.py` shows the exact flagged lines deleted: from_head had `repo_ids = ctx.repo_ids` followed by `if repo is not None and repo not in {full_name for _, full_name in store.active_repos(installation_id)}: raise HTTPException(status_code=404...)` \u2014 an installation-only membership test, with scoping left to latest_reviews. At to_head (`git show fe307ab6:api/doug/api.py`, lines ~519-532) that block is replaced by an id-based check against the key's selection: `live = {full_name: rid for rid, full_name in store.active_repos(installation_id)}`, `effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())`, then `rid = live.get(repo)` / `if rid is None or rid not in effective: raise HTTPException(status_code=404, detail=\"not found\")` / `effective = frozenset({rid})` / `repo_ids = effective` \u2014 so an out-of-selection repo now yields 403-equivalent 404, not a misleading empty result, and the call site became `repo=repo if ctx is None else None` so tenants can no longer bypass the id filter via the display filter. The finding's secondary clause is also closed: `store.latest_reviews` gates on `if repo_ids is not None` (not truthiness), and `tenancy.resolve` returns None rather than an empty `repo_ids` (`effective = frozen & live; if not effective: return None`), so no empty-set fall-through exists. The only non-latest-reviews branch is the `else:` fixture path, which requires `store.enabled()` false; a tenant token cannot reach it because `resolve` depends on `store.installation_token_by_lookup`, which returns None with no engine, producing a 401. Commit 554dab1 \"feat: queue repo authorization and filtering share installation_repos ids (MT4)\" is the attributed edit, so resolved(attributed-edited) is correct."
+ },
+ {
+  "i": 5,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:input-validation",
+  "refined": "persisted(attributed-surviving)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "I could not refute the call: the flagged code is byte-identical across the pair and nothing else in the pair addresses it. `git -C /Users/andrew/Projects/doughq/repo diff a0591d66 fe307ab6 -- api/doug/api.py` returns exactly two hunks \u2014 one adding drift warnings to `_startup_reconcile`, one rewriting the `queue` repo-scope check \u2014 and neither touches `revoke_token`. Extracting the function at both heads (`git show <head>:api/doug/api.py | awk '/^def revoke_token/,/^class PatternRow/' | md5`) yields the same digest `058353d39beee9e20b9599c911538060` at a0591d66 and fe307ab6, and the guard `if owner and \"/\" not in owner:` still exists at to_head (line 777, was line 744) with the same `if repos:` fallthrough and terminal `raise _not_found()` beneath it \u2014 so an owner containing '/' still routes into the repos branch rather than being rejected. No fix landed elsewhere either: `git diff a0591d66 fe307ab6 --name-only` lists only api/deploy/gcp.sh, api/doug/api.py, api/doug/store.py, the two test files, and two docs; `api/doug/tenancy.py` is untouched, the store.py diff adds only `count_installations_referenced_by_verdicts()` and `count_verdict_repos_missing_from_ledger()`, and the test diff's sole \"owner\" hit is a comment about a stale `repositories_removed` row. The defect persists at to_head, so `persisted(attributed-surviving)` stands."
+ },
+ {
+  "i": 6,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:authz-scoping-regression",
+  "refined": "persisted(attributed-surviving)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff 8d6f817d 0a3e0b7f` touches only three files (`api/doug/api.py | 8 +++++++-`, `api/tests/test_api.py`, `docs/OPERATIONS.md`), and the entire api.py change is inside `revoke_token`: `if owner:` \u2026 `if \"/\" in owner: raise _not_found()` \u2014 a malformed-owner precedence fix with no relation to queue scoping. The flagged code is byte-identical and still live at to_head: `git show 0a3e0b7f:api/doug/api.py` still contains `effective = ctx.repo_ids if ctx.repo_ids is not None else frozenset(live.values())` \u2026 `repo_ids = effective` and the call `store.latest_reviews(repo=repo if ctx is None else None,  # operator keeps the display filter` \u2014 so the repo filter is still dropped for tenant callers and replaced by repo_ids. `git show 0a3e0b7f:api/doug/store.py` confirms the exclusion is unconditional inside the grouped subquery: `scoped = scoped & (verdicts.c.github_repo_id.in_(repo_ids))`, with no NULL/unresolvable fallback, so a verdict row without a resolvable github_repo_id cannot reach a tenant. The startup drift check the finding cites is likewise unchanged at to_head (`\"installation_repos row; their tenants cannot see those verdicts. \"`), i.e. the code still reports the condition it does not mitigate. The only test added in the pair is `test_revoke_malformed_owner_never_falls_through_to_the_repos_proof`, and the OPERATIONS.md hunk documents pepper provisioning \u2014 neither addresses tenant queue scoping. The defect was not fixed in this pair, in this file or any other, so `persisted(attributed-surviving)` is correct."
+ },
+ {
+  "i": 7,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:error-handling-gap",
+  "refined": "resolved(attributed-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff 8d6f817d 0a3e0b7f -- api/doug/api.py` returns exactly one 8-line hunk, entirely inside `revoke_token`'s owner branch: it replaces `if owner and \"/\" not in owner:` with `if owner:` plus a nested `if \"/\" in owner: raise _not_found()` and a comment about owner precedence over the repos proof \u2014 no try/except and no `KeysNotConfigured` handling was added anywhere. `diff <(git show 8d6f817d:api/doug/api.py | sed -n '748,768p') <(git show 0a3e0b7f:api/doug/api.py | sed -n '748,768p')` prints nothing, so `list_tokens` is byte-identical across the pair and the flagged code on that route was never edited. At to_head, `git show 0a3e0b7f:api/doug/api.py | grep -n KeysNotConfigured` returns only lines 484, 515, and 726 (the `/v1/score/read`, `/v1/queue`, and mint routes, e.g. `    except tenancy.KeysNotConfigured as exc:` / `        raise HTTPException(status_code=503, detail=\"token minting not configured\") from exc`), while `list_tokens` at line 760 still calls `    installation_id = tenancy.verify_org_admin(x_github_token, owner)` bare and `revoke_token` at 791/814 still calls `tenancy.verify_org_admin` and `tenancy.verify_repos_admin` bare. The exact asymmetry the finding names \u2014 guarded on other routes, unguarded on these two \u2014 survives verbatim at to_head, so the code the finding rests on was not resolved by the pair's edits. Separately, the finding looks reachability-weak (only `tenancy.resolve` at tenancy.py:113 and `mint_key` at :314 raise `KeysNotConfigured`, and neither `verify_org_admin`/`verify_repos_admin` nor the three `store.*` token calls reach them), but that would make it a false positive, not an edit-resolved one \u2014 `attributed-edited` is wrong either way."
+ },
+ {
+  "i": 8,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:logic-error",
+  "refined": "resolved(attributed-edited)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff 8d6f817d 0a3e0b7f -- api/doug/api.py` shows the pair's single commit rewriting the exact flagged guard: from_head's `if owner and \"/\" not in owner:` (which let a malformed owner fall past the org-admin branch) becomes, at to_head, `if owner:` followed by `if \"/\" in owner: raise _not_found()` before `installation_id = tenancy.verify_org_admin(...)`. Because the `raise` fires inside the `if owner:` block, control can no longer reach the `if repos:` repo-admin branch at all when owner is present, so the described fall-through is structurally impossible at to_head \u2014 the defect does not survive verbatim or functionally. The commit is explicitly attributed to this finding: \"fix: malformed owner refuses revoke instead of yielding to the repos proof ... Both from Doug's own review of PR #50 (findings 1 and 4): a present owner= param is now authoritative.\" It also adds a regression pin, `test_revoke_malformed_owner_never_falls_through_to_the_repos_proof`, which stubs `verify_repos_admin` to succeed and asserts the request still 404s with `tenancy.resolve(minted.token) is not None`. The only residual is that the refusal is a 404 rather than a 400, but `_not_found()` returning `HTTPException(status_code=404, detail=\"not found\")` is the file's uniform refusal used by `list_tokens` and every other branch, so that is deliberate design, not the flagged precedence bug. resolved(attributed-edited) is the correct call."
+ },
+ {
+  "i": 9,
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:partial-write",
+  "refined": "resolved(attributed-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "The pair's only api.py edit is a malformed-owner guard inside `revoke_token`'s `owner` branch: `git -C /Users/andrew/Projects/doughq/repo diff 8d6f817d 0a3e0b7f -- 'api/doug/api.py'` returns one hunk at line 781 adding `if \"/\" in owner: raise _not_found()` (7 insertions, 1 deletion), and `git diff --stat` over the pair shows only api.py, api/tests/test_api.py (one test, `test_revoke_malformed_owner_never_falls_through_to_the_repos_proof`), and docs/OPERATIONS.md \u2014 tenancy.py is untouched. The flagged mint code was demonstrably not edited: `git show <head>:'api/doug/api.py' | sed -n '600,760p' | md5` yields the identical digest 55d7342665ef3ca1877b6330742980e5 at both 8d6f817d and 0a3e0b7f, and that span contains the whole `dispense_token` handler; `git show <head>:'api/doug/tenancy.py' | md5` is likewise identical (65bd039fdf1c61a5141f5c6fcf281947) at both heads. The defect survives verbatim in `tenancy.mint_key` at to_head, which the handler calls unchanged: `token_id = store.insert_installation_token(...)` / `if token_id is None: return None` / `if repo_selection == \"selected\": store.set_installation_token_repos(token_id, repo_ids)` \u2014 two separate writes with no transaction, no rollback, and no check of the second call's result, so a failure between them leaves a live `repo_selection='selected'` key row with zero junction rows. The finding's second consequence also survives verbatim in the branch the pair did NOT touch: `key_repo_ids = store.installation_token_repo_ids(token_id)` followed by `if not key_repo_ids or not key_repo_ids <= proven_ids: raise _not_found()` (lines 814/818 at from_head, unchanged at 820/824 at to_head), whose own comment states an empty set means \"'all' key ... refused here\" \u2014 exactly the orphaned key being treated like an 'all' key. The edit sits in the mutually exclusive `if owner:` branch that returns before this code is reached, so it neither touches nor repairs the flagged logic; \"attributed-edited\" is false."
+ },
+ {
+  "i": 10,
+  "pr": 56,
+  "file": "api/doug/features.py",
+  "rule": "reader:tier-classification-edge-case",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff d1cb8991 b07e176a -- api/doug/features.py` shows the pair edited only the guard line (`-    if name in MANIFESTS:` \u2192 `+    if name in MANIFESTS or _DEPENDENCY_TEXT_RE.fullmatch(name):`), while the line the finding actually rests on \u2014 `return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)` \u2014 appears as unchanged context and is byte-identical at to_head (`git show b07e176a:api/doug/features.py`, line 160). That lone commit, \"fix: keep dependency text manifests in the code tier\", resolves only the finding's parenthetical example (`requirements-dev.txt` and `constraints.txt` now return tier 0), leaving the three primary sub-cases untouched: CHANGELOG/`.md` codegen inputs, `.txt` fixtures used as test data, and `.rst`-embedded doctests all still hit the blanket suffix test. Replaying the verbatim to_head `_is_prose` against `_read_tier` from `api/doug/review.py` confirms the defect is live: `CHANGELOG.md`, `docs/api_guide.rst`, and `tests/fixtures/expected_output.txt` each return tier 2, the deprioritized prose tier. The fixture case is in fact worse than the finding stated, because `_read_tier` short-circuits on `if features._is_prose(filename): return 2` before reaching `if features._is_test(filename): return 1`, so a fixture that `_is_test` positively matches is still demoted below tests. The new regex is anchored at `^`, so prefixed variants `dev-requirements.txt` and `test-requirements.txt` remain misclassified \u2014 the exact defect class the finding named. The hunk was edited, but the flagged defect was not fixed, so `resolved(hunk-edited)` drops a still-valid finding."
+ },
+ {
+  "i": 11,
+  "pr": 69,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:config-path-fragility",
+  "refined": "resolved(attributed-edited)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff 5db1850 f5ae6a7 -- api/deploy/gcp.sh` shows the exact flagged line replaced: `-PREREG_DOC=../docs/design/outcome-loop/publication-preregistration.md` becomes `+PREREG_DOC=\"$REPO_ROOT/docs/design/outcome-loop/publication-preregistration.md\"`, where the same hunk adds a symlink-resolving prologue (`SCRIPT_DIR=$(cd -P -- \"$(dirname -- \"$SCRIPT_SOURCE\")\" && pwd)`, `API_DIR=$(cd -- \"$SCRIPT_DIR/..\" && pwd -P)`, `REPO_ROOT=$(cd -- \"$API_DIR/..\" && pwd -P)`, `cd \"$API_DIR\"`) before any use. At to_head the grep gate reads an absolute path derived from the script's own location, so the finding's failure mode \u2014 invoking gcp.sh from a directory other than api/ makes grep fail and hard-blocks deploys with a misleading \"not LOCKED\" error \u2014 cannot occur; the same commit also added an explicit readability guard, `if [ ! -f \"$PREREG_DOC\" ] || [ ! -r \"$PREREG_DOC\" ]; then echo \"ERROR: cannot read publication pre-registration: $PREREG_DOC\" >&2; return 1; fi`, which replaces the misleading message even on a genuinely missing file. I checked for a functionally equivalent survivor: `git show f5ae6a7:api/deploy/gcp.sh | grep -n '\\.\\./'` leaves only `--source ../web` (line 439) and `--source ../console` (line 464), and those are anchored by the new `cd \"$API_DIR\"` at line 35 \u2014 the file even documents it at line 434 (\"Built from ../web, so this runs from api/ like every other command here\"). The commits in the pair are named for this work (`11fecec fix: resolve deploy paths from script location`, `737a2c4 fix: resolve deploy script symlinks`, `f5ae6a7 fix: pass preregistration path as data`), the last also fixing the adjacent shell-interpolation into `python3 -c` by passing the path as argv. The defect does not survive at to_head and the flagged code was demonstrably edited, so resolved(attributed-edited) stands."
+ },
+ {
+  "i": 12,
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "rule": "reader:unsafe-migration",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": true,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo diff 5db1850 f5ae6a7 -- api/doug/outcome_backfill.py` returns exactly one hunk, inside `_insert_statement()` at line ~241, changing the SQLite `due_at` expression from `func.datetime(job_14.c.merged_at, \"+60 days\")` to a `func.date(...).op(\"||\")(func.substr(...))` precision fix \u2014 it does not touch `apply()` or `_write_manifest_new()` at all, so the \"hunk-edited\" premise is false. `git show f5ae6a7:api/doug/outcome_backfill.py | sed -n '356,384p'` shows the flagged sequence surviving verbatim at to_head: `transaction = conn.begin()`, then `text(\"LOCK TABLE installations IN SHARE ROW EXCLUSIVE MODE\")` and `text(\"LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE\")`, followed by `before = inspect(...)`, the insert, `after = inspect(...)`, `_write_manifest_new(manifest_path, effective_now, inserted_rows)`, and only then `transaction.commit()` \u2014 with `_write_manifest_new` still calling `os.fsync(manifest.fileno())` and `os.fsync(directory_fd)` (lines 336/339) while both locks are held. Hashing the `_write_manifest_new`-through-`_load_manifest` block at both ends of the pair yields the identical digest `cc84683d753c1bc1` at 5db1850 and at f5ae6a7, proving the flagged code is byte-for-byte unchanged. The pair's own docs commit f157643 (\"docs: explain apply write stall\") confirms the defect was acknowledged and accepted rather than fixed: \"While apply holds its locks, merge-webhook database writes can wait and an HTTP request that times out may be redelivered. Those locks fence the complete eligibility predicate and must not be removed or weakened.\" The classification `resolved(hunk-edited)` is therefore wrong on both prongs \u2014 the flagged code was never edited, and the described stall is fully present at to_head."
+ },
+ {
+  "i": 13,
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "rule": "reader:dialect-specific-logic",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "The refutation fails: the flagged code was genuinely edited in the pair and the defect is genuinely repaired. `git -C /Users/andrew/Projects/doughq/repo diff 5db1850d f5ae6a78 -- api/doug/outcome_backfill.py` shows commit a8f9488 (\"fix: preserve SQLite backfill precision\") replacing the exact flagged line `due_at = func.datetime(job_14.c.merged_at, \"+60 days\")` with `due_at = func.date(job_14.c.merged_at, \"+60 days\").op(\"||\")(func.substr(job_14.c.merged_at, 11))`; grepping `git show f5ae6a78:api/doug/outcome_backfill.py` confirms `func.datetime(` appears nowhere at to_head, only `func.date`/`func.substr` at lines 244-245. The fix is functional, not cosmetic: `sqlite3` gives `datetime('2024-01-31 23:59:58.123456','+60 days')` -> `2024-03-31 23:59:58` (microseconds truncated, the precise format divergence from the Python `timedelta` path at line 204, `expected_due = _as_utc(pair[\"merged_at_14\"]) + timedelta(days=60)`), whereas the new expression yields `2024-03-31 23:59:58.123456`. The same commit added `test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary`, asserting `clean.mismatches == ()` and an exact `due_at`, targeting the very `inspect()` mismatch audit the finding warned about. I also probed for a surviving edge \u2014 float julian-day rounding pushing `date()` across a day boundary \u2014 but `date('2024-01-31 23:59:59.999999','+60 days')` returns `2024-03-31` and `2024-12-31 00:00:00.000001` yields `2025-03-01 00:00:00.000001`, so that residual is refuted too. The first read's diff (99011b78..5db1850d, line 250) confirms the flagged construct was introduced in the reviewed change and then edited away within the pair, so resolved(hunk-edited) is correct."
+ },
+ {
+  "i": 14,
+  "pr": 90,
+  "file": "web/lib/node-next-loader.mjs",
+  "rule": "reader:tooling-resolution-fallback",
+  "refined": "resolved(hunk-edited)",
+  "call_is_false": false,
+  "uncertain": false,
+  "evidence": "Refutation fails: the flagged code was genuinely edited in the pair and the defect is gone. `git -C /Users/andrew/Projects/doughq/repo log --oneline 00798b2..a1d0d86` shows commit `7201710 fix(web): test loader falls back to .ts only for extensionless specifiers`, and `git diff 00798b2 a1d0d86 -- web/lib/node-next-loader.mjs` shows the unconditional `if (specifier.startsWith(\"./\") || specifier.startsWith(\"../\")) { return nextResolve(`${specifier}.ts`, context); }` replaced by a guarded form: `if ((specifier.startsWith(\"./\") || specifier.startsWith(\"../\")) && !/\\.[a-zA-Z]+$/.test(specifier))`, with a comment naming the rule (\"appending .ts to a failing \\\"./foo.mjs\\\" would report \\\"./foo.mjs.ts not found\\\" and mask the real error (Doug PR #90 review, reader:tooling-resolution-fallback)\"). `git show a1d0d86:web/lib/node-next-loader.mjs` confirms that guarded version is what stands at to_head, so the exact masking case the finding cited (extension-bearing `.mjs`/`.js` specifiers) can no longer reach the `.ts` fallback. A repo-wide grep for `specifier}.ts` returns only that one guarded line at web/lib/node-next-loader.mjs:72 plus identical copies inside `.claude/worktrees/*` checkouts, so no unguarded duplicate survives; Doug's own docs/findings-log.jsonl entry added in a1d0d86 independently records `\"rule\":\"reader:tooling-resolution-fallback\",\"verdict\":\"real\",\"changed\":true` settled as \"fixed in the same PR by guarding the fallback to extensionless specifiers\". The only residual is that an extensionless `./foo` whose real target `./foo.js` is missing still reports \"./foo.ts not found\", but that is the fallback's intended purpose and is narrower than the finding's claim about \"any failing relative specifier\", so it is not the flagged defect surviving. The classifier's resolved(hunk-edited) call is correct."
+ }
+]
