@@ -49,12 +49,13 @@ What neither fixes: the comment **persists in the conversation timeline** in a w
 ```python
 MARKER_PREFIX = "<!-- doug:verdict"      # startswith() on the raw body, line 1
 
-def receipt_url(owner, repo, pr_number) -> str | None:
-    """{DOUG_WEB_URL}/dashboard/pr/{n}?repo={quote(owner/repo, safe='')};
+def receipt_links(owner, repo, pr_number) -> Links | None:
+    """A NamedTuple(base, receipt) where receipt is
+    {DOUG_WEB_URL}/dashboard/pr/{n}?repo={quote(owner/repo, safe='')};
     None when the env is unset or empty (os.environ.get(...) or None —
     Cloud Run sets DOUG_WEB_URL="" on a bootstrap before doug-web exists)."""
 
-def render(summary, *, head_sha, seq, receipt_url) -> str:
+def render(summary, *, head_sha, seq, links) -> str:
     """marker line, blank line, one italic header line, blank line, the
     check-run SUMMARY BYTE-FOR-BYTE, TWO newlines, '---', footer."""
 
@@ -62,7 +63,7 @@ def upsert(gh, owner, repo, pr_number, body, *, installation_id, github_repo_id,
     """Returns 'created' | 'updated' | 'skipped-stale' | 'denied:403' | 'failed:<code|net>'."""
 ```
 
-**Frame.** Header: `_The \`Doug\` check run for {head_sha[:7]}, repeated here in full. Doug edits this comment in place on every review; it is never re-posted._` — this resolves the summary's own "this check" references, carries the commit (D9), and explains the one behaviour a reader cannot infer. Footer: `Doug · [full receipt on Doug HQ]({receipt_url}) — sign-in required · [what Doug gets wrong]({DOUG_WEB_URL}/docs/what-doug-gets-wrong)`; without `DOUG_WEB_URL` both links are omitted and one stderr line is printed per process. **Joins are pinned:** a blank line between header and summary, and **two** newlines before `---` — `check_run.render` can end on a list item (`- none`) or a plain paragraph, and a `---` on the very next line is a setext `<h2>` underline or a GFM lazy continuation, both of which `check_run.py` already documents having to avoid. Size: `SUMMARY_LIMIT (60,000) + FRAME_MAX ≤ 65,536` is an **asserted invariant**, not a truncation branch (a second truncation would diverge the middle silently).
+**Frame.** Header: `_The \`Doug\` check run for {head_sha[:7]}, repeated here in full. Doug edits this comment in place on every review; it is never re-posted._` — this resolves the summary's own "this check" references, carries the commit (D9), and explains the one behaviour a reader cannot infer. Footer: `Doug · [full receipt on Doug HQ]({links.receipt}) — sign-in required · [what Doug gets wrong]({links.base}/docs/what-doug-gets-wrong)`; without `DOUG_WEB_URL` both links are omitted and one stderr line is printed per process. **Joins are pinned:** a blank line between header and summary, and **two** newlines before `---` — `check_run.render` can end on a list item (`- none`) or a plain paragraph, and a `---` on the very next line is a setext `<h2>` underline or a GFM lazy continuation, both of which `check_run.py` already documents having to avoid. Size: `SUMMARY_LIMIT (60,000) + FRAME_MAX ≤ 65,536` is maintained by frame degradation: `render` measures the frame (header + footer) and, when it exceeds `FRAME_MAX`, re-renders with `links=None` and logs a warning. An explicit raise backstops a frame still overrunning with no links. The middle (the summary) is never truncated — that would diverge it from the check run silently, which the byte-identity contract cannot survive.
 
 **Upsert algorithm (D9):**
 1. `comment_id = store.pr_comment_id(...)`. If present → `issues.update_comment(owner, repo, comment_id, body=...)`; on 404 → `store.forget_pr_comment(...)` and continue to step 2 (someone deleted it; re-create is correct and its notification cost is named in §4).
@@ -81,7 +82,7 @@ if store.repo_pr_comment(job["installation_id"], job["github_repo_id"]) and _com
     if pr_comment.target_matches(gh, owner, name, job["pr_number"], job["github_repo_id"]):
         outcome = pr_comment.upsert(gh, owner, name, job["pr_number"],
                                     pr_comment.render(summary, head_sha=job["head_sha"], seq=job["id"],
-                                                      receipt_url=pr_comment.receipt_url(owner, name, job["pr_number"])),
+                                                      links=pr_comment.receipt_links(owner, name, job["pr_number"])),
                                     installation_id=job["installation_id"], github_repo_id=job["github_repo_id"], seq=job["id"])
     else:
         outcome = "skipped-target"
@@ -130,7 +131,7 @@ Public receipts; inline/code comments; deleting comments (D3b); anything in the 
 ## 5. Tests that encode intent
 
 - **Worker-level mirror test**: for one job, capture the `summary` passed to `check_run.post` and the `body` passed to `upsert`; assert `summary in body` — *the ADR's claim tested where it can actually fail* (a `render`-only test compares render's output to its own input and passes trivially).
-- `pr_comment.render`: marker is line 1 and carries `head`/`seq`; blank line before the summary; two newlines before `---`; footer says sign-in required and carries both links; `receipt_url=None` → no links; `SUMMARY_LIMIT + FRAME_MAX ≤ 65_536` asserted.
+- `pr_comment.render`: marker is line 1 and carries `head`/`seq`; blank line before the summary; two newlines before `---`; footer says sign-in required and carries both links; `links=None` → no links; `SUMMARY_LIMIT + FRAME_MAX ≤ 65_536` held by frame degradation when oversized.
 - `pr_comment.upsert`: stored id → `update_comment` only; id 404 → forget, then list; human-authored marked comment → not matched, `create_comment` called; App-authored marked comment with higher `seq` → `skipped-stale`, no write; list raises → `failed`, **no** create; page bound → `failed`, no create; claim lost → update not create; 403 → `denied:403` and no raise; body `UNSET` does not crash; `RequestError` → `failed:net`.
 - worker: setting off / no row / removed row → `skipped`, no GitHub call; replay path upserts the same body as the fresh path; `target_matches` false → `skipped-target`; `denied` sets `pr_comment_denied_at`, next success clears it; own `doug: comment …` line present and the "reviewed" line unchanged.
 - `check_run._oneline`/`_quote`: neutralisation cases above; check-run summary with a `CLEARED_NOTE` when cleared.

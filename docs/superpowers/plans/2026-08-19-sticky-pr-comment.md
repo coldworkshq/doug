@@ -15,7 +15,7 @@
 - The comment's middle is `check_run.render()`'s `summary` **byte-for-byte**; the only transform applied to model text happens inside `check_run._oneline` and therefore reaches both surfaces identically.
 - Marker is line 1: `<!-- doug:verdict head=<full head_sha> seq=<job id> -->`; match is `body.startswith("<!-- doug:verdict")` **and** `performed_via_github_app.id == app_auth.app_id()`. A human-authored marked comment is never matched or written.
 - Upsert order: stored id → update (404 → forget) → bounded list scan (10 pages × 100) with authorship match and `seq` guard → claim row → create. A listing failure or hitting the page bound returns `failed:…` and **never** creates.
-- Joins pinned: marker, blank line, header, blank line, summary, **two** newlines, `---`, footer. `SUMMARY_LIMIT + FRAME_MAX <= 65_536` is asserted, never truncated.
+- Joins pinned: marker, blank line, header, blank line, summary, **two** newlines, `---`, footer. `SUMMARY_LIMIT + FRAME_MAX <= 65_536` is maintained by frame degradation: `render` measures the frame and, when it exceeds `FRAME_MAX`, re-renders with no links; the summary is never truncated.
 - Worker posts only when `store.repo_pr_comment(...)` is True (an **active** row with `pr_comment = TRUE`; absent/removed → False) AND `pr_comment.allowed(job["installation_id"])` (env `DOUG_PR_COMMENT_INSTALLATIONS`, temporary — D3a). Own stderr line `doug: comment <outcome> <repo>#<pr>@<sha12>`; the "reviewed"/"replayed" lines are untouched.
 - `target_matches` on the replay path: `pulls.get(...).base.repo.id == job["github_repo_id"]` else `skipped-target`.
 - Neutralisation in `_oneline` (zero-width space U+200B after the trigger): `@name` → `@​name`; `#123` / `owner/repo#4` → `#​123`; `<!--` → `<!-​-`; `](` → `]​(`. `_quote` routes through `_oneline`.
@@ -372,8 +372,8 @@ and in `render`, right after the `RISK_NOTE`/`NEUTRAL_NOTE` lines: `if verdict.b
 MARKER_PREFIX = "<!-- doug:verdict"
 ALLOWLIST_ENV = "DOUG_PR_COMMENT_INSTALLATIONS"
 def allowed(installation_id: int) -> bool                       # D3a: empty env -> False; same parse as intent.enabled_for
-def receipt_url(owner: str, repo: str, pr_number: int) -> str | None
-def render(summary: str, *, head_sha: str, seq: int, receipt_url: str | None) -> str
+def receipt_links(owner: str, repo: str, pr_number: int) -> Links | None
+def render(summary: str, *, head_sha: str, seq: int, links: Links | None) -> str
 def target_matches(gh, owner: str, repo: str, pr_number: int, github_repo_id: int) -> bool
 def upsert(gh, owner, repo, pr_number, body, *, installation_id, github_repo_id, seq) -> str
 ```
@@ -383,7 +383,7 @@ Outcome strings: `created | updated | skipped-stale | denied:403 | failed:<code>
 
 ```python
 def test_render_frames_the_summary_verbatim_with_pinned_joins():
-    body = pr_comment.render("**T**\n\n- none", head_sha="a"*40, seq=7, receipt_url="https://hq/dashboard/pr/3?repo=o%2Fr")
+    body = pr_comment.render("**T**\n\n- none", head_sha="a"*40, seq=7, links=pr_comment.Links(base="https://hq", receipt="https://hq/dashboard/pr/3?repo=o%2Fr"))
     lines = body.split("\n")
     assert lines[0] == f"<!-- doug:verdict head={'a'*40} seq=7 -->"
     assert lines[1] == ""
@@ -398,11 +398,12 @@ def test_render_without_a_web_url_omits_both_links_and_still_renders(): ...
 def test_frame_plus_summary_limit_fits_githubs_comment_cap():
     assert check_run.SUMMARY_LIMIT + pr_comment.FRAME_MAX <= 65_536
 
-def test_receipt_url_encodes_the_repo_and_is_none_when_env_empty(monkeypatch):
+def test_receipt_links_encodes_the_repo_and_is_none_when_env_empty(monkeypatch):
     monkeypatch.setenv("DOUG_WEB_URL", "")
-    assert pr_comment.receipt_url("o", "r", 3) is None
+    assert pr_comment.receipt_links("o", "r", 3) is None
     monkeypatch.setenv("DOUG_WEB_URL", "https://hq")
-    assert pr_comment.receipt_url("o", "r", 3) == "https://hq/dashboard/pr/3?repo=o%2Fr"
+    links = pr_comment.receipt_links("o", "r", 3)
+    assert links.base == "https://hq" and links.receipt == "https://hq/dashboard/pr/3?repo=o%2Fr"
 
 def test_upsert_updates_by_stored_id_and_never_lists(): ...
 def test_upsert_on_a_404_for_the_stored_id_forgets_then_lists_then_creates(): ...
@@ -441,23 +442,30 @@ _MARKER_RE = re.compile(r"^<!-- doug:verdict head=([0-9a-f]{7,64}) seq=(\d+) -->
 ALLOWLIST_ENV = "DOUG_PR_COMMENT_INSTALLATIONS"
 _PAGE_BOUND = 10
 _PER_PAGE = 100
-FRAME_MAX = 1_000  # asserted in tests against SUMMARY_LIMIT
+FRAME_MAX = 1_000  # bound maintained by frame degradation, checked in render
 
 def allowed(installation_id): ...  # same parse as intent.enabled_for
-def receipt_url(owner, repo, pr_number):
+def receipt_links(owner, repo, pr_number):
     base = os.environ.get("DOUG_WEB_URL") or None
-    return None if base is None else f"{base.rstrip('/')}/dashboard/pr/{pr_number}?repo={quote(f'{owner}/{repo}', safe='')}"
+    if base is None:
+        return None
+    base = base.rstrip('/')
+    slug = quote(f"{owner}/{repo}", safe="")
+    return Links(base=base, receipt=f"{base}/dashboard/pr/{pr_number}?repo={slug}")
 
-def render(summary, *, head_sha, seq, receipt_url):
+def render(summary, *, head_sha, seq, links):
     header = (f"_The `Doug` check run for {head_sha[:7]}, repeated here in full. "
               "Doug edits this comment in place on every review; it is never re-posted._")
-    web = os.environ.get("DOUG_WEB_URL") or None
-    if receipt_url is None:
+    if links is None:
         footer = "Doug · not a gate"
     else:
-        footer = (f"Doug · [full receipt on Doug HQ]({receipt_url}) — sign-in required · "
-                  f"[what Doug gets wrong]({web.rstrip('/')}/docs/what-doug-gets-wrong)")
-    return f"{MARKER_PREFIX} head={head_sha} seq={seq} -->\n\n{header}\n\n{summary}\n\n---\n{footer}"
+        footer = (f"Doug · [full receipt on Doug HQ]({links.receipt}) — sign-in required · "
+                  f"[what Doug gets wrong]({links.base}/docs/what-doug-gets-wrong)")
+    body = f"{MARKER_PREFIX} head={head_sha} seq={seq} -->\n\n{header}\n\n{summary}\n\n---\n{footer}"
+    # Frame degradation: if oversized with links, re-render without them
+    if links is not None and len(body) - len(summary) > FRAME_MAX:
+        body = render(summary, head_sha=head_sha, seq=seq, links=None)
+    return body
 
 def _is_ours(c) -> bool:
     body = getattr(c, "body", "") or ""
@@ -576,7 +584,7 @@ def _post_pr_comment(gh, owner, name, job, title, summary, *, fresh: bool) -> No
         outcome = "skipped-target"
     else:
         body = pr_comment.render(summary, head_sha=job["head_sha"], seq=job["id"],
-                                 receipt_url=pr_comment.receipt_url(owner, name, pr))
+                                 links=pr_comment.receipt_links(owner, name, pr))
         outcome = pr_comment.upsert(gh, owner, name, pr, body,
                                     installation_id=inst, github_repo_id=repo_id, seq=job["id"])
         if outcome == "denied:403":
@@ -698,4 +706,4 @@ Then open PR B (`feat: one sticky PR comment that mirrors the check run`) — bo
 
 - **Spec coverage:** §3.1 → T2/T3/T7/T8; §3.2 → T5; §3.3 → T6; §3.4 → T4; §3.5 → T10; D3a → T5 `allowed` + T6 gate + T9 env; D8 → T2/T3 col + T6 marking + T7 connections + T8 banner; D9 → T5; deploy split → T1 + manual gate; §5 tests → each task's Step 1 (worker-level mirror test in T6).
 - **Placeholders:** T5 lists test names with `...` — each is a required real test; the RED run must show each; T6's `_wire_pr_comment`/`_run_one_job` name the file's helper pattern to extend (the threshold plan's T5 did the same and the implementer built them).
-- **Type consistency:** `repo_pr_comment/set_repo_pr_comment/pr_comment_id/claim_pr_comment/set_pr_comment_id/forget_pr_comment/mark_pr_comment_denied/pr_comment_denied_at` (T3) match T5/T6/T7; `pr_comment.render(summary, *, head_sha, seq, receipt_url)` / `upsert(..., *, installation_id, github_repo_id, seq)` / `allowed` / `target_matches` (T5) match T6; response shape `{needs_you_threshold, pr_comment}` is the same in T1/T7/T8; outcome tokens `created|updated|skipped-stale|denied:403|failed:*` plus worker-only `skipped|skipped-target` consistent in T5/T6.
+- **Type consistency:** `repo_pr_comment/set_repo_pr_comment/pr_comment_id/claim_pr_comment/set_pr_comment_id/forget_pr_comment/mark_pr_comment_denied/pr_comment_denied_at` (T3) match T5/T6/T7; `pr_comment.render(summary, *, head_sha, seq, links)` / `upsert(..., *, installation_id, github_repo_id, seq)` / `allowed` / `target_matches` (T5) match T6; response shape `{needs_you_threshold, pr_comment}` is the same in T1/T7/T8; outcome tokens `created|updated|skipped-stale|denied:403|failed:*` plus worker-only `skipped|skipped-target` consistent in T5/T6.
