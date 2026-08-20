@@ -42,24 +42,36 @@ NAME = "Doug"
 SUMMARY_LIMIT = 60_000
 TITLE_LIMIT = 255
 
+# These two are STANDING text: identical on every PR, on both tiers. They
+# render under HOW_TO_READ_HEADING, below the findings, because ~120 words of
+# unconditional caveat above the first finding is how the old layout buried
+# the only part of the summary that changes from push to push. Honesty about
+# THIS run — the fallback, a partial read, the band — stays above, in the
+# alert. Conditional above, unconditional below; that is the whole rule.
 NEUTRAL_NOTE = (
-    "Doug is advisory: this check is always neutral and never blocks a "
-    "merge, whatever the band says."
+    "**Doug never blocks a merge.** This check is always neutral, whatever "
+    "the band says."
 )
 # The first author to fix four findings and re-push read the unchanged
 # number as a bug (PR #50). The score prices the PR's shape — it routes
 # attention; the findings are the judgment.
 RISK_NOTE = (
-    "Risk is not a grade and does not go down as findings are fixed: it "
-    "prices what this change touches and how much of it, so a change of "
-    "this shape earns the same look on every push. What the read actually "
-    "found is below."
+    "**Risk is not a grade.** It prices what this change touches and how "
+    "much of it, so a change of this shape earns the same look on every "
+    "push. It does not go down as findings are fixed; the findings are the "
+    "judgment."
 )
-FALLBACK_NOTE = (
-    "**The validated diff-reader did not run.** This band and score come "
-    "from the deterministic scorer, which never opens the diff — it scores "
-    "PR shape (size, paths, authorship) alone. Read it as routing, not as "
-    "a judgment about this change."
+FLAG_LINE_NOTE = "**The flag line is per repository**, set on the Doug dashboard."
+HOW_TO_READ_HEADING = "### How to read this"
+
+_FALLBACK_BODY = (
+    "This band and score come from the deterministic scorer, which never "
+    "opens the diff — it scores PR shape (size, paths, authorship) alone. "
+    "Read it as routing, not as a judgment about this change."
+)
+FALLBACK_NOTE = "**The validated diff-reader did not run.** " + _FALLBACK_BODY
+FALLBACK_FLAGGED_NOTE = (
+    "**Needs you, but the validated diff-reader did not run.** " + _FALLBACK_BODY
 )
 # A Cleared band reads as "safe" to anyone skimming the checks list. It
 # means Doug's read found nothing worth a human's time — it is not a
@@ -68,6 +80,30 @@ CLEARED_NOTE = (
     "Cleared means Doug found nothing it wanted a human to look at; it is not a "
     "statement that the change is safe."
 )
+# The one question this surface exists to answer, and the only thing allowed
+# to raise an alert.
+#
+# It is keyed to the BAND, never to a finding's severity. The band is
+# computed against `installation_repos.needs_you_threshold` — a number the
+# tenant set, per ADR-0013. A severity is the model's own call: the reader
+# schema constrains it to low/medium/high (reader.py), the Python model types
+# it `str | None` and validates nothing (models.py). The two are independent,
+# and the case that decides it is ordinary rather than exotic: a Cleared
+# verdict routinely carries a medium finding, so a severity-keyed alert would
+# put a stop sign on a change this module just said nobody needs to look at,
+# contradicting CLEARED_NOTE two lines above it.
+NEEDS_YOU = (
+    "**Needs you.** Risk is above this repository's flag line, so Doug is "
+    "asking for a human read. It does not block: this check is neutral and "
+    "the merge button is unchanged."
+)
+# GitHub renders these as themed callouts in a PR comment (pr_comment.py
+# mirrors this summary verbatim). CAUTION is deliberately absent: red reads
+# as "stop", and a surface that never blocks a merge and has adjudicated
+# nothing has not earned it (ADR-0010).
+_ALERT_IMPORTANT = "[!IMPORTANT]"
+_ALERT_WARNING = "[!WARNING]"
+
 DEVIATION_HEADING = "### Decision deviations (unvalidated)"
 DEVIATION_NOTE = (
     "The instrument behind this section has not passed its derangement "
@@ -220,6 +256,88 @@ def _quote(reason) -> list[str]:
     return ["", f"> {_oneline(reason.label)}"]
 
 
+# The order counts render in, not a validation list — see _finding_counts for
+# why an unrecognised severity falls back to a plain count instead of being
+# escaped into a table cell.
+_SEVERITY_ORDER = ("high", "medium", "low")
+
+
+def _read_cell(tier: str) -> str:
+    """The summary table's Read cell. Static strings on both branches."""
+    return "validated diff reader" if tier == "reader" else "none — scorer only"
+
+
+def _finding_counts(risks: list) -> str:
+    """The summary table's Findings cell.
+
+    NOTHING model-authored reaches this string, and that is a hard rule
+    rather than a preference: a `|` inside a table cell ends the cell and
+    shifts every column after it, which `_oneline` does not neutralise
+    because a pipe is inert everywhere else this module writes. So the
+    severity words are emitted from `_SEVERITY_ORDER`, never echoed from the
+    verdict — the moment any finding carries a severity outside that
+    vocabulary, the whole cell degrades to a count. The raw severity still
+    reaches the reader in the findings list below, where `_oneline` already
+    governs it.
+
+    Settlement notices are excluded. They are weight-0 markers for findings
+    that were DISPROVED (settle.py), so counting them would put a number in
+    the header of a summary whose body says nothing survived — the same
+    misreading SETTLED_NOTE exists to end (#109).
+    """
+    countable = [r for r in risks if r.rule not in SETTLED_REASON_CODES]
+    if not countable:
+        return "none"
+    graded = [(r.severity or "").strip().lower() for r in countable]
+    if all(g in _SEVERITY_ORDER for g in graded):
+        buckets = {s: graded.count(s) for s in _SEVERITY_ORDER if s in graded}
+        return " · ".join(f"{n} {s}" for s, n in buckets.items())
+    return "1 finding" if len(countable) == 1 else f"{len(countable)} findings"
+
+
+def _alert(tier: str, verdict: Verdict, partial) -> list[str]:
+    """At most ONE alert, chosen by precedence. Never two.
+
+    Two stacked callouts teach a reader to skip both, so the four run states
+    that could each claim one are resolved here instead of each appending
+    its own block:
+
+      1. The reader did not run. This says the band is PR shape alone, which
+         reframes what Flagged even MEANS, so it outranks the routing call
+         and carries it inside its own body rather than losing it.
+      2. The read was truncated. A clear is not evidence about anything past
+         the cut, and `render` filters the matching Reason out of the
+         findings list on the strength of this block rendering.
+      3. Flagged on a clean read. The routing call, unqualified.
+      4. Cleared on a clean read. Nothing. Quiet is the signal — an alert on
+         every PR is an alert on none.
+
+    Returns the lines to splice, blank-line-first, or [] for state 4.
+    """
+    flagged = verdict.band is Band.FLAGGED
+    if tier != "reader":
+        return _alert_block(
+            _ALERT_WARNING, FALLBACK_FLAGGED_NOTE if flagged else FALLBACK_NOTE
+        )
+    if partial is not None:
+        # `partial.label` is reader.truncation_reason's whole sentence and it
+        # splices file paths, so it goes through the same chokepoint as every
+        # other model- or repo-influenced span (D7).
+        lead = "**Needs you.** " if flagged else ""
+        return _alert_block(_ALERT_WARNING, lead + _oneline(partial.label))
+    if flagged:
+        return _alert_block(_ALERT_IMPORTANT, NEEDS_YOU)
+    return []
+
+
+def _alert_block(kind: str, body: str) -> list[str]:
+    """One GitHub alert. `body` must already be a single physical line: the
+    marker only opens an alert when it is the blockquote's first line, so a
+    stray newline in the body would silently demote the whole block to an
+    ordinary quote carrying a literal "[!WARNING]"."""
+    return ["", f"> {kind}", f"> {body}"]
+
+
 def render(
     tier: str,
     verdict: Verdict,
@@ -231,27 +349,29 @@ def render(
     title = _headline(tier, verdict)
     partial = truncation_reason(coverage) if coverage is not None else None
 
+    # Folded into the alert below, so it is stated once — but only when that
+    # alert renders, so it can never be lost instead. Computed BEFORE the
+    # lines, because the summary table's Findings cell counts this list.
+    skip = {"read-truncated"} if partial is not None else set()
+    risks = [r for r in verdict.reasons if r.rule not in skip]
+
+    # The numbers, as a table. Every cell is either a float this module
+    # formatted or a string from a fixed vocabulary — see _finding_counts on
+    # why nothing model-authored is allowed in here.
     lines = [
         f"**{title}**",
         "",
-        (
-            f"Risk {verdict.score:.2f} against a flag line of {verdict.threshold:.2f}. "
-            "The flag line is set per repository on the Doug dashboard."
-        ),
-        RISK_NOTE,
-        NEUTRAL_NOTE,
+        "| Risk | Flag line | Read | Findings |",
+        "|:--|:--|:--|:--|",
+        f"| **{verdict.score:.2f}** | {verdict.threshold:.2f} "
+        f"| {_read_cell(tier)} | {_finding_counts(risks)} |",
     ]
+    lines += _alert(tier, verdict, partial)
     if verdict.band is Band.CLEARED:
-        lines += ["", CLEARED_NOTE]
-    if tier != "reader":
-        lines += ["", FALLBACK_NOTE]
-    if partial is not None:
-        lines += _quote(partial)
-
-    # Folded into the block above, so it is stated once — but only when that
-    # block rendered, so it can never be lost instead.
-    skip = {"read-truncated"} if partial is not None else set()
-    risks = [r for r in verdict.reasons if r.rule not in skip]
+        # A quote, not an alert. This defines what the band means; it does
+        # not ask the reader for anything, and the one alert slot belongs to
+        # the state that does.
+        lines += ["", f"> {CLEARED_NOTE}"]
     # `partial is None` is load-bearing, not defensive. SETTLED_NOTE reads as
     # "nothing survived"; on a KNOWN-partial read that claim sits directly
     # beneath the blockquote saying a clear is not evidence about the rest, and
@@ -313,6 +433,9 @@ def render(
         # spliced through the same chokepoint as everything else here.
         joined = _oneline(", ".join(intent_read.refs)) or "no records"
         lines += ["", f"Judged against: {joined}."]
+
+    lines += ["", HOW_TO_READ_HEADING, "", f"- {RISK_NOTE}", f"- {NEUTRAL_NOTE}",
+              f"- {FLAG_LINE_NOTE}"]
 
     footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)

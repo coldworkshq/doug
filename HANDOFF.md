@@ -2,19 +2,31 @@
 
 State:    review — PR for issue #142 is open:
           https://github.com/drewjst/doug/pull/155
+          Rebuilt on main after #157 (db6d51c) landed; only HANDOFF.md
+          conflicted and both sides are kept below.
 Next:     Andrew reviews and merges #155. Migration 13 ships with it, so the
-          API deploy applies the ALTER on start — nothing manual. Unchanged
-          from before: #148 (sticky PR comment) is open and awaiting review,
-          and the dogfood week / #144 cleanup follows its merge.
+          API deploy applies the ALTER on start — nothing manual. #157's own
+          open question (does a GitHub alert render inside a CHECK RUN
+          summary?) is unaffected by this branch and is kept verbatim under
+          "Prior stream: check-run relayout" below.
 Blockers: none.
 Decisions this session:
-- The stored-`comment_id` `seq` guard is a RESERVATION, not a read: one
-  conditional UPDATE (`store.claim_pr_comment_seq`) tests `last_seq <= seq`
-  and advances the mark BEFORE the GitHub write — rejected: read last_seq,
-  compare, then write, which leaves the whole round trip as the window
-- `last_seq` is nullable with no backfill — NULL means "nothing written
-  yet" and never blocks — rejected: backfilling 0, which says the same
-  thing less clearly
+- The stored-`comment_id` `seq` guard is a RESERVATION, not a read:
+  `store.claim_pr_comment_seq` tests `last_seq <= seq` and advances the mark
+  BEFORE the GitHub write — rejected: read last_seq, compare, then write,
+  which leaves the whole round trip as the window
+- The claim's win/loss answer is RE-READ from the row, never taken from the
+  UPDATE's rowcount — the equality retry writes a row the value it already
+  holds, which is the matched-but-unchanged case drivers disagree on, and no
+  CI job runs on Postgres — rejected: `rowcount == 1`, which Doug caught
+- A reservation is NOT released when the GitHub write fails — a failed PATCH
+  is not proof the edit did not land, so releasing would clear an older job
+  to overwrite a newer verdict live on the PR — rejected: CAS rollback to the
+  previous mark
+- `last_seq` is nullable with no backfill — NULL means "nothing written yet"
+  and never blocks; a row predating the column gets ONE unguarded write —
+  rejected: forcing those rows through a listing, which would make a PR past
+  `_PAGE_BOUND` fail every write forever instead of once
 - The discovery path keeps BOTH comparisons (the marker's seq and the
   reservation): the marker is the only guard that survives storage being
   disabled and reads GitHub's actual state, the reservation is the only one
@@ -22,11 +34,60 @@ Decisions this session:
   the marker check as redundant
 - All THREE of `upsert`'s update sites are gated, including the
   claim-lost-then-read-the-winner's-id path the issue did not name
+- Doug's four findings on 6438a99 are dispositioned in
+  docs/findings-log.jsonl (1 real+fixed, 1 adjacent, 1 real+documented,
+  1 disproved) — the repo's rule is one row per finding at disposition time
 Pointers: branch claude/issue-142-verification-fix-1a077f ·
           api/doug/store.py (pr_comments.last_seq, claim_pr_comment_seq,
           set_pr_comment_id) · api/doug/pr_comment.py (upsert's three write
           sites) · migration 13 · ADR-0014 D9 + Consequences amended ·
-          spec 2026-08-19-sticky-pr-comment-design.md §4
+          spec 2026-08-19-sticky-pr-comment-design.md §4 ·
+          docs/findings-log.jsonl
+
+---
+
+## Prior stream: check-run relayout (#157 merged as db6d51c) — kept verbatim
+
+> **CORRECTION 2026-08-19 (this session):** the block below says "building …
+> uncommitted". It shipped: #157 is merged and is what this branch rebased
+> onto. Its open question — whether a GitHub alert renders inside a check-run
+> summary — is still open, as is the `pr_comment.py` fold it names.
+
+State:    building — check-run summary relayout + the needs-you alert are in
+          the working tree on claude/doug-pr-review-llm-b10317 (uncommitted).
+          api/doug/check_run.py + api/tests/test_check_run.py. Full suite
+          green (1540), ruff clean.
+Next:     Verify a GitHub alert actually renders inside a CHECK RUN summary —
+          post one on a scratch commit. No public example exists to copy
+          (sampled 5 large repos' check runs, zero carry `[!KIND]`). If it
+          does not render, the alert moves to pr_comment.py's frame and the
+          mirror keeps a bold line. Then decide whether the agent-handoff
+          fold ships in the same change.
+Blockers: none. (#148 merged as c8da9d7.)
+Decisions this session:
+- Comment layout: standing caveats (risk-is-not-a-grade, never-blocks, flag-line) move BELOW the findings under "### How to read this"; run-specific honesty (fallback, partial read, band) stays above — ~120 words of unconditional preamble was burying the only part that changes per push — rejected: leaving the order alone, folding the notes into `<details>` (unverified in a check run)
+- The alert is keyed to the BAND, never to a finding's severity — the band is computed against installation_repos.needs_you_threshold (ADR-0013); a severity is model output (enum in reader.py's schema, `str | None` unvalidated in models.py). A Cleared verdict routinely carries a medium, so severity-keying puts a callout on a change the same summary just cleared — rejected: CAUTION on high/medium severity
+- Exactly one alert, by precedence: fallback > partial read > Flagged > nothing. Cleared+clean read renders none — quiet is the signal — rejected: one block per condition (two stacked callouts train the reader to skip both)
+- CAUTION (red) is never used; a surface that never blocks and has adjudicated 0 has not earned it. IMPORTANT (purple) carries "needs you" — Andrew, 2026-08-19
+- Summary numbers become a markdown table, and no model-authored text may enter a cell: a `|` shifts every column and `_oneline` does not neutralise it, so severity words come from a fixed vocabulary and an unrecognised one degrades the cell to a plain count — rejected: escaping `|` at the cell
+- Copy-for-LLM is a fenced block in the comment FRAME; GitHub attaches its own copy control to every fence (verified: drewjst/doug#143, and inside a closed `<details>` on microsoft/vscode#331454). We cannot build a button — `<button onclick>` and `style` are stripped (verified through POST /markdown)
+- Still open, not filed as issues because they are this session's live state: the pr_comment.py fold + FRAME_MAX rework, the MCP `doug.review(repo, pr)` route, and whether a Cleared comment should collapse entirely
+
+- Sticky PR comment: D1 one comment/PR edited in place · D2 body = check-run summary verbatim in a header/footer frame · D3 on by default, opt-out per repo · D4 link = dashboard receipt page · D5 403 swallowed, check run unaffected — rejected: per-push comments, flagged-only, short card, public receipt, gating
+- D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
+- D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
+- D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
+- D4 unset shows both defaults (0.30 reader / 0.62 fallback) — prod runs DOUG_READER=1 — rejected: single 0.62
+- D5 write authority = org member + live repo entitlement, new settings:write scope — weaker than mint/bind, named — rejected: installer-only
+- D6 two PRs, web exact() guards first — API deploys before web — rejected: one PR (dashboard outage window)
+- D7 a global RequestValidationError handler on api.py (stock handler, non-finite floats stringified) so a NaN/Infinity threshold body 422s instead of 500 — recorded as an ADR-0013 consequence
+- Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
+Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
+          plan 098cf40 (11 tasks, two PRs) · ADR-0013
+          docs/decisions/ADR-0013-needs-you-line-is-a-per-repo-setting.md ·
+          seams: review.score_one (review.py:303), worker.py:250,
+          store.set_installation_repos, api.py:1877 connections,
+          web/lib/threshold-lens.ts (header rewritten to name the setting)
 
 ---
 
