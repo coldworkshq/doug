@@ -1288,3 +1288,134 @@ def test_the_verify_prompt_hash_changes_with_its_own_frozen_bytes(monkeypatch):
         (reader.VERIFY_SYSTEM + " Also consider style." + repr(reader.VERIFY_SCHEMA)).encode()
     ).hexdigest()
     assert after != reader.VERIFY_PROMPT_HASH
+
+
+# --- attribution tier (ADR-0015; Walked Out commit 7) -----------------------
+
+
+class _AttrResponse:
+    def __init__(self, payload, stop_reason="end_turn"):
+        import json as _json
+
+        class _Block:
+            type = "text"
+
+            def __init__(self, text):
+                self.text = text
+
+        self.content = [_Block(_json.dumps(payload))]
+        self.stop_reason = stop_reason
+        self.usage = None
+
+
+class _AttrClient:
+    def __init__(self, payload, stop_reason="end_turn"):
+        self._payload = payload
+        self._stop = stop_reason
+        self.requests = []
+
+    class _Messages:
+        def __init__(self, outer):
+            self._outer = outer
+
+        def create(self, **request):
+            self._outer.requests.append(request)
+            return _AttrResponse(self._outer._payload, self._outer._stop)
+
+    @property
+    def messages(self):
+        return self._Messages(self)
+
+
+def _attr_fixture():
+    from doug.models import Reason
+
+    patch_a = "@@ -1,2 +1,2 @@\n-x\n+y\n"
+    patch_b = "@@ -9,2 +9,2 @@\n-p\n+q\n@@ -20,2 +20,2 @@\n-r\n+s\n"
+    diff = reader.CHUNK_SEPARATOR.join([
+        reader.diff_chunk("a.py", "modified", 1, 1, patch_a),
+        reader.diff_chunk("b.py", "modified", 2, 2, patch_b),
+    ])
+    cov = reader.coverage(diff)
+    reasons = [
+        Reason(rule="reader:race-condition", label="finding on a", weight=0.0,
+               severity="high", file="a.py"),
+        Reason(rule="reader:logic-error", label="finding on b", weight=0.0,
+               severity="low", file="b.py"),
+        Reason(rule="size-large", label="not a reader finding", weight=0.4),
+    ]
+    return diff, cov, reasons
+
+
+def test_attribute_findings_converts_valid_picks_to_stored_hashes():
+    """The model picks numbers from an enumerated list; code owns the
+    conversion to content hashes — the exact task shape the pre-registered
+    span-verification pass validated."""
+    diff, cov, reasons = _attr_fixture()
+    client = _AttrClient({"attributions": [
+        {"finding": 0, "hunks": [1]},
+        {"finding": 1, "hunks": [2]},
+    ]})
+    n = reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=client)
+    assert n == 2
+    assert reasons[0].hunks == [cov.hunks["a.py"][0]]
+    assert reasons[1].hunks == [cov.hunks["b.py"][1]]
+    assert reasons[2].hunks is None
+    (request,) = client.requests
+    assert request["system"] == reader.ATTRIBUTION_SYSTEM
+    assert "FINDING id=0" in request["messages"][0]["content"]
+
+
+def test_attribute_findings_abstention_and_bad_picks_store_nothing():
+    """An empty list is the model saying cannot-tell; an out-of-range number
+    is a failed validation contract. Both leave hunks=None — the classifier
+    reads that as an abstention, never a guess."""
+    diff, cov, reasons = _attr_fixture()
+    client = _AttrClient({"attributions": [
+        {"finding": 0, "hunks": []},
+        {"finding": 1, "hunks": [9]},
+    ]})
+    n = reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=client)
+    assert n == 0
+    assert reasons[0].hunks is None
+    assert reasons[1].hunks is None
+
+
+def test_attribute_findings_fails_soft_on_transport_and_stop():
+    diff, cov, reasons = _attr_fixture()
+
+    class _Boom:
+        class messages:
+            @staticmethod
+            def create(**_):
+                raise RuntimeError("transport down")
+
+    assert reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=_Boom()) == 0
+    stopped = _AttrClient({"attributions": []}, stop_reason="max_tokens")
+    assert reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=stopped) == 0
+    assert all(r.hunks is None for r in reasons)
+
+
+def test_attribute_findings_no_call_without_candidates():
+    """Deterministic-only verdicts and uncovered files buy no model call."""
+    from doug.models import Reason
+
+    diff, cov, _ = _attr_fixture()
+    client = _AttrClient({"attributions": []})
+    n = reader.attribute_findings(
+        [Reason(rule="size-large", label="x", weight=0.4)], diff, cov,
+        scope="attribution:1", client=client,
+    )
+    assert n == 0
+    assert client.requests == []
+
+
+def test_attribution_prompt_pair_is_frozen_separately():
+    """Its own instrument: the risk read's PROMPT_HASH must not move when the
+    attribution pair changes, and vice versa."""
+    assert reader.ATTRIBUTION_PROMPT_HASH != reader.PROMPT_HASH
+    import hashlib as _h
+
+    assert reader.ATTRIBUTION_PROMPT_HASH == _h.sha256(
+        (reader.ATTRIBUTION_SYSTEM + repr(reader.ATTRIBUTION_SCHEMA)).encode()
+    ).hexdigest()

@@ -3630,3 +3630,31 @@ def test_convergence_for_degrades_a_db_failure_to_an_error_value(tmp_path, monke
     monkeypatch.setattr(store, "_get_engine", _boom)
     out = store.convergence_for(1)
     assert out == {"error": "RuntimeError: db down"}
+
+
+def test_save_review_persists_the_attribution_on_the_findings_row(tmp_path, monkeypatch):
+    """ADR-0015: the attribution the Reason carried in lands on
+    findings.hunks in the same transaction, and rows without one stay NULL —
+    the classifier's abstention contract depends on NULL meaning
+    not-attributed, never empty."""
+    _db(tmp_path, monkeypatch)
+    attributed = Verdict(
+        score=0.62, band=Band.FLAGGED, threshold=0.30,
+        reasons=[
+            Reason(rule="reader:race-condition", label="a", weight=0.0,
+                   severity="high", file="cache.py", hunks=["3" * 64]),
+            Reason(rule="reader:logic-error", label="b", weight=0.0,
+                   severity="low", file="cache.py"),
+        ],
+    )
+    vid = store.save_review(
+        "o/r", 1, "reader", attributed,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    with store._get_engine().connect() as conn:
+        rows = conn.execute(
+            select(store.findings.c.label, store.findings.c.hunks)
+            .where(store.findings.c.verdict_id == vid)
+            .order_by(store.findings.c.id)
+        ).all()
+    assert [(r.label, r.hunks) for r in rows] == [("a", ["3" * 64]), ("b", None)]

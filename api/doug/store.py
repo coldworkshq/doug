@@ -918,6 +918,9 @@ def save_review(
                     # notices carry None for both, exactly as before.
                     "file": r.file,
                     "severity": r.severity,
+                    # Migration 014: the validated attribution the Reason
+                    # carried in from reader.attribute_findings, or None.
+                    "hunks": getattr(r, "hunks", None),
                 }
                 for r in verdict.reasons
             ]

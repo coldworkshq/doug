@@ -22,6 +22,7 @@ design.
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -387,6 +388,7 @@ DEFAULT_VERIFY_TIMEOUT_S = 60
 
 _SCOPE_PREFIX = "installation:"
 _VERIFY_SCOPE_PREFIX = "verify:"
+_ATTRIBUTION_SCOPE_PREFIX = "attribution:"
 
 
 def installation_scope(installation_id: int) -> str:
@@ -434,6 +436,14 @@ def verify_scope(installation_id: int | None) -> str:
 
 def is_verify_scope(scope: str) -> bool:
     return scope.startswith(_VERIFY_SCOPE_PREFIX)
+
+
+def attribution_scope(installation_id: int | None) -> str:
+    """Same posture as verify_scope: its own prefix, so an attribution call
+    can never reach the customer's published `deep reads` meter."""
+    if installation_id is None:
+        return f"{_ATTRIBUTION_SCOPE_PREFIX}{SENTINEL_SCOPE}"
+    return f"{_ATTRIBUTION_SCOPE_PREFIX}{installation_id}"
 
 
 def cap_for(scope: str) -> int:
@@ -714,6 +724,14 @@ def ground_findings(
 
 def enabled() -> bool:
     return os.environ.get("DOUG_READER") == "1"
+
+
+def attribution_enabled() -> bool:
+    """Opt-in, default off — the same land-dark posture as DOUG_VERIFY. The
+    convergence classifier degrades a missing attribution to
+    unknown(not-reconfirmed), so running dark costs abstentions, never
+    wrong answers."""
+    return os.environ.get("DOUG_ATTRIBUTION") == "1"
 
 
 def verify_enabled() -> bool:
@@ -1401,3 +1419,173 @@ def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Ve
         threshold=thr / 100,
         reasons=reasons,
     )
+
+
+# --- Attribution tier (ADR-0015; Walked Out) -------------------------------
+#
+# One small charged call after a reader-tier read: map each finding to the
+# numbered hunks of its cited file's sent diff. The task shape is EXACTLY the
+# one the pre-registered span-verification pass validated (0/84 state flips
+# across identical double runs, 42/42 controls, 0/25 danger-class
+# contradictions; docs/design/walked-out/span-verification.md): closed-choice
+# attribution over enumerated hunks, code validating every number. The model
+# picks; code converts picks to content hashes from Coverage.hunks and stores
+# them on the finding row — classify consumes stored hashes only and never
+# re-derives. Fails soft on everything: a failed or abstained call stores
+# nothing, and a missing attribution is an abstention downstream, never a
+# wrong answer. SYSTEM/SCHEMA above are untouched; this tier carries its own
+# frozen pair and hash.
+
+ATTRIBUTION_SYSTEM = (
+    "You are attributing code-review findings to the diff hunks they rest "
+    "on. Each file's hunks are numbered exactly as sent to the reviewer. "
+    "For each FINDING id, decide which hunk number(s) the finding is about "
+    "- the hunks whose changed lines the finding describes. Judge only from "
+    "the hunk text shown. If a finding is about the file as a whole, or you "
+    "cannot tell which hunk(s), return an empty list for it. Return every "
+    "FINDING id exactly once."
+)
+
+ATTRIBUTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "attributions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "finding": {"type": "integer"},
+                    "hunks": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["finding", "hunks"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["attributions"],
+    "additionalProperties": False,
+}
+
+ATTRIBUTION_PROMPT_HASH = hashlib.sha256(
+    (ATTRIBUTION_SYSTEM + repr(ATTRIBUTION_SCHEMA)).encode()
+).hexdigest()
+
+ATTRIBUTION_MAX_TOKENS = 2000
+
+
+def _sent_file_patches(diff: str, cov: Coverage) -> dict[str, str] | None:
+    """Per-file patch text for every fully-sent file, or None on drift.
+
+    Re-derives the same geometry coverage() used (same slice point, same
+    header regex, same separator), then self-checks: the hashes of what this
+    parse yields must equal the stored index, or the attribution prompt
+    would number hunks the index does not describe — that mismatch fails
+    soft rather than storing a wrong mapping.
+    """
+    if cov.hunks is None:
+        return None
+    sent = diff[: cov.sent_chars]
+    matches = list(_FILE_HEADER.finditer(diff))
+    patches: dict[str, str] = {}
+    for pos, m in enumerate(matches):
+        name = m.group(1)
+        if name not in cov.hunks:
+            continue
+        content_end = (
+            matches[pos + 1].start() - len(CHUNK_SEPARATOR)
+            if pos + 1 < len(matches)
+            else len(diff)
+        )
+        if content_end > len(sent):
+            continue
+        patches[name] = diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
+    from . import hunks as _hunks_mod
+
+    for name, patch in patches.items():
+        derived = [_hunks_mod.hash_hunk(h) for h in _hunks_mod.split_hunks(patch)]
+        if derived != cov.hunks.get(name):
+            return None
+    if set(patches) != set(cov.hunks):
+        return None
+    return patches
+
+
+def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, client=None) -> int:
+    """Attach validated hunk attributions to reader-finding Reasons, in place.
+
+    Returns how many findings gained an attribution. Fails soft on
+    everything — spend cap, transport, stop reason, parse, out-of-range
+    numbers, index drift — because the model only ever picks from an
+    enumerated list and code owns the conversion: a bad pick must cost an
+    abstention downstream, never a wrong stored mapping (the posture
+    ground_findings established for the verify tier).
+    """
+    from . import hunks as _hunks_mod  # noqa: F401 — via _sent_file_patches
+
+    candidates = [
+        r
+        for r in reasons
+        if r.rule.startswith("reader:")
+        and getattr(r, "file", None)
+        and cov.hunks is not None
+        and len(cov.hunks.get(r.file) or []) >= 1
+    ]
+    if not candidates:
+        return 0
+    patches = _sent_file_patches(diff, cov)
+    if patches is None:
+        return 0
+    try:
+        _charge(scope)
+        if client is None:
+            client = _verify_client()
+        lines: list[str] = []
+        by_file: dict[str, list[int]] = {}
+        for i, r in enumerate(candidates):
+            by_file.setdefault(r.file, []).append(i)
+        for name, indices in by_file.items():
+            lines.append(f"## FILE {name}")
+            hunk_texts = _hunks_mod.split_hunks(patches[name])
+            for n, h in enumerate(hunk_texts, 1):
+                lines.append(f"### Hunk {n}")
+                lines.append(h)
+            lines.append("### Findings on this file")
+            for i in indices:
+                r = candidates[i]
+                lines.append(f"- FINDING id={i} [{r.rule}]: {r.label}")
+            lines.append("")
+        request = {
+            "model": MODEL,
+            "max_tokens": ATTRIBUTION_MAX_TOKENS,
+            "output_config": {
+                "effort": EFFORT,
+                "format": {"type": "json_schema", "schema": ATTRIBUTION_SCHEMA},
+            },
+            "system": ATTRIBUTION_SYSTEM,
+            "messages": [{"role": "user", "content": "\n".join(lines)}],
+        }
+        response = client.messages.create(**request)
+        _report_cost(response, kind="attribution", scope=scope, pr=None)
+        if response.stop_reason != "end_turn":
+            return 0
+        text = next((b.text for b in response.content if b.type == "text"), "")
+        parsed = json.loads(text)
+        attributed = 0
+        seen: set[int] = set()
+        for row in parsed.get("attributions", []):
+            i = row.get("finding")
+            picks = row.get("hunks")
+            if not isinstance(i, int) or i in seen or not (0 <= i < len(candidates)):
+                continue
+            seen.add(i)
+            if not isinstance(picks, list) or not picks:
+                continue  # abstained: stores nothing
+            r = candidates[i]
+            hashes = cov.hunks[r.file]
+            if not all(isinstance(n, int) and 1 <= n <= len(hashes) for n in picks):
+                continue  # out-of-range pick: the validation contract failed
+            r.hunks = [hashes[n - 1] for n in picks]
+            attributed += 1
+        return attributed
+    except Exception:  # noqa: BLE001 — fail soft; abstention beats a wrong row
+        return 0
