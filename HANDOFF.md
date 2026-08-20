@@ -1,32 +1,33 @@
 # HANDOFF — doug
 
-State:    review — PR B is open: https://github.com/drewjst/doug/pull/148
-Next:     Andrew reviews and merges #148. Both gates already satisfied (PR A
-          #138 merged AND deployed; `Pull requests: Read and write` set on the
-          App — installations re-accept individually). After merge: watch the
-          dogfood week (grep the API logs for `doug: comment `; created/updated
-          should dominate, no PR should grow two Doug comments), then close out
-          #144 by removing DOUG_PR_COMMENT_INSTALLATIONS and the rollout
-          sentence in the toggle panel.
-Blockers: none on this branch. (Production-dark stream: #116 MERGED as
-          3eddbf0; its remaining steps are kept verbatim under "Prior stream"
-          below — verify the adjudicator Job actually drained before deleting.)
+State:    review — issue #142 fixed on branch
+          claude/issue-142-verification-fix-1a077f; ready to open a PR.
+Next:     Open the PR (`Closes #142`), get it reviewed and merged. Migration
+          13 ships with it, so the API deploy applies the ALTER on start —
+          nothing manual. Unchanged from before: #148 (sticky PR comment)
+          is open and awaiting review, and the dogfood week / #144 cleanup
+          follows its merge.
+Blockers: none.
 Decisions this session:
-- Sticky PR comment: D1 one comment/PR edited in place · D2 body = check-run summary verbatim in a header/footer frame · D3 on by default, opt-out per repo · D4 link = dashboard receipt page · D5 403 swallowed, check run unaffected — rejected: per-push comments, flagged-only, short card, public receipt, gating
-- D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
-- D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both
-- D3 one 0–1 number for both scorers (reader ×100) — verdicts already normalise — rejected: two knobs
-- D4 unset shows both defaults (0.30 reader / 0.62 fallback) — prod runs DOUG_READER=1 — rejected: single 0.62
-- D5 write authority = org member + live repo entitlement, new settings:write scope — weaker than mint/bind, named — rejected: installer-only
-- D6 two PRs, web exact() guards first — API deploys before web — rejected: one PR (dashboard outage window)
-- D7 a global RequestValidationError handler on api.py (stock handler, non-finite floats stringified) so a NaN/Infinity threshold body 422s instead of 500 — recorded as an ADR-0013 consequence
-- Threshold ≠ scope: "docs repo only cares about structure" is a path-rule feature, named as non-goal
-Pointers: branch claude/per-repo-needs-you-threshold-f075db · spec a23c427 ·
-          plan 098cf40 (11 tasks, two PRs) · ADR-0013
-          docs/decisions/ADR-0013-needs-you-line-is-a-per-repo-setting.md ·
-          seams: review.score_one (review.py:303), worker.py:250,
-          store.set_installation_repos, api.py:1877 connections,
-          web/lib/threshold-lens.ts (header rewritten to name the setting)
+- The stored-`comment_id` `seq` guard is a RESERVATION, not a read: one
+  conditional UPDATE (`store.claim_pr_comment_seq`) tests `last_seq <= seq`
+  and advances the mark BEFORE the GitHub write — rejected: read last_seq,
+  compare, then write, which leaves the whole round trip as the window
+- `last_seq` is nullable with no backfill — NULL means "nothing written
+  yet" and never blocks — rejected: backfilling 0, which says the same
+  thing less clearly
+- The discovery path keeps BOTH comparisons (the marker's seq and the
+  reservation): the marker is the only guard that survives storage being
+  disabled and reads GitHub's actual state, the reservation is the only one
+  that closes the window between deciding and writing — rejected: dropping
+  the marker check as redundant
+- All THREE of `upsert`'s update sites are gated, including the
+  claim-lost-then-read-the-winner's-id path the issue did not name
+Pointers: branch claude/issue-142-verification-fix-1a077f ·
+          api/doug/store.py (pr_comments.last_seq, claim_pr_comment_seq,
+          set_pr_comment_id) · api/doug/pr_comment.py (upsert's three write
+          sites) · migration 13 · ADR-0014 D9 + Consequences amended ·
+          spec 2026-08-19-sticky-pr-comment-design.md §4
 
 ---
 

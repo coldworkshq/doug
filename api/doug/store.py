@@ -43,6 +43,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    case,
     create_engine,
     exists,
     func,
@@ -252,6 +253,14 @@ installation_repos = Table(
 # surrogate id: the natural key IS the uniqueness the design wants, same
 # precedent as schema_migrations above. comment_id is NULL between claim and
 # create — the row is the claim, the id arrives once create_comment returns.
+#
+# last_seq is the high-water mark of the job id (`seq`) whose body was last
+# written, or reserved, for this slot. It is what lets a write through an
+# already-stored comment_id be gated the way a discovered comment is gated by
+# the `seq` in its own marker: without it the stored-id path is the one write
+# in `pr_comment.upsert` with nothing to compare against (issue #142). NULL is
+# "nothing written yet" — a claim that has not created, or a row from before
+# this column existed — and never blocks a write.
 pr_comments = Table(
     "pr_comments",
     metadata,
@@ -259,6 +268,7 @@ pr_comments = Table(
     Column("github_repo_id", BigInteger, nullable=False, primary_key=True),
     Column("pr_number", Integer, nullable=False, primary_key=True),
     Column("comment_id", BigInteger, nullable=True),
+    Column("last_seq", BigInteger, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
@@ -1291,6 +1301,10 @@ def claim_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) 
                 github_repo_id=github_repo_id,
                 pr_number=pr_number,
                 comment_id=None,
+                # NULL, not this job's seq: the claim is not a write. Naming
+                # a seq here would let a claim that never created block a
+                # newer job's first write.
+                last_seq=None,
                 updated_at=datetime.now(UTC),
             )
         )
@@ -1298,9 +1312,23 @@ def claim_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) 
 
 
 def set_pr_comment_id(
-    installation_id: int, github_repo_id: int, pr_number: int, comment_id: int
+    installation_id: int,
+    github_repo_id: int,
+    pr_number: int,
+    comment_id: int,
+    *,
+    seq: int,
 ) -> None:
-    """Record the GitHub comment id created for this PR's claim."""
+    """Record the GitHub comment id for this PR's claim, and the seq whose
+    body that comment now carries.
+
+    `seq` moves last_seq FORWARD only. Both callers can be holding a stale
+    view of the slot — the discovery path passes the seq it read out of a
+    listed comment's marker, which another drainer may already have
+    overwritten — and a high-water mark that can go backwards is not a guard
+    (issue #142). NULL compares as "nothing written yet", so the CASE's
+    else-branch takes the new seq, which is what a first write wants.
+    """
     engine = _get_engine()
     if engine is None:
         return
@@ -1312,8 +1340,66 @@ def set_pr_comment_id(
                 pr_comments.c.github_repo_id == github_repo_id,
                 pr_comments.c.pr_number == pr_number,
             )
-            .values(comment_id=comment_id, updated_at=datetime.now(UTC))
+            .values(
+                comment_id=comment_id,
+                last_seq=case(
+                    (pr_comments.c.last_seq > seq, pr_comments.c.last_seq), else_=seq
+                ),
+                updated_at=datetime.now(UTC),
+            )
         )
+
+
+def claim_pr_comment_seq(
+    installation_id: int, github_repo_id: int, pr_number: int, seq: int
+) -> bool:
+    """Reserve this PR's sticky-comment slot for `seq`. True means write.
+
+    The `seq` guard the design asks for (D9) is "an older verdict must not
+    overwrite a newer one". Reading last_seq and then writing GitHub would
+    leave the whole round trip as the window — so the reservation IS the
+    comparison: one conditional UPDATE that both tests `last_seq <= seq` and
+    moves the mark, taken BEFORE the GitHub write. Two drainers is the
+    deployed configuration (`--max-instances 2`, `SKIP LOCKED`), so the loser
+    of that UPDATE is an ordinary outcome, not an exotic one.
+
+    Equal passes, matching the discovery path's `_seq_of(found) > seq`: a job
+    that failed mid-write and re-pended keeps its id, and its retry is the
+    same verdict, not an older one.
+
+    Two cases return True that are not "we won a comparison":
+
+      * Storage disabled (no engine). There is no mark to compare against
+        and never was; the caller that can reach this state at all is the
+        discovery path, which is still guarded by the marker in the
+        comment's own body.
+      * No row at all. Only `forget_pr_comment` deletes one, and only after
+        a 404 proved the comment is gone — so the right answer is to let the
+        write proceed and 404 into the re-create path, not to report a
+        staleness that did not happen.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return True
+    identity = (
+        pr_comments.c.installation_id == installation_id,
+        pr_comments.c.github_repo_id == github_repo_id,
+        pr_comments.c.pr_number == pr_number,
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(pr_comments)
+            .where(
+                *identity,
+                or_(pr_comments.c.last_seq.is_(None), pr_comments.c.last_seq <= seq),
+            )
+            .values(last_seq=seq, updated_at=datetime.now(UTC))
+        )
+        if result.rowcount == 1:
+            return True
+        # Lost, or the row is gone. One extra read, on the rare branch only.
+        row = conn.execute(select(pr_comments.c.last_seq).where(*identity)).first()
+    return row is None
 
 
 def forget_pr_comment(installation_id: int, github_repo_id: int, pr_number: int) -> None:

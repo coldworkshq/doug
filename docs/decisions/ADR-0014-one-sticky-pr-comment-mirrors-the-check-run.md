@@ -119,10 +119,12 @@ not a customer's.
   **and** by App authorship before `upsert` will write to a comment it
   finds; a marked comment posted by a human is never touched. Within the
   matched, App-authored comment, `upsert` compares `seq` against the
-  existing marker and skips an update whose `seq` is not newer — on the
-  path that discovers the comment by listing. The path that writes through
-  an already-stored comment id does not repeat this comparison; that gap is
-  named below and tracked as issue #142.
+  existing marker and skips an update whose `seq` is not newer. The path
+  that writes through an already-stored comment id never lists, so it has no
+  marker to read: it compares against `pr_comments.last_seq` instead, a
+  high-water mark of the last `seq` written to the slot. As shipped, this
+  decision covered only the discovery path; issue #142 closed the gap and
+  added `last_seq`.
 
 ## Rejected
 
@@ -214,13 +216,18 @@ not a customer's.
   check run that never appeared. "Mirrors the check run" describes the
   comment's content, not a guarantee that both surfaces always exist
   together.
-- **The stored-`comment_id` write path skips the `seq` guard.** D9's
-  sequence check runs on the path that discovers a comment by listing; the
-  path that writes through an already-stored `comment_id` — the common
-  case once a PR has a comment — updates unconditionally. Two drainers
-  racing can let an older verdict overwrite a newer one through that path
-  until the next review re-asserts the current state. Tracked as issue
-  #142; closing it needs a `last_seq` column on `pr_comments`.
+- **The `seq` guard costs a write to the database before every comment
+  write.** *(Amended by issue #142. As originally accepted, this entry read
+  that the stored-`comment_id` path skipped the guard entirely and could let
+  an older verdict overwrite a newer one.)* Closing that gap made the guard
+  a reservation rather than a read: `store.claim_pr_comment_seq` advances
+  `pr_comments.last_seq` in a conditional UPDATE **before** the GitHub
+  write, so an older job loses the row rather than the race. The price is
+  that a `seq` reserved by a write that then fails is not rolled back — the
+  same job's retry keeps its id and passes on equality, but the mark stays
+  ahead of what GitHub actually shows until some job writes successfully.
+  The residual is the one this ADR already prices elsewhere: a stale comment
+  that self-heals on the next push.
 - **Most PR readers hit sign-in on the receipt link.** The footer's
   dashboard link (D4) requires a Doug session; a reader who is not already
   a Doug user lands on a sign-in wall rather than the receipt, and signing
