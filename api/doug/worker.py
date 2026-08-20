@@ -122,7 +122,7 @@ def _pr_comment_outcome(
         summary,
         head_sha=job["head_sha"],
         seq=job["id"],
-        receipt_url=pr_comment.receipt_url(owner, name, pr),
+        links=pr_comment.receipt_links(owner, name, pr),
     )
     outcome = pr_comment.upsert(
         gh,
@@ -323,6 +323,15 @@ def process_job(job: dict) -> int | None:
     # name) re-queues it.
     base_repo = getattr(getattr(current_pr, "base", None), "repo", None)
     base_repo_id = getattr(base_repo, "id", None)
+    if not isinstance(base_repo_id, int) or isinstance(base_repo_id, bool):
+        # Unreadable is not mismatched. Retiring below is right when the
+        # response NAMES another repo — the next webhook carries a current
+        # name and re-queues the row — but an id we cannot read names
+        # nothing, so treating it as a mismatch would spend the only durable
+        # job on a response we failed to parse. Same posture as the missing
+        # base.sha guard below: drain's ordinary failure path keeps this
+        # claim retryable.
+        raise RuntimeError("GitHub pull response carried no usable base.repo.id")
     if base_repo_id != job["github_repo_id"]:
         ingest.supersede(job["id"], claim_generation=job["claim_generation"])
         print(

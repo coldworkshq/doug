@@ -894,6 +894,56 @@ def test_a_pr_whose_base_repo_is_not_this_job_s_repo_is_retired_unread(
     assert "base repo" in err and "drewjst/doug#7" in err
 
 
+@pytest.mark.parametrize(
+    "base",
+    [
+        pytest.param(None, id="no base"),
+        pytest.param(SimpleNamespace(sha="0" * 40, repo=None), id="no base.repo"),
+        pytest.param(
+            SimpleNamespace(sha="0" * 40, repo=SimpleNamespace(full_name="drewjst/doug")),
+            id="base.repo carries no id",
+        ),
+    ],
+)
+def test_an_unreadable_base_repo_id_raises_instead_of_retiring_the_job(
+    tmp_path, monkeypatch, base
+):
+    """"I could not read the repo id" is not "this is the wrong repo".
+
+    The mismatch branch below retires the job unread, which is right when the
+    response NAMES another repo — the next webhook carries a current name and
+    re-queues it. An unreadable id names nothing, so retiring on it would
+    spend the only durable job on a response we failed to parse. Same posture
+    as the missing base.sha guard eleven lines down: raise, and let drain's
+    ordinary failure path keep the claim retryable.
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    def _get(*, owner, repo, pull_number):
+        return SimpleNamespace(
+            parsed_data=SimpleNamespace(head=SimpleNamespace(sha=JOB["head_sha"]), base=base)
+        )
+
+    monkeypatch.setattr(
+        app_auth,
+        "installation_client",
+        lambda i: SimpleNamespace(rest=SimpleNamespace(pulls=SimpleNamespace(get=_get))),
+    )
+
+    with pytest.raises(RuntimeError, match="base.repo.id"):
+        worker.process_job(ingest.claim())
+
+    # Retryable, not retired: drain's failure path re-pends this row.
+    (j,) = _rows(url, store.review_jobs)
+    assert j["status"] == "running"
+    assert _rows(url, store.verdicts) == []
+    assert posted == [] and upserts == []
+
+
 def test_the_fresh_path_buys_exactly_one_pulls_get(tmp_path, monkeypatch):
     """The fresh path deliberately does NOT call `pr_comment.target_matches`:
     its own `pulls.get` already verified both the head and the base repo id,
