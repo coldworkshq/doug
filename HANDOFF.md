@@ -1,17 +1,25 @@
 # HANDOFF — doug
 
-State:    review — PR B is open: https://github.com/drewjst/doug/pull/148
-Next:     Andrew reviews and merges #148. Both gates already satisfied (PR A
-          #138 merged AND deployed; `Pull requests: Read and write` set on the
-          App — installations re-accept individually). After merge: watch the
-          dogfood week (grep the API logs for `doug: comment `; created/updated
-          should dominate, no PR should grow two Doug comments), then close out
-          #144 by removing DOUG_PR_COMMENT_INSTALLATIONS and the rollout
-          sentence in the toggle panel.
-Blockers: none on this branch. (Production-dark stream: #116 MERGED as
-          3eddbf0; its remaining steps are kept verbatim under "Prior stream"
-          below — verify the adjudicator Job actually drained before deleting.)
+State:    building — check-run summary relayout + the needs-you alert are in
+          the working tree on claude/doug-pr-review-llm-b10317 (uncommitted).
+          api/doug/check_run.py + api/tests/test_check_run.py. Full suite
+          green (1540), ruff clean.
+Next:     Verify a GitHub alert actually renders inside a CHECK RUN summary —
+          post one on a scratch commit. No public example exists to copy
+          (sampled 5 large repos' check runs, zero carry `[!KIND]`). If it
+          does not render, the alert moves to pr_comment.py's frame and the
+          mirror keeps a bold line. Then decide whether the agent-handoff
+          fold ships in the same change.
+Blockers: none. (#148 merged as c8da9d7.)
 Decisions this session:
+- Comment layout: standing caveats (risk-is-not-a-grade, never-blocks, flag-line) move BELOW the findings under "### How to read this"; run-specific honesty (fallback, partial read, band) stays above — ~120 words of unconditional preamble was burying the only part that changes per push — rejected: leaving the order alone, folding the notes into `<details>` (unverified in a check run)
+- The alert is keyed to the BAND, never to a finding's severity — the band is computed against installation_repos.needs_you_threshold (ADR-0013); a severity is model output (enum in reader.py's schema, `str | None` unvalidated in models.py). A Cleared verdict routinely carries a medium, so severity-keying puts a callout on a change the same summary just cleared — rejected: CAUTION on high/medium severity
+- Exactly one alert, by precedence: fallback > partial read > Flagged > nothing. Cleared+clean read renders none — quiet is the signal — rejected: one block per condition (two stacked callouts train the reader to skip both)
+- CAUTION (red) is never used; a surface that never blocks and has adjudicated 0 has not earned it. IMPORTANT (purple) carries "needs you" — Andrew, 2026-08-19
+- Summary numbers become a markdown table, and no model-authored text may enter a cell: a `|` shifts every column and `_oneline` does not neutralise it, so severity words come from a fixed vocabulary and an unrecognised one degrades the cell to a plain count — rejected: escaping `|` at the cell
+- Copy-for-LLM is a fenced block in the comment FRAME; GitHub attaches its own copy control to every fence (verified: drewjst/doug#143, and inside a closed `<details>` on microsoft/vscode#331454). We cannot build a button — `<button onclick>` and `style` are stripped (verified through POST /markdown)
+- Still open, not filed as issues because they are this session's live state: the pr_comment.py fold + FRAME_MAX rework, the MCP `doug.review(repo, pr)` route, and whether a Cleared comment should collapse entirely
+
 - Sticky PR comment: D1 one comment/PR edited in place · D2 body = check-run summary verbatim in a header/footer frame · D3 on by default, opt-out per repo · D4 link = dashboard receipt page · D5 403 swallowed, check run unaffected — rejected: per-push comments, flagged-only, short card, public receipt, gating
 - D1 forward-only: setting changes future verdicts, ledger keeps stamped line — honest ledger vs. GitHub — rejected: retroactive re-band
 - D2 dashboard setting on installation_repos + session PATCH — where the ledger is — rejected: .doug.yml file, or both

@@ -37,6 +37,24 @@ FLAGGED = reader.verdict_from_reader(
 )
 FLAGGED_VERDICT = FLAGGED
 CLEARED_VERDICT = FLAGGED.model_copy(update={"reasons": [], "band": Band.CLEARED, "score": 0.04})
+# Cleared, and carrying a graded finding anyway — 0.26 against a flag line of
+# 0.40. Not a contrived shape: it is the ordinary one, and it is the reason
+# the alert is keyed to the band rather than to a severity.
+CLEARED_WITH_A_MEDIUM = reader.verdict_from_reader(
+    reader.ReaderVerdict(
+        risk_score=26,
+        rationale="Reservation is advanced before the write.",
+        findings=[
+            reader.ReaderFinding(
+                category_slug="non-atomic-reservation",
+                description="last_seq advances before the GitHub write",
+                file="pr_comment.py",
+                severity="medium",
+            )
+        ],
+    ),
+    threshold=40,
+)
 
 WHOLE = reader.Coverage(diff_chars=400, sent_chars=400, files_sent=2, files_unseen=[])
 PARTIAL = reader.Coverage(
@@ -334,11 +352,12 @@ def test_deviations_move_neither_the_band_nor_the_score():
     bare_title, bare = check_run.render("reader", FLAGGED, None, WHOLE)
     dev_title, dev = check_run.render("reader", FLAGGED, DEVIATIONS, WHOLE)
     assert bare_title == dev_title
-    risk_line = (
-        "Risk 0.62 against a flag line of 0.30. "
-        "The flag line is set per repository on the Doug dashboard."
-    )
-    assert risk_line in bare and risk_line in dev
+    # The summary table is where the band, the score and the flag line are
+    # stated. Asserting the whole ROW, byte-for-byte, is the point: a
+    # deviation that nudged any one of the three would have to change this
+    # line, and there is nowhere else for those numbers to hide.
+    row = "| **0.62** | 0.30 | validated diff reader | 1 high |"
+    assert row in bare and row in dev
     assert dev.startswith(bare[: bare.index("### Findings")])
 
 
@@ -689,3 +708,181 @@ def test_judged_against_neutralises_the_record_ids_it_splices():
     read = DEVIATIONS.model_copy(update={"refs": ["@octocat", "x<!--y", "#42"]})
     _, summary = check_run.render("reader", FLAGGED, read, WHOLE)
     assert f"Judged against: @{z}octocat, x<!-{z}-y, #{z}42." in summary
+
+
+# ---------------------------------------------------------------- the alert
+#
+# One alert, keyed to whether a human is being asked for — never to a
+# finding's severity. Every test below is a defect that the severity-keyed
+# alternative would have shipped.
+
+
+def test_a_cleared_verdict_carrying_a_medium_finding_raises_no_alert():
+    """THE case that decided the design. Severity and band are independent:
+    the band is computed against the repo's needs-you line (ADR-0013), a
+    severity is the model's own call. Key the alert to severity and this
+    ordinary verdict — Cleared at 0.26, one medium finding — puts a callout
+    on a change this very summary just said nobody needs to look at, two
+    lines above CLEARED_NOTE saying the opposite."""
+    assert CLEARED_WITH_A_MEDIUM.band is Band.CLEARED
+    assert CLEARED_WITH_A_MEDIUM.reasons[0].severity == "medium"
+    _, summary = check_run.render("reader", CLEARED_WITH_A_MEDIUM, None, WHOLE)
+    assert "[!" not in summary
+    assert check_run.CLEARED_NOTE in summary
+    # and the finding is not hidden by the quiet — it is still in the list
+    assert "non-atomic-reservation" in summary
+
+
+def test_a_flagged_read_asks_for_a_human_in_an_important_alert():
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    assert "> [!IMPORTANT]" in summary
+    assert "Needs you" in summary
+    assert "does not block" in summary
+
+
+def test_exactly_one_alert_ever_renders():
+    """Two stacked callouts train a reader to skip both. The states that can
+    each claim one do co-occur — a fallback verdict is routinely also
+    Flagged — so this is a real collision, not a hypothetical."""
+    verdict = FLAGGED.model_copy(deep=True)
+    verdict.reasons.append(reader.truncation_reason(PARTIAL))
+    for tier, coverage in (
+        ("reader", WHOLE),
+        ("reader", PARTIAL),
+        ("deterministic", None),
+        ("deterministic", PARTIAL),
+    ):
+        for v in (verdict, CLEARED_WITH_A_MEDIUM):
+            _, summary = check_run.render(tier, v, None, coverage)
+            assert summary.count("> [!") <= 1, (tier, v.band)
+
+
+def test_a_fallback_outranks_the_routing_alert_and_still_says_needs_you():
+    """The fallback takes the alert because it reframes what Flagged MEANS —
+    a band from PR shape alone is a different claim from a band from a read.
+    Taking the slot must not cost the routing call, which is why it is
+    carried inside the fallback's own body rather than dropped."""
+    _, summary = check_run.render("deterministic", FLAGGED, None, None)
+    assert "> [!WARNING]" in summary
+    assert "> [!IMPORTANT]" not in summary
+    assert "Needs you" in summary and "did not run" in summary
+
+
+def test_a_fallback_on_a_cleared_verdict_does_not_invent_a_needs_you():
+    _, summary = check_run.render("deterministic", CLEARED_VERDICT, None, None)
+    assert "> [!WARNING]" in summary
+    assert "Needs you" not in summary
+
+
+def test_a_partial_read_takes_the_alert_slot():
+    """A clear is not evidence past the cut, and render() filters the
+    read-truncated Reason out of the findings list on the strength of this
+    block rendering — so if the alert stops carrying it, the caveat is lost
+    entirely rather than merely demoted."""
+    verdict = FLAGGED.model_copy(deep=True)
+    verdict.reasons.append(reader.truncation_reason(PARTIAL))
+    _, summary = check_run.render("reader", verdict, None, PARTIAL)
+    assert "> [!WARNING]" in summary
+    assert summary.count("Partial read") == 1
+    assert "api/store.py" in summary
+
+
+def test_an_alert_body_is_always_a_single_blockquote_line():
+    """The [!KIND] marker only opens an alert when it is the quote's first
+    line. A body carrying a newline demotes the whole block to an ordinary
+    blockquote showing a literal "[!WARNING]" — and the spliced half of one
+    body is truncation_reason's label, which contains file paths."""
+    verdict = FLAGGED.model_copy(deep=True)
+    verdict.reasons.append(reader.truncation_reason(PARTIAL))
+    _, summary = check_run.render("reader", verdict, None, PARTIAL)
+    lines = summary.splitlines()
+    marker = lines.index("> [!WARNING]")
+    assert lines[marker - 1] == ""
+    assert lines[marker + 1].startswith("> ")
+    assert not lines[marker + 2].startswith(">")
+
+
+def test_caution_is_never_used():
+    """Red reads as "stop". Doug never blocks a merge (ADR-0010) and has
+    adjudicated nothing, so it has not earned the loudest thing GitHub
+    renders. Greps the source for the same reason the conclusion test does:
+    the risk is the branch someone adds later."""
+    src = Path(check_run.__file__).read_text()
+    assert "[!IMPORTANT]" in src and "[!WARNING]" in src
+    assert "[!CAUTION]" not in src
+
+
+# --------------------------------------------------------- the summary table
+
+
+def test_the_summary_table_never_splices_model_authored_text():
+    """A `|` ends a table cell and shifts every column after it, and
+    `_oneline` does not neutralise one because a pipe is inert everywhere
+    else this module writes. So the cell is built from a fixed vocabulary,
+    and an unrecognised severity degrades the whole cell to a count rather
+    than being echoed."""
+    hostile = FLAGGED.model_copy(deep=True)
+    hostile.reasons[0].severity = "high | low"
+    _, summary = check_run.render("reader", hostile, None, WHOLE)
+    row = next(ln for ln in summary.splitlines() if ln.startswith("| **0.62**"))
+    assert row.count("|") == 5
+    assert "1 finding" in row
+    # the raw severity still reaches the reader, where _oneline governs it
+    assert "high | low" in summary
+
+
+def test_settlement_notices_do_not_inflate_the_findings_count():
+    """settle.py leaves a weight-0 notice for a finding that was DISPROVED.
+    Counting it puts a number in the header of a summary whose body says
+    nothing survived — the #109 misreading, moved to a new place."""
+    from doug.settle import SETTLED_REASON_CODES
+
+    settled = FLAGGED.model_copy(deep=True)
+    settled.reasons = [
+        Reason(rule=sorted(SETTLED_REASON_CODES)[0], label="disproved at head", weight=0.0)
+    ]
+    _, summary = check_run.render("reader", settled, None, WHOLE)
+    row = next(ln for ln in summary.splitlines() if ln.startswith("| **0.62**"))
+    assert "none" in row
+
+
+def test_a_deterministic_verdict_counts_findings_without_inventing_severities():
+    plain = FLAGGED.model_copy(deep=True)
+    plain.reasons = [
+        Reason(rule="size", label="large diff", weight=0.3),
+        Reason(rule="hotspot", label="touches a hotspot", weight=0.2),
+    ]
+    _, summary = check_run.render("deterministic", plain, None, None)
+    row = next(ln for ln in summary.splitlines() if ln.startswith("| **0.62**"))
+    assert "2 findings" in row
+    assert "none — scorer only" in row
+
+
+# ------------------------------------------------------- where the notes sit
+
+
+def test_the_standing_notes_sit_below_the_findings():
+    """~120 words of caveat identical on every PR, printed above the only
+    part of the summary that changes from push to push, is how the old
+    layout buried its own findings. The notes still ship — every one of them
+    was written for a real misreading — they just stop being the first thing
+    read."""
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    assert summary.index("### Findings") < summary.index(check_run.HOW_TO_READ_HEADING)
+    for note in (check_run.RISK_NOTE, check_run.NEUTRAL_NOTE, check_run.FLAG_LINE_NOTE):
+        assert note in summary
+        assert summary.index("### Findings") < summary.index(note)
+
+
+def test_honesty_about_this_run_stays_above_the_findings():
+    """The counterpart rule. A caveat that is true only of THIS run is not
+    standing text and must not be filed with the standing text — it is the
+    thing the reader needs before they read the findings, not after."""
+    verdict = FLAGGED.model_copy(deep=True)
+    verdict.reasons.append(reader.truncation_reason(PARTIAL))
+    for tier, coverage, mark in (
+        ("deterministic", None, "did not run"),
+        ("reader", PARTIAL, "Partial read"),
+    ):
+        _, summary = check_run.render(tier, verdict, None, coverage)
+        assert summary.index(mark) < summary.index("### Findings")
