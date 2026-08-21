@@ -1,0 +1,4731 @@
+[
+ {
+  "fid": 0,
+  "pair": [
+   1001,
+   1005
+  ],
+  "pr": 30,
+  "file": "api/doug/worker.py",
+  "from": "16c8951d5b2f2d7fbc8504baf667d5df617cb08c",
+  "to": "afee4cac31f23f740376ddaaba2f883a2bab9735",
+  "base": "f3fcee80cb3f897b822c6682b099273c1961004b",
+  "state": "unknown",
+  "rule": "reader:ordering-change-side-effect",
+  "label": "Worker now calls ingest.complete() before check_run.post(). If the GitHub post raises or the process dies between the two, the job is already 'done' and will never be retried, so the PR silently gets no check run \u2014 the exact 'never reviewed' failure the queue is designed to avoid.",
+  "n_hunks": 6,
+  "from_hashes": [
+   "22fe25507a47",
+   "129c14292c3f",
+   "b1287adc3fe3",
+   "801557419d47",
+   "358b3ed7e5a4",
+   "b46fb0c83489"
+  ],
+  "to_hashes": [
+   "2bf2cd453131",
+   "ed30a6130d23",
+   "129c14292c3f",
+   "9d6824a875f1",
+   "aa5f89f56bed",
+   "358b3ed7e5a4",
+   "b46fb0c83489"
+  ],
+  "survives": [
+   false,
+   true,
+   false,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 1,
+  "pair": [
+   1015,
+   1017
+  ],
+  "pr": 38,
+  "file": "api/doug/api.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "resolved",
+  "rule": "reader:missing-key-check",
+  "label": "_comparison_run indexes coverage with fixed keys (diff_chars, sent_chars, files_sent, files_unseen, file_cut); if the reads row shape ever differs or a column is absent this raises KeyError and 500s the endpoint instead of degrading.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "1f28b4ebc867"
+  ],
+  "to_hashes": [
+   "1da838e2ed22",
+   "afc3c5b563f4",
+   "68dd04ca3dc7",
+   "1f28b4ebc867"
+  ],
+  "survives": [
+   true
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 2,
+  "pair": [
+   1015,
+   1017
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "resolved",
+  "rule": "reader:behavior-change-idempotency",
+  "label": "find_review now requires installation_id and github_repo_id to be NULL, so any commit already scored via the App path will no longer replay and will be rescored by /v1/review \u2014 extra LLM spend and duplicate verdict rows. Intentional per the plan, but it changes long-standing dedup semantics and is a likely hotfix candidate if spend spikes.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "9ce8538651ea",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 3,
+  "pair": [
+   1015,
+   1017
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "persisted",
+  "rule": "reader:n-plus-one-query",
+  "label": "comparison_reviews issues one `reads` SELECT per verdict row inside the connection loop; with limit up to 200 PR groups and duplicate App writes this can be hundreds of round-trips per dashboard request.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "9ce8538651ea",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": false
+ },
+ {
+  "fid": 4,
+  "pair": [
+   1015,
+   1017
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "resolved",
+  "rule": "reader:unbounded-response",
+  "label": "The limit bounds PR groups, not returned rows, so a PR with many duplicate verdicts can make the /v1/comparisons payload arbitrarily large.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "9ce8538651ea",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 5,
+  "pair": [
+   1016,
+   1018
+  ],
+  "pr": 38,
+  "file": "api/doug/api.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "resolved",
+  "rule": "reader:unbounded-response",
+  "label": "/v1/comparisons caps `limit` at 200 PR groups but the returned run list is unbounded because all qualifying verdict rows per PR are serialized, so a PR with many rescores can produce a very large payload.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "1f28b4ebc867"
+  ],
+  "to_hashes": [
+   "1da838e2ed22",
+   "afc3c5b563f4",
+   "68dd04ca3dc7",
+   "1f28b4ebc867"
+  ],
+  "survives": [
+   true
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 6,
+  "pair": [
+   1016,
+   1018
+  ],
+  "pr": 38,
+  "file": "api/doug/api.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "resolved",
+  "rule": "reader:missing-null-check",
+  "label": "_comparison_run indexes row['head_sha'], row['score'], etc. directly and assumes coverage rows always contain the five expected keys; a coverage row missing a key would raise a KeyError and 500 the endpoint.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "1f28b4ebc867"
+  ],
+  "to_hashes": [
+   "1da838e2ed22",
+   "afc3c5b563f4",
+   "68dd04ca3dc7",
+   "1f28b4ebc867"
+  ],
+  "survives": [
+   true
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 7,
+  "pair": [
+   1016,
+   1018
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "persisted",
+  "rule": "reader:idempotency-semantics-change",
+  "label": "`find_review` now requires installation_id and github_repo_id to be NULL, narrowing replay to CI rows. Any caller that relied on it to suppress rescoring of App-written verdicts (e.g. webhook redelivery paths sharing this helper) will now pay for a fresh LLM read and insert duplicate ledger rows.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "9ce8538651ea",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 8,
+  "pair": [
+   1016,
+   1018
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "1294e1603d2d56853a29989b8c21f968f98ffaed",
+  "to": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "base": "eb1783a282f9299a8c158b547fcf2fe3940141bf",
+  "state": "persisted",
+  "rule": "reader:n-plus-one-query",
+  "label": "comparison_reviews issues a separate SELECT on `reads` for every verdict row inside a single connection loop; with limit=200 PR groups and duplicate verdicts per PR this can be hundreds of round trips and an unbounded response size (row count is not capped, only PR groups).",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "9ce8538651ea",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": false
+ },
+ {
+  "fid": 9,
+  "pair": [
+   1017,
+   1019
+  ],
+  "pr": 38,
+  "file": "api/doug/api.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:missing-null-check",
+  "label": "`_comparison_run` indexes the coverage mapping with fixed keys (diff_chars, sent_chars, files_sent, files_unseen, file_cut); if the reads row schema differs or a column is absent this raises KeyError and 500s the endpoint instead of degrading.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "1f28b4ebc867"
+  ],
+  "to_hashes": [
+   "c8f3b3b1ca1f"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 10,
+  "pair": [
+   1017,
+   1019
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:idempotency-semantics-change",
+  "label": "`find_review` now requires installation_id and github_repo_id to be NULL, so an existing App verdict for the same head SHA no longer suppresses a /v1/review rescore. This intentionally doubles LLM spend for commits reviewed by both paths and changes webhook-redelivery dedup behavior for any caller relying on the previous cross-path match (e.g. an App-written row followed by a CI retry).",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 11,
+  "pair": [
+   1017,
+   1019
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:n-plus-one-query",
+  "label": "comparison_reviews issues one `reads` SELECT per returned verdict row inside the connection loop; with limit up to 200 PR groups and unbounded duplicate verdict rows per group this can be hundreds of round trips per dashboard request.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 12,
+  "pair": [
+   1017,
+   1019
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:unbounded-result-set",
+  "label": "The limit caps PR groups but not verdict rows; a PR with many duplicate App/CI writes can return an arbitrarily large payload from /v1/comparisons.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 13,
+  "pair": [
+   1017,
+   1019
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:filter-excludes-null",
+  "label": "`verdicts.c.tier != EXTERNAL_TIER` evaluates to NULL for rows with a NULL tier, silently dropping such rows from the comparison view.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 14,
+  "pair": [
+   1018,
+   1020
+  ],
+  "pr": 38,
+  "file": "api/doug/api.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:missing-key-access",
+  "label": "_comparison_run indexes coverage keys directly (coverage[\"diff_chars\"], etc.); if a legacy reads row lacks any of those columns/keys the endpoint raises a 500 instead of degrading to null coverage.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "1f28b4ebc867"
+  ],
+  "to_hashes": [
+   "c8f3b3b1ca1f"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 15,
+  "pair": [
+   1018,
+   1020
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:idempotency-semantics-change",
+  "label": "`find_review` now requires installation_id and github_repo_id to be NULL, so a prior App-path verdict for the same commit no longer short-circuits `/v1/review`. This intentionally doubles LLM spend and inserts an extra verdict row per commit reviewed by both paths; any other consumer relying on find_review as a general dedupe (e.g. webhook redelivery from the App path routed through /v1/review) will now rescore.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 16,
+  "pair": [
+   1018,
+   1020
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:n-plus-one-query",
+  "label": "comparison_reviews issues one `reads` SELECT per returned verdict row inside the connection loop; with limit up to 200 PR groups and multiple verdicts each, this can be hundreds of round trips per dashboard request.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 17,
+  "pair": [
+   1018,
+   1020
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "from": "bee606e21af7b7d4b85e9c1584606f123a86937d",
+  "to": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:unbounded-response-size",
+  "label": "The limit bounds PR groups, not rows; a PR with many duplicate App/CI verdicts can return an arbitrarily large payload for a single request.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "944357fca93a"
+  ],
+  "to_hashes": [
+   "628137bade4a",
+   "b994a0c90991",
+   "c007a4cf73ba",
+   "52c346c97312"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 18,
+  "pair": [
+   1027,
+   1029
+  ],
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "from": "d77a472a3e5fe51bbc13d7a1a383e7a4c4f0303c",
+  "to": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:removed-public-helper",
+  "label": "`reader.intent_enabled()` was deleted and `intent.enabled()` renamed to `enabled_for()`. Only review.py is updated in this diff; any other caller (worker, api, CLI, probes) would raise AttributeError at runtime.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "eba86e93a937",
+   "a1a0b4d245de"
+  ],
+  "to_hashes": [
+   "0333d7dfee4d",
+   "a1a0b4d245de"
+  ],
+  "survives": [
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 19,
+  "pair": [
+   1028,
+   1030
+  ],
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "from": "d77a472a3e5fe51bbc13d7a1a383e7a4c4f0303c",
+  "to": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:removed-public-api",
+  "label": "`intent.enabled()` and `reader.intent_enabled()` were deleted outright. Any remaining caller (CLI, probes, worker, scripts) would raise AttributeError at runtime; only review.read_intent is shown as updated.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "eba86e93a937",
+   "a1a0b4d245de"
+  ],
+  "to_hashes": [
+   "0333d7dfee4d",
+   "a1a0b4d245de"
+  ],
+  "survives": [
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 20,
+  "pair": [
+   1028,
+   1030
+  ],
+  "pr": 39,
+  "file": "api/tests/test_deviations.py",
+  "from": "d77a472a3e5fe51bbc13d7a1a383e7a4c4f0303c",
+  "to": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "state": "resolved",
+  "rule": "reader:brittle-test",
+  "label": "The test greps gcp.sh text for `--set-env-vars` lines and unpacks exactly one match containing DOUG_READER=1; any reformatting (line continuation, reordering, second API service) breaks the suite.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "4ec4131660e9",
+   "16eeb6d5e570",
+   "93660c3fb9e4",
+   "9f5a20baebd9",
+   "0cf867c2511d"
+  ],
+  "to_hashes": [
+   "b92310f4da9a",
+   "4ec4131660e9",
+   "16eeb6d5e570",
+   "93660c3fb9e4",
+   "9f5a20baebd9",
+   "ff4b26263240"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": true
+ },
+ {
+  "fid": 21,
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "persisted",
+  "rule": "reader:unsafe-migration",
+  "label": "Migration 005 dedupes by deleting duplicate verdicts rows and their findings/reads/deviations, and only re-points review_jobs.verdict_id. Any other table referencing verdicts.id (e.g. outcomes or future ledger tables) will be left dangling or will abort the CREATE UNIQUE INDEX / DELETE with an FK error, which per the code's own comment bricks every cold start that runs apply().",
+  "n_hunks": 1,
+  "from_hashes": [
+   "994dfb69d819"
+  ],
+  "to_hashes": [
+   "066b6a0101ac"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 22,
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:data-loss",
+  "label": "Dedupe permanently deletes findings/reads/deviations attached to superseded duplicate verdicts with no backup or archival step; if the wrong rows are chosen as duplicates (e.g. legitimately distinct tiers other than 'external' for the same SHA) evidence is irrecoverably lost.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "994dfb69d819"
+  ],
+  "to_hashes": [
+   "066b6a0101ac"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 23,
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:lock-contention",
+  "label": "CREATE UNIQUE INDEX on verdicts is issued without CONCURRENTLY, taking an exclusive lock on a potentially large production table during startup migration.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "994dfb69d819"
+  ],
+  "to_hashes": [
+   "066b6a0101ac"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 24,
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "_is_app_identity_collision matches the substring 'unique constraint failed: verdicts.' on sqlite, so any unique-constraint violation on the verdicts table (present or future) is misclassified as the App-identity collision and silently converted into an idempotent return instead of propagating.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "6ea2b7cb937c",
+   "dbfe530e44b5",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "899fc51c80e8"
+  ],
+  "to_hashes": [
+   "6ea2b7cb937c",
+   "c99957e0bea1",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "ec74fc1b6413",
+   "899fc51c80e8",
+   "7d7d185babd5"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 25,
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:api-contract-change",
+  "label": "save_review gains an out-parameter style `created: list[bool]` that the worker inspects; if any other caller or a storage-disabled path leaves it empty, the worker silently skips the race-floor branch, and mutation-based signalling is fragile against future refactors.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "6ea2b7cb937c",
+   "dbfe530e44b5",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "899fc51c80e8"
+  ],
+  "to_hashes": [
+   "6ea2b7cb937c",
+   "c99957e0bea1",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "ec74fc1b6413",
+   "899fc51c80e8",
+   "7d7d185babd5"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 26,
+  "pair": [
+   1042,
+   1044
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "persisted",
+  "rule": "reader:unsafe-migration",
+  "label": "Migration 005 deletes duplicate verdicts rows after clearing only findings/reads/deviations. Any other table referencing verdicts.verdict_id (e.g. outcomes, external/comparison rows) would either violate an FK or be left dangling, and a failing DELETE/CREATE UNIQUE INDEX inside apply() bricks every cold start as the comment itself warns.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "994dfb69d819"
+  ],
+  "to_hashes": [
+   "066b6a0101ac"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 27,
+  "pair": [
+   1042,
+   1044
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:over-broad-error-matching",
+  "label": "_is_app_identity_collision matches the substring 'unique constraint failed: verdicts.' which fires for ANY unique constraint on the verdicts table (and sqlite may instead report the index name for a partial index, missing the intended match). Mis-classification either swallows an unrelated integrity error or fails to take the idempotent path.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "6ea2b7cb937c",
+   "dbfe530e44b5",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "899fc51c80e8"
+  ],
+  "to_hashes": [
+   "6ea2b7cb937c",
+   "c99957e0bea1",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "ec74fc1b6413",
+   "899fc51c80e8",
+   "7d7d185babd5"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 28,
+  "pair": [
+   1042,
+   1044
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:fragile-out-parameter",
+  "label": "The `created: list[bool]` out-parameter contract is easy to misuse: when storage is disabled the list stays empty and the race path is silently skipped, conflating 'no insert' with 'no storage'.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "6ea2b7cb937c",
+   "dbfe530e44b5",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "899fc51c80e8"
+  ],
+  "to_hashes": [
+   "6ea2b7cb937c",
+   "c99957e0bea1",
+   "11d558bb7f8a",
+   "919bca555e95",
+   "ec74fc1b6413",
+   "899fc51c80e8",
+   "7d7d185babd5"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 29,
+  "pair": [
+   1042,
+   1044
+  ],
+  "pr": 43,
+  "file": "api/doug/worker.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:behavior-change",
+  "label": "save_review now silently returns a peer's verdict id instead of inserting for the same (installation, repo, pr, head_sha); intentional re-scores of the same SHA (config/prompt change, manual re-trigger) will no longer produce a new verdict row, and local deviations/check-run rendering are dropped.",
+  "n_hunks": 4,
+  "from_hashes": [
+   "4d82b4c427d0",
+   "477dbf0417fa",
+   "585586c313b0",
+   "e175569e77cb"
+  ],
+  "to_hashes": [
+   "4d82b4c427d0",
+   "477dbf0417fa",
+   "585586c313b0",
+   "3ec875bcf0de"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 30,
+  "pair": [
+   1042,
+   1044
+  ],
+  "pr": 43,
+  "file": "api/doug/worker.py",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "The new race path raises RuntimeError when save_review reports a collision but find_verdict_by_identity returns None (possible under replication lag or when the peer row is 'external'/tier-filtered differently), failing the job after paying for the read.",
+  "n_hunks": 4,
+  "from_hashes": [
+   "4d82b4c427d0",
+   "477dbf0417fa",
+   "585586c313b0",
+   "e175569e77cb"
+  ],
+  "to_hashes": [
+   "4d82b4c427d0",
+   "477dbf0417fa",
+   "585586c313b0",
+   "3ec875bcf0de"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 31,
+  "pair": [
+   1064,
+   1066
+  ],
+  "pr": 48,
+  "file": "api/doug/tenancy.py",
+  "from": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "to": "2a9f46a34d83d51f1caa731d01df48d304ae4b12",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "state": "persisted",
+  "rule": "reader:schema-dependency",
+  "label": "tenancy.mint/resolve depend on an installations.token_hash column; the store.py diff shows no migration or column addition, so deployments with an existing ledger could fail at runtime if the column isn't already present/migrated.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "7f89040ddcf7"
+  ],
+  "to_hashes": [
+   "e436e81c94be"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 32,
+  "pair": [
+   1064,
+   1066
+  ],
+  "pr": 48,
+  "file": "api/doug/tenancy.py",
+  "from": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "to": "2a9f46a34d83d51f1caa731d01df48d304ae4b12",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "verify_admin swallows all exceptions and returns None, so transient GitHub outages or rate-limit 403s render as 404 'not found' to tenants, making legitimate failures indistinguishable from misconfiguration and hard to diagnose.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "7f89040ddcf7"
+  ],
+  "to_hashes": [
+   "e436e81c94be"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 33,
+  "pair": [
+   1067,
+   1069
+  ],
+  "pr": 49,
+  "file": "api/doug/settle.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:overly-broad-regex",
+  "label": "`_TABLE_DOT_COLUMN` matches any dotted identifier in the description (e.g. `store.py`, `migrations.py`, `obj.attr`), so `claimed_columns` can yield spurious pairs. Since settlement requires *all* pairs to resolve, this mostly fails closed (keeps findings), but it can also silently suppress settlement or, if a bogus pair coincidentally matches a real table/column, settle a valid finding.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "b9882a2c5674"
+  ],
+  "to_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "64f2897cbf6e"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 34,
+  "pair": [
+   1067,
+   1069
+  ],
+  "pr": 49,
+  "file": "api/doug/settle.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:environment-dependent-behavior",
+  "label": "Settlement is decided against whatever database the worker/API is connected to; a dev or lagging replica schema differing from production could drop a legitimate unmigrated-column finding (or keep one already migrated), making review output environment-dependent.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "b9882a2c5674"
+  ],
+  "to_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "64f2897cbf6e"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 35,
+  "pair": [
+   1067,
+   1069
+  ],
+  "pr": 49,
+  "file": "api/doug/store.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "`columns_of` calls `inspect(engine).has_table/get_columns` on every scored PR; a transient DB connectivity/permission error raises rather than returning None (\"cannot tell\"), potentially failing the review path instead of degrading gracefully.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "e6510977a72a",
+   "d4404cd7e946"
+  ],
+  "to_hashes": [
+   "32a10e3f21f3",
+   "e6510977a72a",
+   "c571491771c1"
+  ],
+  "survives": [
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 36,
+  "pair": [
+   1068,
+   1070
+  ],
+  "pr": 49,
+  "file": "api/doug/settle.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "persisted",
+  "rule": "reader:overly-broad-regex-match",
+  "label": "`_TABLE_DOT_COLUMN` matches any `word.word`, including file names (`store.py`), attribute access (`self.token_hash`) or module paths inside a finding description. If every extracted pair happens to resolve against the live schema, a legitimate finding can be silently dropped; the broad `\"migrat\" in desc` keyword test widens the candidate set further.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "b9882a2c5674"
+  ],
+  "to_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "64f2897cbf6e"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": false
+ },
+ {
+  "fid": 37,
+  "pair": [
+   1068,
+   1070
+  ],
+  "pr": 49,
+  "file": "api/doug/settle.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:environment-drift",
+  "label": "Settling against the reviewer service's own database assumes that DB reflects the target repo's production schema; a column present locally but missing in the deployed DB would cause a real unmigrated-column finding to be dropped.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "b9882a2c5674"
+  ],
+  "to_hashes": [
+   "89cadbe8f8d9",
+   "0ae4ce35728f",
+   "64f2897cbf6e"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 38,
+  "pair": [
+   1068,
+   1070
+  ],
+  "pr": 49,
+  "file": "api/doug/store.py",
+  "from": "b694f5bd824cc075f5623df58c86c87074e33945",
+  "to": "f52a80a448026f4967debdd00ed7b30fdaf5ff8c",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:unhandled-exception-path",
+  "label": "`store.columns_of` runs `inspect(engine).has_table/get_columns` on every scored PR in api.py and worker.py; a transient DB connection failure raises rather than returning None, so unless the surrounding try/except in score_one covers it, review scoring fails instead of degrading to \"cannot tell\".",
+  "n_hunks": 2,
+  "from_hashes": [
+   "e6510977a72a",
+   "d4404cd7e946"
+  ],
+  "to_hashes": [
+   "32a10e3f21f3",
+   "e6510977a72a",
+   "c571491771c1"
+  ],
+  "survives": [
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 39,
+  "pair": [
+   1071,
+   1072
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "6a626d6c6a86a0fcdef849e60c457512f7ba6a48",
+  "to": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:incomplete-authorization-scoping",
+  "label": "Only `store.latest_reviews` receives `repo_ids`; the `repo` parameter is still validated against all of `store.active_repos(installation_id)` rather than the key's selected repo set, and the other branch of `queue` (the non-review path) appears unchanged. A 'selected'-scope key can therefore query a sibling repo in the same installation and get a 200 (existence oracle) and, if any unscoped query path exists, potentially out-of-selection data.",
+  "n_hunks": 4,
+  "from_hashes": [
+   "3421db44654b",
+   "6d0e5ecbe8d9",
+   "b32a3a54f14f",
+   "0c99bf45abe8"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "3421db44654b",
+   "6d0e5ecbe8d9",
+   "b32a3a54f14f",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 40,
+  "pair": [
+   1071,
+   1072
+  ],
+  "pr": 50,
+  "file": "api/doug/store.py",
+  "from": "6a626d6c6a86a0fcdef849e60c457512f7ba6a48",
+  "to": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "persisted",
+  "rule": "reader:non-atomic-write",
+  "label": "insert_installation_token and set_installation_token_repos run in separate transactions; a crash between them leaves a 'selected' key row with zero junction rows (resolve then fails closed, but the row counts toward the daily mint cap and appears in key listings as a permanently unusable key).",
+  "n_hunks": 5,
+  "from_hashes": [
+   "36e7761ff8db",
+   "dd348b65be85",
+   "fc6130ca9f32",
+   "15a32ed4246d",
+   "d9d2b352bfe5"
+  ],
+  "to_hashes": [
+   "36e7761ff8db",
+   "dd348b65be85",
+   "fc6130ca9f32",
+   "15a32ed4246d",
+   "66803480e962"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": false
+ },
+ {
+  "fid": 41,
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:api-contract-change",
+  "label": "TokenResponse drops the previously-required `repo` field and adds several required fields (token_id, selection, repos, last4, expires_at); TokenRequest now 404s when neither `selection` nor `repo` is supplied. Existing clients of /v1/installations/token may break on the changed response shape.",
+  "n_hunks": 6,
+  "from_hashes": [
+   "b23f459800db",
+   "3421db44654b",
+   "6d0e5ecbe8d9",
+   "b32a3a54f14f",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": true
+ },
+ {
+  "fid": 42,
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authz-scope-gap",
+  "label": "In /queue, when a tenant key supplies `repo`, the membership check only verifies the repo belongs to the installation, not that it is in the key's `repo_ids` selection; scoping relies solely on latest_reviews' repo_ids filter. Any code path in the non-latest-reviews branch that does not also apply repo_ids would leak out-of-selection data, and the mismatch yields a misleading empty result instead of a 403.",
+  "n_hunks": 6,
+  "from_hashes": [
+   "b23f459800db",
+   "3421db44654b",
+   "6d0e5ecbe8d9",
+   "b32a3a54f14f",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 4,
+  "marginal": true
+ },
+ {
+  "fid": 43,
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:input-validation",
+  "label": "revoke_token treats an owner containing '/' as absent and silently falls through to the repos branch instead of rejecting, which can produce confusing 404s and makes the authorization branch selection depend on malformed input.",
+  "n_hunks": 6,
+  "from_hashes": [
+   "b23f459800db",
+   "3421db44654b",
+   "6d0e5ecbe8d9",
+   "b32a3a54f14f",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": true
+ },
+ {
+  "fid": 44,
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/store.py",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "unknown",
+  "rule": "reader:non-atomic-write",
+  "label": "Key row insert (insert_installation_token) and junction rows (set_installation_token_repos) are separate transactions; a failure between them leaves a 'selected' key with zero repo rows, which resolves as an empty selection rather than an error.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "36e7761ff8db",
+   "dd348b65be85",
+   "fc6130ca9f32",
+   "15a32ed4246d",
+   "66803480e962"
+  ],
+  "to_hashes": [
+   "36e7761ff8db",
+   "dd348b65be85",
+   "fc6130ca9f32",
+   "15a32ed4246d",
+   "cb5813de0003"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": false
+ },
+ {
+  "fid": 45,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:query-filter-regression",
+  "label": "Tenant queue now intersects on verdicts.github_repo_id (via repo_ids) even for 'all'-selection keys. Any verdict with NULL/unknown github_repo_id, or a repo not yet present in installation_repos (ledger lag, the drift the new startup check explicitly logs), will disappear from the tenant view where it was previously visible via installation_id alone.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 46,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authorization-bypass-risk",
+  "label": "revoke_token dispatches on 'owner and \"/\" not in owner'; an owner value containing '/' silently falls through to the repos branch instead of 404ing, and with empty repos returns 404 \u2014 behavior is order-dependent and easy to misuse, and repo-admin proof path depends on installation_token_repo_ids being non-empty without verifying the token belongs to the proven installation before the coverage check.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 47,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:fail-open-rate-limit",
+  "label": "Mint rate cap is fail-open when count_installation_tokens_minted_since returns None, so a DB read error removes the 30/day bound on key minting (each mint spends GitHub API calls).",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 48,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:non-atomic-write",
+  "label": "Mint inserts the key row then attaches junction rows; duplicate-case repos are pre-checked, but any other failure in set_installation_token_repos (e.g. concurrent repo removal) can still leave an orphaned key row with zero repos, which resolves to an empty scope rather than an error.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "89dc7fbb926c",
+   "91a8df96e083",
+   "5e13659b7b60",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 49,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/migrations.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "persisted",
+  "rule": "reader:unsafe-migration",
+  "label": "Migration 006 issues ALTER TABLE installations DROP COLUMN token_hash and relies on error-string matching ('no such column', 'does not exist' + 'column') for idempotency; on a driver/locale whose message differs, the migration raises and can crash-loop startup, and the drop is irreversible on existing environments.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b1203c199699",
+   "a2d69c67dbb6",
+   "2a8c776d6e52"
+  ],
+  "to_hashes": [
+   "b1203c199699",
+   "a2d69c67dbb6",
+   "ae1b50f9fccc"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 50,
+  "pair": [
+   1073,
+   1074
+  ],
+  "pr": 50,
+  "file": "api/doug/migrations.py",
+  "from": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "to": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:broad-exception-swallowing",
+  "label": "_SATISFIED now includes the broad substring 'no such column' and a 'does not exist'+'column' heuristic, which can mask genuinely failing future DDL (e.g. altering the wrong column name) rather than surfacing it.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "b1203c199699",
+   "a2d69c67dbb6",
+   "2a8c776d6e52"
+  ],
+  "to_hashes": [
+   "b1203c199699",
+   "a2d69c67dbb6",
+   "ae1b50f9fccc"
+  ],
+  "survives": [
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 51,
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authz-scoping-regression",
+  "label": "Tenant queue scoping switches from full_name matching to installation_repos repo ids (repo filter is dropped for tenant callers and replaced by repo_ids). Any verdict row lacking a resolvable github_repo_id (the drift the new startup check explicitly reports) becomes invisible to tenants, silently emptying their queue.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 52,
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "list_tokens/revoke_token do not guard against tenancy.KeysNotConfigured (handled explicitly on other routes), so a missing pepper would surface as an unhandled 500 rather than 503 on these endpoints.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 53,
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:logic-error",
+  "label": "revoke_token silently falls through to the repo-admin branch when the owner query param contains '/', treating a malformed org-admin request as a repo-admin request (or a 404 if repos is empty), which can mask caller errors and confuse revocation semantics.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 54,
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:partial-write",
+  "label": "Mint performs multiple non-atomic steps (key row insert plus set_installation_token_repos junction rows); a failure between them can leave a live key row with no repo rows, which for 'selected' selection yields zero effective repos and for revoke-coverage checks is treated like an 'all' key.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 55,
+  "pair": [
+   1075,
+   1077
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:silent-empty-result",
+  "label": "Tenant queue scoping switched from verdicts.repo name matching to installation_repos-derived repo_ids. If the repo ledger lags GitHub (the documented drift condition), tenants silently see an empty queue instead of their verdicts; the only signal is a stderr log at startup.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 56,
+  "pair": [
+   1075,
+   1077
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "Mint writes the key row and then attaches junction rows via set_installation_token_repos; a failure between the two (or a race with repo removal) leaves an orphaned 'selected' key with zero repos, which resolves to no access rather than an explicit error. Only the duplicate-name case is pre-validated.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 57,
+  "pair": [
+   1075,
+   1077
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authz-edge-case",
+  "label": "revoke_token silently ignores an `owner` value containing '/' and falls through to the repos branch, and org-admin proof for revocation is only reached when owner is well-formed; malformed input yields 404 rather than a clear validation error, which can mask legitimate revoke attempts during an incident.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "10af7b400734",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 58,
+  "pair": [
+   1076,
+   1078
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "persisted",
+  "rule": "reader:api-contract-change",
+  "label": "TokenResponse drops the `repo` field and adds required token_id/selection/repos/last4/expires_at; existing clients of POST /v1/installations/token that read `repo` will break even though the legacy `repo` request body is still accepted.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": false
+ },
+ {
+  "fid": 59,
+  "pair": [
+   1076,
+   1078
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authz-scope-edge-case",
+  "label": "For selection='all' keys, `effective` becomes an empty frozenset when the live repo ledger is empty; if latest_reviews treats an empty set as 'no filter' (falsy check), the repo scoping degrades to installation-only scoping rather than returning nothing.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 60,
+  "pair": [
+   1076,
+   1078
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:fail-open-rate-limit",
+  "label": "Mint rate cap is explicitly fail-open (None count allows), so a counting/DB error removes the 30-mints-per-day protection on a public, unauthenticated-by-operator endpoint.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 61,
+  "pair": [
+   1076,
+   1078
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:missing-guard",
+  "label": "count_verdict_repos_missing_from_ledger() is called at startup without the store.enabled() guard applied to the sibling check; it relies solely on the surrounding try/except to avoid breaking reconcile.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 62,
+  "pair": [
+   1076,
+   1078
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:non-atomic-write",
+  "label": "Mint inserts the key row and then attaches junction rows (set_installation_token_repos); if the second step fails for a reason other than the pre-checked duplicate, an orphaned zero-repo key row remains.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 63,
+  "pair": [
+   1077,
+   1079
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "persisted",
+  "rule": "reader:api-contract-change",
+  "label": "TokenResponse drops `repo` and adds required fields (token_id, selection, repos, last4, expires_at); legacy clients posting {\"repo\": ...} now also require admin proof on that repo via verify_repos_admin rather than the previous verify_admin path. Existing integrations parsing the old response or relying on the old permission semantics will break.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": false
+ },
+ {
+  "fid": 64,
+  "pair": [
+   1077,
+   1079
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:missing-guard",
+  "label": "revoke_token's repo-proof path calls store.installation_token_repo_ids(token_id) with a caller-supplied token_id that has not yet been scoped to the proven installation; correctness relies entirely on the later revoke_installation_token(token_id, installation_id) check, and the subset comparison leaks nothing only by accident of the uniform 404.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 65,
+  "pair": [
+   1077,
+   1079
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "from": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "to": "93ad704bed5c396f53d5c80bfabcf3594d8ce957",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:startup-error-path",
+  "label": "_startup_reconcile now performs two extra DB reads (count_installations_referenced_by_verdicts, count_verdict_repos_missing_from_ledger) before reconcile_all; the second runs even when store is not enabled. Any exception there is caught, but it aborts the reconcile/drain sweep for the process lifetime.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "e9a1a3e99a8e",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6b8edbb8ca30",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 66,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/deploy/prove-isolation.sh",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:unsafe-shell-logic",
+  "label": "`[ -z \"$A_MINT\" ] || [ -z \"$B_MINT\" ] && { ...; exit 1; }` under `set -u` without `set -e` relies on fragile && / || precedence; if both mints succeed the compound returns non-zero which is harmless here, but the idiom also makes the script's exit-status semantics unreliable. Additionally `b_total`/`b_foreign` are used in `[ \"$b_total\" -gt 0 ]` without guarding for empty jq output (non-JSON body on error) which raises a shell syntax error.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "c3cc1be5ab74"
+  ],
+  "to_hashes": [
+   "9449c523bbef"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 67,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/deploy/prove-isolation.sh",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:logic-error",
+  "label": "`b_inst` is read via jq and used as `--argjson inst \"${b_inst:-0}\"`; jq outputs the string `null` (not empty) when the id is missing, so `${b_inst:-0}` yields `null`, and the subsequent cross-tenant assertion silently compares against null, potentially producing a vacuous PASS.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "c3cc1be5ab74"
+  ],
+  "to_hashes": [
+   "9449c523bbef"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 68,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/doug/api.py",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:api-contract-change",
+  "label": "TokenResponse gained required fields and dispense_token now requires selection/owner/repos semantics; legacy `repo` body is normalized but the response shape (token_id, selection, repos, last4, expires_at) breaks existing clients parsing the old `repo` field. Any deployed CLI/web client must be updated in lockstep.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "767b7a4881d5",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": false
+ },
+ {
+  "fid": 69,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/doug/api.py",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:config-dependency-outage",
+  "label": "tenancy now raises KeysNotConfigured when DOUG_TOKEN_PEPPER is absent, converting all tenant token verification (and operator-token fallback path) into 503s. If the secret is not provisioned before the code deploy (secret creation is only in gcp.sh setup, and deploy binds it as `latest`), the API returns 503 for tenant traffic.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "767b7a4881d5",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": false
+ },
+ {
+  "fid": 70,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/doug/api.py",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:authz-scope-gap",
+  "label": "revoke_token treats a present `owner` as authoritative and never falls through to the repos proof; a caller with only repo-admin who passes an owner they can't administer gets 404 even though the repos proof would succeed \u2014 a usability/behavioral trap, and the cross-tenant revoke test depends on this precedence.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "767b7a4881d5",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": false
+ },
+ {
+  "fid": 71,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/doug/api.py",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:logic-error",
+  "label": "For selection='all', the effective repo set is computed as everything live NOW; combined with `repo=None` passed to latest_reviews for tenant keys, filtering relies entirely on repo_ids. If active_repos lags the ledger (the very MT0 drift documented in startup), an 'all' key could see an empty queue or, conversely, newly added repos without re-mint \u2014 behavior change worth verifying against store.latest_reviews' repo_ids semantics.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "767b7a4881d5",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": false
+ },
+ {
+  "fid": 72,
+  "pair": [
+   1081,
+   1082
+  ],
+  "pr": 51,
+  "file": "api/doug/api.py",
+  "from": "7661c73463c728f63c33b6e8b62df3c0106a7292",
+  "to": "1d1248736bb871659a00b15d68132608c445c6d0",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "Mint rate cap: count_installation_tokens_minted_since returning None is documented as fail-open, but `minted_today is not None and minted_today >= MAX` combined with raising 404 on cap makes an over-quota tenant indistinguishable from a bad request, complicating support; also no per-caller cap so one admin can exhaust the installation's daily budget.",
+  "n_hunks": 7,
+  "from_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "to_hashes": [
+   "b23f459800db",
+   "7aad50b8c941",
+   "767b7a4881d5",
+   "3421db44654b",
+   "3191658b556a",
+   "91a8df96e083",
+   "6cc43382ed48",
+   "cb4a95b23681"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": false
+ },
+ {
+  "fid": 73,
+  "pair": [
+   1094,
+   1095
+  ],
+  "pr": 56,
+  "file": "api/doug/features.py",
+  "from": "cbbf12791706b98622fbbc96679b652f7a6e6e8d",
+  "to": "0707eda89c7695b3717155d1d89c0f07450ee9e2",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:classification-edge-case",
+  "label": "_is_prose classifies lockfiles and any .md/.txt/.rst as tier 2, deprioritizing them. Markdown/text files that do carry behavior (e.g. prompt templates, SQL-in-docs, config in .txt like requirements.txt) may be pushed out of the budget silently.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "c1707cf4289e"
+  ],
+  "to_hashes": [
+   "52c2d125946e"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 74,
+  "pair": [
+   1094,
+   1095
+  ],
+  "pr": 56,
+  "file": "api/doug/reader.py",
+  "from": "cbbf12791706b98622fbbc96679b652f7a6e6e8d",
+  "to": "0707eda89c7695b3717155d1d89c0f07450ee9e2",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:cost-latency-regression",
+  "label": "DIFF_BUDGET raised from 30k to 100k chars for every live read; token spend, latency, and risk of hitting MAX_TOKENS/timeout (DEFAULT_READ_TIMEOUT_S=120) rise materially, and the docstring itself admits the probe's AUC evidence no longer validates the larger read.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "6fc983baf123",
+   "b051a81b1fad",
+   "fc089882b845"
+  ],
+  "to_hashes": [
+   "fd6c347a6432",
+   "b051a81b1fad",
+   "fc089882b845"
+  ],
+  "survives": [
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 75,
+  "pair": [
+   1095,
+   1096
+  ],
+  "pr": 56,
+  "file": "api/doug/review.py",
+  "from": "0707eda89c7695b3717155d1d89c0f07450ee9e2",
+  "to": "d1cb8991f6629a68833df983e44d08a9566b1e34",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:behavior-change-in-scoring-path",
+  "label": "read_order() re-sorts PR files (tier, then ascending patch size) before joining the diff sent to the LLM. This changes reader input for every PR, and the authors themselves note the probe's validated AUC figures no longer cover the reordered, larger read \u2014 output drift/regressions in verdict quality are plausible and only detectable in production.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "bcb03f698b4d",
+   "40c499f78f89",
+   "72c14b95081f",
+   "60852063599b",
+   "01749ce157b3"
+  ],
+  "to_hashes": [
+   "bcb03f698b4d",
+   "4f8a239da997",
+   "72c14b95081f",
+   "60852063599b",
+   "01749ce157b3"
+  ],
+  "survives": [
+   true,
+   false,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 76,
+  "pair": [
+   1096,
+   1097
+  ],
+  "pr": 56,
+  "file": "api/doug/features.py",
+  "from": "d1cb8991f6629a68833df983e44d08a9566b1e34",
+  "to": "b07e176ae870fdb5fd4a16380b5e778a836e71f3",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:tier-classification-edge-case",
+  "label": "_is_prose treats any .md/.txt/.rst suffix and lockfiles as prose; files like CHANGELOG-driven code generation inputs, .txt fixtures used as test data, or .rst-embedded doctests get deprioritized, and requirements.txt is special-cased only via the MANIFESTS set \u2014 other prose-suffixed manifests (e.g. requirements-dev.txt, constraints.txt) will be misclassified.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "52c2d125946e"
+  ],
+  "to_hashes": [
+   "a790258b3eea"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 77,
+  "pair": [
+   1098,
+   1099
+  ],
+  "pr": 56,
+  "file": "api/doug/reader.py",
+  "from": "580591fb305570abf09265ba0f2520b555f9ca25",
+  "to": "b976364c2a8feac4a2277aca4bd30bc1a561969c",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:cost-and-latency-increase",
+  "label": "DIFF_BUDGET raised 30k -> 100k chars for all live reads, roughly tripling worst-case prompt size (tokens, latency, spend) against a fixed DEFAULT_READ_TIMEOUT_S of 120s; large PRs may now time out more often and fall back to deterministic scoring.",
+  "n_hunks": 3,
+  "from_hashes": [
+   "fd6c347a6432",
+   "b051a81b1fad",
+   "fc089882b845"
+  ],
+  "to_hashes": [
+   "fd6c347a6432",
+   "b051a81b1fad",
+   "4815806899c8",
+   "fc089882b845",
+   "4854651b020f",
+   "3415a69f59a8"
+  ],
+  "survives": [
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 78,
+  "pair": [
+   1098,
+   1099
+  ],
+  "pr": 56,
+  "file": "api/scripts/backfill_ledger.py",
+  "from": "580591fb305570abf09265ba0f2520b555f9ca25",
+  "to": "b976364c2a8feac4a2277aca4bd30bc1a561969c",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "unknown",
+  "rule": "reader:global-state-mutation",
+  "label": "_probe_coverage temporarily mutates the module global reader.DIFF_BUDGET. It is restored in finally, but any concurrent/async use of reader.coverage during the backfill would observe the 30k budget; the safety argument relies on the script staying strictly synchronous.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "82e68c16826b",
+   "ec40882fba86",
+   "f7f8518e40bb",
+   "f93dcd2ec44f",
+   "f93dcd2ec44f"
+  ],
+  "to_hashes": [
+   "82e68c16826b",
+   "ec40882fba86",
+   "013f53e7feb4",
+   "f93dcd2ec44f",
+   "f93dcd2ec44f"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 79,
+  "pair": [
+   1098,
+   1099
+  ],
+  "pr": 56,
+  "file": "api/scripts/backfill_ledger.py",
+  "from": "580591fb305570abf09265ba0f2520b555f9ca25",
+  "to": "b976364c2a8feac4a2277aca4bd30bc1a561969c",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "persisted",
+  "rule": "reader:fragile-import",
+  "label": "Top-level `from llm_probe import DIFF_BUDGET` couples the backfill script to sys.path containing the scripts directory; importing backfill_ledger from another working directory or as a module would raise ImportError at import time.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "82e68c16826b",
+   "ec40882fba86",
+   "f7f8518e40bb",
+   "f93dcd2ec44f",
+   "f93dcd2ec44f"
+  ],
+  "to_hashes": [
+   "82e68c16826b",
+   "ec40882fba86",
+   "013f53e7feb4",
+   "f93dcd2ec44f",
+   "f93dcd2ec44f"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 1,
+  "marginal": false
+ },
+ {
+  "fid": 80,
+  "pair": [
+   1099,
+   1100
+  ],
+  "pr": 56,
+  "file": "api/doug/features.py",
+  "from": "b976364c2a8feac4a2277aca4bd30bc1a561969c",
+  "to": "0b87c48e3deb727f8bdef43647a3eff3d1c8aec3",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:classification-edge-case",
+  "label": "_is_prose treats lockfiles and all .md/.txt/.rst as tier 2, but only known MANIFESTS and requirements/constraints*.txt are exempted; other text-suffixed code-adjacent files (e.g. CMakeLists.txt, *.rst docs vs. sources, .txt fixtures used in logic) get deprioritized out of the read budget.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "a790258b3eea"
+  ],
+  "to_hashes": [
+   "ebde9dea3b68"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 81,
+  "pair": [
+   1114,
+   1115
+  ],
+  "pr": 63,
+  "file": "console/components/facet-bar.tsx",
+  "from": "75910bd01a03caf79b42e7740fa91f8f433b6f45",
+  "to": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "resolved",
+  "rule": "reader:ui-state-inconsistency",
+  "label": "Band facet pills always render flag/clear colours regardless of selected state, so an unselected band pill looks visually identical to a selected one except for border colour; also `expanded` group keys persist after filtering, so a group re-appearing later renders pre-expanded.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "73428cb5f188"
+  ],
+  "to_hashes": [
+   "a815ddaa3167"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 82,
+  "pair": [
+   1114,
+   1115
+  ],
+  "pr": 63,
+  "file": "console/components/runs-table.tsx",
+  "from": "75910bd01a03caf79b42e7740fa91f8f433b6f45",
+  "to": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "resolved",
+  "rule": "reader:framework-api-assumption",
+  "label": "Facet state is written with `window.history.pushState` and read back via `useSearchParams`. This sync only holds on Next versions that integrate the native History API with the router; on other versions pill clicks would update the URL but not re-render the filtered table (and back/forward would desync).",
+  "n_hunks": 1,
+  "from_hashes": [
+   "ffd381047532"
+  ],
+  "to_hashes": [
+   "902a67d8d5d5"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 83,
+  "pair": [
+   1114,
+   1115
+  ],
+  "pr": 63,
+  "file": "console/components/runs-table.tsx",
+  "from": "75910bd01a03caf79b42e7740fa91f8f433b6f45",
+  "to": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "resolved",
+  "rule": "reader:misleading-count",
+  "label": "CountLine's `shown` sums group.runCount over filtered groups; when a filter is active this is the count of matching runs, but it is rendered against `total` (all fetched runs) which is fine, yet at cap the same number is presented alongside 'the latest {limit}', which can read as a scope-wide count.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "ffd381047532"
+  ],
+  "to_hashes": [
+   "902a67d8d5d5"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 84,
+  "pair": [
+   1115,
+   1116
+  ],
+  "pr": 63,
+  "file": "console/components/facet-bar.tsx",
+  "from": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "to": "c2148e749446eb5bc0c8e16e6217a382f4943038",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "resolved",
+  "rule": "reader:misleading-ui-count",
+  "label": "Comments in facets.ts and the tests state that the page 'suppresses counts entirely once that set is a truncated page', but FacetBar always renders per-option counts and a `X of totalInScope` title even when atCap is true, so pill counts can understate the true scope silently.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "a815ddaa3167"
+  ],
+  "to_hashes": [
+   "acd26c9baf2c"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 85,
+  "pair": [
+   1115,
+   1116
+  ],
+  "pr": 63,
+  "file": "console/components/runs-table.tsx",
+  "from": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "to": "c2148e749446eb5bc0c8e16e6217a382f4943038",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "resolved",
+  "rule": "reader:framework-api-misuse",
+  "label": "RunsTable is a client component calling useSearchParams and mutating URL state via window.history.pushState. Without a Suspense boundary this can fail prerender/build in some Next configurations, and reliance on pushState keeping useSearchParams in sync is version-specific behavior.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "902a67d8d5d5"
+  ],
+  "to_hashes": [
+   "60134e6a15c5"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 86,
+  "pair": [
+   1115,
+   1116
+  ],
+  "pr": 63,
+  "file": "console/components/runs-table.tsx",
+  "from": "eb2ddb41d393ab7aa4df5194e3028f73d65536c4",
+  "to": "c2148e749446eb5bc0c8e16e6217a382f4943038",
+  "base": "d3ec70a262e369662819387b388dc782096cf12c",
+  "state": "persisted",
+  "rule": "reader:state-desync",
+  "label": "Sort state and expanded-group state are local useState, while facet selection lives in the URL. A shared/copied URL restores filters but not sort, and expanded group keys can persist for groups removed by a new filter (harmless but stale set growth).",
+  "n_hunks": 1,
+  "from_hashes": [
+   "902a67d8d5d5"
+  ],
+  "to_hashes": [
+   "60134e6a15c5"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 87,
+  "pair": [
+   1120,
+   1121
+  ],
+  "pr": 67,
+  "file": "web/package-lock.json",
+  "from": "e3b184c3a79265dcc74cb96c2c55524b75bfc308",
+  "to": "c60b1d75780a4384888cb89605950df15e1fdef0",
+  "base": "c77536e93884eb8c2ae3ca83efd146ec6c21188a",
+  "state": "resolved",
+  "rule": "reader:dependency-lockfile-drift",
+  "label": "package-lock.json changes drop @emnapi/core and @emnapi/runtime entries and add numerous 'peer' markers, unrelated to this feature removal; regenerated lockfile could alter install resolution in CI/builds.",
+  "n_hunks": 19,
+  "from_hashes": [
+   "134392680d48",
+   "134392680d48",
+   "81ae0ba11035",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48",
+   "f907afd22451",
+   "134392680d48",
+   "134392680d48",
+   "134392680d48"
+  ],
+  "to_hashes": [],
+  "survives": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 88,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/app/runs/[verdictId]/page.tsx",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "resolved",
+  "rule": "reader:lost-context-on-redirect",
+  "label": "/runs/[id] now redirects to /?run=<id> without preserving tenant/repo scope, so deep links land on an unscoped list; also the redirect makes any previously shared detail URLs perform an extra full list fetch.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "b5b6bd710b63"
+  ],
+  "to_hashes": [
+   "6e94a0e553d1"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 89,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/components/runs-table.tsx",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "resolved",
+  "rule": "reader:performance-regression",
+  "label": "selectRun uses router.replace, which triggers a server re-render of the page and therefore a full getRuns() fetch (up to 500 rows) on every row click, in addition to getRunDetail. Previously selection was a navigation to a small detail page. Could be noticeably slow on large tenants.",
+  "n_hunks": 15,
+  "from_hashes": [
+   "4e7eba250f8c",
+   "4654f62aec70",
+   "8cff6381e800",
+   "14fc78dd4c23",
+   "bf17101414e2",
+   "cff4b75eee4a",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "8dd86851f6c2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "93ca8d1bdd46",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "c1133cb7d100"
+  ],
+  "to_hashes": [
+   "64e3c61c1c5f",
+   "79fc32f2dbba",
+   "d9172abe25b5",
+   "f50b75fd540d",
+   "2b76a44b2176",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "91bc664a0cd2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "fe09fa51e860",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "ef762371dc2a",
+   "e7d410758f8f"
+  ],
+  "survives": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 90,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/components/runs-table.tsx",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "resolved",
+  "rule": "reader:url-state-inconsistency",
+  "label": "Facets/sort are written with window.history.pushState while selection uses router.replace. If a facet pushState hasn't propagated to useSearchParams at the time of a row click, the replace can drop or resurrect stale facet/sort params, and conversely a subsequent facet pushState copies searchParams that may not reflect the replaced run value.",
+  "n_hunks": 15,
+  "from_hashes": [
+   "4e7eba250f8c",
+   "4654f62aec70",
+   "8cff6381e800",
+   "14fc78dd4c23",
+   "bf17101414e2",
+   "cff4b75eee4a",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "8dd86851f6c2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "93ca8d1bdd46",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "c1133cb7d100"
+  ],
+  "to_hashes": [
+   "64e3c61c1c5f",
+   "79fc32f2dbba",
+   "d9172abe25b5",
+   "f50b75fd540d",
+   "2b76a44b2176",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "91bc664a0cd2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "fe09fa51e860",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "ef762371dc2a",
+   "e7d410758f8f"
+  ],
+  "survives": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 91,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/components/runs-table.tsx",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "persisted",
+  "rule": "reader:accessibility-regression",
+  "label": "Row selection moved to a <tr> onClick with aria-selected but no role/tabIndex/keyboard handler; the previous <Link> to /runs/[id] was keyboard-accessible. Middle-click/open-in-new-tab and deep-link copying from the row are also lost.",
+  "n_hunks": 15,
+  "from_hashes": [
+   "4e7eba250f8c",
+   "4654f62aec70",
+   "8cff6381e800",
+   "14fc78dd4c23",
+   "bf17101414e2",
+   "cff4b75eee4a",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "8dd86851f6c2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "93ca8d1bdd46",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "c1133cb7d100"
+  ],
+  "to_hashes": [
+   "64e3c61c1c5f",
+   "79fc32f2dbba",
+   "d9172abe25b5",
+   "f50b75fd540d",
+   "2b76a44b2176",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "91bc664a0cd2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "fe09fa51e860",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "ef762371dc2a",
+   "e7d410758f8f"
+  ],
+  "survives": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 92,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/components/runs-table.tsx",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "resolved",
+  "rule": "reader:css-layout-regression",
+  "label": "Sticky thead inside an overflow container combined with border-collapse on the table commonly loses header border rendering and can clip the facet/sort dropdowns or focus outlines within the new max-h-[40vh] scroll box.",
+  "n_hunks": 15,
+  "from_hashes": [
+   "4e7eba250f8c",
+   "4654f62aec70",
+   "8cff6381e800",
+   "14fc78dd4c23",
+   "bf17101414e2",
+   "cff4b75eee4a",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "8dd86851f6c2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "93ca8d1bdd46",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "c1133cb7d100"
+  ],
+  "to_hashes": [
+   "64e3c61c1c5f",
+   "79fc32f2dbba",
+   "d9172abe25b5",
+   "f50b75fd540d",
+   "2b76a44b2176",
+   "4db6ee00d64d",
+   "11d736baff81",
+   "91bc664a0cd2",
+   "f80c759d23f6",
+   "143cdd81c052",
+   "fe09fa51e860",
+   "295674464ad8",
+   "be72b0c6b03d",
+   "ef762371dc2a",
+   "e7d410758f8f"
+  ],
+  "survives": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 93,
+  "pair": [
+   1122,
+   1123
+  ],
+  "pr": 68,
+  "file": "console/lib/selection.test.mjs",
+  "from": "314b89060614ec22e27b809fe7aa95ff7fad0e0a",
+  "to": "e4dd2fb8b222dbbc1c58e4326260348cabc75827",
+  "base": "c985a1f9caba7edd535a13af8d89d89fa9b52b59",
+  "state": "resolved",
+  "rule": "reader:test-tooling-assumption",
+  "label": "New test imports a .ts module directly from a .mjs node:test file, which requires Node type-stripping support; if CI Node version differs the new test suite fails to run.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "bd725887af74"
+  ],
+  "to_hashes": [
+   "eefb5820beba"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 94,
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/deploy/gcp.sh",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "state": "resolved",
+  "rule": "reader:config-path-fragility",
+  "label": "PREREG_DOC is a cwd-relative path ('../docs/...'). preregistration_preflight now gates both deploy() and adjudicator(), so invoking gcp.sh from any directory other than api/ makes grep fail and hard-blocks all deploys with a misleading 'not LOCKED' error.",
+  "n_hunks": 4,
+  "from_hashes": [
+   "688ff5f91abe",
+   "13ae1965c5aa",
+   "1b7e949474ce",
+   "0c645fbb3428"
+  ],
+  "to_hashes": [
+   "6c05752a47d8",
+   "8dabcc500e4d",
+   "b45767c49f6d",
+   "51279e191ebc",
+   "0c645fbb3428"
+  ],
+  "survives": [
+   false,
+   false,
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 95,
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "state": "resolved",
+  "rule": "reader:unsafe-migration",
+  "label": "apply() takes SHARE ROW EXCLUSIVE locks on installations and outcome_jobs for the whole inspect/insert/inspect/manifest-fsync sequence, so webhook merge writes block for the duration of the backfill including a synchronous disk fsync; on a large ledger this can stall ingest long enough to time out webhook deliveries.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "93793532504e"
+  ],
+  "to_hashes": [
+   "35a07adbc7f2"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 96,
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "state": "resolved",
+  "rule": "reader:dialect-specific-logic",
+  "label": "sqlite backfill computes due_at via func.datetime(merged_at, '+60 days'), which yields a string with a different format/timezone handling than the Python timedelta path used by the runtime writer, risking due_at mismatches flagged later by inspect()'s own mismatch audit.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "93793532504e"
+  ],
+  "to_hashes": [
+   "35a07adbc7f2"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 97,
+  "pair": [
+   1131,
+   1132
+  ],
+  "pr": 72,
+  "file": "api/doug/migrations.py",
+  "from": "dc23ed7cc8a06d97717776db1e583969cec48971",
+  "to": "21e0eb26c79514bc7f815594aab0963d31e26051",
+  "base": "91b5e8be1ab47e0cceae3b642ef4e3ae56683e43",
+  "state": "persisted",
+  "rule": "reader:unsafe-migration",
+  "label": "Migration 008 backfills prompt_hash with a hardcoded literal for all reader rows with NULL hash, based on the assumption that SYSTEM+SCHEMA never changed. If that assumption is wrong (e.g. prompt text moved lines or was edited outside the traced range), historical verdicts get mislabelled with a hash they never ran under \u2014 hard to undo once written.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "feedad83f3bb"
+  ],
+  "to_hashes": [
+   "d39bf484f014"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 98,
+  "pair": [
+   1131,
+   1132
+  ],
+  "pr": 72,
+  "file": "api/doug/migrations.py",
+  "from": "dc23ed7cc8a06d97717776db1e583969cec48971",
+  "to": "21e0eb26c79514bc7f815594aab0963d31e26051",
+  "base": "91b5e8be1ab47e0cceae3b642ef4e3ae56683e43",
+  "state": "resolved",
+  "rule": "reader:unbounded-query",
+  "label": "The migration's UPDATE over verdicts (tier='reader' AND prompt_hash IS NULL) runs at deploy time without batching; on a large production verdicts table this can hold row locks / stall the deploy.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "feedad83f3bb"
+  ],
+  "to_hashes": [
+   "d39bf484f014"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 99,
+  "pair": [
+   1131,
+   1132
+  ],
+  "pr": 72,
+  "file": "api/doug/store.py",
+  "from": "dc23ed7cc8a06d97717776db1e583969cec48971",
+  "to": "21e0eb26c79514bc7f815594aab0963d31e26051",
+  "base": "91b5e8be1ab47e0cceae3b642ef4e3ae56683e43",
+  "state": "resolved",
+  "rule": "reader:nested-connection-in-transaction",
+  "label": "store.receipt() opens `engine.begin()` and then calls governing_verdict() inside the merge loop, which acquires a second connection per merge. On a small pool (or SQLite with file locking) this risks pool exhaustion/blocking, and the reads are outside the outer transaction so the assembled document can be internally inconsistent.",
+  "n_hunks": 12,
+  "from_hashes": [
+   "6b51dea1eabc",
+   "92433b049951",
+   "d4ec952a3dfe",
+   "9ee6102f4695",
+   "ce41813335e0",
+   "f8b1191a6629",
+   "e737778c7658",
+   "1dab778020bd",
+   "d8ad952cdc60",
+   "467f5a7335e4",
+   "b08108f8f037",
+   "c9c7de51af24"
+  ],
+  "to_hashes": [
+   "6b51dea1eabc",
+   "92433b049951",
+   "d4ec952a3dfe",
+   "9ee6102f4695",
+   "ce41813335e0",
+   "f8b1191a6629",
+   "e737778c7658",
+   "1dab778020bd",
+   "d8ad952cdc60",
+   "584ed432bf96",
+   "b08108f8f037",
+   "c9c7de51af24"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 10,
+  "marginal": true
+ },
+ {
+  "fid": 100,
+  "pair": [
+   1131,
+   1132
+  ],
+  "pr": 72,
+  "file": "api/doug/store.py",
+  "from": "dc23ed7cc8a06d97717776db1e583969cec48971",
+  "to": "21e0eb26c79514bc7f815594aab0963d31e26051",
+  "base": "91b5e8be1ab47e0cceae3b642ef4e3ae56683e43",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "governing_verdict uses one_or_none(); if duplicate rows ever rank rn=1 (e.g. partition assumptions change), the receipt endpoint raises an unhandled MultipleResultsFound producing a 500 rather than a degraded response.",
+  "n_hunks": 12,
+  "from_hashes": [
+   "6b51dea1eabc",
+   "92433b049951",
+   "d4ec952a3dfe",
+   "9ee6102f4695",
+   "ce41813335e0",
+   "f8b1191a6629",
+   "e737778c7658",
+   "1dab778020bd",
+   "d8ad952cdc60",
+   "467f5a7335e4",
+   "b08108f8f037",
+   "c9c7de51af24"
+  ],
+  "to_hashes": [
+   "6b51dea1eabc",
+   "92433b049951",
+   "d4ec952a3dfe",
+   "9ee6102f4695",
+   "ce41813335e0",
+   "f8b1191a6629",
+   "e737778c7658",
+   "1dab778020bd",
+   "d8ad952cdc60",
+   "584ed432bf96",
+   "b08108f8f037",
+   "c9c7de51af24"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 10,
+  "marginal": true
+ },
+ {
+  "fid": 101,
+  "pair": [
+   1135,
+   1136
+  ],
+  "pr": 74,
+  "file": "package.json",
+  "from": "3dce75e585a873a74c925c736832a3e8298eb27c",
+  "to": "ec004c7a9e9dda3e44da4f21038a464b3cc2ed41",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "state": "resolved",
+  "rule": "reader:build-config-break",
+  "label": "Root package.json declares workspaces [\"web\", \"console\"]; if the console package does not exist (or lacks a package.json), `npm install`/CI fails. The new root package-lock.json also changes install semantics for web and can conflict with an existing web/package-lock.json.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "9f5874b1b1a8"
+  ],
+  "to_hashes": [],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 102,
+  "pair": [
+   1145,
+   1146
+  ],
+  "pr": 75,
+  "file": "api/doug/api.py",
+  "from": "70fe216ca610e1fc58b84edd2abb2d8bb8ac8996",
+  "to": "aa342f7ddcef9008abf01399db8fedf1eb619635",
+  "base": "7fa5869dee2395327acd4de186aef754352de647",
+  "state": "resolved",
+  "rule": "reader:unauthenticated-public-endpoint",
+  "label": "/v1/showcase/queue is fully unauthenticated and queries the ledger on every request with no rate limiting/caching, and filters on the display-only `verdicts.repo` string. A misconfigured DOUG_SHOWCASE_REPO (or repo-name collision/rename) would publicly expose another tenant's PR titles, authors and reasons; it is also a cheap DB-load amplifier on a scale-to-zero service.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "702b1b56eaeb",
+   "e240423f9fb1"
+  ],
+  "to_hashes": [
+   "e842b0d335b7",
+   "702b1b56eaeb",
+   "887020804f8a"
+  ],
+  "survives": [
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 103,
+  "pair": [
+   1148,
+   1149
+  ],
+  "pr": 76,
+  "file": "api/deploy/gcp.sh",
+  "from": "25346a479491a5f056272113efe9002cbad5cf95",
+  "to": "fe01adf0522e845a104201be743858224c25a4f3",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:shell-command-substitution-capture",
+  "label": "`image=$(build_node_image ...)` captures all stdout from the function, which includes `gcloud builds submit` output. gcloud normally logs to stderr, but any stdout line (build log tailing, prompts, or a generated .gcloudignore notice) would be concatenated into `$image`, producing an invalid `--image` and a failed prod deploy.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "11300599ae15",
+   "f269a2a15ea4"
+  ],
+  "to_hashes": [
+   "3cbdb694378e",
+   "f269a2a15ea4"
+  ],
+  "survives": [
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 1,
+  "marginal": true
+ },
+ {
+  "fid": 104,
+  "pair": [
+   1148,
+   1149
+  ],
+  "pr": 76,
+  "file": "api/deploy/gcp.sh",
+  "from": "25346a479491a5f056272113efe9002cbad5cf95",
+  "to": "fe01adf0522e845a104201be743858224c25a4f3",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:build-context-ignore-mismatch",
+  "label": "`gcloud builds submit` honors .gcloudignore (falling back to .gitignore), not the new .dockerignore, so the uploaded Cloud Build context differs from the locally/CI-tested docker build context; files excluded locally (api/, docs/, data/) will be uploaded and files gitignored but needed could be missing.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "11300599ae15",
+   "f269a2a15ea4"
+  ],
+  "to_hashes": [
+   "3cbdb694378e",
+   "f269a2a15ea4"
+  ],
+  "survives": [
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 1,
+  "marginal": true
+ },
+ {
+  "fid": 105,
+  "pair": [
+   1148,
+   1149
+  ],
+  "pr": 76,
+  "file": "console/app/jobs/page.tsx",
+  "from": "25346a479491a5f056272113efe9002cbad5cf95",
+  "to": "fe01adf0522e845a104201be743858224c25a4f3",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:unsafe-type-cast",
+  "label": "`urlKey={key as \"review\" | \"outcome\"}` casts an untyped value; if `key` ever takes another value the search/page URL params silently diverge from expectations with no compile-time guard.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "3a489bd16c9d",
+   "abd279833ccb"
+  ],
+  "to_hashes": [
+   "3a489bd16c9d",
+   "3df9d411f56c",
+   "2f73301b6f0d"
+  ],
+  "survives": [
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 2,
+  "marginal": true
+ },
+ {
+  "fid": 106,
+  "pair": [
+   1148,
+   1149
+  ],
+  "pr": 76,
+  "file": "console/components/runs-table.tsx",
+  "from": "25346a479491a5f056272113efe9002cbad5cf95",
+  "to": "fe01adf0522e845a104201be743858224c25a4f3",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:misleading-ui-count",
+  "label": "`shown` still totals run counts across all groups while only one page is rendered, so the count line can report far more rows than are visible after paging is applied.",
+  "n_hunks": 13,
+  "from_hashes": [
+   "4d6c45446f35",
+   "2a3d0202c63e",
+   "4e2199040835",
+   "aac9d6fc4cba",
+   "14201d55bf26",
+   "7a89528a49c3",
+   "a11e818b6edf",
+   "4dcadcb8b290",
+   "d0cf31be245d",
+   "5e6ff86161a6",
+   "57177ce6fe1c",
+   "ff16d7cbbb29",
+   "7aeab0cd3149"
+  ],
+  "to_hashes": [
+   "4d6c45446f35",
+   "2a3d0202c63e",
+   "4e2199040835",
+   "aac9d6fc4cba",
+   "14201d55bf26",
+   "7a89528a49c3",
+   "bab02f980855",
+   "4dcadcb8b290",
+   "d0cf31be245d",
+   "5e6ff86161a6",
+   "57177ce6fe1c",
+   "ff16d7cbbb29",
+   "7aeab0cd3149"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": 6,
+  "marginal": true
+ },
+ {
+  "fid": 107,
+  "pair": [
+   1148,
+   1149
+  ],
+  "pr": 76,
+  "file": "web/Dockerfile",
+  "from": "25346a479491a5f056272113efe9002cbad5cf95",
+  "to": "fe01adf0522e845a104201be743858224c25a4f3",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:docker-arg-availability",
+  "label": "TARGETARCH is only auto-populated by BuildKit; under the legacy builder it is empty and silently falls through to the x64-musl native bindings, which would break arm64 builds at runtime rather than at build time.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "2e6ffc8a0928"
+  ],
+  "to_hashes": [
+   "f0907c5a3de9"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 108,
+  "pair": [
+   1149,
+   1150
+  ],
+  "pr": 76,
+  "file": ".gcloudignore",
+  "from": "fe01adf0522e845a104201be743858224c25a4f3",
+  "to": "f58c2f92887807ef62d7a1148872eee40b8f5346",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:build-context-ignore-mismatch",
+  "label": "A root .gcloudignore is introduced that excludes `api`, `Makefile`, `**/*.md`, etc. If any existing `gcloud run deploy --source api` / builds submit invocation resolves the ignore file from the repo root (or is ever run with root as source), the API upload silently loses files. Correctness depends on gcloud's per-source-dir resolution, which is not asserted anywhere.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "b2e556e69356"
+  ],
+  "to_hashes": [
+   "1aec2703f263"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 109,
+  "pair": [
+   1149,
+   1150
+  ],
+  "pr": 76,
+  "file": "api/deploy/gcp.sh",
+  "from": "fe01adf0522e845a104201be743858224c25a4f3",
+  "to": "f58c2f92887807ef62d7a1148872eee40b8f5346",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "persisted",
+  "rule": "reader:deploy-pipeline-change",
+  "label": "web/console deploys now require Cloud Build API, an Artifact Registry repo, and the deploying SA to have roles/cloudbuild.builds.editor + artifactregistry.writer + actAs on the build SA. None of that IAM is provisioned in this diff, so the first prod deploy can fail after merge.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "3cbdb694378e",
+   "f269a2a15ea4"
+  ],
+  "to_hashes": [
+   "c4023262ac30",
+   "832e23c906d3",
+   "f269a2a15ea4"
+  ],
+  "survives": [
+   false,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 110,
+  "pair": [
+   1149,
+   1150
+  ],
+  "pr": 76,
+  "file": "console/Dockerfile",
+  "from": "fe01adf0522e845a104201be743858224c25a4f3",
+  "to": "f58c2f92887807ef62d7a1148872eee40b8f5346",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "resolved",
+  "rule": "reader:runtime-path-change",
+  "label": "Standalone output now nests under web/ or console/, changing the container entrypoint to `node web/server.js` and static asset path to ./web/.next/static. If public/ does not exist in a workspace, the final COPY fails; if the static path is mis-nested, the app boots but serves unstyled/broken assets while the readiness probe still passes.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "3dd53c7337c9"
+  ],
+  "to_hashes": [
+   "34a65e701934"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 111,
+  "pair": [
+   1149,
+   1150
+  ],
+  "pr": 76,
+  "file": "web/Dockerfile",
+  "from": "fe01adf0522e845a104201be743858224c25a4f3",
+  "to": "f58c2f92887807ef62d7a1148872eee40b8f5346",
+  "base": "da43e13c53667bb6f9bfaad48dd34bf326c3ba38",
+  "state": "persisted",
+  "rule": "reader:fragile-dependency-workaround",
+  "label": "Dockerfiles run `npm install --no-save $NATIVE` with hard-pinned 4.3.3 / 1.32.0 native packages after `npm ci`. These must stay in lockstep with the tailwindcss/lightningcss versions in the lockfile; any dependency bump will silently mismatch ABI or fail the build, and the pinned optionalDependencies duplicate the same versions in three places.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "f0907c5a3de9"
+  ],
+  "to_hashes": [
+   "12ba8a77d4d3"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 112,
+  "pair": [
+   1154,
+   1155
+  ],
+  "pr": 80,
+  "file": "api/doug/example_pack_capture.py",
+  "from": "b2333cd9b8cd20ebbf495eb4c5e3c3a2ebf0ce9f",
+  "to": "cac6d7e8971b8895fc9129fdc30c98529cdd4057",
+  "base": "4db0cce47424753288c5e102f3635f0278b064d0",
+  "state": "resolved",
+  "rule": "reader:ordering-bug",
+  "label": "In `record_attempt`, `findings` are built before the guard `if finding_values and raw_ref is None: raise ValueError(...)`; the generator is evaluated with `raw_ref.sha256` only when raw_ref is not None, so the check is effectively dead/reordered logic and may mask the intended contract error.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "ef42137dea17"
+  ],
+  "to_hashes": [
+   "d937ebc54151"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 113,
+  "pair": [
+   1154,
+   1155
+  ],
+  "pr": 80,
+  "file": "api/doug/reader.py",
+  "from": "b2333cd9b8cd20ebbf495eb4c5e3c3a2ebf0ce9f",
+  "to": "cac6d7e8971b8895fc9129fdc30c98529cdd4057",
+  "base": "4db0cce47424753288c5e102f3635f0278b064d0",
+  "state": "resolved",
+  "rule": "reader:unguarded-instrumentation-in-hot-path",
+  "label": "`request_bytes = canonical_json_bytes(request)` in both `read_diff` and `read_with_decisions` is outside any try/except. `canonical_json_bytes` runs `reject_secret_fields` and `json.dumps(..., allow_nan=False)`, so a SecretFieldError or serialization error would turn a previously working read into a hard failure. It also always pays the serialization cost of the full prompt (diff up to DIFF_BUDGET=100k chars) even when capture is disabled.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "42f34d55e9f9",
+   "91c6d20e6a56",
+   "31fcca31bb7a",
+   "be5bb6601f88",
+   "74c5cad988b4"
+  ],
+  "to_hashes": [
+   "42f34d55e9f9",
+   "91c6d20e6a56",
+   "d5f98e893be1",
+   "f75bdd5438ca",
+   "27c48e22e52a"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   false,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 114,
+  "pair": [
+   1154,
+   1155
+  ],
+  "pr": 80,
+  "file": "api/doug/reader.py",
+  "from": "b2333cd9b8cd20ebbf495eb4c5e3c3a2ebf0ce9f",
+  "to": "cac6d7e8971b8895fc9129fdc30c98529cdd4057",
+  "base": "4db0cce47424753288c5e102f3635f0278b064d0",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "`_failure` indexes a fixed dict by `phase`; any future/unexpected phase string raises KeyError inside the reader's failure path, converting a controlled ReaderError fallback into an unhandled exception.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "42f34d55e9f9",
+   "91c6d20e6a56",
+   "31fcca31bb7a",
+   "be5bb6601f88",
+   "74c5cad988b4"
+  ],
+  "to_hashes": [
+   "42f34d55e9f9",
+   "91c6d20e6a56",
+   "d5f98e893be1",
+   "f75bdd5438ca",
+   "27c48e22e52a"
+  ],
+  "survives": [
+   true,
+   true,
+   false,
+   false,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 3,
+  "marginal": true
+ },
+ {
+  "fid": 115,
+  "pair": [
+   1154,
+   1155
+  ],
+  "pr": 80,
+  "file": "api/doug/worker.py",
+  "from": "b2333cd9b8cd20ebbf495eb4c5e3c3a2ebf0ce9f",
+  "to": "cac6d7e8971b8895fc9129fdc30c98529cdd4057",
+  "base": "4db0cce47424753288c5e102f3635f0278b064d0",
+  "state": "resolved",
+  "rule": "reader:unguarded-instrumentation-in-hot-path",
+  "label": "`_example_pack_scope` is invoked unconditionally in `process_job` and does raw dict indexing (`job['id']`, `job['claim_generation']`, `job['github_repo_id']`, ...) plus pydantic construction of PackScopeV0 (with constraints like `pull_number > 0`, 64-char sha limits). A missing key or out-of-contract value raises KeyError/ValidationError that propagates and fails the job, even when Example Pack capture is disabled. Everything else in this feature is carefully wrapped in try/except; this call is not.",
+  "n_hunks": 2,
+  "from_hashes": [
+   "2eb61d3ed12d",
+   "33f7a29dccee"
+  ],
+  "to_hashes": [
+   "1efb81200ce9",
+   "afb8c7280cfe"
+  ],
+  "survives": [
+   false,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 1,
+  "marginal": false
+ },
+ {
+  "fid": 116,
+  "pair": [
+   1156,
+   1157
+  ],
+  "pr": 81,
+  "file": "api/deploy/gcp.sh",
+  "from": "ad2a40574fb97c8f412d373069ebf1f68f274acb",
+  "to": "6e7eeb009a9cc81fa3e62e2e7027d0d71ea54744",
+  "base": "700cf0eee97d74876fa20464dae74ab121cc4174",
+  "state": "resolved",
+  "rule": "reader:config-mismatch",
+  "label": "NEXT_PUBLIC_WORKOS_REDIRECT_URI is supplied as a Cloud Run runtime secret, but NEXT_PUBLIC_* values are inlined at build time in Next; if any client-side AuthKit code (AuthKitProvider) depends on it, it will be undefined in the browser, and baseURL silently falls back to http://localhost:3000 when the env var is absent at runtime.",
+  "n_hunks": 6,
+  "from_hashes": [
+   "136cf4debe61",
+   "7f73cb7650ca",
+   "5648d2ef12c2",
+   "021511c7ca75",
+   "1f9f31ef014e",
+   "4d9e22615064"
+  ],
+  "to_hashes": [
+   "136cf4debe61",
+   "7f73cb7650ca",
+   "5648d2ef12c2",
+   "3892a531ec5a",
+   "1f9f31ef014e",
+   "4d9e22615064"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "cohort": "test",
+  "mech_hunk": null,
+  "marginal": true
+ },
+ {
+  "fid": 117,
+  "pair": [
+   1156,
+   1157
+  ],
+  "pr": 81,
+  "file": "api/doug/session_auth.py",
+  "from": "ad2a40574fb97c8f412d373069ebf1f68f274acb",
+  "to": "6e7eeb009a9cc81fa3e62e2e7027d0d71ea54744",
+  "base": "700cf0eee97d74876fa20464dae74ab121cc4174",
+  "state": "resolved",
+  "rule": "reader:auth-validation-gap",
+  "label": "jwt.decode verifies signature and exp only; no issuer/audience or org membership check, and the JWKS client is cached in a module global keyed on the first-seen WORKOS_CLIENT_ID, so any token signed by that client's keys is accepted for session resolution.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "86dfe6ea68c9"
+  ],
+  "to_hashes": [
+   "75e3a80a55d2"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 118,
+  "pair": [
+   1156,
+   1157
+  ],
+  "pr": 81,
+  "file": "web/lib/entitlements.ts",
+  "from": "ad2a40574fb97c8f412d373069ebf1f68f274acb",
+  "to": "6e7eeb009a9cc81fa3e62e2e7027d0d71ea54744",
+  "base": "700cf0eee97d74876fa20464dae74ab121cc4174",
+  "state": "resolved",
+  "rule": "reader:error-handling-gap",
+  "label": "recordProviderEntitlements throws when the API does not return 204, and it is wired as handleAuth's onSuccess. Any transient API failure (timeout, 5xx, missing WORKOS/app config causing 503) turns a valid sign-in into a callback error, blocking all logins rather than degrading to an unscoped session.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "d98d74b6adf1"
+  ],
+  "to_hashes": [
+   "19799e42e74a"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 119,
+  "pair": [
+   1156,
+   1157
+  ],
+  "pr": 81,
+  "file": "web/lib/entitlements.ts",
+  "from": "ad2a40574fb97c8f412d373069ebf1f68f274acb",
+  "to": "6e7eeb009a9cc81fa3e62e2e7027d0d71ea54744",
+  "base": "700cf0eee97d74876fa20464dae74ab121cc4174",
+  "state": "resolved",
+  "rule": "reader:missing-fetch-timeout",
+  "label": "recordProviderEntitlements' fetch has no timeout/AbortSignal (unlike session-api.ts), so a hung API call during the auth callback holds the sign-in request until platform timeout.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "d98d74b6adf1"
+  ],
+  "to_hashes": [
+   "19799e42e74a"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 120,
+  "pair": [
+   1160,
+   1161
+  ],
+  "pr": 84,
+  "file": "web/lib/auth-origin.ts",
+  "from": "dc40d254e7cc1b18b409e5598662a3175399364d",
+  "to": "354650e34eb72a7dd754fe9dc0a04113863a2d90",
+  "base": "c8bf6269e4b2b924d2b3c77d5ca33f7638a075d3",
+  "state": "resolved",
+  "rule": "reader:config-driven-outage",
+  "label": "A missing or slightly malformed NEXT_PUBLIC_WORKOS_REDIRECT_URI (any query/hash, or a callback path other than exactly '/auth/callback') now makes configuredWorkOSRedirectUri() return null, causing a blanket 503 for all proxied routes rather than a degraded auth path. This turns a config typo into a site-wide outage.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "b5e130003ae6"
+  ],
+  "to_hashes": [
+   "ab25d12117f8"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 121,
+  "pair": [
+   1160,
+   1161
+  ],
+  "pr": 84,
+  "file": "web/proxy.ts",
+  "from": "dc40d254e7cc1b18b409e5598662a3175399364d",
+  "to": "354650e34eb72a7dd754fe9dc0a04113863a2d90",
+  "base": "c8bf6269e4b2b924d2b3c77d5ca33f7638a075d3",
+  "state": "resolved",
+  "rule": "reader:redirect-loop",
+  "label": "proxy redirects any request whose derived public origin differs from NEXT_PUBLIC_WORKOS_REDIRECT_URI's origin to the canonical origin. If the derived origin can never match (e.g., x-forwarded-proto missing behind the Cloud Run/load balancer so protocol resolves to http while the configured URI is https, or a custom domain fronting the service), every request enters an infinite redirect loop across the whole matched route set.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "f3d7a1cf0b31"
+  ],
+  "to_hashes": [
+   "25feae335e77"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 122,
+  "pair": [
+   1160,
+   1161
+  ],
+  "pr": 84,
+  "file": "web/proxy.ts",
+  "from": "dc40d254e7cc1b18b409e5598662a3175399364d",
+  "to": "354650e34eb72a7dd754fe9dc0a04113863a2d90",
+  "base": "c8bf6269e4b2b924d2b3c77d5ca33f7638a075d3",
+  "state": "resolved",
+  "rule": "reader:type-contract-mismatch",
+  "label": "proxy is declared as returning Promise<NextResponse> but handleAuthkitProxy likely returns a plain Response (the stub returns Response/Response.redirect), which may fail type-check or lose NextResponse-specific behavior at runtime.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "f3d7a1cf0b31"
+  ],
+  "to_hashes": [
+   "25feae335e77"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 123,
+  "pair": [
+   1160,
+   1161
+  ],
+  "pr": 84,
+  "file": "web/scripts/smoke-auth-entry.sh",
+  "from": "dc40d254e7cc1b18b409e5598662a3175399364d",
+  "to": "354650e34eb72a7dd754fe9dc0a04113863a2d90",
+  "base": "c8bf6269e4b2b924d2b3c77d5ca33f7638a075d3",
+  "state": "resolved",
+  "rule": "reader:brittle-deploy-gate",
+  "label": "The post-promotion smoke requires /dashboard and /sign-in to return exactly 307 with redirect_uri equal to the promoted service URL + /auth/callback. If the configured redirect URI is a custom domain (or the service URL differs from the canonical origin), the first hop is a same-app canonicalization redirect and the deploy fails even though the app is healthy.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "311054fd2fb8"
+  ],
+  "to_hashes": [
+   "1f9db4c9a42b"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ },
+ {
+  "fid": 124,
+  "pair": [
+   1167,
+   1169
+  ],
+  "pr": 90,
+  "file": "web/lib/dashboard-model.ts",
+  "from": "cfc4f21cbd583eb1222a5f167a52056703d3bd5c",
+  "to": "00798b29678073435a67a8b165a00ba09860d53e",
+  "base": "2b563762b1414f5abc7732c996cac854799503de",
+  "state": "persisted",
+  "rule": "reader:behavior-change-default-branch",
+  "label": "outcomeTone now flags every unrecognized kind. Values previously treated as neutral/clear (e.g. 'clear', 'scheduled', 'pending', or any future informational kind) will render in the alarm colour, producing false-positive flags on the dashboard.",
+  "n_hunks": 5,
+  "from_hashes": [
+   "7b304ff33a96",
+   "84e501eab335",
+   "544ee235b6eb",
+   "3fbec66248f8",
+   "92d67abaa668"
+  ],
+  "to_hashes": [
+   "7b304ff33a96",
+   "84e501eab335",
+   "544ee235b6eb",
+   "3fbec66248f8",
+   "abd9fc53c15d"
+  ],
+  "survives": [
+   true,
+   true,
+   true,
+   true,
+   false
+  ],
+  "cohort": "test",
+  "mech_hunk": 5,
+  "marginal": false
+ },
+ {
+  "fid": 125,
+  "pair": [
+   1169,
+   1170
+  ],
+  "pr": 90,
+  "file": "web/lib/node-next-loader.mjs",
+  "from": "00798b29678073435a67a8b165a00ba09860d53e",
+  "to": "a1d0d86d61f5f381e02057a24c97f83c4bee902a",
+  "base": "2b563762b1414f5abc7732c996cac854799503de",
+  "state": "resolved",
+  "rule": "reader:tooling-resolution-fallback",
+  "label": "Loader fallback appends '.ts' to any failing relative specifier, which can mask real resolution errors (e.g. missing .mjs/.js files) with a confusing '.ts not found' error.",
+  "n_hunks": 1,
+  "from_hashes": [
+   "5139c32d28c7"
+  ],
+  "to_hashes": [
+   "c11fcc6e318a"
+  ],
+  "survives": [
+   false
+  ],
+  "cohort": "control",
+  "mech_hunk": null,
+  "marginal": false
+ }
+]

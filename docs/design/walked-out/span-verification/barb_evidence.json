@@ -1,0 +1,191 @@
+[
+ {
+  "i": 0,
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:idempotency-scope-change",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit, `c8383dc docs: record comparison review discrepancies`, and `git diff --stat 05fafe2b c8383dc` reports a single changed file, `docs/REVIEWING.md` (+20 lines); `git diff 05fafe2b c8383dc -- api/` is empty, so no production code changed anywhere in the pair, not just in the cited file. The flagged predicate still exists verbatim at to_head: `git show c8383dc:api/doug/store.py` shows `find_review` (line 819) still filtering on `verdicts.c.installation_id.is_(None)` and `verdicts.c.github_repo_id.is_(None)`, so any App-written verdict still fails to suppress a `/v1/review` rescore. The 20 added doc lines rebut different findings (the comparison-route 413 degradation, the null-head-SHA classification claim, and a query-cost warning) and say nothing about idempotency scope. A rebuttal of this exact finding does exist in `docs/REVIEWING.md` under \"A shared commit SHA does not make App and CI the same idempotency domain,\" but `git show 05fafe2b:docs/REVIEWING.md | grep -n \"same idempotency domain\"` returns it at line 129 already present at from_head, so it is a pre-existing argument rather than anything the pair did \u2014 the finding stands unchanged at to_head."
+ },
+ {
+  "i": 1,
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:fail-loud-cap",
+  "addressed": false,
+  "evidence": "`git log --oneline 05fafe2b..c8383dc` returns exactly one commit, c8383dc \"docs: record comparison review discrepancies\", and `git diff --stat 05fafe2b c8383dc` shows a single file changed \u2014 docs/REVIEWING.md, +20/-0 \u2014 so no code, in any file, moved between the two reads. The flagged code is still live at to_head: `git grep -n \"COMPARISON_RUN_LIMIT\\|ComparisonResultTooLarge\" c8383dc` shows `COMPARISON_RUN_LIMIT = 500` at api/doug/store.py:50, the unconditional `raise ComparisonResultTooLarge(max_rows)` at store.py:1270 when `len(rows) > max_rows`, and api/doug/api.py:1144 translating it straight to `HTTPException(status_code=413)` with no retry, no narrowing, and no pagination. The docs commit only argues the finding is overstated \u2014 it notes web/lib/api.ts maps non-OK comparison responses to `source: \"unavailable\"` (present at both reads, since the pair diff is docs-only, so not an in-pair fix) and it explicitly concedes \"Pagination could improve availability later,\" leaving the permanent-413 hazard for a busy repo intact. Refutation fails: the defect was not addressed anywhere in this pair, and the carry-forward is correct on the merits, not just on byte-identity.",
+  "uncertain": false
+ },
+ {
+  "i": 2,
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:unbounded-subquery-scan",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 05fafe2b..c8383dc3` returns exactly one commit, `c8383dc docs: record comparison review discrepancies`, and `git diff --stat 05fafe2b c8383dc3` shows the pair changes only `docs/REVIEWING.md` (+20 lines), so no code anywhere in the tree could have fixed this \u2014 `git rev-parse` confirms `api/doug/store.py` is the identical blob `059586e2` at both heads. The flagged code is fully present at to_head: `git show c8383dc3:api/doug/store.py | sed -n '1205,1275p'` still has `select(verdicts.c.repo, verdicts.c.pr_number, func.max(verdicts.c.scored_at))...group_by(repo, pr_number)` with no time predicate (`qualifies` filters only on tier and App/CI identity), outer-joined to a `select(reads.c.verdict_id, func.max(reads.c.id)).group_by(reads.c.verdict_id)` subquery that scans the whole reads table. No index was added to cover it: `git diff 05fafe2b c8383dc3 -- api/doug/migrations.py` is empty, the only migration indexes are `idx_review_jobs_pending_queue`, `idx_review_jobs_running_stale`, and `idx_outcome_jobs_pending_due` (none on verdicts or reads), and in the Table definitions `verdicts.scored_at` carries no `index=True`. The one docs commit in the pair in fact explicitly declines the fix, recording that \"the replacement pass's remaining query-cost warning is plausible but unproven\" and requiring \"a production-scale execution plan or measured latency before replacing it again\" \u2014 a deliberate non-fix, not a resolution."
+ },
+ {
+  "i": 3,
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "rule": "reader:removed-public-function",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit, `4408925 HANDOFF: Doug's review of #39, and the git-add-A rule it exposed`, and `git diff --stat 2cf9cbf 4408925` shows it touches only `HANDOFF.md` (+22/-2); no source file changed, and `git diff 2cf9cbf 4408925 -- api/doug/reader.py` is empty, so nothing in the pair fixed, reverted, or removed the flagged deletion. The hazard is nonetheless unreal in both reads: `git grep -n \"intent_enabled\" a8cc396` (merge base) returns a single hit, the definition at `api/doug/reader.py:527`, with zero callers anywhere in the tree, and `git grep -n \"intent\\.enabled\" a8cc396 -- 'api/*'` shows `intent.enabled()`'s only caller was `api/doug/review.py:307`, already rewritten to `intent.enabled_for(reader.installation_from_scope(scope))` at `review.py:309` in both `2cf9cbf` and `4408925`. So no CLI, probe, worker, or docs-script call site exists to raise AttributeError/ImportError \u2014 `api/scripts/decision_intent_probe.py:179` calls only `reader.enabled()`, which survives. The pair's HANDOFF.md text records the same conclusion from the human review (\"1 disproved (reader.intent_enabled had no caller anywhere)\"), but that is prose, not a fix: the finding was a false positive before the pair opened, not something the pair addressed."
+ },
+ {
+  "i": 4,
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "rule": "reader:strict-parsing-fallback",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 2cf9cbf..4408925` returns exactly one commit (4408925 \"HANDOFF: Doug's review of #39, and the git-add-A rule it exposed\"), and both `git diff --stat` and `git diff --name-only` over the pair show a single changed file, HANDOFF.md (+22/-2) \u2014 no source file changed between the two reads, so no fix in another file is possible. `git show 4408925:api/doug/reader.py | sed -n '215,245p'` confirms the flagged code still exists at to_head: `installation_from_scope` has three silent `return None` branches (wrong prefix, non-digit remainder, non-round-tripping form such as leading zeros) with no log or signal on any path. Its sole production caller is unchanged at `api/doug/review.py:309` \u2014 `if not (intent.enabled_for(reader.installation_from_scope(scope)) and reader.enabled())` \u2014 so a non-canonical scope still silently disables intent exactly as the finding describes. The strictness is deliberate and documented in the docstring, and `api/tests/test_deviations.py:456-460` locks in None for \"installation:007\", \"installation:-5\", \"installation: 7\", \"installation:\", and \"installation:abc\", but that rationale predates from_head and is not a change made within this pair; the finding stands unaltered at 4408925."
+ },
+ {
+  "i": 5,
+  "pr": 39,
+  "file": "api/tests/test_deviations.py",
+  "rule": "reader:brittle-test-on-deploy-file",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit and it touches no code: `git log --oneline 2cf9cbf..4408925` returns only `4408925 HANDOFF: Doug's review of #39...`, and `git diff --stat 2cf9cbf 4408925` shows `HANDOFF.md | 24 ++++--` as the sole entry, so no fix could have landed in another file. The flagged code still exists and is unchanged at to_head: `git diff 2cf9cbf 4408925 -- api/tests/test_deviations.py` (and the same for `api/deploy/gcp.sh` and `api/doug/intent.py`) each produce 0 lines, and `git show 4408925:api/tests/test_deviations.py` still contains `test_the_deployed_config_opts_the_dogfood_installation_in_and_nobody_else` with the strict `assert opted_in == [str(DOGFOOD)]` \u2014 the exact hazard, present at from_head too (line 438 of `git show 2cf9cbf:api/tests/test_deviations.py`). The one commit in fact reaffirms the assertion as deliberate rather than fixing it: its HANDOFF.md diff records \"the deploy test now pins 'and nobody else' instead of unpacking one line\" as a fix made earlier in PR #39, before from_head. One qualifier on the finding's own wording, not on the carry-forward: the reformatting half is already weak at both heads, since the test joins every `--set-env-vars` line and regex-extracts the value specifically so that adding a service, reflowing a continuation, or changing quoting will not fail it; the \"adding a second installation fails CI\" half stands unaddressed at to_head."
+ },
+ {
+  "i": 6,
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:sql-null-semantics",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 17533f9..2f2ab6a` returns exactly one commit (2f2ab6a \"Capture the rest of Doug's #43 misses in REVIEWING.md.\"), and `git diff --name-only 17533f9 2f2ab6a` lists only `docs/REVIEWING.md` (26 insertions, 3 deletions) \u2014 no code file changed anywhere in the pair, so no fix in another file is possible. That doc commit discusses two *other* #43 findings (`reader:unsafe-migration` inventing an `outcomes` FK, and beyond-ticket ADR gaps resolved by ADR-0011); it never mentions NULL tier or three-valued logic. `git show 2f2ab6a:api/doug/migrations.py | grep -n external` shows the flagged code intact at to_head: eleven `tier <> 'external'` predicates across the migration-005 dedupe DELETEs plus the partial `CREATE UNIQUE INDEX uq_verdicts_app_identity ... WHERE installation_id IS NOT NULL AND tier <> 'external'` (lines 126-187). One caveat that cuts against the finding's premise rather than against the carry-forward: `git show 2f2ab6a:api/doug/store.py` line 68 declares `Column(\"tier\", String(20), nullable=False)`, identical at the merge base and from_head, and `git log -S'Column(\"tier\"' -- api/doug/store.py` shows a single commit (06da136) \u2014 so the column was never nullable, but that is a pre-existing schema property, not anything this pair did. The finding stands unchanged at to_head; Doug's carry-forward is correct."
+ },
+ {
+  "i": 7,
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "rule": "reader:awkward-out-parameter",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit \u2014 `git -C /Users/andrew/Projects/doughq/repo log --oneline 17533f93..2f2ab6a4` returns only 2f2ab6a \"Capture the rest of Doug's #43 misses in REVIEWING.md.\" \u2014 and `git diff --name-only 17533f93 2f2ab6a4` lists only `docs/REVIEWING.md` (26 insertions, 3 deletions), so no code file changed anywhere in the pair and `git diff ... -- api/doug/store.py` is empty. That commit's prose covers two unrelated #43 findings (reader:unsafe-migration inventing an `outcomes` FK, and beyond-ticket ADR gaps); it never mentions the `created` out-parameter. The flagged code exists verbatim at to_head: `git show 2f2ab6a4:api/doug/store.py` line 382 declares `created: list[bool] | None = None`, and the `_mark()` helper at lines 410-413 only runs after the `if engine is None: return None` early exit. The sole caller, `git show 2f2ab6a4:api/doug/worker.py` lines 176-195, still branches on `if created == [False]` with a comment spelling out that an empty list means storage was disabled \u2014 so the hazard is unmitigated at to_head and the carry-forward is correct."
+ },
+ {
+  "i": 8,
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:auth-scope-bypass",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit: `git log --oneline 30fdf38..e8cf8cb` returns only e8cf8cb \"findings-log: first five PROSPECTIVE rows (Doug's review of #48)\", and `git diff --stat 30fdf38 e8cf8cb` shows one file changed, docs/findings-log.jsonl (+5), so no code anywhere in the repo moved between the two reads. api/doug/api.py is byte-identical by blob hash at both ends (2f17aef6be3089b77f82d8e7f70b22ea403b6437), and the flagged code still exists at to_head: `git show e8cf8cb:api/doug/api.py` (lines 462-519) shows /v1/queue resolving installation_id from the tenant token and passing it to `store.latest_reviews(repo=..., installation_id=...)` only inside `if store.enabled():`, while the `else:` branch is `items = [QueueItem(pr=pr, verdict=score(pr, thr)) for pr in _load_fixture()]` with installation_id never consulted. The five findings-log rows added by e8cf8cb dispose of other rules (api-contract-change, missing-migration-dependency, unauthenticated-endpoint-abuse, tenant-visibility-gap, inconsistent-scope-check) and include no row for reader:auth-scope-bypass, so it was not adjudicated, let alone fixed. One severity-lowering fact that does not amount to a fix: the non-store fallback serves a static packaged demo fixture (doug/fixtures/queue.json, _load_fixture at line 406), not live cross-tenant ledger rows."
+ },
+ {
+  "i": 9,
+  "pr": 48,
+  "file": "api/doug/tenancy.py",
+  "rule": "reader:schema-migration-gap",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit and it touches no code: `git log --oneline 30fdf38..e8cf8cb` returns only e8cf8cb \"findings-log: first five PROSPECTIVE rows (Doug's review of #48)\", and `git diff --stat 30fdf38 e8cf8cb` shows `docs/findings-log.jsonl | 5 +++++` as the sole change, so no fix landed in another file and no commit removed the hazard. The flagged code still exists verbatim at to_head \u2014 `git show e8cf8cb:api/doug/tenancy.py | grep -n token_hash` returns line 47 `.values(token_hash=_hash(token))` and line 73 `store.installations.c.token_hash == _hash(token)` \u2014 and `git show e8cf8cb:api/doug/migrations.py` still lists no installations/token_hash DDL, so the literal claim (no migration visible) holds at to_head. Separately, the finding's premise is false rather than fixed: `git show 6a1a213 -- api/doug/store.py` shows the `installations` table and `Column(\"token_hash\", Text)` were added in the same commit, so `create_all()` (which adds missing tables) builds the column, and the very findings-log row added by e8cf8cb records rule `reader:missing-migration-dependency` on pr 48 as `\"verdict\":\"disproved\"` settled by \"queried production information_schema via cloud-sql-proxy\" with \"token_hash IS present in doug-prod0\". Doug's carry-forward is therefore mechanically correct for this pair \u2014 nothing was addressed between the two heads \u2014 but the carried finding is a documented false positive (the fourth consecutive disproved unmigrated-column finding), not a live defect."
+ },
+ {
+  "i": 10,
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:validation-gap",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 30fdf38..e8cf8cb` returns exactly one commit (e8cf8cb, \"findings-log: first five PROSPECTIVE rows (Doug's review of #48)\"), and `git diff --name-only 30fdf38 e8cf8cb` lists only `docs/findings-log.jsonl` (5 insertions, 0 deletions) \u2014 no source file changed anywhere in the pair, so a fix in another file is impossible. `git rev-parse 30fdf38:api/doug/api.py e8cf8cb:api/doug/api.py` yields the identical blob 2f17aef6be3089b77f82d8e7f70b22ea403b6437, confirming the cited file is byte-identical rather than merely diff-clean. The flagged code still exists at to_head: `git show e8cf8cb:api/doug/api.py | sed -n '575,600p'` shows `owner, _, name = body.repo.partition(\"/\")` guarded only by `if not owner or not name or \"/\" in name:` \u2014 no whitespace strip, no URL-decode, no owner-side character validation. Those values reach GitHub unchanged, since `git show e8cf8cb:api/doug/tenancy.py` line 102 passes them straight through as `_caller_client(pat).rest.repos.get(owner=owner, repo=repo)`. The defect was not addressed in this pair; Doug's carry-forward is correct."
+ },
+ {
+  "i": 11,
+  "pr": 50,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:error-swallowing",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo log --oneline a0591d6..fe307ab` returns four commits (554dab1 queue repo authorization, 373261b installation-boundary tests, 0c502f4 startup drift warning, fe307ab pepper secret wiring/runbook), and `git diff --stat a0591d6 fe307ab` touches only api/deploy/gcp.sh, api/doug/api.py, api/doug/store.py, api/tests/test_api.py, api/tests/test_store.py, docs/OPERATIONS.md, and docs/design/outcome-loop/ROADMAP.md \u2014 `api/doug/migrations.py` is absent, and `git diff a0591d6 fe307ab -- api/doug/migrations.py` is empty. The flagged code still exists verbatim at to_head: `git show fe307ab:api/doug/migrations.py` line 223 is `_SATISFIED = (\"duplicate column name\", \"already exists\", \"no such column\")` and `_satisfied()` (lines 226-236) still ends `return \"does not exist\" in msg and \"column\" in msg`, with `_run` (line 247) still doing `if not _satisfied(str(e)): raise`. No commit in the pair adds a schema-drift guard or a migrations test \u2014 grepping the pair's test diff for `migration|_satisfied|no such column|does not exist` yields nothing, and 0c502f4's \"drift warning\" is data drift (verdicts naming installations the ledger lacks in store.py/api.py), not schema drift. The only defense present is an in-file comment arguing the blast radius is limited to Doug's own MIGRATIONS list, which is pre-existing author rationale rather than a fix made within this pair."
+ },
+ {
+  "i": 12,
+  "pr": 50,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:config-dependency",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit \u2014 `git log --oneline 8d6f817..0a3e0b7` returns only 0a3e0b7 \"fix: malformed owner refuses revoke instead of yielding to the repos proof; runbook setup-before-deploy note\" \u2014 and `git diff --stat 8d6f817 0a3e0b7` touches only api/doug/api.py (+8/-1), api/tests/test_api.py (+28), docs/OPERATIONS.md (+15); the api.py hunk is solely the revoke `owner` precedence fix at line ~781, unrelated to the pepper. The flagged code is fully intact at to_head: `git show 0a3e0b7:api/deploy/gcp.sh` still warns-and-continues on a missing secret (lines 108-111, `WARN: secret $s does not exist yet \u2026 continue`, with doug-token-pepper in the loop) and still binds `DOUG_TOKEN_PEPPER=doug-token-pepper:latest` in the deploy `--set-secrets` at line 237, while `git grep -n \"503\" 0a3e0b7 -- api/doug/api.py` shows the \"token verification not configured\" (485, 516) and \"token minting not configured\" (727) 503s unchanged, backed by the still-present `test_dispense_without_pepper_is_503`. The only response to this finding in the pair is documentation: the OPERATIONS.md addition tells operators to create `doug-token-pepper` before the first deploy and refines the failure mode (Cloud Run fails the revision outright; 503 applies when the secret exists but is empty/malformed) \u2014 a process mitigation that leaves both code hazards in place. So the carry-forward is correct on the code, with the caveat that the author explicitly treated this as PR #50 \"finding 4\" and chose a runbook note as the remediation."
+ },
+ {
+  "i": 13,
+  "pr": 56,
+  "file": "api/doug/reader.py",
+  "rule": "reader:behavior-change-invalidates-validation",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline d1cb899..b07e176` returns exactly one commit, \"fix: keep dependency text manifests in the code tier\", and `git diff --stat d1cb899 b07e176` shows it touches only api/doug/features.py, api/tests/test_features.py, docs/findings-log.jsonl, and two superpowers plan/spec docs \u2014 it fixes a different rule (`reader:tier-classification-edge-case`, making requirements-dev.txt/constraints.txt classify as code rather than prose), which shifts the tier ordering slightly further from the probe's configuration rather than restoring it. The flagged code is fully intact at to_head: `git grep -n DIFF_BUDGET b07e176 -- api/doug/reader.py` shows `DIFF_BUDGET = 100_000` at line 41, and `git grep -n \"read_order|_read_tier\" b07e176 -- api/doug/review.py` shows the tier sort still live at review.py:145 and consumed at lines 185 and 262. No new validation was produced in the pair \u2014 `git diff --name-only d1cb899 b07e176 -- docs/decisions/` is empty (ADR-0012 untouched), and grepping the pair diff for AUC/probe figures turns up only findings-log prose, no re-run numbers. Decisively, the commit's own findings-log entry records this exact rule as `\"verdict\":\"real\",\"changed\":false`, settled by ADR-0012's Consequences section, which \"explicitly records amount and order as unvalidated by the original probe\"; the reader.py docstring at to_head says the same thing (\"those AUC figures do not validate the larger, reordered live read\"). The defect is knowingly accepted and documented, not addressed, so Doug's carry-forward call is correct."
+ },
+ {
+  "i": 14,
+  "pr": 56,
+  "file": "api/doug/review.py",
+  "rule": "reader:ordering-side-effects",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline d1cb899..b07e176` returns exactly one commit (b07e176 \"fix: keep dependency text manifests in the code tier\") and `git diff --stat d1cb899 b07e176` touches only api/doug/features.py, api/tests/test_features.py, docs/findings-log.jsonl, and two docs/superpowers plan/spec files \u2014 nothing that changes ordering or any downstream consumer. That commit's only code change widens `_is_prose` with `_DEPENDENCY_TEXT_RE` so `requirements-dev.txt` / `constraints.txt` stay tier 0; it adjusts which tier a file lands in but leaves the flagged sort key intact. `git show b07e176:api/doug/review.py | sed -n '121,143p'` shows `read_order` still returning `sorted(files, key=lambda f: (_read_tier(f.filename), len(f.patch or \"\")))`, with the docstring explicitly retaining \"makes the largest file in a tier the likeliest to be cut or dropped,\" and it is still the order used at both call sites (lines 185 and 262). The repo's own ledger confirms the non-fix: `git show b07e176 -- docs/findings-log.jsonl` adds a `reader:ordering-side-effects` row with `\"verdict\":\"adjacent\",\"changed\":false` (settled as intentional, no downstream original-order consumer in the traced call graph), while the only `\"changed\":true` row in the commit is the different rule `reader:tier-classification-edge-case`. The defect as written therefore still stands at to_head b07e176."
+ },
+ {
+  "i": 15,
+  "pr": 59,
+  "file": "api/doug/backtest/git_labels.py",
+  "rule": "reader:behavior-divergence",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The pair contains exactly one commit, df1331d, and `git diff --stat 81b8a62b..df1331de` shows it touches only `api/doug/adjudicate.py` and `api/tests/test_adjudicate.py` \u2014 `api/doug/backtest/git_labels.py` is byte-identical (`git diff 81b8a62b..df1331de -- api/doug/backtest/git_labels.py` is empty) and still present at to_head (blob 778950dd). Both attribution rules still coexist there: `git show df1331de:api/doug/backtest/git_labels.py | grep -n \"earlier=\"` yields line 334 `parse_revert_targets_dated(..., earlier=_earlier_by_string)` and line 366 `parse_revert_targets_evidenced(..., earlier=_earlier_by_instant)`, with both parsers still live (dated is called from `git_labels.py:373,397`; evidenced feeds `adjudicate.py:216`). The repo's own pre-existing test, unchanged by this pair, asserts the disagreement rather than removing it \u2014 `test_adjudicate.py:110-116` (`test_the_earlier_instant_wins_when_string_order_disagrees`) pins `evidenced[100] == _TOKYO_REVERT` while `parse_revert_targets_dated(_OFFSET_CORPUS, {}) == {100: _NEW_YORK_REVERT.date}` on the multi-offset corpus. What df1331d actually fixed is a different axis: stale line-number citations, keying `predated_reverts` by `window_days`, and a new `test_the_live_bound_and_the_backtest_filter_agree_across_the_boundary` covering the integer-day TOLERANCE_DAYS window predicate \u2014 grepping the full pair diff for `offset|tzinfo|timezone|utcoffset|_earlier|evidenced` returns no attribution-related change."
+ },
+ {
+  "i": 16,
+  "pr": 69,
+  "file": "api/doug/store.py",
+  "rule": "reader:error-handling-gap",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo log --oneline 5db1850..f5ae6a7` shows 8 commits (deploy-path fixes, a SQLite backfill precision fix, docs, and report removal), and `git diff --stat 5db1850 f5ae6a7` touches only api/deploy/gcp.sh, api/doug/outcome_backfill.py, api/tests/test_deploy_gcp.py, api/tests/test_outcome_backfill.py, and docs/design/outcome-loop/60-day-backfill-runbook.md \u2014 api/doug/store.py is absent, and `git rev-parse 5db1850:api/doug/store.py f5ae6a7:api/doug/store.py` returns the identical blob 10357eeb63764e310f3547c559cbc26c210401c3. The flagged code still exists verbatim at to_head: `git show f5ae6a7:api/doug/store.py` has `_outcome_insert` ending in `statement.on_conflict_do_nothing(index_elements=_OUTCOME_IDENTITY)` (line 808) with no IntegrityError/constraint-name check on that path, and `enqueue_outcome_job` (line 858) is still a `-> int | None` wrapper returning `inserted.get(window_days)`, i.e. None on absorbed conflict. No fix landed in another file either: the only non-store caller, `store.enqueue_outcome_jobs(...)` at api/doug/api.py:1074 (`git grep -n enqueue_outcome_job f5ae6a7 -- 'api/doug/*.py'`), is untouched by the pair, and the one behavioral commit a8f9488 only changes the SQLite `due_at` expression in outcome_backfill.py (`func.date(...) || func.substr(...)`), which is unrelated to conflict/error handling. The finding stands at to_head; Doug's carry-forward call is correct."
+ },
+ {
+  "i": 17,
+  "pr": 69,
+  "file": "api/doug/api.py",
+  "rule": "reader:api-contract-change",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "The nine commits in `git log --oneline 5db1850..f5ae6a7` are deploy-path fixes, a SQLite backfill precision fix, doc commits, and a preregistration path fix; `git diff --stat 5db1850 f5ae6a7` touches only api/deploy/gcp.sh, api/doug/outcome_backfill.py, api/tests/test_deploy_gcp.py, api/tests/test_outcome_backfill.py, and one runbook doc \u2014 nothing in the flagged call path. Both api/doug/api.py (blob 61ac405) and api/doug/store.py (blob 10357ee), where enqueue_outcome_jobs is actually defined, are byte-identical at both heads per `git rev-parse <head>:<path>`, and `git log --oneline -3 f5ae6a7 -- api/doug/api.py api/doug/store.py` shows the last touch was 058daf0, which predates from_head. At to_head, `git grep -n enqueue_outcome_jobs f5ae6a7` confirms the flagged code still exists unchanged: store.py:811 still returns `dict[int, int]` and api.py:1074 is still the switched caller. A pre-existing `enqueue_outcome_job` (singular) wrapper at store.py:858 still preserves the old `int | None` contract, but it was already present at from_head, so it is not a fix delivered by this pair \u2014 the finding stands as written at to_head."
+ },
+ {
+  "i": 18,
+  "pr": 75,
+  "file": "web/package.json",
+  "rule": "reader:tooling-compat",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 93a566b..70fe216` returns exactly one commit, 70fe216 \"ci: deploy web after api, without inheriting its skip\", and `git diff --stat 93a566b 70fe216` shows a single file changed: `.github/workflows/deploy.yml` (+11/-2). `git show 70fe216 -- .github/workflows/deploy.yml` confirms the entire change is the `web:` job's `needs: [changes, api]` / `if: ${{ !cancelled() && !failure() && ... }}` gating \u2014 deployment ordering, nothing touching test invocation. `git show 70fe216:web/package.json` shows the flagged code verbatim at to_head: `\"test\": \"node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --experimental-strip-types 'lib/**/*.test.mjs'\"` with the same `pretest` guard that only checks file existence via `find lib -name '*.test.mjs' | grep -q .`, and `git diff 93a566b 70fe216 -- web/package.json` is empty. The only mitigating factor is pre-existing, not introduced in this pair: `.github/workflows/ci.yml` pins `node-version: 22` at lines 40 and 63, unchanged across the pair, so CI happens to run a Node with `--test` glob support while the hazard remains for any other Node version."
+ },
+ {
+  "i": 19,
+  "pr": 90,
+  "file": "web/lib/coverage.ts",
+  "rule": "reader:semantics-change",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git -C /Users/andrew/Projects/doughq/repo log --oneline 00798b29..a1d0d86d` yields only two commits (7201710 loader fix, a1d0d86 docs), and `git diff --stat 00798b29 a1d0d86d` touches only `docs/findings-log.jsonl` (+5) and `web/lib/node-next-loader.mjs` (+9/-2) \u2014 the loader commit answers a different finding (reader:tooling-resolution-fallback, logged \"real\"/changed:true), never coverage. `git rev-parse <head>:web/lib/coverage.ts` returns the same blob e7b55b289cf9c71cdc3ef1b20c1e346251b0858e at both heads, and the flagged mechanism is still live at to_head: `coveragePercent` returns `{kind:\"unknown-denominator\"}` when `changedFiles` is null (web/lib/coverage.ts:32-36), and the unchanged filter in web/lib/dashboard-model.ts:78-81 drops those rows via `if (!(result.kind === \"known\" && result.low)) return false;`. The only thing the pair added about this rule is an adjudication row in docs/findings-log.jsonl explicitly recording `\"rule\":\"reader:semantics-change\",\"verdict\":\"adjacent\",\"changed\":false` and deferring the residual \u2014 \"unknown-denominator rows become invisible under the coverage filter; logged as a Phase B facet candidate\" \u2014 which is a triage note, not a code fix. No commit in the pair removed the hazard and the flagged code exists verbatim at a1d0d86, so the carry-forward is correct."
+ },
+ {
+  "i": 20,
+  "pr": 90,
+  "file": "web/lib/dashboard-model.ts",
+  "rule": "reader:pagination-assumption",
+  "addressed": false,
+  "uncertain": false,
+  "evidence": "`git log --oneline 00798b2..a1d0d86` returns exactly two commits (7201710 loader fix, a1d0d86 docs adjudication) and `git diff --name-only 00798b2 a1d0d86` touches only `docs/findings-log.jsonl` and `web/lib/node-next-loader.mjs`; 7201710's message and diff address a different rule (`reader:tooling-resolution-fallback`, guarding the `.ts` fallback to extensionless specifiers), so no code in the pair touches the pagination path. The flagged code still exists verbatim at to_head: `git show a1d0d86:web/lib/dashboard-model.ts` line 66 is still `export function capSuffix(fetched: number, limit: number)` returning `fetched >= limit ? \\` \u00b7 latest ${limit}\\` : \"\"`, and `git grep -n capSuffix a1d0d86` shows the sole caller at `web/app/dashboard/page.tsx:340` unchanged, with no paging control anywhere. The only pair activity on this finding is a documentation verdict \u2014 the last line of `docs/findings-log.jsonl` at a1d0d86 records `\"rule\":\"reader:pagination-assumption\",\"verdict\":\"disproved\",\"changed\":false`, arguing the caller consumes the echoed `response.limit` and that `api.py` rejects limits outside 1..500 (confirmed at `api/doug/api.py:1045-1059`, itself untouched in the pair). That is a disposition asserting the finding was never valid, not a fix applied within the pair, and the log itself concedes the no-paging-beyond-500 half is true and still present, so the flagged code stands at to_head."
+ }
+]
