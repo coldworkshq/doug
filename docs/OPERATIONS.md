@@ -197,26 +197,68 @@ new installation_id and orphans every verdict.
 
 ## Service identities
 
-### Revoke the default compute SA's access to `doug-api-token` (one-off, NOT YET RUN)
+Every workload in doug-prod0 runs as its own service account:
 
-Legacy from the Task-10 era: the default compute service account may still
-hold `secretmanager.secretAccessor` on `doug-api-token`. `doug-api` and
-`doug-console` run as their own service accounts and `doug-web` now holds no
-secret at all, so nothing should depend on this binding — but it has never
-been verified or removed.
+| Workload | Runs as |
+|---|---|
+| `doug-api` (Run service) | `doug-api-sa` |
+| `doug-web` (Run service) | `doug-web-sa` |
+| `doug-console` (Run service) | `doug-console-sa` |
+| `doug-adjudicator`, `doug-outcome-reconciler` (Run jobs) | `doug-adjudicator-sa` |
+| `doug-adjudicator-daily` (Scheduler) | `doug-scheduler-sa` |
+| Cloud Build | the **default compute SA** — see #161 |
 
-Check first, and only remove if it is present:
+### Audit the default compute SA's secret access (repeatable)
+
+The default compute SA holds `roles/editor` on doug-prod0, so anything that
+inherits it inherits editor. `roles/editor` does not carry
+`secretmanager.versions.access`, which is why the accessor bindings were
+granted separately in the Task-10 era and had to be revoked separately too.
+
+Run this sweep after any `gcp.sh setup`, and whenever a service changes
+identity. It should print `clean:` for every secret:
 
     PROJECT=doug-prod0
     PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-    gcloud secrets get-iam-policy doug-api-token --project "$PROJECT" \
-      --format=json | grep -A3 "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+    CSA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+    for s in $(gcloud secrets list --project "$PROJECT" --format='value(name.basename())'); do
+      if gcloud secrets get-iam-policy "$s" --project "$PROJECT" \
+           --format='value(bindings.members)' | grep -q "$CSA"; then
+        echo "LEFTOVER: $s"
+      else
+        echo "clean: $s"
+      fi
+    done
 
-If it appears:
+`name.basename()` is not decoration. The API field is the **full resource
+path** — `gcloud secrets list --format='json(name)'` returns
+`projects/<number>/secrets/<id>` — and a bare `value(name)` prints the short id
+only because `secrets list` applies a command-specific display transform. The
+two are byte-identical on SDK 579.0.0; `basename()` is what keeps the loop from
+feeding a resource path to `get-iam-policy` if that transform ever changes.
 
-    gcloud secrets remove-iam-policy-binding doug-api-token --project "$PROJECT" \
-      --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+To remove one it finds:
+
+    gcloud secrets remove-iam-policy-binding "$SECRET" --project "$PROJECT" \
+      --member="serviceAccount:$CSA" \
       --role=roles/secretmanager.secretAccessor
 
-Then redeploy nothing — no service uses that identity. Confirm `doug-api`
-and `doug-console` still serve, since they are the only readers left.
+Redeploy nothing — no Cloud Run service or job uses that identity. Confirm the
+readers that remain still serve.
+
+**Do not read an empty Secret Manager audit-log query as proof that a binding
+is unused.** doug-prod0 sets no `auditConfigs`, so Data Access logging is off
+and `AccessSecretVersion` never appears for any principal. The workload table
+above is the evidence; the logs are not.
+
+### Closed 2026-08-20 (#152)
+
+The sweep was run against all eleven secrets. `doug-api-token` — the binding
+this runbook used to chase — never held the default compute SA. Three others
+did, and were revoked: `doug-anthropic-key`, `doug-database-url`,
+`doug-webhook-secret`. `doug-web-sa`'s own accessor on `doug-api-token` went
+with them, dead since Front Door Phase 0 dropped that secret from `web()`.
+
+`doug-web` mounts five secrets, not none: the four AuthKit values plus
+`doug-install-flow-secret`. An earlier draft of this section claimed it held
+no secret at all, which stopped being true at Phase 0.

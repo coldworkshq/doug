@@ -218,12 +218,40 @@ executed as written — amendments folded in at their task, never as a second pa
   so advisory-era duplicates cannot brick `apply()` on boot. Race losers enter the
   identity-replay path so they do not hang local deviations / a locally rendered check
   run on the peer's row.
-- [~] **doug-web dedicated service account** — code merged #44 (`5b06214`):
-  `setup()` creates `doug-web-sa` (token-only accessor); `web()` deploys with
-  `--service-account`. Held back from Task 10 so a misconfigured web SA could
-  not confuse the api cutover. **Ops still open:** this PR only touches `api/` +
-  docs, so merge does not run `gcp.sh web` — first web deploy must use the new
-  SA, then revoke the default compute SA's leftover accessor on `doug-api-token`.
+- [x] **doug-web dedicated service account** — code merged #44 (`5b06214`):
+  `setup()` creates `doug-web-sa`; `web()` deploys with `--service-account`.
+  Held back from Task 10 so a misconfigured web SA could not confuse the api
+  cutover. **Ops closed 2026-08-20 (#152).** The deploy proof:
+
+      $ gcloud run services describe doug-web --project doug-prod0 \
+          --region us-central1 \
+          --format='value(spec.template.spec.serviceAccountName)'
+      doug-web-sa@doug-prod0.iam.gserviceaccount.com
+
+  Revision `doug-web-00090-wiw` carries 100% of traffic and the twenty most
+  recent revisions all run `doug-web-sa`, so later web deploys (Front Door
+  Phase 0 onward) had already cut this over — the `[~]` was stale, not open.
+  **The revoke this item named was a no-op:** `doug-api-token`'s policy held
+  only `doug-api-sa`, `doug-console-sa` and `doug-web-sa` — the default compute
+  SA was never on it. A sweep of all eleven secrets found that leftover
+  accessor on three *others* instead — `doug-anthropic-key`,
+  `doug-database-url`, `doug-webhook-secret` — Task-10-era api residue rather
+  than web's. All three are revoked; every secret in doug-prod0 is now clean of
+  the default compute SA, and each keeps its real reader (`doug-api-sa`, plus
+  `doug-adjudicator-sa` on the database URL). Revoked alongside them:
+  `doug-web-sa`'s own accessor on `doug-api-token`, dead since Front Door
+  Phase 0 dropped that secret from `web()`, so production now matches what
+  `setup()` builds. `doug-api` and `doug-web` both returned 200 afterwards.
+  **What the evidence is, and is not:** the safety argument is the workload
+  inventory — three Run services, two Run jobs and one scheduler job all hold
+  dedicated SAs, there is no GCE, and the functions/eventarc/workflows APIs are
+  disabled. It is *not* the empty Secret Manager audit-log query: doug-prod0
+  sets no `auditConfigs`, so Data Access logging is off and that silence proves
+  nothing.
+  **Honest limit:** the default compute SA still holds `roles/editor` on
+  doug-prod0, and it is still the identity Cloud Build runs as. What shipped is
+  "no service inherits editor", not "the editor grant is gone" — **#161**
+  carries the rest, which needs a scoped build identity first.
 - [x] Per-installation token dispense endpoint (GitHub-token-verified); scoped
   `/v1/queue`; cross-tenant read attempt → 404 (test pinned). **Two token
   classes, not one replaced:** `DOUG_API_TOKEN` survives as an unscoped

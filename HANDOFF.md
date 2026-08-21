@@ -1,5 +1,69 @@
 # HANDOFF — doug
 
+State:    review — PR for issue #152 is open:
+          https://github.com/drewjst/doug/pull/162
+          Rebuilt on main after #155 (d8c4b48) landed; only HANDOFF.md
+          conflicted and both sides are kept below. Production IAM already
+          mutated (4 revokes, below) — that part is done, not pending review.
+Next:     Andrew reviews and merges #162. Nothing in it deploys: `gcp.sh` gains
+          a comment only, and the revokes were applied by hand on 2026-08-20.
+          #161 carries the roles/editor remainder and needs a scoped
+          doug-build-sa first.
+Blockers: none.
+Decisions this session:
+- Done-when 1 PROVEN: doug-web serves 100% on doug-web-00090-wiw and the
+  twenty most recent revisions all run doug-web-sa@doug-prod0. Later web
+  deploys had already cut it over, so the M2 `[~]` was stale, not open ops.
+- Done-when 2 was a no-op AS WRITTEN — doug-api-token never held the default
+  compute SA. Swept all 11 secrets instead and found it on three others.
+  REVOKED (Andrew approved "all four", 2026-08-20): default-compute accessor
+  on doug-anthropic-key, doug-database-url, doug-webhook-secret; plus
+  doug-web-sa's own accessor on doug-api-token (dead since Front Door Phase 0
+  dropped that secret from web()). Every secret in doug-prod0 is now clean of
+  the default compute SA. Before-policies are in the session scratchpad; each
+  revoke reverses with one add-iam-policy-binding.
+- Safety argument is the WORKLOAD INVENTORY, not logs: 3 Run services, 2 Run
+  jobs, 1 scheduler job all hold dedicated SAs; no GCE; functions/eventarc/
+  workflows APIs disabled. Rejected as evidence: the empty secretmanager
+  audit query — doug-prod0 sets no auditConfigs, so Data Access logging is
+  off and the silence proves nothing. Post-revoke: doug-api /openapi.json and
+  doug-web / both 200; the live web revision mounts only the five workos/
+  install-flow secrets, so cold start cannot regress either.
+- The one-off runbook became a REPEATABLE SWEEP over every secret — chasing
+  one named secret is exactly what let three others sit unnoticed for a
+  milestone — rejected: fixing the one-off to name the right secret.
+- Doug's own review of daf8355 raised `reader:docs-script-mismatch` (low) on
+  that sweep. REAL, and the mechanism is sharper than reported: `json(name)`
+  proves the API field is the full resource path
+  (projects/1004699192359/secrets/…) and `value(name)` short-names it only via
+  a command-specific display transform. Fixed with `name.basename()`, which is
+  byte-identical on SDK 579.0.0 and drops the dependency on that transform.
+  Dispositioned real/changed in docs/findings-log.jsonl.
+- No new test. test_setup_creates_doug_web_sa_and_binds_only_its_front_door_secrets
+  already asserts LIST EQUALITY on web's bindings, so doug-api-token cannot be
+  reintroduced silently — a stronger pin than anything added here.
+- HANDOFF.md convention followed from #155: newest slot block on top, each
+  superseded block kept verbatim under its own "Prior stream" heading with a
+  correction note. An earlier overwrite this session dropped the whole 448-line
+  archive wholesale; it was restored, and it holds decision debt ("Andrew's
+  call, blocks the scoreboard spec") that AGENTS.md says must not live only in
+  a transcript.
+Pointers: branch claude/github-issue-152-aa87ae · api/deploy/gcp.sh:174 (web
+          SA create) · :896 (web deploy flags) · :200 (comment rewritten) ·
+          docs/OPERATIONS.md:198 "Service identities" (one-off → sweep) ·
+          docs/design/outcome-loop/ROADMAP.md:222 (ticked) ·
+          api/tests/test_deploy_gcp.py:42,49 · docs/findings-log.jsonl
+
+---
+
+## Prior stream: sticky-comment seq guard (#155 merged as d8c4b48) — kept verbatim
+
+> **CORRECTION 2026-08-20 (this session):** the block below says "PR for issue
+> #142 is open" and "Andrew reviews and merges #155". It shipped — #155 is
+> merged as d8c4b48 and is what this branch rebased onto. Its note that #157's
+> open question (does a GitHub alert render inside a CHECK RUN summary?) is
+> unaffected still holds, and that question is still open.
+
 State:    review — PR for issue #142 is open:
           https://github.com/drewjst/doug/pull/155
           Rebuilt on main after #157 (db6d51c) landed; only HANDOFF.md
