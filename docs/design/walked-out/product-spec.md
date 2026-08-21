@@ -51,8 +51,8 @@ Cliffs, each named on the check run:
 
 **v1 check-run copy.** Never contains the strings `stale`, `failure`, `success`, `cancelled`, `timed_out`, or `miss rate`. After the headline and provenance, each finding line opens `` `rule` · path — `` and continues:
 
-- Headline: "Of N earlier findings on files unchanged since `<sha12>`, M were not mentioned by this read."
-- Provenance: "Compared with Doug's last diff read at `<sha12>`. This section grades Doug's own reader, not your change; the reader's silence is not evidence."
+- Headline: "Of N earlier findings on files unchanged since `<sha12>`, M were not mentioned by this read." Number agreement follows the counts ("Of 1 earlier finding … 1 was"), and a zero denominator renders "No earlier findings on files unchanged since `<sha12>`." — never "Of 0" (amended 2026-08-20, from Doug's own review of PR #164).
+- Provenance: "Compared with Doug's last diff read at `<sha12>`. This section grades Doug's own reader, not your change; the reader's silence is not evidence. Advisory, like everything on this surface: it enters no score and blocks nothing." (The last sentence was added with ADR-0015's explicit extension of ADR-0010's surface, same review.)
 - **Still here** — by-construction, unchanged: "cited file's diff is byte-unchanged since `<sha12>`; carried forward, not re-verified."
 - **Still here** — by-construction, changed-elsewhere: "cited file's diff is byte-unchanged since `<sha12>`; other code in this PR changed. Carried forward, not re-verified. If you addressed it elsewhere, a human should look."
 - **Still here** — attributed-surviving: "the hunks this finding was attributed to are unchanged since `<sha12>`; other parts of the file changed. Carried forward, not re-verified."
