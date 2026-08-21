@@ -21,6 +21,8 @@ import {
   filterRuns,
   frontDoor,
   isAtCap,
+  type LedgerFailure,
+  ledgerFailure,
   outcomeTone,
   repositoryOptions,
 } from "@/lib/dashboard-model";
@@ -50,6 +52,8 @@ import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
 import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
 import {
+  type ConnectionsResponse,
+  SessionApiError,
   getConnections,
   getSessionRun,
   getSessionRuns,
@@ -1226,6 +1230,93 @@ function NoConnection({
   );
 }
 
+/** Three arms because the API states three different things, and the same
+ *  discipline the receipt page applies to its five
+ *  (`dashboard/pr/[number]/page.tsx:126-152`): each arm may claim only what its
+ *  status supports, and the arm reached without a status the API chose claims
+ *  nothing at all. Which status reaches which arm is `ledgerFailure`'s call, in
+ *  dashboard-model.ts beside `frontDoor`, so a test can reach it.
+ *
+ *  Before this existed, every one of these fell to `app/error.tsx`, which says
+ *  "This page failed to render." and offers a Try again button. Both claims are
+ *  false here. The page rendered fine — the API declined the request or did not
+ *  answer — and re-running a 401 cannot clear a 401. The likeliest trigger is
+ *  the one `lib/entitlements.ts` already budgets 8 seconds and a retry for: a
+ *  Cloud Run container scaled to zero, holding the request through a boot. */
+const LEDGER_UNREACHABLE: Record<
+  LedgerFailure,
+  { route: string; heading: string; body: string; signOut: boolean }
+> = {
+  // 401 ONLY, and it names no cause for the same reason the receipt page's
+  // `unauthorized` arm does not: `api/doug/session_auth.py:164-195` returns
+  // None — 401 — for five different states, and this page is told the request
+  // was declined, not which one it was.
+  declined: {
+    route: "/spaces",
+    heading: "Doug would not answer for this session.",
+    body:
+      "The API declined it, and that one answer covers several different states: a " +
+      "sign-in token it will not verify, no space selected yet, no installation bound " +
+      "to the space you are in, and a repository scope that has aged past its " +
+      "eight-hour life. This page is told that the request was declined, not which of " +
+      "those it was, so it does not pick one. Signing out and signing back in renews " +
+      "the token and re-derives the scope, which covers most of them.",
+    signOut: true,
+  },
+  // 503 is a deployment fault — no ledger, or no operator secret. The API
+  // checks for it BEFORE the token so a misconfiguration is never reported as
+  // a bad credential, and this arm must not undo that by offering sign-out.
+  unavailable: {
+    route: "/spaces",
+    heading: "The ledger is not answering.",
+    body:
+      "This is a deployment fault — no ledger, or no operator secret — and not a " +
+      "problem with your session. Signing out would not help. Nothing is listed " +
+      "because nothing is known.",
+    signOut: false,
+  },
+  // Everything else: a transport failure, a timeout against a cold container,
+  // a 500, or a body this build's validator rejects (#149). None of those is a
+  // statement about the reader, so this arm makes none. Telling someone their
+  // session was declined over a dropped connection is the confident false
+  // claim the typed arms exist to refuse.
+  unreachable: {
+    route: "/spaces",
+    heading: "Doug could not load your connected spaces.",
+    body:
+      "The request did not come back with an answer Doug can use. That is all this " +
+      "page knows — it is not a claim about your session, your connection, or your " +
+      "repositories. Reloading in a moment is worth a try; the first request after an " +
+      "idle period waits on a container start.",
+    signOut: false,
+  },
+};
+
+function LedgerUnreachable({ failure }: { failure: LedgerFailure }) {
+  const copy = LEDGER_UNREACHABLE[failure];
+  return (
+    <div className="dashboard-surface">
+      <main className={EMPTY_PAGE}>
+        <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>{copy.route}</p>
+        <h1 className={EMPTY_HEADING}>{copy.heading}</h1>
+        <p className={EMPTY_BODY}>{copy.body}</p>
+        {/* Only the arm whose cause sign-out can actually address offers it.
+            The rail that normally carries this control is built from the
+            connections this page could not read, so without it there is no way
+            out of the two arms that a new session would fix. */}
+        {copy.signOut && (
+          <form action={signOutAction} className="mt-[26px]">
+            <button
+              type="submit"
+              className="mono cursor-pointer rounded-[4px] border-0 bg-foreground px-3.5 py-2.5 text-[11px] text-background"
+            >Sign out</button>
+          </form>
+        )}
+      </main>
+    </div>
+  );
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -1235,13 +1326,33 @@ export default async function DashboardPage({
   const auth = await withAuth();
   const { user, accessToken, organizationId } = auth;
   if (!user || !accessToken) redirect("/sign-in");
+  // ONE variable, not two, and no JSX inside the try — the same shape and the
+  // same reasons as the receipt page's `loaded` (dashboard/pr/[number]/
+  // page.tsx:508-515). Two independent `let`s would type as `data: … | null`
+  // beside `failure: … | null`, whose fourth combination — nothing loaded and
+  // no reason why — cannot happen but would still demand copy.
+  let session:
+    | { data: ConnectionsResponse; failure: null }
+    | { data: null; failure: LedgerFailure };
+  try {
+    session = { data: await getConnections(accessToken), failure: null };
+  } catch (error) {
+    // A throw that is not a SessionApiError carries no status Doug chose, so
+    // it reads as null and lands on the arm that names no cause.
+    const status = error instanceof SessionApiError ? error.status : null;
+    session = { data: null, failure: ledgerFailure(status) };
+  }
+  // Early, because every line below this one reads the connections. The rail,
+  // the scope picker and the settings menu are all built from them, so there
+  // is no partial page to render: the honest thing is the whole screen.
+  if (session.data === null) return <LedgerUnreachable failure={session.failure} />;
+
   // The whole response, not just `connections`: the repositories view prints
   // Doug's OWN two defaults beside every unset repository, and they are the
   // API's to state — the reader's line and the deterministic fallback are
   // environment values on the API, and a copy of them here would drift the
   // moment either is retuned.
-  const { connections, default_needs_you_threshold: flagLineDefaults } =
-    await getConnections(accessToken);
+  const { connections, default_needs_you_threshold: flagLineDefaults } = session.data;
   const door = frontDoor(connections, organizationId);
   const current = door.current;
   const userLabel = user.firstName || user.email || "You";

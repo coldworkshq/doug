@@ -1,5 +1,64 @@
 # HANDOFF — doug
 
+State:    building — #168 done in the working tree (uncommitted, suite green).
+          #167 RUN: the answer is NEGATIVE, and it invalidates the design the
+          23-agent pass recommended.
+Next:     Commit #168 and open its PR (Closes #168). Then ship #170's log line,
+          because the maxAge retest cannot be read without it.
+Blockers: reconnect-in-place is blocked, not buildable as designed. `maxAge` is
+          the only untested variant and needs a DEPLOY — the callback origin is
+          pinned by NEXT_PUBLIC_WORKOS_REDIRECT_URI, so it cannot run locally.
+Decisions this session:
+- #167 ANSWERED, negative (2026-08-21, production). Two round trips —
+  /install/callback?setup_action=update (ships prompt:"consent") at 17:58:02Z
+  and /sign-in (no prompt) at 17:58:52Z — both completed through WorkOS and
+  landed on /dashboard in ~15s with no consent screen. GitHub's security log at
+  18:05:58Z showed NO new token: newest Dougs Review event still 17:55:20Z.
+  Instrument validated first — Doug mints log as a pair (drewjst
+  oauth_access.create + GitHub System oauth_access.regenerate) at one second,
+  three times on 2026-08-21, each matching a real sign-in.
+  So prompt=consent is honored at WorkOS and never reaches GitHub, exactly as
+  the security lens predicted (GitHub accepts only prompt=select_account)
+- CONFIRMED LIVE BUG: /install/callback?reauth=github (route.ts:85-98) is a
+  dead loop. route.ts:178-184 offers it as the ONLY remedy on a user-facing 403
+- Evidence limit, stated in the issue: this proves no NEW GitHub token was
+  minted, not that WorkOS returned nothing. A replayed cached token dies on the
+  same 8h clock, so it cannot refresh an expired scope either way
+- #170 promoted to PREREQUISITE for the maxAge retest — without the log line at
+  entitlements.ts:160, "no oauthTokens" and "derivation failed" are
+  indistinguishable from outside. #169 blocked on a positive #167
+- #168: three arms — `declined` (401 only), `unavailable` (503 only),
+  `unreachable` (everything else, including status:null from a transport
+  failure or a rejected body) — rejected: one generic failure arm
+- #168 mapping lives in dashboard-model.ts as `ledgerFailure`, not inline —
+  same reason #99 moved the front-door states there — rejected: inline ternary
+- #168: only `declined` offers sign-out; on a 503 the fault is a missing ledger
+  or operator secret — rejected: sign-out on every arm
+- #168 sign-out pin initially SURVIVED its mutation (lazy [\s\S]*? crossed arm
+  boundaries); strengthened to (?:(?!signOut:)[\s\S])*? until all four fail
+- The mixed case (one space live, one expired) is UNREACHABLE — store.py:3325
+  stamps once per call, :3335 writes it to every row. No issue filed
+- WORKOS_COOKIE_MAX_AGE is 28800 in production (gcp.sh:897), not the ~400 days
+  api/doug/entitlements.py:26-31 claims. Comment is wrong as deployed
+Pointers: branch claude/login-workos-redirect-9d9711 ·
+          #167 ANSWERED-negative (see its comment for the full method),
+          #168 DONE-uncommitted, #169 blocked, #170 now a prerequisite,
+          #171 Pipes, #172 preemptive refresh ·
+          in flight: web/app/dashboard/page.tsx (LedgerUnreachable + guarded
+          read), web/lib/dashboard-model.ts (ledgerFailure), both .test.mjs ·
+          node_modules installed in the worktree — 18 tests were failing on
+          module resolution before that, on a clean tree too ·
+          full workflow output: scratchpad tasks/wptwl85el.output (226KB)
+
+---
+
+## Prior stream — check-run relayout + needs-you alert (kept, not this session's work)
+
+
+---
+
+## Prior stream — #152 secret-accessor sweep, PR #162 (kept, per that PR's own precedent)
+
 State:    review — PR for issue #152 is open:
           https://github.com/drewjst/doug/pull/162
           Rebuilt on main after #155 (d8c4b48) landed; only HANDOFF.md

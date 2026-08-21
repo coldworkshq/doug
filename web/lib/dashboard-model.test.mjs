@@ -393,3 +393,36 @@ test("a connection still waiting on setup outranks a stale one for the front doo
   assert.equal(door.state, "choose");
   assert.deepEqual(door.expired, [expired]);
 });
+
+test("a declined session and a dead deployment are never told as the same failure", async () => {
+  const { ledgerFailure } = await import("./dashboard-model.ts?ledger-failure-arms");
+
+  // 401 is the only route to `declined`. The arm's copy says a new session
+  // renews the token and re-derives the scope, which is advice — so any status
+  // that reaches it must actually be a statement about the session.
+  assert.equal(ledgerFailure(401), "declined");
+
+  // 503 is a deployment fault, and api/doug/api.py checks for it BEFORE the
+  // token precisely so a missing ledger is not reported as a bad credential.
+  // Collapsing these two would rebuild that confusion on the front door and
+  // send someone to sign out over an operator secret they cannot fix.
+  assert.equal(ledgerFailure(503), "unavailable");
+  assert.notEqual(ledgerFailure(503), ledgerFailure(401));
+});
+
+test("no status Doug did not choose is ever reported as a declined session", async () => {
+  const { ledgerFailure } = await import("./dashboard-model.ts?ledger-failure-default");
+
+  // THE CLAIM THIS GUARDS. `sessionJson` throws status:null for a transport
+  // failure, a timeout against a cold Cloud Run container, AND a body this
+  // build's validator rejects (#149). None of those is a fact about the
+  // reader's session, so none may reach an arm that tells them to sign out.
+  assert.equal(ledgerFailure(null), "unreachable");
+
+  // Nor may any other code. An allowlist that named only the codes known on
+  // the day it was written is how a new failure arrives wearing someone else's
+  // explanation; the default is the safe arm, not the interesting one.
+  for (const status of [400, 403, 404, 422, 429, 500, 502, 504]) {
+    assert.equal(ledgerFailure(status), "unreachable", `status ${status} must claim no cause`);
+  }
+});

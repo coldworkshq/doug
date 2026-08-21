@@ -332,3 +332,34 @@ export function readyOrganizationAfterSetup(
   );
   return connection?.organization_id || null;
 }
+
+/** Which arm a FAILED connections read lands on.
+ *
+ *  Here rather than inline in page.tsx for the reason `frontDoor` is here
+ *  (#99): a `status === …` ternary buried in a Server Component is a decision
+ *  `node --test` cannot reach, and this one decides what Doug claims about the
+ *  reader. Before it existed every failure fell to `app/error.tsx`, which says
+ *  "This page failed to render." over a Try again button — two false claims,
+ *  because the page rendered fine and re-running a 401 cannot clear a 401.
+ *
+ *  `declined` is 401 ONLY, and its copy names no cause: `session_auth.py:164-195`
+ *  returns None — 401 — for five different states, and this page is told the
+ *  request was declined, not which. `unavailable` is 503 ONLY, a deployment
+ *  fault the API checks for BEFORE the token so a misconfiguration is never
+ *  reported as a bad credential.
+ *
+ *  Everything else is `unreachable`, and that is the point of the default
+ *  rather than an oversight. `sessionJson` throws `status: null` for a
+ *  transport failure, a timeout against a cold container, AND a body the
+ *  validator rejects (#149); a 500 or a 502 is none of those three either.
+ *  Routing any of them to `declined` would tell a reader their session was
+ *  refused over a dropped connection — the confident false claim these arms
+ *  exist to refuse. An allowlist of "known bad" codes is what lets a new
+ *  failure arrive wearing someone else's explanation. */
+export type LedgerFailure = "declined" | "unavailable" | "unreachable";
+
+export function ledgerFailure(status: number | null): LedgerFailure {
+  if (status === 503) return "unavailable";
+  if (status === 401) return "declined";
+  return "unreachable";
+}
