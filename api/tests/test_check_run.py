@@ -919,7 +919,7 @@ def test_since_section_headline_counts_silence_over_unchanged_files():
     assert f"### Since `{_SHA[:12]}`" in summary
     assert (
         f"Of 2 earlier findings on files unchanged since `{_SHA[:12]}`, "
-        "1 were not mentioned by this read." in summary
+        "1 was not mentioned by this read." in summary
     )
     assert "the reader's silence is not evidence" in summary
     assert "carried forward, not re-verified" in summary
@@ -952,6 +952,22 @@ def test_since_section_lists_new_findings_on_unchanged_files():
                      code_changed=False)])
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
     assert f"New on files unchanged since `{_SHA[:12]}` (1)" in summary
+
+
+def test_since_section_headline_grammar_holds_at_the_edges():
+    """User-facing copy on every reader check run (Doug's own review flagged
+    the fixed plural): singular counts read as English, and a pair with no
+    unchanged-file findings says so instead of "Of 0 earlier findings"."""
+    one = _conv([_c()])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=one)
+    assert (
+        f"Of 1 earlier finding on files unchanged since `{_SHA[:12]}`, "
+        "1 was not mentioned by this read." in summary
+    )
+    zero = _conv([_c(state="unknown", reason="left-diff", basis=None, pair_delta=None)])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=zero)
+    assert f"No earlier findings on files unchanged since `{_SHA[:12]}`." in summary
+    assert "Of 0" not in summary
 
 
 def test_since_section_absent_without_convergence():

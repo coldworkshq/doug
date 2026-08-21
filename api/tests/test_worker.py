@@ -2770,7 +2770,10 @@ def test_fresh_path_renders_the_since_section(tmp_path, monkeypatch):
     worker.process_job(ingest.claim())
     assert len(posted) == 1
     assert "### Since `" + "e" * 12 + "`" in posted[0]["summary"]
-    assert "were not mentioned by this read" in posted[0]["summary"]
+    # This fixture's prior finding leaves the fresh read's diff, so the
+    # honest headline is the zero-denominator form; the provenance line
+    # renders in every form.
+    assert "the reader's silence is not evidence" in posted[0]["summary"]
 
 
 def test_replay_renders_the_same_since_section_as_the_rows_dictate(

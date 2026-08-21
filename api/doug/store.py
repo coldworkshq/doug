@@ -52,7 +52,6 @@ from sqlalchemy import (
     select,
     text,
     true,
-    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -2182,8 +2181,18 @@ def convergence_for(verdict_id: int) -> dict | None:
                         verdicts.c.github_repo_id == v["github_repo_id"],
                         verdicts.c.pr_number == v["pr_number"],
                         verdicts.c.tier == "reader",
-                        tuple_(verdicts.c.scored_at, verdicts.c.id)
-                        < tuple_(v["scored_at"], v["id"]),
+                        # (scored_at, id) lexicographic, spelled as OR/AND
+                        # rather than a row-value tuple_: row values need
+                        # SQLite >= 3.15 and can defeat index use on
+                        # Postgres, and this query runs after every paid
+                        # reader read (Doug's own review of this change).
+                        or_(
+                            verdicts.c.scored_at < v["scored_at"],
+                            and_(
+                                verdicts.c.scored_at == v["scored_at"],
+                                verdicts.c.id < v["id"],
+                            ),
+                        ),
                     )
                     .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
                     .limit(1)
@@ -2247,6 +2256,13 @@ def convergence_for(verdict_id: int) -> dict | None:
             ],
         }
     except Exception as e:  # noqa: BLE001 — deliberate: degrade, never raise
+        # The check run carries the same line; stderr is what ops greps, and
+        # a schema drift that silently became permanent abstentions would
+        # otherwise be invisible outside individual check runs.
+        print(
+            f"doug: convergence_for failed ({type(e).__name__}: {str(e)[:120]})",
+            file=sys.stderr,
+        )
         return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 

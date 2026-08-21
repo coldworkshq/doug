@@ -363,30 +363,41 @@ def _since_section(convergence: dict | None) -> list[str]:
     label = f"`{_oneline(sha)[:12]}`" if sha else "the previous read"
     rows = convergence.get("classifications") or []
     prior = [c for c in rows if c["side"] == "prior"]
-    carried = [c for c in prior if c["state"] == "persisted" and c["basis"] == "by-construction"]
-    attributed = [c for c in prior if c["state"] == "persisted" and c["basis"] == "attributed-surviving"]
+    persisted = [c for c in prior if c["state"] == "persisted"]
+    carried = [c for c in persisted if c["basis"] == "by-construction"]
+    attributed = [c for c in persisted if c["basis"] == "attributed-surviving"]
     unknowns = [c for c in prior if c["state"] == "unknown"]
     new_unchanged = [
-        c for c in rows if c["side"] == "later" and c["state"] == "new" and c["code_changed"] is False
+        c
+        for c in rows
+        if c["side"] == "later" and c["state"] == "new" and c["code_changed"] is False
     ]
     # Headline: earlier findings on files unchanged between the reads =
     # silent-and-carried (by construction) plus re-reported findings whose
     # own file's delta did not move. The silent ones are the numerator.
     silent = len(carried)
     denominator = silent + sum(
-        1
-        for c in prior
-        if c["state"] == "persisted" and c["basis"] is None and c["code_changed"] is False
+        1 for c in persisted if c["basis"] is None and c["code_changed"] is False
     )
+    if denominator == 0:
+        headline = f"No earlier findings on files unchanged since {label}."
+    else:
+        findings_word = "finding" if denominator == 1 else "findings"
+        verb = "was" if silent == 1 else "were"
+        headline = (
+            f"Of {denominator} earlier {findings_word} on files unchanged "
+            f"since {label}, {silent} {verb} not mentioned by this read."
+        )
     out = [
         "",
         f"### Since {label}" if sha else SINCE_HEADING_FALLBACK,
         "",
-        f"Of {denominator} earlier findings on files unchanged since {label}, "
-        f"{silent} were not mentioned by this read.",
+        headline,
         "",
         f"Compared with Doug's last diff read at {label}. This section grades "
-        "Doug's own reader, not your change; the reader's silence is not evidence.",
+        "Doug's own reader, not your change; the reader's silence is not "
+        "evidence. Advisory, like everything on this surface: it enters no "
+        "score and blocks nothing.",
     ]
 
     def _line(c: dict, sentence: str) -> str:

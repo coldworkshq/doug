@@ -55,6 +55,18 @@ signed at 1/26 with the one member pre-declared).
   against the repo at `to_head` that fails to find the defect, with stored
   evidence and a zero-false hand-checked sample, or `settle.py`'s
   deterministic disproof (which stays `unknown(settled)` in v1).
+- **The `### Since <sha12>` section is part of this decision.** ADR-0010
+  confined the check run to the risk verdict plus the labelled deviations;
+  this record extends that surface with one section that grades Doug's own
+  reader against the ledger — never the author's change. Its comparison is
+  deterministic over stored rows (the hunk indexes; attribution enters only
+  as hashes validated and stored at read time), its copy is pinned by the
+  banned-strings tests, it carries no rate or ratio, and its provenance
+  line states that it is advisory, enters no score, and that the reader's
+  silence is not evidence. The failed instrument ADR-0010 cites (the
+  2026-07-31 derangement check) is the deviation instrument; the old
+  silence-as-evidence rule 5, whose bar 1 also failed, is REMOVED by this
+  same change — the section renders only the evidence-gated replacement.
 - **Attribution refines only the carry-forward direction in v1**:
   `persisted(basis=attributed-surviving)` when every attributed hunk
   survives byte-identical; everything else abstains.

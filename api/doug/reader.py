@@ -31,9 +31,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import hunks
-
-from . import example_pack_capture
+from . import example_pack_capture, hunks
 from .example_pack import (
     CoverageV0,
     FailureV0,
@@ -876,6 +874,30 @@ class Coverage(BaseModel):
         return 1.0 if not self.diff_chars else self.sent_chars / self.diff_chars
 
 
+def _chunk_content_end(matches: list, pos: int, diff_len: int) -> int:
+    """Where chunk `pos`'s patch text ends. THE one home for the geometry:
+    review.py joins chunks with exactly CHUNK_SEPARATOR, so content runs to
+    that separator before the next header, or to the end of the diff for the
+    final file. coverage() and _sent_file_patches both read this — a format
+    change updated in one place cannot silently disagree with the other
+    (the drift Doug's own review of this change flagged).
+    """
+    if pos + 1 < len(matches):
+        return matches[pos + 1].start() - len(CHUNK_SEPARATOR)
+    return diff_len
+
+
+def _chunk_patch(diff: str, matches: list, pos: int, sent_len: int) -> str | None:
+    """Chunk `pos`'s patch text, or None unless it arrived IN FULL within the
+    sent slice. The cut file's content end lies past the slice point by
+    construction, so it is never returned."""
+    m = matches[pos]
+    content_end = _chunk_content_end(matches, pos, len(diff))
+    if content_end > sent_len:
+        return None
+    return diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
+
+
 def coverage(
     diff: str,
     *,
@@ -915,25 +937,15 @@ def coverage(
         next_start = matches[last + 1].start() if last + 1 < len(matches) else len(diff)
         if next_start - len(sent) > len(CHUNK_SEPARATOR):
             cut = names[-1]
-    # Hunk index over the SENT slice only. A file's chunk is fully sent when
-    # its content ends at or before the slice point; the cut file's content
-    # end lies past it by construction, so file_cut is never indexed, and a
-    # clean between-files cut leaves the last whole file indexed. Same
-    # geometry as the `cut` derivation above: chunks are joined with exactly
-    # CHUNK_SEPARATOR, so content ends CHUNK_SEPARATOR before the next
-    # header (or at len(diff) for the final file).
+    # Hunk index over the SENT slice only. _chunk_patch returns None for any
+    # chunk that did not arrive in full, so file_cut and unseen files are
+    # never indexed, and a clean between-files cut leaves the last whole
+    # file indexed.
     index: dict[str, list[str]] = {}
-    for i, m in enumerate(seen):
-        pos = matches.index(m)
-        content_end = (
-            matches[pos + 1].start() - len(CHUNK_SEPARATOR)
-            if pos + 1 < len(matches)
-            else len(diff)
-        )
-        if content_end > len(sent):
-            continue
-        patch = diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
-        index[m.group(1)] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
+    for pos, m in enumerate(matches):
+        patch = _chunk_patch(diff, matches, pos, len(sent))
+        if patch is not None:
+            index[m.group(1)] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
     return Coverage(
         diff_chars=len(diff),
         sent_chars=len(sent),
@@ -1484,25 +1496,17 @@ def _sent_file_patches(diff: str, cov: Coverage) -> dict[str, str] | None:
     """
     if cov.hunks is None:
         return None
-    sent = diff[: cov.sent_chars]
     matches = list(_FILE_HEADER.finditer(diff))
     patches: dict[str, str] = {}
     for pos, m in enumerate(matches):
         name = m.group(1)
         if name not in cov.hunks:
             continue
-        content_end = (
-            matches[pos + 1].start() - len(CHUNK_SEPARATOR)
-            if pos + 1 < len(matches)
-            else len(diff)
-        )
-        if content_end > len(sent):
-            continue
-        patches[name] = diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
-    from . import hunks as _hunks_mod
-
+        patch = _chunk_patch(diff, matches, pos, cov.sent_chars)
+        if patch is not None:
+            patches[name] = patch
     for name, patch in patches.items():
-        derived = [_hunks_mod.hash_hunk(h) for h in _hunks_mod.split_hunks(patch)]
+        derived = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
         if derived != cov.hunks.get(name):
             return None
     if set(patches) != set(cov.hunks):
@@ -1520,8 +1524,6 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
     abstention downstream, never a wrong stored mapping (the posture
     ground_findings established for the verify tier).
     """
-    from . import hunks as _hunks_mod  # noqa: F401 — via _sent_file_patches
-
     candidates = [
         r
         for r in reasons
@@ -1545,7 +1547,7 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
             by_file.setdefault(r.file, []).append(i)
         for name, indices in by_file.items():
             lines.append(f"## FILE {name}")
-            hunk_texts = _hunks_mod.split_hunks(patches[name])
+            hunk_texts = hunks.split_hunks(patches[name])
             for n, h in enumerate(hunk_texts, 1):
                 lines.append(f"### Hunk {n}")
                 lines.append(h)
@@ -1587,5 +1589,10 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
             r.hunks = [hashes[n - 1] for n in picks]
             attributed += 1
         return attributed
-    except Exception:  # noqa: BLE001 — fail soft; abstention beats a wrong row
+    except Exception as e:  # noqa: BLE001 — fail soft; abstention beats a wrong row
+        print(
+            f"doug: attribution failed ({type(e).__name__}: {str(e)[:120]}); "
+            "findings stay unattributed",
+            file=sys.stderr,
+        )
         return 0

@@ -7,8 +7,7 @@ If the hash ever starts reading them, by-construction carry-forward breaks
 on every rebase — these tests are what fails first.
 """
 
-from doug import hunks
-
+from doug import hunks, reader
 
 PATCH_A = (
     "@@ -10,7 +10,8 @@ def f():\n"
@@ -92,8 +91,6 @@ def test_index_from_patches():
 
 
 # --- Coverage.hunks: the index is over the SENT slice only -----------------
-
-from doug import reader
 
 
 def _diff(*files):

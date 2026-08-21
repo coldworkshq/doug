@@ -217,7 +217,9 @@ def classify(
     return entries
 
 
-def _rule5(row: dict, file: str, prior_read: dict | None, later_read: dict | None) -> Classification:
+def _rule5(
+    row: dict, file: str, prior_read: dict | None, later_read: dict | None
+) -> Classification:
     """The replaced rule 5: hunk-set evidence, never the reader's silence.
 
     The prior finding is absent from the later verdict and rules 2-4 did not
