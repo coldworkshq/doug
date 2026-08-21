@@ -1,0 +1,733 @@
+[
+ {
+  "pair": [
+   1020,
+   1022
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:idempotency-scope-change",
+  "label": "find_review now requires installation_id and github_repo_id to be NULL, so any App-written verdict no longer suppresses a /v1/review rescore for the same commit. This doubles LLM spend for commits reviewed by both paths and can produce duplicate ledger rows if any App-originated call ever routes through /v1/review.",
+  "from": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "to": "c8383dc3fca902481a27fb8555ec29e3efe03a51",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 4,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1020,
+   1022
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:fail-loud-cap",
+  "label": "comparison_reviews raises ComparisonResultTooLarge (HTTP 413) when a repo/PR window exceeds COMPARISON_RUN_LIMIT=500 rows; a busy repo with many duplicate verdicts can make /v1/comparisons permanently error for the default limit=50, with no automatic fallback in the dashboard.",
+  "from": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "to": "c8383dc3fca902481a27fb8555ec29e3efe03a51",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 4,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1020,
+   1022
+  ],
+  "pr": 38,
+  "file": "api/doug/store.py",
+  "rule": "reader:unbounded-subquery-scan",
+  "label": "The group-by over all verdicts (max(scored_at) per repo/PR) with an outer join over the whole reads table per verdict has no time bound; on a large ledger this read can be slow without an appropriate index.",
+  "from": "05fafe2b3c9d8b59c35d9ffa3a607e7421c5c216",
+  "to": "c8383dc3fca902481a27fb8555ec29e3efe03a51",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 4,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1029,
+   1031
+  ],
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "rule": "reader:removed-public-function",
+  "label": "`reader.intent_enabled()` and `intent.enabled()` were deleted and replaced by `enabled_for()`. Any other call sites (CLI, probes, worker, docs scripts) not shown in the diff would raise AttributeError/ImportError at runtime.",
+  "from": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "to": "4408925d25a9572aceabd5047369febdcd5725ee",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 2,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1029,
+   1031
+  ],
+  "pr": 39,
+  "file": "api/doug/reader.py",
+  "rule": "reader:strict-parsing-fallback",
+  "label": "installation_from_scope only accepts the exact canonical form; any scope string built elsewhere (e.g. with padding, different prefix casing, or a future scope kind) silently resolves to None, disabling intent without any log or signal.",
+  "from": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "to": "4408925d25a9572aceabd5047369febdcd5725ee",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 2,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1029,
+   1031
+  ],
+  "pr": 39,
+  "file": "api/tests/test_deviations.py",
+  "rule": "reader:brittle-test-on-deploy-file",
+  "label": "Test parses gcp.sh text and asserts the allowlist equals exactly the dogfood id; legitimately adding a second installation or reformatting the deploy command will fail CI and require a code change.",
+  "from": "2cf9cbfe39fb0ba4f2bba8bdfbe76611b0a8504e",
+  "to": "4408925d25a9572aceabd5047369febdcd5725ee",
+  "base": "a8cc39605bc8ec7d9f0f2cc277c2065645941c51",
+  "n_hunks": 6,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "rule": "reader:error-handling-gap",
+  "label": "_is_app_identity_collision matches the substring 'unique constraint failed: verdicts.' on sqlite, so any unique-constraint violation on the verdicts table (present or future) is misclassified as the App-identity collision and silently converted into an idempotent return instead of propagating.",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 5,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "unknown(not-reconfirmed)",
+  "note": "mixed"
+ },
+ {
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:data-loss",
+  "label": "Dedupe permanently deletes findings/reads/deviations attached to superseded duplicate verdicts with no backup or archival step; if the wrong rows are chosen as duplicates (e.g. legitimately distinct tiers other than 'external' for the same SHA) evidence is irrecoverably lost.",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "rule": "reader:api-contract-change",
+  "label": "save_review gains an out-parameter style `created: list[bool]` that the worker inspects; if any other caller or a storage-disabled path leaves it empty, the worker silently skips the race-floor branch, and mutation-based signalling is fragile against future refactors.",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 5,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "persisted(attributed-surviving)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1041,
+   1043
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:lock-contention",
+  "label": "CREATE UNIQUE INDEX on verdicts is issued without CONCURRENTLY, taking an exclusive lock on a potentially large production table during startup migration.",
+  "from": "ab8f25b9dfd490161078df0a0644e2a31f3578c9",
+  "to": "17533f93237d2731445c4073340e9392e0ad4912",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1043,
+   1045
+  ],
+  "pr": 43,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:sql-null-semantics",
+  "label": "The partial index and dedupe predicates use `tier <> 'external'`, which evaluates to NULL for rows with NULL tier, silently excluding such rows from both dedupe and uniqueness. If any legacy App-path row has NULL tier, uniqueness is not actually enforced for it (and any mismatch with find_verdict_by_identity's filter would produce inconsistent dedupe behavior).",
+  "from": "17533f93237d2731445c4073340e9392e0ad4912",
+  "to": "2f2ab6a40005e89f38172ff387bc7de8465eba87",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 1,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1043,
+   1045
+  ],
+  "pr": 43,
+  "file": "api/doug/store.py",
+  "rule": "reader:awkward-out-parameter",
+  "label": "save_review signals insertion via a mutable `created` list out-param; callers must distinguish [] (storage disabled) from [False] (race). Any future caller or early-return path that forgets to mark the list will be silently treated as 'not a race' or vice versa.",
+  "from": "17533f93237d2731445c4073340e9392e0ad4912",
+  "to": "2f2ab6a40005e89f38172ff387bc7de8465eba87",
+  "base": "5757fe8ace220e2c2acf041f49ab8515aefa6fef",
+  "n_hunks": 7,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1062,
+   1064
+  ],
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:auth-scope-bypass",
+  "label": "In /v1/queue the tenant scoping only applies in the `store.enabled()` branch. If storage is disabled/unavailable, the code falls through to the non-store queue path and returns items unfiltered, so a tenant token would see all in-memory/global queue rows (and a cross-tenant `repo` check is also skipped since active_repos would be empty \u2014 though that path 404s only when repo is supplied).",
+  "from": "30fdf3861606040207b355ef1e5d6d07969d2a0d",
+  "to": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "n_hunks": 7,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1062,
+   1064
+  ],
+  "pr": 48,
+  "file": "api/doug/tenancy.py",
+  "rule": "reader:schema-migration-gap",
+  "label": "tenancy.mint/resolve depend on an `installations.token_hash` column, but no migration/DDL change is visible in the diff. If the column is not created/backfilled in existing deployments, mint and resolve will raise operational errors on every request (500s on /v1/queue via _operator_only too).",
+  "from": "30fdf3861606040207b355ef1e5d6d07969d2a0d",
+  "to": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "n_hunks": 1,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1062,
+   1064
+  ],
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:unbounded-external-calls",
+  "label": "/v1/installations/token is intentionally unauthenticated apart from a caller-supplied PAT and performs two GitHub API calls per request with no rate limiting or throttling; even with caller-first ordering, a valid-PAT attacker can repeatedly reach the app-JWT call and consume Doug's shared 5,000/hr quota, plus repeatedly rotate/invalidate a tenant's live token.",
+  "from": "30fdf3861606040207b355ef1e5d6d07969d2a0d",
+  "to": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "n_hunks": 7,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1062,
+   1064
+  ],
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:error-handling-gap",
+  "label": "_operator_only now calls tenancy.resolve() on every operator endpoint request, adding a DB round-trip inside auth; a DB outage or missing table turns previously simple 401/200 auth into unhandled 500s on /v1/patterns, /v1/comparisons and /v1/score/read.",
+  "from": "30fdf3861606040207b355ef1e5d6d07969d2a0d",
+  "to": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "n_hunks": 7,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1062,
+   1064
+  ],
+  "pr": 48,
+  "file": "api/doug/api.py",
+  "rule": "reader:validation-gap",
+  "label": "Repo parsing uses partition and rejects '/' in the name but does not reject '/' in owner or extra path segments beyond the first split edge cases (e.g. 'a/b/c' is rejected, but whitespace/URL-encoded values pass through to the GitHub call).",
+  "from": "30fdf3861606040207b355ef1e5d6d07969d2a0d",
+  "to": "e8cf8cb2e65888449d6e5f0ed1aabe9e59689f30",
+  "base": "9090dce9554d1c209bd94956ffd1ab69366e02bd",
+  "n_hunks": 7,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/migrations.py",
+  "rule": "reader:error-swallowing",
+  "label": "_SATISFIED gains the broad substring \"no such column\", and _satisfied() swallows any Postgres error containing both \"does not exist\" and \"column\". Future migrations referencing a genuinely missing column (e.g. a typo in an ADD/UPDATE statement) will silently succeed, leaving schema drift undetected.",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 3,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:api-contract-change",
+  "label": "TokenResponse drops the previously-required `repo` field and adds several required fields (token_id, selection, repos, last4, expires_at); TokenRequest now 404s when neither `selection` nor `repo` is supplied. Existing clients of /v1/installations/token may break on the changed response shape.",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 6,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "persisted(attributed-surviving)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:authz-scope-gap",
+  "label": "In /queue, when a tenant key supplies `repo`, the membership check only verifies the repo belongs to the installation, not that it is in the key's `repo_ids` selection; scoping relies solely on latest_reviews' repo_ids filter. Any code path in the non-latest-reviews branch that does not also apply repo_ids would leak out-of-selection data, and the mismatch yields a misleading empty result instead of a 403.",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 6,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "resolved(attributed-edited)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1072,
+   1073
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:input-validation",
+  "label": "revoke_token treats an owner containing '/' as absent and silently falls through to the repos branch instead of rejecting, which can produce confusing 404s and makes the authorization branch selection depend on malformed input.",
+  "from": "a0591d6653a5a961ea9666e9873bc05830a6a6bc",
+  "to": "fe307ab6ec698832ff939a431246e40c4b115727",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 6,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "persisted(attributed-surviving)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:authz-scoping-regression",
+  "label": "Tenant queue scoping switches from full_name matching to installation_repos repo ids (repo filter is dropped for tenant callers and replaced by repo_ids). Any verdict row lacking a resolvable github_repo_id (the drift the new startup check explicitly reports) becomes invisible to tenants, silently emptying their queue.",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 7,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "persisted(attributed-surviving)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:config-dependency",
+  "label": "Token verification/minting now requires DOUG_TOKEN_PEPPER; environments where the new secret has not been created will return 503 on tenant token paths, and the deploy --set-secrets reference will fail hard if the secret does not yet exist (setup only warns and continues).",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 3,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:error-handling-gap",
+  "label": "list_tokens/revoke_token do not guard against tenancy.KeysNotConfigured (handled explicitly on other routes), so a missing pepper would surface as an unhandled 500 rather than 503 on these endpoints.",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 7,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "resolved(attributed-edited)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:logic-error",
+  "label": "revoke_token silently falls through to the repo-admin branch when the owner query param contains '/', treating a malformed org-admin request as a repo-admin request (or a 404 if repos is empty), which can mask caller errors and confuse revocation semantics.",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 7,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "resolved(attributed-edited)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1074,
+   1076
+  ],
+  "pr": 50,
+  "file": "api/doug/api.py",
+  "rule": "reader:partial-write",
+  "label": "Mint performs multiple non-atomic steps (key row insert plus set_installation_token_repos junction rows); a failure between them can leave a live key row with no repo rows, which for 'selected' selection yields zero effective repos and for revoke-coverage checks is treated like an 'all' key.",
+  "from": "8d6f817d7d88e61fbb693d878d9aae0f24074ec1",
+  "to": "0a3e0b7f1ae81c0b5b7bd554b00781b5db47a808",
+  "base": "ed5aa3e3ae4f1114758d480d35f0036e717d5969",
+  "n_hunks": 7,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "resolved(attributed-edited)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1096,
+   1097
+  ],
+  "pr": 56,
+  "file": "api/doug/reader.py",
+  "rule": "reader:behavior-change-invalidates-validation",
+  "label": "Raising DIFF_BUDGET from 30k to 100k and reordering files by tier changes the model's input distribution relative to the frozen probe that produced the AUC evidence; scoring quality/cost/latency may regress in production even though the five prompt constants are unchanged.",
+  "from": "d1cb8991f6629a68833df983e44d08a9566b1e34",
+  "to": "b07e176ae870fdb5fd4a16380b5e778a836e71f3",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "n_hunks": 3,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1096,
+   1097
+  ],
+  "pr": 56,
+  "file": "api/doug/review.py",
+  "rule": "reader:ordering-side-effects",
+  "label": "read_order sorts by (tier, patch length), so the largest code file in a PR is now the most likely to be cut/dropped and GitHub's natural diff order is no longer preserved for the reader; any downstream consumer assuming original file order in the assembled diff (e.g. stored coverage comparisons or prompt heuristics) could behave differently.",
+  "from": "d1cb8991f6629a68833df983e44d08a9566b1e34",
+  "to": "b07e176ae870fdb5fd4a16380b5e778a836e71f3",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "n_hunks": 5,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1096,
+   1097
+  ],
+  "pr": 56,
+  "file": "api/doug/features.py",
+  "rule": "reader:tier-classification-edge-case",
+  "label": "_is_prose treats any .md/.txt/.rst suffix and lockfiles as prose; files like CHANGELOG-driven code generation inputs, .txt fixtures used as test data, or .rst-embedded doctests get deprioritized, and requirements.txt is special-cased only via the MANIFESTS set \u2014 other prose-suffixed manifests (e.g. requirements-dev.txt, constraints.txt) will be misclassified.",
+  "from": "d1cb8991f6629a68833df983e44d08a9566b1e34",
+  "to": "b07e176ae870fdb5fd4a16380b5e778a836e71f3",
+  "base": "135c8e51310d8f85f259e92031aba0b277a36bd4",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1107,
+   1108
+  ],
+  "pr": 59,
+  "file": "api/doug/backtest/git_labels.py",
+  "rule": "reader:behavior-divergence",
+  "label": "Two attribution rules now coexist (string order for backtest, instant+sha for live). Cached backtest corpora and live labels can disagree on multi-offset repos, weakening the claimed 'same event' invariant the change is meant to establish.",
+  "from": "81b8a62b18964b1a4f57712d856f82a9b34c2c53",
+  "to": "df1331dec7a387815c1fe32d7420c9a9f2852738",
+  "base": "3fec72a5ed1bfd0439842d1f54a4342e4b267a31",
+  "n_hunks": 4,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1120,
+   1121
+  ],
+  "pr": 67,
+  "file": "web/package-lock.json",
+  "rule": "reader:dependency-lockfile-drift",
+  "label": "package-lock.json changes drop @emnapi/core and @emnapi/runtime entries and add numerous 'peer' markers, unrelated to this feature removal; regenerated lockfile could alter install resolution in CI/builds.",
+  "from": "e3b184c3a79265dcc74cb96c2c55524b75bfc308",
+  "to": "c60b1d75780a4384888cb89605950df15e1fdef0",
+  "base": "c77536e93884eb8c2ae3ca83efd146ec6c21188a",
+  "n_hunks": 19,
+  "pure": "unknown(left-diff)",
+  "refined": "unknown(left-diff)",
+  "note": null
+ },
+ {
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/store.py",
+  "rule": "reader:error-handling-gap",
+  "label": "Dedupe moved from catching IntegrityError with an explicit constraint-name check to blanket ON CONFLICT DO NOTHING on the outcome identity. Real duplicate-key situations that previously surfaced (e.g. a partially conflicting row inserted by another writer, or a conflict on a different unique index) are now silently absorbed for the identity columns, and enqueue_outcome_job now returns None in cases that previously raised, so a merge can drop out of the denominator without a signal.",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "n_hunks": 5,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:config-path-fragility",
+  "label": "PREREG_DOC is a cwd-relative path ('../docs/...'). preregistration_preflight now gates both deploy() and adjudicator(), so invoking gcp.sh from any directory other than api/ makes grep fail and hard-blocks all deploys with a misleading 'not LOCKED' error.",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "n_hunks": 4,
+  "pure": "unknown(not-reconfirmed)",
+  "refined": "resolved(attributed-edited)",
+  "note": "refined"
+ },
+ {
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/api.py",
+  "rule": "reader:api-contract-change",
+  "label": "enqueue_outcome_jobs changes the return type from int|None to dict[int,int]; the api.py caller was switched but any other caller or monkeypatched test double expecting the old scalar contract would silently misbehave.",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "n_hunks": 1,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "rule": "reader:unsafe-migration",
+  "label": "apply() takes SHARE ROW EXCLUSIVE locks on installations and outcome_jobs for the whole inspect/insert/inspect/manifest-fsync sequence, so webhook merge writes block for the duration of the backfill including a synchronous disk fsync; on a large ledger this can stall ingest long enough to time out webhook deliveries.",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1124,
+   1125
+  ],
+  "pr": 69,
+  "file": "api/doug/outcome_backfill.py",
+  "rule": "reader:dialect-specific-logic",
+  "label": "sqlite backfill computes due_at via func.datetime(merged_at, '+60 days'), which yields a string with a different format/timezone handling than the Python timedelta path used by the runtime writer, risking due_at mismatches flagged later by inspect()'s own mismatch audit.",
+  "from": "5db1850df2d0ae6197bd133d6304a6d3abd71315",
+  "to": "f5ae6a7875357efbe95ea59769b89699f6dc96b7",
+  "base": "99011b7806a05d5265380763c5b94cc931c1e4ad",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1144,
+   1145
+  ],
+  "pr": 75,
+  "file": "api/doug/api.py",
+  "rule": "reader:unauthenticated-data-exposure",
+  "label": "/v1/showcase/queue filters store.latest_reviews on the display-only `repo` string across all installations, on a public unauthenticated surface. If two installations have a repo with the same full name (or the env var is misconfigured), the public page can leak another tenant's PR titles, authors and reader rationales. Authorization elsewhere keys on github_repo_id.",
+  "from": "93a566b66327a1852f24c2344c0a73e7fd49a660",
+  "to": "70fe216ca610e1fc58b84edd2abb2d8bb8ac8996",
+  "base": "7fa5869dee2395327acd4de186aef754352de647",
+  "n_hunks": 2,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1144,
+   1145
+  ],
+  "pr": 75,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:deploy-ordering-hazard",
+  "label": "web and api deploy in parallel (deploy.yml web job is `needs: changes` only). If web lands first, the public pages call /v1/showcase/queue on an api that doesn't serve it yet and silently fall back to the bundled fixture; promote_if_healthy smokes `/`, which returns 200 either way, so the gate cannot catch it.",
+  "from": "93a566b66327a1852f24c2344c0a73e7fd49a660",
+  "to": "70fe216ca610e1fc58b84edd2abb2d8bb8ac8996",
+  "base": "7fa5869dee2395327acd4de186aef754352de647",
+  "n_hunks": 5,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1144,
+   1145
+  ],
+  "pr": 75,
+  "file": "web/package.json",
+  "rule": "reader:tooling-compat",
+  "label": "The test script relies on node's --test accepting a quoted recursive glob ('lib/**/*.test.mjs'); on Node versions without glob support in --test this passes a literal path and matches nothing (the pretest guard only checks files exist, not that they ran), reintroducing the vacuous-green problem the change intends to fix.",
+  "from": "93a566b66327a1852f24c2344c0a73e7fd49a660",
+  "to": "70fe216ca610e1fc58b84edd2abb2d8bb8ac8996",
+  "base": "7fa5869dee2395327acd4de186aef754352de647",
+  "n_hunks": 1,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1144,
+   1145
+  ],
+  "pr": 75,
+  "file": "api/deploy/gcp.sh",
+  "rule": "reader:missing-smoke-test",
+  "label": "No smoke check verifies /v1/showcase/queue after deploy; a missing or wrong DOUG_SHOWCASE_REPO yields a 404 and a silent fixture fallback on the public pages while health checks stay green.",
+  "from": "93a566b66327a1852f24c2344c0a73e7fd49a660",
+  "to": "70fe216ca610e1fc58b84edd2abb2d8bb8ac8996",
+  "base": "7fa5869dee2395327acd4de186aef754352de647",
+  "n_hunks": 5,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1169,
+   1170
+  ],
+  "pr": 90,
+  "file": "web/lib/coverage.ts",
+  "rule": "reader:semantics-change",
+  "label": "Coverage denominator switched from sent_chars/diff_chars to files_sent/changed_files, which also silently redefines the 'coverage < 50%' filter; rows with missing changed_files are now excluded from that filter entirely.",
+  "from": "00798b29678073435a67a8b165a00ba09860d53e",
+  "to": "a1d0d86d61f5f381e02057a24c97f83c4bee902a",
+  "base": "2b563762b1414f5abc7732c996cac854799503de",
+  "n_hunks": 1,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ },
+ {
+  "pair": [
+   1169,
+   1170
+  ],
+  "pr": 90,
+  "file": "web/lib/node-next-loader.mjs",
+  "rule": "reader:tooling-resolution-fallback",
+  "label": "Loader fallback appends '.ts' to any failing relative specifier, which can mask real resolution errors (e.g. missing .mjs/.js files) with a confusing '.ts not found' error.",
+  "from": "00798b29678073435a67a8b165a00ba09860d53e",
+  "to": "a1d0d86d61f5f381e02057a24c97f83c4bee902a",
+  "base": "2b563762b1414f5abc7732c996cac854799503de",
+  "n_hunks": 1,
+  "pure": "resolved(hunk-edited)",
+  "refined": "resolved(hunk-edited)",
+  "note": null
+ },
+ {
+  "pair": [
+   1169,
+   1170
+  ],
+  "pr": 90,
+  "file": "web/lib/dashboard-model.ts",
+  "rule": "reader:pagination-assumption",
+  "label": "capSuffix compares items.length to limit but the request pins offset=0 and limit=500; if the API ever caps below the requested limit or returns a different limit, the note could misreport, and runs beyond 500 are silently unavailable with no paging.",
+  "from": "00798b29678073435a67a8b165a00ba09860d53e",
+  "to": "a1d0d86d61f5f381e02057a24c97f83c4bee902a",
+  "base": "2b563762b1414f5abc7732c996cac854799503de",
+  "n_hunks": 5,
+  "pure": "persisted(by-construction)",
+  "refined": "persisted(by-construction)",
+  "note": null
+ }
+]

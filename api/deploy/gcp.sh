@@ -197,10 +197,12 @@ setup() {
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
 
-  # The default compute SA may still hold a leftover secretAccessor on
-  # doug-api-token from before doug-web had its own identity. That is a
-  # one-off operator action, not a setup step — see docs/OPERATIONS.md,
-  # "Revoke the default compute SA's access to doug-api-token".
+  # WEB_SA is deliberately NOT bound to doug-api-token: Front Door Phase 0
+  # dropped that secret from web(), and the leftover production binding was
+  # revoked 2026-08-20 (#152). setup() grants no accessor it cannot point at
+  # a --set-secrets flag, which is what let the last one rot unnoticed.
+  # Revoking a stale one is an operator action, not a setup step — see
+  # docs/OPERATIONS.md, "Audit the default compute SA's secret access".
 
   # doug-console is the operator surface. It crosses every installation, so
   # it is IAM-gated rather than token-gated, and it gets its own identity
