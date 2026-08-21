@@ -157,7 +157,39 @@ export async function recordProviderEntitlements(
   // No provider token (silent SSO, non-GitHub identity): no derivation was
   // attempted, so any standing failure note still describes the latest real
   // attempt — leave it to expire rather than withdrawing it unearned.
-  if (!data.oauthTokens) return;
+  //
+  // SAID OUT LOUD, because this return was the one failure in the file that
+  // nothing could see. `derived_at` never moves, sign-in succeeds, and the
+  // person meets the expired-scope screen on every visit until they happen to
+  // sign in a way that carries a token. Two causes reach here and no file in
+  // this repo can tell them apart: WorkOS not round-tripping the provider, and
+  // the WorkOS connection's "Return GitHub OAuth tokens" option being off —
+  // a dashboard toggle with no representation in code.
+  //
+  // It is also the instrument the #167 retest needs. That experiment showed a
+  // re-auth for an already-signed-in user mints no GitHub token; without this
+  // line, "WorkOS returned nothing" and "derivation ran and failed" look
+  // identical from outside, and only the second one logs.
+  //
+  // WARNING, not ERROR: on a Password or non-GitHub sign-in this is the
+  // correct and expected path, and paging on it would train the reader to mute
+  // the event that matters. The signal is a RATE — GitHubOAuth sign-ins
+  // arriving here at all.
+  if (!data.oauthTokens) {
+    console.warn(
+      JSON.stringify({
+        severity: "WARNING",
+        event: "entitlement_derivation_skipped",
+        message:
+          "doug: sign-in carried no provider token, so no scope was derived. Stored scope and " +
+          "its derived_at are unchanged. Expected for a non-provider sign-in; for a GitHub one " +
+          "it means the callback returned no oauthTokens.",
+        workos_user_id: data.user?.id ?? "unknown",
+        provider: data.authenticationMethod ?? "unknown",
+      }),
+    );
+    return;
+  }
 
   const budgetMs = limits.budgetMs ?? ENTITLEMENT_BUDGET_MS;
   const backoffMs = limits.backoffMs ?? ENTITLEMENT_BACKOFF_MS;

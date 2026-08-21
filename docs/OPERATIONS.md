@@ -262,3 +262,82 @@ with them, dead since Front Door Phase 0 dropped that secret from `web()`.
 `doug-web` mounts five secrets, not none: the four AuthKit values plus
 `doug-install-flow-secret`. An earlier draft of this section claimed it held
 no secret at all, which stopped being true at Phase 0.
+
+## Sign-in scope derivation
+
+A repository scope is derived once, at sign-in, from the provider token
+`authkit-nextjs` hands to `handleAuth`'s `onSuccess` and nowhere else
+(`web/lib/entitlements.ts`). The token is used and discarded; the derived scope
+carries `derived_at` and dies after `entitlements.TTL` — 8 hours
+(`api/doug/entitlements.py:77`).
+
+Two different failures leave a person with a stale scope and an expired-scope
+dashboard, and they need different responses. Both are one structured line on
+stderr, which Cloud Run parses into a structured entry.
+
+| Event | Severity | Means |
+|---|---|---|
+| `entitlement_derivation_failed` | ERROR | Doug had a token, called the API, and gave up after two attempts. Usually a cold start or the API being down. |
+| `entitlement_derivation_skipped` | WARNING | The sign-in carried no provider token at all, so nothing was attempted. |
+
+### Read the skipped-derivation rate (repeatable)
+
+A `Password` or other non-provider sign-in reaching the skip is correct and
+expected, so the event alone is not actionable. **The signal is a `GitHubOAuth`
+sign-in landing there** — that means the callback returned no `oauthTokens`,
+and every affected person sees the expired-scope screen until something
+changes:
+
+    gcloud logging read \
+      'resource.type="cloud_run_revision"
+       resource.labels.service_name="doug-web"
+       jsonPayload.event="entitlement_derivation_skipped"
+       jsonPayload.provider="GitHubOAuth"' \
+      --project doug-prod0 --freshness=24h \
+      --format='value(timestamp, jsonPayload.workos_user_id)'
+
+Any rows at all are worth acting on. Two causes produce them, and no file in
+this repo can tell them apart:
+
+1. **WorkOS did not round-trip the provider.** Confirmed to happen on a re-auth
+   for an already-signed-in user — see #167. `prompt=consent` is honored at the
+   WorkOS layer and never reaches GitHub, which accepts only
+   `prompt=select_account`.
+2. **The WorkOS GitHub connection has "Return GitHub OAuth tokens" turned off.**
+   A dashboard toggle with no representation in code, so it has to be read by
+   hand: **Authentication > OAuth providers > GitHub > Manage**, under
+   **OAuth tokens**.
+
+### The WorkOS GitHub connection, as configured
+
+Read 2026-08-21 from the dialog above. Recorded here because none of it is
+visible from any file in this repo, and #167 turned on knowing it:
+
+| Field | Value |
+|---|---|
+| GitHub OAuth | Enabled |
+| Return GitHub OAuth tokens | **Checked** |
+| GitHub Client ID | begins `Iv23li` — a GitHub **App**, not an OAuth App |
+| GitHub Client Secret | set |
+| Scopes | `user:email` only |
+
+**The Scopes field is expected to be inert, and that expectation is load-bearing
+enough to write down.** Scopes apply only to GitHub OAuth Apps; a GitHub App
+takes its permissions from the app itself
+(https://workos.com/docs/integrations/github-oauth). The client ID's `Iv`
+prefix marks a GitHub App, and the decisive evidence is internal:
+`api/doug/entitlements.py` calls `GET /user/installations`, which an OAuth App
+token answers with 403 — recorded at
+`docs/superpowers/specs/2026-08-08-front-door-design.md:84-88`. Derivation
+works, so the token in hand is a user-to-server GitHub App token.
+
+If WorkOS ever routed this connection as an OAuth App, a `user:email`-only token
+would fail that call for every user at once, and it would surface here as either
+a derivation failure or the skip event above. Check the client ID prefix before
+chasing anything else.
+
+To confirm a specific sign-in did or did not refresh the scope, GitHub's own
+security log is authoritative. A Doug user-token mint appears as a pair at the
+same second — `oauth_access.create` with the user's IP, and
+`GitHub System – oauth_access.regenerate` — under the Dougs Review GitHub App.
+No pair means no token was minted, whatever the app believes.

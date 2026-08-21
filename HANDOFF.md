@@ -1,5 +1,90 @@
 # HANDOFF — doug
 
+State:    review — PR #174 open (#168 + #170), rebased onto main @ fd881cb.
+          Suite green (345), tsc clean, lint clean. Eight mutations verified
+          across the two changes.
+Next:     Andrew reviews and merges #174. Then deploy and re-run #167 with a
+          `maxAge` variant — #170's log line is now shipped, so the retest is
+          readable for the first time.
+Blockers: reconnect-in-place stays blocked. `maxAge` is the only untested
+          variant and needs a DEPLOY: NEXT_PUBLIC_WORKOS_REDIRECT_URI pins the
+          callback to the production origin, so it cannot run locally.
+Decisions this session:
+- #167 ANSWERED, negative (2026-08-21, production). Two round trips —
+  /install/callback?setup_action=update (ships prompt:"consent") at 17:58:02Z
+  and /sign-in (no prompt) at 17:58:52Z — both completed through WorkOS and
+  landed on /dashboard in ~15s with no consent screen. GitHub's security log at
+  18:05:58Z showed NO new token: newest Dougs Review event still 17:55:20Z.
+  Instrument validated first — Doug mints log as a pair (drewjst
+  oauth_access.create with IP + GitHub System oauth_access.regenerate) at one
+  second, three times on 2026-08-21, each matching a real sign-in.
+  prompt=consent is honored at WorkOS and never reaches GitHub, which accepts
+  only prompt=select_account — exactly as the security lens predicted
+- CONFIRMED LIVE BUG: /install/callback?reauth=github (route.ts:85-98) is a
+  dead loop. route.ts:178-184 offers it as the ONLY remedy on a user-facing 403
+- Evidence limit, stated in #167: this proves no NEW GitHub token was minted,
+  not that WorkOS returned nothing. A replayed cached token dies on the same 8h
+  clock, so it cannot refresh an expired scope either way
+- #168: three arms — `declined` (401 only), `unavailable` (503 only),
+  `unreachable` (everything else, incl. status:null) — rejected: one generic arm
+- #168 mapping lives in dashboard-model.ts as `ledgerFailure` — same reason #99
+  moved the front-door states there — rejected: inline ternary
+- #168: only `declined` offers sign-out — rejected: sign-out on every arm
+- #168 sign-out pin initially SURVIVED (lazy [\s\S]*? crossed arm boundaries);
+  strengthened to (?:(?!signOut:)[\s\S])*? until all four mutations fail
+- #170: the skip at entitlements.ts is WARNING, not ERROR — a Password sign-in
+  reaching it is correct and expected, and paging on it would train the reader
+  to mute the event that matters. The signal is a RATE: GitHubOAuth sign-ins
+  arriving there at all — rejected: ERROR, and rejected: reusing the
+  `entitlement_derivation_failed` event name
+- #170: the skip still does NOT withdraw SCOPE_UNCONFIRMED — the existing
+  comment is right that a skipped attempt must not clear a standing note
+- #170's runbook half landed in docs/OPERATIONS.md with the Cloud Logging query
+  and the GitHub security-log method. The connection config is now RECORDED
+  (2026-08-21, Andrew read it): Return GitHub OAuth tokens is CHECKED, client id
+  begins Iv23li (a GitHub App), client secret is set, Scopes = user:email only.
+  So #170's Done-when is fully met and the toggle is eliminated as the cheap
+  explanation for #167 — its negative stands as real WorkOS behaviour
+- The Scopes=user:email field is expected INERT (scopes apply only to OAuth
+  Apps; the Iv prefix and the working GET /user/installations call both say
+  GitHub App). Written into the runbook rather than filed as an issue, because
+  the failure it would cause is indistinguishable from #170's skip event and
+  that is where someone would be looking — rejected: a third issue
+- #171 cost argument CORRECTED, posture argument stands. The GitHub client
+  secret exists (in WorkOS, not doug's Secret Manager), and with the toggle on
+  and a GitHub App connection WorkOS returns refreshToken + expiresAt — SDK
+  types it at factory-DmBBe791.d.mts:1161-1166, web/lib/entitlements.ts:6
+  narrows it away. So doug is HANDED the 6-month refresh token at every sign-in
+  and discards it; it does not have to acquire one. The reason to say no is
+  still posture (no reversible secret anywhere in api/doug), not cost
+- HANDOFF conflict on rebase resolved by keeping both sides, per the precedent
+  PR #162 set for the same file
+- The mixed case (one space live, one expired) is UNREACHABLE — store.py:3325
+  stamps once per call, :3335 writes it to every row. No issue filed
+- WORKOS_COOKIE_MAX_AGE is 28800 in production (gcp.sh:897), not the ~400 days
+  api/doug/entitlements.py:26-31 claims. Comment is wrong as deployed, unfixed
+Pointers: branch claude/login-workos-redirect-9d9711 · PR #174 ·
+          #167 ANSWERED-negative (method in its comment), #168 + #170 in #174,
+          #169 blocked on a positive #167, #171 Pipes, #172 preemptive refresh ·
+          touched: web/app/dashboard/page.tsx (LedgerUnreachable + guarded
+          read), web/lib/dashboard-model.ts (ledgerFailure),
+          web/lib/entitlements.ts (the skip line), docs/OPERATIONS.md,
+          three .test.mjs files ·
+          node_modules installed in the worktree — 18 tests were failing on
+          module resolution before that, on a clean tree too ·
+          CI does not run on this branch yet; ci.yml is pull_request-triggered
+          and had not reported at push time — check before merging ·
+          full workflow output: scratchpad tasks/wptwl85el.output (226KB)
+
+---
+
+## Prior stream — check-run relayout + needs-you alert (kept, not this session's work)
+
+
+---
+
+## Prior stream — #152 secret-accessor sweep, PR #162 (kept, per that PR's own precedent)
+
 State:    review — PR for issue #152 is open:
           https://github.com/drewjst/doug/pull/162
           Rebuilt on main after #155 (d8c4b48) landed; only HANDOFF.md

@@ -117,6 +117,19 @@ test("callback entitlement derivation sends the provider token only in the serve
   });
 });
 
+/** Collect console.warn while `run` executes, and always put it back. */
+async function withCapturedWarnings(run) {
+  const warnings = [];
+  const oldConsoleWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    await run(warnings);
+  } finally {
+    console.warn = oldConsoleWarn;
+  }
+  return warnings;
+}
+
 /** Collect console.error while `run` executes, and always put it back. */
 async function withCapturedErrors(run) {
   const errors = [];
@@ -339,4 +352,65 @@ test("sign-out delegates to AuthKit from a server action instead of a browser GE
   const { signOutAction } = await import("../app/auth/actions.ts");
   await signOutAction();
   assert.equal(globalThis.__workosSignOutCalls, 1);
+});
+
+test("a sign-in that carried no provider token says so instead of returning in silence", async () => {
+  // THE FAILURE THIS MAKES FINDABLE. `derived_at` never moves, the sign-in
+  // succeeds, and the person meets the expired-scope screen on every visit —
+  // with nothing in the logs, because this was the one return in the file that
+  // wrote neither a line nor a cookie. Two causes reach it and no file in this
+  // repo can tell them apart: WorkOS not round-tripping the provider, and the
+  // WorkOS connection's "Return GitHub OAuth tokens" option being off.
+  const { recordProviderEntitlements } = await import("./entitlements.ts?skip-is-audible");
+  await withEntitlementServer(async (requests) => {
+    const warnings = await withCapturedWarnings(async () => {
+      await recordProviderEntitlements({
+        accessToken: "workos-session-token-canary",
+        authenticationMethod: "GitHubOAuth",
+        oauthTokens: undefined,
+        user: { id: "user_01CANARY" },
+      });
+    });
+
+    // Still no derivation attempt — the line is the whole change, and turning
+    // a skipped sign-in into an API call would be a different bug.
+    assert.deepEqual(requests, []);
+
+    assert.equal(warnings.length, 1);
+    const entry = JSON.parse(warnings[0]);
+    assert.equal(entry.event, "entitlement_derivation_skipped");
+    assert.equal(entry.workos_user_id, "user_01CANARY");
+    assert.equal(entry.provider, "GitHubOAuth");
+
+    // WARNING, not ERROR. On a Password sign-in this path is correct and
+    // expected; paging on it would train the reader to mute the event that
+    // matters. It must also stay distinguishable from the derivation that RAN
+    // and failed — that one is ERROR, and #167's retest reads the difference.
+    assert.equal(entry.severity, "WARNING");
+    assert.notEqual(entry.event, "entitlement_derivation_failed");
+
+    // Property 2 of api/doug/entitlements.py, held on this side of the wire.
+    assert.equal(warnings[0].includes("workos-session-token-canary"), false);
+  });
+});
+
+test("a non-provider sign-in is named as itself, not reported as a GitHub failure", async () => {
+  // The rate is the signal, so the line has to carry enough to separate the
+  // expected case from the one worth acting on. A Password sign-in reaching
+  // here is routine; a GitHubOAuth one is the #167 symptom.
+  const { recordProviderEntitlements } = await import("./entitlements.ts?skip-names-provider");
+  await withEntitlementServer(async () => {
+    const warnings = await withCapturedWarnings(async () => {
+      await recordProviderEntitlements({
+        accessToken: "workos-session-token",
+        authenticationMethod: "Password",
+        oauthTokens: undefined,
+      });
+    });
+    const entry = JSON.parse(warnings[0]);
+    assert.equal(entry.provider, "Password");
+    // Absent user id must not print as "undefined" or crash the line — a log
+    // that throws inside a callback would take a valid sign-in down with it.
+    assert.equal(entry.workos_user_id, "unknown");
+  });
 });

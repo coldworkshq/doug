@@ -757,3 +757,53 @@ test("setFlagLineCommentAction is a server action, and the denial is stated on t
   // Rendered only when the API says a denial happened, never unconditionally.
   assert.match(page, /pr_comment_denied_at/);
 });
+
+test("a failed connections read never reaches the generic error boundary", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // THE BUG. `getConnections` was awaited unguarded, and `sessionJson` throws
+  // on every non-ok status, so any 401 or 503 fell through to app/error.tsx —
+  // "This page failed to render." over a Try again button. The page rendered
+  // fine, and re-running a 401 cannot clear a 401.
+  assert.equal(page.includes("await getConnections(accessToken);"), false);
+  assert.match(page, /try \{\s*session = \{ data: await getConnections\(accessToken\), failure: null \}/);
+
+  // The decision is delegated, not re-derived here — same reason #99 moved the
+  // four front-door states into dashboard-model.ts, where node --test can
+  // reach them. An inline ternary would put the claim back out of reach.
+  assert.match(page, /ledgerFailure\(status\)/);
+  assert.equal(page.includes('failure = "declined"'), false);
+
+  // And the arm renders instead of the page, not beside it: everything below
+  // the read is built from connections the page does not have.
+  assert.match(page, /if \(session\.data === null\) return <LedgerUnreachable failure=\{session\.failure\} \/>;/);
+});
+
+test("only the arm a new session can fix offers sign-out", async () => {
+  const page = await readFile(pageUrl, "utf8");
+
+  // Sign-out is advice, and advice is a claim. On a 503 the fault is a missing
+  // ledger or a missing operator secret — signing out cannot touch either, and
+  // offering it there tells the reader their credentials are the problem when
+  // the API deliberately checked for the deployment fault FIRST so that exact
+  // confusion could not happen.
+  assert.match(page, /\{copy\.signOut && \(/);
+  const gate = page.indexOf("{copy.signOut && (");
+  const control = page.indexOf("action={signOutAction}", gate);
+  assert.ok(gate >= 0 && control > gate, "the sign-out form must sit inside the signOut branch");
+
+  // Pinned as data, so flipping a flag is what it takes to move it — not
+  // editing JSX that a regex over the whole file would still match.
+  //
+  // `(?:(?!signOut:)[\s\S])*?` rather than a bare lazy `[\s\S]*?`, and the
+  // difference is the whole test. A lazy gap still crosses arm boundaries, so
+  // it keeps scanning past this arm's flag to the NEXT arm's — flipping
+  // `unavailable` to true left `/unavailable: \{[\s\S]*?signOut: false,/`
+  // matching `unreachable`'s flag, and the mutation survived. Refusing to step
+  // over an intervening `signOut:` confines each match to its own arm.
+  const arm = (name, flag) =>
+    new RegExp(`${name}: \\{(?:(?!signOut:)[\\s\\S])*?signOut: ${flag},`);
+  assert.match(page, arm("declined", "true"));
+  assert.match(page, arm("unavailable", "false"));
+  assert.match(page, arm("unreachable", "false"));
+});
