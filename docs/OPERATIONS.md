@@ -304,8 +304,37 @@ this repo can tell them apart:
    WorkOS layer and never reaches GitHub, which accepts only
    `prompt=select_account`.
 2. **The WorkOS GitHub connection has "Return GitHub OAuth tokens" turned off.**
-   A dashboard toggle with no representation in code. Check it first, because
-   it is the cheap one to rule out.
+   A dashboard toggle with no representation in code, so it has to be read by
+   hand: **Authentication > OAuth providers > GitHub > Manage**, under
+   **OAuth tokens**.
+
+### The WorkOS GitHub connection, as configured
+
+Read 2026-08-21 from the dialog above. Recorded here because none of it is
+visible from any file in this repo, and #167 turned on knowing it:
+
+| Field | Value |
+|---|---|
+| GitHub OAuth | Enabled |
+| Return GitHub OAuth tokens | **Checked** |
+| GitHub Client ID | begins `Iv23li` — a GitHub **App**, not an OAuth App |
+| GitHub Client Secret | set |
+| Scopes | `user:email` only |
+
+**The Scopes field is expected to be inert, and that expectation is load-bearing
+enough to write down.** Scopes apply only to GitHub OAuth Apps; a GitHub App
+takes its permissions from the app itself
+(https://workos.com/docs/integrations/github-oauth). The client ID's `Iv`
+prefix marks a GitHub App, and the decisive evidence is internal:
+`api/doug/entitlements.py` calls `GET /user/installations`, which an OAuth App
+token answers with 403 — recorded at
+`docs/superpowers/specs/2026-08-08-front-door-design.md:84-88`. Derivation
+works, so the token in hand is a user-to-server GitHub App token.
+
+If WorkOS ever routed this connection as an OAuth App, a `user:email`-only token
+would fail that call for every user at once, and it would surface here as either
+a derivation failure or the skip event above. Check the client ID prefix before
+chasing anything else.
 
 To confirm a specific sign-in did or did not refresh the scope, GitHub's own
 security log is authoritative. A Doug user-token mint appears as a pair at the

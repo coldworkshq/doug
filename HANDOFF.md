@@ -40,8 +40,23 @@ Decisions this session:
 - #170: the skip still does NOT withdraw SCOPE_UNCONFIRMED — the existing
   comment is right that a skipped attempt must not clear a standing note
 - #170's runbook half landed in docs/OPERATIONS.md with the Cloud Logging query
-  and the GitHub security-log method. The "Return GitHub OAuth tokens" toggle
-  value is still UNRECORDED — needs the WorkOS dashboard, Andrew
+  and the GitHub security-log method. The connection config is now RECORDED
+  (2026-08-21, Andrew read it): Return GitHub OAuth tokens is CHECKED, client id
+  begins Iv23li (a GitHub App), client secret is set, Scopes = user:email only.
+  So #170's Done-when is fully met and the toggle is eliminated as the cheap
+  explanation for #167 — its negative stands as real WorkOS behaviour
+- The Scopes=user:email field is expected INERT (scopes apply only to OAuth
+  Apps; the Iv prefix and the working GET /user/installations call both say
+  GitHub App). Written into the runbook rather than filed as an issue, because
+  the failure it would cause is indistinguishable from #170's skip event and
+  that is where someone would be looking — rejected: a third issue
+- #171 cost argument CORRECTED, posture argument stands. The GitHub client
+  secret exists (in WorkOS, not doug's Secret Manager), and with the toggle on
+  and a GitHub App connection WorkOS returns refreshToken + expiresAt — SDK
+  types it at factory-DmBBe791.d.mts:1161-1166, web/lib/entitlements.ts:6
+  narrows it away. So doug is HANDED the 6-month refresh token at every sign-in
+  and discards it; it does not have to acquire one. The reason to say no is
+  still posture (no reversible secret anywhere in api/doug), not cost
 - HANDOFF conflict on rebase resolved by keeping both sides, per the precedent
   PR #162 set for the same file
 - The mixed case (one space live, one expired) is UNREACHABLE — store.py:3325
