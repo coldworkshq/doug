@@ -262,3 +262,53 @@ with them, dead since Front Door Phase 0 dropped that secret from `web()`.
 `doug-web` mounts five secrets, not none: the four AuthKit values plus
 `doug-install-flow-secret`. An earlier draft of this section claimed it held
 no secret at all, which stopped being true at Phase 0.
+
+## Sign-in scope derivation
+
+A repository scope is derived once, at sign-in, from the provider token
+`authkit-nextjs` hands to `handleAuth`'s `onSuccess` and nowhere else
+(`web/lib/entitlements.ts`). The token is used and discarded; the derived scope
+carries `derived_at` and dies after `entitlements.TTL` — 8 hours
+(`api/doug/entitlements.py:77`).
+
+Two different failures leave a person with a stale scope and an expired-scope
+dashboard, and they need different responses. Both are one structured line on
+stderr, which Cloud Run parses into a structured entry.
+
+| Event | Severity | Means |
+|---|---|---|
+| `entitlement_derivation_failed` | ERROR | Doug had a token, called the API, and gave up after two attempts. Usually a cold start or the API being down. |
+| `entitlement_derivation_skipped` | WARNING | The sign-in carried no provider token at all, so nothing was attempted. |
+
+### Read the skipped-derivation rate (repeatable)
+
+A `Password` or other non-provider sign-in reaching the skip is correct and
+expected, so the event alone is not actionable. **The signal is a `GitHubOAuth`
+sign-in landing there** — that means the callback returned no `oauthTokens`,
+and every affected person sees the expired-scope screen until something
+changes:
+
+    gcloud logging read \
+      'resource.type="cloud_run_revision"
+       resource.labels.service_name="doug-web"
+       jsonPayload.event="entitlement_derivation_skipped"
+       jsonPayload.provider="GitHubOAuth"' \
+      --project doug-prod0 --freshness=24h \
+      --format='value(timestamp, jsonPayload.workos_user_id)'
+
+Any rows at all are worth acting on. Two causes produce them, and no file in
+this repo can tell them apart:
+
+1. **WorkOS did not round-trip the provider.** Confirmed to happen on a re-auth
+   for an already-signed-in user — see #167. `prompt=consent` is honored at the
+   WorkOS layer and never reaches GitHub, which accepts only
+   `prompt=select_account`.
+2. **The WorkOS GitHub connection has "Return GitHub OAuth tokens" turned off.**
+   A dashboard toggle with no representation in code. Check it first, because
+   it is the cheap one to rule out.
+
+To confirm a specific sign-in did or did not refresh the scope, GitHub's own
+security log is authoritative. A Doug user-token mint appears as a pair at the
+same second — `oauth_access.create` with the user's IP, and
+`GitHub System – oauth_access.regenerate` — under the Dougs Review GitHub App.
+No pair means no token was minted, whatever the app believes.
