@@ -22,6 +22,7 @@ design.
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -30,7 +31,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import example_pack_capture
+from . import example_pack_capture, hunks
 from .example_pack import (
     CoverageV0,
     FailureV0,
@@ -385,6 +386,7 @@ DEFAULT_VERIFY_TIMEOUT_S = 60
 
 _SCOPE_PREFIX = "installation:"
 _VERIFY_SCOPE_PREFIX = "verify:"
+_ATTRIBUTION_SCOPE_PREFIX = "attribution:"
 
 
 def installation_scope(installation_id: int) -> str:
@@ -432,6 +434,14 @@ def verify_scope(installation_id: int | None) -> str:
 
 def is_verify_scope(scope: str) -> bool:
     return scope.startswith(_VERIFY_SCOPE_PREFIX)
+
+
+def attribution_scope(installation_id: int | None) -> str:
+    """Same posture as verify_scope: its own prefix, so an attribution call
+    can never reach the customer's published `deep reads` meter."""
+    if installation_id is None:
+        return f"{_ATTRIBUTION_SCOPE_PREFIX}{SENTINEL_SCOPE}"
+    return f"{_ATTRIBUTION_SCOPE_PREFIX}{installation_id}"
 
 
 def cap_for(scope: str) -> int:
@@ -714,6 +724,14 @@ def enabled() -> bool:
     return os.environ.get("DOUG_READER") == "1"
 
 
+def attribution_enabled() -> bool:
+    """Opt-in, default off — the same land-dark posture as DOUG_VERIFY. The
+    convergence classifier degrades a missing attribution to
+    unknown(not-reconfirmed), so running dark costs abstentions, never
+    wrong answers."""
+    return os.environ.get("DOUG_ATTRIBUTION") == "1"
+
+
 def verify_enabled() -> bool:
     """Opt-in, default off, and separate from DOUG_READER on purpose.
 
@@ -833,6 +851,13 @@ class Coverage(BaseModel):
     # match. None = not tracked (old callers).
     changed_files: int | None = None
     files_dropped: list[str] = Field(default_factory=list)
+    # Content-hash index over the hunks that were actually SENT — the
+    # Walked Out convergence identity (docs/design/walked-out/). Keyed by
+    # path; ordered sha256 list per file; only files whose whole chunk
+    # arrived within the budget appear (file_cut and unseen files do not),
+    # so a stored index bakes this read's coverage in. None = not computed
+    # (rows from before migration 12).
+    hunks: dict[str, list[str]] | None = None
 
     @property
     def complete(self) -> bool:
@@ -847,6 +872,30 @@ class Coverage(BaseModel):
     @property
     def fraction(self) -> float:
         return 1.0 if not self.diff_chars else self.sent_chars / self.diff_chars
+
+
+def _chunk_content_end(matches: list, pos: int, diff_len: int) -> int:
+    """Where chunk `pos`'s patch text ends. THE one home for the geometry:
+    review.py joins chunks with exactly CHUNK_SEPARATOR, so content runs to
+    that separator before the next header, or to the end of the diff for the
+    final file. coverage() and _sent_file_patches both read this — a format
+    change updated in one place cannot silently disagree with the other
+    (the drift Doug's own review of this change flagged).
+    """
+    if pos + 1 < len(matches):
+        return matches[pos + 1].start() - len(CHUNK_SEPARATOR)
+    return diff_len
+
+
+def _chunk_patch(diff: str, matches: list, pos: int, sent_len: int) -> str | None:
+    """Chunk `pos`'s patch text, or None unless it arrived IN FULL within the
+    sent slice. The cut file's content end lies past the slice point by
+    construction, so it is never returned."""
+    m = matches[pos]
+    content_end = _chunk_content_end(matches, pos, len(diff))
+    if content_end > sent_len:
+        return None
+    return diff[m.end() + 1 : content_end] if m.end() + 1 <= content_end else ""
 
 
 def coverage(
@@ -888,6 +937,15 @@ def coverage(
         next_start = matches[last + 1].start() if last + 1 < len(matches) else len(diff)
         if next_start - len(sent) > len(CHUNK_SEPARATOR):
             cut = names[-1]
+    # Hunk index over the SENT slice only. _chunk_patch returns None for any
+    # chunk that did not arrive in full, so file_cut and unseen files are
+    # never indexed, and a clean between-files cut leaves the last whole
+    # file indexed.
+    index: dict[str, list[str]] = {}
+    for pos, m in enumerate(matches):
+        patch = _chunk_patch(diff, matches, pos, len(sent))
+        if patch is not None:
+            index[m.group(1)] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
     return Coverage(
         diff_chars=len(diff),
         sent_chars=len(sent),
@@ -898,7 +956,20 @@ def coverage(
         file_cut=cut,
         changed_files=changed_files,
         files_dropped=files_dropped or [],
+        hunks=index,
     )
+
+
+def hunk_index(diff: str, *, budget: int | None = None) -> dict[str, list[str]]:
+    """The hunk index for `diff` under `budget` — coverage()'s, verbatim.
+
+    A wrapper rather than a second derivation: the index the ledger stores
+    and the index an offline caller computes from the same text must be the
+    same function or the eval grades labels the product never produced.
+    """
+    cov = coverage(diff, budget=budget)
+    assert cov.hunks is not None
+    return cov.hunks
 
 
 def truncation_reason(cov: Coverage) -> Reason | None:
@@ -1360,3 +1431,168 @@ def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Ve
         threshold=thr / 100,
         reasons=reasons,
     )
+
+
+# --- Attribution tier (ADR-0015; Walked Out) -------------------------------
+#
+# One small charged call after a reader-tier read: map each finding to the
+# numbered hunks of its cited file's sent diff. The task shape is EXACTLY the
+# one the pre-registered span-verification pass validated (0/84 state flips
+# across identical double runs, 42/42 controls, 0/25 danger-class
+# contradictions; docs/design/walked-out/span-verification.md): closed-choice
+# attribution over enumerated hunks, code validating every number. The model
+# picks; code converts picks to content hashes from Coverage.hunks and stores
+# them on the finding row — classify consumes stored hashes only and never
+# re-derives. Fails soft on everything: a failed or abstained call stores
+# nothing, and a missing attribution is an abstention downstream, never a
+# wrong answer. SYSTEM/SCHEMA above are untouched; this tier carries its own
+# frozen pair and hash.
+
+ATTRIBUTION_SYSTEM = (
+    "You are attributing code-review findings to the diff hunks they rest "
+    "on. Each file's hunks are numbered exactly as sent to the reviewer. "
+    "For each FINDING id, decide which hunk number(s) the finding is about "
+    "- the hunks whose changed lines the finding describes. Judge only from "
+    "the hunk text shown. If a finding is about the file as a whole, or you "
+    "cannot tell which hunk(s), return an empty list for it. Return every "
+    "FINDING id exactly once."
+)
+
+ATTRIBUTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "attributions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "finding": {"type": "integer"},
+                    "hunks": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["finding", "hunks"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["attributions"],
+    "additionalProperties": False,
+}
+
+ATTRIBUTION_PROMPT_HASH = hashlib.sha256(
+    (ATTRIBUTION_SYSTEM + repr(ATTRIBUTION_SCHEMA)).encode()
+).hexdigest()
+
+ATTRIBUTION_MAX_TOKENS = 2000
+
+
+def _sent_file_patches(diff: str, cov: Coverage) -> dict[str, str] | None:
+    """Per-file patch text for every fully-sent file, or None on drift.
+
+    Re-derives the same geometry coverage() used (same slice point, same
+    header regex, same separator), then self-checks: the hashes of what this
+    parse yields must equal the stored index, or the attribution prompt
+    would number hunks the index does not describe — that mismatch fails
+    soft rather than storing a wrong mapping.
+    """
+    if cov.hunks is None:
+        return None
+    matches = list(_FILE_HEADER.finditer(diff))
+    patches: dict[str, str] = {}
+    for pos, m in enumerate(matches):
+        name = m.group(1)
+        if name not in cov.hunks:
+            continue
+        patch = _chunk_patch(diff, matches, pos, cov.sent_chars)
+        if patch is not None:
+            patches[name] = patch
+    for name, patch in patches.items():
+        derived = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
+        if derived != cov.hunks.get(name):
+            return None
+    if set(patches) != set(cov.hunks):
+        return None
+    return patches
+
+
+def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, client=None) -> int:
+    """Attach validated hunk attributions to reader-finding Reasons, in place.
+
+    Returns how many findings gained an attribution. Fails soft on
+    everything — spend cap, transport, stop reason, parse, out-of-range
+    numbers, index drift — because the model only ever picks from an
+    enumerated list and code owns the conversion: a bad pick must cost an
+    abstention downstream, never a wrong stored mapping (the posture
+    ground_findings established for the verify tier).
+    """
+    candidates = [
+        r
+        for r in reasons
+        if r.rule.startswith("reader:")
+        and getattr(r, "file", None)
+        and cov.hunks is not None
+        and len(cov.hunks.get(r.file) or []) >= 1
+    ]
+    if not candidates:
+        return 0
+    patches = _sent_file_patches(diff, cov)
+    if patches is None:
+        return 0
+    try:
+        _charge(scope)
+        if client is None:
+            client = _verify_client()
+        lines: list[str] = []
+        by_file: dict[str, list[int]] = {}
+        for i, r in enumerate(candidates):
+            by_file.setdefault(r.file, []).append(i)
+        for name, indices in by_file.items():
+            lines.append(f"## FILE {name}")
+            hunk_texts = hunks.split_hunks(patches[name])
+            for n, h in enumerate(hunk_texts, 1):
+                lines.append(f"### Hunk {n}")
+                lines.append(h)
+            lines.append("### Findings on this file")
+            for i in indices:
+                r = candidates[i]
+                lines.append(f"- FINDING id={i} [{r.rule}]: {r.label}")
+            lines.append("")
+        request = {
+            "model": MODEL,
+            "max_tokens": ATTRIBUTION_MAX_TOKENS,
+            "output_config": {
+                "effort": EFFORT,
+                "format": {"type": "json_schema", "schema": ATTRIBUTION_SCHEMA},
+            },
+            "system": ATTRIBUTION_SYSTEM,
+            "messages": [{"role": "user", "content": "\n".join(lines)}],
+        }
+        response = client.messages.create(**request)
+        _report_cost(response, kind="attribution", scope=scope, pr=None)
+        if response.stop_reason != "end_turn":
+            return 0
+        text = next((b.text for b in response.content if b.type == "text"), "")
+        parsed = json.loads(text)
+        attributed = 0
+        seen: set[int] = set()
+        for row in parsed.get("attributions", []):
+            i = row.get("finding")
+            picks = row.get("hunks")
+            if not isinstance(i, int) or i in seen or not (0 <= i < len(candidates)):
+                continue
+            seen.add(i)
+            if not isinstance(picks, list) or not picks:
+                continue  # abstained: stores nothing
+            r = candidates[i]
+            hashes = cov.hunks[r.file]
+            if not all(isinstance(n, int) and 1 <= n <= len(hashes) for n in picks):
+                continue  # out-of-range pick: the validation contract failed
+            r.hunks = [hashes[n - 1] for n in picks]
+            attributed += 1
+        return attributed
+    except Exception as e:  # noqa: BLE001 — fail soft; abstention beats a wrong row
+        print(
+            f"doug: attribution failed ({type(e).__name__}: {str(e)[:120]}); "
+            "findings stay unattributed",
+            file=sys.stderr,
+        )
+        return 0

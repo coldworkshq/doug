@@ -2745,3 +2745,77 @@ def test_a_broken_comment_path_cannot_fail_a_job_whose_verdict_is_durable(
     err = capsys.readouterr().err
     assert "AttributeError" in err
     assert "doug: comment failed:internal drewjst/doug#7@" + "a" * 12 in err
+
+
+def test_fresh_path_renders_the_since_section(tmp_path, monkeypatch):
+    """Walked Out commit 5: a reader-tier check run carries the Since section
+    whenever a prior reader verdict exists for the PR, computed from the
+    ledger (store.convergence_for) after save_review."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV.model_copy(update={"hunks": {"cache.py": ["9" * 64]}}),
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha="e" * 40,
+        source="app",
+    )
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    assert len(posted) == 1
+    assert "### Since `" + "e" * 12 + "`" in posted[0]["summary"]
+    # This fixture's prior finding leaves the fresh read's diff, so the
+    # honest headline is the zero-denominator form; the provenance line
+    # renders in every form.
+    assert "the reader's silence is not evidence" in posted[0]["summary"]
+
+
+def test_replay_renders_the_same_since_section_as_the_rows_dictate(
+    tmp_path, monkeypatch
+):
+    """Commit 5's gate: the section is a pure function of ledger rows, so the
+    replay path must render exactly what convergence_for's rows dictate —
+    byte for byte — not a re-derivation and not nothing."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV.model_copy(update={"hunks": {"cache.py": ["9" * 64]}}),
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha="e" * 40,
+        source="app",
+    )
+    ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+    # The later verdict lands before process_job runs (worker died after
+    # save_review): process_job replays the stored row.
+    later_id = store.save_review(
+        JOB["repo_full_name"],
+        JOB["pr_number"],
+        "reader",
+        VERDICT.model_copy(deep=True),
+        RV,
+        pr_meta=_pr().model_dump(mode="json"),
+        coverage=COV.model_copy(update={"hunks": {"cache.py": ["9" * 64]}}),
+        github_repo_id=JOB["github_repo_id"],
+        installation_id=JOB["installation_id"],
+        head_sha=JOB["head_sha"],
+        source="app",
+    )
+    worker.process_job(claimed)
+    assert len(posted) == 1
+    expected = "\n".join(check_run._since_section(store.convergence_for(later_id)))
+    assert expected.strip()
+    assert expected in posted[0]["summary"]

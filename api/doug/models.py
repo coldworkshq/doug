@@ -94,6 +94,16 @@ class Reason(BaseModel):
     # carry a weight and no severity. Both travel here so a surface can
     # show whichever one is meaningful instead of a constant 0.00.
     severity: str | None = None
+    # Walked Out (ADR-0015): the validated hunk attribution — content hashes
+    # of the sent hunks this finding was attributed to, set by
+    # reader.attribute_findings where the finding is still in hand, written
+    # to findings.hunks by save_review in the same transaction. None = no
+    # attribution (pass dark, failed, or abstained); the convergence
+    # classifier reads None as an abstention, never a guess. Excluded from
+    # every model_dump: the run-detail wire contract and the stored pr_meta
+    # predate this field, and the lock says no wire, API, or web change —
+    # store.save_review reads the attribute directly.
+    hunks: list[str] | None = Field(default=None, exclude=True)
     # The file a reader finding names, set where the finding is still in
     # hand (reader.verdict_from_reader) rather than recovered later. It used
     # to be rebuilt in store.save_review by matching this Reason's label

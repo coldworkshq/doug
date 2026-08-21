@@ -3506,3 +3506,155 @@ def test_pr_comment_denied_marker_sets_and_clears(tmp_path, monkeypatch):
     assert store.pr_comment_denied_at(101) == at
     store.mark_pr_comment_denied(101, None)
     assert store.pr_comment_denied_at(101) is None
+
+
+def test_save_review_persists_the_hunk_index_on_the_reads_row(tmp_path, monkeypatch):
+    """Walked Out (migration 014): the index the classifier will compare is
+    the one this read stored, in the same transaction as the verdict. A NULL
+    here must mean "not recorded" — the classifier abstains on it — so the
+    column round-trips the dict exactly, or stays NULL when coverage carries
+    none (old callers, deploy overlap)."""
+    _db(tmp_path, monkeypatch)
+    index = {"api.py": ["a" * 64, "b" * 64], "empty.py": []}
+    vid = store.save_review(
+        "o/r", 1, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=2,
+            files_unseen=[], file_cut=None, hunks=index,
+        ),
+    )
+    with store._get_engine().connect() as conn:
+        row = conn.execute(
+            select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid)
+        ).one()
+    assert row.hunks == index
+
+    vid2 = store.save_review(
+        "o/r", 2, "reader", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="b" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=0, files_unseen=[],
+        ),
+    )
+    with store._get_engine().connect() as conn:
+        row = conn.execute(
+            select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid2)
+        ).one()
+    assert row.hunks is None
+
+
+# --- convergence_for (Walked Out commit 4) ---------------------------------
+
+_H1, _H2 = "1" * 64, "2" * 64
+
+
+def _reader_verdict_with_finding(file="cache.py"):
+    return Verdict(
+        score=0.62, band=Band.FLAGGED, threshold=0.30,
+        reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded",
+                        weight=0.0, severity="high", file=file)],
+    )
+
+
+def _save_reader(pr=7, sha="a" * 40, hunks=None):
+    return store.save_review(
+        "o/r", pr, "reader", _reader_verdict_with_finding(),
+        github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=1, files_unseen=[],
+            hunks=hunks,
+        ),
+    )
+
+
+def test_convergence_for_pairs_by_scored_at_then_id_and_classifies(tmp_path, monkeypatch):
+    """The Since section's input: prior = the preceding reader verdict for the
+    same (installation, repo, PR) under the eval's ordering key. With both
+    indexes stored and the cited file's delta byte-unchanged, the finding
+    carries forward by construction — the load-bearing Walked Out call."""
+    _db(tmp_path, monkeypatch)
+    first = _save_reader(sha="a" * 40, hunks={"cache.py": [_H1]})
+    second = _save_reader(sha="b" * 40, hunks={"cache.py": [_H1]})
+    out = store.convergence_for(second)
+    assert out["prior_verdict_id"] == first
+    assert out["prior_head_sha"] == "a" * 40
+    prior_side = [c for c in out["classifications"] if c["side"] == "prior"]
+    # rule 1 fires (the finding is re-reported by the identical later verdict)
+    assert [(c["state"], c["rule"]) for c in prior_side] == [
+        ("persisted", "reader:race-condition")
+    ]
+
+
+def test_convergence_for_reads_the_stored_hunk_indexes(tmp_path, monkeypatch):
+    """A prior finding the later read stays silent about is judged by the
+    stored indexes: unchanged delta -> by-construction; changed -> the
+    edited-not-verified abstention, never resolved (2026-08-20 ruling)."""
+    _db(tmp_path, monkeypatch)
+    _save_reader(sha="a" * 40, hunks={"cache.py": [_H1]})
+    silent_later = store.save_review(
+        "o/r", 7, "reader", Verdict(score=0.1, band=Band.CLEARED, threshold=0.30, reasons=[]),
+        github_repo_id=1, installation_id=99, head_sha="b" * 40, source="app",
+        coverage=store.Coverage(
+            diff_chars=10, sent_chars=10, files_sent=1, files_unseen=[],
+            hunks={"cache.py": [_H2]},
+        ),
+    )
+    out = store.convergence_for(silent_later)
+    (c,) = out["classifications"]
+    assert (c["state"], c["unknown_reason"]) == ("unknown", "edited-not-verified")
+
+
+def test_convergence_for_none_without_a_prior_or_identity_or_reader_tier(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    only = _save_reader()
+    assert store.convergence_for(only) is None            # no prior
+    det = store.save_review(
+        "o/r", 7, "deterministic", VERDICT,
+        github_repo_id=1, installation_id=99, head_sha="c" * 40, source="app",
+    )
+    assert store.convergence_for(det) is None             # not reader tier
+    cli = store.save_review("o/r", 7, "reader", VERDICT)  # no identity kwargs
+    assert store.convergence_for(cli) is None
+    assert store.convergence_for(10**9) is None           # missing row
+
+
+def test_convergence_for_degrades_a_db_failure_to_an_error_value(tmp_path, monkeypatch):
+    """This runs after a paid read: a database hiccup must become a weight-0
+    notice on the check run, never an exception that kills the job."""
+    _db(tmp_path, monkeypatch)
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(store, "_get_engine", _boom)
+    out = store.convergence_for(1)
+    assert out == {"error": "RuntimeError: db down"}
+
+
+def test_save_review_persists_the_attribution_on_the_findings_row(tmp_path, monkeypatch):
+    """ADR-0015: the attribution the Reason carried in lands on
+    findings.hunks in the same transaction, and rows without one stay NULL —
+    the classifier's abstention contract depends on NULL meaning
+    not-attributed, never empty."""
+    _db(tmp_path, monkeypatch)
+    attributed = Verdict(
+        score=0.62, band=Band.FLAGGED, threshold=0.30,
+        reasons=[
+            Reason(rule="reader:race-condition", label="a", weight=0.0,
+                   severity="high", file="cache.py", hunks=["3" * 64]),
+            Reason(rule="reader:logic-error", label="b", weight=0.0,
+                   severity="low", file="cache.py"),
+        ],
+    )
+    vid = store.save_review(
+        "o/r", 1, "reader", attributed,
+        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+    )
+    with store._get_engine().connect() as conn:
+        rows = conn.execute(
+            select(store.findings.c.label, store.findings.c.hunks)
+            .where(store.findings.c.verdict_id == vid)
+            .order_by(store.findings.c.id)
+        ).all()
+    assert [(r.label, r.hunks) for r in rows] == [("a", ["3" * 64]), ("b", None)]

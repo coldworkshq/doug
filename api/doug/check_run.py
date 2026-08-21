@@ -338,12 +338,155 @@ def _alert_block(kind: str, body: str) -> list[str]:
     return ["", f"> {kind}", f"> {body}"]
 
 
+def _since_section(convergence: dict | None) -> list[str]:
+    """The `### Since <sha12>` block, or nothing.
+
+    Walked Out (docs/design/walked-out/): every reader-tier check run
+    compares this read with Doug's previous one and says, per earlier
+    finding, whether it is carried forward with evidence or cannot be
+    judged, with the reason. The headline count is the first line — the per
+    -PR fact Andrew ruled ships in v1 (2026-08-20). No rate, no ratio,
+    nothing model-authored outside the sanitizer chokepoints, and never a
+    claim that anything was fixed: v1 has no resolved state at all.
+    """
+    if convergence is None:
+        return []
+    if "error" in convergence:
+        return [
+            "",
+            SINCE_HEADING_FALLBACK,
+            "",
+            "Doug could not compare with its last diff read; storage did not "
+            f"answer ({_oneline(convergence['error'])}).",
+        ]
+    sha = convergence.get("prior_head_sha")
+    label = f"`{_oneline(sha)[:12]}`" if sha else "the previous read"
+    rows = convergence.get("classifications") or []
+    prior = [c for c in rows if c["side"] == "prior"]
+    persisted = [c for c in prior if c["state"] == "persisted"]
+    carried = [c for c in persisted if c["basis"] == "by-construction"]
+    attributed = [c for c in persisted if c["basis"] == "attributed-surviving"]
+    unknowns = [c for c in prior if c["state"] == "unknown"]
+    new_unchanged = [
+        c
+        for c in rows
+        if c["side"] == "later" and c["state"] == "new" and c["code_changed"] is False
+    ]
+    # Headline: earlier findings on files unchanged between the reads =
+    # silent-and-carried (by construction) plus re-reported findings whose
+    # own file's delta did not move. The silent ones are the numerator.
+    silent = len(carried)
+    denominator = silent + sum(
+        1 for c in persisted if c["basis"] is None and c["code_changed"] is False
+    )
+    if denominator == 0:
+        headline = f"No earlier findings on files unchanged since {label}."
+    else:
+        findings_word = "finding" if denominator == 1 else "findings"
+        verb = "was" if silent == 1 else "were"
+        headline = (
+            f"Of {denominator} earlier {findings_word} on files unchanged "
+            f"since {label}, {silent} {verb} not mentioned by this read."
+        )
+    out = [
+        "",
+        f"### Since {label}" if sha else SINCE_HEADING_FALLBACK,
+        "",
+        headline,
+        "",
+        f"Compared with Doug's last diff read at {label}. This section grades "
+        "Doug's own reader, not your change; the reader's silence is not "
+        "evidence. Advisory, like everything on this surface: it enters no "
+        "score and blocks nothing.",
+    ]
+
+    def _line(c: dict, sentence: str) -> str:
+        path = _oneline(c.get("file") or "(no file)")
+        return f"- `{_rule_span(c.get('rule') or '')}` · {path} — {sentence}"
+
+    if carried or attributed:
+        out += ["", "**Still here**", ""]
+        for c in carried:
+            if c.get("pair_delta") == "changed-elsewhere":
+                out.append(_line(
+                    c,
+                    f"cited file's diff is byte-unchanged since {label}; other "
+                    "code in this PR changed. Carried forward, not re-verified. "
+                    "If you addressed it elsewhere, a human should look.",
+                ))
+            else:
+                out.append(_line(
+                    c,
+                    f"cited file's diff is byte-unchanged since {label}; "
+                    "carried forward, not re-verified.",
+                ))
+        for c in attributed:
+            out.append(_line(
+                c,
+                "the hunks this finding was attributed to are unchanged since "
+                f"{label}; other parts of the file changed. Carried forward, "
+                "not re-verified.",
+            ))
+    if unknowns:
+        out += ["", "**Can't say**", ""]
+        for c in unknowns:
+            out.append(_line(c, _UNKNOWN_SENTENCES.get(
+                c.get("unknown_reason") or "",
+                "this read could not confirm or clear it.",
+            ).format(label=label)))
+    if new_unchanged:
+        out += [
+            "",
+            f"**New on files unchanged since {label} ({len(new_unchanged)})** — "
+            "this read reported findings on files whose diff did not change; "
+            "the earlier read did not.",
+            "",
+        ]
+        out += [_line(c, "new this read.") for c in new_unchanged]
+    return out
+
+
+# Sentences per abstention reason (product-spec.md "v1 check-run copy",
+# updated by the 2026-08-20 demote ruling). {label} is the prior-read sha
+# span. Everything else in these strings is fixed vocabulary.
+_UNKNOWN_SENTENCES = {
+    "edited-not-verified": (
+        "the cited code changed since {label} and this read did not report it "
+        "again; Doug has not verified a fix, so it stays listed."
+    ),
+    "not-reconfirmed": (
+        "part of the cited file's diff changed since {label}; this read did "
+        "not confirm or clear it, and Doug has no usable attribution for it."
+    ),
+    "no-hunk-index": (
+        "Doug has no hunk record for one of the two reads, so it cannot compare."
+    ),
+    "file-uncovered": (
+        "Doug did not read this file in one of the two reads (cut or unseen)."
+    ),
+    "left-diff": (
+        "no longer in this PR's diff (reverted, renamed, or landed another "
+        "way); Doug cannot tell which."
+    ),
+    "settled": (
+        "Doug's own deterministic check disproved this finding at this head; "
+        "not counted as your progress."
+    ),
+    "identity-incomplete": (
+        "no file recorded for this finding, so Doug cannot compare it."
+    ),
+}
+
+SINCE_HEADING_FALLBACK = "### Since the previous read"
+
+
 def render(
     tier: str,
     verdict: Verdict,
     intent_read: IntentRead | None,
     coverage: Coverage | None,
     instrument: InstrumentSnapshot | None = None,
+    convergence: dict | None = None,
 ) -> tuple[str, str]:
     """(title, summary_md) for one verdict."""
     title = _headline(tier, verdict)
@@ -433,6 +576,8 @@ def render(
         # spliced through the same chokepoint as everything else here.
         joined = _oneline(", ".join(intent_read.refs)) or "no records"
         lines += ["", f"Judged against: {joined}."]
+
+    lines += _since_section(convergence)
 
     lines += ["", HOW_TO_READ_HEADING, "", f"- {RISK_NOTE}", f"- {NEUTRAL_NOTE}",
               f"- {FLAG_LINE_NOTE}"]

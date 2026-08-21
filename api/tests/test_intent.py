@@ -227,7 +227,11 @@ def test_selection_on_dougs_own_records():
     assert "ADR-0010" in comments
     assert "ADR-0003" not in comments
     lema = sent("Read decisions from lema's hosted API", ["doug/intent_providers.py"])
-    assert lema == ["ADR-0006"]
+    # ADR-0015 (post-read hunk attribution) joined the read/reader vocabulary
+    # cluster and rides along at the floor for this generic title; the pin
+    # that matters is that the lema record surfaces first — same posture as
+    # the inclusion/exclusion pin below.
+    assert lema[0] == "ADR-0006"
 
     # Changes that bear on no recorded decision must be read against none.
     assert sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"]) == []

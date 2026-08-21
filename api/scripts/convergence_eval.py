@@ -31,12 +31,13 @@ not gradeable without controller sign-off on the smaller n.
 
 import argparse
 import json
+import subprocess
 import sys
 from collections import defaultdict
 
 from sqlalchemy import select, text
 
-from doug import convergence, store
+from doug import convergence, hunks, store
 from doug.patterns import from_rule
 
 # The floor pre-registered in the design note. The operator must repeat it back;
@@ -56,8 +57,8 @@ VERDICT_COLUMNS = (
     "installation_id",
     "github_repo_id",
 )
-FINDING_COLUMNS = ("rule", "label", "file", "severity")
-COVERAGE_COLUMNS = ("files_unseen", "file_cut", "files_dropped", "changed_files")
+FINDING_COLUMNS = ("rule", "label", "file", "severity", "hunks")
+COVERAGE_COLUMNS = ("files_unseen", "file_cut", "files_dropped", "changed_files", "hunks")
 
 
 # --- analysis (pure: rows in, JSON out) ------------------------------------
@@ -87,30 +88,92 @@ def consecutive_pairs(verdicts: list[dict]) -> list[tuple[dict, dict]]:
     return list(zip(ordered, ordered[1:], strict=False))
 
 
+def _git(git_dir: str, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", git_dir, *args], capture_output=True, text=True, check=False
+    ).stdout
+
+
+def index_from_git(git_dir: str, head_sha: str) -> dict[str, list[str]] | None:
+    """Hunk-emulated index for one read: what `reader.hunk_index` WOULD have
+    stored, re-derived from git history.
+
+    The emulated base is `git merge-base origin/main <head>` per side — the
+    three-dot delta the product's patches carry. The assumptions are the
+    pre-registered ones (convergence-design.md "Rule 5 replaced"): main is
+    append-only, and PR ancestors reach main only through this PR's squash.
+    Every number derived through this function carries the label
+    `hunk-emulated`. Hashing is doug.hunks — the same function the product
+    stores, so the eval never grades labels the product could not produce.
+    Returns None when git cannot resolve the pair (unknown sha, no clone).
+    """
+    base = _git(git_dir, "merge-base", "origin/main", head_sha).strip()
+    if not base:
+        return None
+    names = [n for n in _git(git_dir, "diff", "--name-only", base, head_sha).split("\n") if n]
+    index: dict[str, list[str]] = {}
+    for name in names:
+        patch = _git(
+            git_dir, "diff", "--unified=3", "--no-color", "--no-ext-diff",
+            base, head_sha, "--", name,
+        )
+        index[name] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
+    return index
+
+
+def emulate_missing_indexes(
+    git_dir: str,
+    verdicts: list[dict],
+    reads_by_verdict: dict[int, dict],
+) -> set[int]:
+    """Fill hunks=None read rows with the emulated index; returns the ids
+    filled, so every payload touched by emulation can carry the label."""
+    emulated: set[int] = set()
+    for verdict in verdicts:
+        row = reads_by_verdict.get(verdict["id"])
+        if row is None or row.get("hunks") is not None or not verdict.get("head_sha"):
+            continue
+        index = index_from_git(git_dir, verdict["head_sha"])
+        if index is not None:
+            row["hunks"] = index
+            emulated.add(verdict["id"])
+    return emulated
+
+
 def pair_payload(
     prior: dict,
     later: dict,
     findings_by_verdict: dict[int, list[dict]],
     reads_by_verdict: dict[int, dict],
+    emulated_ids: frozenset[int] | set[int] = frozenset(),
+    grain_fn=None,
 ) -> dict:
     """Everything about one pair a labeller needs, and nothing they would have
     to query for."""
     prior_findings = findings_by_verdict.get(prior["id"], [])
     later_findings = findings_by_verdict.get(later["id"], [])
     later_read = reads_by_verdict.get(later["id"])
+    prior_read = reads_by_verdict.get(prior["id"])
 
     # Findings and reasons are one table (store.py:104-114) — the settlement
     # notices sit among the later verdict's own rows. Handing the same list in
     # as both is what lets rule 4 fire; `compare` separates them by vocabulary.
-    entries = convergence.classify(prior_findings, later_findings, later_findings, later_read)
-    report = convergence.compare(prior_findings, later_findings, later_findings, later_read)
+    # Historical rows carry hunks=NULL, so under the replaced rule 5 the
+    # ledger's own pairs classify unknown(no-hunk-index) until the
+    # hunk-emulated indexes land (build-plan commit 6, `index_from_git`).
+    entries = convergence.classify(
+        prior_findings, later_findings, later_findings, later_read, prior_read
+    )
+    report = convergence.compare(
+        prior_findings, later_findings, later_findings, later_read, prior_read
+    )
 
     classifications = [
         {
             "side": entry.side,
             "state": entry.state,
             "unknown_reason": entry.unknown_reason,
-            **{column: entry.finding[column] for column in FINDING_COLUMNS},
+            **{column: entry.finding.get(column) for column in FINDING_COLUMNS},
         }
         for entry in entries
     ]
@@ -132,12 +195,31 @@ def pair_payload(
         },
         "classifications": classifications,
         "later_coverage": (
-            {column: later_read[column] for column in COVERAGE_COLUMNS}
+            {column: later_read.get(column) for column in COVERAGE_COLUMNS}
             if later_read is not None
             else None
         ),
         "labelable": _labelable(classifications),
         "path_form_suspects": path_form_suspects(prior_findings, later_read),
+        # `hunk-emulated`: at least one side's index was re-derived from git
+        # rather than read from the ledger — the pre-registered label every
+        # such number must carry. `stored`: both sides came from reads.hunks.
+        # None: a side has no index at all (the pair abstains no-hunk-index).
+        "index_label": (
+            "hunk-emulated"
+            if {prior["id"], later["id"]} & set(emulated_ids)
+            else (
+                "stored"
+                if (prior_read or {}).get("hunks") is not None
+                and (later_read or {}).get("hunks") is not None
+                else None
+            )
+        ),
+        # The file-grain `git diff --name-only from..to` proxy, reported
+        # BESIDE the hunk-grain result, never in its place: merge-from-main
+        # counts as touched in git and not in patches, so a file-grain pass
+        # is a different function from the shipped rule.
+        "file_grain_touched": grain_fn(prior, later) if grain_fn is not None else None,
     }
 
 
@@ -312,13 +394,17 @@ def evaluate(
     verdicts: list[dict],
     findings_by_verdict: dict[int, list[dict]],
     reads_by_verdict: dict[int, dict],
+    emulated_ids: frozenset[int] | set[int] = frozenset(),
+    grain_fn=None,
 ) -> dict:
     by_pr: dict[tuple, list[dict]] = defaultdict(list)
     for verdict in verdicts:
         by_pr[group_key(verdict)].append(verdict)
 
     pairs = [
-        pair_payload(prior, later, findings_by_verdict, reads_by_verdict)
+        pair_payload(
+            prior, later, findings_by_verdict, reads_by_verdict, emulated_ids, grain_fn
+        )
         for group in by_pr.values()
         for prior, later in consecutive_pairs(group)
     ]
@@ -335,6 +421,16 @@ def main(argv: list[str] | None = None) -> int:
         "--signed-off-floor",
         type=float,
         help="bar 1's pre-registered resolved-precision floor, as recorded in the design note",
+    )
+    parser.add_argument(
+        "--emulate-hunks",
+        metavar="GIT_DIR",
+        help=(
+            "fill hunks=NULL read rows with the hunk-emulated index derived "
+            "from this clone (merge-base origin/main per side); every touched "
+            "payload carries index_label='hunk-emulated' and the file-grain "
+            "name-only proxy beside it"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -357,7 +453,25 @@ def main(argv: list[str] | None = None) -> int:
             # Belt and braces: the code below only reads, and now the server
             # will refuse anything else.
             conn.execute(text("SET TRANSACTION READ ONLY"))
-        result = evaluate(*fetch(conn))
+        verdicts, findings_by_verdict, reads_by_verdict = fetch(conn)
+
+    emulated_ids: set[int] = set()
+    grain_fn = None
+    if args.emulate_hunks:
+        emulated_ids = emulate_missing_indexes(
+            args.emulate_hunks, verdicts, reads_by_verdict
+        )
+
+        def grain_fn(prior: dict, later: dict) -> list[str] | None:
+            if not (prior.get("head_sha") and later.get("head_sha")):
+                return None
+            names = _git(
+                args.emulate_hunks, "diff", "--name-only",
+                prior["head_sha"], later["head_sha"],
+            )
+            return [n for n in names.split("\n") if n]
+
+    result = evaluate(verdicts, findings_by_verdict, reads_by_verdict, emulated_ids, grain_fn)
 
     json.dump(result, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")

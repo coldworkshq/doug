@@ -59,7 +59,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
-from . import migrations
+from . import convergence, migrations
 from .models import Band, Verdict
 from .reader import Coverage, ReaderVerdict, installation_scope
 
@@ -115,6 +115,13 @@ findings = Table(
     Column("weight", Float, nullable=False, default=0.0),
     Column("file", Text),
     Column("severity", String(10)),
+    # Migration 014 (Walked Out). The validated hunk attribution: the subset
+    # of the cited file's hunk hashes this finding was attributed to at read
+    # time, written only by the attribution pass (ADR-0014) after the read.
+    # NULL = no attribution (pre-migration rows, failed or abstained calls);
+    # the convergence classifier degrades NULL to unknown(not-reconfirmed)
+    # and never re-derives it.
+    Column("hunks", JSON),
 )
 
 # Written by the outcome-sync job (revert/hotfix anchoring), joined against
@@ -171,6 +178,13 @@ reads = Table(
     # lets a receipt distinguish prompt truncation from files GitHub omitted.
     Column("changed_files", Integer),
     Column("files_dropped", JSON),
+    # Migration 014 (Walked Out). {path: [sha256, ...]} over the hunks this
+    # read was actually SENT (reader.Coverage.hunks): the deterministic
+    # identity the convergence classifier compares. NULL on rows from before
+    # the migration and on rows written by old revisions during a deploy
+    # overlap — the classifier reads NULL as unknown(no-hunk-index), the old
+    # leak closing, never a guess.
+    Column("hunks", JSON),
 )
 
 # Intent-tier output, kept in its own table on purpose (ADR-0007). A
@@ -903,6 +917,9 @@ def save_review(
                     # notices carry None for both, exactly as before.
                     "file": r.file,
                     "severity": r.severity,
+                    # Migration 014: the validated attribution the Reason
+                    # carried in from reader.attribute_findings, or None.
+                    "hunks": getattr(r, "hunks", None),
                 }
                 for r in verdict.reasons
             ]
@@ -920,6 +937,7 @@ def save_review(
                         "file_cut": coverage.file_cut,
                         "changed_files": coverage.changed_files,
                         "files_dropped": coverage.files_dropped,
+                        "hunks": coverage.hunks,
                     },
                 )
         _mark(True)
@@ -1814,6 +1832,7 @@ def save_read(verdict_id: int | None, cov: Coverage) -> int:
                     "file_cut": cov.file_cut,
                     "changed_files": cov.changed_files,
                     "files_dropped": cov.files_dropped,
+                    "hunks": cov.hunks,
                 }
             ],
         )
@@ -2117,6 +2136,134 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
         if v is None:
             return None
         return _verdict_bundle(conn, v)
+
+
+def convergence_for(verdict_id: int) -> dict | None:
+    """The `### Since <sha12>` section's input for one reader verdict.
+
+    The single importer of `convergence` (test_convergence.py pre-declared
+    store.py as the only future importer; the worker and score() stay
+    forbidden). Pairs by the same ordering key the evaluation uses —
+    (scored_at, id), convergence_eval.py:80-87 — because product and eval
+    pairing by different keys could pair differently under concurrent
+    workers, and then the bars would grade pairs the product never renders.
+
+    Returns None when storage is disabled, the verdict is missing, not
+    reader-tier, has no pairing identity (CLI rows), or no prior reader
+    verdict exists — all "there is nothing to compare", not errors. Returns
+    {"error": "<type>: <message>"} when the database fails mid-read: this
+    runs after a paid read, and a DB hiccup must degrade to a weight-0
+    notice on the check run, never kill the job (build-plan commit 4 gate).
+    """
+    try:
+        engine = _get_engine()
+        if engine is None:
+            return None
+        with engine.connect() as conn:
+            v = (
+                conn.execute(select(verdicts).where(verdicts.c.id == verdict_id))
+                .mappings()
+                .first()
+            )
+            if v is None or v["tier"] != "reader":
+                return None
+            if (
+                v["installation_id"] is None
+                or v["github_repo_id"] is None
+                or v["pr_number"] is None
+            ):
+                return None
+            prior = (
+                conn.execute(
+                    select(verdicts)
+                    .where(
+                        verdicts.c.installation_id == v["installation_id"],
+                        verdicts.c.github_repo_id == v["github_repo_id"],
+                        verdicts.c.pr_number == v["pr_number"],
+                        verdicts.c.tier == "reader",
+                        # (scored_at, id) lexicographic, spelled as OR/AND
+                        # rather than a row-value tuple_: row values need
+                        # SQLite >= 3.15 and can defeat index use on
+                        # Postgres, and this query runs after every paid
+                        # reader read (Doug's own review of this change).
+                        or_(
+                            verdicts.c.scored_at < v["scored_at"],
+                            and_(
+                                verdicts.c.scored_at == v["scored_at"],
+                                verdicts.c.id < v["id"],
+                            ),
+                        ),
+                    )
+                    .order_by(verdicts.c.scored_at.desc(), verdicts.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if prior is None:
+                return None
+
+            def _finding_rows(vid: int) -> list[dict]:
+                rows = (
+                    conn.execute(
+                        select(findings)
+                        .where(findings.c.verdict_id == vid)
+                        .order_by(findings.c.id)
+                    )
+                    .mappings()
+                    .all()
+                )
+                return [dict(r) for r in rows]
+
+            def _read_row(vid: int) -> dict | None:
+                row = (
+                    conn.execute(
+                        select(reads).where(reads.c.verdict_id == vid).limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                return dict(row) if row is not None else None
+
+            later_findings = _finding_rows(verdict_id)
+            # Findings and reasons are one table; the settlement notices sit
+            # among the later verdict's own rows (same handing the eval does).
+            entries = convergence.classify(
+                _finding_rows(prior["id"]),
+                later_findings,
+                later_findings,
+                _read_row(verdict_id),
+                _read_row(prior["id"]),
+            )
+        return {
+            "prior_verdict_id": prior["id"],
+            "prior_head_sha": prior["head_sha"],
+            "prior_scored_at": prior["scored_at"],
+            "classifications": [
+                {
+                    "side": e.side,
+                    "state": e.state,
+                    "unknown_reason": e.unknown_reason,
+                    "basis": e.basis,
+                    "pair_delta": e.pair_delta,
+                    "code_changed": e.code_changed,
+                    "rule": e.finding.get("rule"),
+                    "label": e.finding.get("label"),
+                    "file": e.finding.get("file"),
+                    "severity": e.finding.get("severity"),
+                }
+                for e in entries
+            ],
+        }
+    except Exception as e:  # noqa: BLE001 — deliberate: degrade, never raise
+        # The check run carries the same line; stderr is what ops greps, and
+        # a schema drift that silently became permanent abstentions would
+        # otherwise be invisible outside individual check runs.
+        print(
+            f"doug: convergence_for failed ({type(e).__name__}: {str(e)[:120]})",
+            file=sys.stderr,
+        )
+        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
 def governing_verdict(

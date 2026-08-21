@@ -398,6 +398,22 @@ def score_one(
             )
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
+            if reader.attribution_enabled():
+                # One batched call per read (ADR-0015); its own scope prefix
+                # keeps it off the published meter, and it fails soft — a
+                # dark or failed pass costs abstentions downstream, never a
+                # wrong stored mapping.
+                attributed = reader.attribute_findings(
+                    verdict.reasons,
+                    diff,
+                    cov,
+                    scope=reader.attribution_scope(reader.installation_from_scope(scope)),
+                )
+                if attributed:
+                    print(
+                        f"doug: attributed {attributed} finding(s) to sent hunks",
+                        file=sys.stderr,
+                    )
             return "reader", verdict, rv, cov
         except reader.SpendCapExceeded as e:
             # Before ReaderError: SpendCapExceeded is a subclass of it, so a

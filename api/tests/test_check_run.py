@@ -886,3 +886,108 @@ def test_honesty_about_this_run_stays_above_the_findings():
     ):
         _, summary = check_run.render(tier, verdict, None, coverage)
         assert summary.index(mark) < summary.index("### Findings")
+
+
+# --- the Since section (Walked Out commit 5) --------------------------------
+
+_SHA = "f" * 40
+
+
+def _conv(classifications, sha=_SHA):
+    return {"prior_verdict_id": 1, "prior_head_sha": sha, "prior_scored_at": None,
+            "classifications": classifications}
+
+
+def _c(side="prior", state="persisted", reason=None, basis="by-construction",
+       pair_delta="unchanged", code_changed=None, rule="reader:race-condition",
+       file="cache.py"):
+    return {"side": side, "state": state, "unknown_reason": reason, "basis": basis,
+            "pair_delta": pair_delta, "code_changed": code_changed, "rule": rule,
+            "label": "x", "file": file, "severity": "high"}
+
+
+def test_since_section_headline_counts_silence_over_unchanged_files():
+    """The per-PR fact Andrew ruled ships in v1: denominator = earlier
+    findings on unchanged files (carried + re-reported-unchanged), numerator
+    = the silent ones. Never a rate, never a ratio."""
+    conv = _conv([
+        _c(),  # silent, carried by construction
+        _c(basis=None, pair_delta=None, code_changed=False),   # re-reported, unchanged file
+        _c(basis=None, pair_delta=None, code_changed=True),    # re-reported, changed file
+    ])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
+    assert f"### Since `{_SHA[:12]}`" in summary
+    assert (
+        f"Of 2 earlier findings on files unchanged since `{_SHA[:12]}`, "
+        "1 was not mentioned by this read." in summary
+    )
+    assert "the reader's silence is not evidence" in summary
+    assert "carried forward, not re-verified" in summary
+
+
+def test_since_section_never_says_resolved_or_fixed():
+    """v1 has no resolved state (2026-08-20 ruling); the section must not
+    manufacture one in prose either."""
+    conv = _conv([
+        _c(),
+        _c(state="unknown", reason="edited-not-verified", basis=None, pair_delta=None),
+        _c(state="unknown", reason="left-diff", basis=None, pair_delta=None),
+    ])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
+    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_HEADING)]
+    assert "resolved" not in section.lower()
+    assert "fixed" not in section.lower()
+    assert "Doug has not verified a fix, so it stays listed." in section
+
+
+def test_since_section_changed_elsewhere_asks_for_a_human():
+    conv = _conv([_c(pair_delta="changed-elsewhere")])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
+    assert "If you addressed it elsewhere, a human should look." in summary
+
+
+def test_since_section_lists_new_findings_on_unchanged_files():
+    """The reader's noise runs both ways; both directions are printed."""
+    conv = _conv([_c(side="later", state="new", basis=None, pair_delta=None,
+                     code_changed=False)])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
+    assert f"New on files unchanged since `{_SHA[:12]}` (1)" in summary
+
+
+def test_since_section_headline_grammar_holds_at_the_edges():
+    """User-facing copy on every reader check run (Doug's own review flagged
+    the fixed plural): singular counts read as English, and a pair with no
+    unchanged-file findings says so instead of "Of 0 earlier findings"."""
+    one = _conv([_c()])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=one)
+    assert (
+        f"Of 1 earlier finding on files unchanged since `{_SHA[:12]}`, "
+        "1 was not mentioned by this read." in summary
+    )
+    zero = _conv([_c(state="unknown", reason="left-diff", basis=None, pair_delta=None)])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=zero)
+    assert f"No earlier findings on files unchanged since `{_SHA[:12]}`." in summary
+    assert "Of 0" not in summary
+
+
+def test_since_section_absent_without_convergence():
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    assert "### Since" not in summary
+
+
+def test_since_section_degrades_a_storage_error_to_one_line():
+    _, summary = check_run.render(
+        "reader", FLAGGED, None, WHOLE, convergence={"error": "RuntimeError: db down"}
+    )
+    assert "storage did not answer" in summary
+    assert "RuntimeError: db down" in summary
+    assert "Of " not in summary.split("### Since")[1][:200]
+
+
+def test_since_section_carries_no_ratio_or_rate():
+    conv = _conv([_c(), _c(state="unknown", reason="not-reconfirmed", basis=None,
+                           pair_delta=None)])
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
+    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_HEADING)]
+    assert "%" not in section
+    assert "miss rate" not in section.lower()

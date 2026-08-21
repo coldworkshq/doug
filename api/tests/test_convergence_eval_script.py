@@ -41,6 +41,7 @@ def _f(verdict_id, rule="reader:error-handling-gap", file=FILE, label="x", sever
         "file": file,
         "severity": severity,
         "weight": 0.0,
+        "hunks": None,
     }
 
 
@@ -142,16 +143,20 @@ def test_pair_payload_carries_what_a_labeller_needs_without_db_access():
     assert payload["from_verdict_id"] == 1
     assert payload["to_verdict_id"] == 2
     assert (payload["from_head_sha"], payload["to_head_sha"]) == ("sha1", "sha2")
-    assert payload["report"]["resolved"] == 1
+    # Replaced rule 5: these historical rows carry hunks=NULL, so the honest
+    # classification is no-hunk-index — never the old rule's `resolved`.
+    assert payload["report"]["resolved"] == 0
+    assert payload["report"]["unknown"] == {"no-hunk-index": 1}
     assert payload["classifications"] == [
         {
             "side": "prior",
-            "state": "resolved",
-            "unknown_reason": None,
+            "state": "unknown",
+            "unknown_reason": "no-hunk-index",
             "rule": "reader:error-handling-gap",
             "label": "x",
             "file": FILE,
             "severity": "high",
+            "hunks": None,
         }
     ]
 
@@ -288,3 +293,109 @@ def test_identical_paths_are_not_suspects():
         {1: _read(1), 2: _read(2, files_unseen=["api/doug/api.py"])},
     )
     assert pair["path_form_suspects"] == []
+
+
+# --- hunk emulation (Walked Out commit 6) -----------------------------------
+
+
+def _tmp_repo(tmp_path):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            check=True, capture_output=True, text=True,
+            env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+                 "PATH": "/usr/bin:/bin"},
+        )
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "a.py").write_text("one\ntwo\nthree\n")
+    git("add", "a.py")
+    git("commit", "-qm", "base")
+    base = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    # The emulation resolves merge-base against origin/main; a local clone
+    # under test provides the ref directly.
+    git("update-ref", "refs/remotes/origin/main", base)
+    (tmp_path / "a.py").write_text("one\nTWO\nthree\n")
+    git("add", "a.py")
+    git("commit", "-qm", "head")
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    return base, head
+
+
+def test_index_from_git_hashes_with_the_products_own_function(tmp_path):
+    """The eval and the product must compute ONE function: the emulated
+    index's hashes are doug.hunks over the same per-file diff text git
+    prints, so a Phase-0 outcome re-derived here is an outcome the shipped
+    classifier would produce from stored rows."""
+    import subprocess
+
+    from doug import hunks as hunks_mod
+
+    _, head = _tmp_repo(tmp_path)
+    index = convergence_eval.index_from_git(str(tmp_path), head)
+    assert set(index) == {"a.py"}
+    base = subprocess.run(
+        ["git", "-C", str(tmp_path), "merge-base", "origin/main", head],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    patch = subprocess.run(
+        ["git", "-C", str(tmp_path), "diff", "--unified=3", "--no-color",
+         "--no-ext-diff", base, head, "--", "a.py"],
+        capture_output=True, text=True,
+    ).stdout
+    assert index["a.py"] == [hunks_mod.hash_hunk(h) for h in hunks_mod.split_hunks(patch)]
+    assert convergence_eval.index_from_git(str(tmp_path), "0" * 40) is None
+
+
+def test_emulated_pairs_carry_the_label_and_stored_pairs_do_not():
+    """Every number derived through emulation must carry `hunk-emulated`
+    (the pre-registered label); rows the ledger stored are `stored`; a pair
+    with no index on a side is None and abstains upstream."""
+    reads = {
+        1: _read(1),
+        2: _read(2),
+    }
+    reads[1]["hunks"] = {FILE: ["a" * 64]}
+    reads[2]["hunks"] = {FILE: ["a" * 64]}
+    stored = convergence_eval.pair_payload(
+        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []}, reads
+    )
+    assert stored["index_label"] == "stored"
+    assert stored["report"]["persisted"] == 1  # by construction, carried
+
+    emulated = convergence_eval.pair_payload(
+        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []}, reads,
+        emulated_ids={2},
+    )
+    assert emulated["index_label"] == "hunk-emulated"
+
+    bare = convergence_eval.pair_payload(
+        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []},
+        {1: _read(1), 2: _read(2)},
+    )
+    assert bare["index_label"] is None
+    assert bare["report"]["unknown"] == {"no-hunk-index": 1}
+
+
+def test_file_grain_proxy_reported_beside_never_in_place():
+    """The file-grain name-only result is a different function from the
+    shipped rule (merge-from-main counts as touched in git and not in
+    patches); it rides beside the classification and moves nothing."""
+    reads = {1: _read(1), 2: _read(2)}
+    reads[1]["hunks"] = {FILE: ["a" * 64]}
+    reads[2]["hunks"] = {FILE: ["b" * 64]}
+    payload = convergence_eval.pair_payload(
+        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []}, reads,
+        grain_fn=lambda prior, later: ["x.py"],
+    )
+    assert payload["file_grain_touched"] == ["x.py"]
+    assert payload["report"]["unknown"] == {"edited-not-verified": 1}
