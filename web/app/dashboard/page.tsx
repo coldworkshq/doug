@@ -88,13 +88,34 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
  *  had before, kept as the narrow-viewport answer rather than reinvented.
  *
  *  1620 was MEASURED against a 940px table, not chosen. The ledger's chrome —
- *  212 of rail, a 400 dock, 40 of gutter, two container borders and the
- *  table's own ~15px vertical scrollbar — costs 669px. The table now needs
- *  876 (see COLUMNS) after dropping a 64px scoring-tier column, so the dock
- *  can appear from 1545 up. 1620 stays: it is the measured stop, and it
- *  still carries slack for a platform whose scrollbars are wider.
- *  Arithmetic alone said 1600 and was wrong by 9px, which is exactly the
- *  kind of error that ships as "why does this scroll sideways".
+ *  212 of rail, the dock, 40 of gutter, two container borders and the table's
+ *  own ~15px vertical scrollbar — costs the dock's width plus 269px. The table
+ *  needs 876 (see COLUMNS) after dropping a 64px scoring-tier column.
+ *  Arithmetic alone said 1600 and was wrong by 9px, which is exactly the kind
+ *  of error that ships as "why does this scroll sideways", so every width
+ *  below keeps visible slack over 876 rather than sitting on it.
+ *
+ *  THREE DOCK WIDTHS, one per stop, each checked at its NARROWEST viewport —
+ *  the width where that stop first applies, before the ledger grows again:
+ *
+ *    1620 → 400 dock, 951 ledger, 75 over the floor
+ *    1800 → 560 dock, 971 ledger, 95 over
+ *    2100 → 640 dock, 1191 ledger, 315 over
+ *
+ *  The upper two grew (480 → 560, plus a stop that did not exist) because the
+ *  dock is the column holding prose — a rationale, a finding's words, a file
+ *  list — while the ledger's spare width was going into a pull request title
+ *  that had long since run out of characters to show. A title that truncates
+ *  states its own overflow; a rationale reflowed into a 20-character column
+ *  does not.
+ *
+ *  1620 DELIBERATELY DID NOT GROW. It is the one stop with no spare width:
+ *  measured in a browser at 1620, a 400 dock leaves the title column ~188px
+ *  and a 440 dock leaves ~148px, which is the difference between a truncated
+ *  title and a truncated prefix. Widening the dock there would have paid for
+ *  prose with the master column's ability to say what a row is about — the
+ *  same trade 1360 was rejected for. Width the layout does not have is not
+ *  width to spend.
  *
  *  Tried at 1360 first, which was worse than a small scroll: the ledger got 708,
  *  the eight fixed columns then in the grid do not shrink, and the whole
@@ -337,9 +358,9 @@ function FilterChip({
  *  looks, not by hue — the same rule CoverageRuler's cut marker follows. */
 function CoverageCell({ run }: { run: RunSummary }) {
   const view = coverageView(run);
-  if (view.kind === "no-read") return <span className="mono text-[11px] text-muted-foreground">no read</span>;
+  if (view.kind === "no-read") return <span className="mono text-[11.5px] text-muted-foreground">no read</span>;
   return (
-    <div className="mono flex items-center gap-[6px] text-[11px] text-foreground" title={view.chars ?? undefined}>
+    <div className="mono flex items-center gap-[6px] text-[11.5px] text-foreground" title={view.chars ?? undefined}>
       <span className="cov-track block h-1.5 w-[46px]">
         <span className="cov-fill block h-full" style={{ width: `${view.percent ?? 0}%` }} />
       </span>
@@ -579,8 +600,8 @@ function RepoCountLine({
 }
 
 /** Column widths are the console's, tightened for the split layout: the ledger
- *  now shares its row with a 400px dock, so every fixed column gave up what it
- *  could without truncating its own content. band is the one column that did
+ *  now shares its row with a dock of 400px or more, so every fixed column gave
+ *  up what it could without truncating its own content. band is the one column that did
  *  NOT shrink to fit: BandChip's "needs you" measures 86px of set text and the
  *  cell adds 16px of padding, so anything under 102 wraps it to two lines and
  *  drags every flagged row taller than its neighbours. Measured in a browser
@@ -634,9 +655,17 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
  *  the SEPARATED border model (see RunTable): in the collapsed model the
  *  border belongs to the table, and a sticky header leaves it behind. */
 const TH =
-  "mono sticky top-0 z-10 border-b border-border bg-background px-2 pt-[7px] pb-[6px] text-left " +
-  "text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground";
-const TD = "h-[34px] border-b border-[var(--rule-soft)] px-2 align-middle";
+  "mono sticky top-0 z-10 border-b border-border bg-background px-2 pt-[8px] pb-[7px] text-left " +
+  "text-[10.5px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+
+/** 38px, up from 34. The divider between two rows is capped at 1.20:1 by
+ *  --border (see globals.css), so contrast cannot be what separates them —
+ *  height is. Four pixels is also what the type below needed: nothing in a row
+ *  now sets under 11px, where the old 34 was already tight around 13px text
+ *  with 10.5px in the job column. The two outcome cells are the exception that
+ *  did not grow — they are width-bound, not height-bound, and the measurement
+ *  is in the comment on the cells themselves. */
+const TD = "h-[38px] border-b border-[var(--rule-soft)] px-2 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
@@ -665,7 +694,7 @@ function RunCells({
             moment a reader is moving between them. Chrome, never a data
             colour — which run you are reading is not a verdict about it. */}
         {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-[var(--iridescent)]" />}
-        <span className={"mono text-[14px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
+        <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
       </TableCell>
@@ -680,13 +709,18 @@ function RunCells({
             // What distinguishes one run of a PR from the next is WHEN it ran,
             // so that is what the cell carries — still linking to this run's
             // own evidence.
-            <Link className="mono truncate pl-3 text-[11px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
+            <Link className="mono truncate pl-3 text-[11.5px] text-muted-foreground no-underline hover:text-foreground" href={href(params, { run: String(run.verdict_id) })}>
               {relativeAge(run.scored_at)} ago
             </Link>
           ) : (
             <Link className="flex min-w-0 items-baseline gap-2 text-inherit no-underline" href={href(params, { run: String(run.verdict_id) })}>
-              <span className="mono flex-none text-[11px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
-              <strong className="min-w-0 flex-1 truncate text-[13px] font-normal">{run.title}</strong>
+              <span className="mono flex-none text-[11.5px] text-muted-foreground"><b className="font-medium text-foreground">{run.repo}</b> #{run.pr_number}</span>
+              {/* `title`: the dock got wider and this column got narrower, so
+                  more titles reach the ellipsis. Truncation states its own
+                  overflow, but only a tooltip gives the rest of the sentence
+                  back without a navigation — and the row's own destination is
+                  the run, not the title. */}
+              <strong className="min-w-0 flex-1 truncate text-[13.5px] font-normal" title={run.title}>{run.title}</strong>
             </Link>
           )}
           {/* The PR's receipt, not this run's evidence — a second, separate
@@ -709,6 +743,15 @@ function RunCells({
           row differently. truncate: shadcn's TableCell brings
           `whitespace-nowrap`, so a longer-than-expected outcome overflows
           its fixed column instead of wrapping (Doug PR 103). */}
+      {/* 11.5px, and this is the one cell that did NOT take the type bump the
+          rest of the row did. MEASURED in a browser: the widest label
+          `○ censored` sets 72.3px in Geist Mono at 12px, against the 72px this
+          column leaves after padding — it truncates to `○ censore…`. At 11.5px
+          it is 69.2px, with 2.8px of slack. Doug caught this on PR #193
+          (reader:fixed-width-overflow) and was right: the column widths above
+          were measured against 11.5px text and nothing re-measured them.
+          Raising this needs the column widened past 88px first, which raises
+          the table's 876px floor and comes out of the title. */}
       <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
@@ -719,10 +762,10 @@ function RunCells({
           cell holding an arbitrary-length string (a job error), in a fixed
           84px column. Nowrap spills it across the age column — and these are
           the rows an operator most needs to read. */}
-      <TableCell className={`mono ${TD} whitespace-normal break-words text-[10.5px] leading-[1.25] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
+      <TableCell className={`mono ${TD} whitespace-normal break-words text-[11px] leading-[1.25] ` + (run.job?.error ? "data-flag" : "text-muted-foreground")}>
         {run.job?.error ? `${run.job.attempts}× · ${run.job.error}` : (run.job?.status ?? "—")}
       </TableCell>
-      <TableCell className={`mono ${TD} text-right text-[11px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
+      <TableCell className={`mono ${TD} text-right text-[11.5px] text-muted-foreground`}>{relativeAge(run.scored_at)}</TableCell>
     </>
   );
 }
@@ -1044,7 +1087,8 @@ function Pager({ window, params }: { window: PageWindow<unknown>; params: Dashbo
  *  used to run belonged to a 1440px canvas; inside a 400px dock a viewport
  *  breakpoint would have put two columns in a container that never has room for
  *  them, because `lg:` asks about the window and the dock's width is set by the
- *  grid. One column is right at 400px and merely generous at 900.
+ *  grid. One column is right at 400px and merely generous at 640 — the dock's
+ *  widest stop — so the split stays gone rather than returning at the top end.
  *
  *  The three links in the header are the run's ACTIONS — the PR itself, the
  *  PR's receipt, and the way back out of the pane. `summary.url` has been on
@@ -1110,7 +1154,11 @@ function Evidence({
 
       <div className={BLOCK}>
         <h3 className={BLOCK_HEADING}>The read</h3>
-        <dl className="mono grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[11px]">
+        {/* 12px, not 11: `rationale` is the longest continuous prose on the
+            page, and the dock is now wide enough to set it without the line
+            breaks that made 11px worth trying. The label column stays 92px —
+            the widest label is `prompt hash` and it fits. */}
+        <dl className="mono grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[12px] leading-[1.5]">
           <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.tier}</dd>
           <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
           <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
@@ -1588,7 +1636,7 @@ export default async function DashboardPage({
               <div className="mt-7 max-w-[320px]"><ScopePicker connections={connections} current={null} /></div>
             </main>
           ) : (
-            <main className="grid min-[1620px]:grid-cols-[minmax(0,1fr)_400px] min-[1800px]:grid-cols-[minmax(0,1fr)_480px]">
+            <main className="grid min-[1620px]:grid-cols-[minmax(0,1fr)_400px] min-[1800px]:grid-cols-[minmax(0,1fr)_560px] min-[2100px]:grid-cols-[minmax(0,1fr)_640px]">
               {/* THE LEDGER. Viewport-tall from 1620px up, so the table's own
                   scroll is the only one on this column and the dock beside it
                   never moves. */}

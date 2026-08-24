@@ -21,7 +21,7 @@ function ruleBody(css, selector) {
 }
 
 test("number columns align: .mono pins tabular numerals", async () => {
-  // Intent: a score column that does not align is unreadable at 34px rows.
+  // Intent: a score column that does not align is unreadable at 38px rows.
   const body = ruleBody(code(await readFile(cssUrl, "utf8")), ".mono");
   assert.ok(body, ".mono utility is missing from web/app/globals.css");
   assert.match(body, /font-variant-numeric:\s*tabular-nums/);
@@ -114,9 +114,21 @@ test("the CVD reasoning survives the port from the console", async () => {
 
 test("the dashboard surface keeps the orphan values it inherited, exactly", async () => {
   // Intent (plan A5.6, controller ruling): dashboard.module.css carried values
-  // with NO equivalent in the palette, and the ruling was that they keep their
+  // with NO equivalent in the palette, and the ruling was that they live at an
   // exact hex inside the scoped surface block — never substituted for globals'
   // nearest neighbour, never left dangling.
+  //
+  // TWO OF THE THREE HAVE BEEN RETUNED ONCE, deliberately, and the pin moved
+  // with them rather than being loosened to a range. The ruling forbids
+  // SUBSTITUTION — swapping in a palette neighbour and calling the difference
+  // close enough — not correction: --dim shipped at #aaa79f, which is 2.3:1
+  // against --background while painting the smallest text on the page, and
+  // --rule-soft at #f1efe9 was a 1.11:1 row divider. They are now #757269
+  // (4.65:1) and #eae7df (1.20:1, still under --border's 1.22:1 so a row rule
+  // stays lighter than the table's edge). globals.css carries the arithmetic.
+  //
+  // The assertion stays exact for the same reason it always was: nothing here
+  // renders, so a value that drifts is invisible to every other test.
   //
   // This is pinned because the failure is silent and visual. `--rule-soft`
   // alone draws every row divider in the run ledger; deleting it leaves
@@ -137,8 +149,8 @@ test("the dashboard surface keeps the orphan values it inherited, exactly", asyn
   const block = css.match(/\.dashboard-surface\s*\{[^}]+\}/g)?.join("\n") ?? "";
   assert.ok(block, "the .dashboard-surface scope block is gone");
 
-  assert.match(block, /--rule-soft:\s*#f1efe9/);
-  assert.match(block, /--dim:\s*#aaa79f/);
+  assert.match(block, /--rule-soft:\s*#eae7df/);
+  assert.match(block, /--dim:\s*#757269/);
   assert.match(block, /--row-hover:\s*#faf9f5/);
 
   // …and the two that deliberately did NOT come here stay out: #eceae3 and

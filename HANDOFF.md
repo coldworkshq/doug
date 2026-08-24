@@ -1,5 +1,76 @@
 # HANDOFF — doug
 
+State:    review — PR #193 open (feat/wider-dock-legible-ledger): dock stops
+          400/560/640, --dim to 4.65:1, --rule-soft to 1.20:1, rows 34→38px,
+          row type up EXCEPT the two width-bound outcome cells. Doug read it
+          three times, 0.22 → 0.16 → 0.12, all five findings settled in
+          docs/findings-log.jsonl (2 real+fixed, 3 disproved). Web suite
+          346/346, lint clean (2 pre-existing <img> warnings on /about), build
+          clean. Not merged — merging deploys (ADR-0009), Andrew's call.
+Next:     Andrew merges #193 after a look at the deploy, or says which of the
+          numbers to adjust (dock stops, row height, --dim #757269). Every
+          number came from a mock, so the deploy is the first real look.
+          STANDING, not raised in this PR: the "Decision debt — Andrew's call,
+          blocks the scoreboard spec" block still lives only in HANDOFF.md,
+          which AGENTS.md says must be a GitHub issue. Not filed — it is
+          Andrew's debt to shape, and he was asked.
+Blockers: none
+Decisions this session:
+- The 1620 dock stop stays at 400 — measured, a 440 dock leaves the title
+  column ~148px there vs ~188px, which buys dock prose with the master
+  column's ability to name a row — rejected: widening all three stops.
+- Only --dim and --rule-soft were retuned, not the whole palette — --dim at
+  2.3:1 was painting the smallest text on the page; --rule-soft is capped by
+  --border (1.22:1) so row separation came from height (34→38px) instead —
+  rejected: darker dividers, zebra striping.
+- design-system.test.mjs pin MOVED to the new hex rather than loosened — the
+  A5.6 ruling forbids substituting a palette neighbour, not correcting a value
+  that fails to be legible — rejected: a range assertion.
+- Verified against a static 2000px mock served over localhost, not the real
+  dashboard — /dashboard needs WorkOS auth + the API and has no fixture mode —
+  rejected: standing up auth locally for a CSS change.
+- PR #193's first push ran NO CI: the branch came off a stale local main (3
+  behind origin) and conflicted on HANDOFF.md, and GitHub cannot build the
+  merge ref for a CONFLICTING pr, so `pull_request` workflows never fire. The
+  only check was Doug's own, reporting `skipping`. A checks-empty PR page is
+  the symptom to watch for — rejected: reading the silence as "nothing to run".
+- Updated the branch by MERGING origin/main, not rebasing — the force-push a
+  rebase needs was blocked by the permission classifier, and the merged tree
+  was verified byte-identical to the rebased one before pushing — rejected:
+  asking for force-push rights for a change that did not need history rewritten.
+- REVERSED: the HANDOFF.md trim was NOT safe and is no longer in this PR.
+  workspace/handoff-archive-2026-08-23.md is outside the repo and untracked, so
+  the diff proved a copy exists on one machine, not that the text survives in
+  the repo — which is the only thing AGENTS.md's rule is about. Doug's medium
+  (reader:documentation-loss) caught it and cited the file's own line 292
+  recording the same drop being reverted once before. HANDOFF.md is now +55/-0,
+  newest slots on top, prior stream verbatim below — rejected: the trim.
+- Outcome cells stayed at 11.5px while the rest of the row grew — MEASURED,
+  `○ censored` sets 72.3px at 12px against 72px of column, i.e. it truncates.
+  Doug's reader:fixed-width-overflow (low) was right; the COLUMNS widths were
+  measured against 11.5px text and nothing re-measured them — rejected: bumping
+  the type without widening the column, which would raise the 876px floor.
+Pointers: PR #193 · branch feat/wider-dock-legible-ledger, merged up to
+          origin/main @ a309395 ·
+          web/app/dashboard/page.tsx (dock grid ~line 1600, COLUMNS, TD/TH) ·
+          web/app/globals.css (.dashboard-surface tokens) ·
+          mock + screenshots in the session scratchpad (mock.py, before.html,
+          after.html, ledger-before.jpg, ledger-after.jpg)
+          NOTE: a stash holds the PR #188 branch's uncommitted HANDOFF.md trim
+          ("pr188 handoff trim"), backed up at scratchpad/HANDOFF-pr188-backup.md
+
+---
+
+## Prior stream — through PR #187 (2026-08-23)
+
+Kept verbatim, per the convention this file adopted in #155: newest slot block
+on top, everything superseded below rather than dropped. It was dropped once
+before and restored, because it carries decision debt ("Decision debt —
+Andrew's call, blocks the scoreboard spec", below) that AGENTS.md says must not
+live only in a transcript. A copy also sits at
+workspace/handoff-archive-2026-08-23.md, but that path is OUTSIDE this
+repository and untracked, so it is not a substitute for keeping the text here.
+
 RANKING ITEM #1 WAS ALREADY BUILT. Carry-forward shipped in Walked Out v1
 (#164, merged 2026-08-21): convergence.classify carries a finding forward by
 construction on a byte-unchanged hunk delta, store.convergence_for pairs the

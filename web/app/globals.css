@@ -208,7 +208,7 @@
    copied) plus the four values the deleted dashboard.module.css carried that
    have NO equivalent in the palette. They keep their exact hex here rather
    than being substituted — globals' nearest neighbours are visibly different
-   values (`--muted`/`--secondary` are #f6f5f1 against --rule-soft's #f1efe9),
+   values (`--muted`/`--secondary` are #f6f5f1 against --rule-soft's #eae7df),
    and --rule-soft alone draws every row divider in the run ledger, so
    "close enough" would restyle the whole table.
 
@@ -219,8 +219,30 @@
    viewport — <body> keeps web's theme, so in dark mode this is what stops the
    gutters showing through. */
 .dashboard-surface {
-  --rule-soft: #f1efe9;
-  --dim: #aaa79f;
+  /* RETUNED for contrast, not restyled (see the block comment above: these
+     three keep their own hex because the palette has no equivalent — that
+     rule is about not SUBSTITUTING globals' nearest neighbour, not about
+     freezing a value that fails to be legible).
+
+     --dim was #aaa79f, which is 2.3:1. Everything it paints is 9–10.5px
+     uppercase set in tracking — the rail's SPACE/REPO labels, the /runs
+     header line, the dock's block sub-labels — i.e. the smallest text on the
+     page wearing the lowest contrast on the page. #757269 is 4.65:1, so it
+     clears AA for body-size text at a size well under it, and still sits a
+     clear step below --muted-foreground (7.0:1), which sits below
+     --foreground (18.3:1). The three-step chrome ramp is intact; only its
+     bottom rung moved.
+
+     --rule-soft was #f1efe9 at 1.11:1 — a divider you infer rather than see,
+     under 34px rows of 11px text. #eae7df is 1.20:1, and the ceiling is not
+     taste: --border is 1.22:1, and a row divider heavier than the table's own
+     edge inverts the two. That 0.02 of headroom is the whole budget, which is
+     why the rest of the row separation came from height, not ink.
+
+     Figures are against --background #fcfcfa, the surface these render on —
+     NOT --card. */
+  --rule-soft: #eae7df;
+  --dim: #757269;
   --row-hover: #faf9f5;
 
   min-height: 100vh;
