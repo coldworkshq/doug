@@ -662,7 +662,9 @@ const TH =
  *  --border (see globals.css), so contrast cannot be what separates them —
  *  height is. Four pixels is also what the type below needed: nothing in a row
  *  now sets under 11px, where the old 34 was already tight around 13px text
- *  with 10.5px in the job column. */
+ *  with 10.5px in the job column. The two outcome cells are the exception that
+ *  did not grow — they are width-bound, not height-bound, and the measurement
+ *  is in the comment on the cells themselves. */
 const TD = "h-[38px] border-b border-[var(--rule-soft)] px-2 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
@@ -741,10 +743,19 @@ function RunCells({
           row differently. truncate: shadcn's TableCell brings
           `whitespace-nowrap`, so a longer-than-expected outcome overflows
           its fixed column instead of wrapping (Doug PR 103). */}
-      <TableCell className={`mono ${TD} truncate text-[12px]`}>
+      {/* 11.5px, and this is the one cell that did NOT take the type bump the
+          rest of the row did. MEASURED in a browser: the widest label
+          `○ censored` sets 72.3px in Geist Mono at 12px, against the 72px this
+          column leaves after padding — it truncates to `○ censore…`. At 11.5px
+          it is 69.2px, with 2.8px of slack. Doug caught this on PR #193
+          (reader:fixed-width-overflow) and was right: the column widths above
+          were measured against 11.5px text and nothing re-measured them.
+          Raising this needs the column widened past 88px first, which raises
+          the table's 876px floor and comes out of the title. */}
+      <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
-      <TableCell className={`mono ${TD} truncate text-[12px]`}>
+      <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
         <span className={outcomeToneClass(outcomeTone(run.outcome_60))}>{outcomeLabel(run.outcome_60)}</span>
       </TableCell>
       {/* whitespace-normal, against TableCell's nowrap base: this is the one

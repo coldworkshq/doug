@@ -31,9 +31,18 @@ Decisions this session:
   rebase needs was blocked by the permission classifier, and the merged tree
   was verified byte-identical to the rebased one before pushing — rejected:
   asking for force-push rights for a change that did not need history rewritten.
-- The HANDOFF.md trim in this PR (-846 lines) is safe: main's 849-line copy is
-  byte-for-byte archived at workspace/handoff-archive-2026-08-23.md, confirmed
-  with diff — rejected: assuming the archive existed.
+- REVERSED: the HANDOFF.md trim was NOT safe and is no longer in this PR.
+  workspace/handoff-archive-2026-08-23.md is outside the repo and untracked, so
+  the diff proved a copy exists on one machine, not that the text survives in
+  the repo — which is the only thing AGENTS.md's rule is about. Doug's medium
+  (reader:documentation-loss) caught it and cited the file's own line 292
+  recording the same drop being reverted once before. HANDOFF.md is now +55/-0,
+  newest slots on top, prior stream verbatim below — rejected: the trim.
+- Outcome cells stayed at 11.5px while the rest of the row grew — MEASURED,
+  `○ censored` sets 72.3px at 12px against 72px of column, i.e. it truncates.
+  Doug's reader:fixed-width-overflow (low) was right; the COLUMNS widths were
+  measured against 11.5px text and nothing re-measured them — rejected: bumping
+  the type without widening the column, which would raise the 876px floor.
 Pointers: PR #193 · branch feat/wider-dock-legible-ledger, merged up to
           origin/main @ a309395 ·
           web/app/dashboard/page.tsx (dock grid ~line 1600, COLUMNS, TD/TH) ·
