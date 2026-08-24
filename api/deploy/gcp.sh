@@ -666,6 +666,12 @@ deploy() {
   # dark every installation not named in it while their toggles still read
   # "on" — see the guard in api/tests/test_deploy_gcp.py.
   #
+  # If comments have to stop in a hurry: turn the repository's toggle off on
+  # the dashboard (immediate, no deploy), or shift traffic back to the prior
+  # revision, which restores the gate AND its reader together because a
+  # revision pins image and environment as one. Re-adding the variable here
+  # would not stop anything on its own — nothing reads it any more.
+  #
   # DOUG_VERIFY_INSTALLATIONS is an ALLOWLIST, not a switch, and it replaced
   # a process-wide DOUG_VERIFY=1 boolean before that boolean was ever set.
   # Grounding buys up to MAX_VERIFY_READS_PER_REVIEW extra paid calls per

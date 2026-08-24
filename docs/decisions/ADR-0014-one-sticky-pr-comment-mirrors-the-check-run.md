@@ -57,6 +57,19 @@ because nothing was ever attempted and there was therefore no 403 to report.
 That is the state D8 exists to refuse, arrived at from the other direction.
 `installation_repos.pr_comment` (D3) is now the only gate.
 
+**What replaces the allowlist as a rollback path**, because "we deleted the
+switch" is not an answer on its own. Three, in order of blast radius: turn
+the repository's toggle off on the dashboard (immediate, no deploy, and the
+one to reach for first); turn several off, since the write is gated per
+repository and nothing is shared between them; or shift Cloud Run traffic
+back to the previous revision, which restores the gate and its reader
+together — a revision is an immutable image-plus-environment pair, so a
+rollback cannot land in the incoherent state of the variable being set with
+nothing reading it. What is genuinely gone is the ability to dark every
+installation at once by editing one variable. That was judged an acceptable
+loss at a five-repository footprint and should be revisited before the first
+tenant outside these three installations, not after.
+
 ## Decision
 
 - **D1 — One sticky comment per PR, mechanically.** Doug PATCHes the marked
@@ -278,7 +291,11 @@ neutralisation removed from `check_run._oneline` while a PR comment surface
 still exists; **any reintroduction of an installation-level gate on the
 comment write** — `DOUG_PR_COMMENT_INSTALLATIONS`, a `pr_comment.allowed`,
 or a new equivalent — because a second switch a tenant cannot see is what
-#144 removed and what D8 refuses. Do not flag: `upsert` re-creating a comment
+#144 removed and what D8 refuses (**this clause amended 2026-08-20, #144**:
+it previously read "Do not flag: removal of the allowlist", which was correct
+until the removal happened and is misleading afterwards — the risk inverted
+when the gate went, and a flag list that still described the old risk would
+have kept the reader quiet about the new one). Do not flag: `upsert` re-creating a comment
 after a human deletes it (named above as a priced consequence, not a bug);
 the absence of the `DOUG_PR_COMMENT_INSTALLATIONS` allowlist (D3a named its
 removal as the expected outcome, and it happened on 2026-08-20).

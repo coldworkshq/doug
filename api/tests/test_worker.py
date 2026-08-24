@@ -2586,9 +2586,12 @@ def test_the_pr_comment_mirrors_the_check_run_summary_and_logs_its_own_line(
     assert err.index(reviewed_line) < err.index(comment_line)
 
 
-@pytest.mark.parametrize("case", ["no-repo-row", "setting-off"])
+@pytest.mark.parametrize(
+    ("case", "token"),
+    [("no-repo-row", "skipped:no-active-row"), ("setting-off", "skipped:off")],
+)
 def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing(
-    tmp_path, monkeypatch, capsys, case
+    tmp_path, monkeypatch, capsys, case, token
 ):
     """Two ways to be off, one behaviour: nothing is written to the PR.
 
@@ -2614,7 +2617,11 @@ def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing(
     assert upserts == []
     assert len(posted) == 1
     (line,) = _comment_lines(capsys.readouterr().err)
-    assert line == "doug: comment skipped drewjst/doug#7@" + "a" * 12
+    # The token NAMES the cause (#173). A tenant's deliberate opt-out and a
+    # repo missing from installation_repos both refuse, but one is a wish and
+    # the other is a reconciliation fault an operator has to act on, and a
+    # shared word made them indistinguishable in the logs.
+    assert line == f"doug: comment {token} drewjst/doug#7@" + "a" * 12
 
 
 def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(
@@ -2815,3 +2822,22 @@ def test_replay_renders_the_same_since_section_as_the_rows_dictate(
     expected = "\n".join(check_run._since_section(store.convergence_for(later_id)))
     assert expected.strip()
     assert expected in posted[0]["summary"]
+
+
+def test_no_refusal_token_touches_the_denial_marker(tmp_path, monkeypatch):
+    """#173 widened one token into three. The marker branch matches EXACT
+    strings for exactly this reason: `installations.pr_comment_denied_at`
+    means "GitHub refused us", and a repo that is merely switched off has
+    told us nothing about permission. Clearing it on a skip would hide a live
+    403 behind a tenant's own opt-out; setting it would raise a banner about
+    a permission that was never tested."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch, repo_setting=False)
+    store.mark_pr_comment_denied(JOB["installation_id"], datetime(2026, 8, 1, tzinfo=UTC))
+
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    assert store.pr_comment_denied_at(JOB["installation_id"]) is not None
