@@ -22,7 +22,20 @@ Decisions this session:
 - Verified against a static 2000px mock served over localhost, not the real
   dashboard — /dashboard needs WorkOS auth + the API and has no fixture mode —
   rejected: standing up auth locally for a CSS change.
-Pointers: PR #193 · branch feat/wider-dock-legible-ledger off main @ d6dd0eb ·
+- PR #193's first push ran NO CI: the branch came off a stale local main (3
+  behind origin) and conflicted on HANDOFF.md, and GitHub cannot build the
+  merge ref for a CONFLICTING pr, so `pull_request` workflows never fire. The
+  only check was Doug's own, reporting `skipping`. A checks-empty PR page is
+  the symptom to watch for — rejected: reading the silence as "nothing to run".
+- Updated the branch by MERGING origin/main, not rebasing — the force-push a
+  rebase needs was blocked by the permission classifier, and the merged tree
+  was verified byte-identical to the rebased one before pushing — rejected:
+  asking for force-push rights for a change that did not need history rewritten.
+- The HANDOFF.md trim in this PR (-846 lines) is safe: main's 849-line copy is
+  byte-for-byte archived at workspace/handoff-archive-2026-08-23.md, confirmed
+  with diff — rejected: assuming the archive existed.
+Pointers: PR #193 · branch feat/wider-dock-legible-ledger, merged up to
+          origin/main @ a309395 ·
           web/app/dashboard/page.tsx (dock grid ~line 1600, COLUMNS, TD/TH) ·
           web/app/globals.css (.dashboard-surface tokens) ·
           mock + screenshots in the session scratchpad (mock.py, before.html,
