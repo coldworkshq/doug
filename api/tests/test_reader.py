@@ -1116,6 +1116,37 @@ def test_a_read_whose_usage_the_sdk_withheld_says_unknown_not_zero(capsys):
 
 # --- ADR-0002: the reader's frozen prompt is the probe's, verbatim -------
 
+def test_both_clients_bound_the_whole_read_not_just_one_attempt(monkeypatch):
+    """Constructing the client is where the bound is applied, and it is the
+    half a constants-only test cannot see.
+
+    test_read_timeout_budget_fits_inside_the_cloud_run_timeout checks the
+    arithmetic — DEFAULT_READ_TIMEOUT_S x (1 + MAX_READ_RETRIES) < the deployed
+    --timeout. It stays green if someone deletes `max_retries=` from the
+    constructor, because then the SDK default of 2 applies and the arithmetic
+    the test checked describes nothing. Verified: that mutation survives with
+    only the arithmetic test in place. This asserts the argument reaches the
+    SDK, for both clients — grounding runs inside the same synchronous request
+    the risk read does, so _verify_client needs the same bound.
+    """
+    import anthropic
+
+    seen: list[dict] = []
+
+    def _capture(**kwargs):
+        seen.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(anthropic, "Anthropic", _capture)
+    reader._client()
+    reader._verify_client()
+
+    assert len(seen) == 2
+    for kwargs in seen:
+        assert kwargs["max_retries"] == reader.MAX_READ_RETRIES
+        assert kwargs["timeout"] > 0
+
+
 def test_reader_and_probe_share_the_validated_prompt_bytes():
     """ADR-0002 froze six constants byte-identical to scripts/llm_probe.py,
     the module the Phase-1 probes actually validated (AUC 0.687/0.668,

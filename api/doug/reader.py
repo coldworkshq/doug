@@ -64,12 +64,19 @@ DIFF_BUDGET = 100_000
 MECHANICAL_MODEL = "claude-sonnet-5"
 MECHANICAL_EFFORT = "medium"
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
-# seconds, PER HTTP ATTEMPT — not the whole read. The SDK retries twice by
-# default and this module sets no max_retries, so a stalled upstream occupies
-# 3 x 120s plus backoff. This comment claimed "whole read incl. retries'
-# backoff" until 2026-08-23; that was false, and it was the sentence anyone
-# sizing the thread pool would have trusted.
+# seconds, PER HTTP ATTEMPT — not the whole read. This comment claimed "whole
+# read incl. retries' backoff" until 2026-08-23; that was false, and it was the
+# sentence anyone sizing the thread pool would have trusted.
 DEFAULT_READ_TIMEOUT_S = 120
+# Attempts = 1 + MAX_READ_RETRIES, so the whole read is bounded by
+# DEFAULT_READ_TIMEOUT_S * 2 = 240s plus backoff. That bound exists to fit
+# inside the api service's Cloud Run --timeout 300 (api/deploy/gcp.sh), because
+# POST /v1/score/read buys its read synchronously inside the request: at the
+# SDK's default of 2 retries the worst case is ~360s and Cloud Run kills the
+# request mid-read, so the caller gets a platform 504 instead of the
+# reader-unavailable fallback this module contracts for. Pinned against the
+# deployed value by test_read_timeout_budget_fits_inside_the_cloud_run_timeout.
+MAX_READ_RETRIES = 1
 INPUT_POLICY_VERSION = "reader-input-v0"
 COVERAGE_POLICY_VERSION = "reader-coverage-v0"
 INFERENCE_PARAMETERS = (
@@ -804,25 +811,31 @@ def _client():
     is well above any legitimate read and turns the same stall into a
     contained ReaderError fallback instead.
 
-    It does NOT bound the stall at 120s. `max_retries` is unset here, so the
-    SDK's default of 2 applies and the worst case is three attempts — about
-    six minutes with backoff, not two. That matters beyond the thread pool:
-    the api service deploys with `--timeout 300` (api/deploy/gcp.sh), and
-    `POST /v1/score/read` buys its read synchronously inside the request, so
-    a fully-retried stall on that route outlives the platform timeout. The
-    webhook path is insulated — it 202s first and drains in a background
-    task. Bounding the whole read means passing max_retries here as well.
+    `max_retries` is passed for the same reason and is NOT the SDK default.
+    The default of 2 makes the worst case three attempts — about six minutes —
+    which outlives the api service's Cloud Run `--timeout 300` on the one route
+    that buys a read synchronously inside the request (`POST /v1/score/read`).
+    There the platform kills the request mid-read and the caller gets a 504
+    instead of the `reader-unavailable` fallback this module contracts for. At
+    MAX_READ_RETRIES = 1 the bound is 240s plus backoff, inside 300 with margin.
+
+    The webhook path is insulated either way — it 202s first and drains in a
+    background task — so this is about the synchronous route. Retrying once
+    rather than not at all keeps the transient-5xx recovery the SDK gives us;
+    the second retry is what does not fit.
     """
     import anthropic
 
-    return anthropic.Anthropic(timeout=read_timeout())
+    return anthropic.Anthropic(timeout=read_timeout(), max_retries=MAX_READ_RETRIES)
 
 
 def _verify_client():
-    """Same posture as _client, on the tighter verify budget."""
+    """Same posture as _client, on the tighter verify budget — retry bound
+    included, for the same Cloud Run arithmetic. Grounding runs inside
+    score_one, which runs inside the same synchronous request."""
     import anthropic
 
-    return anthropic.Anthropic(timeout=verify_timeout())
+    return anthropic.Anthropic(timeout=verify_timeout(), max_retries=MAX_READ_RETRIES)
 
 
 def _sent_slice(diff: str, *, budget: int | None = None) -> str:

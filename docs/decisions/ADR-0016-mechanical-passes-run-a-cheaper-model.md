@@ -61,6 +61,26 @@ The second and third assert against the literal `"claude-opus-5"` rather than
 `reader.MODEL`, so that setting `MODEL = MECHANICAL_MODEL` cannot make them
 tautologically true.
 
+## This record is self-authorized, and that is worth naming
+
+ADR-0012 froze five constants. This ADR asserts that the freeze governs the risk
+read's instrument and that `verify_finding` / `attribute_findings` were never
+inside it — they were sharing `MODEL` and `EFFORT` by inheritance from the
+request dict `read_diff` was written with first, not by a decision.
+
+That reading is almost certainly right, and it follows ADR-0012's own precedent
+of narrowing scope through a new record rather than an in-place edit. It is also
+an interpretation of a freeze's boundary, made in the same change that benefits
+from it, by the party that benefits. Doug flagged exactly this on `da5b3fb`
+("the scope-narrowing is self-authorized here"), and the flag is fair.
+
+What would ratify it: Andrew's sign-off on the boundary claim specifically —
+that ADR-0012's five constants describe the risk read and not every call in
+`reader.py`. Nothing here depends on new measurement, so there is no experiment
+to run; the question is whether the reading of ADR-0012 is the intended one.
+Until that sign-off, treat this ADR's scope claim as proposed rather than
+settled, even though its status line says accepted for the change it makes.
+
 ## Rejected
 
 **Changing `MODEL` itself.** Breaks
@@ -84,9 +104,18 @@ and a weaker model there would buy cost by losing real findings.
 
 - Per review with both flags on, at list prices: **$0.072 → $0.043**, a 40%
   reduction on the mechanical tier. The risk read's ~$0.074 is untouched.
-- **Today that saving is $0.00.** `DOUG_VERIFY` and `DOUG_ATTRIBUTION` are both
-  unset in `api/deploy/gcp.sh:691`; both passes are dark. This ADR changes what
-  those flags will cost when someone turns them on, not what anything costs now.
+- **Half that saving is realised on merge; half is not.** An earlier draft of
+  this section claimed both passes were dark and the saving was $0.00. That was
+  true when it was written and false by the time the PR was opened, because the
+  same PR turns grounding on (ADR-0017). Doug caught it on its own review of
+  `da5b3fb` as `reader:doc-code-inconsistency`, and it is corrected here rather
+  than in place-with-no-trace, because `docs/decisions/README.md` records that
+  these files are an input to Doug's own reader: a stale record "does not just
+  mislead a human, it produces a confident false finding."
+  - `verify_finding` is **live** for the installation `DOUG_VERIFY_INSTALLATIONS`
+    names, so its share of the saving starts on deploy.
+  - `attribute_findings` stays dark; `DOUG_ATTRIBUTION` is unset. Its share is
+    prospective.
 - Sonnet 5 carries introductory pricing ($2/$10) through 2026-08-31. The figures
   above use list price deliberately, so that nothing here silently gets more
   expensive on 2026-09-01.

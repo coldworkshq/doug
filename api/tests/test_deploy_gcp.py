@@ -8,6 +8,7 @@ allowlist pin in test_deviations.py.
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -161,6 +162,35 @@ def test_api_deploy_carries_the_temporary_pr_comment_installations_allowlist():
     everywhere if it is removed prematurely)."""
     body = _function_body("deploy")
     assert "DOUG_PR_COMMENT_INSTALLATIONS=150424894" in body
+
+
+def test_read_timeout_budget_fits_inside_the_cloud_run_timeout():
+    """The read's worst case must survive the platform, not just the SDK.
+
+    POST /v1/score/read buys its read synchronously inside the request, so the
+    whole read — every attempt plus backoff — has to finish before Cloud Run
+    kills the request. At the SDK's default max_retries=2 the worst case is
+    3 x 120s = 360s against --timeout 300: the platform wins, the caller gets a
+    504, and the reader-unavailable fallback reader.py contracts for never runs.
+
+    Asserts the RELATIONSHIP, not either number, so raising the timeout,
+    raising the retry count, or lowering the deploy timeout each break this
+    rather than only the combination that happens to be wrong today.
+    """
+    from doug import reader
+
+    body = _function_body("deploy")
+    match = re.search(r"--timeout (\d+)", body)
+    assert match, "deploy no longer sets --timeout; the bound below is unpinned"
+    cloud_run_s = int(match.group(1))
+
+    attempts = 1 + reader.MAX_READ_RETRIES
+    worst_case_s = reader.DEFAULT_READ_TIMEOUT_S * attempts
+    assert worst_case_s < cloud_run_s, (
+        f"a fully-retried read takes {worst_case_s}s ({attempts} x "
+        f"{reader.DEFAULT_READ_TIMEOUT_S}s) but Cloud Run kills the request at "
+        f"{cloud_run_s}s — see issue #178"
+    )
 
 
 def test_api_deploy_carries_the_verify_installations_allowlist():
