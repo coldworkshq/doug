@@ -667,6 +667,22 @@ deploy() {
   # → no comments anywhere; the allowlist must not be removed prematurely or
   # comments silently start everywhere without a gate.
   #
+  # DOUG_VERIFY_INSTALLATIONS is an ALLOWLIST, not a switch, and it replaced
+  # a process-wide DOUG_VERIFY=1 boolean before that boolean was ever set.
+  # Grounding buys up to MAX_VERIFY_READS_PER_REVIEW extra paid calls per
+  # review and changes what renders on the check run, so switching it on is a
+  # decision about a named tenant. The boolean would have made it a decision
+  # about every tenant, including every tenant added later — exactly what
+  # DOUG_INTENT=1 did before DOUG_INTENT_INSTALLATIONS replaced it (see
+  # docs/design/outcome-loop/design-lock.md:64). Empty or unset → grounding is
+  # off everywhere. 150424894 is the same dogfood installation the two
+  # allowlists above name.
+  #
+  # Known limit at switch-on: VERIFY_SCHEMA's predicate enum holds exactly one
+  # check, constant_value_is, so most findings will abstain rather than ground.
+  # That is the honest starting state, not a fault — abstention costs a call
+  # and stores nothing. Widening the enum is tracked separately.
+  #
   # DOUG_PREREG_HASH: same value the adjudicator Job below carries, from the
   # same compute_prereg_hash call site. The receipt endpoint reports this as
   # the methodology document currently in force — never a value it reads
@@ -688,7 +704,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_PR_COMMENT_INSTALLATIONS=150424894${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_PR_COMMENT_INSTALLATIONS=150424894,DOUG_VERIFY_INSTALLATIONS=150424894${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

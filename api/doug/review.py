@@ -371,7 +371,12 @@ def score_one(
                         f"finding(s) against the live schema ({rules})",
                         file=sys.stderr,
                     )
-            if reader.verify_enabled() and resolve_file is not None:
+            # The installation is derived from `scope` rather than passed
+            # separately, for the same reason intent.enabled_for does it: who
+            # pays and who opted in must be the same party, and two arguments
+            # can drift apart where one cannot.
+            verify_installation = reader.installation_from_scope(scope)
+            if reader.verify_enabled_for(verify_installation) and resolve_file is not None:
                 # verify_scope is derived from the SAME string the risk read
                 # charged, via installation_from_scope's inverse, so the two can
                 # never disagree about whose review this is. The prefix differs,
@@ -381,7 +386,7 @@ def score_one(
                     rv,
                     head_sha=meta.head_sha,
                     resolve_file=resolve_file,
-                    scope=reader.verify_scope(reader.installation_from_scope(scope)),
+                    scope=reader.verify_scope(verify_installation),
                 )
                 if grounded:
                     print(

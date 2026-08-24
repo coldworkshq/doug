@@ -51,8 +51,32 @@ EFFORT = "medium"
 # commits) at +$0.019 mean per read; the budget is a ceiling, not a
 # spend, and 63% of PRs already fit under 30,000.
 DIFF_BUDGET = 100_000
+# The mechanical tier: verify_finding and attribute_findings. Neither was
+# in the probe, so neither is bound by ADR-0012's freeze — the five frozen
+# constants govern the risk read's instrument, and these two are not it.
+# Both are also the only paid calls whose output is fully validated in code
+# before it can reach a stored row: attribution picks integers from an
+# enumerated list checked against a range, and verify names a location
+# `verify.run_check` either grounds against the file at head or abstains on.
+# A weaker model can therefore only cost an abstention, never a wrong row,
+# which is the property that makes this substitution safe and does not hold
+# for the risk or intent reads.
+MECHANICAL_MODEL = "claude-sonnet-5"
+MECHANICAL_EFFORT = "medium"
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
-DEFAULT_READ_TIMEOUT_S = 120  # seconds, whole read incl. retries' backoff
+# seconds, PER HTTP ATTEMPT — not the whole read. This comment claimed "whole
+# read incl. retries' backoff" until 2026-08-23; that was false, and it was the
+# sentence anyone sizing the thread pool would have trusted.
+DEFAULT_READ_TIMEOUT_S = 120
+# Attempts = 1 + MAX_READ_RETRIES, so the whole read is bounded by
+# DEFAULT_READ_TIMEOUT_S * 2 = 240s plus backoff. That bound exists to fit
+# inside the api service's Cloud Run --timeout 300 (api/deploy/gcp.sh), because
+# POST /v1/score/read buys its read synchronously inside the request: at the
+# SDK's default of 2 retries the worst case is ~360s and Cloud Run kills the
+# request mid-read, so the caller gets a platform 504 instead of the
+# reader-unavailable fallback this module contracts for. Pinned against the
+# deployed value by test_read_timeout_budget_fits_inside_the_cloud_run_timeout.
+MAX_READ_RETRIES = 1
 INPUT_POLICY_VERSION = "reader-input-v0"
 COVERAGE_POLICY_VERSION = "reader-coverage-v0"
 INFERENCE_PARAMETERS = (
@@ -483,7 +507,7 @@ def _charge(scope: str) -> None:
         )
 
 
-def _report_cost(response, *, kind: str, scope: str, pr) -> None:
+def _report_cost(response, *, kind: str, scope: str, pr, model: str = MODEL) -> None:
     """One stderr line per paid read: what it cost and what bought it.
 
     Emitted here because this is the only place `response.usage` exists —
@@ -492,9 +516,13 @@ def _report_cost(response, *, kind: str, scope: str, pr) -> None:
     away. Reporting cost on the success path alone would hide the most
     expensive reads there are.
 
-    `model` rides on every line even though MODEL is a single constant
-    today: the moment anyone splits it per read, a line that silently
-    changed meaning is this repo's recurring defect.
+    `model` rides on every line and is now a PARAMETER, not the module
+    constant it reads by default. The split this docstring used to warn
+    about has happened: the risk and intent reads run MODEL, the verify and
+    attribution passes run MECHANICAL_MODEL. A line that kept quoting MODEL
+    for all four would report the wrong model for half the spend — silently,
+    because the string would still be a real model name — which is the
+    recurring defect the warning named.
 
     Unknown token counts print `?`, never 0 — the point of these lines is
     to set the cap from evidence, and a read of unknown cost summed in as a
@@ -506,7 +534,7 @@ def _report_cost(response, *, kind: str, scope: str, pr) -> None:
     sha = getattr(pr, "head_sha", None)
     print(
         f"doug: read #{getattr(pr, 'number', '?')}@{sha[:12] if sha else '?'} (paid read) "
-        f"kind={kind} scope={scope} model={MODEL} "
+        f"kind={kind} scope={scope} model={model} "
         f"in={tokens_in if tokens_in is not None else '?'} "
         f"out={tokens_out if tokens_out is not None else '?'}",
         file=sys.stderr,
@@ -614,10 +642,10 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
     if client is None:
         client = _verify_client()
     request = {
-        "model": MODEL,
+        "model": MECHANICAL_MODEL,
         "max_tokens": MAX_TOKENS,
         "output_config": {
-            "effort": EFFORT,
+            "effort": MECHANICAL_EFFORT,
             "format": {"type": "json_schema", "schema": VERIFY_SCHEMA},
         },
         "system": VERIFY_SYSTEM,
@@ -627,7 +655,7 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
         response = client.messages.create(**request)
     except Exception as e:  # noqa: BLE001 — same contract as read_diff
         raise ReaderError(f"{type(e).__name__}: {e}") from e
-    _report_cost(response, kind="verify", scope=scope, pr=None)
+    _report_cost(response, kind="verify", scope=scope, pr=None, model=MECHANICAL_MODEL)
     text = next((b.text for b in response.content if b.type == "text"), "")
     if response.stop_reason != "end_turn":
         raise ReaderError(f"verify stopped with {response.stop_reason}")
@@ -732,16 +760,37 @@ def attribution_enabled() -> bool:
     return os.environ.get("DOUG_ATTRIBUTION") == "1"
 
 
-def verify_enabled() -> bool:
-    """Opt-in, default off, and separate from DOUG_READER on purpose.
+VERIFY_ALLOWLIST_ENV = "DOUG_VERIFY_INSTALLATIONS"
+
+
+def verify_enabled_for(installation_id: int | None) -> bool:
+    """Is grounding on for THIS installation?
 
     Grounding adds paid model calls to the live path and changes what renders on
-    a check run. Landing the code dark means the PR that introduces it can be
-    reviewed and merged without changing what Doug does to anyone, and the
-    capability is switched on deliberately — the same posture DOUG_READER and
-    DOUG_INTENT_INSTALLATIONS already take for the tiers below it.
+    a check run. Landing the code dark meant the PR that introduced it could be
+    merged without changing what Doug does to anyone; switching it on is the
+    deliberate act that posture was reserving.
+
+    An ALLOWLIST rather than the process-wide `DOUG_VERIFY=1` boolean this
+    replaced, for the reason design-lock.md:64 records against the identical
+    mistake one tier down: `DOUG_INTENT=1` shipped as a process-wide switch and
+    was "the opposite of 'default OFF', enabling the experimental tier for every
+    installation the service reviewed. It was harmless only because there has
+    only ever been one installation." Turning grounding on for the dogfood
+    install is a decision about the dogfood install; a boolean would make it a
+    decision about every tenant, and would keep making it silently for every
+    tenant added later.
+
+    Same shape and same failure mode as `intent.enabled_for` and
+    `pr_comment.allowed`: an unset or empty allowlist enables nobody, never
+    everybody. Un-tenanted callers (the CLI, the sentinel scope) are
+    structurally excluded, because `installation_from_scope` returns None for
+    them and None is not in any allowlist.
     """
-    return os.environ.get("DOUG_VERIFY") == "1"
+    if installation_id is None:
+        return False
+    allow = os.environ.get(VERIFY_ALLOWLIST_ENV, "")
+    return str(installation_id) in {i.strip() for i in allow.split(",") if i.strip()}
 
 
 def reader_threshold() -> float:
@@ -758,20 +807,35 @@ def _client():
     The SDK defaults to a 600s timeout, and both read entry points run
     synchronously on Starlette's shared request thread pool (~40 workers,
     /healthz included). At the default, one stalled upstream connection
-    parks a worker for ten minutes; forty of them and the whole service
-    reads as down. 120s is well above any legitimate read and turns the
-    same stall into a contained ReaderError fallback instead.
+    parks a worker; forty of them and the whole service reads as down. 120s
+    is well above any legitimate read and turns the same stall into a
+    contained ReaderError fallback instead.
+
+    `max_retries` is passed for the same reason and is NOT the SDK default.
+    The default of 2 makes the worst case three attempts — about six minutes —
+    which outlives the api service's Cloud Run `--timeout 300` on the one route
+    that buys a read synchronously inside the request (`POST /v1/score/read`).
+    There the platform kills the request mid-read and the caller gets a 504
+    instead of the `reader-unavailable` fallback this module contracts for. At
+    MAX_READ_RETRIES = 1 the bound is 240s plus backoff, inside 300 with margin.
+
+    The webhook path is insulated either way — it 202s first and drains in a
+    background task — so this is about the synchronous route. Retrying once
+    rather than not at all keeps the transient-5xx recovery the SDK gives us;
+    the second retry is what does not fit.
     """
     import anthropic
 
-    return anthropic.Anthropic(timeout=read_timeout())
+    return anthropic.Anthropic(timeout=read_timeout(), max_retries=MAX_READ_RETRIES)
 
 
 def _verify_client():
-    """Same posture as _client, on the tighter verify budget."""
+    """Same posture as _client, on the tighter verify budget — retry bound
+    included, for the same Cloud Run arithmetic. Grounding runs inside
+    score_one, which runs inside the same synchronous request."""
     import anthropic
 
-    return anthropic.Anthropic(timeout=verify_timeout())
+    return anthropic.Anthropic(timeout=verify_timeout(), max_retries=MAX_READ_RETRIES)
 
 
 def _sent_slice(diff: str, *, budget: int | None = None) -> str:
@@ -1557,17 +1621,19 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
                 lines.append(f"- FINDING id={i} [{r.rule}]: {r.label}")
             lines.append("")
         request = {
-            "model": MODEL,
+            "model": MECHANICAL_MODEL,
             "max_tokens": ATTRIBUTION_MAX_TOKENS,
             "output_config": {
-                "effort": EFFORT,
+                "effort": MECHANICAL_EFFORT,
                 "format": {"type": "json_schema", "schema": ATTRIBUTION_SCHEMA},
             },
             "system": ATTRIBUTION_SYSTEM,
             "messages": [{"role": "user", "content": "\n".join(lines)}],
         }
         response = client.messages.create(**request)
-        _report_cost(response, kind="attribution", scope=scope, pr=None)
+        _report_cost(
+            response, kind="attribution", scope=scope, pr=None, model=MECHANICAL_MODEL
+        )
         if response.stop_reason != "end_turn":
             return 0
         text = next((b.text for b in response.content if b.type == "text"), "")
