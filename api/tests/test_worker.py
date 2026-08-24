@@ -219,10 +219,10 @@ def _wire_pr_comment(monkeypatch, *, outcomes=("created",)) -> list[dict]:
     return calls
 
 
-def _enable_pr_comment(monkeypatch, *, repo_setting=True, allowlisted=True) -> None:
-    """Both gates the comment hangs off: the repo's own `pr_comment` column
-    (an ACTIVE installation_repos row) and the interim install allowlist.
-    Needs DATABASE_URL already set — call after _db."""
+def _enable_pr_comment(monkeypatch, *, repo_setting=True) -> None:
+    """The one gate the comment hangs off: the repo's own `pr_comment` column
+    on an ACTIVE installation_repos row. The interim install allowlist went
+    with #144. Needs DATABASE_URL already set — call after _db."""
     store.upsert_installation(JOB["installation_id"], "drewjst", "Organization", "active")
     store.set_installation_repos(
         JOB["installation_id"],
@@ -231,9 +231,6 @@ def _enable_pr_comment(monkeypatch, *, repo_setting=True, allowlisted=True) -> N
     )
     if not repo_setting:
         store.set_repo_pr_comment(JOB["installation_id"], JOB["github_repo_id"], False)
-    monkeypatch.setenv(
-        "DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]) if allowlisted else ""
-    )
     monkeypatch.setenv("DOUG_WEB_URL", "https://doug.test")
 
 
@@ -2589,11 +2586,19 @@ def test_the_pr_comment_mirrors_the_check_run_summary_and_logs_its_own_line(
     assert err.index(reviewed_line) < err.index(comment_line)
 
 
-@pytest.mark.parametrize("case", ["no-repo-row", "setting-off", "not-allowlisted"])
-def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_allowlisted(
-    tmp_path, monkeypatch, capsys, case
+@pytest.mark.parametrize(
+    ("case", "token"),
+    [("no-repo-row", "skipped:no-active-row"), ("setting-off", "skipped:off")],
+)
+def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing(
+    tmp_path, monkeypatch, capsys, case, token
 ):
-    """Three ways to be off, one behaviour: nothing is written to the PR.
+    """Two ways to be off, one behaviour: nothing is written to the PR.
+
+    Both are visible from the dashboard — a repo whose toggle is off, and a
+    repo that is not listed at all. That is the point of #144: after the
+    install allowlist went, there is no third way to be off that a tenant
+    cannot see.
 
     A missing installation_repos row is deliberately off rather than
     defaulted on — that is the set of repos a tenant cannot see or toggle on
@@ -2603,14 +2608,8 @@ def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_al
     _db(tmp_path, monkeypatch)
     posted = _wire(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch)
-    if case == "no-repo-row":
-        monkeypatch.setenv("DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]))
-    else:
-        _enable_pr_comment(
-            monkeypatch,
-            repo_setting=case != "setting-off",
-            allowlisted=case != "not-allowlisted",
-        )
+    if case != "no-repo-row":
+        _enable_pr_comment(monkeypatch, repo_setting=case != "setting-off")
     ingest.enqueue(**JOB)
 
     worker.process_job(ingest.claim())
@@ -2618,7 +2617,11 @@ def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_al
     assert upserts == []
     assert len(posted) == 1
     (line,) = _comment_lines(capsys.readouterr().err)
-    assert line == "doug: comment skipped drewjst/doug#7@" + "a" * 12
+    # The token NAMES the cause (#173). A tenant's deliberate opt-out and a
+    # repo missing from installation_repos both refuse, but one is a wish and
+    # the other is a reconciliation fault an operator has to act on, and a
+    # shared word made them indistinguishable in the logs.
+    assert line == f"doug: comment {token} drewjst/doug#7@" + "a" * 12
 
 
 def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(
@@ -2819,3 +2822,22 @@ def test_replay_renders_the_same_since_section_as_the_rows_dictate(
     expected = "\n".join(check_run._since_section(store.convergence_for(later_id)))
     assert expected.strip()
     assert expected in posted[0]["summary"]
+
+
+def test_no_refusal_token_touches_the_denial_marker(tmp_path, monkeypatch):
+    """#173 widened one token into three. The marker branch matches EXACT
+    strings for exactly this reason: `installations.pr_comment_denied_at`
+    means "GitHub refused us", and a repo that is merely switched off has
+    told us nothing about permission. Clearing it on a skip would hide a live
+    403 behind a tenant's own opt-out; setting it would raise a banner about
+    a permission that was never tested."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch, repo_setting=False)
+    store.mark_pr_comment_denied(JOB["installation_id"], datetime(2026, 8, 1, tzinfo=UTC))
+
+    ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    assert store.pr_comment_denied_at(JOB["installation_id"]) is not None

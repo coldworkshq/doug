@@ -137,17 +137,15 @@ export function FlagLineControl({
             comment to disappear, which is the reading the flag-line paragraph
             above already refuses to allow about itself.
 
-            The rollout sentence exists because the first release is gated by
-            `DOUG_PR_COMMENT_INSTALLATIONS` (D3a): outside the first wave this
-            toggle reads "on", nothing posts, and no denial banner fires,
-            because there is no 403 to report. A toggle that claims an effect
-            it cannot yet have is exactly what D8 exists to refuse, so the copy
-            says so until the allowlist goes — its wording stays true on the
-            day it does. Phrased to match the /docs/changelog row. */}
+            There is no rollout sentence any more. It existed while
+            `DOUG_PR_COMMENT_INSTALLATIONS` (D3a) could hold a space dark with
+            this toggle reading "on" and no denial banner to explain it, and it
+            went with the allowlist in #144. Do not reinstate copy hedging what
+            this control does: the toggle is now the only thing that decides,
+            and saying otherwise would be the D8 dishonesty in reverse. */}
         <p className="text-[10.5px] text-muted-foreground">
           On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
           Off, Doug stops updating the comment; the last one it posted stays where it is.
-          Rolling out to Doug&apos;s own repositories first — if this space isn&apos;t in the first wave, comments start when it is.
         </p>
       </div>
     </details>

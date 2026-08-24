@@ -95,17 +95,30 @@ def _pr_comment_outcome(
     """Decide and perform this job's sticky-comment write, returning the
     outcome token for the log line. May raise; `_post_pr_comment` owns that.
 
-    Two gates, cheapest first: the interim install allowlist is an env read,
-    the repo's own `pr_comment` column is a query, and today the allowlist
-    excludes almost everyone — so a non-allowlisted install costs nothing.
-    Both must say yes. `store.repo_pr_comment` is False for an absent or
-    'removed' row on purpose (see its docstring): that is exactly the set of
-    repos a tenant cannot see or toggle on the dashboard, and a repo nobody
-    can see must not get a comment nobody can turn off.
+    The refusal token NAMES its cause (#173). One word for every refusal made
+    "why is this repo silent?" unanswerable from the logs, and removing the
+    install allowlist made that worse rather than better: it deleted the
+    loudest cause and left the three that actually need investigating still
+    sharing a token.
+
+    ONE gate: the repository's own `pr_comment` column, the toggle a tenant
+    can actually see and set beside the flag line on the dashboard. The
+    interim install allowlist (D3a) was removed with issue #144, so there is
+    no longer a second, invisible switch that can hold a repo dark while its
+    visible one reads "on" — which is exactly the state D8 exists to refuse,
+    and the state that made "why is this repo silent?" unanswerable from the
+    dashboard. `store.repo_pr_comment` is False for an absent or 'removed'
+    row on purpose (see its docstring): that is exactly the set of repos a
+    tenant cannot see or toggle on the dashboard, and a repo nobody can see
+    must not get a comment nobody can turn off.
     """
     inst, repo_id, pr = job["installation_id"], job["github_repo_id"], job["pr_number"]
-    if not (pr_comment.allowed(inst) and store.repo_pr_comment(inst, repo_id)):
-        return "skipped"
+    state = store.repo_pr_comment_state(inst, repo_id)
+    if state != store.PR_COMMENT_ON:
+        # `skipped:off` is a tenant's wish; `skipped:no-active-row` is a
+        # reconciliation fault; `skipped:no-ledger` is a deployment fault.
+        # Only the first is a state anyone should be content to see.
+        return f"skipped:{state}"
     # Replay only. process_job's fresh path has already fetched this PR and
     # checked BOTH halves of the target — the head sha (it supersedes when
     # they disagree) and `base.repo.id` against this job's github_repo_id (it

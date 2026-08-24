@@ -40,10 +40,6 @@ from . import app_auth, store
 MARKER_PREFIX = "<!-- doug:verdict"
 _MARKER_RE = re.compile(r"^<!-- doug:verdict head=([0-9a-f]{7,64}) seq=(\d+) -->")
 
-# D3a: the interim allowlist. Parsed exactly like intent.enabled_for's, and
-# for the same reason — an unset allowlist enables nobody, not everybody.
-ALLOWLIST_ENV = "DOUG_PR_COMMENT_INSTALLATIONS"
-
 _PER_PAGE = 100
 _PAGE_BOUND = 10
 
@@ -58,17 +54,6 @@ FRAME_MAX = 1_000
 
 _DOCS_PATH = "/docs/what-doug-gets-wrong"
 _WARNED_NO_WEB_URL = False
-
-
-def allowed(installation_id: int) -> bool:
-    """Is the sticky comment on for THIS installation (D3a)?
-
-    Temporary: the allowlist exists so the first weeks of a surface that
-    notifies real reviewers are scoped to installs that agreed to it. An
-    empty or unset env enables nobody.
-    """
-    allow = os.environ.get(ALLOWLIST_ENV, "")
-    return str(installation_id) in {i.strip() for i in allow.split(",") if i.strip()}
 
 
 class Links(NamedTuple):

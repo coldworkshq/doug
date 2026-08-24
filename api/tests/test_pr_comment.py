@@ -490,13 +490,9 @@ def test_target_matches_compares_base_repo_id():
     )
 
 
-def test_allowed_reads_the_allowlist_env_like_intent(monkeypatch):
-    """An unset allowlist enables nobody, not everybody (intent.enabled_for)."""
-    monkeypatch.delenv(pr_comment.ALLOWLIST_ENV, raising=False)
-    assert pr_comment.allowed(101) is False
-    monkeypatch.setenv(pr_comment.ALLOWLIST_ENV, "")
-    assert pr_comment.allowed(101) is False
-    monkeypatch.setenv(pr_comment.ALLOWLIST_ENV, " 101 , 202 ")
-    assert pr_comment.allowed(101) is True
-    assert pr_comment.allowed(202) is True
-    assert pr_comment.allowed(303) is False
+def test_the_module_exposes_no_installation_allowlist():
+    """#144 removed the D3a gate. A reinstated `allowed()` would be a second,
+    invisible switch beside a visible one — the dashboard toggle would read
+    "on" while nothing posted, which is the exact dishonesty D8 refuses."""
+    assert not hasattr(pr_comment, "allowed")
+    assert not hasattr(pr_comment, "ALLOWLIST_ENV")

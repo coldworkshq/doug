@@ -17,6 +17,23 @@ ruling's reason is that Doug must not infer resolution from its own silence.
 A human disposition is evidence, not inference, so the ruling as stated does
 not cover it. Worth Andrew's call.
 
+State:    review — PR #185 open (remove the PR-comment allowlist), rebased
+          onto main @ d6dd0eb and conflict-free. Doug's own findings on it
+          are verified and fixed; dispositions in docs/findings-log.jsonl.
+Next:     Andrew merges #185. On deploy, four repos start commenting for the
+          first time (coldworks, lema, lema-mcp, lema-verify) — watch for
+          `denied:403`, which means that installation has not re-accepted
+          `Pull requests: Read and write` (ADR-0014 D5); it shows as a banner
+          on the Repositories view. Separately, #157's blocking check is still
+          open: confirm a GitHub alert renders inside a CHECK RUN summary.
+Blockers: none.
+Decisions this session:
+- Rebase conflict with #184 resolved by keeping DOUG_VERIFY_INSTALLATIONS and dropping DOUG_PR_COMMENT_INSTALLATIONS — the two changes edit the same --set-env-vars line for unrelated reasons. Also fixed a stale cross-reference the text merge could not see: #184's comment said 150424894 is "the same dogfood installation the two allowlists above name", and after #144 there is one
+- HANDOFF.md conflicts resolved to main's copy rather than merged half-by-half — the file is ephemeral session state by design (AGENTS.md), so merging two stale halves manufactures a third wrong version. This is the second HANDOFF conflict this branch produced; the first shipped markers into ff8019f
+- Doug's `reader:observability-gap` fixed here rather than deferred (closes #173): this PR is what makes the gap bite, on four repos at once. `skipped` became skipped:off | skipped:no-active-row | skipped:no-ledger
+- `reader:deploy-config-drift` disproved: a Cloud Run revision pins image and env together, so a rollback restores the gate and its reader as one — there is no revision where the variable is set and unread
+- Filed #186: docs/REVIEWING.md:716 carries a committed conflict marker on main, from 525f733, plus a proposal for the CI grep that would have caught both instances
+
 State:    building — reader accuracy/cost work on branch
           claude/doug-pr-review-accuracy-232a1f. Suite green (1600), ruff
           clean. One code change landed, one doc written, one costed.
