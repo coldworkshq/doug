@@ -1,12 +1,19 @@
 # HANDOFF — doug
 
 State:    review — PR #193 open (feat/wider-dock-legible-ledger): dock stops
-          400/560/640, --dim to 4.65:1, --rule-soft to 1.20:1, rows 34→38px.
-          Web suite 345/345, lint clean (2 pre-existing <img> warnings on
-          /about), build clean. Not merged — merging deploys (ADR-0009) and
-          that is Andrew's call.
+          400/560/640, --dim to 4.65:1, --rule-soft to 1.20:1, rows 34→38px,
+          row type up EXCEPT the two width-bound outcome cells. Doug read it
+          three times, 0.22 → 0.16 → 0.12, all five findings settled in
+          docs/findings-log.jsonl (2 real+fixed, 3 disproved). Web suite
+          346/346, lint clean (2 pre-existing <img> warnings on /about), build
+          clean. Not merged — merging deploys (ADR-0009), Andrew's call.
 Next:     Andrew merges #193 after a look at the deploy, or says which of the
-          numbers to adjust (dock stops, row height, --dim #757269).
+          numbers to adjust (dock stops, row height, --dim #757269). Every
+          number came from a mock, so the deploy is the first real look.
+          STANDING, not raised in this PR: the "Decision debt — Andrew's call,
+          blocks the scoreboard spec" block still lives only in HANDOFF.md,
+          which AGENTS.md says must be a GitHub issue. Not filed — it is
+          Andrew's debt to shape, and he was asked.
 Blockers: none
 Decisions this session:
 - The 1620 dock stop stays at 400 — measured, a 440 dock leaves the title
