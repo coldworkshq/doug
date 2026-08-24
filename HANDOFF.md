@@ -1,5 +1,148 @@
 # HANDOFF — doug
 
+RANKING ITEM #1 WAS ALREADY BUILT. Carry-forward shipped in Walked Out v1
+(#164, merged 2026-08-21): convergence.classify carries a finding forward by
+construction on a byte-unchanged hunk delta, store.convergence_for pairs the
+verdicts, and worker.process_job passes it to check_run.render at BOTH call
+sites (:228 fresh, :473 replay) where _since_section renders `### Since
+<sha12>`. 44 tests green. My evidence for ranking it #1 — 28 re-raises in
+findings-log.jsonl — comes from a log ending 2026-08-20, ONE DAY before the
+fix merged. I ranked a solved problem first and called it unproposed.
+THE REAL REMAINING GAP: convergence carries DOUG's own findings across reads.
+It has no notion of a HUMAN disposition. findings_log.py is a CLI/reporting
+tool that nothing in api/doug imports; the dispositions live in a hand-written
+JSONL nobody reads at review time. And the Since section ANNOTATES, it never
+suppresses — Andrew's 2026-08-20 ruling (no resolved state, ever). That
+ruling's reason is that Doug must not infer resolution from its own silence.
+A human disposition is evidence, not inference, so the ruling as stated does
+not cover it. Worth Andrew's call.
+
+State:    building — reader accuracy/cost work on branch
+          claude/doug-pr-review-accuracy-232a1f. Suite green (1600), ruff
+          clean. One code change landed, one doc written, one costed.
+Issues opened 2026-08-23: #178 (Cloud Run timeout vs retried read), #179
+(ground_findings charges before the call), #180 (additive assertion compares
+slugs), #181 (SUMMARY_LIMIT drops findings unnamed), #182 (.json under docs/
+ranks tier 0), #183 (design-lock L1 rationale is stale).
+
+DOUG_VERIFY IS ON, as an allowlist. Converted verify_enabled() ->
+verify_enabled_for(installation_id) + DOUG_VERIFY_INSTALLATIONS=150424894,
+matching intent.enabled_for and pr_comment.allowed. Reason: design-lock.md:64
+records DOUG_INTENT=1 shipping as a process-wide switch that enabled an
+experimental tier for every installation, "harmless only because there has
+only ever been one installation." A boolean would repeat it. Two mutations
+verified. Known limit at switch-on: VERIFY_SCHEMA's predicate enum holds
+exactly one check (constant_value_is), so most findings will abstain.
+MERGING THIS DEPLOYS IT (ADR-0009).
+
+Next:     Andrew reads docs/design/reader-effort/preregistration.md and
+          decides whether to fund the EFFORT run (~$5 of API, ~1 day of
+          blind dispositioning). Open the four issues listed below.
+Blockers: none. The EFFORT change cannot ship without the pre-registered
+          run — EFFORT is one of ADR-0012's five frozen constants.
+
+Decisions this session:
+- Verify + attribution moved to claude-sonnet-5 via a NEW constant pair
+  (MECHANICAL_MODEL / MECHANICAL_EFFORT), not by editing MODEL — why: the
+  freeze binds the risk read's instrument, and neither pass was in the
+  probe. Both validate their output in code before it reaches a stored
+  row, so a weaker model costs an abstention, never a wrong row. rejected:
+  editing MODEL (breaks test_reader_and_probe_share_the_validated_prompt_bytes
+  and silently re-anchors the risk read); haiku-4.5 (Andrew chose sonnet).
+- _report_cost takes `model` as a parameter now — why: it interpolated the
+  MODEL constant, which was correct only while one model served every
+  call. Its own docstring warned about exactly this split. Three mutations
+  verified, including the silent one (Sonnet sent, Opus reported).
+- Settlement pass RECOSTED after agent verification. My first design — ask
+  the model "does the full file at head disprove this?" and drop on yes —
+  is exactly what design-lock L1 already kills, with a measured
+  counterexample (PR #107: the refuter quoted models.py:133, the quote was
+  true and byte-matched, and the conclusion was still wrong). The locked
+  design is a closed predicate vocabulary: the model supplies
+  {file,line_start,line_end,quoted_text,predicate} and CODE runs the
+  predicate. VERIFY_SCHEMA ships enum ["constant_value_is"] — ONE of the
+  five the design names. Widening the enum is free; the cost driver is
+  MAX_VERIFY_READS_PER_REVIEW (2 today). At cap 6 on sonnet-5 that is
+  $0.058/review, +78% on the risk read. Two of the five predicates already
+  exist as code in settle.py and are reachable only via hardcoded slug
+  matching, not the verify channel.
+- EFFORT run is pre-registered against docs/findings-log.jsonl (153
+  findings / 27 PRs), NOT a re-run of the 653-PR AUC probe — why: ADR-0012
+  already declined that on cost for the analogous DIFF_BUDGET change, and
+  the question is about finding precision, not revert-prediction AUC.
+  Power stated before the run: n=153 detects only 32.0% -> 19.6% or better.
+
+Three settled decisions re-opened (Andrew: "don't treat settled as never
+re-open"). Each tested by whether its REASON still holds:
+- design-lock L1 (kills `refuted: bool`) rests on "ReaderFinding carries no
+  line numbers, so the refuter picks its own target with nothing to check it
+  against." L1 is dated 2026-08-18; ADR-0015 shipped hunk attribution
+  2026-08-20 and #164 merged 2026-08-21. PREMISE IS STALE — but not yet in
+  practice: `hunks` lives on Reason, not ReaderFinding, and attribution runs
+  AFTER grounding in score_one. The repair is an ORDERING change (attribute,
+  then verify against the named hunk), not a schema change. L1's conclusion
+  survives; its reason needs amending.
+- ADR-0012's "re-running the 653-PR probe costs real money. Declined
+  (2026-08-06)" DOES NOT SURVIVE ARITHMETIC. llm_probe.py:250 already submits
+  through client.messages.batches.create, so the 50% batch discount was
+  already in force. Full two-repo replication (520 reads) at high effort is
+  ~$24 batched. Pre-registration amended: AUC replication is now the PRIMARY
+  arm, findings-log is secondary.
+- ADR-0012's coverage bar (30/30, 100% code whole) is measured on a window
+  ending 135c8e5, 2026-08-06 — 17 days stale. Re-ran the same zero-model-call
+  measurement on the latest 30 first-parent commits: 29/30 (96.7%) after
+  discounting a classifier artifact, versus 30/30 pinned. Still above the 95%
+  bar, by one commit instead of five. Pressure indicators doubled: PRs over
+  the 100k budget 13% -> 27%, p90 diff 114,604 -> 205,002 chars, max 276,775
+  -> 429,126. One real code-tier loss: web/app/dashboard/page.tsx at 8e1d774
+  (176,819 chars) — the SAME file PR #114's read was cut inside.
+- CLASSIFIER DEFECT found by that run: `.json` is not in
+  features._PROSE_SUFFIXES, so docs/design/walked-out/*.json data fixtures
+  rank TIER 0 and compete with real source for the budget. Two of them are
+  what "failed" commit 6fa1633.
+
+Corrected by the impact pass — numbers I had wrong:
+- findings-log.jsonl CANNOT record a miss (all 153 rows are layer=doug and
+  presuppose an emitted finding). Every recall claim rests on 11 external
+  findings across PR #106 and #114, which are NOT in the log.
+- Only 14 of 49 disproved findings are settleable by fetching the file the
+  finding names; 3 are already handled. Incremental core is 7 of 49 (14%),
+  not "nearly every disproved finding" as I first read it.
+- Split-read for truncation is near-worthless at the current budget: 100%
+  of code sent whole on ADR-0012's pinned 30-commit sample, and only 2 of
+  26 logged PRs lose any code tier at 100k. It also costs 1.92x reads on
+  the real corpus and multiplies a process with a measured 75% silence rate
+  between reads of byte-identical content.
+- The dominant miss class is files ABSENT from the PR entirely (4 of 8 on
+  PR #106). Neither settlement nor split-read reaches it. DOUG_VERIFY does.
+- Cheapest unexploited lever: 28 of 153 findings (18%) are explicit
+  re-raises across review rounds. Carrying a disposition forward is
+  deterministic and costs zero model calls.
+
+Verified against the code this session (agent pass, adversarial):
+- Production makes UP TO two paid reads per PR on installation 150424894,
+  not one — intent.select can return nothing, so the second is conditional.
+- reader._client sets timeout=120 and no max_retries, so the SDK default of
+  2 applies: worst case 360s+. reader.py:67's comment ("whole read incl.
+  retries' backoff") is FALSE — the timeout is per attempt.
+- Cloud Run deploys --timeout 300 (gcp.sh:693) while POST /v1/score/read
+  (api.py:247) buys a read synchronously inside the request. Worst-case
+  read outlives the platform timeout. Webhook path is insulated (202 first).
+- ground_findings increments its spend counter BEFORE the call, so two
+  transport failures exhaust the per-review verify budget grounding nothing.
+- No request in the repo sets cache_control. Nothing is cached at all.
+
+Pointers: branch claude/doug-pr-review-accuracy-232a1f ·
+          api/doug/reader.py (MECHANICAL_MODEL at :64, _report_cost at :498) ·
+          api/tests/test_reader.py (3 tests, mutation-verified) ·
+          docs/design/reader-effort/preregistration.md (new) ·
+          docs/findings-log.jsonl is the corpus · ADR-0012 is the precedent
+          for narrowing the freeze against a stated bar.
+
+---
+
+## Prior stream — WorkOS sign-in, #167/#168/#170, PR #174 (kept verbatim)
+
 State:    review — PR #174 open (#168 + #170), rebased onto main @ fd881cb.
           Suite green (345), tsc clean, lint clean. Eight mutations verified
           across the two changes.
@@ -75,7 +218,6 @@ Pointers: branch claude/login-workos-redirect-9d9711 · PR #174 ·
           CI does not run on this branch yet; ci.yml is pull_request-triggered
           and had not reported at push time — check before merging ·
           full workflow output: scratchpad tasks/wptwl85el.output (226KB)
-
 ---
 
 ## Prior stream — check-run relayout + needs-you alert (kept, not this session's work)

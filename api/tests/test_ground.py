@@ -171,15 +171,34 @@ def test_grounding_is_skipped_when_there_is_nothing_to_resolve_against():
         assert out.findings[0].evidence == "diff"
 
 
-def test_the_live_path_is_dark_until_the_flag_is_set(monkeypatch):
-    """DOUG_VERIFY is separate from DOUG_READER so this can land without
-    changing what Doug does to anyone. Merging the code must not switch it on."""
-    monkeypatch.delenv("DOUG_VERIFY", raising=False)
-    assert reader.verify_enabled() is False
-    monkeypatch.setenv("DOUG_VERIFY", "1")
-    assert reader.verify_enabled() is True
-    monkeypatch.setenv("DOUG_VERIFY", "true")
-    assert reader.verify_enabled() is False
+def test_grounding_is_off_for_everyone_the_allowlist_does_not_name(monkeypatch):
+    """An unset allowlist enables NOBODY, never everybody.
+
+    This replaced a process-wide `DOUG_VERIFY=1` boolean. design-lock.md:64
+    records the identical mistake one tier down — `DOUG_INTENT=1` shipped as a
+    process-wide switch and enabled an experimental tier for every installation
+    the service reviewed, "harmless only because there has only ever been one
+    installation." The empty-env case below is the whole point of the change:
+    it must be OFF, so that adding a second tenant does not silently opt them
+    into paid grounding.
+
+    `None` is asserted explicitly because it is what `installation_from_scope`
+    returns for the CLI and the sentinel scope — un-tenanted callers must be
+    structurally excluded, not merely absent from the list.
+    """
+    monkeypatch.delenv(reader.VERIFY_ALLOWLIST_ENV, raising=False)
+    assert reader.verify_enabled_for(150424894) is False
+    monkeypatch.setenv(reader.VERIFY_ALLOWLIST_ENV, "")
+    assert reader.verify_enabled_for(150424894) is False
+
+    monkeypatch.setenv(reader.VERIFY_ALLOWLIST_ENV, "150424894")
+    assert reader.verify_enabled_for(150424894) is True
+    assert reader.verify_enabled_for(999) is False
+    assert reader.verify_enabled_for(None) is False
+
+    monkeypatch.setenv(reader.VERIFY_ALLOWLIST_ENV, " 12 , 150424894 ")
+    assert reader.verify_enabled_for(150424894) is True
+    assert reader.verify_enabled_for(12) is True
 
 
 def test_score_one_charges_verify_to_a_scope_the_customer_meter_cannot_see(monkeypatch):
@@ -193,7 +212,10 @@ def test_score_one_charges_verify_to_a_scope_the_customer_meter_cannot_see(monke
     """
     charged: list[str] = []
     monkeypatch.setenv("DOUG_READER", "1")
-    monkeypatch.setenv("DOUG_VERIFY", "1")
+    # 99 is the installation this test scores. Naming it here rather than a
+    # blanket value is the point of the allowlist: the gate now answers "is
+    # grounding on for THIS tenant", so the flag and the scope have to agree.
+    monkeypatch.setenv(reader.VERIFY_ALLOWLIST_ENV, "99")
     monkeypatch.setattr(reader, "_charge", lambda scope: charged.append(scope))
     monkeypatch.setattr(
         reader, "read_diff", lambda *a, **k: _rv()

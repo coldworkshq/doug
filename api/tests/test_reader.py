@@ -1007,16 +1007,84 @@ def test_the_two_reads_of_one_pr_report_their_costs_separately(capsys):
 
 
 def test_every_read_line_names_the_model_that_produced_it(capsys):
-    """reader.MODEL is one constant today and both lines quote it, which
-    looks redundant until someone splits the model per read — at which
-    point a line that silently changed meaning is this repo's recurring
-    defect. The name travels with the number instead."""
+    """The split this test was written to survive has happened.
+
+    _report_cost used to interpolate the module constant MODEL, which was
+    correct only while one model served every call. The verify and
+    attribution passes now run MECHANICAL_MODEL, so a line still quoting
+    MODEL would name a real model that did not run this read — the exact
+    silent meaning-change the original docstring warned about, and
+    unfindable afterwards because the string still parses as a model.
+
+    Asserting a literal here rather than reader.MODEL is deliberate: a
+    formatting change that dropped `model=` entirely would satisfy an
+    f-string-derived assertion against an empty capture.
+    """
     reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
     reader.read_with_decisions(
         _pr(), "+ x", DOCS, scope=SCOPE, client=FakeClient(payload=INTENT_PAYLOAD)
     )
 
-    assert all(f"model={reader.MODEL}" in line for line in _read_lines(capsys))
+    assert all("model=claude-opus-5" in line for line in _read_lines(capsys))
+
+
+def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
+    """ADR-0016. verify and attribution are the only paid calls whose output
+    is fully validated in code before it can reach a stored row, so a weaker
+    model can cost an abstention and nothing else. They run
+    MECHANICAL_MODEL; their cost lines must name it.
+
+    The cost line is asserted alongside the request because the two failure
+    modes are independent and only one is visible in production: sending
+    Sonnet while reporting Opus reads as a working substitution on every
+    dashboard and log that exists.
+    """
+    finding = reader.ReaderFinding(
+        category_slug="cap-mismatch",
+        description="Meter renders against the wrong cap",
+        file="api/doug/check_run.py",
+        severity="high",
+    )
+    verify_client = FakeClient(payload={"checks": []})
+    reader.verify_finding(finding, scope="verify:1", client=verify_client)
+
+    diff, cov, reasons = _attr_fixture()
+    attr_client = _AttrClient({"attributions": [{"finding": 0, "hunks": [1]}]})
+    reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=attr_client)
+
+    assert verify_client.messages.last_kwargs["model"] == reader.MECHANICAL_MODEL
+    assert (
+        verify_client.messages.last_kwargs["output_config"]["effort"]
+        == reader.MECHANICAL_EFFORT
+    )
+    assert attr_client.requests[0]["model"] == reader.MECHANICAL_MODEL
+    assert attr_client.requests[0]["output_config"]["effort"] == reader.MECHANICAL_EFFORT
+
+    verify_line, attribution_line = _read_lines(capsys)
+    assert "kind=verify" in verify_line
+    assert "kind=attribution" in attribution_line
+    assert all(
+        "model=claude-sonnet-5" in line for line in (verify_line, attribution_line)
+    )
+
+
+def test_the_two_paid_reads_did_not_follow_the_mechanical_tier_down():
+    """The freeze binds the risk read, and ADR-0007 binds the intent read to
+    the same instrument. Splitting the model per call makes "unify these two
+    constants" look like a tidy-up; this test is what that tidy-up breaks.
+
+    reader.MODEL is asserted against the literal so that setting
+    MODEL = MECHANICAL_MODEL cannot make the assertion tautologically true.
+    """
+    risk = FakeClient()
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=risk)
+    intent = FakeClient(payload=INTENT_PAYLOAD)
+    reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE, client=intent)
+
+    assert reader.MODEL == "claude-opus-5" != reader.MECHANICAL_MODEL
+    for client in (risk, intent):
+        assert client.messages.last_kwargs["model"] == "claude-opus-5"
+        assert client.messages.last_kwargs["output_config"]["effort"] == reader.EFFORT
 
 
 def test_a_read_that_stopped_at_max_tokens_still_reports_its_cost(capsys):

@@ -163,6 +163,20 @@ def test_api_deploy_carries_the_temporary_pr_comment_installations_allowlist():
     assert "DOUG_PR_COMMENT_INSTALLATIONS=150424894" in body
 
 
+def test_api_deploy_carries_the_verify_installations_allowlist():
+    """Grounding (reader.ground_findings) is on for the dogfood installation
+    and nobody else. It reaches the service only through this line.
+
+    Dropped → grounding silently stops and every finding publishes
+    diff-classed, which looks exactly like a healthy review. Replaced by a
+    bare DOUG_VERIFY=1 → paid grounding turns on for every installation the
+    service reviews, which is the failure design-lock.md:64 records against
+    DOUG_INTENT=1 and which reader.verify_enabled_for exists to prevent."""
+    body = _function_body("deploy")
+    assert "DOUG_VERIFY_INSTALLATIONS=150424894" in body
+    assert "DOUG_VERIFY=1" not in body
+
+
 def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy():
     """DOUG_SHOWCASE_REPO reaches the service only through this deploy. If
     it is wrong, /v1/showcase/queue 404s while /openapi.json and / both
