@@ -799,6 +799,13 @@ test("the deep read toggle is its own form and states BOTH of its consequences",
   assert.ok(consequence, "the deep read consequence paragraph is gone");
   assert.match(consequence, /defaults\.reader\.toFixed\(2\)/);
   assert.match(consequence, /defaults\.fallback\.toFixed\(2\)/);
+  // AND IN THE RIGHT TENSE. On a repository where the read is already off the
+  // line has already moved, so copy describing what turning it off "would" do
+  // is a warning about a future the reader is standing in — and it invites
+  // them to believe the band is still the reader's. One sentence per state.
+  assert.match(consequence, /deepRead\s*\n?\s*\?/);
+  assert.match(consequence, /turning the read off also moves the line/);
+  assert.match(consequence, /the line Doug bands against moved with the read/);
   for (const literal of ["0.30", "0.62"]) {
     assert.equal(
       consequence.includes(literal),
