@@ -1,10 +1,12 @@
 # HANDOFF — doug
 
-State:    review — dashboard UX pass on branch feat/wider-dock-legible-ledger,
-          committed, not pushed. Web suite 345/345, lint clean (2 pre-existing
-          <img> warnings on /about), build clean.
-Next:     Andrew looks at the before/after and says push + PR, or adjusts the
-          numbers (dock stops 400/560/640, row height 38px, --dim #757269).
+State:    review — PR #193 open (feat/wider-dock-legible-ledger): dock stops
+          400/560/640, --dim to 4.65:1, --rule-soft to 1.20:1, rows 34→38px.
+          Web suite 345/345, lint clean (2 pre-existing <img> warnings on
+          /about), build clean. Not merged — merging deploys (ADR-0009) and
+          that is Andrew's call.
+Next:     Andrew merges #193 after a look at the deploy, or says which of the
+          numbers to adjust (dock stops, row height, --dim #757269).
 Blockers: none
 Decisions this session:
 - The 1620 dock stop stays at 400 — measured, a 440 dock leaves the title
@@ -20,7 +22,7 @@ Decisions this session:
 - Verified against a static 2000px mock served over localhost, not the real
   dashboard — /dashboard needs WorkOS auth + the API and has no fixture mode —
   rejected: standing up auth locally for a CSS change.
-Pointers: branch feat/wider-dock-legible-ledger off main @ d6dd0eb ·
+Pointers: PR #193 · branch feat/wider-dock-legible-ledger off main @ d6dd0eb ·
           web/app/dashboard/page.tsx (dock grid ~line 1600, COLUMNS, TD/TH) ·
           web/app/globals.css (.dashboard-surface tokens) ·
           mock + screenshots in the session scratchpad (mock.py, before.html,
