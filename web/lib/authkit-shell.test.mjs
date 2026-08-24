@@ -56,6 +56,14 @@ test("AuthKit proxy injects optional callback session state without gating publi
   assert.equal(matches("/queue"), false);
   assert.equal(matches("/scoreboard"), false);
   assert.equal(matches("/dashboard"), true);
+  // The settings route too, and not merely because `/dashboard/:path*` happens
+  // to cover it. A matcher narrowed to the literal "/dashboard" would leave
+  // /dashboard/settings unguarded — an unauthenticated request reaching a page
+  // that calls `withAuth`, on the surface that holds the controls. It is also
+  // what makes the marketing header's plain "Dashboard" link safe: signed out,
+  // the proxy is what hands the request to AuthKit rather than the link being
+  // a dead end.
+  assert.equal(matches("/dashboard/settings"), true);
   assert.equal(matches("/install/start"), true);
   assert.equal(matches("/install/callback"), true);
 });

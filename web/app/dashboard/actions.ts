@@ -26,6 +26,27 @@ const FLAG_LINE_REAUTH =
   "Your session's repository access has aged out — sign in again to change settings.";
 const PR_COMMENT_ERROR = "Doug could not save that PR comment setting.";
 
+/** Every route that renders the per-repository controls.
+ *
+ *  BOTH, and this is the whole reason the constant exists. Until
+ *  /dashboard/settings there was one surface, so `revalidatePath("/dashboard")`
+ *  was the complete answer; now the repositories table and the settings page
+ *  render the same component over the same row, and revalidating one leaves
+ *  the other showing the state before the click. Two surfaces disagreeing
+ *  about a setting is worse than either being stale — it makes the reader
+ *  doubt the write landed at all, on controls whose entire job is to be
+ *  believed.
+ *
+ *  A LOOP, not a spread: `revalidatePath(path, type?)` takes a second argument
+ *  that is `'page' | 'layout'`, so `revalidatePath(...paths)` would hand it
+ *  "/dashboard/settings" as a `type` — silently the wrong call rather than an
+ *  error worth reading. */
+const DASHBOARD_SURFACES = ["/dashboard", "/dashboard/settings"] as const;
+
+function revalidateDashboard(): void {
+  for (const path of DASHBOARD_SURFACES) revalidatePath(path);
+}
+
 export async function finishSetupAction(formData: FormData): Promise<void> {
   let organizationId: string;
   try {
@@ -115,7 +136,7 @@ export async function setFlagLineAction(formData: FormData): Promise<void> {
     }
     throw new Error(FLAG_LINE_ERROR);
   }
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /** Turn the sticky PR comment on or off for one repository.
@@ -159,5 +180,5 @@ export async function setFlagLineCommentAction(formData: FormData): Promise<void
     }
     throw new Error(PR_COMMENT_ERROR);
   }
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }

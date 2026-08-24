@@ -195,7 +195,11 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
 
   assert.deepEqual(
     users.sort(),
-    ["app/dashboard/page.tsx", "app/dashboard/pr/[number]/page.tsx"],
+    [
+      "app/dashboard/page.tsx",
+      "app/dashboard/pr/[number]/page.tsx",
+      "app/dashboard/settings/page.tsx",
+    ],
     "a file outside the dashboard surface now uses a token only declared on it",
   );
 
@@ -206,6 +210,12 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
   // .dashboard-surface, not by being added here as an exemption. Asserting it
   // for EVERY entry rather than for the first is what keeps the second file
   // from weakening the pin.
+  //
+  // The settings page is the third, and took the same decision the same way:
+  // it wears the ledger's route chrome (--dim on the /settings breadcrumb
+  // row) and earns it by mounting its own .dashboard-surface. It is a
+  // /dashboard route rendering the dashboard's own surface, not a component
+  // lifted out of one.
   for (const rel of users) {
     const source = await readFile(new URL(rel, dir), "utf8");
     assert.match(

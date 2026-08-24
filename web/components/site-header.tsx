@@ -5,6 +5,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { GITHUB_REPO_URL } from "@/lib/links";
 
 const NAV_LINKS = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/scoreboard", label: "Scoreboard" },
   { href: "/queue", label: "Queue" },
   { href: "/docs", label: "Docs" },
@@ -24,14 +25,26 @@ const NAV_LINKS = [
  *  floating from the very first frame, not only once you scroll.
  *
  *  Sign in is the one filled, colored control in the bar — everything else
- *  (Scoreboard/Queue/Docs/GitHub/About, the theme toggle) stays low-contrast
- *  text until hovered, so the one action that actually converts a stranger
- *  doesn't have to compete with five links that don't. Below `sm` those
- *  links live in a native <details> disclosure rather than vanishing.
+ *  (Dashboard/Scoreboard/Queue/Docs/GitHub/About, the theme toggle) stays
+ *  low-contrast text until hovered, so the one action that actually converts a
+ *  stranger doesn't have to compete with six links that don't. Below `sm`
+ *  those links live in a native <details> disclosure rather than vanishing.
  *
- *  Order is deliberate: the two live product surfaces (Scoreboard, Queue)
- *  come first, Docs next as reference material, GitHub after that as the
- *  escape hatch to source, About last.
+ *  Order is deliberate: Dashboard first, then the two live public surfaces
+ *  (Scoreboard, Queue), Docs next as reference material, GitHub after that as
+ *  the escape hatch to source, About last.
+ *
+ *  DASHBOARD IS A PLAIN LINK, not a signed-in state. This bar renders on
+ *  /docs/* and /about, which are static; reading the session here to choose
+ *  between "Dashboard" and "Sign in" would make every one of those pages
+ *  render per request, which is a real cost for one word. It is not a dead end
+ *  for a signed-out visitor either — proxy.ts matches /dashboard/:path* and
+ *  hands an unauthenticated request to AuthKit, which returns to /dashboard
+ *  after sign-in. It is first because it is the only entry here addressed to
+ *  someone who already has Doug, and because it being hard to find is the
+ *  reason it was added: everything Doug can be told to do — the flag line and
+ *  the PR comment — is set behind it, and until this link existed the only
+ *  route back to that page from the marketing site was the URL bar.
  *
  *  Changing this bar's padding/height changes how much of the page it can
  *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
@@ -79,8 +92,8 @@ export function SiteHeader({
           </nav>
 
           {/* Native disclosure, not a client menu: works without JS, matches
-              the dashboard's no-JS ethic, and is the only way Scoreboard /
-              Queue / Docs exist below `sm` — the nav above is
+              the dashboard's no-JS ethic, and is the only way Dashboard /
+              Scoreboard / Queue / Docs exist below `sm` — the nav above is
               `hidden sm:flex`. */}
           <details className="relative sm:hidden">
             <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">

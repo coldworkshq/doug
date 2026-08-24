@@ -11,6 +11,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { DougLogo } from "@/components/doug-logo";
 import { FlagLineControl } from "@/components/flag-line-control";
 import { NoJsSubmit } from "@/components/no-js-submit";
+import { PrCommentDenialBanner } from "@/components/pr-comment-denial-banner";
 import { RunSpine } from "@/components/run-spine";
 import { ThresholdGear } from "@/components/threshold-gear";
 import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -47,7 +48,7 @@ import {
   severityCensus,
 } from "@/lib/ledger-census";
 import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
-import { outcomeLabel, outcomeToneClass, relativeAge, utcTimestamp } from "@/lib/runs-time";
+import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
 import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
@@ -930,35 +931,6 @@ function FlagLineCell({
   );
 }
 
-/** D8. The toggle above says "on"; this says whether anything is actually
- *  landing. Without it the failure mode is a setting that reads on, a comment
- *  that never appears, and a stderr line in a project with no alerting — the
- *  operator's only evidence being an absence they would have to go looking for.
- *
- *  It names the USUAL cause and refuses to assert it. GitHub answers 403 for the
- *  App permission never having been re-accepted, for a locked conversation, for
- *  an archived repository and for secondary rate limiting alike; the token names
- *  the code and nothing more, so the banner hedges exactly as far as the
- *  evidence does. Naming one cause with confidence would send someone to the
- *  App settings for a repository they archived last week.
- *
- *  The timestamp is the LAST refusal, not a count: `pr_comment_denied_at` is
- *  cleared by the next successful post, so a stamp here means the most recent
- *  attempt failed — which is the fact worth acting on. */
-function PrCommentDenialBanner({ deniedAt }: { deniedAt: string }) {
-  return (
-    <div className="mono mb-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[5px] border border-[var(--flag)] px-3 py-1.5 text-[11px] text-foreground">
-      <span className="font-medium data-flag">PR comments are not posting</span>
-      <span className="text-muted-foreground">
-        Doug&apos;s last attempt was refused (403) at{" "}
-        <b className="font-medium text-foreground">{utcTimestamp(deniedAt)}</b>. The usual cause is the
-        pull-requests write permission not being re-accepted in GitHub; a locked conversation, an
-        archived repository, or secondary rate limiting produce the same code.
-      </span>
-    </div>
-  );
-}
-
 /** Every repository the installation covers, against what the ledger says.
  *
  *  A zero is a real answer here and is rendered as one: a connected repository
@@ -1563,6 +1535,12 @@ export default async function DashboardPage({
               aria-current={view === "repositories" ? "page" : undefined}
               className={RAIL_ITEM}
             >Repositories</Link>
+            {/* The one section entry that carries NO filters across, because
+                there is nothing on it to narrow: /dashboard/settings is a list
+                of repositories and their controls, and a `?repo=` there would
+                be a parameter nothing reads. It takes no `aria-current` for the
+                same reason Docs does not — this page is never that route. */}
+            <Link href="/dashboard/settings" className={RAIL_ITEM}>Settings</Link>
             {/* Still not built, and still said so. A nav entry that navigates
                 nowhere is a lie about the product; one that names itself as
                 unbuilt is a roadmap. */}
@@ -1578,10 +1556,11 @@ export default async function DashboardPage({
 
           {door.state === "runs" && <div className="border-b border-border max-lg:hidden"><RailReadout runs={visible} scope={scope} /></div>}
 
-          {/* THE SETTINGS MENU is a <details>, not a popover.
+          {/* THE ACCOUNT MENU is a <details>, not a popover.
               /dashboard is a server component and must stay one (RULING 2), and
-              the two things behind this gear are the two that most need to work
-              on an unhydrated page: signing out, and connecting a repository.
+              the things behind this gear are the ones that most need to work
+              on an unhydrated page: signing out, connecting a repository, and
+              reaching the settings that turn Doug down.
               The threshold gear can afford to be a Radix client leaf because a
               view control that does not load costs you a view; a sign-out that
               does not load strands you signed in. <details> is HTML, so the
@@ -1602,7 +1581,7 @@ export default async function DashboardPage({
             <span className="min-w-0 flex-1 truncate" title={user.email}>{user.email}</span>
             <details className="flex-none">
               <summary
-                aria-label="Settings"
+                aria-label="Account"
                 className="flex cursor-pointer list-none items-center rounded-[4px] border border-transparent p-1 text-muted-foreground hover:border-border hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)] [&::-webkit-details-marker]:hidden"
               >
                 {/* The same cog the threshold gear draws, at the same weight —
@@ -1614,6 +1593,11 @@ export default async function DashboardPage({
                 </svg>
               </summary>
               <div className="absolute inset-x-4 bottom-[calc(100%+6px)] z-30 rounded-[5px] border border-border bg-card p-1 shadow-[0_10px_28px_-10px_rgba(0,0,0,.22)] max-lg:inset-x-auto max-lg:right-0 max-lg:top-[calc(100%+6px)] max-lg:bottom-auto max-lg:w-[196px]">
+                {/* Also in the rail's section list, and that is not a
+                    duplicate to be tidied away: the list is where someone
+                    BROWSING finds it, and a gear is where someone LOOKING for
+                    settings looks first. Two doors to one room. */}
+                <Link href="/dashboard/settings" className={MENU_ITEM}>Settings</Link>
                 <Link href="/install/start" prefetch={false} className={MENU_ITEM}>Connect repositories</Link>
                 <form action={signOutAction}><button type="submit" className={MENU_ITEM}>Sign out</button></form>
               </div>
