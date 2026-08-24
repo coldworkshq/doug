@@ -219,10 +219,10 @@ def _wire_pr_comment(monkeypatch, *, outcomes=("created",)) -> list[dict]:
     return calls
 
 
-def _enable_pr_comment(monkeypatch, *, repo_setting=True, allowlisted=True) -> None:
-    """Both gates the comment hangs off: the repo's own `pr_comment` column
-    (an ACTIVE installation_repos row) and the interim install allowlist.
-    Needs DATABASE_URL already set — call after _db."""
+def _enable_pr_comment(monkeypatch, *, repo_setting=True) -> None:
+    """The one gate the comment hangs off: the repo's own `pr_comment` column
+    on an ACTIVE installation_repos row. The interim install allowlist went
+    with #144. Needs DATABASE_URL already set — call after _db."""
     store.upsert_installation(JOB["installation_id"], "drewjst", "Organization", "active")
     store.set_installation_repos(
         JOB["installation_id"],
@@ -231,9 +231,6 @@ def _enable_pr_comment(monkeypatch, *, repo_setting=True, allowlisted=True) -> N
     )
     if not repo_setting:
         store.set_repo_pr_comment(JOB["installation_id"], JOB["github_repo_id"], False)
-    monkeypatch.setenv(
-        "DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]) if allowlisted else ""
-    )
     monkeypatch.setenv("DOUG_WEB_URL", "https://doug.test")
 
 
@@ -2589,11 +2586,16 @@ def test_the_pr_comment_mirrors_the_check_run_summary_and_logs_its_own_line(
     assert err.index(reviewed_line) < err.index(comment_line)
 
 
-@pytest.mark.parametrize("case", ["no-repo-row", "setting-off", "not-allowlisted"])
-def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_allowlisted(
+@pytest.mark.parametrize("case", ["no-repo-row", "setting-off"])
+def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing(
     tmp_path, monkeypatch, capsys, case
 ):
-    """Three ways to be off, one behaviour: nothing is written to the PR.
+    """Two ways to be off, one behaviour: nothing is written to the PR.
+
+    Both are visible from the dashboard — a repo whose toggle is off, and a
+    repo that is not listed at all. That is the point of #144: after the
+    install allowlist went, there is no third way to be off that a tenant
+    cannot see.
 
     A missing installation_repos row is deliberately off rather than
     defaulted on — that is the set of repos a tenant cannot see or toggle on
@@ -2603,14 +2605,8 @@ def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing_or_not_al
     _db(tmp_path, monkeypatch)
     posted = _wire(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch)
-    if case == "no-repo-row":
-        monkeypatch.setenv("DOUG_PR_COMMENT_INSTALLATIONS", str(JOB["installation_id"]))
-    else:
-        _enable_pr_comment(
-            monkeypatch,
-            repo_setting=case != "setting-off",
-            allowlisted=case != "not-allowlisted",
-        )
+    if case != "no-repo-row":
+        _enable_pr_comment(monkeypatch, repo_setting=case != "setting-off")
     ingest.enqueue(**JOB)
 
     worker.process_job(ingest.claim())

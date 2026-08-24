@@ -20,14 +20,24 @@ export default function ChangelogPage() {
             <ParamsTable
               rows={[
                 {
+                  name: "2026-08-20",
+                  description: (
+                    <>
+                      The sticky PR comment finishes rolling out. It is on for
+                      every repository Doug reviews, and the per-repository
+                      toggle beside the flag line is the only thing that turns
+                      it off.
+                    </>
+                  ),
+                },
+                {
                   name: "2026-08-19",
                   description: (
                     <>
                       Doug leaves one sticky comment on each reviewed PR that
                       repeats its check run word for word, edited in place on
                       every push — on by default, opt-out per repository
-                      beside the flag line. Rolling out to Doug&rsquo;s own
-                      repositories first.
+                      beside the flag line.
                     </>
                   ),
                 },

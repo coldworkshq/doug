@@ -659,13 +659,12 @@ deploy() {
   # doug-web does not exist yet, $(web_url) is empty and DOUG_WEB_URL gets
   # set to an empty string — exactly why the code tolerates empty values.
   #
-  # DOUG_PR_COMMENT_INSTALLATIONS is an ALLOWLIST, not a switch. Same shape
-  # as DOUG_INTENT_INSTALLATIONS (this line), gated to the same dogfood
-  # installation id. TEMPORARY (D3a): the design ships PR comments on-by-
-  # default but gates the first release to dogfood, and this allowlist is
-  # removed in a follow-up PR once a week of real comments looks right. Empty
-  # → no comments anywhere; the allowlist must not be removed prematurely or
-  # comments silently start everywhere without a gate.
+  # There is deliberately NO DOUG_PR_COMMENT_INSTALLATIONS here. The staged
+  # rollout it gated (ADR-0014 D3a) ended on 2026-08-20 with issue #144; the
+  # per-repository `installation_repos.pr_comment` toggle on the dashboard is
+  # now the only thing that decides. Re-adding the variable would silently
+  # dark every installation not named in it while their toggles still read
+  # "on" — see the guard in api/tests/test_deploy_gcp.py.
   #
   # DOUG_VERIFY_INSTALLATIONS is an ALLOWLIST, not a switch, and it replaced
   # a process-wide DOUG_VERIFY=1 boolean before that boolean was ever set.
@@ -675,8 +674,10 @@ deploy() {
   # about every tenant, including every tenant added later — exactly what
   # DOUG_INTENT=1 did before DOUG_INTENT_INSTALLATIONS replaced it (see
   # docs/design/outcome-loop/design-lock.md:64). Empty or unset → grounding is
-  # off everywhere. 150424894 is the same dogfood installation the two
-  # allowlists above name.
+  # off everywhere. 150424894 is the same dogfood installation
+  # DOUG_INTENT_INSTALLATIONS above names. (It read "the two allowlists
+  # above" until #144 removed DOUG_PR_COMMENT_INSTALLATIONS; there is one
+  # left.)
   #
   # Known limit at switch-on: VERIFY_SCHEMA's predicate enum holds exactly one
   # check, constant_value_is, so most findings will abstain rather than ground.
@@ -704,7 +705,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_PR_COMMENT_INSTALLATIONS=150424894,DOUG_VERIFY_INSTALLATIONS=150424894${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=150424894,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=150424894${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

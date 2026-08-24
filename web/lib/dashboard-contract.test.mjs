@@ -729,14 +729,14 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   // off-state you have to guess at is guessed at wrong.
   assert.match(control, /Off, Doug stops updating the comment/);
   assert.match(control, /the last one it posted stays where it is/);
-  // AND THE ROLLOUT IS STAGED (D3a). While `DOUG_PR_COMMENT_INSTALLATIONS`
-  // gates the worker's post, a space outside the first wave sees this toggle
-  // read "on", gets no comment, and gets no denial banner either — there is no
-  // 403 to report. Promising posting we cannot yet deliver is the same
-  // dishonesty D8 exists to refuse, one layer up. Phrased to match the
-  // /docs/changelog row so the two read as one message.
-  assert.match(control, /Rolling out to Doug&apos;s own repositories first/);
-  assert.match(control, /if this space isn&apos;t in the first wave/);
+  // AND NOTHING HEDGES IT ANY MORE (#144). The staged-rollout sentence was
+  // true only while `DOUG_PR_COMMENT_INSTALLATIONS` could hold a space dark
+  // with this toggle reading "on". The allowlist is gone, so the sentence
+  // would now describe a gate that does not exist — copy narrating a finished
+  // rollout is its own kind of wrong, and the absence is what needs pinning
+  // because nothing else fails when stale copy survives a deletion.
+  assert.equal(control.includes("Rolling out to Doug"), false);
+  assert.equal(control.includes("first wave"), false);
 });
 
 test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {
