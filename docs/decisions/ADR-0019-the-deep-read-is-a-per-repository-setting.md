@@ -61,9 +61,15 @@ and is looking for the place where Doug is turned down.
   from `reader-unavailable` (a fault) and `reader-capped` (a budget).
 - **A missing or removed row reads as ON**, the opposite of
   `repo_pr_comment`'s default and deliberately so — see Consequences.
-- **Two-PR deploy**, the same sequence ADR-0013 used: web's response guards
-  tolerate `deep_read` first, then the API emits it and web renders the
-  toggle.
+- **Two-PR deploy**, the same sequence ADR-0013 used, and this record lands
+  with the FIRST of them. `deploy.yml:162` gives the web job
+  `needs: [changes, api]`, so the API is always promoted before web: PR 1
+  ships the settings page, the header link and a response guard that TOLERATES
+  `deep_read`; PR 2 adds the column, the API that emits it, the worker read
+  and the toggle, and tightens the guard back. A reader at PR 1's commit will
+  not find `installation_repos.deep_read` — the decision precedes its
+  implementation on purpose, because PR 1's guard tolerance is otherwise a
+  change with no recorded reason.
 
 ## Rejected
 

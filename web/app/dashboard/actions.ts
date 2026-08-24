@@ -28,17 +28,21 @@ const FLAG_LINE_REAUTH =
 const PR_COMMENT_ERROR = "Doug could not save that PR comment setting.";
 const DEEP_READ_ERROR = "Doug could not save that deep read setting.";
 
-/** Every route that renders the per-repository controls. All three settings
- *  writes revalidate ALL of them, because the repositories table and
- *  /dashboard/settings render the same component over the same row —
- *  revalidating one would leave the other showing the state before the click,
- *  and two surfaces disagreeing about a setting is worse than either being
- *  stale: it makes the reader doubt the write landed at all.
+/** Every route that renders the per-repository controls.
  *
- *  A LOOP, not a spread: `revalidatePath(path, type?)` takes a second
- *  argument that is `'page' | 'layout'`, so `revalidatePath(...paths)` would
- *  hand it "/dashboard/settings" as a `type` — invalid, and silently the
- *  wrong call rather than a compile error worth reading. */
+ *  BOTH, and this is the whole reason the constant exists. Until
+ *  /dashboard/settings there was one surface, so `revalidatePath("/dashboard")`
+ *  was the complete answer; now the repositories table and the settings page
+ *  render the same component over the same row, and revalidating one leaves
+ *  the other showing the state before the click. Two surfaces disagreeing
+ *  about a setting is worse than either being stale — it makes the reader
+ *  doubt the write landed at all, on controls whose entire job is to be
+ *  believed.
+ *
+ *  A LOOP, not a spread: `revalidatePath(path, type?)` takes a second argument
+ *  that is `'page' | 'layout'`, so `revalidatePath(...paths)` would hand it
+ *  "/dashboard/settings" as a `type` — silently the wrong call rather than an
+ *  error worth reading. */
 const DASHBOARD_SURFACES = ["/dashboard", "/dashboard/settings"] as const;
 
 function revalidateDashboard(): void {

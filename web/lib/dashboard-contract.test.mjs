@@ -14,6 +14,19 @@ const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
 const globalsUrl = new URL("../app/globals.css", import.meta.url);
 const gearUrl = new URL("../components/threshold-gear.tsx", import.meta.url);
 
+/** A source file with its comments removed.
+ *
+ *  Every assertion below that says "this must NOT appear" needs it. The
+ *  comments in these files EXPLAIN the rules — the deep-read copy's docblock
+ *  quotes "default · 0.30 deep read / 0.62 fallback" as the string it is
+ *  describing, and actions.ts spells out `revalidatePath(...paths)` as the
+ *  call it refuses to make. Scanning the raw file, a negative pin fails on the
+ *  prose that documents it, which trains the next person to delete the
+ *  explanation rather than keep the rule. */
+function code(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
   assert.match(page, /You're in\. Connect GitHub only when you want Doug to review repositories\./);
@@ -739,19 +752,6 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   assert.equal(control.includes("first wave"), false);
 });
 
-/** A source file with its comments removed.
- *
- *  Every assertion below that says "this must NOT appear" needs it. The
- *  comments in these files EXPLAIN the rules — the deep-read copy's docblock
- *  quotes "default · 0.30 deep read / 0.62 fallback" as the string it is
- *  describing, and actions.ts spells out `revalidatePath(...paths)` as the
- *  call it refuses to make. Scanning the raw file, a negative pin fails on the
- *  prose that documents it, which trains the next person to delete the
- *  explanation rather than keep the rule. */
-function code(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-}
-
 test("the deep read toggle is its own form and states BOTH of its consequences", async () => {
   const control = await readFile(
     new URL("../components/flag-line-control.tsx", import.meta.url),
@@ -815,15 +815,16 @@ test("the deep read toggle is its own form and states BOTH of its consequences",
   }
 });
 
-test("setDeepReadAction is a server action that revalidates BOTH surfaces", async () => {
+
+test("every settings write revalidates BOTH surfaces, not just the ledger", async () => {
+  // THE BUG THIS PINS. Until /dashboard/settings there was one surface, so
+  // `revalidatePath("/dashboard")` was the complete answer. The settings page
+  // renders the same component over the same row, so a write from it that
+  // revalidated only the ledger left the page the click happened on showing
+  // the state before the click — on controls whose entire job is to be
+  // believed. Doug caught it on PR #194
+  // (reader:server-action-revalidation-mismatch).
   const actions = await readFile(actionsUrl, "utf8");
-  assert.match(actions, /^"use server";/);
-  assert.match(actions, /export async function setDeepReadAction/);
-  assert.equal(actions.includes("export async function GET"), false);
-  // The repositories table and /dashboard/settings render the same component
-  // over the same row. Revalidating one would leave the other showing the
-  // state before the click, and two surfaces disagreeing about a setting is
-  // worse than either being stale.
   assert.match(actions, /const DASHBOARD_SURFACES = \["\/dashboard", "\/dashboard\/settings"\]/);
   // A loop, not a spread: revalidatePath's second parameter is
   // `'page' | 'layout'`, so `revalidatePath(...paths)` would hand it a path as
@@ -834,8 +835,28 @@ test("setDeepReadAction is a server action that revalidates BOTH surfaces", asyn
     false,
     "revalidatePath is being spread — its second argument is a type, not a path",
   );
-  // All three writes use it, not just the new one.
-  assert.equal((actions.match(/revalidateDashboard\(\);/g) ?? []).length, 3);
+  // EVERY write, counted, so adding a fourth action that revalidates one
+  // surface fails here rather than shipping. There is no bare
+  // revalidatePath("/dashboard") left outside the helper.
+  const calls = actions.match(/revalidateDashboard\(\);/g) ?? [];
+  assert.ok(calls.length >= 2, "a settings write stopped revalidating both surfaces");
+  assert.equal(
+    code(actions).includes('revalidatePath("/dashboard");'),
+    false,
+    "a write still revalidates only the ledger",
+  );
+});
+
+test("setDeepReadAction is a server action like the two beside it", async () => {
+  // Its revalidation is covered by the shared pin above, which counts EVERY
+  // write rather than this one — a third action that revalidated only the
+  // ledger has to fail there, not here. What is left is what is specific to
+  // this action.
+  const actions = await readFile(actionsUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setDeepReadAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  assert.match(actions, /setRepositoryDeepRead\(auth\.accessToken, repoId, value\)/);
 });
 
 test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {

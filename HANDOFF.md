@@ -1,7 +1,23 @@
 # HANDOFF — doug
 
 State:    review — pushed. #194 and #195 open, #195 stacked on #194's
-          branch; #196 filed for the deferral.
+          branch; #196 filed for the deferral. Doug reviewed #194 and found
+          TWO REAL DEFECTS in it as a standalone deployable unit, both fixed
+          in 61c5c6a and both worth remembering:
+          (a) the settings page renders the same controls as the ledger, and
+              the two existing actions revalidated only /dashboard — so a save
+              made from the settings page left that page stale. The
+              second-surface cost of one component with two homes, missed by
+              my own settings-page contract test;
+          (b) settings/page.tsx cited "ADR-0013's amendment" while the
+              amendment and ADR-0019 were both scheduled into #195, so #194
+              shipped a policy change against a record a reader could not
+              find. Both ADRs moved into #194 and ADR-0019 now names which PR
+              does what. LESSON: when work is split across a deploy-ordered
+              stack, the RECORD goes with the first PR, not the last.
+          All seven findings dispositioned in docs/findings-log.jsonl
+          (4 real, 2 disproved, 1 duplicate). #195 has been merged up from
+          #194 and is green on the merge.
           PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
           /dashboard/settings, rail + gear links, a Dashboard link in the site
           header, session-api guards LOOSENED to tolerate deep_read.
