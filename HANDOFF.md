@@ -1,57 +1,63 @@
 # HANDOFF — doug
 
-State:    review — BOTH PRs built and green, on two branches, neither pushed.
-          PR 1 = claude/code-review-settings-page-f902d1 (commit b985c4c):
+State:    review — three commits on two branches, NOTHING PUSHED.
+          PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
           /dashboard/settings, rail + gear links, a Dashboard link in the site
-          header, and session-api guards LOOSENED to tolerate deep_read.
-          PR 2 = claude/per-repo-deep-read, on top of it: migration 15,
-          store/api/review/worker, the toggle, ADR-0019, changelog, README.
+          header, session-api guards LOOSENED to tolerate deep_read.
+          PR 2 = claude/per-repo-deep-read (88c8dad + 8acd9eb), on top of it:
+          migration 15, store/api/review/worker, the toggle, guards tightened
+          back, ADR-0019, changelog, README.
           Green: api 1620/1620 + ruff clean; web 358/358, tsc clean, lint clean
           (2 pre-existing <img> warnings on /about), build clean; console
-          113/113. /about and /docs/* are still ○ — the reason the header link
-          is a plain link and not a session read.
-Next:     ANDREW'S CALL, three things, none of them done because all three are
-          outward-facing: (1) push both branches and open two PRs; (2) MERGE
-          THEM IN ORDER — PR 1 must be deployed before PR 2 merges, because
-          deploy.yml:162 promotes the API before web and PR 2's API emits a key
-          PR 1's web build is the first to tolerate; merging PR 2 first breaks
-          every dashboard with "Doug could not load your connected spaces" for
-          the length of the window; (3) file the deferred issue ADR-0019 names
-          (a service-level DOUG_READER indicator in the connections response),
-          which AGENTS.md requires and which is deliberately NOT filed yet.
+          113/113. /about and /docs/* still ○.
+Next:     ANDREW'S CALL — all three are outward-facing, so none is done:
+          (1) push both branches and open two PRs;
+          (2) MERGE IN ORDER. PR 1 must be DEPLOYED before PR 2 merges.
+              deploy.yml:162 promotes the API before web, and PR 2's API emits
+              a key PR 1's web build is the first to tolerate. Merging PR 2
+              first breaks every dashboard with "Doug could not load your
+              connected spaces" for the length of that window;
+          (3) file the issue ADR-0019 defers — a service-level DOUG_READER
+              indicator in the connections response, so the toggle cannot read
+              "on" while the service has the reader off. AGENTS.md requires it;
+              the ADR says in as many words that it is not filed.
 Blockers: none.
 
-NOT VERIFIED IN A BROWSER. /dashboard needs WorkOS auth + the API and has no
-fixture mode, so the deploy is the first real look at /dashboard/settings —
-the same limitation the #193 session hit. Everything below is source-pinned,
-typechecked and built, not seen.
+SEEN, not just tested: /dashboard/settings was rendered through a temporary
+harness route (deleted, tree clean) against fixture data, because the real
+page needs WorkOS auth + the API and has no fixture mode. That look caught two
+real defects, both fixed in 8acd9eb — the flat panel gave three settings no
+grouping, and a repo already set to deep-read-off was told what turning it off
+"would" do to its band. Verified across all three states. What the harness
+CANNOT show: the real page under real auth, an installation with many repos,
+and the redirect arms.
+
+Known and deliberately not fixed: three paragraphs per repository is a lot of
+page at forty repositories. Thinning it by splitting the copy between the page
+and the control would put the same forward-only promise in two files, which is
+what FlagLineControl's one-component design exists to refuse.
 
 PR 2, as built:
 - installation_repos.deep_read, NOT NULL DEFAULT TRUE (migration 15). TRUE is
   the only honest backfill: every repo that existed before the column WAS read
   whenever DOUG_READER was on.
-- NARROWS ONLY. review.score_one gates on `reader.enabled() and deep_read`, so
-  the per-repo flag can never turn a read on where the service has it off.
-- read_intent (review.py) takes the SAME gate. A repo that turned the LLM off
-  turned off the LLM, not one of the two things Doug asks it.
+- NARROWS ONLY. review.score_one gates on `reader.enabled() and deep_read`.
+- read_intent takes the SAME gate. A repo that turned the LLM off turned off
+  the LLM, not one of the two things Doug asks it.
 - Off gets its own verdict rule, `deep-read-off`, distinct from
   reader-unavailable (a fault) and reader-capped (a budget).
 - store.repo_deep_read defaults a MISSING row to True — the opposite of
-  repo_pr_comment and argued in ADR-0019: resolving that fault towards "off"
-  here silently downgrades the verdict AND moves the band, and nothing on the
-  check run says why.
-- The copy states BOTH consequences of turning it off, and the second one
-  CONDITIONALLY (`value === null`): on a repo with no line of its own the band
-  moves from the reader default to the fallback, so Doug asks for a human less
-  often, not just differently. Pinned in dashboard-contract.test.mjs.
-- All three settings writes revalidate BOTH surfaces now.
+  repo_pr_comment, argued in ADR-0019: resolving that fault towards "off" here
+  silently downgrades the verdict AND moves the band, with nothing on the
+  check run saying why.
+- All three settings writes revalidate BOTH surfaces.
 - Doug's own intent selector caught a real defect in ADR-0019 before it
-  shipped: naming `web/components/*.tsx` tokenised to {web, components, tsx}
+  shipped: citing `web/components/*.tsx` tokenises to {web, components, tsx}
   and pulled the record into "Fix a typo in the footer"
   (test_selection_on_dougs_own_records). Fixed by naming the components, not
-  their paths. Worth remembering when writing any future ADR that cites a web
-  file.
+  their paths. Worth remembering for any future ADR that cites a web file.
 
+Plan — the settings page (decided):
 Plan — the settings page (decided):
 Plan — the settings page (decided):
 Plan — the settings page (decided, not yet built):
