@@ -326,6 +326,23 @@ test("llms.txt does not present the July probe as the live scorer, or hotspots a
   assert.equal(llms.includes("also write the full JSON report"), false);
 });
 
+test("the AUC panel says whose number 0.69 / 0.67 is", () => {
+  // ADR-0012: the shipped reader reads up to 100,000 chars in tiered order,
+  // so "the shipped reader is the one that scored 0.687/0.668" is false. The
+  // panel keeps the figures — the probe did score them — but under a heading
+  // reading "What's actually measured" a visitor reads them as the number for
+  // the reader on their PRs unless the panel names the configuration that
+  // produced them. The sentence is pre-registered in
+  // docs/design/competitor-imports/design-lock.md open risk #4, so pin the
+  // whole of it, not a phrase — a half-kept caveat is the same defect back.
+  // Whitespace-collapsed so re-wrapping the JSX cannot break the pin.
+  const oneLine = landing.replace(/\s+/g, " ");
+  assert.match(
+    oneLine,
+    /That&rsquo;s the 30,000-character probe reader, not the one running on your PRs — the shipped reader hasn&rsquo;t been measured by it\./,
+  );
+});
+
 test("docs intro does not offer a self-serve GitHub App install", () => {
   assert.equal(intro.includes("sign in to install"), false);
   assert.match(intro, /not a self-serve product/);
