@@ -335,11 +335,18 @@ test("the AUC panel says whose number 0.69 / 0.67 is", () => {
   // produced them. The sentence is pre-registered in
   // docs/design/competitor-imports/design-lock.md open risk #4, so pin the
   // whole of it, not a phrase — a half-kept caveat is the same defect back.
-  // Whitespace-collapsed so re-wrapping the JSX cannot break the pin.
-  const oneLine = landing.replace(/\s+/g, " ");
+  // Normalized before matching so the pin fails on wording, not typography:
+  // whitespace collapsed (re-wrapping the JSX is not an edit), entities
+  // folded to their characters, and either dash accepted. A change to the
+  // words is meant to fail here — that is the point of pinning a
+  // pre-registered sentence.
+  const oneLine = landing
+    .replace(/&rsquo;/g, "\u2019")
+    .replace(/&mdash;/g, "\u2014")
+    .replace(/\s+/g, " ");
   assert.match(
     oneLine,
-    /That&rsquo;s the 30,000-character probe reader, not the one running on your PRs — the shipped reader hasn&rsquo;t been measured by it\./,
+    /That\u2019s the 30,000-character probe reader, not the one running on your PRs [\u2014-] the shipped reader hasn\u2019t been measured by it\./,
   );
 });
 
