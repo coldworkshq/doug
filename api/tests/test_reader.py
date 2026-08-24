@@ -1156,10 +1156,14 @@ def test_reader_and_probe_share_the_validated_prompt_bytes():
     which point the live service would be running an unvalidated
     instrument under a validated instrument's claimed AUC.
 
-    ADR-0012 supersedes ADR-0002 and narrows the freeze to FIVE constants;
-    DIFF_BUDGET is now governed by a coverage bar instead and is asserted
-    separately below. MAX_TOKENS and EFFORT are pinned here for the first
-    time — ADR-0002 always claimed them, this test never checked them."""
+    ADR-0012 supersedes ADR-0002 and narrowed the freeze to five constants;
+    ADR-0018 narrows it again to FOUR. DIFF_BUDGET is governed by a coverage
+    bar and EFFORT by a pre-registration, and both are asserted separately
+    below as deliberate divergences rather than dropped from the file.
+
+    Dropping an assertion is how a freeze quietly becomes four constants that
+    nobody decided on. Each removal here has an ADR and a replacement
+    assertion; if you are removing a fifth, write the ADR first."""
     import sys
     from pathlib import Path
 
@@ -1170,7 +1174,40 @@ def test_reader_and_probe_share_the_validated_prompt_bytes():
     assert reader.SCHEMA == llm_probe.SCHEMA
     assert reader.MODEL == llm_probe.MODEL
     assert reader.MAX_TOKENS == llm_probe.MAX_TOKENS
-    assert reader.EFFORT == llm_probe.EFFORT
+
+
+def test_effort_diverges_from_the_probe_on_purpose():
+    """ADR-0018, in the shape ADR-0012's divergence already uses.
+
+    The probe stays at the "medium" it actually measured; the shipped reader
+    runs "high", which is also the API default the probe's choice sat one step
+    below. Asserting BOTH sides is what makes the divergence intentional and
+    sized: syncing either constant to the other breaks this test and sends the
+    author to ADR-0018 rather than silently re-anchoring the instrument.
+
+    Literals, not a cross-module comparison, for the same reason: `reader.EFFORT
+    != llm_probe.EFFORT` would stay green if someone raised the probe too, which
+    is precisely the move that destroys the probe's ability to report what it
+    measured.
+
+    The consequence this encodes, which ADR-0018 states in full: EFFORT is
+    UNMEASURED on this prompt. The pre-registration exists and has not been run,
+    so no claim about accuracy attaches to this value.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import llm_probe
+
+    assert reader.EFFORT == "high"
+    assert llm_probe.EFFORT == "medium"
+    assert reader.EFFORT != llm_probe.EFFORT
+    # The mechanical tier did not follow. Its calls were never in the probe and
+    # never in the freeze, so they have no divergence to record — but a blanket
+    # "raise effort everywhere" edit would sweep them up, and this is where that
+    # gets caught.
+    assert reader.MECHANICAL_EFFORT == "medium"
 
 
 def test_diff_budget_diverges_from_the_probe_on_purpose():

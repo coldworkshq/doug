@@ -138,6 +138,12 @@ def _is_test(path: str) -> bool:
 
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
 _CODE_TEXT_NAMES = {"CMakeLists.txt"}
+# Data that lives under docs/ is evidence, not program text. Scoped by
+# DIRECTORY rather than by suffix because the same suffixes are how real
+# config ships — package.json, tsconfig.json, and the migration fixtures are
+# all correctly tier 0, and a suffix rule would demote every one of them.
+_DOCS_DATA_ROOT = "docs"
+_DOCS_DATA_SUFFIXES = (".json", ".jsonl", ".csv", ".yaml", ".yml")
 _DEPENDENCY_TEXT_RE = re.compile(
     r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
 )
@@ -155,14 +161,35 @@ def _is_prose(path: str) -> bool:
     including conventional requirements/constraints variants despite their
     otherwise-prose suffix. Code-bearing text entry points use routing-only
     exceptions so this helper does not change scoring features.
+
+    Committed data under `docs/` is prose for the same reason lockfiles are:
+    it is evidence a review reads about, not program text a review reasons
+    over. It got here as tier 0 because the suffix list stops at `.md`/`.txt`/
+    `.rst`, and `read_order` sorts `(tier, len(patch))` ascending — so a large
+    evidence fixture did not merely occupy tier 0, it sorted last within it and
+    became the likeliest thing to be cut, displacing real code that would have
+    fit. Measured: on the 30 first-parent commits ending at HEAD on 2026-08-23,
+    `6fa1633` reported a code-tier miss whose only "code" files were
+    `docs/design/walked-out/phase0_units.json` and
+    `span-verification/barb_evidence.json`, on a 429,126-char diff.
+
+    Scoped to the `docs/` root, NOT to the suffix. `package.json`,
+    `tsconfig.json` and migration fixtures carry real decisions and stay tier 0;
+    a suffix rule would demote all of them. Routing only, like the exceptions
+    above — `extract_features` never calls this, so scoring is untouched.
     """
-    name = PurePosixPath(path).name
+    p = PurePosixPath(path)
+    name = p.name
     if (
         name in MANIFESTS
         or name in _CODE_TEXT_NAMES
         or _DEPENDENCY_TEXT_RE.fullmatch(name)
     ):
         return False
+    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and name.lower().endswith(
+        _DOCS_DATA_SUFFIXES
+    ):
+        return True
     return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
 
 

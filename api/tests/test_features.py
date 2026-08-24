@@ -127,6 +127,51 @@ def test_small_deletions_not_deletion_leaning():
     assert not extract_features(pr).deletion_leaning
 
 
+def test_committed_data_under_docs_routes_as_prose_but_real_config_does_not(monkeypatch):
+    """Evidence fixtures under docs/ are things a review reads ABOUT, not
+    program text it reasons OVER — the same argument the docstring already
+    makes for lockfiles.
+
+    They reached tier 0 because the prose suffix list stops at .md/.txt/.rst.
+    That is not merely a mislabel: read_order sorts (tier, len(patch))
+    ascending, so a large fixture sorted last inside tier 0 and became the
+    likeliest file to be cut, displacing code that would otherwise have fit.
+    Measured on the 30 first-parent commits ending 2026-08-23 — 6fa1633
+    reported a code-tier miss whose only "code" files were the two below, on a
+    429,126-char diff (issue #182).
+
+    The negatives are the load-bearing half. The rule is scoped to the docs/
+    ROOT, not to the suffix, because .json is also how real config ships. A
+    suffix rule would demote package.json, tsconfig.json and every migration
+    fixture — trading a routing bug for a much worse one. web/docs/ is
+    deliberately NOT covered: this names the repo's documentation root, not any
+    directory that happens to be called docs.
+    """
+    assert features._is_prose("docs/design/walked-out/phase0_units.json")
+    assert features._is_prose("docs/design/walked-out/span-verification/barb_evidence.json")
+    assert features._is_prose("docs/findings-log.jsonl")
+    assert features._is_prose("docs/data/measurements.CSV")  # case-insensitive
+
+    assert not features._is_prose("web/package.json")
+    assert not features._is_prose("tsconfig.json")
+    assert not features._is_prose("api/tests/fixtures/data.json")
+    assert not features._is_prose("web/docs/thing.json")
+    assert not features._is_prose("docs/scripts/gen.py")
+
+    # Routing only, asserted as a property rather than trusted. ADR-0012's
+    # tiering decides which files reach the model, never what the score says,
+    # and the docstring's "routing-only exceptions" claim is only true while
+    # extract_features does not consult this helper. Breaking _is_prose
+    # entirely must leave the features byte-identical; if this ever fails, a
+    # routing change has silently become a scoring change.
+    files = ["docs/design/walked-out/phase0_units.json", "api/doug/tenancy.py"]
+    real = extract_features(_pr(files=files))
+    monkeypatch.setattr(features, "_is_prose", lambda path: True)
+    assert extract_features(_pr(files=files)) == real
+    monkeypatch.setattr(features, "_is_prose", lambda path: False)
+    assert extract_features(_pr(files=files)) == real
+
+
 def test_prose_covers_docs_and_lockfiles_but_not_their_manifests():
     """The reader is asked for logic errors, unsafe migrations, concurrency
     hazards, error-handling gaps and contract mismatches (reader.SYSTEM).

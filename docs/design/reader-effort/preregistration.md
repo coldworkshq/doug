@@ -1,6 +1,16 @@
 # Raising the reader's EFFORT — PRE-REGISTRATION
 
-**Status:** BARS LOCKED before run — 2026-08-23
+> **The raise shipped before this run, by Andrew's direction (2026-08-23).**
+> ADR-0018 records that decision and what it costs. This document is therefore
+> no longer a gate on the change; it is the experiment that would tell anyone
+> whether the change was right, and its bars are unchanged from before the raise
+> so that running it later is still a real test rather than a confirmation.
+>
+> **Amend nothing here to fit the shipped value.** Bar 1 stays at <=19.6%
+> disproved, bar 2 stays at >=68 real. If the run fails them, the remedy is in
+> ADR-0018's "Reversal is one line", not in this file.
+
+**Status:** BARS LOCKED before run — 2026-08-23. Raise shipped unrun (ADR-0018).
 **Amends:** ADR-0012 (which narrowed ADR-0002's freeze from six constants to five)
 **Instrument under test:** `reader.EFFORT`, `api/doug/reader.py:47`
 **Companion ADR:** ADR-0016, to be written only if this run PASSES
