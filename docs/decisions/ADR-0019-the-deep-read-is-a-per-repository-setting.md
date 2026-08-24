@@ -109,10 +109,9 @@ and is looking for the place where Doug is turned down.
 - **The toggle can read "on" while no read happens**, if the service has
   `DOUG_READER` off. The copy says the setting narrows rather than promises,
   and the ledger's tier and coverage columns are the evidence. A service-level
-  indicator in the connections response is DEFERRED and owes a GitHub issue
-  under AGENTS.md's standing-issues rule; it is not filed yet, because opening
-  it is Andrew's to authorise. Do not let this line stand in for the issue —
-  a prose aside is what that rule exists to refuse.
+  indicator in the connections response is deferred to
+  [#196](https://github.com/drewjst/doug/issues/196) — the issue is the
+  tracker, not this line.
 - All three settings writes now revalidate `/dashboard` and
   `/dashboard/settings`. Two surfaces disagreeing about a setting is worse than
   either being stale: it makes the reader doubt the write landed.

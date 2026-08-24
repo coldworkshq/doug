@@ -1,6 +1,7 @@
 # HANDOFF — doug
 
-State:    review — three commits on two branches, NOTHING PUSHED.
+State:    review — pushed. #194 and #195 open, #195 stacked on #194's
+          branch; #196 filed for the deferral.
           PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
           /dashboard/settings, rail + gear links, a Dashboard link in the site
           header, session-api guards LOOSENED to tolerate deep_read.
@@ -17,10 +18,9 @@ Next:     ANDREW'S CALL — all three are outward-facing, so none is done:
               a key PR 1's web build is the first to tolerate. Merging PR 2
               first breaks every dashboard with "Doug could not load your
               connected spaces" for the length of that window;
-          (3) file the issue ADR-0019 defers — a service-level DOUG_READER
-              indicator in the connections response, so the toggle cannot read
-              "on" while the service has the reader off. AGENTS.md requires it;
-              the ADR says in as many words that it is not filed.
+          Both PRs are open — #194 (settings page) and #195 (deep read,
+          stacked on it) — and the deferral ADR-0019 names is filed as #196,
+          linked from the ADR so the two cannot drift.
 Blockers: none.
 
 SEEN, not just tested: /dashboard/settings was rendered through a temporary
