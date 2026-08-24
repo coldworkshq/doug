@@ -1249,23 +1249,29 @@ class RepositorySettingsPatch(BaseModel):
         None, strict=True, allow_inf_nan=False, ge=0, le=1
     )
     pr_comment: bool | None = Field(None, strict=True)
+    deep_read: bool | None = Field(None, strict=True)
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> RepositorySettingsPatch:
         if not self.model_fields_set:
-            raise ValueError("at least one of needs_you_threshold, pr_comment is required")
-        # Unlike needs_you_threshold, pr_comment has no "clear" meaning for
-        # null — the column is a plain non-nullable bool. Without this,
-        # store.set_repo_pr_comment's `bool(value)` would silently coerce an
-        # explicit `{"pr_comment": null}` into False.
-        if "pr_comment" in self.model_fields_set and self.pr_comment is None:
-            raise ValueError("pr_comment does not accept null")
+            raise ValueError(
+                "at least one of needs_you_threshold, pr_comment, deep_read is required"
+            )
+        # Unlike needs_you_threshold, pr_comment and deep_read have no "clear"
+        # meaning for null — both columns are plain non-nullable bools.
+        # Without this, store.set_repo_pr_comment's `bool(value)` would
+        # silently coerce an explicit `{"pr_comment": null}` into False, and
+        # set_repo_deep_read would do the same for the reader.
+        for name in ("pr_comment", "deep_read"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} does not accept null")
         return self
 
 
 class RepositorySettings(BaseModel):
     needs_you_threshold: float | None
     pr_comment: bool
+    deep_read: bool
 
 
 @app.patch("/v1/sessions/repositories/{github_repo_id}")
@@ -1274,9 +1280,10 @@ def set_repository_flag_line(
     body: RepositorySettingsPatch,
     authorization: str = Header(""),
 ) -> RepositorySettings:
-    """Set (or clear, with null) the repo's needs-you line and/or its sticky
-    PR-comment toggle. Forward-only: verdicts already scored keep the line
-    they were scored against.
+    """Set (or clear, with null) the repo's needs-you line, its sticky
+    PR-comment toggle and/or its deep-read toggle. Forward-only: verdicts
+    already scored keep the line they were scored against, and the tier they
+    were scored on.
 
     installation_id comes from the session, never the request; each write is
     keyed on (installation_id, github_repo_id, state='active'), so another
@@ -1296,6 +1303,7 @@ def set_repository_flag_line(
     fields_set = body.model_fields_set
     threshold = store.repo_threshold(ctx.installation_id, github_repo_id)
     pr_comment = store.repo_pr_comment(ctx.installation_id, github_repo_id)
+    deep_read = store.repo_deep_read(ctx.installation_id, github_repo_id)
     if "needs_you_threshold" in fields_set:
         before = threshold
         if not store.set_repo_threshold(
@@ -1320,7 +1328,25 @@ def set_repository_flag_line(
             f"repo={github_repo_id} {before_flag}->{pr_comment} by sub={sub}",
             file=sys.stderr,
         )
-    return RepositorySettings(needs_you_threshold=threshold, pr_comment=pr_comment)
+    if "deep_read" in fields_set:
+        before_read = deep_read
+        if not store.set_repo_deep_read(
+            ctx.installation_id, github_repo_id, body.deep_read
+        ):
+            raise _not_found()
+        deep_read = store.repo_deep_read(ctx.installation_id, github_repo_id)
+        # Logged like the other two, and worth more than either: this is the
+        # one setting that changes which SCORER ran, so a verdict's tier
+        # changing under a reader who did not expect it has a line naming who
+        # asked and when.
+        print(
+            f"doug: deep_read installation={ctx.installation_id} "
+            f"repo={github_repo_id} {before_read}->{deep_read} by sub={sub}",
+            file=sys.stderr,
+        )
+    return RepositorySettings(
+        needs_you_threshold=threshold, pr_comment=pr_comment, deep_read=deep_read
+    )
 
 
 @app.get("/v1/sessions/runs")

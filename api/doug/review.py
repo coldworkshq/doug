@@ -306,6 +306,7 @@ def score_one(
     *,
     scope: str,
     threshold: float | None = None,
+    deep_read: bool = True,
     resolve_file: settle.ResolveFile | None = None,
     resolve_schema: settle.ResolveSchema | None = None,
 ):
@@ -332,6 +333,13 @@ def score_one(
     integer compared with >=) and all three deterministic fallbacks — because
     a capped read on a 0.9 repo must not quietly band at 0.62.
 
+    `deep_read` is the repo's own reader toggle (store.repo_deep_read). It
+    NARROWS ONLY: `reader.enabled()` is the service's master switch and the
+    spend control, and a True here cannot turn a read on where that is off.
+    False takes the deterministic tier deliberately, under its own rule name
+    — see the branch below for why that is not the same exit as a service
+    with no reader configured.
+
     `resolve_file`, when given, settles import/undefined-name findings
     against the full file at head (REVIEWING.md resolution rule). It does
     not change what the model was shown — ADR-0012's five-constant freeze
@@ -344,6 +352,25 @@ def score_one(
     `resolve_file` is None.
     """
     reader_line = None if threshold is None else round(threshold * 100)
+    if reader.enabled() and not deep_read:
+        # A DELIBERATE opt-out, named as one. The bare fallthrough at the end
+        # of this function is what "this service has no reader" looks like,
+        # and the two must not be spelled the same way on the verdict: one is
+        # a setting somebody chose on this repository and can undo from
+        # /dashboard/settings, the other is a deployment fact they cannot see.
+        # Same distinction store.repo_pr_comment_state draws between `off` and
+        # `no-active-row`, for the same reason — and it matters more here,
+        # because with an unset flag line this exit also moves the band from
+        # DOUG_READER_THRESHOLD to DOUG_THRESHOLD.
+        verdict = score(meta, threshold=threshold)
+        verdict.reasons.append(
+            Reason(
+                rule="deep-read-off",
+                label="deep read is off for this repository",
+                weight=0.0,
+            )
+        )
+        return "deterministic", verdict, None, None
     if reader.enabled():
         try:
             rv = reader.read_diff(meta, diff, scope=scope)
@@ -453,7 +480,14 @@ class IntentRead(BaseModel):
 
 
 def read_intent(
-    gh, owner: str, repo: str, meta: PRMetadata, diff: str, *, scope: str
+    gh,
+    owner: str,
+    repo: str,
+    meta: PRMetadata,
+    diff: str,
+    *,
+    scope: str,
+    deep_read: bool = True,
 ) -> IntentRead | IntentFailure | None:
     """Judge the change against the repo's binding decisions.
 
@@ -469,8 +503,20 @@ def read_intent(
     reason about rather than two. It is also who this tier is switched on
     for — the flag reads the scope rather than taking the installation id
     separately, so "who pays" and "who opted in" cannot drift apart.
+
+    `deep_read` is the repo's reader toggle, and it gates this tier too. A
+    repository whose owner turned the LLM read off has turned OFF THE LLM,
+    not off one of the two things Doug asks it — leaving intent running
+    would keep charging that repo for a read it opted out of, and would keep
+    posting deviation findings written by the model it declined. None here,
+    not IntentFailure: nothing was attempted, so there is nothing to
+    surface on the risk verdict (ADR-0007).
     """
-    if not (intent.enabled_for(reader.installation_from_scope(scope)) and reader.enabled()):
+    if not (
+        deep_read
+        and intent.enabled_for(reader.installation_from_scope(scope))
+        and reader.enabled()
+    ):
         return None
     try:
         docs = intent_providers.fetch(gh, owner, repo)

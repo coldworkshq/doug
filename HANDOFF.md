@@ -1,45 +1,90 @@
 # HANDOFF — doug
 
-State:    building — PR 1 of 2 DONE and green, not yet committed when this was
-          written. /dashboard/settings exists, the rail and the account gear
-          both link to it, and site-header.tsx carries a Dashboard link, which
-          was the actual complaint ("I can't access it from the web page").
-          web 356/356, tsc clean, lint clean (2 pre-existing <img> warnings on
-          /about), build clean — /dashboard/settings is ƒ and /about + /docs/*
-          stayed ○, which is the whole reason the header link is static.
-          NOT VERIFIED IN A BROWSER: /dashboard needs WorkOS auth + the API and
-          has no fixture mode, so the deploy is the first real look. Same
-          limitation the #193 session hit.
-Next:     PR 2 (api + web): migration 15 deep_read, store.repo_deep_read /
-          set_repo_deep_read, api.py PATCH field + projection,
-          review.score_one(deep_read=) gating BOTH reader.enabled() branches
-          (score AND read_intent at review.py:473), worker reads it beside
-          repo_threshold, then web tightens the guard to exact() and renders
-          the toggle. Plus the ADR-0013 amendment.
+State:    review — pushed. #194 and #195 open, #195 stacked on #194's
+          branch; #196 filed for the deferral. Doug reviewed #194 and found
+          TWO REAL DEFECTS in it as a standalone deployable unit, both fixed
+          in 61c5c6a and both worth remembering:
+          (a) the settings page renders the same controls as the ledger, and
+              the two existing actions revalidated only /dashboard — so a save
+              made from the settings page left that page stale. The
+              second-surface cost of one component with two homes, missed by
+              my own settings-page contract test;
+          (b) settings/page.tsx cited "ADR-0013's amendment" while the
+              amendment and ADR-0019 were both scheduled into #195, so #194
+              shipped a policy change against a record a reader could not
+              find. Both ADRs moved into #194 and ADR-0019 now names which PR
+              does what. LESSON: when work is split across a deploy-ordered
+              stack, the RECORD goes with the first PR, not the last.
+          All seven findings dispositioned in docs/findings-log.jsonl
+          (4 real, 2 disproved, 1 duplicate). #195 has been merged up from
+          #194 and is green on the merge.
+          Doug then reviewed #195 at 230ff93: 6 more findings, all settled
+          (3 real+changed, 3 disproved). The one that mattered caught a
+          CONTRADICTION IN MY OWN COMMENTS — #194's guard note argued absence
+          of deep_read is unambiguous, #195's tightening then argued absence
+          would invent a toggle state. Both cannot be true. The justification
+          is rewritten to the real one (an absent key means an API older than
+          the column, i.e. a contract this build cannot check at all), and the
+          rollback window it exposed — which the two-step NEVER covered, since
+          that protects promotion order only — is #197, filed cross-cutting
+          because pr_comment has the identical exposure.
+          PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
+          /dashboard/settings, rail + gear links, a Dashboard link in the site
+          header, session-api guards LOOSENED to tolerate deep_read.
+          PR 2 = claude/per-repo-deep-read (88c8dad + 8acd9eb), on top of it:
+          migration 15, store/api/review/worker, the toggle, guards tightened
+          back, ADR-0019, changelog, README.
+          Green: api 1620/1620 + ruff clean; web 358/358, tsc clean, lint clean
+          (2 pre-existing <img> warnings on /about), build clean; console
+          113/113. /about and /docs/* still ○.
+Next:     ANDREW'S CALL — all three are outward-facing, so none is done:
+          (1) push both branches and open two PRs;
+          (2) MERGE IN ORDER. PR 1 must be DEPLOYED before PR 2 merges.
+              deploy.yml:162 promotes the API before web, and PR 2's API emits
+              a key PR 1's web build is the first to tolerate. Merging PR 2
+              first breaks every dashboard with "Doug could not load your
+              connected spaces" for the length of that window;
+          Both PRs are open — #194 (settings page) and #195 (deep read,
+          stacked on it) — and the deferral ADR-0019 names is filed as #196,
+          linked from the ADR so the two cannot drift.
 Blockers: none.
 
-PR 1, as built:
-- web/app/dashboard/settings/page.tsx — server component, no client boundary.
-  Redirects to /dashboard for a failed connections read AND for every
-  door.state !== "runs", rather than growing a second copy of four empty
-  states that are already worded and pinned on the ledger.
-- FlagLineControl gained `layout: "cell" | "page"`. ONE component, one copy of
-  the forward-only promise, two boxes. The "preview gear above" sentence is
-  cell-only — there is no gear on the settings page.
-- PrCommentDenialBanner extracted to its own component and rendered on BOTH
-  surfaces. D8 would otherwise be recreated: a settings page reading
-  "PR comment · on" while every post is refused.
-- The rail gear's aria-label went "Settings" -> "Account". Two different things
-  named Settings on one screen is the same failure the gear/flag-line naming
-  test already refuses.
-- session-api.ts: `exactWithOptional` + `deepRead()`. deep_read is TOLERATED,
-  not required, and absent means ON — the column is NOT NULL DEFAULT TRUE, so
-  the only body that can omit it came from an API that read every repo.
-- Pins moved with the code, none dropped: the 4 denial-copy assertions now
-  read the component; design-system.test.mjs's surface-token list gained the
-  settings page (it mounts .dashboard-surface, so it earns the token);
-  public-surface.test.mjs's nav order pins /dashboard first.
+SEEN, not just tested: /dashboard/settings was rendered through a temporary
+harness route (deleted, tree clean) against fixture data, because the real
+page needs WorkOS auth + the API and has no fixture mode. That look caught two
+real defects, both fixed in 8acd9eb — the flat panel gave three settings no
+grouping, and a repo already set to deep-read-off was told what turning it off
+"would" do to its band. Verified across all three states. What the harness
+CANNOT show: the real page under real auth, an installation with many repos,
+and the redirect arms.
 
+Known and deliberately not fixed: three paragraphs per repository is a lot of
+page at forty repositories. Thinning it by splitting the copy between the page
+and the control would put the same forward-only promise in two files, which is
+what FlagLineControl's one-component design exists to refuse.
+
+PR 2, as built:
+- installation_repos.deep_read, NOT NULL DEFAULT TRUE (migration 15). TRUE is
+  the only honest backfill: every repo that existed before the column WAS read
+  whenever DOUG_READER was on.
+- NARROWS ONLY. review.score_one gates on `reader.enabled() and deep_read`.
+- read_intent takes the SAME gate. A repo that turned the LLM off turned off
+  the LLM, not one of the two things Doug asks it.
+- Off gets its own verdict rule, `deep-read-off`, distinct from
+  reader-unavailable (a fault) and reader-capped (a budget).
+- store.repo_deep_read defaults a MISSING row to True — the opposite of
+  repo_pr_comment, argued in ADR-0019: resolving that fault towards "off" here
+  silently downgrades the verdict AND moves the band, with nothing on the
+  check run saying why.
+- All three settings writes revalidate BOTH surfaces.
+- Doug's own intent selector caught a real defect in ADR-0019 before it
+  shipped: citing `web/components/*.tsx` tokenises to {web, components, tsx}
+  and pulled the record into "Fix a typo in the footer"
+  (test_selection_on_dougs_own_records). Fixed by naming the components, not
+  their paths. Worth remembering for any future ADR that cites a web file.
+
+Plan — the settings page (decided):
+Plan — the settings page (decided):
 Plan — the settings page (decided):
 Plan — the settings page (decided, not yet built):
 - TWO PRs, mandatory, not a preference. deploy.yml:162 promotes API before

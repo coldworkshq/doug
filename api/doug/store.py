@@ -260,6 +260,14 @@ installation_repos = Table(
     # that omits this column, so a bare NOT NULL breaks every repo insert on
     # a create_all() schema. Written ONLY by set_repo_pr_comment.
     Column("pr_comment", Boolean, nullable=False, server_default=true()),
+    # Whether Doug opens this repo's diff with the LLM reader (ADR-0004), or
+    # scores it on structural signals alone. Read by the worker at scoring
+    # time and NARROWING ONLY: reader.enabled() (DOUG_READER) is the master
+    # switch and the spend control, and review.score_one requires both. Same
+    # server_default reasoning as pr_comment above —
+    # set_installation_repos omits this column from its values dict. Written
+    # ONLY by set_repo_deep_read.
+    Column("deep_read", Boolean, nullable=False, server_default=true()),
     UniqueConstraint("installation_id", "github_repo_id", name="uq_installation_repo"),
 )
 
@@ -1219,6 +1227,65 @@ def set_repo_threshold(
                 installation_repos.c.state == "active",
             )
             .values(needs_you_threshold=stored)
+        )
+    return result.rowcount == 1
+
+
+def repo_deep_read(installation_id: int, github_repo_id: int) -> bool:
+    """Whether Doug opens this repo's diff with the reader.
+
+    Read regardless of `state`, and defaulting to True when there is no row
+    at all — BOTH for the same reason `repo_threshold` above ignores state,
+    and the opposite of `repo_pr_comment` below. The asymmetry is deliberate.
+
+    A missing or removed row is a reconciliation fault (the API's startup
+    DRIFT line), not a preference. For the sticky comment, resolving that
+    fault towards "off" is safe: the cost of being wrong is silence on a PR
+    nobody could have toggled. Here the cost of being wrong is a SILENTLY
+    DOWNGRADED VERDICT — the repo drops to the deterministic tier, and with
+    an unset line drops from 0.30 to 0.62 with it, so Doug quietly asks for
+    a human on far fewer PRs and nothing on the check run says why. A
+    reconciliation fault must not be able to do that. Spending on a read for
+    a repo whose row went missing is the cheaper way to be wrong.
+
+    True here is still not a promise that a read happens: DOUG_READER is the
+    master switch, and review.score_one requires it as well.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return True
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(installation_repos.c.deep_read).where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+            )
+        ).scalar_one_or_none()
+    return True if value is None else bool(value)
+
+
+def set_repo_deep_read(installation_id: int, github_repo_id: int, value: bool) -> bool:
+    """Write the deep-read toggle on the ACTIVE row for
+    (installation_id, github_repo_id).
+
+    Returns False when no such active row exists — the API turns that into
+    404. Same shape as `set_repo_threshold` and `set_repo_pr_comment`:
+    writes ONLY this column, never `updated_at`, because that column is
+    repo_id_for's tiebreaker between duplicate registrations and a settings
+    write must not move it.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(installation_repos)
+            .where(
+                installation_repos.c.installation_id == installation_id,
+                installation_repos.c.github_repo_id == github_repo_id,
+                installation_repos.c.state == "active",
+            )
+            .values(deep_read=bool(value))
         )
     return result.rowcount == 1
 
@@ -3775,6 +3842,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                     installation_repos.c.full_name,
                     installation_repos.c.needs_you_threshold,
                     installation_repos.c.pr_comment,
+                    installation_repos.c.deep_read,
                     installations.c.pr_comment_denied_at,
                 )
                 .select_from(joined)
@@ -3817,6 +3885,7 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                         else float(row["needs_you_threshold"])
                     ),
                     "pr_comment": bool(row["pr_comment"]),
+                    "deep_read": bool(row["deep_read"]),
                 }
             )
     return list(projected.values())

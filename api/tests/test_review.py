@@ -103,6 +103,92 @@ def test_score_one_threads_the_repo_line_to_every_exit(monkeypatch):
     assert (tier, v.band, v.threshold) == ("reader", Band.FLAGGED, 0.55)
 
 
+def test_deep_read_off_takes_the_deterministic_tier_under_its_own_rule(monkeypatch):
+    """A repository that opted out of the reader must not be spelled the same
+    way as a service with no reader, and must not be spelled the same way as a
+    broken one.
+
+    Three exits reach the deterministic tier and each says something
+    different: `reader-unavailable` is a fault someone should page about,
+    `reader-capped` is a budget, and `deep-read-off` is a setting a person
+    chose and can undo from /dashboard/settings. Collapsing them is exactly
+    what made "why is this repo silent?" unanswerable for the sticky comment
+    (#173), and it costs more here — with an unset line this exit also moves
+    the band from DOUG_READER_THRESHOLD to DOUG_THRESHOLD.
+    """
+    meta = _pr_with_deterministic_score_0_79()
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    # If the gate leaks, this raises and the test says so loudly rather than
+    # passing on a read that happened to succeed.
+    monkeypatch.setattr(
+        reader, "read_diff",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("the reader was called")),
+    )
+
+    tier, v, rv, cov = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9, deep_read=False
+    )
+
+    assert (tier, v.band, v.threshold) == ("deterministic", Band.CLEARED, 0.9)
+    rules = {r.rule for r in v.reasons}
+    assert "deep-read-off" in rules
+    assert "reader-unavailable" not in rules
+    assert "reader-capped" not in rules
+    # No read happened, so there is no reader verdict and no coverage. 0% would
+    # assert a read that returned nothing, which is a different fact.
+    assert rv is None and cov is None
+
+
+def test_deep_read_narrows_and_never_widens(monkeypatch):
+    """DOUG_READER is the master switch and the spend control. A repo set to
+    deep_read=True on a service with the reader off must still score
+    deterministically — and must NOT pick up the opt-out rule, because
+    nobody opted out."""
+    meta = _pr_with_deterministic_score_0_79()
+    monkeypatch.setattr(reader, "enabled", lambda: False)
+
+    tier, v, _, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9, deep_read=True
+    )
+
+    assert tier == "deterministic"
+    assert "deep-read-off" not in {r.rule for r in v.reasons}
+
+
+def test_deep_read_defaults_to_on_so_every_other_caller_is_unchanged(monkeypatch):
+    """The parameter is opt-out, not opt-in: `doug-review`, the backtest CLI
+    and every test that predates the column call score_one without it, and a
+    default of False would have silently retired the reader for all of them."""
+    meta = _pr_with_deterministic_score_0_79()
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(risk_score=55))
+
+    tier, _, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE)
+
+    assert tier == "reader"
+
+
+def test_deep_read_off_also_silences_the_intent_tier(monkeypatch):
+    """A repository whose owner turned the LLM read off turned off THE LLM,
+    not one of the two things Doug asks it. Leaving intent running would keep
+    charging that repo for a read it declined and keep posting deviation
+    findings written by the model it declined. None, not IntentFailure —
+    nothing was attempted, so there is nothing to surface (ADR-0007)."""
+    from doug import intent
+
+    meta = _pr_with_deterministic_score_0_79()
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(intent, "enabled_for", lambda _installation: True)
+    monkeypatch.setattr(
+        review.intent_providers, "fetch",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("intent docs were fetched")),
+    )
+
+    assert review.read_intent(
+        None, "o", "r", meta, "+ x", scope=reader.SENTINEL_SCOPE, deep_read=False
+    ) is None
+
+
 def test_metadata_mapping_marks_bots():
     gh = FakeGH([_pull(login="renovate[bot]", user_type="Bot")], [_file()])
     items = review.fetch_open_prs(gh, "o", "r", limit=5)
