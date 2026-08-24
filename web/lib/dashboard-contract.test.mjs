@@ -750,12 +750,25 @@ test("setFlagLineCommentAction is a server action, and the denial is stated on t
   // exists to refuse. It names the USUAL cause without claiming it is the only
   // one — a locked conversation, an archived repository and secondary rate
   // limiting all return the same 403.
-  assert.match(page, /PR comments are not posting/);
-  assert.match(page, /refused \(403\)/);
-  assert.match(page, /re-accepted in GitHub/);
-  assert.match(page, /secondary rate limiting/);
+  //
+  // THE COPY MOVED, THE PIN FOLLOWED IT. The banner is its own component now
+  // because the PR-comment toggle has two homes — this table and
+  // /dashboard/settings — and a denial stated on only one of them recreates
+  // the silence D8 exists to break. Four assertions that used to read
+  // `page` read the component instead; none was dropped, and the two that
+  // are genuinely about THIS page (that it renders the banner, and that it
+  // renders it only on evidence) still read `page`.
+  const banner = await readFile(
+    new URL("../components/pr-comment-denial-banner.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(banner, /PR comments are not posting/);
+  assert.match(banner, /refused \(403\)/);
+  assert.match(banner, /re-accepted in GitHub/);
+  assert.match(banner, /secondary rate limiting/);
+  assert.match(page, /<PrCommentDenialBanner deniedAt=\{door\.current\.pr_comment_denied_at\}/);
   // Rendered only when the API says a denial happened, never unconditionally.
-  assert.match(page, /pr_comment_denied_at/);
+  assert.match(page, /pr_comment_denied_at &&/);
 });
 
 test("a failed connections read never reaches the generic error boundary", async () => {

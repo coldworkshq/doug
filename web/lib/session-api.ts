@@ -19,6 +19,34 @@ const SESSION_FETCH_TIMEOUT_MS = 5_000;
  *  later PR. `session-api.test.mjs` pins both bodies. */
 export type ConnectionStatus = "ready" | "setup_required" | "reauthorize_required";
 
+/** One repository Doug is installed on, and everything about it a person can
+ *  set. `deep_read` is OPTIONAL here and nowhere else in this file's intent:
+ *  it is the same shape ADR-0013 used for `pr_comment` and the reason is the
+ *  same one `repository()` spells out below. Read it through
+ *  `deepRead()` rather than directly, so a body from an API that predates the
+ *  column reads as the default (on) in exactly one place. */
+export type ConnectedRepository = {
+  id: number;
+  full_name: string;
+  needs_you_threshold: number | null;
+  pr_comment: boolean;
+  deep_read?: boolean;
+};
+
+/** Whether Doug opens this repository's diff with the LLM reader.
+ *
+ *  ABSENT MEANS ON, and that is not a guess: the column ships
+ *  `NOT NULL DEFAULT TRUE`, so the only body that can omit the key is one from
+ *  an API revision older than the column — an API on which every repository
+ *  was read. Defaulting to off would blank the toggle on a live setting and
+ *  invite someone to "turn on" what was never off.
+ *
+ *  It is also NOT a claim that a deep read will happen. `DOUG_READER` is the
+ *  master switch and the spend control; this narrows, never widens. */
+export function deepRead(repository: ConnectedRepository): boolean {
+  return repository.deep_read ?? true;
+}
+
 export type RepositoryConnection = {
   provider: "github";
   installation_id: number;
@@ -34,18 +62,17 @@ export type RepositoryConnection = {
    *  rate limiting, so the banner that reads it names the usual cause and
    *  hedges the rest rather than asserting one. */
   pr_comment_denied_at: string | null;
-  repositories: Array<{
-    id: number;
-    full_name: string;
-    needs_you_threshold: number | null;
-    pr_comment: boolean;
-  }>;
+  repositories: ConnectedRepository[];
 };
 
 /** What `PATCH /v1/sessions/repositories/{id}` answers with, whichever field it
  *  was asked to write: the row's whole settable state, so a caller that wrote
  *  one setting still learns the other's current value rather than assuming it. */
-export type RepositorySettings = { needs_you_threshold: number | null; pr_comment: boolean };
+export type RepositorySettings = {
+  needs_you_threshold: number | null;
+  pr_comment: boolean;
+  deep_read?: boolean;
+};
 
 export type ConnectionsResponse = {
   connections: RepositoryConnection[];
@@ -178,6 +205,35 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
+/** Exactly `keys`, plus any subset of `optional`.
+ *
+ *  The loose half of the two-step this repo runs every time the API grows a
+ *  field. `.github/workflows/deploy.yml:162` gives the web job
+ *  `needs: [changes, api]`, so the API revision is always live first — and
+ *  `exact()` rejects the WHOLE body on an unknown key, which would degrade
+ *  every dashboard to "Doug could not load your connected spaces" for the
+ *  length of the promotion window. A key lands here first, unrendered, and
+ *  the API starts emitting it in a later PR.
+ *
+ *  Tolerating a key is not the same as trusting it: each optional key is
+ *  still type-checked by its own caller. What this drops is the requirement
+ *  that it be PRESENT, never the requirement that it be right. */
+function exactWithOptional(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const allowed = new Set<string>([...keys, ...optional]);
+  return (
+    Object.keys(value).every((key) => allowed.has(key)) &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function optionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -212,35 +268,40 @@ function prMetadata(value: unknown): value is PRMetadata {
   );
 }
 
-/** TIGHTENED BACK, now that the API emits `pr_comment` (the API job promotes
- *  first — `.github/workflows/deploy.yml:162`). PR A accepted the key as
- *  optional so this build survived the window between the two promotions; an
- *  entry arriving without it now is not an older API, it is a body this build
- *  cannot render honestly — the row would draw a toggle whose state it invented. */
-function repository(
-  value: unknown,
-): value is {
-  id: number;
-  full_name: string;
-  needs_you_threshold: number | null;
-  pr_comment: boolean;
-} {
+/** `pr_comment` is REQUIRED — it was tightened back once the API emitted it,
+ *  and an entry arriving without it now is not an older API but a body this
+ *  build cannot render honestly, because the row would draw a toggle whose
+ *  state it invented.
+ *
+ *  `deep_read` is at the loose step of that same two-step and is optional
+ *  until the API emits it. It differs from `pr_comment` in one way that makes
+ *  the looseness safe rather than merely temporary: absent has a single true
+ *  reading (`deepRead()` — the column is NOT NULL DEFAULT TRUE, so an API
+ *  without it read every repository), so nothing is invented. Tighten this to
+ *  `exact()` in the PR that ships the toggle, not before. */
+function repository(value: unknown): value is ConnectedRepository {
   return (
     record(value) &&
-    exact(value, ["id", "full_name", "needs_you_threshold", "pr_comment"]) &&
+    exactWithOptional(
+      value,
+      ["id", "full_name", "needs_you_threshold", "pr_comment"],
+      ["deep_read"],
+    ) &&
     Number.isInteger(value.id) &&
     typeof value.full_name === "string" &&
     nullableNumber(value.needs_you_threshold) &&
-    typeof value.pr_comment === "boolean"
+    typeof value.pr_comment === "boolean" &&
+    optionalBoolean(value.deep_read)
   );
 }
 
 function isRepositorySettings(value: unknown): value is RepositorySettings {
   return (
     record(value) &&
-    exact(value, ["needs_you_threshold", "pr_comment"]) &&
+    exactWithOptional(value, ["needs_you_threshold", "pr_comment"], ["deep_read"]) &&
     nullableNumber(value.needs_you_threshold) &&
-    typeof value.pr_comment === "boolean"
+    typeof value.pr_comment === "boolean" &&
+    optionalBoolean(value.deep_read)
   );
 }
 

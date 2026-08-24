@@ -1,20 +1,72 @@
 # HANDOFF — doug
 
-State:    review — PR #193 open (feat/wider-dock-legible-ledger): dock stops
-          400/560/640, --dim to 4.65:1, --rule-soft to 1.20:1, rows 34→38px,
-          row type up EXCEPT the two width-bound outcome cells. Doug read it
-          three times, 0.22 → 0.16 → 0.12, all five findings settled in
-          docs/findings-log.jsonl (2 real+fixed, 3 disproved). Web suite
-          346/346, lint clean (2 pre-existing <img> warnings on /about), build
-          clean. Not merged — merging deploys (ADR-0009), Andrew's call.
-Next:     Andrew merges #193 after a look at the deploy, or says which of the
-          numbers to adjust (dock stops, row height, --dim #757269). Every
-          number came from a mock, so the deploy is the first real look.
-          STANDING, not raised in this PR: the "Decision debt — Andrew's call,
-          blocks the scoreboard spec" block still lives only in HANDOFF.md,
-          which AGENTS.md says must be a GitHub issue. Not filed — it is
-          Andrew's debt to shape, and he was asked.
-Blockers: none
+State:    building — PR 1 of 2 DONE and green, not yet committed when this was
+          written. /dashboard/settings exists, the rail and the account gear
+          both link to it, and site-header.tsx carries a Dashboard link, which
+          was the actual complaint ("I can't access it from the web page").
+          web 356/356, tsc clean, lint clean (2 pre-existing <img> warnings on
+          /about), build clean — /dashboard/settings is ƒ and /about + /docs/*
+          stayed ○, which is the whole reason the header link is static.
+          NOT VERIFIED IN A BROWSER: /dashboard needs WorkOS auth + the API and
+          has no fixture mode, so the deploy is the first real look. Same
+          limitation the #193 session hit.
+Next:     PR 2 (api + web): migration 15 deep_read, store.repo_deep_read /
+          set_repo_deep_read, api.py PATCH field + projection,
+          review.score_one(deep_read=) gating BOTH reader.enabled() branches
+          (score AND read_intent at review.py:473), worker reads it beside
+          repo_threshold, then web tightens the guard to exact() and renders
+          the toggle. Plus the ADR-0013 amendment.
+Blockers: none.
+
+PR 1, as built:
+- web/app/dashboard/settings/page.tsx — server component, no client boundary.
+  Redirects to /dashboard for a failed connections read AND for every
+  door.state !== "runs", rather than growing a second copy of four empty
+  states that are already worded and pinned on the ledger.
+- FlagLineControl gained `layout: "cell" | "page"`. ONE component, one copy of
+  the forward-only promise, two boxes. The "preview gear above" sentence is
+  cell-only — there is no gear on the settings page.
+- PrCommentDenialBanner extracted to its own component and rendered on BOTH
+  surfaces. D8 would otherwise be recreated: a settings page reading
+  "PR comment · on" while every post is refused.
+- The rail gear's aria-label went "Settings" -> "Account". Two different things
+  named Settings on one screen is the same failure the gear/flag-line naming
+  test already refuses.
+- session-api.ts: `exactWithOptional` + `deepRead()`. deep_read is TOLERATED,
+  not required, and absent means ON — the column is NOT NULL DEFAULT TRUE, so
+  the only body that can omit it came from an API that read every repo.
+- Pins moved with the code, none dropped: the 4 denial-copy assertions now
+  read the component; design-system.test.mjs's surface-token list gained the
+  settings page (it mounts .dashboard-surface, so it earns the token);
+  public-surface.test.mjs's nav order pins /dashboard first.
+
+Plan — the settings page (decided):
+Plan — the settings page (decided, not yet built):
+- TWO PRs, mandatory, not a preference. deploy.yml:162 promotes API before
+  web, and session-api.ts's `exact()` guards reject a body with an unknown
+  key — so the API emitting `deep_read` before web tolerates it would break
+  every dashboard with "Doug could not load your connected spaces". Same
+  sequence ADR-0013 used and session-api.ts:196 documents.
+- THE FLAG-LINE CELL STAYS on the repositories table. ADR-0013's reason for
+  putting it there (page.tsx:886 — read the line beside the "needs you"
+  count) still holds, and a settings page does not have that count. The
+  amendment is "both places, one API", not "moved".
+- The header link is a STATIC "Dashboard" link, not auth-aware. Making
+  SiteHeader call withAuth() would turn /, /docs, /queue, /scoreboard,
+  /about dynamic to change one word. Signed out, the link still works —
+  proxy.ts redirects /dashboard to AuthKit.
+- DEEP READ NARROWS ONLY. `reader.enabled()` (DOUG_READER=1) stays the
+  master switch and the spend control; the per-repo flag can only turn a
+  deep read OFF, never on. Composition is `reader.enabled() and deep_read`.
+- Turning it off MOVES THE LINE, and the copy has to say so: an unset repo
+  scores at 0.30 on a deep read and 0.62 on the fallback, so opting out of
+  the read silently re-bands the repo unless a flag line is also set.
+- read_intent (review.py:473) gets the same gate. A repo opted out of LLM
+  reads must not still get an LLM intent read.
+- Consequences that are correct and must not be "fixed": tier records as
+  deterministic, coverage is null, and the repositories table's "read"
+  column shows an em dash for that repo.
+
 Decisions this session:
 - The 1620 dock stop stays at 400 — measured, a 440 dock leaves the title
   column ~148px there vs ~188px, which buys dock prose with the master

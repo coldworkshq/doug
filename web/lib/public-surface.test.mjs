@@ -69,8 +69,9 @@ function fieldOf(source, anchorKey, anchorValue, field) {
 
 test("the header's public routes survive below the sm breakpoint", () => {
   // Desktop nav is `hidden sm:flex`. If that is the only iterator over
-  // NAV_LINKS, a phone cannot reach Docs, Scoreboard, or Queue from the
-  // chrome — and the request that produced this pin came from a phone.
+  // NAV_LINKS, a phone cannot reach Dashboard, Docs, Scoreboard, or Queue
+  // from the chrome — and the request that produced this pin came from a
+  // phone.
   assert.match(header, /hidden sm:flex/);
   assert.match(header, /<details className="[^"]*sm:hidden/);
   const maps = header.match(/NAV_LINKS\.map/g) ?? [];
@@ -82,13 +83,17 @@ test("the header's public routes survive below the sm breakpoint", () => {
 });
 
 test("nav order puts the live product surfaces before reference material, About last", () => {
-  // Scoreboard and Queue are the live showcase surfaces, Docs is reference
-  // material — those three are NAV_LINKS entries. GitHub and About are each
-  // hardcoded separately after the NAV_LINKS.map, in that order, so they're
-  // matched by their literal JSX (not the `href: "…"` object-literal shape
-  // NAV_LINKS entries use). Regressing this ordering is exactly the kind of
-  // silent reshuffle a diff review wouldn't catch without a pin.
+  // Dashboard is first and is the only entry addressed to someone who already
+  // has Doug: every setting — the flag line, the PR comment — is behind it,
+  // and until it existed the only route back from the marketing site was the
+  // URL bar. Scoreboard and Queue are the live public surfaces, Docs is
+  // reference material — those four are NAV_LINKS entries. GitHub and About
+  // are each hardcoded separately after the NAV_LINKS.map, in that order, so
+  // they're matched by their literal JSX (not the `href: "…"` object-literal
+  // shape NAV_LINKS entries use). Regressing this ordering is exactly the kind
+  // of silent reshuffle a diff review wouldn't catch without a pin.
   const order = [
+    'href: "/dashboard"',
     'href: "/scoreboard"',
     'href: "/queue"',
     'href: "/docs"',

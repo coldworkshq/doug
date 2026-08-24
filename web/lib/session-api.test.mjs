@@ -154,6 +154,84 @@ test("the connections validator accepts the old API body and the reauthorize_req
   }
 });
 
+test("the connections validator tolerates deep_read before any API emits it", async () => {
+  // THE LOOSE STEP of the same two-step the reauthorize_required test above
+  // describes, for the per-repo deep-read toggle. `deploy.yml:162` promotes the
+  // API first, so a body carrying a key this build has never seen would be
+  // rejected WHOLE by `exact()` — every dashboard degrading to "Doug could not
+  // load your connected spaces" for the length of the promotion window. The key
+  // lands here first, unrendered, and the API starts emitting it in a later PR.
+  for (const [label, extra] of [
+    ["old api, no key", {}],
+    ["new api, read on", { deep_read: true }],
+    ["new api, read off", { deep_read: false }],
+  ]) {
+    const oldFetch = globalThis.fetch;
+    const body = {
+      connections: [
+        {
+          ...validConnections.connections[0],
+          repositories: validConnections.connections[0].repositories.map(
+            (repository) => ({ ...repository, ...extra }),
+          ),
+        },
+      ],
+      default_needs_you_threshold: validConnections.default_needs_you_threshold,
+    };
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try {
+      const { getConnections, deepRead } = await import(`./session-api.ts?deep-${label}`);
+      const got = await getConnections("secret");
+      assert.deepEqual(got, body, `${label} must survive the validator`);
+      // ABSENT MEANS ON, read in exactly one place. The column is
+      // NOT NULL DEFAULT TRUE, so the only body that can omit the key is one
+      // from an API on which every repository WAS read; defaulting to off
+      // would blank a live setting and invite someone to "turn on" what was
+      // never off.
+      const expected = "deep_read" in extra ? extra.deep_read : true;
+      for (const repository of got.connections[0].repositories) {
+        assert.equal(deepRead(repository), expected, `deepRead disagreed for ${label}`);
+      }
+    } finally {
+      globalThis.fetch = oldFetch;
+    }
+  }
+});
+
+test("tolerating deep_read is not tolerating anything else", async () => {
+  // Widening by one named key is not abandoning the check. An unknown key is
+  // still a body this build cannot render honestly, and a `deep_read` that is
+  // not a boolean is worse than a missing one — it would render a toggle whose
+  // state was invented.
+  for (const bad of [{ surprise: 1 }, { deep_read: "true" }, { deep_read: null }]) {
+    const oldFetch = globalThis.fetch;
+    const body = {
+      connections: [
+        {
+          ...validConnections.connections[0],
+          repositories: validConnections.connections[0].repositories.map(
+            (repository) => ({ ...repository, ...bad }),
+          ),
+        },
+      ],
+      default_needs_you_threshold: validConnections.default_needs_you_threshold,
+    };
+    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
+    try {
+      const { getConnections } = await import(
+        `./session-api.ts?reject-${encodeURIComponent(JSON.stringify(bad))}`
+      );
+      await assert.rejects(
+        () => getConnections("secret"),
+        /connected spaces/,
+        `${JSON.stringify(bad)} must be refused`,
+      );
+    } finally {
+      globalThis.fetch = oldFetch;
+    }
+  }
+});
+
 test("a status outside the known enum is still refused rather than rendered", async () => {
   // Widening the enum is not the same as abandoning it. An unknown status is a
   // fact this build cannot render honestly, so it stays a hard rejection.
