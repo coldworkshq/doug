@@ -2,6 +2,7 @@
 title: The needs-you line is a per-repository setting, forward-only, one number for both scorers
 status: accepted
 date: 2026-08-18
+amended_by: ADR-0019
 ---
 
 ## Context
@@ -20,6 +21,9 @@ docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md.
 - Per-repository: `installation_repos.needs_you_threshold` (0..1, NULL =
   inherit), set via `PATCH /v1/sessions/repositories/{id}` behind the
   `settings:write` session scope, edited on the Repositories view.
+  **Amended by ADR-0019:** also edited on `/dashboard/settings`. The
+  Repositories view keeps its control — the adjacency argument below is
+  unchanged — and both surfaces render one component against this same PATCH.
 - Forward-only: read at scoring time and stamped on the verdict; existing
   verdicts keep their line; open PRs keep their check until a new commit.
 - One number for both scorers; the reader receives round(t*100).
@@ -58,6 +62,12 @@ docs/superpowers/specs/2026-08-18-per-repo-needs-you-threshold-design.md.
   application so a NaN/Infinity threshold body 422s instead of 500 (the
   stock handler, with non-finite floats stringified before the response
   is serialised).
+- **Amended by ADR-0019**, which adds `/dashboard/settings` as a second home
+  for these controls and a third setting (`installation_repos.deep_read`)
+  beside them. Nothing in this record is retired: the line is still one number
+  for both scorers, still forward-only, still authorised the same way, and
+  still sits beside the "needs you" count on the Repositories view for the
+  reason stated above.
 - Reader-fed: this record is `accepted`, so the reader will flag PRs that
   reintroduce a process-wide-only line, or make the settings PATCH advance
   `installation_repos.updated_at` (webhook reconciliation legitimately does;
