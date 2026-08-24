@@ -20,6 +20,22 @@ export default function ChangelogPage() {
             <ParamsTable
               rows={[
                 {
+                  name: "2026-08-23",
+                  description: (
+                    <>
+                      Settings get a page. <IC>/dashboard/settings</IC> lists
+                      every connected repository with its flag line, its PR
+                      comment toggle and a new deep read toggle, and the site
+                      header links to the dashboard. Deep read off means Doug
+                      scores that repository on structural signals alone — no
+                      diff leaves it. On a repository with no flag line of its
+                      own that also moves the line Doug bands against, from the
+                      deep-read default to the fallback one, so it asks for a
+                      human less often rather than merely differently.
+                    </>
+                  ),
+                },
+                {
                   name: "2026-08-20",
                   description: (
                     <>

@@ -739,6 +739,98 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   assert.equal(control.includes("first wave"), false);
 });
 
+/** A source file with its comments removed.
+ *
+ *  Every assertion below that says "this must NOT appear" needs it. The
+ *  comments in these files EXPLAIN the rules — the deep-read copy's docblock
+ *  quotes "default · 0.30 deep read / 0.62 fallback" as the string it is
+ *  describing, and actions.ts spells out `revalidatePath(...paths)` as the
+ *  call it refuses to make. Scanning the raw file, a negative pin fails on the
+ *  prose that documents it, which trains the next person to delete the
+ *  explanation rather than keep the rule. */
+function code(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
+test("the deep read toggle is its own form and states BOTH of its consequences", async () => {
+  const control = await readFile(
+    new URL("../components/flag-line-control.tsx", import.meta.url),
+    "utf8",
+  );
+  // A FOURTH FORM, for the reason the third one exists: `formData.get` returns
+  // the first entry for a name, so a toggle sharing a <form> with the
+  // flag-line input would re-save (or clear) that box on every click.
+  const toggleForm = control.match(/<form action=\{setDeepReadAction\}[\s\S]*?<\/form>/)?.[0] ?? "";
+  assert.ok(toggleForm, "the deep read form is gone");
+  assert.equal(
+    toggleForm.includes('name="needs_you_threshold"'),
+    false,
+    "the deep read form carries the flag line field — every toggle would rewrite the line",
+  );
+  assert.equal(
+    toggleForm.includes('name="pr_comment"'),
+    false,
+    "the deep read form carries the PR comment field",
+  );
+  assert.match(toggleForm, /name="deep_read"/);
+  assert.match(toggleForm, /name="github_repo_id"/);
+  // Reads the current state, submits the opposite — same as the toggle above
+  // it, and for the same reason: a label showing the pending value tells the
+  // reader the wrong thing about the repository in front of them.
+  assert.match(toggleForm, /Deep read · (\{|on|off)/);
+  assert.match(toggleForm, /value=\{deepRead \? "false" : "true"\}/);
+
+  // TWO CONSEQUENCES, and this is the pin that matters. Turning the read off
+  // drops the repository to the deterministic scorer AND — with no flag line
+  // of its own — moves the band from the reader default to the deterministic
+  // one. Copy that named only the first would let someone switch off "the AI
+  // bit" and silently halve how often Doug asks for a human.
+  assert.match(control, /Doug scores on\s*\n?\s*structural signals alone/);
+  assert.match(control, /moves the line Doug bands against/);
+  // Conditional on the repository actually being unset, because a repo that
+  // has set 0.75 keeps 0.75 through this toggle. Promising a move there would
+  // be the same lie pointing the other way.
+  assert.match(control, /\{value === null &&/);
+  // Read from the API's own defaults, never hardcoded — same rule the flag
+  // line's copy follows, so this suite is not pinned to one deployment's
+  // environment. Asserted on the paragraph, not the file: the docblock above
+  // legitimately quotes the numbers while explaining them.
+  const consequence = code(control).match(/On, Doug sends the diff[\s\S]*?<\/p>/)?.[0] ?? "";
+  assert.ok(consequence, "the deep read consequence paragraph is gone");
+  assert.match(consequence, /defaults\.reader\.toFixed\(2\)/);
+  assert.match(consequence, /defaults\.fallback\.toFixed\(2\)/);
+  for (const literal of ["0.30", "0.62"]) {
+    assert.equal(
+      consequence.includes(literal),
+      false,
+      `${literal} is hardcoded in the deep read copy`,
+    );
+  }
+});
+
+test("setDeepReadAction is a server action that revalidates BOTH surfaces", async () => {
+  const actions = await readFile(actionsUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setDeepReadAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  // The repositories table and /dashboard/settings render the same component
+  // over the same row. Revalidating one would leave the other showing the
+  // state before the click, and two surfaces disagreeing about a setting is
+  // worse than either being stale.
+  assert.match(actions, /const DASHBOARD_SURFACES = \["\/dashboard", "\/dashboard\/settings"\]/);
+  // A loop, not a spread: revalidatePath's second parameter is
+  // `'page' | 'layout'`, so `revalidatePath(...paths)` would hand it a path as
+  // a type — silently the wrong call rather than an error worth reading.
+  assert.match(actions, /for \(const path of DASHBOARD_SURFACES\) revalidatePath\(path\);/);
+  assert.equal(
+    /revalidatePath\(\.\.\./.test(code(actions)),
+    false,
+    "revalidatePath is being spread — its second argument is a type, not a path",
+  );
+  // All three writes use it, not just the new one.
+  assert.equal((actions.match(/revalidateDashboard\(\);/g) ?? []).length, 3);
+});
+
 test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {
   const actions = await readFile(actionsUrl, "utf8");
   const page = await readFile(pageUrl, "utf8");

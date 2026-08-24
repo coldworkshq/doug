@@ -17,8 +17,20 @@ const validConnections = {
       label: null,
       pr_comment_denied_at: null,
       repositories: [
-        { id: 11, full_name: "acme/one", needs_you_threshold: null, pr_comment: false },
-        { id: 12, full_name: "acme/two", needs_you_threshold: 0.5, pr_comment: true },
+        {
+          id: 11,
+          full_name: "acme/one",
+          needs_you_threshold: null,
+          pr_comment: false,
+          deep_read: true,
+        },
+        {
+          id: 12,
+          full_name: "acme/two",
+          needs_you_threshold: 0.5,
+          pr_comment: true,
+          deep_read: false,
+        },
       ],
     },
   ],
@@ -154,81 +166,98 @@ test("the connections validator accepts the old API body and the reauthorize_req
   }
 });
 
-test("the connections validator tolerates deep_read before any API emits it", async () => {
-  // THE LOOSE STEP of the same two-step the reauthorize_required test above
-  // describes, for the per-repo deep-read toggle. `deploy.yml:162` promotes the
-  // API first, so a body carrying a key this build has never seen would be
-  // rejected WHOLE by `exact()` — every dashboard degrading to "Doug could not
-  // load your connected spaces" for the length of the promotion window. The key
-  // lands here first, unrendered, and the API starts emitting it in a later PR.
-  for (const [label, extra] of [
-    ["old api, no key", {}],
-    ["new api, read on", { deep_read: true }],
-    ["new api, read off", { deep_read: false }],
-  ]) {
-    const oldFetch = globalThis.fetch;
-    const body = {
+test("the connections and PATCH guards now REQUIRE deep_read", async () => {
+  // THE SECOND STEP of the two-step the reauthorize_required test above
+  // describes. The previous PR accepted this key as optional so the running
+  // web build survived the window between the API's promotion and web's —
+  // `deploy.yml:162` gives the web job `needs: [changes, api]`. The API emits
+  // it now, so an entry arriving WITHOUT it is not an older API; it is a body
+  // this build cannot render honestly, because the row would draw a toggle
+  // whose state it invented.
+  const without = (object, key) =>
+    Object.fromEntries(Object.entries(object).filter(([k]) => k !== key));
+
+  const bodies = {
+    "repositories[].deep_read missing": {
       connections: [
         {
           ...validConnections.connections[0],
           repositories: validConnections.connections[0].repositories.map(
-            (repository) => ({ ...repository, ...extra }),
+            (repository) => without(repository, "deep_read"),
           ),
         },
       ],
       default_needs_you_threshold: validConnections.default_needs_you_threshold,
-    };
+    },
+    "repositories[].deep_read not a boolean": {
+      connections: [
+        {
+          ...validConnections.connections[0],
+          repositories: validConnections.connections[0].repositories.map(
+            (repository) => ({ ...repository, deep_read: "true" }),
+          ),
+        },
+      ],
+      default_needs_you_threshold: validConnections.default_needs_you_threshold,
+    },
+  };
+
+  for (const [label, body] of Object.entries(bodies)) {
+    const oldFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
     try {
-      const { getConnections, deepRead } = await import(`./session-api.ts?deep-${label}`);
-      const got = await getConnections("secret");
-      assert.deepEqual(got, body, `${label} must survive the validator`);
-      // ABSENT MEANS ON, read in exactly one place. The column is
-      // NOT NULL DEFAULT TRUE, so the only body that can omit the key is one
-      // from an API on which every repository WAS read; defaulting to off
-      // would blank a live setting and invite someone to "turn on" what was
-      // never off.
-      const expected = "deep_read" in extra ? extra.deep_read : true;
-      for (const repository of got.connections[0].repositories) {
-        assert.equal(deepRead(repository), expected, `deepRead disagreed for ${label}`);
-      }
+      const { getConnections } = await import(`./session-api.ts?tight-${label}`);
+      await assert.rejects(() => getConnections("secret"), /connected spaces/, label);
     } finally {
       globalThis.fetch = oldFetch;
     }
   }
 });
 
-test("tolerating deep_read is not tolerating anything else", async () => {
-  // Widening by one named key is not abandoning the check. An unknown key is
-  // still a body this build cannot render honestly, and a `deep_read` that is
-  // not a boolean is worse than a missing one — it would render a toggle whose
-  // state was invented.
-  for (const bad of [{ surprise: 1 }, { deep_read: "true" }, { deep_read: null }]) {
-    const oldFetch = globalThis.fetch;
-    const body = {
-      connections: [
-        {
-          ...validConnections.connections[0],
-          repositories: validConnections.connections[0].repositories.map(
-            (repository) => ({ ...repository, ...bad }),
-          ),
-        },
-      ],
-      default_needs_you_threshold: validConnections.default_needs_you_threshold,
-    };
-    globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
-    try {
-      const { getConnections } = await import(
-        `./session-api.ts?reject-${encodeURIComponent(JSON.stringify(bad))}`
-      );
-      await assert.rejects(
-        () => getConnections("secret"),
-        /connected spaces/,
-        `${JSON.stringify(bad)} must be refused`,
-      );
-    } finally {
-      globalThis.fetch = oldFetch;
-    }
+test("setRepositoryDeepRead PATCHes a JSON boolean and sends nothing else", async () => {
+  // ONLY `deep_read`. The API's PATCH is field-set-gated, so a body that also
+  // carried `needs_you_threshold` would rewrite the flag line on every toggle
+  // — and this is the toggle where that matters most, because a repo with no
+  // line of its own is already having its band moved by the read itself.
+  const oldFetch = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push({ url: String(url), method: init.method, body: init.body });
+    return new Response(
+      JSON.stringify({ needs_you_threshold: 0.5, pr_comment: true, deep_read: false }),
+      { status: 200 },
+    );
+  };
+  try {
+    const { setRepositoryDeepRead } = await import("./session-api.ts?deep-write");
+    const stored = await setRepositoryDeepRead("secret", 11, false);
+
+    assert.deepStrictEqual(stored, {
+      needs_you_threshold: 0.5,
+      pr_comment: true,
+      deep_read: false,
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].method, "PATCH");
+    assert.match(sent[0].url, /\/v1\/sessions\/repositories\/11$/);
+    // strictDeepEqual on the PARSED body, so `{"deep_read": "false"}` cannot
+    // pass as `{"deep_read": false}` — `Boolean("false")` is true, and this is
+    // the one field where that accident silently restores paid reads.
+    assert.deepStrictEqual(JSON.parse(sent[0].body), { deep_read: false });
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+
+  // A non-boolean is refused HERE, before the request. The API types the field
+  // strictly and would answer 422, but the refusal belongs where the mistake
+  // is legible.
+  const { setRepositoryDeepRead } = await import("./session-api.ts?deep-write-2");
+  for (const bad of ["false", 0, null, undefined]) {
+    await assert.rejects(
+      () => setRepositoryDeepRead("secret", 11, bad),
+      /deep read/,
+      String(bad),
+    );
   }
 });
 
@@ -509,7 +538,7 @@ test("setRepositoryThreshold PATCHes a JSON number or null, never a string, and 
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return new Response(JSON.stringify({ needs_you_threshold: 0.62, pr_comment: false }), { status: 200 });
+    return new Response(JSON.stringify({ needs_you_threshold: 0.62, pr_comment: false, deep_read: true }), { status: 200 });
   };
   try {
     const stored = await setRepositoryThreshold("token", 11, 0.6249);
@@ -573,10 +602,18 @@ test("the connections and PATCH guards now REQUIRE the pr_comment fields", async
   // Same on the PATCH response: both keys, or nothing.
   oldFetch = globalThis.fetch;
   globalThis.fetch = async () =>
-    new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: true }), { status: 200 });
+    new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: true, deep_read: true }), { status: 200 });
   try { assert.equal(await setRepositoryThreshold("t", 11, 0.5), 0.5); }
   finally { globalThis.fetch = oldFetch; }
-  for (const body of [{ needs_you_threshold: 0.5 }, { needs_you_threshold: 0.5, pr_comment: "true" }, { needs_you_threshold: 0.5, pr_comment: true, surprise: 1 }]) {
+  // Each body carries `deep_read: true` so it is invalid for exactly ONE
+  // reason. Without it every entry here would also be missing the third key,
+  // and a test whose cases all fail for a second shared reason stops proving
+  // the thing it names.
+  for (const body of [
+    { needs_you_threshold: 0.5, deep_read: true },
+    { needs_you_threshold: 0.5, pr_comment: "true", deep_read: true },
+    { needs_you_threshold: 0.5, pr_comment: true, deep_read: true, surprise: 1 },
+  ]) {
     oldFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 });
     try { await assert.rejects(() => setRepositoryThreshold("t", 11, 0.5), SessionApiError, JSON.stringify(body)); }
@@ -595,11 +632,15 @@ test("setRepositoryPrComment PATCHes a JSON boolean, never a string, and returns
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: false }), { status: 200 });
+    return new Response(JSON.stringify({ needs_you_threshold: 0.5, pr_comment: false, deep_read: true }), { status: 200 });
   };
   try {
     const stored = await setRepositoryPrComment("token", 11, false);
-    assert.deepStrictEqual(stored, { needs_you_threshold: 0.5, pr_comment: false });
+    assert.deepStrictEqual(stored, {
+      needs_you_threshold: 0.5,
+      pr_comment: false,
+      deep_read: true,
+    });
     assert.equal(calls[0].url, `${process.env.DOUG_API_URL ?? "http://localhost:8000"}/v1/sessions/repositories/11`);
     assert.equal(calls[0].options.method, "PATCH");
     assert.equal(calls[0].options.cache, "no-store");

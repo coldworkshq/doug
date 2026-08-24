@@ -395,6 +395,11 @@ def process_job(job: dict) -> int | None:
     # The repo's own needs-you line, read INSIDE the job at scoring time (not
     # at admission) so the line in effect when Doug scores is the one stamped.
     threshold = store.repo_threshold(job["installation_id"], job["github_repo_id"])
+    # Read in the same breath and at the same moment as the line, because the
+    # two settings are read together and can move together: turning the deep
+    # read off on a repo with no line of its own also moves the band from
+    # DOUG_READER_THRESHOLD to DOUG_THRESHOLD.
+    deep_read = store.repo_deep_read(job["installation_id"], job["github_repo_id"])
     # Settle resolution findings against the reviewed head — not the PR tip
     # pulls.get might now show (we already refused a moved head above).
     def resolve(path: str) -> str | None:
@@ -415,10 +420,13 @@ def process_job(job: dict) -> int | None:
             diff,
             scope=scope,
             threshold=threshold,
+            deep_read=deep_read,
             resolve_file=resolve,
             resolve_schema=store.columns_of,
         )
-        intent_result = review.read_intent(gh, owner, name, meta, diff, scope=scope)
+        intent_result = review.read_intent(
+            gh, owner, name, meta, diff, scope=scope, deep_read=deep_read
+        )
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):
         verdict.reasons.append(

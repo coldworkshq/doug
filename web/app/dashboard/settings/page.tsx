@@ -122,6 +122,7 @@ export default async function SettingsPage() {
                   githubRepoId={repository.id}
                   value={repository.needs_you_threshold}
                   prComment={repository.pr_comment}
+                  deepRead={repository.deep_read}
                   defaults={defaults}
                 />
               </li>

@@ -161,7 +161,14 @@ def _wire(
     monkeypatch.setattr(review, "fetch_pr", fetch or (lambda gh, o, r, n: (_pr(), "+ x")))
 
     def _score_one(
-        meta, diff, *, scope, threshold=None, resolve_file=None, resolve_schema=None
+        meta,
+        diff,
+        *,
+        scope,
+        threshold=None,
+        deep_read=True,
+        resolve_file=None,
+        resolve_schema=None,
     ):
         if scopes is not None:
             scopes.append(("risk", scope))
@@ -172,7 +179,7 @@ def _wire(
             COV if tier == "reader" else None,
         )
 
-    def _read_intent(gh, o, r, m, d, *, scope):
+    def _read_intent(gh, o, r, m, d, *, scope, deep_read=True):
         if scopes is not None:
             scopes.append(("intent", scope))
         return intent
@@ -1188,13 +1195,16 @@ def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff, *, scope, threshold=None: calls.append("score_one")
+        lambda meta, diff, *, scope, threshold=None, deep_read=True, **_: calls.append(
+            "score_one"
+        )
         or ("reader", VERDICT.model_copy(deep=True), RV, COV),
     )
     monkeypatch.setattr(
         review,
         "read_intent",
-        lambda gh, o, r, m, d, *, scope: calls.append("read_intent") or None,
+        lambda gh, o, r, m, d, *, scope, deep_read=True: calls.append("read_intent")
+        or None,
     )
 
     ingest.enqueue(**JOB)
@@ -1274,6 +1284,54 @@ def test_a_lost_claim_after_save_skips_the_check_run(tmp_path, monkeypatch):
     assert posted == []
 
 
+def test_worker_passes_the_repos_deep_read_into_both_paid_reads(tmp_path, monkeypatch):
+    """Read INSIDE the job at scoring time, like the line beside it, and
+    threaded to BOTH reads.
+
+    The risk read and the intent read come out of one budget and are one
+    decision: a repo that opted out of the reader but still paid for intent
+    would be charged for the model it declined, and would still get deviation
+    findings the model wrote. Reading it at admission instead would score
+    against a setting the tenant may have changed since.
+    """
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+
+    seen: list[tuple[str, bool]] = []
+
+    def _score_one(meta, diff, *, scope, threshold=None, deep_read=True, **_):
+        seen.append(("risk", deep_read))
+        return ("deterministic", VERDICT.model_copy(deep=True), None, None)
+
+    def _read_intent(gh, o, r, m, d, *, scope, deep_read=True):
+        seen.append(("intent", deep_read))
+        return None
+
+    monkeypatch.setattr(review, "score_one", _score_one)
+    monkeypatch.setattr(review, "read_intent", _read_intent)
+
+    job = dict(
+        installation_id=101,
+        github_repo_id=11,
+        repo_full_name="acme/one",
+        pr_number=7,
+        base_sha="0" * 40,
+        head_sha="b" * 40,
+    )
+    store.set_repo_deep_read(101, 11, False)
+    ingest.enqueue(**job)
+    worker.process_job(ingest.claim())
+    assert seen == [("risk", False), ("intent", False)]
+
+    seen.clear()
+    store.set_repo_deep_read(101, 11, True)
+    ingest.enqueue(**{**job, "head_sha": "c" * 40})
+    worker.process_job(ingest.claim())
+    assert seen == [("risk", True), ("intent", True)]
+
+
 def test_worker_passes_the_repos_line_into_scoring_and_logs_its_source(
     tmp_path, monkeypatch, capsys
 ):
@@ -1296,7 +1354,14 @@ def test_worker_passes_the_repos_line_into_scoring_and_logs_its_source(
     seen: list[float | None] = []
 
     def _score_one(
-        meta, diff, *, scope, threshold=None, resolve_file=None, resolve_schema=None
+        meta,
+        diff,
+        *,
+        scope,
+        threshold=None,
+        deep_read=True,
+        resolve_file=None,
+        resolve_schema=None,
     ):
         seen.append(threshold)
         v = VERDICT.model_copy(deep=True)

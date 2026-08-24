@@ -1,45 +1,58 @@
 # HANDOFF — doug
 
-State:    building — PR 1 of 2 DONE and green, not yet committed when this was
-          written. /dashboard/settings exists, the rail and the account gear
-          both link to it, and site-header.tsx carries a Dashboard link, which
-          was the actual complaint ("I can't access it from the web page").
-          web 356/356, tsc clean, lint clean (2 pre-existing <img> warnings on
-          /about), build clean — /dashboard/settings is ƒ and /about + /docs/*
-          stayed ○, which is the whole reason the header link is static.
-          NOT VERIFIED IN A BROWSER: /dashboard needs WorkOS auth + the API and
-          has no fixture mode, so the deploy is the first real look. Same
-          limitation the #193 session hit.
-Next:     PR 2 (api + web): migration 15 deep_read, store.repo_deep_read /
-          set_repo_deep_read, api.py PATCH field + projection,
-          review.score_one(deep_read=) gating BOTH reader.enabled() branches
-          (score AND read_intent at review.py:473), worker reads it beside
-          repo_threshold, then web tightens the guard to exact() and renders
-          the toggle. Plus the ADR-0013 amendment.
+State:    review — BOTH PRs built and green, on two branches, neither pushed.
+          PR 1 = claude/code-review-settings-page-f902d1 (commit b985c4c):
+          /dashboard/settings, rail + gear links, a Dashboard link in the site
+          header, and session-api guards LOOSENED to tolerate deep_read.
+          PR 2 = claude/per-repo-deep-read, on top of it: migration 15,
+          store/api/review/worker, the toggle, ADR-0019, changelog, README.
+          Green: api 1620/1620 + ruff clean; web 358/358, tsc clean, lint clean
+          (2 pre-existing <img> warnings on /about), build clean; console
+          113/113. /about and /docs/* are still ○ — the reason the header link
+          is a plain link and not a session read.
+Next:     ANDREW'S CALL, three things, none of them done because all three are
+          outward-facing: (1) push both branches and open two PRs; (2) MERGE
+          THEM IN ORDER — PR 1 must be deployed before PR 2 merges, because
+          deploy.yml:162 promotes the API before web and PR 2's API emits a key
+          PR 1's web build is the first to tolerate; merging PR 2 first breaks
+          every dashboard with "Doug could not load your connected spaces" for
+          the length of the window; (3) file the deferred issue ADR-0019 names
+          (a service-level DOUG_READER indicator in the connections response),
+          which AGENTS.md requires and which is deliberately NOT filed yet.
 Blockers: none.
 
-PR 1, as built:
-- web/app/dashboard/settings/page.tsx — server component, no client boundary.
-  Redirects to /dashboard for a failed connections read AND for every
-  door.state !== "runs", rather than growing a second copy of four empty
-  states that are already worded and pinned on the ledger.
-- FlagLineControl gained `layout: "cell" | "page"`. ONE component, one copy of
-  the forward-only promise, two boxes. The "preview gear above" sentence is
-  cell-only — there is no gear on the settings page.
-- PrCommentDenialBanner extracted to its own component and rendered on BOTH
-  surfaces. D8 would otherwise be recreated: a settings page reading
-  "PR comment · on" while every post is refused.
-- The rail gear's aria-label went "Settings" -> "Account". Two different things
-  named Settings on one screen is the same failure the gear/flag-line naming
-  test already refuses.
-- session-api.ts: `exactWithOptional` + `deepRead()`. deep_read is TOLERATED,
-  not required, and absent means ON — the column is NOT NULL DEFAULT TRUE, so
-  the only body that can omit it came from an API that read every repo.
-- Pins moved with the code, none dropped: the 4 denial-copy assertions now
-  read the component; design-system.test.mjs's surface-token list gained the
-  settings page (it mounts .dashboard-surface, so it earns the token);
-  public-surface.test.mjs's nav order pins /dashboard first.
+NOT VERIFIED IN A BROWSER. /dashboard needs WorkOS auth + the API and has no
+fixture mode, so the deploy is the first real look at /dashboard/settings —
+the same limitation the #193 session hit. Everything below is source-pinned,
+typechecked and built, not seen.
 
+PR 2, as built:
+- installation_repos.deep_read, NOT NULL DEFAULT TRUE (migration 15). TRUE is
+  the only honest backfill: every repo that existed before the column WAS read
+  whenever DOUG_READER was on.
+- NARROWS ONLY. review.score_one gates on `reader.enabled() and deep_read`, so
+  the per-repo flag can never turn a read on where the service has it off.
+- read_intent (review.py) takes the SAME gate. A repo that turned the LLM off
+  turned off the LLM, not one of the two things Doug asks it.
+- Off gets its own verdict rule, `deep-read-off`, distinct from
+  reader-unavailable (a fault) and reader-capped (a budget).
+- store.repo_deep_read defaults a MISSING row to True — the opposite of
+  repo_pr_comment and argued in ADR-0019: resolving that fault towards "off"
+  here silently downgrades the verdict AND moves the band, and nothing on the
+  check run says why.
+- The copy states BOTH consequences of turning it off, and the second one
+  CONDITIONALLY (`value === null`): on a repo with no line of its own the band
+  moves from the reader default to the fallback, so Doug asks for a human less
+  often, not just differently. Pinned in dashboard-contract.test.mjs.
+- All three settings writes revalidate BOTH surfaces now.
+- Doug's own intent selector caught a real defect in ADR-0019 before it
+  shipped: naming `web/components/*.tsx` tokenised to {web, components, tsx}
+  and pulled the record into "Fix a typo in the footer"
+  (test_selection_on_dougs_own_records). Fixed by naming the components, not
+  their paths. Worth remembering when writing any future ADR that cites a web
+  file.
+
+Plan — the settings page (decided):
 Plan — the settings page (decided):
 Plan — the settings page (decided, not yet built):
 - TWO PRs, mandatory, not a preference. deploy.yml:162 promotes API before

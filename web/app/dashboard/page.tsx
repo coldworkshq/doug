@@ -904,7 +904,12 @@ const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
 /** One repository's flag line, keyed by `full_name` because that is the only
  *  name the rollup rows carry — the ledger joins runs to repositories by name,
  *  and the numeric id exists only on the connection's own list. */
-type FlagLineSetting = { id: number; needs_you_threshold: number | null; pr_comment: boolean };
+type FlagLineSetting = {
+  id: number;
+  needs_you_threshold: number | null;
+  pr_comment: boolean;
+  deep_read: boolean;
+};
 
 /** The flag-line cell, and the one row shape that gets no control.
  *
@@ -926,6 +931,7 @@ function FlagLineCell({
       githubRepoId={setting.id}
       value={setting.needs_you_threshold}
       prComment={setting.pr_comment}
+      deepRead={setting.deep_read}
       defaults={defaults}
     />
   );
@@ -1452,6 +1458,7 @@ export default async function DashboardPage({
           id: repository.id,
           needs_you_threshold: repository.needs_you_threshold,
           pr_comment: repository.pr_comment,
+          deep_read: repository.deep_read,
         },
       ]),
     );

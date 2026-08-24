@@ -1,4 +1,8 @@
-import { setFlagLineAction, setFlagLineCommentAction } from "@/app/dashboard/actions";
+import {
+  setDeepReadAction,
+  setFlagLineAction,
+  setFlagLineCommentAction,
+} from "@/app/dashboard/actions";
 
 /** Hung off a 210px table cell: absolutely positioned, and sized to its own
  *  content rather than to the column, so the open form can be wider than the
@@ -48,6 +52,15 @@ const PAGE_PANEL = "flex max-w-[560px] flex-col gap-1.5";
  *  clears the override. The API's PATCH is field-set-gated on the same
  *  principle: it writes the keys the body names and leaves the rest alone.
  *
+ *  THE DEEP READ TOGGLE IS THE FOURTH FORM, and the most consequential of the
+ *  four. It is the only control here that changes WHICH SCORER RUNS, and on a
+ *  repository with no flag line of its own it moves the band with it: unset,
+ *  Doug uses the reader default on a deep read and the deterministic default
+ *  when the reader did not run, so switching the read off switches the line
+ *  too. Stating one without the other would let someone turn off "the AI bit"
+ *  and silently halve how often Doug asks for a human. The copy says both, and
+ *  says the second only when it is true of THIS repository.
+ *
  *  TWO LAYOUTS, ONE COPY OF THE PROSE. `cell` is the repositories table's
  *  collapsed disclosure; `page` is /dashboard/settings, where the controls are
  *  the content and a click to reveal them would sit in front of the only thing
@@ -59,11 +72,13 @@ export function FlagLineControl({
   value,
   prComment,
   defaults,
+  deepRead,
   layout = "cell",
 }: {
   githubRepoId: number;
   value: number | null;
   prComment: boolean;
+  deepRead: boolean;
   defaults: { reader: number; fallback: number };
   layout?: "cell" | "page";
 }) {
@@ -150,6 +165,32 @@ export function FlagLineControl({
       <p className="text-[10.5px] text-muted-foreground">
         On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
         Off, Doug stops updating the comment; the last one it posted stays where it is.
+      </p>
+      {/* The fourth form, and the only one that changes which scorer runs. Its
+          own <form> for the same reason the two toggles above have one:
+          `formData.get` takes the first entry for a name, so sharing a form
+          with the flag-line input would re-save that box on every click. */}
+      <form action={setDeepReadAction}>
+        <input type="hidden" name="github_repo_id" value={githubRepoId} />
+        <input type="hidden" name="deep_read" value={deepRead ? "false" : "true"} />
+        <button
+          type="submit"
+          aria-label={`Deep read is ${deepRead ? "on" : "off"} — turn it ${deepRead ? "off" : "on"}`}
+          className={`mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] ${deepRead ? "text-foreground" : "text-muted-foreground"}`}
+        >Deep read · {deepRead ? "on" : "off"}</button>
+      </form>
+      {/* BOTH CONSEQUENCES, the second one conditionally, because it is only
+          true of a repository with no line of its own. A repo that has set
+          0.75 keeps 0.75 through this toggle, and telling its owner the line
+          is about to move would be the same lie in the other direction. */}
+      <p className="text-[10.5px] text-muted-foreground">
+        On, Doug sends the diff to the reader and scores what it finds. Off, no diff leaves your repository — Doug scores on
+        structural signals alone and records no findings.
+        {value === null &&
+          ` Because this repository has no flag line of its own, turning the read off also moves the line Doug bands against, from ${defaults.reader.toFixed(2)} to ${defaults.fallback.toFixed(2)} — so Doug asks for a human less often, not just differently.`}
+      </p>
+      <p className="text-[10.5px] text-muted-foreground">
+        Doug routes either way: every pull request still gets a check run, and neither setting blocks a merge.
       </p>
     </div>
   );

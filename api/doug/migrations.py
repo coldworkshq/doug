@@ -357,6 +357,21 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE findings ADD COLUMN hunks JSON",
         ),
     ),
+    (
+        15,
+        (
+            # Per-repo deep read (ADR-0013 amendment). Existing rows default
+            # to TRUE — opted in, matching the Table's server_default — and
+            # TRUE is the only honest backfill: every repo that existed
+            # before this column WAS read whenever DOUG_READER was on, so
+            # FALSE would be a claim about the past that is false.
+            #
+            # It NARROWS ONLY. DOUG_READER stays the master switch and the
+            # spend control; a TRUE here does not turn a read on where the
+            # service has it off (review.score_one gates on both).
+            "ALTER TABLE installation_repos ADD COLUMN deep_read BOOLEAN NOT NULL DEFAULT TRUE",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

@@ -20,32 +20,20 @@ const SESSION_FETCH_TIMEOUT_MS = 5_000;
 export type ConnectionStatus = "ready" | "setup_required" | "reauthorize_required";
 
 /** One repository Doug is installed on, and everything about it a person can
- *  set. `deep_read` is OPTIONAL here and nowhere else in this file's intent:
- *  it is the same shape ADR-0013 used for `pr_comment` and the reason is the
- *  same one `repository()` spells out below. Read it through
- *  `deepRead()` rather than directly, so a body from an API that predates the
- *  column reads as the default (on) in exactly one place. */
+ *  set. */
 export type ConnectedRepository = {
   id: number;
   full_name: string;
   needs_you_threshold: number | null;
   pr_comment: boolean;
-  deep_read?: boolean;
+  /** Whether Doug opens this repository's diff with the LLM reader
+   *  (ADR-0004), or scores it on structural signals alone.
+   *
+   *  NOT a claim that a deep read will happen: `DOUG_READER` is the service's
+   *  master switch and the spend control, and `review.score_one` requires
+   *  both. This narrows, never widens. */
+  deep_read: boolean;
 };
-
-/** Whether Doug opens this repository's diff with the LLM reader.
- *
- *  ABSENT MEANS ON, and that is not a guess: the column ships
- *  `NOT NULL DEFAULT TRUE`, so the only body that can omit the key is one from
- *  an API revision older than the column — an API on which every repository
- *  was read. Defaulting to off would blank the toggle on a live setting and
- *  invite someone to "turn on" what was never off.
- *
- *  It is also NOT a claim that a deep read will happen. `DOUG_READER` is the
- *  master switch and the spend control; this narrows, never widens. */
-export function deepRead(repository: ConnectedRepository): boolean {
-  return repository.deep_read ?? true;
-}
 
 export type RepositoryConnection = {
   provider: "github";
@@ -71,7 +59,7 @@ export type RepositoryConnection = {
 export type RepositorySettings = {
   needs_you_threshold: number | null;
   pr_comment: boolean;
-  deep_read?: boolean;
+  deep_read: boolean;
 };
 
 export type ConnectionsResponse = {
@@ -205,35 +193,6 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
 }
 
-/** Exactly `keys`, plus any subset of `optional`.
- *
- *  The loose half of the two-step this repo runs every time the API grows a
- *  field. `.github/workflows/deploy.yml:162` gives the web job
- *  `needs: [changes, api]`, so the API revision is always live first — and
- *  `exact()` rejects the WHOLE body on an unknown key, which would degrade
- *  every dashboard to "Doug could not load your connected spaces" for the
- *  length of the promotion window. A key lands here first, unrendered, and
- *  the API starts emitting it in a later PR.
- *
- *  Tolerating a key is not the same as trusting it: each optional key is
- *  still type-checked by its own caller. What this drops is the requirement
- *  that it be PRESENT, never the requirement that it be right. */
-function exactWithOptional(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-  optional: readonly string[],
-): boolean {
-  const allowed = new Set<string>([...keys, ...optional]);
-  return (
-    Object.keys(value).every((key) => allowed.has(key)) &&
-    keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-function optionalBoolean(value: unknown): value is boolean | undefined {
-  return value === undefined || typeof value === "boolean";
-}
-
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
@@ -268,40 +227,31 @@ function prMetadata(value: unknown): value is PRMetadata {
   );
 }
 
-/** `pr_comment` is REQUIRED — it was tightened back once the API emitted it,
- *  and an entry arriving without it now is not an older API but a body this
- *  build cannot render honestly, because the row would draw a toggle whose
- *  state it invented.
- *
- *  `deep_read` is at the loose step of that same two-step and is optional
- *  until the API emits it. It differs from `pr_comment` in one way that makes
- *  the looseness safe rather than merely temporary: absent has a single true
- *  reading (`deepRead()` — the column is NOT NULL DEFAULT TRUE, so an API
- *  without it read every repository), so nothing is invented. Tighten this to
- *  `exact()` in the PR that ships the toggle, not before. */
+/** TIGHTENED BACK, now that the API emits `deep_read` — the same second step
+ *  `pr_comment` took before it, and taken for the same reason. The previous PR
+ *  accepted the key as optional so this build survived the window between the
+ *  API's promotion and web's; an entry arriving without it NOW is not an older
+ *  API, it is a body this build cannot render honestly, because the row would
+ *  draw a toggle whose state it invented. */
 function repository(value: unknown): value is ConnectedRepository {
   return (
     record(value) &&
-    exactWithOptional(
-      value,
-      ["id", "full_name", "needs_you_threshold", "pr_comment"],
-      ["deep_read"],
-    ) &&
+    exact(value, ["id", "full_name", "needs_you_threshold", "pr_comment", "deep_read"]) &&
     Number.isInteger(value.id) &&
     typeof value.full_name === "string" &&
     nullableNumber(value.needs_you_threshold) &&
     typeof value.pr_comment === "boolean" &&
-    optionalBoolean(value.deep_read)
+    typeof value.deep_read === "boolean"
   );
 }
 
 function isRepositorySettings(value: unknown): value is RepositorySettings {
   return (
     record(value) &&
-    exactWithOptional(value, ["needs_you_threshold", "pr_comment"], ["deep_read"]) &&
+    exact(value, ["needs_you_threshold", "pr_comment", "deep_read"]) &&
     nullableNumber(value.needs_you_threshold) &&
     typeof value.pr_comment === "boolean" &&
-    optionalBoolean(value.deep_read)
+    typeof value.deep_read === "boolean"
   );
 }
 
@@ -532,6 +482,46 @@ export async function setRepositoryThreshold(
   const body: unknown = await response.json().catch(() => null);
   if (!isRepositorySettings(body)) throw new SessionApiError(message);
   return body.needs_you_threshold;
+}
+
+/** Turn the deep read on or off for one repository.
+ *
+ *  Sends ONLY `deep_read`, for the same field-set reason `setRepositoryPrComment`
+ *  sends only `pr_comment`: the API writes the keys the body names, so a body
+ *  carrying the flag line would rewrite it on every toggle.
+ *
+ *  Off is the expensive direction, and it does two things rather than one: it
+ *  drops this repository to the deterministic scorer, and — on a repository
+ *  with no flag line of its own — moves the line it bands against from
+ *  DOUG_READER_THRESHOLD to DOUG_THRESHOLD with it. The control that calls
+ *  this says so; this function does not get to be the place that explains it,
+ *  but it is the place that must not be called by accident. */
+export async function setRepositoryDeepRead(
+  accessToken: string,
+  githubRepoId: number,
+  value: boolean,
+): Promise<RepositorySettings> {
+  const message = "Doug could not save that deep read setting.";
+  if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
+  // `"false"` is not `false`. The API types this field strictly and would
+  // answer 422, but the refusal belongs here, where the mistake is legible.
+  if (typeof value !== "boolean") throw new SessionApiError(message);
+  let response: Response;
+  try {
+    response = await fetch(`${SESSION_API_URL}/v1/sessions/repositories/${githubRepoId}`, {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ deep_read: value }),
+      signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    throw new SessionApiError(message);
+  }
+  if (response.status !== 200) throw new SessionApiError(message, response.status);
+  const body: unknown = await response.json().catch(() => null);
+  if (!isRepositorySettings(body)) throw new SessionApiError(message);
+  return body;
 }
 
 /** Turn the sticky PR comment on or off for one repository.

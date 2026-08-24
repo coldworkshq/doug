@@ -20,7 +20,7 @@ Doug is a Saint Bernard. The breed has had one job for three centuries: find the
 
 ## What it looks at
 
-Live scoring (production sets `DOUG_READER=1`) is an LLM diff-read. The deterministic fallback looks at cheap structural signals, including:
+Live scoring (production sets `DOUG_READER=1`) is an LLM diff-read, unless a repository turns its deep read off on `/dashboard/settings` — that setting narrows, never widens. The deterministic fallback looks at cheap structural signals, including:
 
 - Sensitive paths (auth, billing, security) and schema migrations in the same diff
 - Runtime dependency bumps with no test delta
@@ -34,7 +34,7 @@ Diff size is deliberately de-weighted. It predicts poorly once the rest are cont
 ## Repo layout
 
 - `api/` — Python 3.14 + FastAPI, managed with uv. `doug/reader.py` (LLM scoring when enabled), `doug/worker.py` (drain + check run), `doug/check_run.py`, `doug/features.py` + `doug/scoring.py` (deterministic fallback). `POST /webhooks/github` verifies, records, and enqueues a review job, then 202s. `GET /v1/queue` is the token-gated ledger queue; `GET /v1/showcase/queue` and `GET /v1/showcase/scoreboard` are the public dogfood surfaces.
-- `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing, `/queue`, `/docs`, `/scoreboard`, WorkOS sign-in. Public pages fetch `/v1/showcase/*` when the API is up, and fall back to a bundled fixture when it isn't.
+- `web/` — Next.js 16 + Tailwind 4 + shadcn/ui. Landing, `/queue`, `/docs`, `/scoreboard`, WorkOS sign-in, and the signed-in `/dashboard` (ledger, repositories, and `/dashboard/settings` — flag line, PR comment, deep read, per repository). Public pages fetch `/v1/showcase/*` when the API is up, and fall back to a bundled fixture when it isn't.
 - `console/` — Operator console (Next.js). Shares the root npm workspaces lockfile with `web/`.
 
 ```sh
