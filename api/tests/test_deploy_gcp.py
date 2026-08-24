@@ -152,16 +152,17 @@ def test_api_deploy_carries_the_web_url_for_receipt_links():
     assert "DOUG_WEB_URL=$(web_url)" in body
 
 
-def test_api_deploy_carries_the_temporary_pr_comment_installations_allowlist():
-    """PR comments gate first to the dogfood installation (150424894, same id
-    DOUG_INTENT_INSTALLATIONS uses) via an allowlist. Empty → no comments
-    anywhere. This is temporary (D3a): the design ships the setting on-by-default
-    but gates the first release to dogfood, and the allowlist is removed in a
-    follow-up PR once a week of real comments looks right. Comments silently
-    stop everywhere if this allowlist is dropped (and, later, silently start
-    everywhere if it is removed prematurely)."""
+def test_api_deploy_carries_no_pr_comment_allowlist():
+    """The staged rollout ended (#144). This pins its ABSENCE, because the
+    variable is read as an allowlist and not a switch: `pr_comment.allowed`
+    is gone, but re-adding the name to this line while anyone reintroduces a
+    reader for it would dark every installation not listed, with each of
+    their dashboard toggles still reading "on" and no denial banner to show
+    for it — there is no 403 when nothing is ever attempted. That silence is
+    the failure mode worth a test; the on-state is already covered by the
+    worker's own gate tests."""
     body = _function_body("deploy")
-    assert "DOUG_PR_COMMENT_INSTALLATIONS=150424894" in body
+    assert "DOUG_PR_COMMENT_INSTALLATIONS" not in body
 
 
 def test_read_timeout_budget_fits_inside_the_cloud_run_timeout():

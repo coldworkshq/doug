@@ -42,6 +42,34 @@ allowlist for one release, Doug's own repositories first) is the mitigation:
 the first tenant to receive a notifying, unvalidated surface is Doug's own,
 not a customer's.
 
+**Amended 2026-08-20 (issue #144): the D3a allowlist is removed.** The
+rollout it gated is finished and the record below is kept as accepted rather
+than rewritten; this note says what changed. The week produced 18 landed
+writes (12 `updated`, 6 `created`), no `denied:403`, no `failed:*`, and no PR
+carrying two Doug comments. The mitigation's own sentence — that the first
+tenant to receive this surface is Doug's own and not a customer's — turned
+out to be guaranteed by the population rather than by the env var: the entire
+live footprint on that date was five repositories across three installations,
+all of them Andrew's. What the allowlist actually bought after the first week
+was a second, invisible switch: `coldworkshq/coldworks` sat dark for two days
+with its dashboard toggle reading "on" and no denial banner to explain it,
+because nothing was ever attempted and there was therefore no 403 to report.
+That is the state D8 exists to refuse, arrived at from the other direction.
+`installation_repos.pr_comment` (D3) is now the only gate.
+
+**What replaces the allowlist as a rollback path**, because "we deleted the
+switch" is not an answer on its own. Three, in order of blast radius: turn
+the repository's toggle off on the dashboard (immediate, no deploy, and the
+one to reach for first); turn several off, since the write is gated per
+repository and nothing is shared between them; or shift Cloud Run traffic
+back to the previous revision, which restores the gate and its reader
+together — a revision is an immutable image-plus-environment pair, so a
+rollback cannot land in the incoherent state of the variable being set with
+nothing reading it. What is genuinely gone is the ability to dark every
+installation at once by editing one variable. That was judged an acceptable
+loss at a five-repository footprint and should be revisited before the first
+tenant outside these three installations, not after.
+
 ## Decision
 
 - **D1 — One sticky comment per PR, mechanically.** Doug PATCHes the marked
@@ -214,7 +242,9 @@ not a customer's.
 - **The interim allowlist (D3a) is temporary.** It exists to scope the
   first release to Doug's own repositories, not as a permanent access
   control; its removal in a follow-up PR is expected and is not a
-  deviation from this record.
+  deviation from this record. **Removed 2026-08-20 (#144)** — see the
+  amendment in Context for what the week showed and why the allowlist had
+  become a liability rather than a mitigation.
 - **The mirror claim is one-directional.** `check_run.post` can itself fail
   and swallow the error (ADR-0010); when it does, the comment can still
   post successfully, producing a PR with a sticky comment mirroring a
@@ -258,7 +288,14 @@ comments outside `pr_comment.upsert`; any code path that submits, approves,
 or requests changes on a review; a write path that posts or edits a comment
 without first checking an active `installation_repos.pr_comment` row (D6);
 neutralisation removed from `check_run._oneline` while a PR comment surface
-still exists. Do not flag: `upsert` re-creating a comment after a human
-deletes it (named above as a priced consequence, not a bug); removal of the
-`DOUG_PR_COMMENT_INSTALLATIONS` allowlist once the staged rollout ends (D3a
-names this as the expected outcome, not a deviation from it).
+still exists; **any reintroduction of an installation-level gate on the
+comment write** — `DOUG_PR_COMMENT_INSTALLATIONS`, a `pr_comment.allowed`,
+or a new equivalent — because a second switch a tenant cannot see is what
+#144 removed and what D8 refuses (**this clause amended 2026-08-20, #144**:
+it previously read "Do not flag: removal of the allowlist", which was correct
+until the removal happened and is misleading afterwards — the risk inverted
+when the gate went, and a flag list that still described the old risk would
+have kept the reader quiet about the new one). Do not flag: `upsert` re-creating a comment
+after a human deletes it (named above as a priced consequence, not a bug);
+the absence of the `DOUG_PR_COMMENT_INSTALLATIONS` allowlist (D3a named its
+removal as the expected outcome, and it happened on 2026-08-20).

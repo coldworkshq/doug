@@ -259,6 +259,11 @@ export default async function Home() {
               or below random. Reading the diff is the first thing that
               survived a second repo.
             </p>
+            <p className="mt-3 text-sm leading-relaxed text-foreground">
+              That&rsquo;s the 30,000-character probe reader, not the one
+              running on your PRs — the shipped reader hasn&rsquo;t been
+              measured by it.
+            </p>
             <div className="mt-6 border-t border-border pt-5">
               <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
                 Published miss rate

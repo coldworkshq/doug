@@ -1223,21 +1223,37 @@ def set_repo_threshold(
     return result.rowcount == 1
 
 
-def repo_pr_comment(installation_id: int, github_repo_id: int) -> bool:
-    """Whether Doug keeps a sticky PR comment on this repo (spec
-    2026-08-19-sticky-pr-comment, D6).
+# The reasons a repo does or does not get a sticky comment, as distinct
+# values rather than one bool. Issue #173: the worker used to log every
+# refusal as the single word "skipped", which left "why is this repo
+# silent?" unanswerable from the logs — a tenant's deliberate opt-out, a
+# repo missing from installation_repos entirely, and a dead ledger all
+# printed the same thing. Only OFF is a wish; the other two are faults with
+# different owners.
+PR_COMMENT_ON = "on"
+PR_COMMENT_OFF = "off"
+PR_COMMENT_NO_ACTIVE_ROW = "no-active-row"
+PR_COMMENT_NO_LEDGER = "no-ledger"
 
-    True ONLY for an ACTIVE row whose `pr_comment` column is true — unlike
-    `repo_threshold` above, this does NOT read a removed row's last value.
-    An absent row (a repo the reader has verdicts for but that never made
-    it into installation_repos — the API's startup DRIFT line) or a
-    'removed' row is exactly the set of repos a tenant cannot see or
-    toggle on the dashboard, and a repo nobody can see must not get an
-    un-disableable public comment.
+
+def repo_pr_comment_state(installation_id: int, github_repo_id: int) -> str:
+    """WHY this repo does or does not keep a sticky PR comment.
+
+    The primitive; `repo_pr_comment` below is a thin wrapper over it, so the
+    predicate and the explanation can never disagree about what counts as
+    on. Returns one of the PR_COMMENT_* values.
+
+    `no-active-row` is deliberately not folded into `off` even though both
+    refuse. An absent row (a repo the reader has verdicts for but that never
+    made it into installation_repos — the API's startup DRIFT line) or a
+    'removed' row is exactly the set of repos a tenant cannot see or toggle
+    on the dashboard, and a repo nobody can see must not get an
+    un-disableable public comment. But it is a reconciliation fault, not a
+    preference, and it is the one an operator has to act on.
     """
     engine = _get_engine()
     if engine is None:
-        return False
+        return PR_COMMENT_NO_LEDGER
     with engine.connect() as conn:
         value = conn.execute(
             select(installation_repos.c.pr_comment).where(
@@ -1246,7 +1262,21 @@ def repo_pr_comment(installation_id: int, github_repo_id: int) -> bool:
                 installation_repos.c.state == "active",
             )
         ).scalar_one_or_none()
-    return bool(value) if value is not None else False
+    if value is None:
+        return PR_COMMENT_NO_ACTIVE_ROW
+    return PR_COMMENT_ON if value else PR_COMMENT_OFF
+
+
+def repo_pr_comment(installation_id: int, github_repo_id: int) -> bool:
+    """Whether Doug keeps a sticky PR comment on this repo (spec
+    2026-08-19-sticky-pr-comment, D6).
+
+    True ONLY for an ACTIVE row whose `pr_comment` column is true — unlike
+    `repo_threshold` above, this does NOT read a removed row's last value.
+    See `repo_pr_comment_state` for why, and for the distinction between the
+    two ways of being false.
+    """
+    return repo_pr_comment_state(installation_id, github_repo_id) == PR_COMMENT_ON
 
 
 def set_repo_pr_comment(installation_id: int, github_repo_id: int, value: bool) -> bool:

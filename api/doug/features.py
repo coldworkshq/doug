@@ -138,6 +138,27 @@ def _is_test(path: str) -> bool:
 
 _PROSE_SUFFIXES = (".md", ".txt", ".rst")
 _CODE_TEXT_NAMES = {"CMakeLists.txt"}
+# Data that lives under docs/ is evidence, not program text. Scoped by
+# DIRECTORY rather than by suffix because the same suffixes are how real
+# config ships — package.json, tsconfig.json, and the migration fixtures are
+# all correctly tier 0, and a suffix rule would demote every one of them.
+_DOCS_DATA_ROOT = "docs"
+_DOCS_DATA_SUFFIXES = (".json", ".jsonl", ".csv", ".yaml", ".yml")
+# ...and `docs/` is not a private directory. Doug reviews other people's
+# repositories, where a published API contract or generated schema under docs/
+# is load-bearing config, not evidence — Doug flagged exactly this on b767f2e:
+# "any repo that stores meaningful config or generated schema under docs/ (e.g.
+# docs/**/openapi.json) would now be deprioritized or cut without notice."
+#
+# The first draft of this rule reasoned only from THIS repo's layout, which is
+# the multi-tenant version of settling a claim by re-reading the diff. These
+# names stay tier 0 wherever they live. The list is deliberately short and
+# conservative: a name here costs nothing when absent, while a missing name
+# silently demotes a customer's contract file. `openapi` and `swagger` also
+# match `openapi.v2.json` and similar via the stem check below.
+_CONTRACT_STEMS = frozenset(
+    {"openapi", "swagger", "schema", "asyncapi", "graphql", "jsonschema"}
+)
 _DEPENDENCY_TEXT_RE = re.compile(
     r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
 )
@@ -155,15 +176,45 @@ def _is_prose(path: str) -> bool:
     including conventional requirements/constraints variants despite their
     otherwise-prose suffix. Code-bearing text entry points use routing-only
     exceptions so this helper does not change scoring features.
+
+    Committed data under `docs/` is prose for the same reason lockfiles are:
+    it is evidence a review reads about, not program text a review reasons
+    over. It got here as tier 0 because the suffix list stops at `.md`/`.txt`/
+    `.rst`, and `read_order` sorts `(tier, len(patch))` ascending — so a large
+    evidence fixture did not merely occupy tier 0, it sorted last within it and
+    became the likeliest thing to be cut, displacing real code that would have
+    fit. Measured: on the 30 first-parent commits ending at HEAD on 2026-08-23,
+    `6fa1633` reported a code-tier miss whose only "code" files were
+    `docs/design/walked-out/phase0_units.json` and
+    `span-verification/barb_evidence.json`, on a 429,126-char diff.
+
+    Scoped to the `docs/` root, NOT to the suffix. `package.json`,
+    `tsconfig.json` and migration fixtures carry real decisions and stay tier 0;
+    a suffix rule would demote all of them.
+
+    Contract files are excepted wherever they live, `docs/` included. Doug
+    reviews other people's repositories, and a published `docs/openapi.json` is
+    config, not evidence — demoting it would cut a customer's API contract out
+    of the read without notice. Routing only, like the exceptions above:
+    `extract_features` never calls this, so scoring is untouched, and a test
+    pins that by breaking this function and asserting the features do not move.
     """
-    name = PurePosixPath(path).name
+    p = PurePosixPath(path)
+    name = p.name
     if (
         name in MANIFESTS
         or name in _CODE_TEXT_NAMES
         or _DEPENDENCY_TEXT_RE.fullmatch(name)
     ):
         return False
-    return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
+    lowered = name.lower()
+    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and lowered.endswith(
+        _DOCS_DATA_SUFFIXES
+    ):
+        # `openapi.v2.json` -> "openapi": the first dot-segment, so a versioned
+        # or dated contract file is still recognised as one.
+        return lowered.split(".", 1)[0] not in _CONTRACT_STEMS
+    return name in LOCKFILES or lowered.endswith(_PROSE_SUFFIXES)
 
 
 def _is_sensitive(path: str) -> bool:

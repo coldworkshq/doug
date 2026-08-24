@@ -3366,6 +3366,47 @@ def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(
     assert store.repo_threshold(101, 11) == 0.9
 
 
+def test_repo_pr_comment_state_names_the_reason_not_just_the_answer(tmp_path, monkeypatch):
+    """#173: the worker logs this value, and "off" and "no active row" are
+    different problems with different owners — one is a tenant's stated wish,
+    the other is a repo missing from installation_repos that nobody can see
+    or toggle. Collapsing them to one bool is what made "why is this repo
+    silent?" unanswerable from the logs.
+
+    The predicate is asserted alongside the state at every step: they read the
+    same row through the same function, and a wrapper that drifted from its
+    primitive would put one answer on the dashboard and another in the log.
+    """
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+
+    assert store.repo_pr_comment_state(101, 11) == store.PR_COMMENT_NO_ACTIVE_ROW
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    assert store.repo_pr_comment_state(101, 11) == store.PR_COMMENT_ON
+    store.set_repo_pr_comment(101, 11, False)
+    assert store.repo_pr_comment_state(101, 11) == store.PR_COMMENT_OFF
+    store.set_repo_pr_comment(101, 11, True)
+    store.set_installation_repos(101, [], replace=True)  # removed
+    assert store.repo_pr_comment_state(101, 11) == store.PR_COMMENT_NO_ACTIVE_ROW
+
+    # Every state agrees with the bool the API and the dashboard read.
+    for expected in (store.PR_COMMENT_NO_ACTIVE_ROW,):
+        assert store.repo_pr_comment_state(101, 11) == expected
+        assert store.repo_pr_comment(101, 11) is False
+
+
+def test_repo_pr_comment_state_says_no_ledger_rather_than_guessing(monkeypatch):
+    """With no engine there is no row to have an opinion about. Reporting
+    `off` or `no-active-row` here would blame a tenant's settings, or their
+    repo list, for a deployment fault — the same misattribution the status
+    codes on /v1/prs/{n}/receipt are ordered to avoid."""
+    # _get_engine reads DATABASE_URL before it consults the cached engine, so
+    # unsetting the variable is enough — no reset hook needed.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.repo_pr_comment_state(101, 11) == store.PR_COMMENT_NO_LEDGER
+    assert store.repo_pr_comment(101, 11) is False
+
+
 def test_repo_pr_comment_is_true_only_for_an_active_row_that_says_so(tmp_path, monkeypatch):
     """D6: absent row -> False (a repo the tenant cannot see on the dashboard
     must not get an un-disableable public comment); removed row -> False;
