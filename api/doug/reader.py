@@ -1,12 +1,19 @@
 """LLM diff-reader — descended from the tier the Phase-1 probes validated.
 
-SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS remain byte-identical to
+SYSTEM, SCHEMA, MODEL and MAX_TOKENS remain byte-identical to
 scripts/llm_probe.py as of commit 0064e6b. The probe's AUC 0.687 sentry /
 0.668 grafana and its ReDef polarity result belong to its 30k diff-budget
 configuration. The shipped DIFF_BUDGET is 100k under ADR-0012 and its files
 are tier-ordered, so those AUC figures do not validate the larger, reordered
-live read. The five frozen parameters are load-bearing evidence — changing
+live read. The four frozen parameters are load-bearing evidence — changing
 one is a new experiment, not a tweak.
+
+ADR-0002 froze six. TWO have left: DIFF_BUDGET (ADR-0012, governed by a
+coverage bar) and EFFORT (ADR-0018, governed by an unrun pre-registration).
+Four remain, and 2 + 4 = 6 — an earlier version of this paragraph said
+"three have left" alongside "four remain", which Doug caught on b767f2e.
+Each divergence is pinned on BOTH sides by test, so nobody can re-anchor the
+instrument by "fixing the drift".
 
 Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
 Callers fall back to the deterministic score when either is missing or a
@@ -44,7 +51,16 @@ from .models import Band, Reason, Verdict
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 6000
-EFFORT = "medium"
+# ADR-0018. The API default is "high"; the probe chose "medium" and this
+# inherited it, so the shipped reader ran one step below the provider default.
+# scripts/llm_probe.py stays at "medium" — it must go on reporting what it
+# actually measured — and the divergence is pinned by test on both sides.
+#
+# UNMEASURED on this prompt. The pre-registration at
+# docs/design/reader-effort/preregistration.md is written and has NOT been run.
+# Nothing here claims this is better; ADR-0018 records why it shipped anyway
+# and exactly what the run would settle.
+EFFORT = "high"
 # chars. Governed by ADR-0012's coverage bar, NOT by the probe — the
 # probe's own DIFF_BUDGET stays at the 30,000 it measured. 100,000 is
 # where code+tests coverage saturates (100%/97% over 30 first-parent
@@ -871,9 +887,9 @@ def _user_text(pr, diff: str) -> str:
 # of its other findings was never sent at all.
 #
 # These functions only observe the cut. DIFF_BUDGET is governed by
-# ADR-0012's coverage bar; SYSTEM, SCHEMA, MODEL, EFFORT, and MAX_TOKENS
-# remain frozen to the validated probe. A partial read therefore stops
-# looking like a complete one.
+# ADR-0012's coverage bar and EFFORT by ADR-0018; SYSTEM, SCHEMA, MODEL and
+# MAX_TOKENS remain frozen to the validated probe. A partial read therefore
+# stops looking like a complete one.
 
 
 def diff_chunk(filename: str, status: str, additions: int, deletions: int, patch: str) -> str:

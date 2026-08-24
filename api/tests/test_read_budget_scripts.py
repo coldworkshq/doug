@@ -8,6 +8,36 @@ from threading import Event
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 
+def test_the_preregistered_coverage_bar_still_holds_at_the_shipped_budget(capsys):
+    """ADR-0012's bar, run in CI rather than by hand.
+
+    The bar is "every code-tier file sent whole on >=95% of PRs" over the 30
+    first-parent commits ending at END_SHA, with a fixed-sample requirement of
+    30/30. It costs zero model calls, which ADR-0012 says is "the property that
+    makes a coverage bar a safe replacement for a freeze" — and until now
+    nothing ran it automatically, so the bar was only as live as someone's
+    memory to invoke the script.
+
+    That gap became load-bearing when `features._is_prose` changed: the bar is
+    measured against the CODE TIER, and redefining which files are code
+    redefines the bar's own subject. Doug flagged it on b767f2e — "no re-run of
+    read_budget_gate.py under the new tiering is included, so the
+    pre-registered sanity sample's 30/30 result is no longer known to hold for
+    the definition that ships." It does hold, and now every commit proves it
+    instead of one person having checked once.
+
+    Deliberately asserts the 30/30 sanity sample and not only the 95% rate:
+    ADR-0012 requires the exact pinned sample, so a range that silently shrank
+    would otherwise pass on a smaller denominator.
+    """
+    import read_budget_gate
+
+    assert read_budget_gate.main() == 0
+    output = capsys.readouterr().out
+    assert "all code sent whole on 30/30 (100%)" in output
+    assert "PASS" in output
+
+
 def test_gate_rejects_partially_sent_code_at_the_probe_budget(monkeypatch, capsys):
     """A code file cut mid-patch is not whole and cannot satisfy the gate.
 

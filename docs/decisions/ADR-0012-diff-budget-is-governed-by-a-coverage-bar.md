@@ -3,7 +3,30 @@ title: Keep the reader prompt and schema frozen; govern DIFF_BUDGET by a coverag
 status: accepted
 date: 2026-08-06
 supersedes: ADR-0002
+amended_by: ADR-0018
 ---
+
+> **Amendment, 2026-08-23 (ADR-0018): `EFFORT` is no longer frozen.**
+>
+> The Decision below lists five constants that "remain frozen byte-identical to
+> `scripts/llm_probe.py`, pinned by
+> `test_reader_and_probe_share_the_validated_prompt_bytes`". Four of them still
+> do. **`EFFORT` does not** — it is `"high"` in `reader.py` against the probe's
+> `"medium"`, and that assertion has been removed from the pinned test and
+> replaced by `test_effort_diverges_from_the_probe_on_purpose`.
+>
+> The amendment is marked here rather than applied to the text, for the reason
+> this ADR's own Rejected section gives against editing ADR-0002 in place: it
+> would erase the record of what was frozen and why. This banner exists because
+> these files are an input to Doug's reader — Doug read the unamended text on
+> `b767f2e` and correctly reported that the change "directly reverses a binding
+> recorded decision," which is what a stale record does.
+>
+> **`DIFF_BUDGET`'s coverage bar is untouched and still binding.** ADR-0018
+> amends this record's freeze list; it does not supersede the rest of it.
+>
+> Read ADR-0018 before citing the Decision below. It is candid that `EFFORT`
+> ships governed by nothing, which is weaker than the standard this ADR set.
 
 ## Context
 
