@@ -2,8 +2,17 @@
 title: Raise EFFORT to high and remove it from the freeze, without the run
 status: accepted
 date: 2026-08-23
-supersedes: ADR-0012
+amends: ADR-0012
 ---
+
+> **This record contradicts two accepted ADRs, on purpose and by direction.**
+> ADR-0012 froze `EFFORT`; ADR-0004 rejects "shipping the reader without
+> pre-registration" on the grounds that "the bars were frozen before the run,
+> which is the only reason the result is worth anything." Both objections are
+> correct and neither is answered by anything below. See **What this contradicts**.
+>
+> `amends`, not `supersedes`: ADR-0012's coverage bar for `DIFF_BUDGET` is
+> untouched and still binding. Only its freeze list changes.
 
 ## Context
 
@@ -64,6 +73,41 @@ does not sweep them up.
 is in scope and stated here rather than discovered later; ADR-0007 keeps the
 intent tier's output off the risk score, so no band changes because of it.
 
+## What this contradicts
+
+Doug flagged both of these on `b767f2e` at `high` severity, against the
+unamended ADR-0012. It was right, and the flags are recorded here rather than
+argued away.
+
+**ADR-0012's freeze.** It states that `SYSTEM`, `SCHEMA`, `MODEL`, `EFFORT` and
+`MAX_TOKENS` remain frozen byte-identical to the probe, pinned by
+`test_reader_and_probe_share_the_validated_prompt_bytes`. This ADR unfreezes
+`EFFORT` and removes that assertion. ADR-0012 now carries an amendment banner
+pointing here, so the two records no longer disagree in the directory Doug
+reads.
+
+**ADR-0012's replacement standard.** It permits a freeze to be replaced by a
+governing bar, and is explicit about what made that safe:
+
+> The bar is checked by `api/scripts/read_budget_gate.py`, which costs **zero
+> model calls** ... That is the property that makes a coverage bar a safe
+> replacement for a freeze.
+
+`EFFORT` has no such bar and this ADR does not invent one. **It ships governed
+by nothing.** That is a real weakening of ADR-0012's standard, not a variation
+on it.
+
+**ADR-0004's rejected alternative.** "Shipping the reader without
+pre-registration. The bars were frozen before the run, which is the only reason
+the result is worth anything." ADR-0004 said that about putting the reader in
+the scoring path; it applies with the same force to changing the reader's
+instrument, and this ADR does the thing that ADR-0004 rejected.
+
+None of the three is answered. They are the price, and the price is recorded so
+that a later reader does not have to rediscover it — or worse, cite this ADR as
+precedent for the next unmeasured change. **It is not precedent.** The next one
+needs its own direction, its own record, and preferably its run.
+
 ## This shipped without its pre-registered run, deliberately
 
 `docs/design/reader-effort/preregistration.md` exists, has bars locked, and has
@@ -93,6 +137,25 @@ the arithmetic against batch pricing that was already in force.
 **Reversal is one line.** If the run is done and fails its bars, set `EFFORT`
 back to `"medium"`, delete `test_effort_diverges_from_the_probe_on_purpose`, and
 supersede this ADR. No migration, no data change.
+
+### The pre-registration document is not to be edited
+
+`docs/design/reader-effort/preregistration.md` stays byte-identical to the
+version whose bars were locked. Bar 1 is `<=19.6%` disproved, bar 2 is `>=68`
+real, and the power statement says the corpus can only detect a large effect.
+
+An earlier version of this change added a banner to that file explaining that
+the raise had shipped first. Doug flagged it on `b767f2e`: "mutating a
+bars-locked pre-registration to accommodate a shipped value is the pattern
+ADR-0018 itself names." That is right, and the irony was the tell — the banner's
+own text said *do not amend the bars to fit the shipped value*, while amending
+the document to fit the shipped value. Editing a locked document to record that
+it was bypassed still edits a locked document, and the next editor has one fewer
+reason not to.
+
+The banner has been reverted. Everything it said lives here instead, which is
+where a record of a decision belongs. **If the run happens and fails, the remedy
+is the reversal above, never a bar edit.**
 
 ## Rejected
 
@@ -131,6 +194,8 @@ further from anything anyone has measured. If a run happens, it should include
   comparability does not.
 - The convergence corpus is partitioned at the cutover for the same reason. Pairs
   spanning it compare two instruments.
-- Three of the probe's six constants have now left the freeze. The remaining four
-  are `SYSTEM`, `SCHEMA`, `MODEL`, `MAX_TOKENS`. If a fifth leaves, the freeze
-  has stopped being a freeze and should be retired by name rather than eroded.
+- **Two of the probe's six constants have now left the freeze**, and four remain:
+  `SYSTEM`, `SCHEMA`, `MODEL`, `MAX_TOKENS`. (An earlier draft of this line said
+  "three have left ... the remaining four", which is seven of six. Doug caught
+  the arithmetic on `b767f2e`.) If a **third** leaves, the freeze has stopped
+  being a freeze and should be retired by name rather than eroded.

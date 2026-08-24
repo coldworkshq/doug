@@ -1210,6 +1210,39 @@ def test_effort_diverges_from_the_probe_on_purpose():
     assert reader.MECHANICAL_EFFORT == "medium"
 
 
+def test_the_paths_that_inherit_the_raised_effort_are_enumerated():
+    """EFFORT is shared, so raising it moves every consumer at once.
+
+    Doug flagged that on b767f2e: read_with_decisions "and any other consumer of
+    the shared EFFORT constant silently inherit the raise; only MECHANICAL_EFFORT
+    is pinned." ADR-0018 names read_with_decisions. Nothing pinned the SET, so a
+    future call site could join it and inherit an unmeasured value with no ADR
+    and no test noticing.
+
+    This enumerates the consumers by reading the module source, so adding a
+    fourth `"effort": EFFORT` site fails here and sends the author to ADR-0018.
+    Source inspection rather than call tracing because the point is coverage of
+    every site, including ones no test exercises.
+    """
+    import inspect
+    import re as _re
+
+    source = inspect.getsource(reader)
+    frozen_sites = _re.findall(r'"effort": (\w+)', source)
+
+    # Three consumers of the raised constant: the risk read, the intent read,
+    # and the Example Pack capture manifest that records what ran. Two of the
+    # mechanical tier, unraised.
+    assert frozen_sites.count("EFFORT") == 2, (
+        f"expected 2 request sites on the raised EFFORT, found {frozen_sites}"
+        " — a new consumer inherits an unmeasured value; see ADR-0018"
+    )
+    assert frozen_sites.count("MECHANICAL_EFFORT") == 2
+    # The capture manifest passes it positionally, not as a dict key, so it is
+    # asserted separately rather than being silently absent from the count.
+    assert "effort=EFFORT" in source
+
+
 def test_diff_budget_diverges_from_the_probe_on_purpose():
     """ADR-0012. The probe's DIFF_BUDGET stays at the 30,000 it actually
     measured; the shipped reader reads more. Asserting BOTH sides pins the

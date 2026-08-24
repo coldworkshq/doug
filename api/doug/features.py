@@ -144,6 +144,21 @@ _CODE_TEXT_NAMES = {"CMakeLists.txt"}
 # all correctly tier 0, and a suffix rule would demote every one of them.
 _DOCS_DATA_ROOT = "docs"
 _DOCS_DATA_SUFFIXES = (".json", ".jsonl", ".csv", ".yaml", ".yml")
+# ...and `docs/` is not a private directory. Doug reviews other people's
+# repositories, where a published API contract or generated schema under docs/
+# is load-bearing config, not evidence — Doug flagged exactly this on b767f2e:
+# "any repo that stores meaningful config or generated schema under docs/ (e.g.
+# docs/**/openapi.json) would now be deprioritized or cut without notice."
+#
+# The first draft of this rule reasoned only from THIS repo's layout, which is
+# the multi-tenant version of settling a claim by re-reading the diff. These
+# names stay tier 0 wherever they live. The list is deliberately short and
+# conservative: a name here costs nothing when absent, while a missing name
+# silently demotes a customer's contract file. `openapi` and `swagger` also
+# match `openapi.v2.json` and similar via the stem check below.
+_CONTRACT_STEMS = frozenset(
+    {"openapi", "swagger", "schema", "asyncapi", "graphql", "jsonschema"}
+)
 _DEPENDENCY_TEXT_RE = re.compile(
     r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
 )
@@ -175,8 +190,14 @@ def _is_prose(path: str) -> bool:
 
     Scoped to the `docs/` root, NOT to the suffix. `package.json`,
     `tsconfig.json` and migration fixtures carry real decisions and stay tier 0;
-    a suffix rule would demote all of them. Routing only, like the exceptions
-    above — `extract_features` never calls this, so scoring is untouched.
+    a suffix rule would demote all of them.
+
+    Contract files are excepted wherever they live, `docs/` included. Doug
+    reviews other people's repositories, and a published `docs/openapi.json` is
+    config, not evidence — demoting it would cut a customer's API contract out
+    of the read without notice. Routing only, like the exceptions above:
+    `extract_features` never calls this, so scoring is untouched, and a test
+    pins that by breaking this function and asserting the features do not move.
     """
     p = PurePosixPath(path)
     name = p.name
@@ -186,11 +207,14 @@ def _is_prose(path: str) -> bool:
         or _DEPENDENCY_TEXT_RE.fullmatch(name)
     ):
         return False
-    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and name.lower().endswith(
+    lowered = name.lower()
+    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and lowered.endswith(
         _DOCS_DATA_SUFFIXES
     ):
-        return True
-    return name in LOCKFILES or name.lower().endswith(_PROSE_SUFFIXES)
+        # `openapi.v2.json` -> "openapi": the first dot-segment, so a versioned
+        # or dated contract file is still recognised as one.
+        return lowered.split(".", 1)[0] not in _CONTRACT_STEMS
+    return name in LOCKFILES or lowered.endswith(_PROSE_SUFFIXES)
 
 
 def _is_sensitive(path: str) -> bool:

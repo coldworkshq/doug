@@ -158,6 +158,19 @@ def test_committed_data_under_docs_routes_as_prose_but_real_config_does_not(monk
     assert not features._is_prose("web/docs/thing.json")
     assert not features._is_prose("docs/scripts/gen.py")
 
+    # docs/ is not a private directory. Doug reviews other people's repos,
+    # where a published contract under docs/ is load-bearing config — demoting
+    # it would cut a customer's API surface out of the read without notice.
+    # The first draft of this rule reasoned only from THIS repo's layout, which
+    # Doug flagged on b767f2e. These stay tier 0 wherever they live.
+    assert not features._is_prose("docs/openapi.json")
+    assert not features._is_prose("docs/api/openapi.v2.json")   # versioned stem
+    assert not features._is_prose("docs/reference/swagger.json")
+    assert not features._is_prose("docs/schema.yaml")
+    assert not features._is_prose("docs/graphql.json")
+    # ...but a contract-shaped WORD inside a longer name is not a contract.
+    assert features._is_prose("docs/design/schema-migration-notes.json")
+
     # Routing only, asserted as a property rather than trusted. ADR-0012's
     # tiering decides which files reach the model, never what the score says,
     # and the docstring's "routing-only exceptions" claim is only true while

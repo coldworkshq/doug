@@ -8,10 +8,12 @@ are tier-ordered, so those AUC figures do not validate the larger, reordered
 live read. The four frozen parameters are load-bearing evidence — changing
 one is a new experiment, not a tweak.
 
-Three of the probe's six constants have now left the freeze: DIFF_BUDGET
-(ADR-0012, governed by a coverage bar) and EFFORT (ADR-0018, governed by an
-unrun pre-registration). Each divergence is pinned on BOTH sides by test, so
-nobody can re-anchor the instrument by "fixing the drift".
+ADR-0002 froze six. TWO have left: DIFF_BUDGET (ADR-0012, governed by a
+coverage bar) and EFFORT (ADR-0018, governed by an unrun pre-registration).
+Four remain, and 2 + 4 = 6 — an earlier version of this paragraph said
+"three have left" alongside "four remain", which Doug caught on b767f2e.
+Each divergence is pinned on BOTH sides by test, so nobody can re-anchor the
+instrument by "fixing the drift".
 
 Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
 Callers fall back to the deterministic score when either is missing or a
