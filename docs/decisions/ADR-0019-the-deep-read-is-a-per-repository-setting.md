@@ -88,6 +88,20 @@ and is looking for the place where Doug is turned down.
 - **Folding a missing row into "off"**, matching `repo_pr_comment`. Rejected on
   the asymmetry in Consequences.
 - **Retroactively re-scoring anything.** Forward-only, like the line.
+- **Reading this as the second knob ADR-0013 rejected.** ADR-0013 refused two
+  *thresholds* for one question — "where is the line?" — and that refusal
+  stands: there is still one number, and this record adds no second one. The
+  deep read answers a different question, "is the diff opened at all?". The
+  objection has a real edge, raised by Doug on #195: on a repository with no
+  line of its own, the user-visible effect of this toggle INCLUDES moving
+  which default applies, so it is a lever over the line in practice even
+  though it is not a line. That is a consequence of which scorer ran, not a
+  second control over banding — a scorer that never opens the diff cannot
+  honour a line calibrated for one that does — and the honest answer is to say
+  so at the control rather than to pretend the effect is not there. The copy
+  does, in the tense that matches the repository's state. A second *threshold*
+  for the deterministic tier would be the thing ADR-0013 rejected, and is
+  still rejected.
 
 ## Consequences
 
@@ -118,6 +132,22 @@ and is looking for the place where Doug is turned down.
   indicator in the connections response is deferred to
   [#196](https://github.com/drewjst/doug/issues/196) — the issue is the
   tracker, not this line.
+- **A rolled-back API breaks the dashboard rather than degrading it.** The
+  two-step above protects the PROMOTION window (API before web); it says
+  nothing about a rollback, a canary, or a stale instance serving a body from
+  before the column. Web's guard is `exact()`, so such a body is rejected
+  whole and every dashboard shows `LedgerUnreachable`. That is the chosen
+  failure: loud, naming no cause it cannot prove, recoverable by rolling web
+  back too. The alternative Doug proposed on #195 — tolerate on read, refuse
+  to render the one control — is better on blast radius and worse on
+  contract clarity, and it applies identically to `pr_comment`, which shipped
+  the same way. Not settled field by field here; tracked as one decision in
+  [#197](https://github.com/drewjst/doug/issues/197).
+- **Merge order is enforced by the stack; deploy order is not.** #195 is based
+  on #194's branch, so GitHub will not merge it to `main` first. Merging #194
+  *starts* a deploy rather than finishing one (ADR-0009), so merging #195
+  minutes later can still land the API ahead of the web build that tolerates
+  its new key. Wait for #194's deploy, not just its merge.
 - All three settings writes now revalidate `/dashboard` and
   `/dashboard/settings`. Two surfaces disagreeing about a setting is worse than
   either being stale: it makes the reader doubt the write landed.

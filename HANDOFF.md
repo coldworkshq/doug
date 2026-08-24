@@ -18,6 +18,16 @@ State:    review — pushed. #194 and #195 open, #195 stacked on #194's
           All seven findings dispositioned in docs/findings-log.jsonl
           (4 real, 2 disproved, 1 duplicate). #195 has been merged up from
           #194 and is green on the merge.
+          Doug then reviewed #195 at 230ff93: 6 more findings, all settled
+          (3 real+changed, 3 disproved). The one that mattered caught a
+          CONTRADICTION IN MY OWN COMMENTS — #194's guard note argued absence
+          of deep_read is unambiguous, #195's tightening then argued absence
+          would invent a toggle state. Both cannot be true. The justification
+          is rewritten to the real one (an absent key means an API older than
+          the column, i.e. a contract this build cannot check at all), and the
+          rollback window it exposed — which the two-step NEVER covered, since
+          that protects promotion order only — is #197, filed cross-cutting
+          because pr_comment has the identical exposure.
           PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
           /dashboard/settings, rail + gear links, a Dashboard link in the site
           header, session-api guards LOOSENED to tolerate deep_read.

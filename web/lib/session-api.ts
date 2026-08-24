@@ -228,11 +228,29 @@ function prMetadata(value: unknown): value is PRMetadata {
 }
 
 /** TIGHTENED BACK, now that the API emits `deep_read` — the same second step
- *  `pr_comment` took before it, and taken for the same reason. The previous PR
- *  accepted the key as optional so this build survived the window between the
- *  API's promotion and web's; an entry arriving without it NOW is not an older
- *  API, it is a body this build cannot render honestly, because the row would
- *  draw a toggle whose state it invented. */
+ *  `pr_comment` took before it. The previous PR accepted the key as optional
+ *  so this build survived the window between the API's promotion and web's.
+ *
+ *  THE REASON IS NOT "an absent key would be an invented state", and the
+ *  earlier draft of this comment said that. It is not true of THIS field: the
+ *  column is `NOT NULL DEFAULT TRUE`, so an API that omits it is an API on
+ *  which every repository was read, and absent has one honest reading. Doug
+ *  caught the contradiction between that argument and this one on #195
+ *  (reader:api-contract-change).
+ *
+ *  The real reason is what an absent key means about the REST of the body. The
+ *  only way to receive one now is an API older than the column — a rolled-back
+ *  revision, a canary, a stale instance — and such a body is not "this body
+ *  minus one field", it is a different contract that this build cannot check.
+ *  Rendering it means asserting a whole settings surface from a source we have
+ *  stopped being able to validate. `LedgerUnreachable` is loud, names no cause
+ *  it cannot prove, and is recoverable; a quietly-wrong toggle is none of
+ *  those. Consistency with `pr_comment` is a tiebreak, not the argument.
+ *
+ *  THE ROLLBACK WINDOW IS REAL AND IS NOT COVERED BY THE TWO-STEP, which only
+ *  protects promotion order. It is recorded in ADR-0019 and tracked across
+ *  every field on this endpoint, `pr_comment` included, rather than settled
+ *  field by field. */
 function repository(value: unknown): value is ConnectedRepository {
   return (
     record(value) &&
