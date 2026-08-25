@@ -1,5 +1,83 @@
 # HANDOFF — doug
 
+State:    review — #122 settled and this PR is the record of it. The
+          detector produced its first `revert` in production and a
+          both-directions audit of all 53 adjudicated rows agrees with
+          `git log`. Docs only: ROADMAP.md + this file. No code.
+
+Next:     Andrew merges. Then the Coldworks sequencing call — App ownership
+          move, repo transfer, publication venue — see "Still unfiled" below.
+
+Blockers: none.
+
+## #122 SETTLED — the detector's first positive, audited 2026-08-24
+
+**The positive.** PR #68 merged 2026-08-07T20:23:41Z and #70 reverted it the
+same day. Its 14-day clock came due 2026-08-21T20:23:41Z and adjudicated
+`kind: revert` at 2026-08-22T03:02:21Z, one scheduler pass later.
+`GET /v1/prs/68/receipt?repo=drewjst/doug` carries `revert_sha` `bf7a440b`,
+`anchor_sha` `99011b78`, `revert_instant` 2026-08-08T00:47:57Z,
+`window_starts_at` 2026-08-06T20:23:41Z (the `TOLERANCE_DAYS = 1` lower
+bound), `source: git-labels`, `prereg_hash` `c8e30da3…60f2`. Manual `git log`
+agrees: `bf7a440` says `This reverts commit 99011b78…` and is the only revert
+commit in this repository's history.
+
+**I audited the other direction too, which the issue did not ask for.** A
+false positive would discredit the instrument exactly as fast as a false
+negative. Every merged PR by receipt — 143 numbers from the GitHub API, NOT
+from `main`'s subjects, because that list silently misses merges to other
+branches — gives 53 `done` rows, matching the live scoreboard's
+`adjudicated: 53` exactly: 50 `clean`, 2 `censored`, 1 `revert`. Nothing else
+is labelled `revert`, including #70 itself, which is correctly `clean`. The
+two `censored` are #40 and #46, merged to `gh-pages`, `censor_reason:
+base_ref` — the `base_ref` censoring item running in production, not in
+fixtures. #166's title-fallback collision cannot touch #68: `bf7a440`
+attributes by sha, and #68 was never relanded.
+
+**THE PART THAT IS EASY TO MISREAD: this does not move the miss rate.** #68's
+governing verdict was **0.34 against a 0.30 threshold — `band: flagged`**.
+Prereg §2.1's denominator is `tier='reader' AND band='cleared'`. Doug flagged
+the one PR that got reverted, so the first positive sits OUTSIDE the published
+denominator. Anyone quoting "the detector's first miss" would be wrong twice
+over, because `instrument_snapshot` also hardcodes `miss_rate=None`
+(`store.py:1773`) and no surface computes a rate at all yet.
+
+**The M3 gate does not close on this.** One full webhook-started 14-day cycle
+is now complete, but "observed" is still not implemented: I verified this
+cycle by hand, three days after it closed, which is the same posture that let
+the first cycle run dead for two days. #121 stays open and the gate's last
+clause stays unmet.
+
+**Evidence for #121, NOT yet posted there — ask Andrew first.** The live
+scoreboard read
+`first_due: 2026-08-25T03:48:04Z` against `as_of: 2026-08-25T04:47:10Z` — a
+`first_due` strictly in the past with work outstanding, which is the exact
+contradiction #121 proposes to alert on, occurring while nothing is wrong. The
+adjudicator runs daily at 03:00Z, so any clock due after that sits untouched
+for up to about 24 hours by design. The check needs a tolerance of at least one
+scheduler period, or it fires every day.
+
+## Still unfiled — decision debt, Andrew's call
+
+Raised 2026-08-24 while answering "when do we move doug to coldworks and give
+it a public surface", deliberately NOT filed as issues yet because both are
+questions for Andrew rather than work:
+
+1. **Publication venue portability.** The prereg names
+   `https://drewjst.github.io/doug/publication/` and §12 requires every prior
+   version stay published. A repo transfer to `coldworkshq` moves the Pages
+   site to a different host. Decide the venue before the first publication,
+   not after.
+2. **Series identity across a transfer.** The ledger keys on
+   `(installation_id, github_repo_id)`; only `github_repo_id` survives a
+   transfer between accounts. Decide which one the published denominator uses
+   BEFORE transferring — a ruling made once the split is visible is
+   indistinguishable from picking the flattering framing.
+
+---
+
+## Prior stream — PR #202 (2026-08-24)
+
 State:    review — PR #202 (fixes #154) open against main, four commits,
           rebased onto 7cb45ec (#200). Doug read it three times — 8dc74d0
           (6 findings), 1db64a3 (5 + 3 deviations), b008221 (5 + 2). All
