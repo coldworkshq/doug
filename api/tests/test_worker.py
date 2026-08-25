@@ -1253,7 +1253,7 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id, *, claim_generation):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation, owes_comment=False):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
@@ -2562,7 +2562,7 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id, *, claim_generation):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation, owes_comment=False):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
@@ -2906,3 +2906,634 @@ def test_no_refusal_token_touches_the_denial_marker(tmp_path, monkeypatch):
     worker.process_job(ingest.claim())
 
     assert store.pr_comment_denied_at(JOB["installation_id"]) is not None
+
+
+def _age_finished_at(url: str, job_id: int, seconds: int) -> None:
+    """Push a completed job's finished_at into the past. The comment-retry
+    sweep reads that column twice — once to decide the write is over rather
+    than in flight, once to decide the PR is still recent enough to be worth
+    repairing — so every test of it has to move this clock rather than wait
+    on the real one."""
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(finished_at=datetime.now(UTC) - timedelta(seconds=seconds))
+        )
+
+
+def _settled(url: str, job_id: int) -> None:
+    _age_finished_at(url, job_id, worker.PR_COMMENT_SETTLED_SECONDS + 1)
+
+
+def _job(url: str) -> dict:
+    (row,) = _rows(url, store.review_jobs)
+    return row
+
+
+def test_a_comment_lost_after_the_job_completed_is_retried_without_a_new_sha(
+    tmp_path, monkeypatch, capsys
+):
+    """Issue #154, the whole of it. `_post_pr_comment` runs AFTER
+    ingest.complete has marked the job 'done', REVIVABLE is ('failed',
+    'superseded'), and the next delivery for this SHA collides on
+    uq_review_job — so before the outcome column, a comment lost to a 5xx was
+    lost until somebody pushed a new commit. Since ADR-0014 the comment is
+    the surface GitHub actually shows (a neutral check run stays folded), so
+    that was a lost review, not a missing badge.
+
+    The head SHA is asserted unchanged on purpose: "retried without requiring
+    a new SHA" is the condition, and a fix that healed the comment by
+    enqueueing the next push would not be one."""
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net", "updated"))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+    assert len(upserts) == 1
+    assert _job(url)["pr_comment_outcome"] == "failed:net"
+
+    _settled(url, job_id)
+    assert worker.retry_unposted_comments() == 1
+
+    assert len(upserts) == 2
+    # Same job id, so the same `seq` guard: store.claim_pr_comment_seq passes
+    # on equality precisely because a re-pended job keeps its id and its
+    # retry is the same verdict, not an older one.
+    assert upserts[1]["seq"] == job_id
+    assert upserts[1]["installation_id"] == JOB["installation_id"]
+    assert upserts[1]["github_repo_id"] == JOB["github_repo_id"]
+    row = _job(url)
+    assert row["status"] == "done" and row["head_sha"] == JOB["head_sha"]
+    assert row["pr_comment_outcome"] == "updated"
+    assert row["pr_comment_attempts"] == 1
+    err = capsys.readouterr().err
+    assert f"doug: retrying comment for job {job_id}" in err
+    assert "last failed:net" in err
+    # The reason this is a comment-only sweep rather than a re-pend of the
+    # job: _replay_recorded would also call check_run.post, which is
+    # checks.create, so every repair would leave a SECOND check run on the
+    # commit. Healing an advisory surface must not damage the working one.
+    assert len(posted) == 1
+
+
+def test_the_repaired_comment_carries_the_same_body_the_first_attempt_did(
+    tmp_path, monkeypatch
+):
+    """ADR-0014's central claim has to survive the repair path: the comment's
+    middle is the check run's summary byte for byte. A retry that rendered
+    its own summary would leave a PR whose comment and check run disagree
+    about one verdict — which is worse than the missing comment, because it
+    is wrong rather than absent. `_render_recorded` is shared with the replay
+    path for exactly this reason."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:502", "updated"))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    _settled(url, job_id)
+    worker.retry_unposted_comments()
+
+    assert len(upserts) == 2
+    assert upserts[1]["body"] == upserts[0]["body"]
+
+
+def test_a_comment_the_worker_never_reached_is_retried(tmp_path, monkeypatch):
+    """The other half of #154, and the half no in-process retry could reach:
+    the instance dies between ingest.complete and the comment. Nothing was
+    attempted and nothing reported back — so the marker `ingest.complete`
+    stamped in the same statement that made the job 'done' is the only
+    evidence a comment is owed. Standing in for the death by cutting
+    _post_pr_comment out of the first pass entirely, which is what the crash
+    does."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("created",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    posting = worker._post_pr_comment
+    monkeypatch.setattr(worker, "_post_pr_comment", lambda *a, **k: None)
+
+    worker.process_job(ingest.claim())
+    row = _job(url)
+    assert row["status"] == "done"
+    assert row["pr_comment_outcome"] == store.PR_COMMENT_OWED
+    assert upserts == []
+
+    monkeypatch.setattr(worker, "_post_pr_comment", posting)
+    _settled(url, job_id)
+
+    assert worker.retry_unposted_comments() == 1
+    assert len(upserts) == 1 and upserts[0]["seq"] == job_id
+    assert _job(url)["pr_comment_outcome"] == "created"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["created", "updated", "skipped:off", "skipped:no-active-row", "skipped-target",
+     "skipped-stale", "denied:403"],
+)
+def test_a_landed_or_decided_comment_is_never_retried(
+    tmp_path, monkeypatch, outcome
+):
+    """Only NULL and `failed:*` are owed a retry, and the exclusions carry
+    the argument. `created`/`updated` are the write landing. Every `skipped*`
+    is a DECISION — the tenant's toggle, a repo the dashboard cannot show, a
+    newer job that already wrote, a PR number belonging to another repo — and
+    a decision retried is a decision overridden. `denied:403` is permission,
+    which is a tenant action with its own marker and banner (D8); retrying it
+    would spend a GitHub call per drain forever to change nothing."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=(outcome,))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    before = len(upserts)
+
+    _settled(url, job_id)
+
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == before
+    # Never claimed, so no repair budget was spent on a row that never
+    # needed one — the counter is repairs, not writes.
+    assert _job(url)["pr_comment_attempts"] == 0
+
+
+def test_a_comment_still_inside_the_settle_window_is_left_alone(tmp_path, monkeypatch):
+    """The window between ingest.complete and the outcome write belongs to a
+    worker that may still be alive inside it, and two drainers are the
+    deployed configuration (`--max-instances 2`). Sweeping a row that young
+    is how ONE review notifies every reviewer on the PR twice — the exact
+    harm the complete-before-post ordering exists to prevent, reintroduced by
+    the repair for it. Younger than the settle period is treated as in
+    flight, the same call reclaim_stalled's lease makes."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 1
+
+    _settled(url, job_id)
+    assert worker.retry_unposted_comments() == 1
+
+
+def test_a_comment_older_than_the_lookback_window_is_left_alone(tmp_path, monkeypatch):
+    """A comment is worth repairing while the PR is still what people are
+    looking at. The bound is also what stops a cold start from walking the
+    ledger's whole history — migration 016's backfill is the other half of
+    that, and this one holds where the backfill did not reach."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+
+    _age_finished_at(url, job_id, worker.PR_COMMENT_RETRY_WINDOW_SECONDS + 60)
+
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 1
+
+
+def test_the_retry_gives_up_after_the_retry_cap(tmp_path, monkeypatch):
+    """A comment failing for a reason no retry fixes has to stop costing
+    GitHub calls on every drain for a day. The counter budgets REPAIRS: the
+    write process_job already made is fenced by the job claim and needs none,
+    so PR_COMMENT_MAX_RETRIES sits on top of it."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    assert _job(url)["pr_comment_attempts"] == 0
+    _settled(url, job_id)
+
+    swept = [worker.retry_unposted_comments() for _ in range(4)]
+
+    assert swept == [1, 1, 0, 0]
+    assert worker.PR_COMMENT_MAX_RETRIES == 2
+    assert len(upserts) == 1 + worker.PR_COMMENT_MAX_RETRIES == 3
+    assert _job(url)["pr_comment_attempts"] == 2
+
+
+def test_two_sweepers_racing_one_row_produce_exactly_one_comment(
+    tmp_path, monkeypatch
+):
+    """`--max-instances 2` means both instances run drain, and the sweep's
+    SELECT is unlocked — so unlike two drainers meeting on one PR by
+    coincidence, both pick the SAME settled rows on EVERY pass. Without a
+    reservation both would reach `upsert`, and for a PR whose comment was
+    never created the listing can miss a create the other has not committed:
+    two comments, two notifications, one review. That is the harm the
+    complete-before-post ordering exists to prevent, reintroduced by the
+    repair for it.
+
+    Standing in for the second instance by claiming the row underneath this
+    one, between its select and its write — the window the reservation has to
+    close, and the only one worth testing, since a claim taken after the
+    select has already lost."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    select_rows = store.jobs_with_unposted_pr_comment
+
+    def _peer_claims_first(**kwargs):
+        rows = select_rows(**kwargs)
+        assert store.claim_pr_comment_retry(job_id, attempts=0)  # the peer wins
+        return rows
+
+    monkeypatch.setattr(store, "jobs_with_unposted_pr_comment", _peer_claims_first)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == 1  # the peer's write, not a second one
+    assert _job(url)["pr_comment_attempts"] == 1
+
+
+def test_a_swallowed_outcome_write_does_not_buy_an_unbounded_retry(
+    tmp_path, monkeypatch
+):
+    """The attempt is spent by the claim, before the GitHub call, not by the
+    outcome write after it. `_post_pr_comment` swallows a ledger failure on
+    purpose — the verdict is durable and the job is done, so nothing there
+    may raise — and counting on the way out made a lost write and a repair
+    that never ran the same row. The same job would then be re-swept on every
+    drain for the whole lookback window, spending a GitHub call each time."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    def _ledger_down(*a, **k):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(store, "record_pr_comment_outcome", _ledger_down)
+
+    swept = [worker.retry_unposted_comments() for _ in range(3)]
+
+    assert swept == [1, 1, 0]
+    assert len(upserts) == 3
+    assert _job(url)["pr_comment_attempts"] == worker.PR_COMMENT_MAX_RETRIES
+
+
+def test_a_raise_after_the_post_does_not_put_a_landed_comment_back_in_the_set(
+    tmp_path, monkeypatch, capsys
+):
+    """The post is inside the whole-job try so one job's raise cannot skip the
+    rest of the batch — and that is exactly what makes this reachable. Once
+    `_post_pr_comment` is entered it owns the outcome and has written one;
+    the recovery must not overwrite it with `failed:internal`, which is
+    retriable and would buy a second write of a body already on the PR.
+
+    `_post_pr_comment` swallows everything today, so this is a contract held
+    in another function. The fence is here because that is where the damage
+    would land, not there."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net", "updated"))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    posting = worker._post_pr_comment
+
+    def _records_then_raises(*a, **k):
+        posting(*a, **k)
+        raise RuntimeError("something after the write")
+
+    monkeypatch.setattr(worker, "_post_pr_comment", _records_then_raises)
+
+    assert worker.retry_unposted_comments() == 1
+
+    assert len(upserts) == 2
+    assert _job(url)["pr_comment_outcome"] == "updated"
+    assert "something after the write" in capsys.readouterr().err
+
+    # And the landed comment is not re-swept on the next pass.
+    monkeypatch.setattr(worker, "_post_pr_comment", posting)
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 2
+
+
+def test_a_raise_before_the_post_still_records_a_retriable_outcome(
+    tmp_path, monkeypatch
+):
+    """The other side of the fence. Nothing was written to GitHub, so the
+    repair has to leave something the next pass can find — and it has to be
+    retriable, because whatever broke may not be broken next time. The claim
+    already spent the budget, so this converges rather than looping."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    def _shape_change(job, existing):
+        raise AttributeError("'Verdict' object has no attribute 'band'")
+
+    monkeypatch.setattr(worker, "_render_recorded", _shape_change)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == 1
+    row = _job(url)
+    assert row["pr_comment_outcome"] == "failed:internal"
+    assert row["pr_comment_attempts"] == 1
+
+
+# Every token `pr_comment.upsert` documents itself as returning, plus the two
+# `worker._pr_comment_outcome` adds ahead of it and the two the worker records
+# on its own behalf. Keeping the list here rather than only in ADR-0014's
+# reader-fed flags is what makes the classification testable: a token added to
+# `upsert` with no `failed:` prefix becomes terminal SILENTLY, and prose in a
+# record cannot fail.
+PR_COMMENT_TOKENS = {
+    "created": False,
+    "updated": False,
+    "skipped-stale": False,
+    "denied:403": False,
+    "failed:500": True,
+    "failed:net": True,
+    "failed:page-bound": True,
+    "skipped:off": False,
+    "skipped:no-active-row": False,
+    "skipped:no-ledger": False,
+    "skipped-target": False,
+    "skipped:no-verdict": False,
+    "failed:internal": True,
+}
+
+
+@pytest.mark.parametrize(("token", "retried"), sorted(PR_COMMENT_TOKENS.items()))
+def test_every_outcome_token_is_classified_on_purpose(
+    tmp_path, monkeypatch, token, retried
+):
+    """The retry set is a prefix rule — `failed:*` and nothing else — so a new
+    token that fails without saying `failed:` would inherit "terminal" with
+    nobody deciding it. This pins the whole vocabulary against the rule, and
+    pins that every token fits the column it is stored in: a value truncated
+    at 32 chars would be a silent lie about what happened.
+
+    Add a token to `pr_comment.upsert` or to `worker._pr_comment_outcome` and
+    this test is where it has to be classified."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch, outcomes=(token,))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    stored = _job(url)["pr_comment_outcome"]
+    assert stored == token, "token does not survive the column width"
+
+    _settled(url, job_id)
+
+    assert bool(worker.retry_unposted_comments()) is retried
+
+
+def test_a_completion_that_does_not_owe_a_comment_is_never_swept(
+    tmp_path, monkeypatch
+):
+    """`ingest.complete` stamps the owed marker only when its caller says the
+    job owes a comment, and the default is that it does not.
+
+    Stamping unconditionally would put the invariant in prose: any completion
+    path that does not go on to attempt a comment would leave a marker the
+    sweep later acts on, and write to a PR nobody asked it to. False is also
+    the right direction to be wrong in — a caller that should have said True
+    loses a repair, which is the behaviour before #154, while a caller
+    wrongly stamped writes to a live PR."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+
+    assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
+
+    assert _job(url)["pr_comment_outcome"] is None
+    _settled(url, job_id)
+    assert worker.retry_unposted_comments() == 0
+    assert upserts == []
+
+
+def test_an_early_return_still_clears_the_owed_marker(tmp_path, monkeypatch):
+    """The marker is cleared by `_record_and_log` and by nothing else, so a
+    path out of `_post_pr_comment` that skips it leaves a job that commented
+    looking like one that never did — and the sweep writes the comment a
+    second time.
+
+    Held as a convention, the next early return added inside that try — a
+    feature-flag short circuit, a new guard clause — breaks it silently. It
+    is held in a `finally` instead, and this stands in for that future edit
+    by making the outcome path return early."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    def _short_circuit(gh, owner, name, job, summary, *, fresh):
+        return "skipped:off"
+
+    monkeypatch.setattr(worker, "_pr_comment_outcome", _short_circuit)
+
+    worker.process_job(ingest.claim())
+
+    row = _job(url)
+    assert row["status"] == "done"
+    assert row["pr_comment_outcome"] == "skipped:off"
+    assert upserts == []
+    _settled(url, row["id"])
+    assert worker.retry_unposted_comments() == 0
+
+
+def test_a_completion_with_no_verdict_promises_no_repair(tmp_path, monkeypatch):
+    """The marker promises a repair, and a repair renders its body from the
+    durable verdict — so a completion with none has nothing a sweep could
+    write. Stamping it anyway would promise what no pass can keep and spend
+    one writing `skipped:no-verdict` to say so.
+
+    `ingest.complete` accepts a None verdict_id on purpose ("a skipped PR is
+    finished, not failed"), so this is that contract read honestly rather
+    than a guard against a path that exists today."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    monkeypatch.setattr(store, "save_review", lambda *a, **k: None)
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    row = _job(url)
+    assert row["status"] == "done" and row["verdict_id"] is None
+    assert row["pr_comment_outcome"] != store.PR_COMMENT_OWED
+    _settled(url, row["id"])
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 1  # the fresh write still happened; only repair is off
+
+
+def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(
+    tmp_path, monkeypatch
+):
+    """Rows completed by a revision that does not stamp `owed` — everything
+    the migration finds, and everything an older instance finishes during a
+    rollout — must stay out of the sweep. Nothing knows whether they
+    commented, and a repair that guesses is a duplicate on a live PR.
+
+    This is what buys the migration its lack of a backfill: the sweep reads a
+    positive marker, so "no marker" needs no UPDATE to be safe."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("created",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+    # The older revision's shape: done, finished, no marker, no outcome.
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(pr_comment_outcome=None)
+        )
+    before = len(upserts)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == before
+    assert _job(url)["pr_comment_outcome"] is None
+
+
+def test_an_outcome_too_long_for_the_column_says_so(tmp_path, monkeypatch, capsys):
+    """Truncation cannot flip the retry classification — that reads a prefix,
+    and a prefix survives a truncation and cannot be created by one — so what
+    is at stake is the ledger claiming an outcome that never happened. Silent
+    is the part that is wrong; the slice itself is fine."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    long_token = "failed:" + "x" * store.PR_COMMENT_OUTCOME_MAX
+
+    store.record_pr_comment_outcome(ingest.claim()["id"], long_token)
+
+    err = capsys.readouterr().err
+    assert f"over {store.PR_COMMENT_OUTCOME_MAX} chars" in err
+    assert repr(long_token) in err
+
+
+def test_the_retry_reverifies_the_target_before_writing(tmp_path, monkeypatch, capsys):
+    """The retry runs long after process_job verified this job's target, on a
+    repo_full_name that is display-only and stale after a rename — so it
+    posts with fresh=False and re-checks. The check run cannot be misdirected
+    that way (a foreign head_sha 422s); a comment needs only a PR number."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+    # The rename lands between the review and the repair.
+    renamed = _gh(base_repo_id=JOB["github_repo_id"] + 1)
+    monkeypatch.setattr(app_auth, "installation_client", lambda i: renamed)
+
+    assert worker.retry_unposted_comments() == 1
+
+    assert len(upserts) == 1  # nothing written to the other repo's PR
+    assert _job(url)["pr_comment_outcome"] == "skipped-target"
+    assert "doug: comment skipped-target drewjst/doug#7@" in capsys.readouterr().err
+
+
+def test_a_done_job_whose_verdict_went_away_stops_rather_than_looping(
+    tmp_path, monkeypatch, capsys
+):
+    """ingest.complete always writes the verdict id, so this is a verdict
+    that disappeared underneath a done row. Terminal rather than `failed:*`:
+    there is nothing for a later pass to find, and a retry that cannot
+    converge is noise on every drain until the window closes."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+    monkeypatch.setattr(store, "find_verdict_by_id", lambda vid: None)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == 1
+    assert _job(url)["pr_comment_outcome"] == "skipped:no-verdict"
+    assert "doug: comment skipped:no-verdict drewjst/doug#7@" in capsys.readouterr().err
+
+
+def test_drain_retries_unposted_comments_after_working_the_queue(
+    tmp_path, monkeypatch, capsys
+):
+    """The cadence. A delivery kicks drain on every push, so a comment lost
+    at 10:00 comes back on the next PR's delivery rather than at the next
+    cold start. After the claim loop, not before: the reviews are what the
+    pass is for and the installation token's rate limit is shared."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net", "updated"))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+
+    assert worker.drain() == 1
+    assert len(upserts) == 1  # too young to sweep in its own pass
+    _settled(url, job_id)
+
+    assert worker.drain() == 0  # nothing left to claim; the sweep still runs
+
+    assert len(upserts) == 2
+    assert _job(url)["pr_comment_outcome"] == "updated"
+    assert "doug: retried 1 unposted comment(s)" in capsys.readouterr().err
+
+
+def test_a_broken_comment_sweep_cannot_stop_the_queue_being_worked(
+    tmp_path, monkeypatch, capsys
+):
+    """The sweep is how a lost comment comes back; a fault inside it must not
+    become how every REVIEW stops. drain's own contract, applied to the
+    repair: one job's failure must not strand the queue behind it."""
+    _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    def _broken(*a, **k):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(store, "jobs_with_unposted_pr_comment", _broken)
+
+    assert worker.drain() == 1
+
+    assert len(posted) == 1
+    assert "doug: comment retry sweep failed (RuntimeError: ledger down)" in (
+        capsys.readouterr().err
+    )

@@ -178,6 +178,19 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
         # have real tables to land on.
         conn.exec_driver_sql("CREATE TABLE reads (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
         conn.exec_driver_sql("CREATE TABLE findings (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
+        # Migration 16's target, and it carries `finished_at` on purpose.
+        # `_satisfied` swallows "no such column", which is meant to keep DROP
+        # COLUMN idempotent — but it also means a CREATE INDEX naming a
+        # column the stub does not have is skipped in silence while the
+        # migration still records itself as applied. A two-column stub here
+        # made this test assert that migration 16 ran when its index had not
+        # been built (issue #205). Production has the column; the fixture has
+        # to as well, or the assertion below is about nothing.
+        conn.exec_driver_sql(
+            "CREATE TABLE review_jobs (id INTEGER PRIMARY KEY, "
+            "status VARCHAR(12) NOT NULL, "
+            "finished_at TIMESTAMP)"
+        )
         conn.execute(
             migrations.schema_migrations.insert(),
             [
@@ -186,7 +199,12 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15]
+    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16]
+    # Not just "the version was recorded": the index migration 16 exists for
+    # has to actually be on the table. See the stub's comment for how this
+    # passed while it was not (issue #205).
+    review_job_indexes = {i["name"] for i in inspect(engine).get_indexes("review_jobs")}
+    assert "ix_review_jobs_pr_comment_retry" in review_job_indexes
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
     assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
@@ -266,6 +284,8 @@ M12_COLUMNS = {
 M13_COLUMNS = {"pr_comments": {"last_seq"}}
 
 M14_COLUMNS = {"reads": {"hunks"}, "findings": {"hunks"}}
+
+M16_COLUMNS = {"review_jobs": {"pr_comment_outcome", "pr_comment_attempts"}}
 
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
@@ -418,6 +438,55 @@ def test_migration_014_declares_the_same_columns_as_their_tables(tmp_path):
     for table, columns in M14_COLUMNS.items():
         assert columns <= _columns(engine, table)
     assert store.pr_comments.c.last_seq.nullable
+
+
+def test_migration_016_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard as 002/007/008/009/013/014. Sharper here than usual:
+    the sweep these columns feed reads NULL as "this comment never posted",
+    so a metadata-only column would leave production selecting on a column it
+    does not have — a repair path that is green in CI and absent in Cloud SQL
+    (issue #154)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl16.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[16]) == M16_COLUMNS
+    for table, columns in M16_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+    # NULL has to be reachable, because it is the value the sweep acts on.
+    assert store.review_jobs.c.pr_comment_outcome.nullable
+    assert not store.review_jobs.c.pr_comment_attempts.nullable
+
+
+def test_migration_016_touches_no_existing_row(tmp_path):
+    """It adds columns and an index and rewrites nothing, which is the point.
+
+    An earlier draft stamped every existing 'done' row so the sweep could
+    read NULL as "never posted". That needed one UPDATE across the whole
+    table — on Postgres, a new tuple version per row inside a startup
+    migration — purely to disambiguate an absence. The sweep reads
+    `ingest.complete`'s positive marker instead, so a row this migration
+    leaves NULL is invisible to it by construction. Pinned here because the
+    cheap-looking fix is to add the backfill back."""
+    engine = create_engine(f"sqlite:///{tmp_path}/m16.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        for pr, status in ((1, "done"), (2, "pending"), (3, "failed"), (4, "superseded")):
+            conn.exec_driver_sql(
+                "INSERT INTO review_jobs (installation_id, github_repo_id, "
+                "repo_full_name, pr_number, head_sha, status, attempts, "
+                f"claim_generation, enqueued_at) VALUES (10, 20, 'o/r', {pr}, "
+                f"'{str(pr) * 40}', '{status}', 1, 1, '2026-08-01')"
+            )
+
+    migrations.apply(engine)
+
+    with engine.connect() as conn:
+        rows = dict(
+            conn.exec_driver_sql(
+                "SELECT pr_number, pr_comment_outcome FROM review_jobs"
+            ).all()
+        )
+    assert rows == {1: None, 2: None, 3: None, 4: None}
+    assert not [s for s in dict(migrations.MIGRATIONS)[16] if "UPDATE" in s.upper()]
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -865,7 +934,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
     # store.metadata.create_all() above already built the current table shapes,
     # so migrations 6 through 13 all find their ALTER/CREATE work satisfied
     # and still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     with engine.connect() as conn:
         app_ids = [
             r[0]

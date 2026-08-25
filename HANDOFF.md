@@ -1,5 +1,165 @@
 # HANDOFF — doug
 
+State:    review — PR #202 (fixes #154) open against main, four commits,
+          rebased onto 7cb45ec (#200). Doug read it three times — 8dc74d0
+          (6 findings), 1db64a3 (5 + 3 deviations), b008221 (5 + 2). All
+          settled. 1658 tests pass, ruff clean.
+
+Next:     Force-push the rebase; watch Doug's read of the new head. Then
+          Andrew reviews and merges.
+
+Blockers: none.
+
+## What #154 was
+
+`worker._post_pr_comment` ran after `ingest.complete` marked the job 'done';
+`ingest.REVIVABLE` is ('failed', 'superseded'); the next delivery for that SHA
+collides on `uq_review_job`. A comment lost to a process death or a 5xx was
+lost until somebody pushed. Since ADR-0014 the comment is the surface GitHub
+actually shows (neutral checks stay folded), so that was a lost review, not a
+missing badge. Fixed by recording what every comment write did and sweeping
+the ones that never landed at the end of each `drain`.
+
+## The shape it arrived at, after three reads
+
+- `ingest.complete` stamps `store.PR_COMMENT_OWED` in the SAME statement that
+  marks the job done. The sweep selects on that POSITIVE marker.
+- It started as "NULL means never posted", which needed a full-table UPDATE in
+  migration 016 to disambiguate, and swept every job an older instance
+  finished mid-rollout. Both went away with the marker. Migration 016 now
+  rewrites nothing.
+- `store.claim_pr_comment_retry` reserves a row before any GitHub call, in one
+  conditional UPDATE that also spends the repair budget, answered by RETURNING
+  the way `ingest.claim` answers its own.
+- `worker.retry_unposted_comments` repairs the COMMENT ALONE. Re-pending the
+  job would reach it through `_replay_recorded`, which also calls
+  `check_run.post` (= `checks.create`) — a second check run on the commit
+  every time.
+- Bounds: 2 repairs, 300s settled, 24h lookback, 20 per pass.
+
+## Doug's six reads, dispositioned
+
+Read 1 (8dc74d0) — 5 real, all fixed: race-condition (unlocked SELECT, both
+instances sweep the same rows every pass), unbounded-retry, error-handling-gap,
+index-mismatch ((status, pr_comment_outcome) -> (status, finished_at)),
+api-contract-change (token vocabulary now pinned by a parametrized test).
+1 disproved: a rollout-overlap row past `pr_comment._PAGE_BOUND` cannot create
+a duplicate — that branch RETURNS `failed:page-bound` and its own comment says
+neither a long PR nor a broken listing may fall through.
+
+Read 2 (1db64a3) — 3 real, all fixed: driver-rowcount-portability (rowcount is
+a property of the DRIVER and no CI job runs Postgres; a matched-not-changed
+driver would hand BOTH sweepers the claim — switched to RETURNING),
+state-overwrite-on-error (moving the post inside the try created the mirror
+defect: a raise past it overwrote a landed outcome with the RETRIABLE
+`failed:internal`), row-shape-coupling (the docstring claimed `ingest.claim`'s
+shape; `claim` adds a bumped `claim_generation`). 1 disproved:
+duplicate-side-effect — created-but-unrecorded leaves `failed:internal`, the
+retry's listing finds the comment by its own marker and this App's authorship
+and edits in place. 1 deferred: #203. 1 deviation REAL — I deleted this file's
+archive, which it already records losing twice. Restored; memory saved as
+`handoff-archive-is-not-ephemeral`.
+
+Read 3 (b008221) — 3 real, all fixed: unsafe-migration (the full-table
+backfill; deleted by the owed marker), error-handling-gap (`_post_pr_comment`
+now records BEFORE it logs — the old order bought nothing, since that write
+swallows and logs its own failure, and cost a retry budget to an f-string
+raise between them), silent-truncation (now loud; and truncation cannot flip
+the classification, because that reads a prefix). 1 already tracked (#203).
+1 NOT fixed and now said plainly instead of overclaimed: the settle period
+NARROWS the slow-first-worker window, it does not close it. Time is a
+heuristic for liveness, not a fence. What remains is `pr_comment.upsert`'s own
+priced trade — its listing falls through to create rather than leave a comment
+that never appears — and a real fence would have to be held by the original
+writer.
+
+Read 4 (691371b) — 3 real, all fixed: invariant-depends-on-caller (the owed
+marker was stamped by `ingest.complete` unconditionally, so any future
+completion path that does not attempt a comment would leave a marker the sweep
+acts on — now `owes_comment`, defaulting to False, so a caller that forgets
+loses a repair rather than writing to a live PR); doc-code-mismatch (three
+docstrings still described the NULL-means-never-posted rule the marker
+replaced, and one still cited a backfill the migration no longer has);
+duplicate-side-effect (not closable, but the settle window went 300s -> 900s,
+which is `ingest.STALL_LEASE_SECONDS` — this codebase has already decided how
+long a worker may be silent before it is presumed dead, and answering that
+twice with two numbers means one is wrong). Deviation REAL: ADR-0014's D10
+said `NULL` was retriable in one sentence and unselectable in the next — the
+exact rule that decides whether a repair can duplicate a live comment. D10 is
+rewritten. Repeats already tracked: #204 (index lock), #203 (client mints),
+#201 (dark exhausted state).
+
+Read 5 (cf76a89, FLAGGED 0.40 — at the line, not over it) — 2 real, both
+fixed, plus one deviation. ddl-column-mismatch is the one worth reading: the
+review_jobs stub I added to the version-9-gap test had no `finished_at`, so
+migration 16's CREATE INDEX failed, `_satisfied` swallowed it as "no such
+column", and the migration RECORDED ITSELF AS APPLIED with no index built.
+Verified by hand: `applied: [16]`, `indexes on review_jobs: []`. Fixture
+fixed and the test now asserts the index exists, not just the version row.
+I tried narrowing `_satisfied` so only DROP COLUMN may shrug at a missing
+column and REVERTED IT: five migration tests fail, including migration 007's
+`uq_outcomes_job_identity` — a UNIQUE index relying on the same swallow. That
+is repo-wide and pre-existing, so it is issue #205 (with the evidence and the
+"check whether the index actually exists in production" clause), not a
+passenger in a comment-retry PR. logic-edge-case also real: `owes_comment` is
+now `verdict_id is not None`, because the marker promises a repair and a
+repair renders from the durable verdict. Deviation REAL: the residual
+paragraph still said "A NULL outcome means no write recorded" — the SAME
+contradiction D10 was rewritten for, surviving in the paragraph below it.
+Fixed. Repeats: #204, #203, #201, and invariant-depends-on-caller now flagged
+in the OPPOSITE direction from read 4 (low, not medium) — that is the
+expected shape of choosing a fail-direction, and the choice is in the ADR's
+rejected list.
+
+Read 6 (48aeb90, cleared 0.36) — CONVERGED. 1 real, fixed:
+invariant-depends-on-caller, now framed as "every path out of
+_post_pr_comment must clear the marker". True, and it was a convention. The
+record + log moved into `_record_and_log`, called from a `finally`, so the
+next early return added inside that try cannot break it silently.
+1 disproved: schema-metadata-drift — migrations.py's own docstring says
+indexes live in migrations and NOT on Table definitions, precisely to avoid
+create_all-only drift, and `migrations.apply(engine)` runs inside
+`store._get_engine()` (store.py:736), so every create_all environment applies
+them. Every other index in the file follows the same rule.
+1 half-correction: the ALTER ... ADD COLUMN NOT NULL DEFAULT 0 named in
+unsafe-migration does NOT rewrite the table — non-rewriting defaults landed in
+Postgres 11 and gcp.sh provisions POSTGRES_18. The CREATE INDEX half stays
+#204. The other three findings and the deviation are all priced residuals or
+tracked issues repeating.
+
+STOPPING POINT: reads 5 and 6 produced no new class of defect — only repeats
+of #201/#203/#204/#205 and the two priced residuals (the time-based liveness
+heuristic, the ADR amendment riding along with the code). Further rounds
+would be re-reading the same trade-offs.
+
+CI GREEN on cf76a89: api, web, console and all three images.
+
+CI GREEN on 691371b: api, web, console and all three images. The web suite ran
+there rather than locally — this worktree has no node_modules — and the diff
+touches no web files.
+
+Deferred, with issues (AGENTS.md): #201 (a comment that exhausts its repairs
+goes dark, the shape D8 refuses), #203 (drain mints an installation client per
+job — the sweep matches what the claim loop beside it already does, so fixing
+one alone leaves the worker inconsistent), #204 (the non-concurrent CREATE
+INDEX in a startup migration). All three numbers are written next to the thing
+they describe so they cannot drift.
+
+Pointers: PR https://github.com/drewjst/doug/pull/202 · #201, #203, #204
+          api/doug/ingest.py `complete` (stamps the marker)
+          api/doug/store.py `PR_COMMENT_OWED`, `_pr_comment_unlanded`,
+          `claim_pr_comment_retry`, `record_pr_comment_outcome`
+          api/doug/worker.py `retry_unposted_comments`, `_render_recorded`
+          api/doug/migrations.py migration 16
+          api/tests/test_worker.py — PR_COMMENT_TOKENS and the tail block
+
+---
+
+## Prior stream — #176 / PR #200: the refused-authority 403 (2026-08-25)
+
+Kept verbatim, per the convention this file adopted in #155: newest slot block
+on top, everything superseded below rather than dropped.
+
 State:    review — #176 fixed on claude/issue-176-verification-3f44bb.
           Full suite green: 1620 pytest, 361 web, console clean. tsc clean,
           lint clean (2 pre-existing <img> warnings in about/page.tsx).
@@ -109,8 +269,6 @@ Pointers: branch claude/issue-176-verification-3f44bb ·
           tests replacing one) · web/lib/node-next-loader.mjs ·
           docs/OPERATIONS.md:295-320 is where #167's answer lives ·
           api/doug/api.py `_prove_installer` is the 404's source
-
----
 
 ## Prior stream — #198, per-repo deep read (kept, still open against main)
 
