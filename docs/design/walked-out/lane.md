@@ -1,10 +1,10 @@
 ---
 lane: walked-out
 vertical: Outcome loop
-status: built
+status: shipped
 opened: 2026-08-19
-closed:
-next: Doug reviews PRs #163 (design) and #164 (the 7 v1 commits, 1597 tests green); Andrew merges; deploy applies migration 014 at start; DOUG_ATTRIBUTION=1 turns the attribution pass on when ready (lands dark). v1.1 resolved state is gated by issue #165 (verify-at-resolve prereg); the reland-labeler fix is issue #166. NUMBER DRIFT: main claimed 12/13 and ADR-0014 between the lock and the build — shipped as migration 014 and ADR-0015; the column set and the decision are what the design binds.
+closed: 2026-08-21
+next: none — the lane is closed. Residuals, each with its own home: DOUG_ATTRIBUTION=1 turns the attribution pass on when Andrew decides to (it shipped dark, ADR-0015); v1.1's resolved state is issue #165 (verify-at-resolve prereg); the reland-labeler fix is issue #166. NUMBER DRIFT: main claimed 12/13 and ADR-0014 between the lock and the build — shipped as migration 014 and ADR-0015; the column set and the decision are what the design binds.
 branches: [design/walked-out, walked-out/v1]
 prs: [163, 164]
 supersedes:
@@ -14,7 +14,7 @@ supersedes:
 
 Doug's convergence lane marks an earlier finding `resolved` when the reader does not mention it again. Bar 1 of the convergence evaluation failed because the reader is nondeterministic: 26 of 43 sampled findings were "resolved" on files nobody touched. This lane replaces rule 5 so that Doug stops carrying a finding only with deterministic evidence (the cited file's diff changed in the PR and the reader did not report it again), carries it forward by construction when the cited file's diff is byte-unchanged, and abstains everywhere else. It adds one column (`reads.hunks`), no model calls, and no reader schema change, and it prints on every check run how many of Doug's own earlier findings on unchanged code the reader did not mention again. The name: a Saint Bernard leaves when it sees the traveler walk out, not when the snow shifts and it loses sight of them.
 
-**Status: BUILT.** Phase 0 recorded (Bar A(B) FAIL → demote ruling; Bar B PASS 1/26, signed); Phase 1's 7 commits are on `walked-out/v1` (PR #164), full suite green. v1 = hunk index + carry-forward by construction + attribution refinement (dark until DOUG_ATTRIBUTION=1) + the Since section with the silence count; no resolved state anywhere. Span-verification passed (attribution is stable and places findings correctly); Phase 0's hand-check then proved edit-evidence is not fix-evidence — Bar A(B) FAIL, carry-forward direction fully validated. See [span-verification.md](span-verification.md) then [phase0-results.md](phase0-results.md).
+**Status: SHIPPED** — PR #164 merged 2026-08-21, deploy green, migration 014 applied at revision start. Phase 0 recorded (Bar A(B) FAIL → demote ruling; Bar B PASS 1/26, signed); Phase 1's 7 commits landed from `walked-out/v1` (PR #164), full suite green. v1 = hunk index + carry-forward by construction + attribution refinement (dark until DOUG_ATTRIBUTION=1) + the Since section with the silence count; no resolved state anywhere. Span-verification passed (attribution is stable and places findings correctly); Phase 0's hand-check then proved edit-evidence is not fix-evidence — Bar A(B) FAIL, carry-forward direction fully validated. See [span-verification.md](span-verification.md) then [phase0-results.md](phase0-results.md).
 
 ## Read in this order
 

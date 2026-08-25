@@ -36,6 +36,38 @@ export default function ChangelogPage() {
                   ),
                 },
                 {
+                  name: "2026-08-23",
+                  description: (
+                    <>
+                      The reader reads harder and spends less doing it. Its
+                      reasoning effort goes to <IC>high</IC>, and the two
+                      mechanical passes behind it — the one that checks a
+                      finding against the file it cites, and the one that
+                      places a finding on a hunk — move to a cheaper model
+                      than the frozen reader (ADR-0016, ADR-0018). Grounding
+                      switches on for one named installation rather than for
+                      everyone at once (ADR-0017).
+                    </>
+                  ),
+                },
+                {
+                  name: "2026-08-21",
+                  description: (
+                    <>
+                      Doug stops forgetting what he already said. When the
+                      code a finding cited is byte-unchanged in the next
+                      push, he carries that finding forward by construction
+                      and reports it under{" "}
+                      <IC>### Since &lt;sha&gt;</IC>, with a count of how many
+                      of his own earlier findings on untouched code he did not
+                      mention again. Nothing is ever marked{" "}
+                      <em>resolved</em>: evidence that code was edited is not
+                      evidence it was fixed, and a sampled hand-check said so
+                      before this shipped.
+                    </>
+                  ),
+                },
+                {
                   name: "2026-08-20",
                   description: (
                     <>
@@ -93,8 +125,9 @@ export default function ChangelogPage() {
                       Doug&rsquo;s own findings now get a durable disposition —
                       real / disproved / adjacent, plus whether anything changed
                       and which file settled it (
-                      <IC>docs/findings-log.jsonl</IC>). All rows today are
-                      backfill and excluded from every rate. A design for an
+                      <IC>docs/findings-log.jsonl</IC>). Every row at the
+                      time was backfill and excluded from every rate; the
+                      prospective denominator opened later. A design for an
                       agent review crew with a falsifier-adjudicated ledger was
                       put through six independent reviewers and <em>cut</em>:
                       four of six proposed &ldquo;agent lenses&rdquo; turned out

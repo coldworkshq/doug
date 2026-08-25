@@ -24,8 +24,8 @@ export default function WhatDougGetsWrongPage() {
               Doug reviews every pull request in his own repository, and we
               write down what he got wrong.{" "}
               <b className="font-semibold text-foreground">
-                About a third of prospective findings are disproved by code he
-                wasn&rsquo;t shown
+                Just under a third of prospective findings are disproved by
+                code he wasn&rsquo;t shown
               </b>{" "}
               — he reads a diff, not a repository, and he does not reliably
               distinguish what the diff <i>proves</i> from what it merely{" "}
@@ -83,14 +83,21 @@ export default function WhatDougGetsWrongPage() {
 
             <div className="mt-6">
               <Callout lead="There is no rate here yet, and that is the point.">
-                The log has 135 rows: 123 prospective and 12 backfill.
-                Backfill was reconstructed from write-ups after the fact and
-                is excluded from every rate by construction. The denominator
-                is the prospective rows. When there is a number, it will not
-                be called precision: whether a finding is <i>true</i> is a
-                different quantity from whether it{" "}
-                <i>predicted a defect</i>, and a finding can be true and
-                worthless or false and load-bearing.
+                Backfill was reconstructed from write-ups after the fact
+                and is excluded from every rate by construction; the
+                denominator is the prospective rows, scoped to one
+                repository, because a rate computed across two describes
+                neither. The counts beside this paragraph are a{" "}
+                <b className="font-semibold text-foreground">
+                  dated snapshot, not a live counter
+                </b>
+                &nbsp;— the log grows every time a finding is settled, and a
+                number printed here cannot follow it. Read the current one off
+                the log yourself; it ships in the repo and the command is in
+                the panel. When there is a rate, it will not be called
+                precision: whether a finding is <i>true</i> is a different
+                quantity from whether it <i>predicted a defect</i>, and a
+                finding can be true and worthless or false and load-bearing.
               </Callout>
             </div>
           </>
@@ -118,7 +125,7 @@ export default function WhatDougGetsWrongPage() {
             <Bright>{"}"}</Bright>
             {"\n\n"}
             <Comment>
-              {"# 135 rows; 123 prospective (37 disproved,\n#   57 real, 29 adjacent); 12 backfill\n#   excluded from every rate."}
+              {"# as of 2026-08-24 — a snapshot, not a\n#   counter. 196 rows; 184 prospective,\n#   12 backfill excluded from every rate.\n#   Doug's own repo is 179 of those:\n#   53 disproved, 89 real, 37 adjacent.\n\n# today's number, from the log itself:\n# python -m doug.findings_log rate --repo doug"}
             </Comment>
           </CodeBlock>
         }

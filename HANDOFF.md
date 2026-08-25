@@ -1,6 +1,10 @@
 # HANDOFF — doug
 
-State:    review — PR #213 open, CI green on 224e0e6. Doug read cf7a978:
+State:    review — PR #213 open. Merged origin/main AGAIN (6bbb1a5, #211);
+          HANDOFF.md is the only file that conflicts, and it has now blocked
+          CI twice — a CONFLICTING PR has no mergeable ref, so workflows
+          never fire and the PR reads "no checks" rather than "blocked".
+          Doug read cf7a978:
           Cleared, risk 0.38, 2 medium + 3 low + 2 deviations. All seven
           dispositioned; web 366/366, console 113/113, api 1661/1661.
 Next:     Push the findings commit, watch Doug's read of the new head, then
@@ -85,12 +89,27 @@ Pointers: branch feat/palette-contrast-dark-mode · web/app/globals.css +
 
 ---
 
-# ARCHIVE — PR #202 (fixes #154), merged 2026-08-25 as 3711bcc
+# ARCHIVE — inherited from main
 
-Kept because it arrived on main in HANDOFF.md and this branch has no business
-deleting it. Its own State/Next slots are dropped: they said "open against
-main", which stopped being true when it merged, and two status blocks in one
-file is how a handoff starts lying. The record of WHAT was built is below.
+Everything below arrived on main in HANDOFF.md and is kept because this branch
+has no business deleting it. Its State/Next slots are dropped on merge: they
+describe whichever branch wrote them, and two status blocks in one file is how
+a handoff starts lying. This file conflicts on every merge for exactly that
+reason — one mutable slot block, every branch rewriting it.
+
+
+## Prior slot — PR #202 (#154)
+
+
+State:    review — PR #202 (fixes #154) open against main, four commits,
+          rebased onto 7cb45ec (#200). Doug read it three times — 8dc74d0
+          (6 findings), 1db64a3 (5 + 3 deviations), b008221 (5 + 2). All
+          settled. 1658 tests pass, ruff clean.
+
+Next:     Force-push the rebase; watch Doug's read of the new head. Then
+          Andrew reviews and merges.
+
+Blockers: none.
 
 ## What #154 was
 
