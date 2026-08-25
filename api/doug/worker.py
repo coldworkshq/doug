@@ -195,32 +195,45 @@ def _post_pr_comment(
     rather than after a month of comment-less reviews, and the outcome token
     on the line below says `failed:internal` rather than reading as a skip.
     """
+    outcome = "failed:internal"
     try:
         outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh)
     except Exception as e:  # noqa: BLE001 — advisory surface; the verdict is durable
-        outcome = "failed:internal"
         print(
             f"doug: comment internal error on job {job['id']} "
             f"({type(e).__name__}: {e})",
             file=sys.stderr,
         )
-    # BEFORE the line, not after it. Recorded for EVERY outcome including the
-    # skips, because it is what clears `ingest.complete`'s `owed` marker —
-    # leave any path here unrecorded and the retry sweep reads a job that
-    # commented as one that never did. The ordering used to be the other way
-    # round, to keep the log line ahead of a write that could fail during a
-    # database outage; it bought nothing (the write below swallows and logs
-    # its own failure, so the outage is visible either way) and it cost the
-    # sweep a real budget, because a raise from the f-string between them —
-    # an unrenderable job field — spent a retry and left the marker standing
-    # with nothing recorded.
-    #
-    # Its own try for the same reason the rest of this function has one: the
-    # verdict is durable and the job is already marked done, so nothing in
-    # this file may hand it back to `ingest.fail`. A record that fails leaves
-    # `owed` in place and the sweep re-posts a comment that may already be
-    # live — an in-place edit of the same body, which GitHub does not notify
-    # on. That is the cheap side of this trade to be wrong on.
+    finally:
+        _record_and_log(job, outcome)
+
+
+def _record_and_log(job: dict, outcome: str) -> None:
+    """Clear the `owed` marker with what actually happened, then say so.
+
+    Reached from `_post_pr_comment`'s `finally`, which is the enforcement
+    rather than a formality. Correctness here rests on EVERY path out of that
+    function recording something — the marker `ingest.complete` stamped is
+    cleared by this call and by nothing else, so a path that returns without
+    it leaves a job that commented looking like one that never did, and the
+    sweep writes the comment a second time. Held as a convention, the next
+    early return added inside that try (a feature-flag short circuit, a new
+    guard clause) breaks it silently. Held in a `finally`, it cannot.
+
+    Records BEFORE it logs. The ordering used to be the other way round, to
+    keep the log line ahead of a write that could fail during a database
+    outage; it bought nothing, because the write below swallows and logs its
+    own failure, and it cost the sweep a real budget — a raise from the
+    f-string between them, an unrenderable job field, spent a retry and left
+    the marker standing with nothing recorded.
+
+    The write has its own try for the same reason `_post_pr_comment` has one:
+    the verdict is durable and the job is already marked done, so nothing in
+    this file may hand it back to `ingest.fail`. A record that fails leaves
+    `owed` in place and the sweep re-posts a comment that may already be
+    live — an in-place edit of the same body, which GitHub does not notify
+    on. That is the cheap side of this trade to be wrong on.
+    """
     try:
         store.record_pr_comment_outcome(job["id"], outcome)
     except Exception as e:  # noqa: BLE001 — the comment is written; the job is done

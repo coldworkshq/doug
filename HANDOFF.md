@@ -37,7 +37,7 @@ the ones that never landed at the end of each `drain`.
   every time.
 - Bounds: 2 repairs, 300s settled, 24h lookback, 20 per pass.
 
-## Doug's five reads, dispositioned
+## Doug's six reads, dispositioned
 
 Read 1 (8dc74d0) — 5 real, all fixed: race-condition (unlocked SELECT, both
 instances sweep the same rows every pass), unbounded-retry, error-handling-gap,
@@ -110,6 +110,27 @@ Fixed. Repeats: #204, #203, #201, and invariant-depends-on-caller now flagged
 in the OPPOSITE direction from read 4 (low, not medium) — that is the
 expected shape of choosing a fail-direction, and the choice is in the ADR's
 rejected list.
+
+Read 6 (48aeb90, cleared 0.36) — CONVERGED. 1 real, fixed:
+invariant-depends-on-caller, now framed as "every path out of
+_post_pr_comment must clear the marker". True, and it was a convention. The
+record + log moved into `_record_and_log`, called from a `finally`, so the
+next early return added inside that try cannot break it silently.
+1 disproved: schema-metadata-drift — migrations.py's own docstring says
+indexes live in migrations and NOT on Table definitions, precisely to avoid
+create_all-only drift, and `migrations.apply(engine)` runs inside
+`store._get_engine()` (store.py:736), so every create_all environment applies
+them. Every other index in the file follows the same rule.
+1 half-correction: the ALTER ... ADD COLUMN NOT NULL DEFAULT 0 named in
+unsafe-migration does NOT rewrite the table — non-rewriting defaults landed in
+Postgres 11 and gcp.sh provisions POSTGRES_18. The CREATE INDEX half stays
+#204. The other three findings and the deviation are all priced residuals or
+tracked issues repeating.
+
+STOPPING POINT: reads 5 and 6 produced no new class of defect — only repeats
+of #201/#203/#204/#205 and the two priced residuals (the time-based liveness
+heuristic, the ADR amendment riding along with the code). Further rounds
+would be re-reading the same trade-offs.
 
 CI GREEN on cf76a89: api, web, console and all three images.
 

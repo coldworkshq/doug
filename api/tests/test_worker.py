@@ -3338,6 +3338,37 @@ def test_a_completion_that_does_not_owe_a_comment_is_never_swept(
     assert upserts == []
 
 
+def test_an_early_return_still_clears_the_owed_marker(tmp_path, monkeypatch):
+    """The marker is cleared by `_record_and_log` and by nothing else, so a
+    path out of `_post_pr_comment` that skips it leaves a job that commented
+    looking like one that never did — and the sweep writes the comment a
+    second time.
+
+    Held as a convention, the next early return added inside that try — a
+    feature-flag short circuit, a new guard clause — breaks it silently. It
+    is held in a `finally` instead, and this stands in for that future edit
+    by making the outcome path return early."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    def _short_circuit(gh, owner, name, job, summary, *, fresh):
+        return "skipped:off"
+
+    monkeypatch.setattr(worker, "_pr_comment_outcome", _short_circuit)
+
+    worker.process_job(ingest.claim())
+
+    row = _job(url)
+    assert row["status"] == "done"
+    assert row["pr_comment_outcome"] == "skipped:off"
+    assert upserts == []
+    _settled(url, row["id"])
+    assert worker.retry_unposted_comments() == 0
+
+
 def test_a_completion_with_no_verdict_promises_no_repair(tmp_path, monkeypatch):
     """The marker promises a repair, and a repair renders its body from the
     durable verdict — so a completion with none has nothing a sweep could
