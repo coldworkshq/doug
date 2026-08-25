@@ -54,9 +54,16 @@ export async function resolve(specifier, context, nextResolve) {
   // which is correct for every importer. Adding a fourth by hand is how the
   // route's `@/lib/links` import failed to load at all. This loader lives in
   // `web/lib/`, so the alias is always the sibling.
+  //
+  // THE EXTENSIONLESS-ONLY RULE FROM THE FALLBACK AT THE END OF THIS FUNCTION
+  // APPLIES HERE TOO, and for the same reason it is stated there: appending
+  // `.ts` to `@/lib/queue-fixture.json` would report `queue-fixture.json.ts`
+  // missing and mask the real error. A specifier that names its extension is
+  // resolved exactly as written.
   if (specifier.startsWith("@/lib/")) {
-    const name = specifier.slice("@/lib/".length);
-    return nextResolve(new URL(`./${name}.ts`, import.meta.url).href, context);
+    const target = new URL(`./${specifier.slice("@/lib/".length)}`, import.meta.url);
+    const namesExtension = /\.[a-zA-Z]+$/.test(target.pathname);
+    return nextResolve(namesExtension ? target.href : `${target.href}.ts`, context);
   }
   try {
     return await nextResolve(specifier, context);

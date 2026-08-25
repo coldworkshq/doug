@@ -178,26 +178,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // to this same 403 — see the comment on the `update` arm earlier for the
     // production measurement, and #176 for the loop it created.
     //
-    // The copy names a remedy that can actually change the answer, and states
-    // the one case where nothing the reader does will. The API answers every
-    // authority failure with the same 404 on purpose (api._prove_installer), so
-    // this page CANNOT tell the three causes apart — a wrong GitHub account, a
-    // Doug session with no GitHub identity, or an installation predating the
-    // installer-id capture, which no re-authorization can repair. Copy that
-    // asserted one of them would be wrong two times in three.
+    // EVERY CONDITION COMES BEFORE ITS INSTRUCTION, because the API answers all
+    // three authority failures with the same 404 on purpose
+    // (api._prove_installer) and this page cannot tell them apart: a wrong
+    // GitHub account, a Doug session carrying no GitHub identity, or an
+    // installation predating the installer-id capture, which no
+    // re-authorization can repair. One instruction covers the two the reader
+    // can fix — signing in to GitHub as the installing account fixes both — and
+    // the third is named by a trigger the READER can check (they did it and
+    // this page came back) rather than by a claim about who they are, which
+    // this page is in no position to make.
     return html(
       "<p>Only the GitHub account that installed Doug here can connect " +
         "repositories, and this sign-in is not confirmed as that account. " +
         "Your Doug account remains available.</p>" +
-        "<p>Signing in to Doug again does not change this, because it returns " +
-        "the same GitHub account. To connect this repository, sign out of Doug, " +
-        "sign in to GitHub as the account that installed Doug, and start the " +
-        "connection again.</p>" +
-        '<p><a href="/dashboard">Go to your dashboard</a> to sign out. ' +
-        "Sign out is in the account menu.</p>" +
-        "<p>If you did install Doug from this account, this connection needs an " +
-        `operator. Report it at <a href="${GITHUB_REPO_URL}/issues">` +
-        `${GITHUB_REPO_SLUG} issues</a>.</p>`,
+        "<p>To connect this repository, sign out of Doug, sign in to GitHub as " +
+        "the account that installed Doug, and start the connection again. " +
+        "Signing in to Doug again without that step changes nothing, because " +
+        "it returns the same GitHub account. " +
+        '<a href="/dashboard">Go to your dashboard</a> to sign out.</p>' +
+        "<p>If you do that and this page comes back, the installation predates " +
+        "the record Doug checks and an operator has to connect it. Report it " +
+        `at <a href="${GITHUB_REPO_URL}/issues">${GITHUB_REPO_SLUG} issues</a>.</p>`,
       403,
     );
   }

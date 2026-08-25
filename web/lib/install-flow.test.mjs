@@ -9,6 +9,9 @@ import {
   sealInstallFlow,
   verifyInstallFlow,
 } from "./install-flow.ts";
+// Imported, not retyped: the 403 arm renders this exact URL, so a rename that
+// left the route compiling against a stale constant fails HERE.
+import { GITHUB_REPO_URL } from "./links.ts";
 
 globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 register("./node-next-loader.mjs", import.meta.url);
@@ -466,7 +469,20 @@ test("the refused-authority 403 offers no link that returns to the same 403", as
     // It names the remedy that can change the answer, and says why signing in
     // again cannot. Without this pin the copy can quietly revert to a reconnect.
     assert.match(copy, /sign out of Doug/i);
-    assert.match(copy, /does not change this/i);
+    assert.match(copy, /changes nothing/i);
+    // THE GOAL PRECEDES THE INSTRUCTION, and the case the instruction cannot
+    // help is named by something the reader can check rather than by a claim
+    // about who they are. The API returns one 404 for three causes, so an
+    // unconditional "you are signed in as the wrong account" is wrong twice.
+    const remedy = copy.indexOf("To connect this repository");
+    const instruction = copy.indexOf("sign out of Doug");
+    assert.ok(remedy >= 0 && remedy < instruction, "the 403 instructs before it states the goal");
+    assert.match(copy, /If you do that and this page comes back/i);
+    // The operator escape hatch is a real, reachable destination.
+    assert.ok(
+      copy.includes(`href="${GITHUB_REPO_URL}/issues"`),
+      "the 403 lost its operator escape hatch",
+    );
 
     // Every link the page offers, followed. A link this route serves itself
     // must not answer 403, or the reader is back where they started.

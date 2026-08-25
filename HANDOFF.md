@@ -58,6 +58,51 @@ NOT VERIFIED: I did not reproduce the loop in production. The mechanism is
 #167's production evidence plus a read of both code paths, and the fix is
 pinned by tests, not by a production round trip.
 
+## Review round 1 — Doug on 6293571, plus /code-review low
+
+Doug: Cleared, risk 0.22, 4 low findings + 1 unvalidated deviation.
+/code-review low found 2, both overlapping Doug's. Settled: 2 real+changed,
+2 disproved with evidence, 1 half-real, 1 deviation accepted as a judgment call.
+
+REAL, changed:
+- The `@/lib/*` rule appended `.ts` UNCONDITIONALLY, which contradicts the
+  extensionless-ONLY rule the same function states twenty lines later. Its
+  reason is identical: `@/lib/queue-fixture.json` would report
+  `queue-fixture.json.ts` missing and mask the real error. Now resolves a
+  specifier that names its extension exactly as written, and there is a new
+  lib/node-next-loader.test.mjs holding it.
+- The 403's remedy was an UNCONDITIONAL instruction, while the block comment
+  above it said the page cannot tell which of three causes it is. Rewritten so
+  the goal precedes the instruction, one instruction covers both fixable causes
+  (signing in to GitHub as the installing account fixes the wrong-account and
+  the no-GitHub-identity cases alike), and the third is named by a trigger the
+  READER can check — you did it and this page came back — instead of a claim
+  about who they are, which this page cannot make.
+
+DISPROVED with evidence:
+- `removed-route-branch`: a stale ?reauth=github with an absent or expired
+  cookie is said to now get the generic invalid-flow response "rather than a
+  re-auth". The DELETED branch returned `invalidFlow()` on exactly that
+  condition (its own lines 88-92). Behaviour is identical. And a repo-wide grep
+  finds no link, doc, or template pointing at the path outside the comments
+  describing its removal.
+- `missing-import-verification`: the exports exist and `tsc --noEmit` is green,
+  which is what proves it. The half worth acting on was the untested link, so
+  the 403 test now imports GITHUB_REPO_URL from lib/links.ts and pins the
+  rendered href against it — a rename fails the test, not production.
+- The `.tsx` / directory-index half of the alias finding: every `@/lib/*`
+  import in the tree resolves to a flat `.ts` sibling, and the resolver
+  fallback Doug supposed "might have worked" cannot — `@/` is not a real
+  package, so it always threw. That is how #176's own import failed.
+
+DEVIATION `beyond-ticket`, accepted: rewriting three loader entries into one
+IS wider than adding a fourth line. The ticket forced a loader change either
+way, the file is test-only, and two of the three entries were wrong in a way a
+fourth would have copied. Recorded here rather than in an ADR: an ADR for a
+test-runner resolve hook would be the first of its kind in docs/decisions.
+
+Nine mutations verified across both rounds, each failing exactly one pin.
+
 Pointers: branch claude/issue-176-verification-3f44bb ·
           web/app/install/callback/route.ts (the 403 body, the deleted arm,
           the update-arm comment) · web/lib/install-flow.test.mjs (two new
