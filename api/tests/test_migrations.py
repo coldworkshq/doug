@@ -178,12 +178,18 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
         # have real tables to land on.
         conn.exec_driver_sql("CREATE TABLE reads (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
         conn.exec_driver_sql("CREATE TABLE findings (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
-        # Migration 16's target. Migration 10 already sits in the ledger
-        # above, so this stub is never altered by it — 16 is the first
-        # statement in this era that needs the table to exist at all.
+        # Migration 16's target, and it carries `finished_at` on purpose.
+        # `_satisfied` swallows "no such column", which is meant to keep DROP
+        # COLUMN idempotent — but it also means a CREATE INDEX naming a
+        # column the stub does not have is skipped in silence while the
+        # migration still records itself as applied. A two-column stub here
+        # made this test assert that migration 16 ran when its index had not
+        # been built (issue #205). Production has the column; the fixture has
+        # to as well, or the assertion below is about nothing.
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs (id INTEGER PRIMARY KEY, "
-            "status VARCHAR(12) NOT NULL)"
+            "status VARCHAR(12) NOT NULL, "
+            "finished_at TIMESTAMP)"
         )
         conn.execute(
             migrations.schema_migrations.insert(),
@@ -194,6 +200,11 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
         )
 
     assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16]
+    # Not just "the version was recorded": the index migration 16 exists for
+    # has to actually be on the table. See the stub's comment for how this
+    # passed while it was not (issue #205).
+    review_job_indexes = {i["name"] for i in inspect(engine).get_indexes("review_jobs")}
+    assert "ix_review_jobs_pr_comment_retry" in review_job_indexes
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
     assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}

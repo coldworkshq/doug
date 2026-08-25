@@ -571,7 +571,15 @@ def process_job(job: dict) -> int | None:
         job["id"],
         verdict_id,
         claim_generation=job["claim_generation"],
-        owes_comment=True,
+        # Only when there is a durable verdict to replay from. The marker
+        # promises a repair, and a repair renders its body through
+        # `_render_recorded`, which needs the verdict row — so stamping a
+        # completion that has none promises something no sweep can keep, and
+        # spends a pass writing `skipped:no-verdict` to say so. `complete`
+        # accepts a None verdict_id ("a skipped PR is finished, not failed"),
+        # so this is the honest reading of that contract rather than a
+        # defence against a path that exists today.
+        owes_comment=verdict_id is not None,
     ):
         print(
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",

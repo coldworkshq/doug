@@ -37,7 +37,7 @@ the ones that never landed at the end of each `drain`.
   every time.
 - Bounds: 2 repairs, 300s settled, 24h lookback, 20 per pass.
 
-## Doug's four reads, dispositioned
+## Doug's five reads, dispositioned
 
 Read 1 (8dc74d0) — 5 real, all fixed: race-condition (unlocked SELECT, both
 instances sweep the same rows every pass), unbounded-retry, error-handling-gap,
@@ -88,6 +88,30 @@ said `NULL` was retriable in one sentence and unselectable in the next — the
 exact rule that decides whether a repair can duplicate a live comment. D10 is
 rewritten. Repeats already tracked: #204 (index lock), #203 (client mints),
 #201 (dark exhausted state).
+
+Read 5 (cf76a89, FLAGGED 0.40 — at the line, not over it) — 2 real, both
+fixed, plus one deviation. ddl-column-mismatch is the one worth reading: the
+review_jobs stub I added to the version-9-gap test had no `finished_at`, so
+migration 16's CREATE INDEX failed, `_satisfied` swallowed it as "no such
+column", and the migration RECORDED ITSELF AS APPLIED with no index built.
+Verified by hand: `applied: [16]`, `indexes on review_jobs: []`. Fixture
+fixed and the test now asserts the index exists, not just the version row.
+I tried narrowing `_satisfied` so only DROP COLUMN may shrug at a missing
+column and REVERTED IT: five migration tests fail, including migration 007's
+`uq_outcomes_job_identity` — a UNIQUE index relying on the same swallow. That
+is repo-wide and pre-existing, so it is issue #205 (with the evidence and the
+"check whether the index actually exists in production" clause), not a
+passenger in a comment-retry PR. logic-edge-case also real: `owes_comment` is
+now `verdict_id is not None`, because the marker promises a repair and a
+repair renders from the durable verdict. Deviation REAL: the residual
+paragraph still said "A NULL outcome means no write recorded" — the SAME
+contradiction D10 was rewritten for, surviving in the paragraph below it.
+Fixed. Repeats: #204, #203, #201, and invariant-depends-on-caller now flagged
+in the OPPOSITE direction from read 4 (low, not medium) — that is the
+expected shape of choosing a fail-direction, and the choice is in the ADR's
+rejected list.
+
+CI GREEN on cf76a89: api, web, console and all three images.
 
 CI GREEN on 691371b: api, web, console and all three images. The web suite ran
 there rather than locally — this worktree has no node_modules — and the diff

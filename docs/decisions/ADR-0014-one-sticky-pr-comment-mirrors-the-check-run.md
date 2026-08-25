@@ -350,14 +350,16 @@ tenant outside these three installations, not after.
   would then fail every write forever rather than once.
 - **Two guards keep the repair from becoming the duplicate it repairs, and
   they close different windows.** *(Added 2026-08-24, issue #154; the
-  reservation added after Doug's review of the same PR.)* A `NULL` outcome
-  means "no write recorded", which is what a crash between `ingest.complete`
-  and the comment leaves — but it is also, briefly, what a worker still
-  inside that gap leaves. The settle period NARROWS that one — nothing
-  finished less than fifteen minutes ago is swept, the same call
-  `reclaim_stalled`'s lease makes about a live claim, at the same number —
-  but it does not close
-  it, and calling it a fence would be a claim this record cannot support.
+  reservation added after Doug's review of the same PR; the first sentence
+  corrected after the fifth read caught it still describing the pre-marker
+  rule, which is the same contradiction D10 was rewritten for.)* An `owed`
+  marker still standing is what a crash between `ingest.complete` and the
+  comment leaves — but it is also, briefly, what a worker still inside that
+  gap leaves, because the marker is cleared by the comment write and not by
+  reaching it. The settle period NARROWS that one — nothing finished less
+  than fifteen minutes ago is swept, the same call `reclaim_stalled`'s lease
+  makes about a live claim, at the same number — but it does not close it,
+  and calling it a fence would be a claim this record cannot support.
   Time is a heuristic for liveness: a long GitHub backoff or a paused
   container can outlast any window, and what remains past it is `upsert`'s
   own priced trade, a listing that cannot yet see a create falling through to

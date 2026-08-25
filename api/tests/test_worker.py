@@ -3338,6 +3338,32 @@ def test_a_completion_that_does_not_owe_a_comment_is_never_swept(
     assert upserts == []
 
 
+def test_a_completion_with_no_verdict_promises_no_repair(tmp_path, monkeypatch):
+    """The marker promises a repair, and a repair renders its body from the
+    durable verdict — so a completion with none has nothing a sweep could
+    write. Stamping it anyway would promise what no pass can keep and spend
+    one writing `skipped:no-verdict` to say so.
+
+    `ingest.complete` accepts a None verdict_id on purpose ("a skipped PR is
+    finished, not failed"), so this is that contract read honestly rather
+    than a guard against a path that exists today."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    monkeypatch.setattr(store, "save_review", lambda *a, **k: None)
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    row = _job(url)
+    assert row["status"] == "done" and row["verdict_id"] is None
+    assert row["pr_comment_outcome"] != store.PR_COMMENT_OWED
+    _settled(url, row["id"])
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 1  # the fresh write still happened; only repair is off
+
+
 def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(
     tmp_path, monkeypatch
 ):
