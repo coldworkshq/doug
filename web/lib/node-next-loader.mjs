@@ -47,14 +47,23 @@ export async function resolve(specifier, context, nextResolve) {
       url: `data:text/javascript,${encodeURIComponent(stub)}`,
     };
   }
-  if (specifier === "@/lib/entitlements") {
-    return nextResolve(new URL("../../../lib/entitlements.ts", context.parentURL).href, context);
-  }
-  if (specifier === "@/lib/install-flow") {
-    return nextResolve(new URL("../../../lib/install-flow.ts", context.parentURL).href, context);
-  }
-  if (specifier === "@/lib/auth-origin") {
-    return nextResolve(new URL("./auth-origin.ts", import.meta.url).href, context);
+  // One rule for the whole `@/lib/*` alias, not a line per module. The three
+  // hand-written entries this replaces had drifted into two shapes: two resolved
+  // `../../../lib/<name>.ts` against the IMPORTER, which is only correct for an
+  // importer exactly three segments deep, and one resolved against this file,
+  // which is correct for every importer. Adding a fourth by hand is how the
+  // route's `@/lib/links` import failed to load at all. This loader lives in
+  // `web/lib/`, so the alias is always the sibling.
+  //
+  // THE EXTENSIONLESS-ONLY RULE FROM THE FALLBACK AT THE END OF THIS FUNCTION
+  // APPLIES HERE TOO, and for the same reason it is stated there: appending
+  // `.ts` to `@/lib/queue-fixture.json` would report `queue-fixture.json.ts`
+  // missing and mask the real error. A specifier that names its extension is
+  // resolved exactly as written.
+  if (specifier.startsWith("@/lib/")) {
+    const target = new URL(`./${specifier.slice("@/lib/".length)}`, import.meta.url);
+    const namesExtension = /\.[a-zA-Z]+$/.test(target.pathname);
+    return nextResolve(namesExtension ? target.href : `${target.href}.ts`, context);
   }
   try {
     return await nextResolve(specifier, context);
