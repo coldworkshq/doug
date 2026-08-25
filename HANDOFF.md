@@ -40,7 +40,7 @@ Prereg §2.1's denominator is `tier='reader' AND band='cleared'`. Doug flagged
 the one PR that got reverted, so the first positive sits OUTSIDE the published
 denominator. Anyone quoting "the detector's first miss" would be wrong twice
 over, because `instrument_snapshot` also hardcodes `miss_rate=None`
-(`store.py:1773`) and no surface computes a rate at all yet.
+(`store.py:2020`) and no surface computes a rate at all yet.
 
 **The M3 gate does not close on this.** One full webhook-started 14-day cycle
 is now complete, but "observed" is still not implemented: I verified this
@@ -63,11 +63,17 @@ Raised 2026-08-24 while answering "when do we move doug to coldworks and give
 it a public surface", deliberately NOT filed as issues yet because both are
 questions for Andrew rather than work:
 
-1. **Publication venue portability.** The prereg names
+1. **Publication venue portability — SHARPER after #211.** The prereg names
    `https://drewjst.github.io/doug/publication/` and §12 requires every prior
-   version stay published. A repo transfer to `coldworkshq` moves the Pages
-   site to a different host. Decide the venue before the first publication,
-   not after.
+   version stay published. #211 retired gh-pages to a redirect stub
+   (bd67e4a), and checked 2026-08-25: `drewjst.github.io/doug/` answers 200
+   while `drewjst.github.io/doug/publication/` answers **404**. Nothing is
+   lost — no publication exists yet, the first is provisionally 2027-01-15 —
+   but the venue a hashed document names is now a 404 under a retired site,
+   and a repo transfer to `coldworkshq` would move that host again. #211 did
+   not amend the prereg, and §12 says a venue change needs a new hashed
+   version. Decide where the venue lives before the first publication, not
+   after.
 2. **Series identity across a transfer.** The ledger keys on
    `(installation_id, github_repo_id)`; only `github_repo_id` survives a
    transfer between accounts. Decide which one the published denominator uses
@@ -76,7 +82,71 @@ questions for Andrew rather than work:
 
 ---
 
-## Prior stream — PR #202 (2026-08-24)
+## Prior slot — docs accuracy sweep (#211, merged 2026-08-25)
+
+State:    review — docs accuracy sweep is a PR against main from branch
+          docs/accuracy-sweep (worktree .worktrees/docs-accuracy), 3 commits,
+          branch level with origin/main so CI fires. web 363/363, api
+          1661/1661, console 113/113, tsc clean, eslint clean (2 pre-existing
+          <img> warnings on /about). SHIPPED separately: gh-pages bd67e4a is
+          pushed and live — drewjst.github.io/doug is now a redirect to the
+          Cloud Run site. That push was the deploy; there is no PR for it.
+Next:     Andrew reviews and merges #211. Merging deploys (ADR-0009), so the
+          corrected /docs copy goes out with it. Doug already read it —
+          Cleared, risk 0.32, 1 medium + 3 low + 2 deviations, ALL SETTLED in
+          docs/findings-log.jsonl (4 real, 1 adjacent, 1 disproved) and fixed
+          in 94be0d3. Doug will read the new head; expect a second pass.
+Blockers: none.
+
+Not fixed, each a judgment call Andrew owns:
+- docs/design/competitor-imports/ is named for a concept that died in its own
+  grounding phase; the six files inside are all "cited head reads". The new
+  lane.md says so rather than renaming, because 3 files outside the folder
+  point at the path. Rename is a clean follow-up if wanted.
+- ADR-0018 owes a 20-PR cost pilot (~$1) before anyone quotes a per-read cost
+  after EFFORT went to high. No issue exists for it; AGENTS.md says there
+  should be one.
+- docs/design/reader-effort/preregistration.md's header still names ADR-0016
+  as its companion; ADR-0018 is what governs. Left as the record of what was
+  written then; lane.md carries the correction.
+
+Decisions this session:
+- Verified every number against code or the live API, never against another
+  doc — the two hosted surfaces already disagreed, so doc-vs-doc agreement
+  proves nothing — rejected: trusting the surface that looked freshest.
+- Retired gh-pages instead of rewriting it (Andrew's call) — repairing keeps
+  two copies of every claim, which is the mechanism that produced the drift —
+  rejected: fixing the ~9 false claims in place.
+- The docs copy states a DATED SNAPSHOT and names the command that prints
+  today's figure, and the pins check growth-invariants instead of exact counts
+  — an exact derived pin fails on every settle forever, so the copy becomes a
+  chore on unrelated PRs and the first person in a hurry deletes the pin rather
+  than the staleness (Doug's medium on #211, real). Verified: a prospective
+  append stays green, a backfill append fails — rejected: the exact derived
+  pin, and rejected: computing at render time, which .dockerignore forbids
+  (/docs is not in the web image's build context).
+- The rest-api sample shows field placeholders, not live counters — printing
+  53/179 and a frozen timestamp reintroduced the exact drift class this PR
+  removes, my own regression, caught by Doug (reader:docs-sample-drift) —
+  rejected: real values with a "counters move" caveat under them.
+- HANDOFF.md was NOT touched in the main checkout: a concurrent session owns
+  it there (feat/palette-contrast-dark-mode). This slot lives on the docs
+  branch only, so it will conflict on merge — drop this commit if that is not
+  worth it — rejected: editing the file another session is mid-write on.
+- gh-pages went out as a direct push, not a PR — it is a separate branch with
+  no CI, no reviewer and no deploy pipeline, and the push IS the publish;
+  a PR would have added a review surface for nobody — rejected: routing a
+  static-site retirement through main.
+Pointers: branch docs/accuracy-sweep @ bd5886b · branch gh-pages @ bd67e4a ·
+          web/app/docs/*, web/public/llms.txt, web/lib/public-surface.test.mjs ·
+          api/README.md · docs/REVIEWING.md (#186 conflict marker, closed) ·
+          docs/design/{walked-out,competitor-imports,reader-effort}/lane.md ·
+          live API https://doug-api-g7rm4l4e3q-uc.a.run.app
+
+---
+
+## Prior slot — PR #202 (#154)
+
 
 State:    review — PR #202 (fixes #154) open against main, four commits,
           rebased onto 7cb45ec (#200). Doug read it three times — 8dc74d0

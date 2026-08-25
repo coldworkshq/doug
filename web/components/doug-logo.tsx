@@ -1,5 +1,5 @@
 /** The Doug mark — Saint Bernard, barrel-brandy ears. Same geometry as the
- *  landing site (drewjst.github.io/doug) so the brand reads as one dog. */
+ *  console and the landing page, so the brand reads as one dog. */
 export function DougLogo({ size = 22 }: { size?: number }) {
   return (
     <svg

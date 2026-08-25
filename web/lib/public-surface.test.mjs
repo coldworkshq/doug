@@ -27,6 +27,7 @@ const [
   report,
   readme,
   apiReadme,
+  findingsLog,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -46,7 +47,45 @@ const [
   readFile(new URL("../app/docs/report/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../../README.md", import.meta.url), "utf8"),
   readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
+  readFile(new URL("../../docs/findings-log.jsonl", import.meta.url), "utf8"),
 ]);
+
+/** The log's own shape, for the pins below.
+ *
+ *  Three designs were tried here and the third is the one that holds. A
+ *  LITERAL ("123 prospective") cannot fail when the log grows, which is the
+ *  only way these numbers go wrong — it stayed green through 55 appended rows.
+ *  Deriving the literal and pinning it EXACTLY fails correctly, but fails on
+ *  every settle forever, so the copy becomes a chore attached to unrelated
+ *  PRs; Doug called that on #211 (`reader:brittle-test-coupling`) and was
+ *  right. The page cannot compute the number at render time either: `/docs` is
+ *  excluded from the web image's build context (`.dockerignore`), so the file
+ *  is not there to read.
+ *
+ *  So the copy states a DATED SNAPSHOT and names the command that yields
+ *  today's figure, and these pins check the things that stay true as the log
+ *  grows: a snapshot cannot exceed the present, backfill is closed, the
+ *  verdicts partition the scope, and the copy must keep saying it is a
+ *  snapshot.
+ *
+ *  `repo` defaults to "doug" because it was optional in the file before the
+ *  field existed (docs/REVIEWING.md:211) — same default the CLI applies, so
+ *  this scope matches `findings_log rate --repo doug`. */
+const logRows = findingsLog
+  .split("\n")
+  .filter((line) => line.trim())
+  .map((line) => JSON.parse(line));
+const prospective = logRows.filter((r) => r.source !== "backfill");
+const dougRows = prospective.filter((r) => (r.repo ?? "doug") === "doug");
+const counts = {
+  total: logRows.length,
+  prospective: prospective.length,
+  backfill: logRows.length - prospective.length,
+  doug: dougRows.length,
+  disproved: dougRows.filter((r) => r.verdict === "disproved").length,
+  real: dougRows.filter((r) => r.verdict === "real").length,
+  adjacent: dougRows.filter((r) => r.verdict === "adjacent").length,
+};
 
 /** The field of ONE record, or null.
  *
@@ -232,7 +271,13 @@ test("REST API docs do not mark live tenant routes as planned or preview", () =>
   assert.equal(rest.includes("Tenant REST is still planned"), false);
   assert.equal(rest.includes("Tenant REST is still the planned"), false);
   assert.match(rest, /\$DOUG_API_URL/);
-  assert.match(rest, /SAMPLE — empty-ledger snapshot/);
+  // The sample used to be pinned as an "empty-ledger snapshot". That stopped
+  // being what the endpoint returns the moment the first outcome adjudicated,
+  // and a label describing a state the ledger has left reads as today's
+  // reading. What is durable is the null: miss_rate stays null and decidable
+  // stays false until the pre-registered interval fires, whatever the
+  // counters say. Pin that, and pin that the sample shows the whole shape.
+  assert.equal(rest.includes("empty-ledger snapshot"), false);
 });
 
 test("REST API sits in Coming up as preview, not planned — showcase is live", () => {
@@ -286,10 +331,60 @@ test("risk-routing does not present the live scorer as model-free", () => {
   assert.equal(risk.includes("no model in the hot path"), false);
 });
 
-test("what Doug gets wrong uses the current findings-log counts", () => {
+test("what Doug gets wrong quotes a dated snapshot, not a live count", () => {
   assert.equal(wrong.includes("Roughly half"), false);
   assert.equal(wrong.includes("12 rows today"), false);
   assert.equal(llms.includes("Roughly half"), false);
+
+  for (const [source, name] of [
+    [wrong, "what-doug-gets-wrong"],
+    [llms, "llms.txt"],
+  ]) {
+    // A number with no date reads as current, and cannot be. Both surfaces
+    // must date the figure and say in words that it does not track the log.
+    assert.match(source, /as of 20\d\d-\d\d-\d\d/i, `${name}: as-of date`);
+    assert.match(source, /snapshot/i, `${name}: says it is a snapshot`);
+    // And must hand the reader the instrument, so a stale figure is
+    // recoverable without waiting for anyone to edit this page.
+    assert.match(
+      source,
+      /findings_log rate --repo doug/,
+      `${name}: names the command that prints today's figure`,
+    );
+  }
+
+  // The snapshot's own arithmetic, against the log as it stands now. These
+  // survive growth: a snapshot taken in the past cannot exceed the present,
+  // and backfill is closed by construction — the denominator starts at the
+  // first prospective row and no new backfill row is ever appended.
+  const snapshot = {
+    total: Number(/([\d,]+) rows/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    prospective: Number(/([\d,]+) prospective/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    backfill: Number(/([\d,]+) backfill/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    doug: Number(/repo is ([\d,]+) of those/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    disproved: Number(/([\d,]+) disproved/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    real: Number(/([\d,]+) real/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    adjacent: Number(/([\d,]+) adjacent/.exec(wrong)?.[1]?.replace(/,/g, "")),
+  };
+  for (const [k, v] of Object.entries(snapshot)) {
+    assert.ok(Number.isInteger(v), `snapshot ${k} did not parse out of the copy`);
+  }
+  assert.equal(snapshot.total, snapshot.prospective + snapshot.backfill);
+  assert.equal(
+    snapshot.doug,
+    snapshot.disproved + snapshot.real + snapshot.adjacent,
+    "the three verdicts must partition the doug-scoped rows",
+  );
+  assert.ok(snapshot.doug <= snapshot.prospective);
+  assert.ok(
+    snapshot.total <= counts.total,
+    `the snapshot claims ${snapshot.total} rows but the log holds ${counts.total} — a snapshot cannot exceed the present`,
+  );
+  assert.equal(
+    snapshot.backfill,
+    counts.backfill,
+    "backfill is closed; a change here means a backfill row was appended, which the denominator rule forbids",
+  );
 });
 
 test("the report does not invent a misses-by-PR list the CLI does not print", () => {
@@ -314,10 +409,39 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
 });
 
 test("what Doug gets wrong does not claim every log row is backfill", () => {
-  // 123 of 135 rows are prospective. A callout that still says every row is
+  // Most rows are prospective. A callout that still says every row is
   // backfill contradicts the rail on the same page.
+  assert.ok(counts.prospective > counts.backfill);
   assert.equal(wrong.includes("Every row in the log today is backfill"), false);
-  assert.match(wrong, /123 prospective/);
+  assert.equal(changelog.includes("All rows today are backfill"), false);
+});
+
+test("the scoreboard sample shows a shape, not a reading that decays", () => {
+  // The first pass at this replaced an "empty-ledger snapshot" showing 0/0
+  // with the live counters, which are stale the moment they are printed —
+  // the same drift class this file exists to stop, reintroduced by the fix
+  // for it. Doug caught it on #211 (`reader:docs-sample-drift`).
+  assert.doesNotMatch(
+    rest,
+    /"adjudicated"[^\n]*<Kw>\s*\d/,
+    "the sample must not print a concrete adjudicated count",
+  );
+  assert.doesNotMatch(rest, /2026-08-25T/, "no frozen timestamp in the sample");
+  // What is durable: every field, and the two values that do not move.
+  for (const field of ["repo", "adjudicated", "pending", "as_of", "first_due",
+    "deep_reads", "deep_read_cap", "miss_rate", "decidable", "label"]) {
+    assert.match(rest, new RegExp(`&quot;${field}&quot;`), `sample: ${field}`);
+  }
+  assert.match(rest, /<Kw>null<\/Kw>/);
+  assert.match(rest, /<Kw>false<\/Kw>/);
+});
+
+test("llms.txt names both sanctioned homes for the per-repo settings", () => {
+  // ADR-0019: "The repositories table KEEPS its control: ADR-0013's adjacency
+  // argument is untouched." Naming only /dashboard/settings describes one of
+  // two shipped surfaces. Doug's `contradicts-ticket` on #211.
+  assert.match(llms, /\/dashboard\/settings/);
+  assert.match(llms, /repositories table/);
 });
 
 test("llms.txt does not present the July probe as the live scorer, or hotspots as a live learner", () => {

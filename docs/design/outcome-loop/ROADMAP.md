@@ -464,7 +464,7 @@ the title-fallback collision of #166: `bf7a440` names its target by sha, and
 verdict scored **0.34 against a 0.30 threshold — `band: flagged`**, and §2.1's
 denominator is `tier='reader' AND band='cleared'`. Doug flagged the one PR that
 got reverted, so this positive sits outside the published denominator entirely.
-`instrument_snapshot` hardcodes `miss_rate=None` (`store.py:1773`) besides, so
+`instrument_snapshot` hardcodes `miss_rate=None` (`store.py:2020`) besides, so
 no surface computes a rate yet.
 
 **One full webhook-started 14-day cycle is now complete** — #68 was reviewed

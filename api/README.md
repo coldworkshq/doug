@@ -17,6 +17,8 @@ uv run ruff check .     # lint
 | `POST /v1/score` | PR metadata in, verdict out (score, band, reasons); pure, no read |
 | `POST /v1/score/read` | reader-tier scoring (LLM diff-read when enabled, deterministic fallback otherwise); token-gated, spends money |
 | `GET /v1/queue` | review queue — operator token sees everything, a dispensed tenant token sees only its installation |
+| `GET /v1/showcase/queue` | the dogfood repo's open PRs, scored; unauthenticated, pinned to `DOUG_SHOWCASE_REPO` and never to a caller's `?repo=` |
+| `GET /v1/showcase/scoreboard` | the same repo's publication counters — adjudicated, pending, first due, deep-read meter; `miss_rate` is always null here |
 | `GET /v1/prs/{pr_number}/receipt` | one PR's evidentiary record (verdict + governing verdict per merge + findings + adjudication, when it exists); operator-unscoped or tenant token carrying `receipt:read` |
 | `GET /v1/runs` | verdict history for the operator console; operator-only |
 | `GET /v1/runs/{verdict_id}` | one run end to end; operator-only |
@@ -32,7 +34,23 @@ uv run ruff check .     # lint
 - `doug/scoring.py` — features → verdict, as legible weighted rules.
 - `doug/fixtures/queue.json` — bundled fixture used by `/v1/queue` and the showcase when the ledger is not configured.
 
-Env: `DOUG_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`, `DOUG_CORS_ORIGINS`.
+Env, for local dev: `DOUG_THRESHOLD` (default 0.62), `GITHUB_WEBHOOK_SECRET`,
+`DOUG_CORS_ORIGINS` — the three in `.env.example`.
+
+The rest of the surface is ~30 vars; these are the ones that change what Doug
+*does*, and each is off unless set, so an unset deploy is the quiet one:
+
+| Var | Effect when set |
+|---|---|
+| `DOUG_READER=1` | the LLM diff-read becomes the scoring path (ADR-0004). Production sets it; a repository can still turn its own deep read off. |
+| `DOUG_READER_THRESHOLD` | reader risk points at which Doug asks for a human (default 30). A per-repository setting overrides it (ADR-0013, ADR-0019). |
+| `DOUG_VERIFY_INSTALLATIONS` | comma-separated installation IDs that get grounding. An allowlist, not a boolean — unset enables nobody, never everybody (ADR-0017). |
+| `DOUG_INTENT_INSTALLATIONS` | same shape, for the experimental intent stream. |
+| `DOUG_ATTRIBUTION=1` | runs the post-read hunk-attribution pass (ADR-0015). |
+| `DOUG_SHOWCASE_REPO` | the one repo the unauthenticated `/v1/showcase/*` routes serve. Unset ⇒ those routes 404. |
+
+`DOUG_EXAMPLE_PACK_*` gate the evidence lane and are documented in
+[`../docs/EXAMPLE_PACK.md`](../docs/EXAMPLE_PACK.md) and the runbook.
 
 ## Backtest (Phase 0)
 

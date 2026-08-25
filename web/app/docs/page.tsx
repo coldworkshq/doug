@@ -5,7 +5,7 @@ import { Bright, CodeBlock, Comment, Dim, Fn, Str } from "@/components/docs/code
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
 import { DocsTwoCol } from "@/components/docs/docs-two-col";
-import { DocsPageHeader, P } from "@/components/docs/prose";
+import { DocsPageHeader, IC, P } from "@/components/docs/prose";
 
 export const metadata = {
   title: "Doug Documentation",
@@ -34,14 +34,16 @@ export default function DocsIntroductionPage() {
                 <Link href="/queue" className="underline underline-offset-4">
                   queue
                 </Link>
-                , read the empty{" "}
+                , read the{" "}
                 <Link
                   href="/scoreboard"
                   className="underline underline-offset-4"
                 >
                   scoreboard
                 </Link>{" "}
-                (the counters are the product until the first window closes).
+                (adjudicated and pending counters tick there now;{" "}
+                <IC>miss_rate</IC> stays null until the pre-registered
+                interval fires, and a count is not a rate).
                 The GitHub App is dogfooding on this repository and is{" "}
                 not a self-serve product for other orgs yet. The self-serve
                 measurement tool is still the{" "}
