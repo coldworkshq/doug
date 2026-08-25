@@ -47,14 +47,16 @@ export async function resolve(specifier, context, nextResolve) {
       url: `data:text/javascript,${encodeURIComponent(stub)}`,
     };
   }
-  if (specifier === "@/lib/entitlements") {
-    return nextResolve(new URL("../../../lib/entitlements.ts", context.parentURL).href, context);
-  }
-  if (specifier === "@/lib/install-flow") {
-    return nextResolve(new URL("../../../lib/install-flow.ts", context.parentURL).href, context);
-  }
-  if (specifier === "@/lib/auth-origin") {
-    return nextResolve(new URL("./auth-origin.ts", import.meta.url).href, context);
+  // One rule for the whole `@/lib/*` alias, not a line per module. The three
+  // hand-written entries this replaces had drifted into two shapes: two resolved
+  // `../../../lib/<name>.ts` against the IMPORTER, which is only correct for an
+  // importer exactly three segments deep, and one resolved against this file,
+  // which is correct for every importer. Adding a fourth by hand is how the
+  // route's `@/lib/links` import failed to load at all. This loader lives in
+  // `web/lib/`, so the alias is always the sibling.
+  if (specifier.startsWith("@/lib/")) {
+    const name = specifier.slice("@/lib/".length);
+    return nextResolve(new URL(`./${name}.ts`, import.meta.url).href, context);
   }
   try {
     return await nextResolve(specifier, context);

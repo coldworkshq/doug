@@ -9,6 +9,7 @@ import {
   sealInstallFlow,
   verifyInstallFlow,
 } from "@/lib/install-flow";
+import { GITHUB_REPO_SLUG, GITHUB_REPO_URL } from "@/lib/links";
 
 const FLOW_COOKIE = "doug_install_flow";
 const FLOW_MAX_AGE = 1800;
@@ -79,22 +80,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
   if (setupAction === "update") {
+    // `prompt: "consent"` DOES NOT REACH GITHUB, and no remedy may be built on
+    // the belief that it does. WorkOS honours the parameter itself and never
+    // forwards it; GitHub's authorize endpoint accepts only
+    // `prompt=select_account`. Measured in production on 2026-08-21 (#167):
+    // this arm and a plain /sign-in both completed through WorkOS in about 15
+    // seconds with no consent screen, and GitHub's security log recorded no new
+    // token. The parameter is kept because it is inert, not because it works —
+    // this arm only needs to land the reader on /dashboard. #172 carries the
+    // real question of refreshing a derived scope.
     const signInUrl = await getSignInUrl({ prompt: "consent", returnTo: "/dashboard" });
     return clearFlow(NextResponse.redirect(signInUrl));
-  }
-  if (request.nextUrl.searchParams.get("reauth") === "github") {
-    const token = request.cookies.get(FLOW_COOKIE)?.value;
-    try {
-      const flow = token ? verifyInstallFlow(token) : null;
-      if (!flow || flow.installationId === null) return invalidFlow();
-    } catch {
-      return invalidFlow();
-    }
-    const signInUrl = await getSignInUrl({
-      prompt: "consent",
-      returnTo: "/install/callback",
-    });
-    return NextResponse.redirect(signInUrl);
   }
 
   const queryId = queryInstallationId(request);
@@ -176,10 +172,32 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
   if (response.status === 404) {
+    // NO LINK HERE MAY RETURN THE READER TO THIS PAGE. This arm used to offer
+    // /install/callback?reauth=github as its only action, which re-signed the
+    // reader in through WorkOS with `prompt: "consent"` and came straight back
+    // to this same 403 — see the comment on the `update` arm earlier for the
+    // production measurement, and #176 for the loop it created.
+    //
+    // The copy names a remedy that can actually change the answer, and states
+    // the one case where nothing the reader does will. The API answers every
+    // authority failure with the same 404 on purpose (api._prove_installer), so
+    // this page CANNOT tell the three causes apart — a wrong GitHub account, a
+    // Doug session with no GitHub identity, or an installation predating the
+    // installer-id capture, which no re-authorization can repair. Copy that
+    // asserted one of them would be wrong two times in three.
     return html(
-      "<p>A GitHub connection is required only to connect repositories. " +
+      "<p>Only the GitHub account that installed Doug here can connect " +
+        "repositories, and this sign-in is not confirmed as that account. " +
         "Your Doug account remains available.</p>" +
-        '<p><a href="/install/callback?reauth=github">Continue with the GitHub account that installed Doug</a></p>',
+        "<p>Signing in to Doug again does not change this, because it returns " +
+        "the same GitHub account. To connect this repository, sign out of Doug, " +
+        "sign in to GitHub as the account that installed Doug, and start the " +
+        "connection again.</p>" +
+        '<p><a href="/dashboard">Go to your dashboard</a> to sign out. ' +
+        "Sign out is in the account menu.</p>" +
+        "<p>If you did install Doug from this account, this connection needs an " +
+        `operator. Report it at <a href="${GITHUB_REPO_URL}/issues">` +
+        `${GITHUB_REPO_SLUG} issues</a>.</p>`,
       403,
     );
   }

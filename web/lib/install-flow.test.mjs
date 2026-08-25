@@ -419,14 +419,26 @@ test("request waits for an admin and update re-consents without ever binding", a
   }
 });
 
-test("missing GitHub identity preserves the flow for one explicit consent retry", async () => {
+test("the refused-authority 403 offers no link that returns to the same 403", async () => {
+  // THE REGRESSION THIS EXISTS TO CATCH (#176). This arm shipped with exactly
+  // one action — /install/callback?reauth=github — and that action provably
+  // changed nothing: WorkOS honours `prompt=consent` itself and never forwards
+  // it to GitHub, so the reader came back with the same session, the same
+  // GitHub identity, the same 404 from the API, and this same page offering the
+  // same link. Measured in production on 2026-08-21 under #167.
+  //
+  // The old test hid the loop by stubbing the SECOND bind call to 204, which
+  // manufactured a success the deployed path could not produce. So this test
+  // holds the API at 404 for every call — the only honest fixture, because
+  // api._prove_installer's answer does not move when a session is refreshed —
+  // and then FOLLOWS the links the page actually offers.
   const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
   process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
   const oldFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options) => {
     requests.push({ url: String(url), options });
-    return new Response(null, { status: requests.length === 1 ? 404 : 204 });
+    return new Response(null, { status: 404 });
   };
   globalThis.__workosAuth = {
     user: { id: "user_01ABC" },
@@ -442,36 +454,90 @@ test("missing GitHub identity preserves the flow for one explicit consent retry"
     );
     assert.equal(response.status, 403);
     const copy = await response.text();
-    assert.match(copy, /GitHub connection is required only to connect repositories/i);
-    assert.match(copy, /Doug account remains available/i);
-    assert.match(copy, /href="\/install\/callback\?reauth=github"/i);
+
+    // The flow cookie SURVIVES, and that is the recovery path: a reader who
+    // signs out and signs back in as the installing account still holds the
+    // installation id, so the bind can complete without a second GitHub round.
     assert.equal(response.headers.get("set-cookie"), null);
 
-    const reauth = await GET(
+    // The page still says the account is not lost, which is the one thing a 403
+    // must not leave a reader guessing about.
+    assert.match(copy, /Doug account remains available/i);
+    // It names the remedy that can change the answer, and says why signing in
+    // again cannot. Without this pin the copy can quietly revert to a reconnect.
+    assert.match(copy, /sign out of Doug/i);
+    assert.match(copy, /does not change this/i);
+
+    // Every link the page offers, followed. A link this route serves itself
+    // must not answer 403, or the reader is back where they started.
+    const hrefs = [...copy.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+    assert.ok(hrefs.length > 0, "the 403 offers the reader no way onward at all");
+    let selfLinks = 0;
+    for (const href of hrefs) {
+      const target = new URL(href, "https://doug.example");
+      if (target.origin !== "https://doug.example") continue;
+      if (target.pathname !== "/install/callback") continue;
+      selfLinks += 1;
+      const followed = await GET(await nextRequest(target.toString(), token));
+      assert.notEqual(
+        followed.status,
+        403,
+        `the 403 links to ${href}, whose handler returns the same 403`,
+      );
+    }
+    // Belt and braces: this route has no arm that can escape its own 404, so
+    // any self-link is a loop whether or not the walk above happens to catch
+    // it. The walk stays because it survives a rewrite of the copy.
+    assert.equal(selfLinks, 0, "the 403 links back into /install/callback");
+
+    // No WorkOS round trip is started from this page, by the link or otherwise.
+    assert.deepEqual(globalThis.__workosSignInCalls, []);
+    assert.equal(requests.length, 1, "rendering the 403 called bind more than once");
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;
+    else process.env.DOUG_INSTALL_FLOW_SECRET = oldSecret;
+  }
+});
+
+test("a stale ?reauth=github bookmark retries the bind instead of re-signing in", async () => {
+  // The arm that served the dead link is gone, so the parameter is now just an
+  // unknown query on the normal path: the flow cookie still carries the
+  // installation id, so the request retries the bind and answers with whatever
+  // the API says. What it must never do again is spend a WorkOS sign-in to
+  // arrive back at the same answer.
+  const oldSecret = process.env.DOUG_INSTALL_FLOW_SECRET;
+  process.env.DOUG_INSTALL_FLOW_SECRET = ROUTE_SECRET;
+  const oldFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return new Response(null, { status: 204 });
+  };
+  globalThis.__workosAuth = {
+    user: { id: "user_01ABC" },
+    accessToken: "workos-session-jwt",
+  };
+  globalThis.__workosSignInCalls = [];
+  globalThis.__workosSignInUrl = "https://auth.workos.test/github-consent";
+  try {
+    const { GET } = await import("../app/install/callback/route.ts");
+    const response = await GET(
       await nextRequest(
         "https://doug.example/install/callback?reauth=github",
-        token,
+        routeToken(),
       ),
     );
-    assert.equal(reauth.status, 307);
-    assert.equal(reauth.headers.get("location"), "https://auth.workos.test/github-consent");
-    assert.deepEqual(globalThis.__workosSignInCalls, [
-      { prompt: "consent", returnTo: "/install/callback" },
-    ]);
-    assert.equal(requests.length, 1, "explicit reauth must not call bind");
-
-    const resumed = await GET(
-      await nextRequest("https://doug.example/install/callback", token),
-    );
-    assert.equal(resumed.status, 307);
-    assert.equal(resumed.headers.get("location"), "https://doug.example/dashboard");
-    assert.equal(requests.length, 2);
-    const retried = verifyInstallFlow(JSON.parse(requests[1].options.body).flow_token, {
+    assert.equal(response.status, 307);
+    assert.equal(response.headers.get("location"), "https://doug.example/dashboard");
+    assert.deepEqual(globalThis.__workosSignInCalls, []);
+    assert.equal(requests.length, 1);
+    const sent = verifyInstallFlow(JSON.parse(requests[0].options.body).flow_token, {
       expectedSubject: "user_01ABC",
       expectedInstallationId: 1001,
       secret: ROUTE_SECRET,
     });
-    assert.deepEqual(retried.nonce, verifyInstallFlow(token, { secret: ROUTE_SECRET }).nonce);
+    assert.equal(sent.installationId, 1001);
   } finally {
     globalThis.fetch = oldFetch;
     if (oldSecret === undefined) delete process.env.DOUG_INSTALL_FLOW_SECRET;

@@ -1,5 +1,74 @@
 # HANDOFF — doug
 
+State:    review — #176 fixed on claude/issue-176-verification-3f44bb.
+          Full suite green: 1620 pytest, 361 web, console clean. tsc clean,
+          lint clean (2 pre-existing <img> warnings in about/page.tsx).
+Next:     Open the PR against main and let Andrew review it.
+Blockers: none.
+
+## #176 — verified, then fixed
+
+VERIFIED FIRST, and the loop is real. `/install/callback` answers the API's 404
+with a 403 whose only action linked to `/install/callback?reauth=github`; that
+handler verified the flow cookie and re-signed the reader in through WorkOS with
+`prompt: "consent"`, returnTo `/install/callback`. Per #167 (production,
+2026-08-21, recorded in docs/OPERATIONS.md) WorkOS honours that parameter itself
+and never forwards it, and GitHub accepts only `prompt=select_account`. The flow
+cookie survives the round trip, so the reader came back with the same session,
+the same WorkOS `sub`, the same 404, and the same page offering the same link.
+
+WHAT MAKES IT UNFIXABLE BY RE-AUTH, not just badly parameterised: the 404 comes
+from `api._prove_installer`, and every one of its arms is immune to a refreshed
+session — a legacy row whose `installed_by_github_user_id` is NULL, a WorkOS user
+with no GitHub identity at all, or a GitHub id that is not the installer's. The
+last would need account switching AT GITHUB, which is exactly what the missing
+`select_account` would have done. So option A in the issue (make the remedy
+work) cannot close it; option B is the only honest one.
+
+WHY IT SHIPPED: the test at install-flow.test.mjs stubbed the SECOND bind call
+to 204, manufacturing a success the deployed path could not produce. That test
+is gone. Its replacement holds the API at 404 for every call and then FOLLOWS
+the links the page offers.
+
+Changed:
+- The 403 body names the condition, the one remedy that can change the answer
+  (sign out, sign in to GitHub as the installing account, connect again), and
+  the case where nothing the reader does will help — with a link to the issues
+  page rather than a dead end. It does not assert WHICH of the three causes it
+  is, because the API returns one 404 for all three on purpose.
+- The `reauth=github` arm is deleted. A stale bookmark now falls through to the
+  normal path and retries the bind, spending no WorkOS round trip.
+- `setup_action=update` keeps `prompt: "consent"` (it only needs to land the
+  reader on /dashboard) but now carries the #167 measurement as a comment, so
+  the parameter cannot be read as working and copied into a remedy again.
+- node-next-loader.mjs: one rule for the whole `@/lib/*` alias. The three
+  hand-written entries had drifted into two shapes, two of them resolving
+  against the IMPORTER and only correct at three segments deep.
+
+Four mutations verified, each fails exactly one pin: re-adding the self-link,
+dropping the sign-out remedy, stripping every link from the body, and restoring
+the `reauth=github` arm.
+
+NOT DONE, and deliberately: #167 stays OPEN. Its step 4 — the `maxAge: 0`
+variant — has never been run and needs a deploy, so its Done-when is not met
+even though the bug it predicted is now closed. #169 (receipt page's
+unauthorized arm) is a different surface and untouched.
+
+NOT VERIFIED: I did not reproduce the loop in production. The mechanism is
+#167's production evidence plus a read of both code paths, and the fix is
+pinned by tests, not by a production round trip.
+
+Pointers: branch claude/issue-176-verification-3f44bb ·
+          web/app/install/callback/route.ts (the 403 body, the deleted arm,
+          the update-arm comment) · web/lib/install-flow.test.mjs (two new
+          tests replacing one) · web/lib/node-next-loader.mjs ·
+          docs/OPERATIONS.md:295-320 is where #167's answer lives ·
+          api/doug/api.py `_prove_installer` is the 404's source
+
+---
+
+## Prior stream — #198, per-repo deep read (kept, still open against main)
+
 State:    review — #198 open against main, carrying the stranded #195 work
           plus Andrew's three UI follow-ups. Doug reviewed cd3f2fd: 7 findings,
           all settled (3 real+changed, 4 disproved).
