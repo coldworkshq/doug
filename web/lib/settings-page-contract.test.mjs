@@ -13,28 +13,53 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [settings, dashboard, header, control] = await Promise.all([
+const [settings, dashboard, header, control, rail] = await Promise.all([
   readFile(new URL("../app/dashboard/settings/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../components/flag-line-control.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../components/dashboard-rail.tsx", import.meta.url), "utf8"),
 ]);
 
-test("the settings page is reachable from the signed-in shell in two places", () => {
-  // The rail, for someone browsing the sections, and the account gear, for
-  // someone who went looking. Two doors to one room is not a duplicate: the
-  // bug being fixed is that neither door existed.
-  const railEntry = dashboard.match(
-    /<Link href="\/dashboard\/settings" className=\{RAIL_ITEM\}>Settings<\/Link>/,
-  );
-  const menuEntry = dashboard.match(
-    /<Link href="\/dashboard\/settings" className=\{MENU_ITEM\}>Settings<\/Link>/,
-  );
-  assert.ok(railEntry, "the rail's Settings entry is gone");
-  assert.ok(menuEntry, "the account menu's Settings entry is gone");
+test("Settings sits against Account at the foot of the rail, once", () => {
+  // ONE ENTRY, NOT TWO. It began in both the section list and the account gear,
+  // which was defensible while they were far apart. It is six pixels from the
+  // gear now, so a second copy is just the same link twice.
+  const entries = [...rail.matchAll(/href="\/dashboard\/settings"/g)];
+  assert.equal(entries.length, 1, "Settings is linked from the rail more than once");
+  assert.match(rail, /aria-current=\{section === "settings" \? "page" : undefined\}/);
+
+  // BELOW the two view entries and ABOVE the account row — it is not a view of
+  // the ledger (those two swap what the table shows and carry the filters
+  // across; this one leaves the table), and it belongs with the things it now
+  // neighbours: who you are signed in as, and what Doug may do on your behalf.
+  const repositories = rail.indexOf(">Repositories</Link>");
+  const settings = rail.indexOf('href="/dashboard/settings"');
+  const account = rail.indexOf('aria-label="Account"');
+  assert.ok(repositories > 0 && settings > repositories, "Settings is above the view entries");
+  assert.ok(account > settings, "Settings is no longer directly above Account");
+  // The two travel together as one block pinned to the bottom.
+  assert.match(rail, /className="mt-auto max-lg:mt-0 max-lg:contents"/);
+});
+
+test("every /dashboard route wears the same rail", () => {
+  // THE REGRESSION THIS EXISTS TO CATCH. The settings page shipped without the
+  // rail, on the argument that it has no scope picker, filter set or selected
+  // run to keep visible. That was true of the rail's CONTENTS and wrong about
+  // what a rail is for: you left the navigation to reach your settings, and
+  // the only way back was one link.
+  for (const [name, source] of [["ledger", dashboard], ["settings", settings]]) {
+    assert.match(source, /<DashboardRail/, `the ${name} page dropped the rail`);
+  }
+  assert.match(settings, /section="settings"/);
+  // The ledger's own two pieces stay slots, so the runs page's fetch scope and
+  // row counts cannot follow the chrome onto a page that has neither.
+  assert.equal(settings.includes("filter={"), false, "the settings page grew a ledger filter");
+  assert.equal(settings.includes("readout={"), false, "the settings page grew a ledger readout");
 });
 
 test("the gear is not also called Settings", () => {
+  const dashboard = rail;
   // Two different things sharing one word on one screen is the confusion the
   // gear/flag-line naming pin already exists to refuse — and this is the same
   // failure in a new place. The gear opens sign-out and Connect repositories;

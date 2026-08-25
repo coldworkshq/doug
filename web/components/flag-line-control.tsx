@@ -67,6 +67,78 @@ const PAGE_PANEL = "flex max-w-[560px] flex-col gap-3";
  *  on the screen. Only the box changes — every word inside it is shared,
  *  because both surfaces describe the same forward-only write and a second
  *  copy of that promise would drift the first time one was edited. */
+/** One boolean setting, as a switch you can read without pressing it.
+ *
+ *  BOTH CARRIERS, because neither alone is enough. The track's position says
+ *  the state at a glance; the word beside it says the same thing in text, for
+ *  anyone who cannot pick a 28px track's fill out of a light surface and for
+ *  anyone reading by ear. The button that shipped first had only the word, in
+ *  a bordered box that looked exactly like the `save` and `reset to default`
+ *  buttons next to it — three identical-looking controls where one was a state
+ *  and two were actions.
+ *
+ *  IT IS A `<button type="submit">`, not an input, and that is what keeps this
+ *  component free of JavaScript: the form posts, the server writes, the page
+ *  re-renders with the new state. `role="switch"` + `aria-checked` is the ARIA
+ *  pattern for exactly this — a control that reports a state and toggles it —
+ *  so screen readers announce "switch, on" rather than "button".
+ *
+ *  IT READS THE CURRENT STATE AND SUBMITS THE OPPOSITE. The hidden input
+ *  carries the negation; the label never shows the pending value. On a control
+ *  whose whole job is "what is Doug allowed to do on my repository", showing
+ *  the value you are about to get is the one error that matters.
+ *
+ *  ITS OWN <form>, always. `formData.get` returns the first entry for a name,
+ *  so a switch sharing a form with the flag-line input would re-save that box
+ *  on every press — including an empty box, which clears the override. */
+function SettingSwitch({
+  action,
+  githubRepoId,
+  name,
+  label,
+  on,
+}: {
+  action: (formData: FormData) => Promise<void>;
+  githubRepoId: number;
+  name: string;
+  label: string;
+  on: boolean;
+}) {
+  return (
+    <form action={action}>
+      <input type="hidden" name="github_repo_id" value={githubRepoId} />
+      <input type="hidden" name={name} value={on ? "false" : "true"} />
+      <button
+        type="submit"
+        role="switch"
+        aria-checked={on}
+        aria-label={`${label} is ${on ? "on" : "off"} — turn it ${on ? "off" : "on"}`}
+        className="flex cursor-pointer items-center gap-2.5 rounded-[4px] border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+      >
+        {/* --foreground, not the accent: the accent is a hair off --flag on
+            this surface, and a control that is not about a verdict must not
+            borrow the colour that is. */}
+        <span
+          aria-hidden
+          className={`relative flex h-[16px] w-[28px] flex-none items-center rounded-full border transition-colors ${
+            on ? "border-foreground bg-foreground" : "border-border bg-muted"
+          }`}
+        >
+          <span
+            className={`block size-[10px] rounded-full transition-transform ${
+              on ? "translate-x-[15px] bg-background" : "translate-x-[2px] bg-muted-foreground"
+            }`}
+          />
+        </span>
+        <span className="mono text-[10.5px] uppercase tracking-[.08em] text-muted-foreground">{label}</span>
+        <span className={`mono text-[10.5px] ${on ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+          {on ? "on" : "off"}
+        </span>
+      </button>
+    </form>
+  );
+}
+
 export function FlagLineControl({
   githubRepoId,
   value,
@@ -119,7 +191,14 @@ export function FlagLineControl({
                 step={0.01}
                 defaultValue={value ?? ""}
                 list={`flag-line-marks-${githubRepoId}`}
-                className="mono ml-2 h-[26px] w-[72px] rounded-[4px] border border-border bg-card px-1.5 text-[12px] text-foreground"
+                /* 88, not 72: a `type="number"` reserves room for its spinner
+                   arrows, so a four-character value like 0.75 measured 76px of
+                   content in a 72px box and rendered as "0.7". THE ONE CONTROL
+                   ON THIS PANEL THAT HAS A VALUE RATHER THAN A STATE cannot be
+                   the one that hides it — every other setting here is a switch
+                   you can read at a glance, and a clipped number is worse than
+                   no number because it looks like a number. */
+                className="mono ml-2 h-[26px] w-[88px] rounded-[4px] border border-border bg-card px-1.5 text-[12px] text-foreground"
               />
               {/* The defaults as MARKS, never as a prefilled value: an input
                   showing 0.30 on an unset repository would claim a setting that
@@ -163,15 +242,13 @@ export function FlagLineControl({
           matters. `aria-label` spells the action out, because "PR comment ·
           on" alone does not say what pressing it does. */}
       {setting(
-        <form action={setFlagLineCommentAction}>
-          <input type="hidden" name="github_repo_id" value={githubRepoId} />
-          <input type="hidden" name="pr_comment" value={prComment ? "false" : "true"} />
-          <button
-            type="submit"
-            aria-label={`PR comment is ${prComment ? "on" : "off"} — turn it ${prComment ? "off" : "on"}`}
-            className={`mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] ${prComment ? "text-foreground" : "text-muted-foreground"}`}
-          >PR comment · {prComment ? "on" : "off"}</button>
-        </form>,
+        <SettingSwitch
+          action={setFlagLineCommentAction}
+          githubRepoId={githubRepoId}
+          name="pr_comment"
+          label="PR comment"
+          on={prComment}
+        />,
         /* BOTH DIRECTIONS, because the decision is made here. On is an edit
            loop; off is a STOP, not an undo — D3: turning it off ends the
            updates and leaves the last comment where Doug posted it. Stating
@@ -196,15 +273,13 @@ export function FlagLineControl({
           `formData.get` takes the first entry for a name, so sharing a form
           with the flag-line input would re-save that box on every click. */}
       {setting(
-        <form action={setDeepReadAction}>
-          <input type="hidden" name="github_repo_id" value={githubRepoId} />
-          <input type="hidden" name="deep_read" value={deepRead ? "false" : "true"} />
-          <button
-            type="submit"
-            aria-label={`Deep read is ${deepRead ? "on" : "off"} — turn it ${deepRead ? "off" : "on"}`}
-            className={`mono h-[26px] rounded-[4px] border border-border px-2 text-[11px] ${deepRead ? "text-foreground" : "text-muted-foreground"}`}
-          >Deep read · {deepRead ? "on" : "off"}</button>
-        </form>,
+        <SettingSwitch
+          action={setDeepReadAction}
+          githubRepoId={githubRepoId}
+          name="deep_read"
+          label="Deep read"
+          on={deepRead}
+        />,
         /* BOTH CONSEQUENCES, the second one conditionally, because it is only
            true of a repository with no line of its own. A repo that has set
            0.75 keeps 0.75 through this toggle, and telling its owner the line

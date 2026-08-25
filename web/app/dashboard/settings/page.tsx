@@ -2,6 +2,7 @@ import { withAuth } from "@workos-inc/authkit-nextjs";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DashboardRail } from "@/components/dashboard-rail";
 import { FlagLineControl } from "@/components/flag-line-control";
 import { PrCommentDenialBanner } from "@/components/pr-comment-denial-banner";
 import { frontDoor } from "@/lib/dashboard-model";
@@ -25,10 +26,14 @@ const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] 
  *  surfaces, one component (`FlagLineControl`) rendering both — see ADR-0013's
  *  amendment.
  *
- *  Deliberately NOT a rail-and-ledger shell. The ledger's chrome exists to
- *  keep a scope, a filter set and a selected run visible at once; this screen
- *  has one scope, no filters and nothing selected, and borrowing that shell
- *  would have been 200px of column holding a single link.
+ *  IT WEARS THE RAIL. The first cut did not, on the argument that the ledger's
+ *  chrome exists to keep a scope, a filter set and a selected run visible at
+ *  once and this screen has none of those. That was true about the CONTENTS of
+ *  the rail and wrong about what a rail is for: leaving the navigation to reach
+ *  your settings makes settings feel like a different product, and the only way
+ *  back was one "Ledger" link. The two parts that are genuinely the ledger's —
+ *  the repo filter and the in-view readout — are slots, and this page passes
+ *  neither.
  */
 export default async function SettingsPage() {
   const { user, accessToken, organizationId } = await withAuth();
@@ -65,21 +70,27 @@ export default async function SettingsPage() {
   );
 
   return (
-    <div className="dashboard-surface min-h-screen">
-      <main className="mx-auto w-full max-w-[820px] px-6 py-10">
+    <div className="dashboard-surface">
+      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[212px_minmax(0,1fr)]">
+        {/* No `filter` and no `readout`: this page has no ledger to narrow and
+            no rows in hand to count. The rail carries the space picker, the
+            sections, and Settings itself marked current. */}
+        <DashboardRail
+          connections={connections.connections}
+          current={connection}
+          userEmail={user.email}
+          section="settings"
+          runsHref="/dashboard"
+          repositoriesHref="/dashboard?view=repositories"
+        />
+
+        <main className="mx-auto w-full max-w-[820px] px-6 py-10">
         <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
           <span className={ROUTE}>/settings</span>
           <span className="truncate normal-case tracking-normal text-muted-foreground">
             {connection.account_login}
           </span>
           <span className="h-px flex-1 bg-border" />
-          {/* The way back, and the only way to change space: switching spaces
-              is the rail's picker, and a second picker here would be a second
-              control writing the same session. */}
-          <Link
-            href="/dashboard"
-            className="flex-none normal-case tracking-normal text-muted-foreground no-underline hover:text-foreground"
-          >Ledger</Link>
         </div>
 
         <h1 className="font-heading text-[32px] font-semibold tracking-[-.03em]">Settings</h1>
@@ -129,7 +140,8 @@ export default async function SettingsPage() {
             ))}
           </ul>
         )}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

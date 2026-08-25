@@ -1,52 +1,27 @@
 # HANDOFF — doug
 
-State:    review — pushed. #194 and #195 open, #195 stacked on #194's
-          branch; #196 filed for the deferral. Doug reviewed #194 and found
-          TWO REAL DEFECTS in it as a standalone deployable unit, both fixed
-          in 61c5c6a and both worth remembering:
-          (a) the settings page renders the same controls as the ledger, and
-              the two existing actions revalidated only /dashboard — so a save
-              made from the settings page left that page stale. The
-              second-surface cost of one component with two homes, missed by
-              my own settings-page contract test;
-          (b) settings/page.tsx cited "ADR-0013's amendment" while the
-              amendment and ADR-0019 were both scheduled into #195, so #194
-              shipped a policy change against a record a reader could not
-              find. Both ADRs moved into #194 and ADR-0019 now names which PR
-              does what. LESSON: when work is split across a deploy-ordered
-              stack, the RECORD goes with the first PR, not the last.
-          All seven findings dispositioned in docs/findings-log.jsonl
-          (4 real, 2 disproved, 1 duplicate). #195 has been merged up from
-          #194 and is green on the merge.
-          Doug then reviewed #195 at 230ff93: 6 more findings, all settled
-          (3 real+changed, 3 disproved). The one that mattered caught a
-          CONTRADICTION IN MY OWN COMMENTS — #194's guard note argued absence
-          of deep_read is unambiguous, #195's tightening then argued absence
-          would invent a toggle state. Both cannot be true. The justification
-          is rewritten to the real one (an absent key means an API older than
-          the column, i.e. a contract this build cannot check at all), and the
-          rollback window it exposed — which the two-step NEVER covered, since
-          that protects promotion order only — is #197, filed cross-cutting
-          because pr_comment has the identical exposure.
-          PR 1 = claude/code-review-settings-page-f902d1 (b985c4c):
-          /dashboard/settings, rail + gear links, a Dashboard link in the site
-          header, session-api guards LOOSENED to tolerate deep_read.
-          PR 2 = claude/per-repo-deep-read (88c8dad + 8acd9eb), on top of it:
-          migration 15, store/api/review/worker, the toggle, guards tightened
-          back, ADR-0019, changelog, README.
-          Green: api 1620/1620 + ruff clean; web 358/358, tsc clean, lint clean
-          (2 pre-existing <img> warnings on /about), build clean; console
-          113/113. /about and /docs/* still ○.
-Next:     ANDREW'S CALL — all three are outward-facing, so none is done:
-          (1) push both branches and open two PRs;
-          (2) MERGE IN ORDER. PR 1 must be DEPLOYED before PR 2 merges.
-              deploy.yml:162 promotes the API before web, and PR 2's API emits
-              a key PR 1's web build is the first to tolerate. Merging PR 2
-              first breaks every dashboard with "Doug could not load your
-              connected spaces" for the length of that window;
-          Both PRs are open — #194 (settings page) and #195 (deep read,
-          stacked on it) — and the deferral ADR-0019 names is filed as #196,
-          linked from the ADR so the two cannot drift.
+State:    building — Andrew's three follow-ups are done and green, on
+          claude/per-repo-deep-read, NOT pushed yet.
+          (1) the rail is extracted to components/dashboard-rail.tsx and both
+              /dashboard and /dashboard/settings render it, so the left nav no
+              longer disappears when you open settings;
+          (2) Settings moved out of the section list AND out of the account
+              gear, to a single entry directly above the account row;
+          (3) pr_comment and deep_read are real switches (role="switch" +
+              aria-checked, track + word, still JS-free); the flag line stays a
+              number input, and got 16px wider because 0.75 was rendering as
+              "0.7" in a 72px box.
+          web 360/360, tsc clean, lint clean, build clean.
+
+          MAIN IS BEHIND: #195 reads MERGED on GitHub but none of its content
+          is on main. It was based on #194's branch and merged INTO it at
+          05:04, eleven minutes after #194 had already been squashed to main at
+          04:53. The stack enforced merge order exactly as designed and then
+          the order itself stranded the second half. This branch now carries
+          main + the deep-read work + these three changes, and needs ONE PR to
+          main. Deploy order is satisfied for free: main's live web build has
+          the LOOSE deep_read guard, which is the tolerance the two-step
+          existed to put in front of the API that emits the key.
 Blockers: none.
 
 SEEN, not just tested: /dashboard/settings was rendered through a temporary
