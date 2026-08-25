@@ -27,6 +27,7 @@ const [
   report,
   readme,
   apiReadme,
+  findingsLog,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -46,7 +47,36 @@ const [
   readFile(new URL("../app/docs/report/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../../README.md", import.meta.url), "utf8"),
   readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
+  readFile(new URL("../../docs/findings-log.jsonl", import.meta.url), "utf8"),
 ]);
+
+/** The counts the public pages quote, computed from the log they quote it
+ *  from — never typed in twice.
+ *
+ *  The pins below used to be literals ("135 rows", "123 prospective"). A
+ *  literal cannot fail when the log grows, which is the only way these
+ *  numbers ever go wrong: by 2026-08-24 the log held 190 rows and both the
+ *  page and llms.txt still said 135, green the whole way. A pin that cannot
+ *  observe the thing it pins is decoration.
+ *
+ *  `repo` defaults to "doug" because it was optional in the file before the
+ *  field existed (docs/REVIEWING.md:211) — same default the CLI applies, so
+ *  this scope matches `findings_log rate --repo doug`. */
+const logRows = findingsLog
+  .split("\n")
+  .filter((line) => line.trim())
+  .map((line) => JSON.parse(line));
+const prospective = logRows.filter((r) => r.source !== "backfill");
+const dougRows = prospective.filter((r) => (r.repo ?? "doug") === "doug");
+const counts = {
+  total: logRows.length,
+  prospective: prospective.length,
+  backfill: logRows.length - prospective.length,
+  doug: dougRows.length,
+  disproved: dougRows.filter((r) => r.verdict === "disproved").length,
+  real: dougRows.filter((r) => r.verdict === "real").length,
+  adjacent: dougRows.filter((r) => r.verdict === "adjacent").length,
+};
 
 /** The field of ONE record, or null.
  *
@@ -232,7 +262,19 @@ test("REST API docs do not mark live tenant routes as planned or preview", () =>
   assert.equal(rest.includes("Tenant REST is still planned"), false);
   assert.equal(rest.includes("Tenant REST is still the planned"), false);
   assert.match(rest, /\$DOUG_API_URL/);
-  assert.match(rest, /SAMPLE — empty-ledger snapshot/);
+  // The sample used to be pinned as an "empty-ledger snapshot". That stopped
+  // being what the endpoint returns the moment the first outcome adjudicated,
+  // and a label describing a state the ledger has left reads as today's
+  // reading. What is durable is the null: miss_rate stays null and decidable
+  // stays false until the pre-registered interval fires, whatever the
+  // counters say. Pin that, and pin that the sample shows the whole shape.
+  assert.equal(rest.includes("empty-ledger snapshot"), false);
+  assert.match(rest, /&quot;miss_rate&quot;/);
+  assert.match(rest, /&quot;decidable&quot;/);
+  for (const field of ["repo", "adjudicated", "pending", "as_of", "first_due",
+    "deep_reads", "deep_read_cap", "label"]) {
+    assert.match(rest, new RegExp(`&quot;${field}&quot;`), `sample: ${field}`);
+  }
 });
 
 test("REST API sits in Coming up as preview, not planned — showcase is live", () => {
@@ -290,6 +332,37 @@ test("what Doug gets wrong uses the current findings-log counts", () => {
   assert.equal(wrong.includes("Roughly half"), false);
   assert.equal(wrong.includes("12 rows today"), false);
   assert.equal(llms.includes("Roughly half"), false);
+
+  // Every number the page and llms.txt quote, checked against the log itself.
+  // Append a row without updating the copy and this fails, naming the number.
+  for (const [source, name] of [
+    [wrong, "what-doug-gets-wrong"],
+    [llms, "llms.txt"],
+  ]) {
+    assert.match(source, new RegExp(`${counts.total} rows`), `${name}: total`);
+    assert.match(
+      source,
+      new RegExp(`${counts.prospective} prospective`),
+      `${name}: prospective`,
+    );
+    assert.match(
+      source,
+      new RegExp(`${counts.backfill} backfill`),
+      `${name}: backfill`,
+    );
+    assert.match(
+      source,
+      new RegExp(`${counts.disproved} of ${counts.doug}`),
+      `${name}: the disproved share, doug-scoped`,
+    );
+  }
+
+  // The rail breaks the doug-scoped rows out by verdict; the three must sum
+  // to the scope they are drawn from or one of them is a typo.
+  assert.equal(counts.disproved + counts.real + counts.adjacent, counts.doug);
+  assert.match(wrong, new RegExp(`${counts.disproved} disproved`));
+  assert.match(wrong, new RegExp(`${counts.real} real`));
+  assert.match(wrong, new RegExp(`${counts.adjacent} adjacent`));
 });
 
 test("the report does not invent a misses-by-PR list the CLI does not print", () => {
@@ -314,10 +387,11 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
 });
 
 test("what Doug gets wrong does not claim every log row is backfill", () => {
-  // 123 of 135 rows are prospective. A callout that still says every row is
+  // Most rows are prospective. A callout that still says every row is
   // backfill contradicts the rail on the same page.
+  assert.ok(counts.prospective > counts.backfill);
   assert.equal(wrong.includes("Every row in the log today is backfill"), false);
-  assert.match(wrong, /123 prospective/);
+  assert.equal(changelog.includes("All rows today are backfill"), false);
 });
 
 test("llms.txt does not present the July probe as the live scorer, or hotspots as a live learner", () => {

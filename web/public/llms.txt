@@ -52,6 +52,17 @@ Harvests are checkpointed — kill and relaunch with the same command to resume.
   both (union, intersected with the harvested window — no outcome-dependent injection).
   Known limits: reverts under-count defects; a small % of labels show timestamp
   anomalies under triage.
+- Per-repository settings (AVAILABLE): each connected repository carries its own
+  flag line (the score at which Doug asks for a human), a PR-comment toggle, and a
+  deep-read toggle, all on /dashboard/settings. Deep read off means that repository
+  is scored on structural signals alone and no diff leaves it; on a repository with
+  no flag line of its own it also moves the line Doug bands against, so he asks for
+  a human less often rather than merely differently.
+- Carrying findings forward (AVAILABLE): when the code a finding cited is
+  byte-unchanged in the next push, Doug carries that finding forward by
+  construction and reports it under "Since <sha>", with a count of his own earlier
+  findings on untouched code that the reader did not mention again. Nothing is
+  marked resolved: evidence that code was edited is not evidence it was fixed.
 - Cleared band (AVAILABLE): the product claim is about CLEARED PRs. density_lift =
   cleared-band defect density vs merging blind; <1 means clearing carries
   information, =1 means merging blind. This is the trust metric; capture@budget is
@@ -67,7 +78,8 @@ JSON schema is early-preview; printed tables are the stable contract.
 
 ## Doug's own findings (AVAILABLE — the log; there is no rate yet)
 Doug reviews every PR in his own repository and the dispositions are written down.
-About a third of prospective findings are disproved by code he wasn't shown: he reads a diff,
+Just under a third of prospective findings — 52 of 173 — are disproved by code he
+wasn't shown: he reads a diff,
 not a repository, and does not reliably separate what a diff PROVES from what it
 merely PERMITS. Two recurring failure classes: (1) a conclusion drawn from an
 absence in the diff ("this name is used and no import was added" — it was already
@@ -85,9 +97,10 @@ settled it. Two axes because one loses the interesting cases — a true finding 
 changed nothing is a re-report; a false finding that changed something found a real
 gap by the wrong route. Doug's strongest mode is "this code does not justify
 itself," and a single score would grade that as failure.
-NO RATE IS PUBLISHED. The log has 135 rows (123 prospective, 12 backfill). Backfill
-is excluded from every rate by construction; the denominator is the prospective
-rows. When a number exists
+NO RATE IS PUBLISHED. The log has 190 rows (178 prospective, 12 backfill). Backfill
+is excluded from every rate by construction. Of the prospective rows 173 are reviews
+of Doug's own repository and 5 are of another; every count here is the 173, because
+a rate computed across two repositories describes neither. When a number exists
 it will NOT be called precision: whether a finding is TRUE is a different quantity
 from whether it PREDICTED A DEFECT, and a finding can be true and worthless or
 false and load-bearing.
@@ -137,7 +150,8 @@ stated). The deterministic scorer is a single-repo result — its cross-repo
 replication FAILED (grafana at random), which we publish rather than bury. The LLM
 diff-read result above is the piece that replicated across both repos. Those AUC
 numbers are the 2026-07 probe (ADR-0012), not a measurement of the shipped
-100k-char reader that is the live scoring path when DOUG_READER=1. Misses are published, not buried. Doug never
+100k-char reader that is the live scoring path when DOUG_READER=1 and the
+reviewed repository has not turned its deep read off. Misses are published, not buried. Doug never
 blocks a merge. What Doug himself gets wrong is written down too (see "Doug's own
 findings") — including the fact that there is not yet enough of it to quote a rate.
 A design for an agent review crew with a falsifier-adjudicated finding ledger was
