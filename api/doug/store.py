@@ -411,6 +411,41 @@ review_jobs = Table(
     Column("finished_at", DateTime(timezone=True)),
     Column("error", Text),
     Column("verdict_id", Integer, ForeignKey("verdicts.id")),
+    # What this job's sticky PR comment actually did — one of
+    # `pr_comment.upsert`'s seven tokens, or worker's `skipped:*` /
+    # `failed:internal` (issue #154). The comment is written AFTER
+    # ingest.complete has already marked the job 'done', and 'done' is not
+    # REVIVABLE, so without a durable record of the outcome a comment lost to
+    # a process death or a 5xx is lost until a new head SHA makes a new job —
+    # which on the surface GitHub actually shows (neutral checks stay folded)
+    # is a lost review, not a missing badge.
+    #
+    # PR_COMMENT_OWED is written by `ingest.complete`, in the same statement
+    # that marks the job done, and overwritten moments later by whatever the
+    # comment write actually did. A row still holding it is a job that
+    # completed and then lost its comment — which is the signal the retry
+    # sweep reads.
+    #
+    # A POSITIVE marker rather than "NULL means it never ran", which is what
+    # this started as. NULL now means one thing only and needs no backfill to
+    # mean it: this row predates the column, or predates the revision that
+    # writes the marker. Those rows are invisible to the sweep, which is
+    # correct — nothing knows whether they commented, and re-posting on a
+    # guess is how a repair becomes a duplicate. Reading the absence instead
+    # cost a full-table UPDATE in the migration to disambiguate, and left
+    # every row completed by an older revision mid-rollout looking like a
+    # comment that never happened.
+    Column("pr_comment_outcome", String(32)),
+    # How many times the retry sweep has CLAIMED this row. The write
+    # `process_job` makes is not counted here and needs no counter: it is
+    # fenced by the job claim itself, so only one worker can make it. This
+    # column bounds the repairs on top of that one, and it is spent by
+    # `claim_pr_comment_retry` BEFORE the GitHub call rather than by the
+    # outcome write after it — the same order `claim_pr_comment_seq` takes
+    # its reservation in, and for the same reason. Spending it afterwards
+    # would leave a swallowed ledger failure looking exactly like a repair
+    # that never ran, and re-post the same comment on every drain for a day.
+    Column("pr_comment_attempts", Integer, nullable=False, server_default="0"),
     UniqueConstraint(
         "installation_id", "github_repo_id", "pr_number", "head_sha", name="uq_review_job"
     ),
@@ -1594,6 +1629,218 @@ def pr_comment_denied_at(installation_id: int) -> datetime | None:
             )
         ).scalar_one_or_none()
     return _as_utc(value)
+
+
+# What `ingest.complete` stamps on a job it marks done, meaning "this job
+# owes a sticky comment and has not written one yet". Neither a
+# `pr_comment.upsert` token nor a worker one, so it can never be mistaken for
+# an outcome that happened; short enough that PR_COMMENT_OUTCOME_MAX cannot
+# reach it.
+PR_COMMENT_OWED = "owed"
+
+# review_jobs.pr_comment_outcome's declared width. A token over it would be
+# stored mangled, so `record_pr_comment_outcome` says so out loud rather than
+# slicing in silence. Truncation cannot flip the retry classification in
+# either direction — that reads a PREFIX, and a prefix survives a truncation
+# and cannot be created by one — so what is at stake is a lie in the ledger
+# about what happened, not a comment retried wrongly.
+PR_COMMENT_OUTCOME_MAX = 32
+
+
+def _pr_comment_unlanded():
+    """The one definition of "this job still owes a comment", shared by the
+    sweep's selection and the reservation that fences it.
+
+    Two clauses, and they are not the same statement twice. `owed` is the
+    marker `ingest.complete` stamps and nothing has overwritten — the job
+    finished and its comment write never reported back. `failed:*` is a write
+    that reported a failure it might not repeat.
+
+    Everything else is deliberately absent. `created`/`updated` landed. Every
+    `skipped*` is a decision, and a decision retried is a decision
+    overridden. `denied:403` is a tenant permission action with its own
+    marker and banner (ADR-0014 D8); a retry cannot converge on it. NULL is a
+    row from before this column, or from a revision that did not stamp the
+    marker — nothing knows whether it commented, so re-posting on a guess is
+    how a repair becomes a duplicate.
+
+    One function because the SELECT and the UPDATE that claims what it
+    selected must agree exactly: a claim narrower than the selection makes
+    rows that can never be claimed, and a claim wider than it lets a landed
+    comment be repaired.
+    """
+    return or_(
+        review_jobs.c.pr_comment_outcome == PR_COMMENT_OWED,
+        review_jobs.c.pr_comment_outcome.like("failed:%"),
+    )
+
+
+def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
+    """Record what this job's sticky-comment write did, and spend an attempt.
+
+    The comment is written after `ingest.complete` has already marked the job
+    'done'. Nothing revives a 'done' row — REVIVABLE is ('failed',
+    'superseded') — so before this column the outcome existed only as a
+    stderr line, and a comment lost to a process death or a 5xx stayed lost
+    until a new head SHA made a new job (issue #154). This is what turns that
+    line into something a sweep can select on.
+
+    Called for EVERY path out of `worker._post_pr_comment`, including the
+    skips and its own internal failures, because this is what CLEARS the
+    `PR_COMMENT_OWED` marker `ingest.complete` stamped. A path that returns
+    without recording leaves the marker standing, and the sweep then reads a
+    comment that WAS written as one that never was.
+
+    Deliberately does NOT count the attempt. `claim_pr_comment_retry` spends
+    it before the GitHub call instead, so that a failure here — which is
+    swallowed, because the job is done and the verdict durable — cannot leave
+    a row that looks untried. Counting on the way out made a lost ledger
+    write and a repair that never ran indistinguishable, and re-swept the
+    same job on every drain until the lookback window closed.
+
+    Storage-disabled is a no-op, matching every other write in this family —
+    the sweep is likewise a no-op there.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return
+    if len(outcome) > PR_COMMENT_OUTCOME_MAX:
+        print(
+            f"doug: comment outcome {outcome!r} is over "
+            f"{PR_COMMENT_OUTCOME_MAX} chars; storing it truncated",
+            file=sys.stderr,
+        )
+    with engine.begin() as conn:
+        conn.execute(
+            update(review_jobs)
+            .where(review_jobs.c.id == job_id)
+            .values(pr_comment_outcome=outcome[:PR_COMMENT_OUTCOME_MAX])
+        )
+
+
+def claim_pr_comment_retry(job_id: int, *, attempts: int) -> bool:
+    """Reserve this job's comment repair for one sweeper. True means write.
+
+    `jobs_with_unposted_pr_comment` is an unlocked SELECT, and `drain` runs
+    on every delivery with `--max-instances 2`, so both instances sweep the
+    same settled rows on the same pass — not by coincidence the way two
+    drainers meet on one PR, but every time, because the same query picks the
+    same candidates. Without a reservation both would call `upsert`, and for
+    a PR whose comment was never created the listing can miss a create the
+    other has not committed yet: two comments, two notifications, for one
+    review. That is the harm the complete-before-post ordering exists to
+    prevent, reintroduced by the repair for it.
+
+    One conditional UPDATE, taken BEFORE the GitHub call, that both tests the
+    attempt count and spends it — the same shape `claim_pr_comment_seq` uses
+    for the seq mark, for the same reason: reading and then writing would
+    leave the whole round trip as the window. The outcome is re-tested in the
+    same statement so a row the original worker finished between our SELECT
+    and our claim is not repaired after it landed.
+
+    The answer comes from RETURNING, not from rowcount, and not from a
+    re-read either. `ingest.claim` already fences its claim exactly this way
+    ("Lost a race after the SELECT"), and the two alternatives both fail
+    here. A re-read cannot disambiguate at all: winner and loser would both
+    read `attempts + 1`, unlike `claim_pr_comment_seq`, where the value read
+    back is the caller's own seq. Rowcount would be sound in principle —
+    every WHERE that matches here also CHANGES the value, so the "matched but
+    unchanged" case that function distrusts cannot arise — but it is a
+    property of the driver, and no CI job runs on Postgres to hold it. A
+    driver reporting matched-rather-than-changed would hand BOTH sweepers the
+    claim, which is the duplicate this exists to stop. RETURNING emits a row
+    only for a row actually updated, on both backends, so the ambiguity is
+    not traded for a smaller one — it is gone.
+
+    Storage-disabled returns False. There is no ledger to have selected a row
+    from, so nothing can reach this honestly, and False is the quiet
+    direction: no claim, no write, no duplicate.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.begin() as conn:
+        won = conn.execute(
+            update(review_jobs)
+            .where(
+                review_jobs.c.id == job_id,
+                review_jobs.c.pr_comment_attempts == attempts,
+                _pr_comment_unlanded(),
+            )
+            .values(pr_comment_attempts=attempts + 1)
+            .returning(review_jobs.c.id)
+        ).scalar_one_or_none()
+    return won is not None
+
+
+def jobs_with_unposted_pr_comment(
+    *,
+    max_retries: int,
+    settled_for_seconds: int,
+    within_seconds: int,
+    limit: int,
+) -> list[dict]:
+    """Done jobs whose sticky comment has not landed and can still be
+    retried, oldest first. Rows are whole `review_jobs` rows — NOT "what
+    `ingest.claim` returns", which is these columns plus values that call
+    derives (`claim_generation` is bumped by the claim itself). The caller
+    reads only stored columns, and must not hand these rows to anything that
+    completes or fences a job.
+
+    "Not landed" is `_pr_comment_unlanded`, which is the single definition
+    and lives beside the reservation that has to agree with it — read the
+    rule there rather than restating it here, where a copy could drift into
+    describing a set the query does not select.
+
+    Selecting is not claiming. This is an unlocked read, and two instances
+    sweep the same rows on the same pass, so every caller has to win
+    `claim_pr_comment_retry` on a row before writing to GitHub with it.
+
+    Three bounds, each closing a different way this could misfire:
+
+      * `max_retries` — a comment failing for a reason no retry fixes has to
+        stop costing calls. It counts repairs only; the write `process_job`
+        already made is fenced by the job claim and needs no budget here.
+      * `settled_for_seconds` — the gap between `ingest.complete` and the
+        outcome write belongs to a worker that may still be alive inside it,
+        and two drainers are the deployed configuration (`--max-instances
+        2`). Sweeping a row still in that gap is how one review notifies
+        every reviewer on the PR twice, which is the exact harm the
+        complete-before-post ordering exists to prevent. Younger than this is
+        treated as in flight, the same call reclaim_stalled's lease makes.
+      * `within_seconds` — a retry is worth making while the PR is still what
+        people are looking at, and the bound is also what stops a cold start
+        from walking the ledger's whole history. It is NOT what makes old
+        rows safe; the marker is, by leaving anything completed before it
+        unselectable. This bounds how far back a repair is worth making.
+
+    NULL `finished_at` cannot satisfy either comparison, so such a row is
+    never swept. That is deliberate and the safe direction: a 'done' row with
+    no finish time has no clock to decide "in flight" against, and the cost
+    of skipping it is one missing comment rather than a duplicated one.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        rows = (
+            conn.execute(
+                select(review_jobs)
+                .where(
+                    review_jobs.c.status == "done",
+                    _pr_comment_unlanded(),
+                    review_jobs.c.pr_comment_attempts < max_retries,
+                    review_jobs.c.finished_at <= now - timedelta(seconds=settled_for_seconds),
+                    review_jobs.c.finished_at >= now - timedelta(seconds=within_seconds),
+                )
+                .order_by(review_jobs.c.finished_at, review_jobs.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(r) for r in rows]
 
 
 _OUTCOME_IDENTITY = (

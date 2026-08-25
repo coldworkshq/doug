@@ -372,6 +372,56 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE installation_repos ADD COLUMN deep_read BOOLEAN NOT NULL DEFAULT TRUE",
         ),
     ),
+    (
+        16,
+        (
+            # The sticky comment's own outcome, recorded on the job that
+            # wrote it (issue #154). Without it a comment lost after
+            # ingest.complete returned True — a process death, a 5xx, a
+            # dropped connection — is unrecoverable: the row is 'done',
+            # REVIVABLE excludes 'done', and nothing retries until a new head
+            # SHA makes a new job.
+            "ALTER TABLE review_jobs ADD COLUMN pr_comment_outcome VARCHAR(32)",
+            "ALTER TABLE review_jobs ADD COLUMN pr_comment_attempts "
+            "INTEGER NOT NULL DEFAULT 0",
+            # NO BACKFILL, deliberately, and the absence is the design. An
+            # earlier draft stamped every existing 'done' row so that NULL
+            # could mean "never posted" — which needed one UPDATE over the
+            # whole table (on Postgres, a new tuple version per row and a
+            # long transaction inside a startup migration) purely to
+            # disambiguate an absence. The sweep reads a POSITIVE marker
+            # instead: `ingest.complete` stamps `owed`, so a row this
+            # migration leaves NULL is invisible to the sweep by
+            # construction, and stays invisible until a completion writes the
+            # marker. That is also the honest answer for the rollout overlap,
+            # where an instance still on the older revision completes jobs
+            # without stamping anything: nothing knows whether those
+            # commented, and a repair that guesses is a duplicate.
+            # (status, finished_at), NOT (status, pr_comment_outcome).
+            # Virtually every row in this table is 'done', so an outcome
+            # column second buys almost nothing and leaves the planner a
+            # range filter and a sort it cannot serve from the index. The
+            # sweep's actual selectivity is the twenty-four-hour window on
+            # finished_at, which this ordering serves as a range AND as the
+            # ORDER BY; the outcome and attempt predicates are then cheap
+            # residuals over one day of rows rather than over every job ever
+            # run. Not a partial index on the outcome predicate: the LIKE
+            # would have to be identical in the index and the query for
+            # Postgres to use it, and sqlite's partial-index rules are not
+            # the same rules, so the two backends could silently diverge on
+            # whether the sweep has an index at all.
+            #
+            # Plain CREATE INDEX, not CONCURRENTLY: `_run` puts every
+            # statement in a transaction, which CONCURRENTLY cannot join, and
+            # this file's contract is DDL valid on both backends. The cost is
+            # a SHARE lock for the length of the build, blocking the
+            # webhook's enqueue while boot holds it — real, not specific to
+            # this migration (005, 009 and 012 create indexes the same way),
+            # and tracked as issue #204 rather than fixed behind a feature.
+            "CREATE INDEX IF NOT EXISTS ix_review_jobs_pr_comment_retry "
+            "ON review_jobs (status, finished_at)",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

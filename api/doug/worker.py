@@ -164,10 +164,18 @@ def _post_pr_comment(
 ) -> None:
     """The sticky PR comment mirroring the check run (spec 2026-08-19).
 
-    Posted from both sites, immediately after `check_run.post` and therefore
-    only after `ingest.complete` returned True — a lost claim must not write
-    a comment the second holder's replay will write too, which on this
-    surface means notifying every reviewer on the PR twice for one review.
+    Posted from both review paths, immediately after `check_run.post` and
+    therefore only after `ingest.complete` returned True — a lost claim must
+    not write a comment the second holder's replay will write too, which on
+    this surface means notifying every reviewer on the PR twice for one
+    review. `retry_unposted_comments` is the third caller, repairing the
+    consequence of that same ordering: by the time this runs the job is
+    already 'done', which no enqueue can revive, so `ingest.complete`'s
+    `owed` marker and the outcome written here are the only things that can
+    bring a lost comment back without waiting for a new head SHA (issue
+    #154). Recording is therefore not bookkeeping — it is how the marker gets
+    cleared, and a path out of here that skips it is a comment the sweep will
+    write a second time.
 
     Its own stderr line, rather than fields appended to the reviewed/replayed
     lines: those are printed BEFORE `ingest.complete` on purpose (so a lost
@@ -187,12 +195,50 @@ def _post_pr_comment(
     rather than after a month of comment-less reviews, and the outcome token
     on the line below says `failed:internal` rather than reading as a skip.
     """
+    outcome = "failed:internal"
     try:
         outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh)
     except Exception as e:  # noqa: BLE001 — advisory surface; the verdict is durable
-        outcome = "failed:internal"
         print(
             f"doug: comment internal error on job {job['id']} "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+    finally:
+        _record_and_log(job, outcome)
+
+
+def _record_and_log(job: dict, outcome: str) -> None:
+    """Clear the `owed` marker with what actually happened, then say so.
+
+    Reached from `_post_pr_comment`'s `finally`, which is the enforcement
+    rather than a formality. Correctness here rests on EVERY path out of that
+    function recording something — the marker `ingest.complete` stamped is
+    cleared by this call and by nothing else, so a path that returns without
+    it leaves a job that commented looking like one that never did, and the
+    sweep writes the comment a second time. Held as a convention, the next
+    early return added inside that try (a feature-flag short circuit, a new
+    guard clause) breaks it silently. Held in a `finally`, it cannot.
+
+    Records BEFORE it logs. The ordering used to be the other way round, to
+    keep the log line ahead of a write that could fail during a database
+    outage; it bought nothing, because the write below swallows and logs its
+    own failure, and it cost the sweep a real budget — a raise from the
+    f-string between them, an unrenderable job field, spent a retry and left
+    the marker standing with nothing recorded.
+
+    The write has its own try for the same reason `_post_pr_comment` has one:
+    the verdict is durable and the job is already marked done, so nothing in
+    this file may hand it back to `ingest.fail`. A record that fails leaves
+    `owed` in place and the sweep re-posts a comment that may already be
+    live — an in-place edit of the same body, which GitHub does not notify
+    on. That is the cheap side of this trade to be wrong on.
+    """
+    try:
+        store.record_pr_comment_outcome(job["id"], outcome)
+    except Exception as e:  # noqa: BLE001 — the comment is written; the job is done
+        print(
+            f"doug: comment outcome not recorded for job {job['id']} "
             f"({type(e).__name__}: {e})",
             file=sys.stderr,
         )
@@ -203,17 +249,17 @@ def _post_pr_comment(
     )
 
 
-def _replay_recorded(
-    job: dict,
-    gh,
-    owner: str,
-    name: str,
-    existing: dict,
-    *,
-    discarded_paid_read: bool = False,
-) -> int:
-    """Post the already-durable verdict. Shared by the pre-read hit and the
-    migration-005 race floor (save_review returned a peer's id)."""
+def _render_recorded(job: dict, existing: dict) -> tuple[str, str]:
+    """Rebuild one durable verdict's check-run title and summary.
+
+    Shared by `_replay_recorded` and `retry_unposted_comments`, which need
+    the same two strings for different halves of the same delivery — the
+    replay posts both surfaces, the comment retry re-posts only the one that
+    did not land. Sharing the reconstruction is what keeps ADR-0014's central
+    claim true on the repair path too: the comment's middle is the check
+    run's summary byte for byte, so a retry that rendered its own would mean
+    a PR whose comment and check run disagree about the same verdict.
+    """
     verdict = Verdict(
         score=existing["score"],
         band=Band(existing["band"]),
@@ -236,16 +282,33 @@ def _replay_recorded(
             findings=[reader.DeviationFinding(**d) for d in existing["deviations"]],
             coverage=cov,
         )
-    title, summary = check_run.render(
+    return check_run.render(
         existing["tier"], verdict, intent_read, cov, instrument=_instrument(job),
         convergence=(
             store.convergence_for(existing["id"]) if existing["tier"] == "reader" else None
         ),
     )
+
+
+def _replay_recorded(
+    job: dict,
+    gh,
+    owner: str,
+    name: str,
+    existing: dict,
+    *,
+    discarded_paid_read: bool = False,
+) -> int:
+    """Post the already-durable verdict. Shared by the pre-read hit and the
+    migration-005 race floor (save_review returned a peer's id)."""
+    title, summary = _render_recorded(job, existing)
     # complete before post: a lost claim must not emit a check run that a
     # second holder will also post via this path.
     if not ingest.complete(
-        job["id"], existing["id"], claim_generation=job["claim_generation"]
+        job["id"],
+        existing["id"],
+        claim_generation=job["claim_generation"],
+        owes_comment=True,
     ):
         print(
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
@@ -518,7 +581,18 @@ def process_job(job: dict) -> int | None:
     # head SHA, never meta's: by now pulls.get may already be returning a
     # newer commit, and that commit has its own job.
     if not ingest.complete(
-        job["id"], verdict_id, claim_generation=job["claim_generation"]
+        job["id"],
+        verdict_id,
+        claim_generation=job["claim_generation"],
+        # Only when there is a durable verdict to replay from. The marker
+        # promises a repair, and a repair renders its body through
+        # `_render_recorded`, which needs the verdict row — so stamping a
+        # completion that has none promises something no sweep can keep, and
+        # spends a pass writing `skipped:no-verdict` to say so. `complete`
+        # accepts a None verdict_id ("a skipped PR is finished, not failed"),
+        # so this is the honest reading of that contract rather than a
+        # defence against a path that exists today.
+        owes_comment=verdict_id is not None,
     ):
         print(
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
@@ -528,6 +602,173 @@ def process_job(job: dict) -> int | None:
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
     _post_pr_comment(gh, owner, name, job, summary, fresh=True)
     return verdict_id
+
+
+# The sticky comment's retry policy. Here rather than in store because store
+# owns the selection and this owns what "worth retrying" means — the same
+# split `ingest.MAX_ATTEMPTS` keeps for the review lane.
+#
+# Two repairs on top of the write `process_job` already made: a comment
+# failing for a reason no retry fixes must stop costing GitHub calls.
+# Fifteen minutes settled, because the gap between `ingest.complete` and the
+# outcome write belongs to a worker that may still be alive inside it, and
+# two drainers are the deployed configuration — sweeping a row still in that
+# gap is how one review notifies a PR twice. The number is deliberately
+# `ingest.STALL_LEASE_SECONDS`'s: this codebase has already decided how long
+# a worker may be silent before it is presumed dead, and answering that
+# question twice with two numbers would mean one of them is wrong. Copied
+# rather than imported, because the lease is tuned for a claim holding a paid
+# read and must be free to move without silently retuning this. Twenty-four
+# hours of lookback,
+# because a comment is worth repairing while the PR is still what people are
+# looking at, and because an unbounded window turns every cold start into a
+# walk of the ledger's whole history.
+#
+# The settle period NARROWS the window in which a first worker is still
+# writing; it does not close it. Time is a heuristic for liveness, not a
+# fence — a long GitHub backoff or a paused container can outlast it — and
+# what remains past it is `pr_comment.upsert`'s own priced trade: a listing
+# that cannot yet see a create falls through to create, because the
+# alternative is a comment that never appears at all. ADR-0014 records that
+# residual. A real fence would have to be held by the original writer, and
+# the only one available is `claim_pr_comment`, whose loser is specified to
+# create rather than skip for exactly that reason.
+PR_COMMENT_MAX_RETRIES = 2
+PR_COMMENT_SETTLED_SECONDS = 900
+PR_COMMENT_RETRY_WINDOW_SECONDS = 86_400
+PR_COMMENT_RETRY_BATCH = 20
+
+
+def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
+    """Re-post sticky comments that never landed. Returns how many were tried.
+
+    The hole this closes: `_post_pr_comment` runs after `ingest.complete` has
+    marked the job 'done', `REVIVABLE` is ('failed', 'superseded'), and the
+    unique index means the next delivery for that SHA collides rather than
+    re-queueing. So a comment lost to a process death, a 5xx or a dropped
+    connection stayed lost until somebody pushed a new commit — and since
+    ADR-0014 the comment is the surface GitHub actually shows (a neutral
+    check run stays folded), so that was a lost review, not a missing badge.
+
+    What it selects on is a POSITIVE marker — `ingest.complete`'s `owed`,
+    still standing where an outcome should be — and not the absence of one. A
+    row with no outcome at all came from a revision that did not stamp the
+    marker; nothing knows whether it commented, and a repair that guesses is
+    a duplicate on a live PR.
+
+    It repairs the comment ALONE rather than re-pending the job, and that is
+    the whole reason this function exists instead of a status flip. Re-pending
+    would reach the comment through `_replay_recorded`, which also calls
+    `check_run.post` — and that is `checks.create`, so every repair of an
+    advisory surface would leave a second check run on the commit. Damaging
+    the surface that worked to heal the one that did not is not a repair.
+
+    Nothing here is paid: `find_verdict_by_id` reads the durable row this job
+    already completed against, and `_render_recorded` rebuilds the same
+    strings the original post used. The GitHub cost is `target_matches`' one
+    `pulls.get` plus the write, which is what the replay path already spends.
+
+    `fresh=False` is not a formality. The retry runs long after
+    `process_job` verified this job's target, on a `repo_full_name` that is
+    display-only and stale after a rename, so it re-verifies before writing —
+    exactly the case `pr_comment.target_matches` exists for.
+
+    Selecting a row is not owning it. The read is unlocked and both deployed
+    instances sweep the same candidates on the same pass, so every repair
+    goes through `store.claim_pr_comment_retry` first — which spends the
+    attempt in the statement that wins it, before any GitHub call.
+
+    Best-effort per job, and every path out of one records or claims: a
+    repair that neither wins a claim nor writes an outcome would be re-swept
+    on the next drain, and on every drain after it until the window closed.
+    Whole-job try, including the post: `_post_pr_comment` swallows everything
+    today, but a sweep that lets one job's raise skip the rest of the batch
+    would make the repair's reach depend on a contract held elsewhere. The
+    recovery is fenced on whether that call was entered, for the mirror image
+    of the same reason — once it owns the outcome, a raise from anywhere past
+    that point must not overwrite what it recorded with `failed:internal`,
+    which is retriable and would schedule another write for a comment that
+    already landed.
+
+    Rows here are whole `review_jobs` rows. That is a superset of what
+    `_post_pr_comment`, `_render_recorded` and `_instrument` read between
+    them — the identity columns, the head SHA and the job id — and it is
+    deliberately NOT routed through `_replay_recorded`, the one helper that
+    needs a value `ingest.claim` derives rather than selects
+    (`claim_generation`, which only fences `ingest.complete`, and this sweep
+    completes nothing).
+    """
+    jobs = store.jobs_with_unposted_pr_comment(
+        max_retries=PR_COMMENT_MAX_RETRIES,
+        settled_for_seconds=PR_COMMENT_SETTLED_SECONDS,
+        within_seconds=PR_COMMENT_RETRY_WINDOW_SECONDS,
+        limit=limit,
+    )
+    attempted = 0
+    for job in jobs:
+        where = f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]}"
+        # `_post_pr_comment` records before it logs, so entering it is the
+        # point past which the outcome is owned. See the recovery below.
+        posting = False
+        try:
+            existing = (
+                store.find_verdict_by_id(job["verdict_id"])
+                if job["verdict_id"] is not None
+                else None
+            )
+            if existing is None:
+                # A 'done' row always carries the id ingest.complete wrote,
+                # so this is a verdict that went away underneath it. Terminal
+                # rather than `failed:*`: there is nothing for a later pass to
+                # find, and a retry that cannot converge is noise. Recorded
+                # without claiming — nothing is written to GitHub, so there is
+                # no write for a second sweeper to duplicate, and whichever of
+                # them records it first records the same thing.
+                print(f"doug: comment skipped:no-verdict {where}", file=sys.stderr)
+                store.record_pr_comment_outcome(job["id"], "skipped:no-verdict")
+                continue
+            if not store.claim_pr_comment_retry(
+                job["id"], attempts=job["pr_comment_attempts"]
+            ):
+                # The other instance owns this repair, or the original worker
+                # landed its outcome between the select and here. Ordinary,
+                # not a fault: silent, the way ingest.claim's lost race is.
+                continue
+            print(
+                f"doug: retrying comment for job {job['id']} {where} "
+                f"(retry {job['pr_comment_attempts'] + 1} of "
+                f"{PR_COMMENT_MAX_RETRIES}, "
+                f"last {job['pr_comment_outcome'] or 'unrecorded'})",
+                file=sys.stderr,
+            )
+            gh = app_auth.installation_client(job["installation_id"])
+            owner, name = job["repo_full_name"].split("/", 1)
+            _, summary = _render_recorded(job, existing)
+            attempted += 1
+            posting = True
+            _post_pr_comment(gh, owner, name, job, summary, fresh=False)
+        except Exception as e:  # noqa: BLE001 — one bad job must not stop the sweep
+            print(
+                f"doug: comment retry internal error on job {job['id']} "
+                f"({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+            if posting:
+                # `_post_pr_comment` owns the outcome from the moment it is
+                # entered, and it has already written one. Overwriting it with
+                # `failed:internal` would put a landed comment back in the
+                # retry set and buy a second write of a body that is already
+                # on the PR.
+                continue
+            try:
+                store.record_pr_comment_outcome(job["id"], "failed:internal")
+            except Exception as inner:  # noqa: BLE001 — the ledger is the fault here
+                print(
+                    f"doug: comment outcome not recorded for job {job['id']} "
+                    f"({type(inner).__name__}: {inner})",
+                    file=sys.stderr,
+                )
+    return attempted
 
 
 def drain(max_jobs: int = 20) -> int:
@@ -541,6 +782,14 @@ def drain(max_jobs: int = 20) -> int:
     One job's failure must not strand the queue behind it — the whole
     queue is FIFO-ish and a poison job would otherwise block every PR
     opened after it.
+
+    Ends by calling retry_unposted_comments() once, after the claim loop —
+    the cadence for issue #154's repair. A comment written after
+    `ingest.complete` and then lost has no other way back: the row is 'done',
+    'done' is not REVIVABLE, and the next delivery for that SHA collides on
+    the unique index. Here rather than only in reconcile because a delivery
+    kicks this on every push, so a comment lost at 10:00 comes back on the
+    next PR's delivery rather than at the next cold start.
 
     Calls ingest.reclaim_stalled() once, before the first claim — not per
     job. A worker that claims a job and then dies (a deploy, a scale-down,
@@ -598,6 +847,22 @@ def drain(max_jobs: int = 20) -> int:
                 file=sys.stderr,
             )
             ingest.fail(job["id"], str(e), claim_generation=job["claim_generation"])
+    # After the claim loop, not before it, and in its own try. After,
+    # because the reviews are what this pass is for and the installation
+    # token's rate limit is shared — the same order `api._startup_reconcile`
+    # puts the outcome sweep in, for the same reason. Its own try, because a
+    # repair of an advisory surface must never stop the queue from being
+    # worked: this sweep is how a lost comment comes back, but a ledger fault
+    # inside it taking down `drain` would be how every REVIEW stops.
+    try:
+        retried = retry_unposted_comments()
+        if retried:
+            print(f"doug: retried {retried} unposted comment(s)", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — repair must not cost the queue
+        print(
+            f"doug: comment retry sweep failed ({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
     return attempted
 
 

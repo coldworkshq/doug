@@ -103,7 +103,11 @@ tenant outside these three installations, not after.
   needs no session (`/docs/what-doug-gets-wrong`), so the footer always has
   something it can honour for a reader without a Doug account.
 - **D5 — The App permission is `pull_requests: write`; failure to post is
-  swallowed, logged, and changes nothing else.** Every existing installation
+  swallowed, logged, and changes nothing else.** *(Amended 2026-08-24, issue
+  #154: swallowed and logged still hold, and "changes nothing else" no longer
+  does — the outcome is now also recorded on the job, which is what D10 below
+  retries from. Nothing about the review's fate changed; a comment still
+  cannot fail a job.)* Every existing installation
   must re-accept it. `pr_comment.upsert` is the only function this
   permission is exercised through — it exposes no path that submits a
   review, the same move ADR-0010 made when `check_run.post` was given no
@@ -158,6 +162,46 @@ tenant outside these three installations, not after.
   before the GitHub write. The decision D9 records is unchanged — `seq`
   guards the write — and the amendment is that it now holds on every path
   rather than one.*
+- **D10 — A comment that never landed is retried from the job that owed it,
+  without waiting for a new commit.** *(Added 2026-08-24, issue #154;
+  rewritten 2026-08-25 after Doug's fourth read of PR #202 caught this clause
+  describing two different rules — it named `NULL` as retriable in one
+  sentence and unselectable in the next, which is the exact rule that decides
+  whether a repair can duplicate a live comment.)*
+
+  `ingest.complete` stamps `review_jobs.pr_comment_outcome` with `owed` in
+  the same statement that makes the job 'done', and only when its caller says
+  the job owes a comment. Every path out of the comment write then overwrites
+  that marker with what actually happened — the landings, the skips and the
+  failures alike. `worker.retry_unposted_comments`, run at the end of each
+  `drain`, re-posts a job whose outcome is still `owed`, or is a `failed:*`.
+  `store._pr_comment_unlanded` is that rule's single definition, shared by
+  the selection and the reservation that has to agree with it.
+
+  Nothing else is retried, and each exclusion is its own argument.
+  `created`/`updated` are the write landing. Every `skipped*` is a decision,
+  and a decision retried is a decision overridden. `denied:403` is a tenant
+  permission action that already has D8's marker and banner, so a retry
+  spends a call per drain to change nothing it can change. An outcome that is
+  absent entirely — no marker at all — is a job completed by a revision that
+  did not stamp one: nothing knows whether it commented, and a repair that
+  guesses is a duplicate on a live PR.
+
+  Three bounds: two repairs on top of the write `process_job` already made,
+  fifteen minutes settled before a job is read as abandoned rather than in
+  flight (`ingest.STALL_LEASE_SECONDS`'s number, because this codebase has
+  already decided how long a worker may be silent before it is presumed
+  dead), and a twenty-four-hour lookback.
+
+  Selecting a row is not owning it. The read is unlocked and both deployed
+  instances sweep the same candidates on the same pass, so
+  `store.claim_pr_comment_retry` reserves the row in one conditional UPDATE
+  that also spends the repair — taken before the GitHub call, the same order
+  and for the same reason as `claim_pr_comment_seq`, and answered by
+  RETURNING the way `ingest.claim` answers its own. The retry re-verifies the
+  target (`fresh=False`) and rebuilds its body through the same
+  `_render_recorded` the replay path uses, so D2's byte-for-byte claim holds
+  on the repair too.
 
 ## Rejected
 
@@ -178,6 +222,34 @@ tenant outside these three installations, not after.
   PR comment under a bot identity, unprompted, is its own surprise, and the
   comment is part of what the receipt exists to preserve. Recorded as issue
   #141, including the case for reversing this.
+- **Fire-and-forget after `ingest.complete`, the way `check_run.post` is.**
+  Considered as the cheap resolution of issue #154 and rejected: the two
+  surfaces are not equivalent any more. GitHub folds a neutral check run, so
+  a lost check run costs an advisory badge; since this ADR the comment is
+  the surface a reviewer actually reads, so a lost comment is a lost review.
+  Accepting it would also have made the failure permanent rather than
+  transient — 'done' is not `REVIVABLE`, and the next delivery for that SHA
+  collides on `uq_review_job`, so "it heals on the next push" is only true
+  if someone pushes.
+- **Healing the comment by re-pending the finished job.** The mechanism was
+  already there — a re-pended job hits `find_verdict_by_identity`, replays
+  with nothing paid, and posts the comment on the way out — and it is the
+  wrong one. `_replay_recorded` also calls `check_run.post`, which is
+  `checks.create`, so every repair of a missing comment would leave a second
+  check run on the same commit. Damaging the surface that worked in order to
+  heal the one that did not is not a repair. `retry_unposted_comments` posts
+  the comment alone instead.
+- **Stamping the `owed` marker on every completion.** The simpler shape, and
+  it puts the invariant in prose: a completion path that does not go on to
+  attempt a comment would leave a marker the sweep later acts on, and write
+  to a PR nobody asked it to. `ingest.complete` takes the decision from its
+  caller instead, defaulting to "does not owe one" — a caller that should
+  have said otherwise loses a repair, which is only the behaviour before
+  #154, while a caller wrongly stamped writes to a live PR.
+- **Retrying `denied:403`.** It is the one failure a retry cannot converge
+  on: permission is restored by a tenant, not by a later attempt, and D8
+  already surfaces it. Retrying would add a GitHub call per drain, per
+  denied PR, for a day, and change nothing.
 - **Gating the review itself on the comment succeeding.** The comment is
   advisory; making a durable, already-scored verdict depend on a second
   network call to GitHub would turn an advisory surface into a point of
@@ -276,6 +348,64 @@ tenant outside these three installations, not after.
   mark is set and every later write is guarded. Forcing those rows through a
   listing to read the marker was rejected: a PR past `pr_comment._PAGE_BOUND`
   would then fail every write forever rather than once.
+- **Two guards keep the repair from becoming the duplicate it repairs, and
+  they close different windows.** *(Added 2026-08-24, issue #154; the
+  reservation added after Doug's review of the same PR; the first sentence
+  corrected after the fifth read caught it still describing the pre-marker
+  rule, which is the same contradiction D10 was rewritten for.)* An `owed`
+  marker still standing is what a crash between `ingest.complete` and the
+  comment leaves — but it is also, briefly, what a worker still inside that
+  gap leaves, because the marker is cleared by the comment write and not by
+  reaching it. The settle period NARROWS that one — nothing finished less
+  than fifteen minutes ago is swept, the same call `reclaim_stalled`'s lease
+  makes about a live claim, at the same number — but it does not close it,
+  and calling it a fence would be a claim this record cannot support.
+  Time is a heuristic for liveness: a long GitHub backoff or a paused
+  container can outlast any window, and what remains past it is `upsert`'s
+  own priced trade, a listing that cannot yet see a create falling through to
+  create rather than leaving a comment that never appears. A real fence would
+  have to be held by the original writer, and the only one available is
+  `claim_pr_comment`, whose loser is specified to create for exactly that
+  reason. It says nothing about the other window,
+  which is sharper — the sweep's read is unlocked, so both instances select
+  the *same* rows on *every* pass rather than meeting on one PR by
+  coincidence, and both would have reached `upsert`. `claim_pr_comment_retry`
+  closes that one. The residual is a first worker's write that outlives the
+  settle period and lands anyway; `upsert`'s listing usually finds the
+  comment and edits it, and the case where it does not is the duplicate
+  already priced above.
+- **A job completed before the marker shipped is never repaired, and that is
+  the design rather than a gap.** The sweep reads `owed`, so a row with no
+  outcome — everything predating migration 016, and everything an instance
+  still on the older revision completes during a rollout — is invisible to
+  it. Nothing knows whether those commented, and a repair that guesses is a
+  duplicate on a live PR. The first draft did the opposite, treating a
+  missing outcome as "never posted" and paying for the disambiguation with a
+  full-table `UPDATE` in the migration; both the rewrite and the
+  rollout-overlap sweep went away with the marker. The residual is one
+  window's worth of jobs, at the single deploy that ships this, whose lost
+  comments return on the next push the way they always did.
+- **A comment written but not recorded still converges.** `set_pr_comment_id`
+  raising is not a `RequestFailed`, so a create whose id never reached the
+  ledger leaves `failed:internal` and is retried; the listing then finds the
+  comment under its own marker and this App's authorship and edits it in
+  place. The one case where a listing cannot find a comment that exists is a
+  PR past `_PAGE_BOUND`, and that branch returns `failed:page-bound` rather
+  than falling through to create — its own comment says neither a long PR nor
+  a broken listing may. What remains is the failure `_is_ours` already
+  names — with no app id configured nothing matches and every write
+  duplicates — which predates this sweep and is not bounded by it.
+- **A comment that exhausts its retries goes silent.** *(Added 2026-08-24,
+  issue #154.)* After three attempts the row keeps its `failed:*` outcome and
+  the only trace is a stderr line — the same shape D8 refuses for the 403
+  case, now reachable by a different route. The ledger holds the answer; no
+  surface reads it yet. Tracked as issue #201, which also records the design
+  question (a banner beside D8's, a per-repo line, or a health counter).
+- **A comment lost more than twenty-four hours ago stays lost.** The
+  lookback window is what keeps a cold start from walking the whole ledger,
+  and it means the repair is bounded in time rather than absolute. Past the
+  window, the old behaviour is what remains: the comment returns on the next
+  push, which creates a new head SHA and a new job.
 - **Most PR readers hit sign-in on the receipt link.** The footer's
   dashboard link (D4) requires a Doug session; a reader who is not already
   a Doug user lands on a sign-in wall rather than the receipt, and signing
@@ -287,6 +417,10 @@ against it. Flag: a second function anywhere in the codebase that writes PR
 comments outside `pr_comment.upsert`; any code path that submits, approves,
 or requests changes on a review; a write path that posts or edits a comment
 without first checking an active `installation_repos.pr_comment` row (D6);
+a call site of `worker._post_pr_comment` reached on a path that does not
+record an outcome, or an outcome token added to `pr_comment.upsert` that
+D10's retry set does not classify (a new `failed:*` retries, anything else
+is terminal — an unclassified token silently becomes terminal);
 neutralisation removed from `check_run._oneline` while a PR comment surface
 still exists; **any reintroduction of an installation-level gate on the
 comment write** — `DOUG_PR_COMMENT_INSTALLATIONS`, a `pr_comment.allowed`,

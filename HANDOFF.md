@@ -1,10 +1,12 @@
 # HANDOFF — doug
 
-State:    building — palette contrast shift + dark mode on the console.
-          Branch feat/palette-contrast-dark-mode off main @ 7cb45ec.
+State:    review — PR #213 open. Merged origin/main (3711bcc, #202) in to
+          clear a HANDOFF.md conflict that was blocking CI: a CONFLICTING PR
+          has no mergeable ref, so `pull_request` workflows never start and
+          the PR reads as "no checks" rather than as failing.
           web 365/365 and console 113/113 pass; lint clean; both build.
           Verified visually in BOTH themes against the real compiled CSS.
-Next:     Andrew reviews the two screenshots, then commit + open a PR.
+Next:     Watch CI on the merge commit, then Andrew reviews PR #213.
 Blockers: none
 
 Decisions this session:
@@ -54,11 +56,12 @@ Pointers: branch feat/palette-contrast-dark-mode · web/app/globals.css +
 
 ---
 
-# PRIOR HANDOFF — PR #202 (fixes #154), still open
+# ARCHIVE — PR #202 (fixes #154), merged 2026-08-25 as 3711bcc
 
-Kept verbatim below. It belongs to a different, in-flight branch
-(claude/issue-154-investigation-04042c) and was on main when this branch was
-cut; the slots above describe THIS working tree, not that PR.
+Kept because it arrived on main in HANDOFF.md and this branch has no business
+deleting it. Its own State/Next slots are dropped: they said "open against
+main", which stopped being true when it merged, and two status blocks in one
+file is how a handoff starts lying. The record of WHAT was built is below.
 
 ## What #154 was
 
