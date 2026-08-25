@@ -411,6 +411,27 @@ review_jobs = Table(
     Column("finished_at", DateTime(timezone=True)),
     Column("error", Text),
     Column("verdict_id", Integer, ForeignKey("verdicts.id")),
+    # What this job's sticky PR comment actually did — one of
+    # `pr_comment.upsert`'s seven tokens, or worker's `skipped:*` /
+    # `failed:internal` (issue #154). The comment is written AFTER
+    # ingest.complete has already marked the job 'done', and 'done' is not
+    # REVIVABLE, so without a durable record of the outcome a comment lost to
+    # a process death or a 5xx is lost until a new head SHA makes a new job —
+    # which on the surface GitHub actually shows (neutral checks stay folded)
+    # is a lost review, not a missing badge.
+    #
+    # NULL is "no outcome recorded". On a 'done' row past the grace period
+    # that means the write never happened: worker records an outcome for
+    # every path out of `_post_pr_comment`, including its own failures.
+    # Migration 016 backfills the rows that predate the column to
+    # 'unrecorded' so NULL cannot also mean "written before anything
+    # recorded" — see that migration for what the rollout overlap leaves.
+    Column("pr_comment_outcome", String(32)),
+    # Bounds the retry. Incremented on every attempt including the first, so
+    # worker.PR_COMMENT_MAX_ATTEMPTS is the total, not the retries on top of
+    # one. A comment that fails for a reason no retry can fix has to stop
+    # costing GitHub calls on every drain.
+    Column("pr_comment_attempts", Integer, nullable=False, server_default="0"),
     UniqueConstraint(
         "installation_id", "github_repo_id", "pr_number", "head_sha", name="uq_review_job"
     ),
@@ -1594,6 +1615,111 @@ def pr_comment_denied_at(installation_id: int) -> datetime | None:
             )
         ).scalar_one_or_none()
     return _as_utc(value)
+
+
+def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
+    """Record what this job's sticky-comment write did, and spend an attempt.
+
+    The comment is written after `ingest.complete` has already marked the job
+    'done'. Nothing revives a 'done' row — REVIVABLE is ('failed',
+    'superseded') — so before this column the outcome existed only as a
+    stderr line, and a comment lost to a process death or a 5xx stayed lost
+    until a new head SHA made a new job (issue #154). This is what turns that
+    line into something a sweep can select on.
+
+    Called for EVERY path out of `worker._post_pr_comment`, including the
+    skips and its own internal failures, because the value of NULL is what
+    the sweep reads: a 'done' row with no outcome is a write that never
+    happened. Recording only the failures would make "we decided not to
+    comment" and "we died before commenting" the same row.
+
+    The attempt is counted here rather than at the call site so the two
+    cannot drift: an outcome written without spending an attempt is an
+    unbounded retry, and an attempt spent without an outcome is a comment
+    that goes quiet with attempts left. Storage-disabled is a no-op, matching
+    every other write in this family — the sweep is likewise a no-op there.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            update(review_jobs)
+            .where(review_jobs.c.id == job_id)
+            .values(
+                pr_comment_outcome=outcome[:32],
+                pr_comment_attempts=review_jobs.c.pr_comment_attempts + 1,
+            )
+        )
+
+
+def jobs_with_unposted_pr_comment(
+    *,
+    max_attempts: int,
+    settled_for_seconds: int,
+    within_seconds: int,
+    limit: int,
+) -> list[dict]:
+    """Done jobs whose sticky comment has not landed and can still be
+    retried, oldest first. Rows are the same shape `ingest.claim` returns.
+
+    "Not landed" is NULL or `failed:*`, and the exclusions are the point.
+    `created` and `updated` are the write landing. Every `skipped*` is a
+    decision — the tenant's toggle, a repo the dashboard cannot show, a newer
+    job that already wrote, a PR number that turned out to belong to another
+    repo — and a decision retried is a decision overridden. `denied:403` is
+    excluded too, and that one is a judgement rather than a definition:
+    permission is a tenant action, it already has its own marker and the
+    Repositories banner (D8), and a retry that cannot converge would spend a
+    GitHub call per drain forever to change nothing.
+
+    Three bounds, each closing a different way this could misfire:
+
+      * `max_attempts` — a comment failing for a reason no retry fixes has to
+        stop costing calls. The first attempt counts, so this is the total.
+      * `settled_for_seconds` — the gap between `ingest.complete` and the
+        outcome write belongs to a worker that may still be alive inside it,
+        and two drainers are the deployed configuration (`--max-instances
+        2`). Sweeping a row still in that gap is how one review notifies
+        every reviewer on the PR twice, which is the exact harm the
+        complete-before-post ordering exists to prevent. Younger than this is
+        treated as in flight, the same call reclaim_stalled's lease makes.
+      * `within_seconds` — a retry is worth making while the PR is still what
+        people are looking at, and the bound is also what stops a cold start
+        from walking the ledger's whole history. Migration 016's backfill is
+        the other half of that; this one holds even where the backfill did
+        not reach.
+
+    NULL `finished_at` cannot satisfy either comparison, so such a row is
+    never swept. That is deliberate and the safe direction: a 'done' row with
+    no finish time has no clock to decide "in flight" against, and the cost
+    of skipping it is one missing comment rather than a duplicated one.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return []
+    with engine.connect() as conn:
+        now = _db_now(conn)
+        rows = (
+            conn.execute(
+                select(review_jobs)
+                .where(
+                    review_jobs.c.status == "done",
+                    or_(
+                        review_jobs.c.pr_comment_outcome.is_(None),
+                        review_jobs.c.pr_comment_outcome.like("failed:%"),
+                    ),
+                    review_jobs.c.pr_comment_attempts < max_attempts,
+                    review_jobs.c.finished_at <= now - timedelta(seconds=settled_for_seconds),
+                    review_jobs.c.finished_at >= now - timedelta(seconds=within_seconds),
+                )
+                .order_by(review_jobs.c.finished_at, review_jobs.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(r) for r in rows]
 
 
 _OUTCOME_IDENTITY = (

@@ -372,6 +372,36 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE installation_repos ADD COLUMN deep_read BOOLEAN NOT NULL DEFAULT TRUE",
         ),
     ),
+    (
+        16,
+        (
+            # The sticky comment's own outcome, recorded on the job that
+            # wrote it (issue #154). Without it a comment lost after
+            # ingest.complete returned True — a process death, a 5xx, a
+            # dropped connection — is unrecoverable: the row is 'done',
+            # REVIVABLE excludes 'done', and nothing retries until a new head
+            # SHA makes a new job.
+            "ALTER TABLE review_jobs ADD COLUMN pr_comment_outcome VARCHAR(32)",
+            "ALTER TABLE review_jobs ADD COLUMN pr_comment_attempts "
+            "INTEGER NOT NULL DEFAULT 0",
+            # The watermark, and the reason NULL can mean something exact.
+            # Every 'done' row that predates this column was written by code
+            # that recorded nothing, so NULL there is "unknowable", not
+            # "never posted" — and the sweep would otherwise re-post a
+            # comment on every PR in the ledger's history. Backfilling the
+            # sentinel makes NULL mean one thing from here on: written by
+            # code that DOES record, and lost before it could. Rows that
+            # reach 'done' during the rollout overlap, on an instance still
+            # running the old revision, land NULL and are swept once — the
+            # honest answer for them, since nothing knows whether they posted.
+            "UPDATE review_jobs SET pr_comment_outcome = 'unrecorded' "
+            "WHERE status = 'done' AND pr_comment_outcome IS NULL",
+            # The sweep's selection is (status, pr_comment_outcome); without
+            # this it is a full scan of every job ever run, on every drain.
+            "CREATE INDEX IF NOT EXISTS ix_review_jobs_pr_comment_retry "
+            "ON review_jobs (status, pr_comment_outcome)",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

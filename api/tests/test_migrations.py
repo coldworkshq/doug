@@ -178,6 +178,13 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
         # have real tables to land on.
         conn.exec_driver_sql("CREATE TABLE reads (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
         conn.exec_driver_sql("CREATE TABLE findings (id INTEGER PRIMARY KEY, verdict_id INTEGER)")
+        # Migration 16's target. Migration 10 already sits in the ledger
+        # above, so this stub is never altered by it — 16 is the first
+        # statement in this era that needs the table to exist at all.
+        conn.exec_driver_sql(
+            "CREATE TABLE review_jobs (id INTEGER PRIMARY KEY, "
+            "status VARCHAR(12) NOT NULL)"
+        )
         conn.execute(
             migrations.schema_migrations.insert(),
             [
@@ -186,7 +193,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15]
+    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16]
     assert M9_COLUMNS["installations"] <= _columns(engine, "installations")
     assert M11_COLUMNS["installation_repos"] <= _columns(engine, "installation_repos")
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
@@ -266,6 +273,8 @@ M12_COLUMNS = {
 M13_COLUMNS = {"pr_comments": {"last_seq"}}
 
 M14_COLUMNS = {"reads": {"hunks"}, "findings": {"hunks"}}
+
+M16_COLUMNS = {"review_jobs": {"pr_comment_outcome", "pr_comment_attempts"}}
 
 
 def test_migration_008_declares_the_same_columns_as_their_tables(tmp_path):
@@ -418,6 +427,51 @@ def test_migration_014_declares_the_same_columns_as_their_tables(tmp_path):
     for table, columns in M14_COLUMNS.items():
         assert columns <= _columns(engine, table)
     assert store.pr_comments.c.last_seq.nullable
+
+
+def test_migration_016_declares_the_same_columns_as_their_tables(tmp_path):
+    """Same drift guard as 002/007/008/009/013/014. Sharper here than usual:
+    the sweep these columns feed reads NULL as "this comment never posted",
+    so a metadata-only column would leave production selecting on a column it
+    does not have — a repair path that is green in CI and absent in Cloud SQL
+    (issue #154)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/decl16.db")
+    store.metadata.create_all(engine)
+    assert _statements_by_table(dict(migrations.MIGRATIONS)[16]) == M16_COLUMNS
+    for table, columns in M16_COLUMNS.items():
+        assert columns <= _columns(engine, table)
+    # NULL has to be reachable, because it is the value the sweep acts on.
+    assert store.review_jobs.c.pr_comment_outcome.nullable
+    assert not store.review_jobs.c.pr_comment_attempts.nullable
+
+
+def test_migration_016_backfills_only_the_done_rows_that_predate_it(tmp_path):
+    """The watermark that lets NULL mean one thing. Every 'done' row written
+    before this column recorded nothing, so NULL there is "unknowable", not
+    "never posted" — and the sweep would re-post a comment on every PR in the
+    ledger's history. Rows that have not finished keep NULL: they have not
+    had a comment attempted yet, and marking them would make the sweep blind
+    to the very next crash."""
+    engine = create_engine(f"sqlite:///{tmp_path}/m16.db")
+    store.metadata.create_all(engine)
+    with engine.begin() as conn:
+        for pr, status in ((1, "done"), (2, "pending"), (3, "failed"), (4, "superseded")):
+            conn.exec_driver_sql(
+                "INSERT INTO review_jobs (installation_id, github_repo_id, "
+                "repo_full_name, pr_number, head_sha, status, attempts, "
+                f"claim_generation, enqueued_at) VALUES (10, 20, 'o/r', {pr}, "
+                f"'{str(pr) * 40}', '{status}', 1, 1, '2026-08-01')"
+            )
+
+    migrations.apply(engine)
+
+    with engine.connect() as conn:
+        rows = dict(
+            conn.exec_driver_sql(
+                "SELECT pr_number, pr_comment_outcome FROM review_jobs"
+            ).all()
+        )
+    assert rows == {1: "unrecorded", 2: None, 3: None, 4: None}
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):
@@ -865,7 +919,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
     # store.metadata.create_all() above already built the current table shapes,
     # so migrations 6 through 13 all find their ALTER/CREATE work satisfied
     # and still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     with engine.connect() as conn:
         app_ids = [
             r[0]
