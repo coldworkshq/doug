@@ -47,6 +47,22 @@ and is looking for the place where Doug is turned down.
 - **The rail gear is "Account", not "Settings".** Two different things sharing
   one word on one screen is the confusion the gear/flag-line naming test
   already refuses.
+- **The rail is shared chrome on every `/dashboard` route**, extracted to
+  a shared `DashboardRail`. Settings is a section of the dashboard, so
+  it keeps the dashboard's navigation. **This REVERSES what shipped with the
+  page** — see Consequences.
+- **`Settings` sits against `Account` at the foot of the rail, once.** It is
+  not a view of the ledger: the two entries above it swap what the table shows
+  and carry the filters across, and this one leaves the table. It belongs with
+  what it neighbours — who you are signed in as, and what Doug may do on your
+  behalf. It was in both the section list and the account gear, which was
+  defensible while they were far apart and is the same link twice at six
+  pixels.
+- **The two booleans are switches; the flag line is not.** `role="switch"` +
+  `aria-checked` on a submit button in its own form, so the control stays
+  JS-free and announces as a switch. The flag line is the one control here
+  with a VALUE rather than a state, and its three-way distinction — a number,
+  unset, or unset-and-showing-both-defaults — has no on/off to collapse into.
 - **Per-repository deep read**: `installation_repos.deep_read`
   (`NOT NULL DEFAULT TRUE`), set through the existing
   `PATCH /v1/sessions/repositories/{id}` behind `settings:write`, read by the
@@ -78,6 +94,15 @@ and is looking for the place where Doug is turned down.
   places, one API, one component.
 - **A session-aware header.** One word, paid for by turning `/about` and eleven
   `/docs` routes from static into per-request renders.
+- **A route-segment layout for the rail**, which is the obvious Next answer
+  and the wrong one here. It would have to fetch `connections` itself — a
+  second API round-trip per render on a page that already reads it; it cannot
+  see `searchParams`, so the repo filter could not live in it; and marking the
+  current section would need `usePathname`, a client boundary this shell is
+  built to avoid. A component taking the page's own data costs one prop and
+  moves no reads.
+- **A switch for the flag line**, for visual consistency with the two beside
+  it. It has a value, not a state.
 - **`DOUG_READER` per installation, through an allowlist env var**, the shape
   ADR-0017 used for grounding. It is an operator lever, and this is a tenant
   decision about their own repository; routing it through a deploy makes the
@@ -132,6 +157,25 @@ and is looking for the place where Doug is turned down.
   indicator in the connections response is deferred to
   [#196](https://github.com/drewjst/doug/issues/196) — the issue is the
   tracker, not this line.
+- **THE SETTINGS PAGE SHIPPED WITHOUT THE RAIL, AND THAT WAS WRONG.** The
+  first cut argued the ledger's chrome exists to keep a scope, a filter set and
+  a selected run visible at once, and that this screen has none of those. That
+  was true about the rail's CONTENTS and wrong about what a rail is for:
+  leaving the navigation to reach your settings makes settings read as a
+  different product, and the only way back was one link. The two parts that
+  genuinely are the ledger's — the repo filter and the in-view readout — are
+  slots the settings route does not fill, so the original observation survives
+  as the reason those two are parameters rather than fixtures. Recorded here
+  rather than left in a commit message, because the reasoning it reverses was
+  shipped in a code comment one PR earlier and a reader who found only that
+  comment would think the current shell was an accident.
+- **A reconciliation fault now costs money, not just silence.** The fail-open
+  default above means a repository whose `installation_repos` row goes missing
+  keeps being deep-read, and deep reads are metered
+  (`store.record_deep_read`). That is the intended trade — a silently
+  downgraded verdict is worse than a paid read — but it makes reconciliation
+  drift a spend problem as well as a correctness one, and the only signal
+  today is the API's startup DRIFT line on stderr.
 - **A rolled-back API breaks the dashboard rather than degrading it.** The
   two-step above protects the PROMOTION window (API before web); it says
   nothing about a rollback, a canary, or a stale instance serving a body from

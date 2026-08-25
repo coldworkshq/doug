@@ -1,27 +1,29 @@
 # HANDOFF — doug
 
-State:    building — Andrew's three follow-ups are done and green, on
-          claude/per-repo-deep-read, NOT pushed yet.
-          (1) the rail is extracted to components/dashboard-rail.tsx and both
-              /dashboard and /dashboard/settings render it, so the left nav no
-              longer disappears when you open settings;
-          (2) Settings moved out of the section list AND out of the account
-              gear, to a single entry directly above the account row;
-          (3) pr_comment and deep_read are real switches (role="switch" +
-              aria-checked, track + word, still JS-free); the flag line stays a
-              number input, and got 16px wider because 0.75 was rendering as
-              "0.7" in a 72px box.
-          web 360/360, tsc clean, lint clean, build clean.
+State:    review — #198 open against main, carrying the stranded #195 work
+          plus Andrew's three UI follow-ups. Doug reviewed cd3f2fd: 7 findings,
+          all settled (3 real+changed, 4 disproved).
+          Real: an orphaned unclosed docblock in the rail (my line-range
+          extraction overran a boundary — swept the other three touched files,
+          clean); the fail-open deep_read default also costs SPEND, not just
+          silence, because deep reads are metered — added to ADR-0019; and
+          ADR-0019 said nothing about the rail while the code comment it
+          shipped with said "Deliberately NOT a rail-and-ledger shell", which
+          this PR reverses. The rail, the rejected route-segment layout, and
+          the reversal are now all in the record.
+          Disproved with evidence: the exact() rollback window is already #197;
+          migrations.apply() runs inside _get_engine() under the engine lock,
+          so no API instance can SELECT deep_read before migration 15 ran in
+          its own process; lint (no-unused-vars) was already green and
+          signOutAction is still used at page.tsx:1138 and :1255; the threshold
+          shift is the most-documented behaviour in the PR.
 
-          MAIN IS BEHIND: #195 reads MERGED on GitHub but none of its content
-          is on main. It was based on #194's branch and merged INTO it at
-          05:04, eleven minutes after #194 had already been squashed to main at
-          04:53. The stack enforced merge order exactly as designed and then
-          the order itself stranded the second half. This branch now carries
-          main + the deep-read work + these three changes, and needs ONE PR to
-          main. Deploy order is satisfied for free: main's live web build has
-          the LOOSE deep_read guard, which is the tolerance the two-step
-          existed to put in front of the API that emits the key.
+          I REPEATED A MISTAKE I HAD ALREADY WRITTEN DOWN: citing web file
+          paths in an ADR. `components/dashboard-rail.tsx` and `layout.tsx`
+          tokenise to {components, dashboard, tsx, layout} and pulled ADR-0019
+          into "Fix a typo in the footer" again —
+          test_selection_on_dougs_own_records caught it a second time. RULE:
+          in any ADR, name the COMPONENT, never its path.
 Blockers: none.
 
 SEEN, not just tested: /dashboard/settings was rendered through a temporary

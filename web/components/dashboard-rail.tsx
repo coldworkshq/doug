@@ -38,13 +38,6 @@ export const SUBMIT_BUTTON =
  *  Hoisted so each tag stays short and legible. The reachability pin in
  *  lib/dashboard-contract.test.mjs deliberately does NOT read this string — it
  *  pins the href and the label, so restyling can never fail an ordering
-
-/** One row of the settings menu — the connect link and the sign-out button
- *  share it so a <Link> and a <button type="submit"> render as one list.
- *
- *  Hoisted so each tag stays short and legible. The reachability pin in
- *  lib/dashboard-contract.test.mjs deliberately does NOT read this string — it
- *  pins the href and the label, so restyling can never fail an ordering
  *  guarantee. */
 const MENU_ITEM =
   "mono block w-full cursor-pointer rounded-[3px] border-0 bg-transparent px-2 py-[7px] " +
