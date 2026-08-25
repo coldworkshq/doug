@@ -1,13 +1,42 @@
 # HANDOFF — doug
 
-State:    review — PR #213 open. Merged origin/main (3711bcc, #202) in to
-          clear a HANDOFF.md conflict that was blocking CI: a CONFLICTING PR
-          has no mergeable ref, so `pull_request` workflows never start and
-          the PR reads as "no checks" rather than as failing.
-          web 365/365 and console 113/113 pass; lint clean; both build.
-          Verified visually in BOTH themes against the real compiled CSS.
-Next:     Watch CI on the merge commit, then Andrew reviews PR #213.
+State:    review — PR #213 open, CI green on 224e0e6. Doug read cf7a978:
+          Cleared, risk 0.38, 2 medium + 3 low + 2 deviations. All seven
+          dispositioned; web 366/366, console 113/113, api 1661/1661.
+Next:     Push the findings commit, watch Doug's read of the new head, then
+          Andrew reviews PR #213.
 Blockers: none
+
+Doug's findings, dispositioned:
+- missing-provider-dependency (med) — NOT REAL: app/layout.tsx is the only
+  layout above /dashboard and mounts ThemeProvider. The fragility was real
+  and untested (next-themes returns a no-op setTheme outside a provider, so
+  the row would go dead silently). Pinned; mutation-tested both arms.
+- broad-visual-regression (med) — REAL, and it found a bug the first pin
+  missed: doug-logo carried #111311/#D1571E, the PREVIOUS palette. The scan
+  now WALKS app/ and components/ instead of reading an 11-file list. Mark
+  itself is a justified exemption (self-grounded, always worked on dark);
+  its rust vs the new accent is issue #214.
+- token-contract-change (low) — INVERTED: every bg-[var(--iridescent)] site
+  is a solid fill (2px bar, 1px line, a dot) that was BROKEN in dark before.
+  The gradient consumers read --brand-wash, still a gradient in dark.
+- brittle-regex-assertions (low) — PARTLY VALID: selector regexes now
+  whitespace-tolerant, file list replaced by the walk. Source-text pins stay
+  (documented house rule, design-system.test.mjs header).
+- stale-documented-invariant (low) — VALID, FIXED: now "ΔE2000 9.2 from
+  --flag", formula named, in both stylesheets + the assertion. #210 narrowed
+  to the durable fix (compute it, stop hardcoding it).
+- deviation, ADR-0019 account gear — VALID: ADR-0020 written, both sides
+  marked per docs/decisions/README. Theme is NOT on /dashboard/settings
+  because that page is per-repository and theme is per-person.
+- deviation, RULING 1 unrecorded — VALID: ADR-0020 + an amendment note at
+  RULING 1's source in the Phase B plan.
+
+CAUGHT BY api/tests/test_intent.py, worth remembering: ADR-0020 as first
+written scored 0.50 on "fix a typo in the footer" (floor 0.25) purely on the
+tokens `components`, `tsx`, `fix` — an ADR's own vocabulary decides which PRs
+Doug reads it against, so spelling out file paths in a record manufactures
+false findings. Rewritten to 0.000 on that probe, 0.857 on a real theme change.
 
 Decisions this session:
 - The "hard to read" report is NOT a contrast failure: --muted-foreground was
@@ -41,10 +70,10 @@ Measured (against the surface each renders on):
   /SETTINGS chip           3.65 -> 5.15 : 1   (was below AA)
   every text pair in BOTH themes now clears AA.
 
-- The ΔE 6.1 figure in the lockstep block does not reproduce (old pair
-  measured ΔE2000 10.8 / ΔE76 16.7, new pair 9.2). Rule kept, number left
-  untouched, filed as issue #210 — rejected: quietly rewriting a spec
-  sentence that two tests pin, inside an unrelated commit.
+- The ΔE figure was corrected to a measured, formula-named ΔE2000 9.2 in
+  both stylesheets and the assertion together — rejected: leaving a spec
+  sentence that no formula reproduces, which is how 6.1 survived one palette
+  change already. #210 stays open for retiring the hardcoded constant.
 
 Pointers: branch feat/palette-contrast-dark-mode · web/app/globals.css +
           console/app/globals.css · web/components/theme-menu-item.tsx (new) ·

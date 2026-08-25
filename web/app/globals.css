@@ -470,8 +470,10 @@
   .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
 
   /* The two data colours. NEVER add a third, and never use --iridescent
-     here: it fails CVD separation against --flag at ΔE 6.1 in NORMAL
-     vision, so the two are indistinguishable side by side. --iridescent is
+     here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
+     than any two things a reader must tell apart, and closer still under
+     deuteranopia. For scale, the pair this rule protects — --flag against
+     --clear — is ΔE2000 57.9. --iridescent is
      chrome only (nav, focus, hover rules). */
   .data-flag  { color: var(--flag); }
   .data-clear { color: var(--clear); }

@@ -108,15 +108,21 @@ test("the CVD reasoning survives the port from the console", async () => {
   // Intent: the comment IS the spec. A port that drops it leaves the next
   // reader with two hex values and no reason not to add a third.
   //
-  // THE RULE IS PINNED HERE; THE NUMBER IN IT IS DISPUTED — see issue #210.
-  // "ΔE 6.1" does not reproduce from the values the sentence describes: the
-  // pair measured ΔE2000 10.8 / ΔE76 16.7 before the 2026-08-24 palette shift
-  // and 9.2 after. The rule it justifies (chrome is never a data colour) is
-  // sound and is why this assertion stays. Correcting the digits means editing
-  // two stylesheets and this line together, which is #210's job, not a silent
-  // fix inside an unrelated commit.
+  // Doug, PR 213, reader:stale-documented-invariant. The sentence used to
+  // claim "ΔE 6.1", which reproduced under no formula for the colours it
+  // described — the pre-shift pair measured ΔE2000 10.8 / CIE76 16.7. A spec
+  // sentence carrying an uncheckable constant is how it survived one palette
+  // change already, so the number was corrected in both stylesheets and here
+  // in the same edit. Issue #210 remains open for the durable fix: stop
+  // hardcoding a figure that nothing recomputes.
   const css = await readFile(cssUrl, "utf8");
-  assert.match(css, /fails CVD separation against --flag at ΔE 6\.1/);
+  // The figure is asserted with its FORMULA named, which is the half that was
+  // missing. "ΔE 6.1" did not reproduce under either CIEDE2000 or CIE76 for
+  // the colours it described, so nobody could check it and it survived two
+  // palettes. 9.2 is ΔE2000 for the shipped pair and is recomputable from the
+  // two hexes in this file — see issue #210 for retiring the hardcoded number
+  // altogether, which is the durable fix.
+  assert.match(css, /ΔE2000 9\.2 from --flag in NORMAL/);
   assert.match(css, /Coverage is a magnitude, not a judgement/);
 });
 
@@ -351,7 +357,7 @@ test("the per-PR disclosure fails open where :has() is unsupported", async () =>
   assert.match(css, /@supports\s+not\s+selector\(:has\(\*\)\)\s*\{[\s\S]*?\.pr-disclosure\s*\{[^}]*display:\s*none/);
 });
 
-test("nothing rendered on the console surface paints a one-theme hex", async () => {
+test("nothing rendered anywhere paints a one-theme hex, except where that is the point", async () => {
   // THE DEFECT CLASS THE DARK TOGGLE CREATED, pinned so it cannot come back.
   //
   // While the console was pinned to light (RULING 1), a literal hex in a
@@ -362,42 +368,56 @@ test("nothing rendered on the console surface paints a one-theme hex", async () 
   // correct at the time and both became wrong in the same commit — a
   // near-black dot on a near-black card, and a warm-beige hatch over #1e2127.
   //
-  // The rule is a token or nothing. A hex cannot know what it is sitting on,
-  // and NOTHING in this suite renders, so the failure is invisible until
-  // somebody opens the page in the other theme. Comments are stripped first:
-  // the two files above still NAME their old hexes while explaining why they
-  // no longer use them, and a pin that fired on prose would push the next
-  // author into deleting the explanation to get green.
+  // THE SCAN WALKS THE TREE; it does not read a list. The first version of
+  // this test named eleven files, and Doug was right about it (PR 213,
+  // reader:broad-visual-regression): components/doug-logo.tsx was not among
+  // them and was carrying #111311 / #D1571E — the PREVIOUS palette's
+  // --foreground and --iridescent — into every surface that renders the mark.
+  // A hardcoded list can only catch the files whoever wrote it already
+  // suspected, which is the opposite of what a guard is for.
+  //
+  // Comments are stripped first: run-spine and coverage-ruler still NAME their
+  // old hexes while explaining why they no longer use them, and a pin that
+  // fired on prose would push the next author into deleting the explanation to
+  // get green.
   const dir = new URL("../", import.meta.url);
-  const surface = [
-    "app/dashboard/page.tsx",
-    "app/dashboard/settings/page.tsx",
-    "app/dashboard/pr/[number]/page.tsx",
-    "components/dashboard-rail.tsx",
-    "components/coverage-ruler.tsx",
-    "components/run-spine.tsx",
-    "components/census-panel.tsx",
-    "components/flag-line-control.tsx",
-    "components/threshold-gear.tsx",
-    "components/band-chip.tsx",
-    "components/score-strip.tsx",
-  ];
+  const sources = [];
+  async function walk(rel) {
+    for (const entry of await readdir(new URL(rel, dir), { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const next = `${rel}${entry.name}${entry.isDirectory() ? "/" : ""}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (/\.tsx?$/.test(entry.name)) sources.push(next);
+    }
+  }
+  await walk("app/");
+  await walk("components/");
 
   /** JS/TSX with comments removed. Deliberately not a parser: a `//` inside a
    *  string would over-strip, and over-stripping this scan can only produce a
    *  false PASS on a line that is already comment-shaped. */
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
+  // TWO EXEMPTIONS, EACH BECAUSE THE COLOUR IS DELIBERATELY NOT THEMED — not
+  // because the file is inconvenient to fix. Both are asserted to still earn
+  // it below, so an exemption cannot outlive its reason.
+  //
+  //  - The docs code samples render on `.code-rail`, which globals.css fixes to
+  //    the gh-pages docs site's "night" terminal in BOTH themes: it stands in
+  //    for a real terminal, and a terminal that goes pale in light mode is not
+  //    one. Its syntax colours are picked against that fixed ground.
+  //  - The Doug mark is a logo. It carries its own white ground, which is why
+  //    it has always rendered correctly on the dark public pages, and a dog
+  //    that changes colour with the page is not a brand mark. Its rust is
+  //    nonetheless now a different orange from --iridescent — see issue #214.
+  const CODE_RAIL = ["components/docs/code-block.tsx", "components/docs/copy-button.tsx"];
+  const BRAND_MARK = "components/doug-logo.tsx";
+  const exempt = new Set([...CODE_RAIL, BRAND_MARK]);
+
   const offenders = [];
-  for (const rel of surface) {
-    let source;
-    try {
-      source = await readFile(new URL(rel, dir), "utf8");
-    } catch {
-      // A file that moved is not this test's business to fail on, but a list
-      // that has quietly emptied itself IS — see the vacuity guard below.
-      continue;
-    }
+  for (const rel of sources) {
+    if (rel.endsWith(".test.mjs") || exempt.has(rel)) continue;
+    const source = await readFile(new URL(rel, dir), "utf8");
     for (const hex of strip(source).match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
       offenders.push(`${rel}: ${hex}`);
     }
@@ -405,20 +425,41 @@ test("nothing rendered on the console surface paints a one-theme hex", async () 
   assert.deepEqual(
     offenders,
     [],
-    "a console-surface file paints a literal colour, which cannot invert with the theme",
+    "a rendered file paints a literal colour, which cannot invert with the theme",
   );
 
-  // The scan must actually be reading files. Without this, renaming every
-  // entry on the list above turns the assertion into a tautology.
-  const present = await Promise.all(
-    surface.map((rel) =>
-      readFile(new URL(rel, dir), "utf8").then(() => true, () => false),
-    ),
+  // The exemptions still earn themselves. Without this, "exempt" becomes a
+  // place to put a file that simply failed.
+  // A file earns the terminal exemption by rendering the rail OR by being
+  // rendered inside one — copy-button.tsx paints in the rail's ink without
+  // ever naming the class, because code-block.tsx puts it in the rail's head.
+  // Asserting only the first form is what made the first cut of this pin fail.
+  const railRenderers = [];
+  for (const rel of sources) {
+    const text = await readFile(new URL(rel, dir), "utf8");
+    if (/["'`\s]code-rail/.test(text)) railRenderers.push({ rel, text });
+  }
+  assert.ok(railRenderers.length > 0, "nothing renders .code-rail any more");
+  for (const rel of CODE_RAIL) {
+    const own = await readFile(new URL(rel, dir), "utf8");
+    const name = rel.split("/").pop().replace(/\.tsx?$/, "");
+    const nested = railRenderers.some((r) => r.rel !== rel && r.text.includes(name));
+    assert.ok(
+      /["'`\s]code-rail/.test(own) || nested,
+      `${rel} is exempt as fixed terminal ink but neither renders the rail nor sits inside one`,
+    );
+  }
+  const mark = await readFile(new URL(BRAND_MARK, dir), "utf8");
+  assert.match(mark, /<svg/, "the brand-mark exemption no longer points at a mark");
+  assert.match(
+    mark,
+    /fill="#fff"/,
+    "the mark no longer carries its own ground, so it can no longer claim to work on any surface",
   );
-  assert.ok(
-    present.filter(Boolean).length >= 8,
-    "the surface file list has gone stale — most of these no longer exist",
-  );
+
+  // And the walk actually walked. Without this, a rename that empties `sources`
+  // turns the whole assertion into a tautology.
+  assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
 });
 
 test("the console's dot grid does not ride on --border", async () => {

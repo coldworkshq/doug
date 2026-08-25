@@ -92,7 +92,15 @@ best and a silent wrong-function-called at worst. The port renames the incoming 
 
 ## RULINGS — SIGNED OFF BY ANDREW 2026-08-11. Do not re-litigate.
 
-- **RULING 1 — dashboard theme: STAYS PINNED LIGHT-PAPER.** The signed-in dashboard does
+- **RULING 1 — dashboard theme: STAYS PINNED LIGHT-PAPER.**
+  > **AMENDED 2026-08-25 by ADR-0020.** The console now FOLLOWS the toggle:
+  > light is still the default and is still declared on `.dashboard-surface`,
+  > but `.dark .dashboard-surface` (0,2,0) defeats that pin deliberately. The
+  > paragraph below records what was decided on 2026-08-11 and is kept for the
+  > rejected alternatives; it is no longer what ships. `dashboard-contract.test.mjs`
+  > pins the amendment, not this.
+
+  The signed-in dashboard does
   NOT follow web's toggle. The port scopes the dashboard subtree to the console's light
   tokens in `globals.css` (~15 lines replacing the module's 185). The `:48` pin's intent
   ("the signed-in console stays on the reference light paper surface") is **preserved**, and

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { register } from "node:module";
 import test from "node:test";
 
@@ -84,6 +84,64 @@ test("organization switching and sign-out are POST server actions", async () => 
   assert.equal(actions.includes("export async function GET"), false);
 });
 
+test("the console is inside the ThemeProvider that its toggle needs", async () => {
+  // Doug, PR 213, reader:missing-provider-dependency. The finding as written —
+  // "if the dashboard layout tree isn't wrapped by ThemeProvider" — is not true
+  // today: app/layout.tsx is the ONLY layout above /dashboard and it mounts the
+  // provider. The fragility behind it is real and was untested.
+  //
+  // next-themes' useTheme() reads a plain React context whose default carries a
+  // no-op setTheme. Outside a provider it therefore does not throw, does not
+  // warn, and does not fail any test in this suite, because nothing here
+  // renders: the account menu's theme row would simply stop doing anything when
+  // clicked. Adding app/dashboard/layout.tsx without the provider, or lifting
+  // the provider under a route group, is a one-line change that would ship that
+  // silently.
+  //
+  // So the pin is on the two facts that make the row work: the provider is at
+  // the ROOT, and nothing between the root and the console re-roots the tree.
+  const rootLayout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
+  const root = code(rootLayout);
+  assert.match(root, /<ThemeProvider/, "the root layout no longer mounts ThemeProvider");
+  // Light stays the default and the OS preference does not override it — the
+  // whole amendment to RULING 1 rests on an unset preference still rendering
+  // paper. `enableSystem` would hand that decision to the reader's OS.
+  assert.match(root, /defaultTheme="light"/);
+  assert.match(root, /enableSystem=\{false\}/);
+  // attribute="class" is what puts `.dark` on <html>; the console's dark
+  // palette is selected by `.dark .dashboard-surface`, so a different strategy
+  // (data attribute) would leave the console permanently light.
+  assert.match(root, /attribute="class"/);
+
+  // No layout between the root and the console. Any that appears must mount a
+  // provider of its own, or the console's toggle is inert inside it.
+  const appDir = new URL("../app/", import.meta.url);
+  const layouts = [];
+  let consoleDir = null;
+  async function walk(rel) {
+    for (const entry of await readdir(new URL(rel, appDir), { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.isDirectory()) await walk(`${rel}${entry.name}/`);
+      else if (entry.name === "layout.tsx" && rel !== "") layouts.push(`${rel}layout.tsx`);
+      else if (entry.name === "page.tsx" && rel.endsWith("dashboard/")) consoleDir = rel;
+    }
+  }
+  await walk("");
+  // Derived, not hardcoded to "dashboard/": a route group (app/(console)/…) or
+  // any other move would leave a hardcoded prefix matching nothing, and a
+  // covering-layout check that matches nothing passes for free.
+  assert.ok(consoleDir, "app/**/dashboard/page.tsx is gone — this pin cannot locate the console");
+  const covering = layouts.filter((rel) => consoleDir.startsWith(rel.slice(0, -"layout.tsx".length)));
+  for (const rel of covering) {
+    const nested = await readFile(new URL(rel, appDir), "utf8");
+    assert.match(
+      code(nested),
+      /<ThemeProvider/,
+      `app/${rel} sits between the root and the console without a ThemeProvider — the account menu's theme row is inert`,
+    );
+  }
+});
+
 test("light is the console's default, and dark is reachable on purpose", async () => {
   // THIS TEST REPLACES "the signed-in console stays on the reference light
   // paper surface" (Phase B RULING 1), which is AMENDED rather than dropped.
@@ -110,7 +168,7 @@ test("light is the console's default, and dark is reachable on purpose", async (
   // (1) DEFAULT. One declaration block, three selectors — not three copies,
   // which would drift. The console is named here, which is what makes an
   // unset preference render paper.
-  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface,\n\.surface-tokens\s*\{([\s\S]*?)\n\}/);
+  const light = css.match(/(?:^|\n):root,\s*\.dashboard-surface,\s*\.surface-tokens\s*\{([\s\S]*?)\n\}/);
   assert.ok(
     light,
     "the console scope no longer shares :root's light palette block — its default theme is now whatever :root inherits",
@@ -124,7 +182,7 @@ test("light is the console's default, and dark is reachable on purpose", async (
   // beat a declaration sitting on the element itself, since inheritance is the
   // weakest source a custom property can have. A bare `.dark` on <html> is
   // not enough and never was; that asymmetry is the whole mechanism.
-  const dark = css.match(/(?:^|\n)\.dark,\n\.dark \.dashboard-surface,\n\.dark \.surface-tokens\s*\{([\s\S]*?)\n\}/);
+  const dark = css.match(/(?:^|\n)\.dark,\s*\.dark\s+\.dashboard-surface,\s*\.dark\s+\.surface-tokens\s*\{([\s\S]*?)\n\}/);
   assert.ok(
     dark,
     "the dark palette no longer claims the console scope — the toggle cannot reach the dashboard",
