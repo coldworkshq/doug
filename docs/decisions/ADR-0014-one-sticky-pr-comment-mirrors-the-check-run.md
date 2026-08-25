@@ -170,10 +170,15 @@ tenant outside these three installations, not after.
   those two: `created`/`updated` landed, every `skipped*` is a decision and a
   decision retried is a decision overridden, and `denied:403` is a tenant
   permission action that already has D8's marker and banner, so retrying it
-  would spend a call per drain to change nothing. Three bounds — two repairs
-  on top of the write `process_job` already made, five minutes settled before
-  a `NULL` row is read as abandoned rather than in flight, and a
-  twenty-four-hour lookback. Selecting a row is not owning it: the read is
+  would spend a call per drain to change nothing. What it selects on is a
+  POSITIVE marker — `ingest.complete` stamps `owed` in the same statement that
+  makes the job 'done', and the comment write overwrites it moments later —
+  never the absence of an outcome: a row with none came from a revision that
+  did not stamp the marker, nothing knows whether it commented, and a repair
+  that guesses is a duplicate on a live PR. Three bounds — two repairs on top
+  of the write `process_job` already made, five minutes settled before a job
+  is read as abandoned rather than in flight, and a twenty-four-hour
+  lookback. Selecting a row is not owning it: the read is
   unlocked and both deployed instances sweep the same candidates on the same
   pass, so `store.claim_pr_comment_retry` reserves the row in one conditional
   UPDATE that also spends the repair — taken before the GitHub call, the same
@@ -326,9 +331,17 @@ tenant outside these three installations, not after.
   reservation added after Doug's review of the same PR.)* A `NULL` outcome
   means "no write recorded", which is what a crash between `ingest.complete`
   and the comment leaves — but it is also, briefly, what a worker still
-  inside that gap leaves. The settle period closes that one: nothing finished
-  less than five minutes ago is swept, the same call `reclaim_stalled`'s
-  lease makes about a live claim. It says nothing about the other window,
+  inside that gap leaves. The settle period NARROWS that one — nothing
+  finished less than five minutes ago is swept, the same call
+  `reclaim_stalled`'s lease makes about a live claim — but it does not close
+  it, and calling it a fence would be a claim this record cannot support.
+  Time is a heuristic for liveness: a long GitHub backoff or a paused
+  container can outlast five minutes, and what remains past it is `upsert`'s
+  own priced trade, a listing that cannot yet see a create falling through to
+  create rather than leaving a comment that never appears. A real fence would
+  have to be held by the original writer, and the only one available is
+  `claim_pr_comment`, whose loser is specified to create for exactly that
+  reason. It says nothing about the other window,
   which is sharper — the sweep's read is unlocked, so both instances select
   the *same* rows on *every* pass rather than meeting on one PR by
   coincidence, and both would have reached `upsert`. `claim_pr_comment_retry`
@@ -336,25 +349,26 @@ tenant outside these three installations, not after.
   settle period and lands anyway; `upsert`'s listing usually finds the
   comment and edits it, and the case where it does not is the duplicate
   already priced above.
-- **`NULL` means one thing only from migration 016 forward.** Every `done`
-  row written before that migration recorded nothing, so migration 016
-  backfills them to `unrecorded` — without it the first sweep after deploy
-  would re-post a comment on every PR in the ledger's history. Rows that
-  reach `done` during the rollout overlap, on an instance still running the
-  older revision, land `NULL` and are swept once. That is the honest
-  outcome for them: nothing knows whether they posted, and an in-place edit
-  of the same body is silent on GitHub while a missing comment is not. One
-  such row cannot become a duplicate, on either of the two paths it can take.
-  A comment that posted also wrote `pr_comments.comment_id`, so the sweep
-  takes `upsert`'s stored-id branch and never lists. A comment that posted
-  and then failed to record its id — `set_pr_comment_id` raising is not a
-  `RequestFailed`, so it leaves `failed:internal` — is found by the listing
-  instead, under its own marker and this App's authorship, and edited in
-  place. The one case where the listing cannot find a comment that exists is
-  a PR past `_PAGE_BOUND`, and that branch returns `failed:page-bound`
-  rather than falling through to create; its own comment says neither a long
-  PR nor a broken listing may. What remains is the failure `_is_ours`
-  already names — with no app id configured nothing matches and every write
+- **A job completed before the marker shipped is never repaired, and that is
+  the design rather than a gap.** The sweep reads `owed`, so a row with no
+  outcome — everything predating migration 016, and everything an instance
+  still on the older revision completes during a rollout — is invisible to
+  it. Nothing knows whether those commented, and a repair that guesses is a
+  duplicate on a live PR. The first draft did the opposite, treating a
+  missing outcome as "never posted" and paying for the disambiguation with a
+  full-table `UPDATE` in the migration; both the rewrite and the
+  rollout-overlap sweep went away with the marker. The residual is one
+  window's worth of jobs, at the single deploy that ships this, whose lost
+  comments return on the next push the way they always did.
+- **A comment written but not recorded still converges.** `set_pr_comment_id`
+  raising is not a `RequestFailed`, so a create whose id never reached the
+  ledger leaves `failed:internal` and is retried; the listing then finds the
+  comment under its own marker and this App's authorship and edits it in
+  place. The one case where a listing cannot find a comment that exists is a
+  PR past `_PAGE_BOUND`, and that branch returns `failed:page-bound` rather
+  than falling through to create — its own comment says neither a long PR nor
+  a broken listing may. What remains is the failure `_is_ours` already
+  names — with no app id configured nothing matches and every write
   duplicates — which predates this sweep and is not bounded by it.
 - **A comment that exhausts its retries goes silent.** *(Added 2026-08-24,
   issue #154.)* After three attempts the row keeps its `failed:*` outcome and

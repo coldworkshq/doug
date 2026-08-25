@@ -410,6 +410,14 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # Postgres to use it, and sqlite's partial-index rules are not
             # the same rules, so the two backends could silently diverge on
             # whether the sweep has an index at all.
+            #
+            # Plain CREATE INDEX, not CONCURRENTLY: `_run` puts every
+            # statement in a transaction, which CONCURRENTLY cannot join, and
+            # this file's contract is DDL valid on both backends. The cost is
+            # a SHARE lock for the length of the build, blocking the
+            # webhook's enqueue while boot holds it — real, not specific to
+            # this migration (005, 009 and 012 create indexes the same way),
+            # and tracked as issue #204 rather than fixed behind a feature.
             "CREATE INDEX IF NOT EXISTS ix_review_jobs_pr_comment_retry "
             "ON review_jobs (status, finished_at)",
         ),
