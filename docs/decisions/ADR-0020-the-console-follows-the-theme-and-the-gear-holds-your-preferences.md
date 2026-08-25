@@ -85,8 +85,12 @@ from that gear rather than leaving the same link twice at six pixels.
   was not the one asked for.
 - **Keeping the neutrals warm and only raising their contrast.** The ground and
   the accent were both warm, which is why nothing separated; splitting the
-  temperature buys separation at no contrast cost. Accepted cost: the light
-  surface no longer matches the gh-pages marketing site it was tuned against.
+  temperature buys separation at no contrast cost. This was accepted at the
+  time as costing parity with the gh-pages marketing site the light palette
+  had been tuned against — and that cost turned out not to exist. ADR-0009's
+  deploy and the docs reconciliation (#211) left `drewjst.github.io/doug` a
+  bare `<meta refresh>` redirect to the app: it renders no palette, so there
+  is no second surface for this one to disagree with.
 
 ## Consequences
 
@@ -112,7 +116,9 @@ from that gear rather than leaving the same link twice at six pixels.
   `--iridescent` and `--foreground`. The mark itself is a deliberate exemption
   — it carries its own white ground and has always rendered on the dark public
   pages — but its rust is now a different orange from the accent beside it.
-  Issue #214.
+  Issue #214. The usual objection to repainting a mark, that it would split the
+  brand across two properties, does not apply here: there is only one property
+  now.
 - **The console's own dark values are declared per theme.** `--rule-soft`,
   `--dim`, `--row-hover` and `--surface-dot` now exist in both directions and
   are pinned in both; a theme that forgets one loses every row divider in the

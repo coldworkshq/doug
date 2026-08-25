@@ -11,6 +11,13 @@ Next:     Push the findings commit, watch Doug's read of the new head, then
           Andrew reviews PR #213.
 Blockers: none
 
+CORRECTED AFTER MERGING #211: the palette shift's one accepted cost — losing
+parity with the gh-pages marketing site — does not exist. origin/gh-pages is
+now a bare <meta refresh> redirect and renders no palette, so there is no
+second surface to disagree with. ADR-0020's Consequences and issue #214 both
+updated; #214's recommendation is now REPAINT the mark (two hexes, one file),
+since the only remaining objection is that it is also the favicon.
+
 Doug's findings, dispositioned:
 - missing-provider-dependency (med) — NOT REAL: app/layout.tsx is the only
   layout above /dashboard and mounts ThemeProvider. The fragility was real
