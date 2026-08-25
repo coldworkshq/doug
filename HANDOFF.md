@@ -1,14 +1,112 @@
 # HANDOFF — doug
 
-State:    review — #122 settled and this PR is the record of it. The
-          detector produced its first `revert` in production and a
-          both-directions audit of all 53 adjudicated rows agrees with
-          `git log`. Docs only: ROADMAP.md + this file. No code.
+State:    review — PR #213 open, MERGEABLE, all six CI jobs green. Merged
+          origin/main a third time (99f059f, #212);
+          HANDOFF.md is the only file that conflicts, and it has now blocked
+          CI twice — a CONFLICTING PR has no mergeable ref, so workflows
+          never fire and the PR reads "no checks" rather than "blocked".
+          Doug read cf7a978:
+          Cleared, risk 0.38, 2 medium + 3 low + 2 deviations. All seven
+          dispositioned; web 366/366, console 113/113, api 1661/1661.
+Next:     Push the findings commit, watch Doug's read of the new head, then
+          Andrew reviews PR #213.
+Blockers: none
 
-Next:     Andrew merges. Then the Coldworks sequencing call — App ownership
-          move, repo transfer, publication venue — see "Still unfiled" below.
+CORRECTED AFTER MERGING #211: the palette shift's one accepted cost — losing
+parity with the gh-pages marketing site — does not exist. origin/gh-pages is
+now a bare <meta refresh> redirect and renders no palette, so there is no
+second surface to disagree with. ADR-0020's Consequences and issue #214 both
+updated; #214's recommendation is now REPAINT the mark (two hexes, one file),
+since the only remaining objection is that it is also the favicon.
 
-Blockers: none.
+Doug's findings, dispositioned:
+- missing-provider-dependency (med) — NOT REAL: app/layout.tsx is the only
+  layout above /dashboard and mounts ThemeProvider. The fragility was real
+  and untested (next-themes returns a no-op setTheme outside a provider, so
+  the row would go dead silently). Pinned; mutation-tested both arms.
+- broad-visual-regression (med) — REAL, and it found a bug the first pin
+  missed: doug-logo carried #111311/#D1571E, the PREVIOUS palette. The scan
+  now WALKS app/ and components/ instead of reading an 11-file list. Mark
+  itself is a justified exemption (self-grounded, always worked on dark);
+  its rust vs the new accent is issue #214.
+- token-contract-change (low) — INVERTED: every bg-[var(--iridescent)] site
+  is a solid fill (2px bar, 1px line, a dot) that was BROKEN in dark before.
+  The gradient consumers read --brand-wash, still a gradient in dark.
+- brittle-regex-assertions (low) — PARTLY VALID: selector regexes now
+  whitespace-tolerant, file list replaced by the walk. Source-text pins stay
+  (documented house rule, design-system.test.mjs header).
+- stale-documented-invariant (low) — VALID, FIXED: now "ΔE2000 9.2 from
+  --flag", formula named, in both stylesheets + the assertion. #210 narrowed
+  to the durable fix (compute it, stop hardcoding it).
+- deviation, ADR-0019 account gear — VALID: ADR-0020 written, both sides
+  marked per docs/decisions/README. Theme is NOT on /dashboard/settings
+  because that page is per-repository and theme is per-person.
+- deviation, RULING 1 unrecorded — VALID: ADR-0020 + an amendment note at
+  RULING 1's source in the Phase B plan.
+
+CAUGHT BY api/tests/test_intent.py, worth remembering: ADR-0020 as first
+written scored 0.50 on "fix a typo in the footer" (floor 0.25) purely on the
+tokens `components`, `tsx`, `fix` — an ADR's own vocabulary decides which PRs
+Doug reads it against, so spelling out file paths in a record manufactures
+false findings. Rewritten to 0.000 on that probe, 0.857 on a real theme change.
+
+Decisions this session:
+- The "hard to read" report is NOT a contrast failure: --muted-foreground was
+  already 7.06:1 on #fcfcfa. The faults were (a) help copy set at 10.5px,
+  (b) --card vs --background at 1.03:1 and --border at 1.23:1, so items had no
+  boundary, (c) the /SETTINGS chip at 3.65:1, genuinely below AA — rejected:
+  darkening body text, which would have fixed nothing.
+- Phase B RULING 1 AMENDED, not deleted: light stays the default, dark is
+  reachable from the rail's account menu. `.dark .dashboard-surface` (0,2,0)
+  deliberately beats the light pin (0,1,0) — rejected: a toggle on public
+  pages only, which cannot change the page it sits on.
+- Neutrals went cool, the accent stayed warm. Warm-on-warm is why nothing
+  separated; splitting the temperature buys separation at no contrast cost.
+- --iridescent is now a COLOUR in both themes; the gradient moved to
+  --brand-wash. .dark used to set it to a linear-gradient, which is invalid in
+  all 34 `text-[…]`/`border-[…]`/`color-mix(…)` call sites — every focus ring
+  in the console would have silently stopped rendering the moment dark
+  reached it. Latent before, load-bearing now.
+- The dot grid got --surface-dot. It painted with --border, so raising
+  --border for item separation turned the paper texture into noise. Caught in
+  the browser, not by a test; now pinned by one.
+- --cov-track/--cov-fill/--cov-unread are tokens. The utilities that read them
+  are under a character-identical lockstep with console's, so per-theme values
+  had to move OUT of that block; console got the identical edit.
+
+Measured (against the surface each renders on):
+  --card vs --background   1.03 -> 1.14 : 1
+  --border vs --card       1.26 -> 1.64 : 1
+  --border vs --background 1.23 -> 1.43 : 1
+  --iridescent as text     4.01 -> 5.03 : 1   (was below AA)
+  /SETTINGS chip           3.65 -> 5.15 : 1   (was below AA)
+  every text pair in BOTH themes now clears AA.
+
+- The ΔE figure was corrected to a measured, formula-named ΔE2000 9.2 in
+  both stylesheets and the assertion together — rejected: leaving a spec
+  sentence that no formula reproduces, which is how 6.1 survived one palette
+  change already. #210 stays open for retiring the hardcoded constant.
+
+Pointers: branch feat/palette-contrast-dark-mode · web/app/globals.css +
+          console/app/globals.css · web/components/theme-menu-item.tsx (new) ·
+          tests rewritten: dashboard-contract.test.mjs ("light is the
+          console's default, and dark is reachable on purpose"),
+          design-system.test.mjs (surface values pinned in both themes,
+          --iridescent-is-a-colour, one-theme-hex scan, dot-grid coupling) ·
+          the #193 branch work is stashed: `git stash list`
+
+---
+
+# ARCHIVE — inherited from main
+
+Everything below arrived on main in HANDOFF.md and is kept because this branch
+has no business deleting it. Its State/Next slots are dropped on merge: they
+describe whichever branch wrote them, and two status blocks in one file is how
+a handoff starts lying. This file conflicts on EVERY merge for exactly that
+reason — one mutable slot block, every branch rewriting it — and a conflicted
+PR has no mergeable ref, so CI silently does not run and the PR reads "no
+checks" rather than "blocked". That has now happened three times on #213.
+
 
 ## #122 SETTLED — the detector's first positive, audited 2026-08-24
 

@@ -2,9 +2,12 @@
 // lockstep. Only the imports differ: RunDetail comes from web's session API and
 // the time helpers from lib/runs-time.ts (B2's port of console/lib/runs.ts).
 //
-// The hardcoded #3d403c / #c9c6bd node colours are light-paper only,
-// deliberately — the dashboard is pinned to the console's light surface
-// (RULING 1), so there is no dark variant to invent here.
+// The node colours are tokens, not hexes. They were #3d403c / #c9c6bd on the
+// argument that the dashboard was pinned to the console's light surface
+// (RULING 1) and so had no dark variant to invent. That ruling is amended: the
+// console follows the theme toggle, and both hexes would have survived into
+// dark mode as a near-black dot on a near-black card and a beige ring around
+// it. --foreground and --input carry the same two jobs in either theme.
 //
 // ENFORCED: lib/console-lockstep.test.mjs asserts this file is character-identical
 // to console's below the imports — render tests are against the house rule,
@@ -25,8 +28,8 @@ function Event({
 }) {
   const node =
     state === "done"
-      ? "bg-[#3d403c] border-[#3d403c]"
-      : "bg-background border-[#c9c6bd]";
+      ? "bg-foreground border-foreground"
+      : "bg-background border-input";
   return (
     <li className="relative pb-5 pl-5 last:pb-0 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-[3.5px] [&:not(:last-child)]:before:top-[11px] [&:not(:last-child)]:before:bottom-[-3px] [&:not(:last-child)]:before:w-px [&:not(:last-child)]:before:bg-border">
       <span className={`absolute left-0 top-[5px] size-2 rounded-full border-[1.5px] ${node}`} />

@@ -67,6 +67,9 @@
   --chart-4: #545852;
   --chart-5: #d9d6cd;
   --radius: 0.875rem;
+  --cov-track: #eceae3;
+  --cov-fill: #3d403c;
+  --cov-unread: #c9c6bd;
   --sidebar: #ffffff;
   --sidebar-foreground: #111311;
   --sidebar-primary: #111311;
@@ -120,6 +123,9 @@
   --chart-4: oklch(0.66 0.015 260);
   --chart-5: oklch(0.45 0.02 260);
   --radius: 0.75rem;
+  --cov-track: #2c3138;
+  --cov-fill: #aeb6bf;
+  --cov-unread: #5b646d;
   --sidebar: oklch(0.2 0.022 265);
   --sidebar-foreground: oklch(0.93 0.01 260);
   --sidebar-primary: oklch(0.93 0.01 260);
@@ -166,8 +172,10 @@
   .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
 
   /* The two data colours. NEVER add a third, and never use --iridescent
-     here: it fails CVD separation against --flag at ΔE 6.1 in NORMAL
-     vision, so the two are indistinguishable side by side. --iridescent is
+     here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
+     than any two things a reader must tell apart, and closer still under
+     deuteranopia. For scale, the pair this rule protects — --flag against
+     --clear — is ΔE2000 57.9. --iridescent is
      chrome only (nav, focus, hover rules). */
   .data-flag  { color: var(--flag); }
   .data-clear { color: var(--clear); }
@@ -175,8 +183,8 @@
   /* Coverage is a magnitude, not a judgement — a neutral sequential ramp,
      never the flag/clear pair. Low coverage is alarmed by how empty the
      track looks, not by hue. */
-  .cov-track { background: #eceae3; }
-  .cov-fill  { background: #3d403c; }
+  .cov-track { background: var(--cov-track); }
+  .cov-fill  { background: var(--cov-fill); }
 
   /* The evidence seam is provenance, not decoration: each exact artifact
      attaches to one ordered rule, with the orange chrome colour never used

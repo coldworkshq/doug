@@ -66,11 +66,13 @@ export function ThresholdGear({
           )}
         </button>
       </PopoverTrigger>
-      {/* Radix portals this into <body>, outside `.dashboard-surface` — so it
-          would inherit `.dark` from <html> and render a dark panel over the
-          light paper ledger. `paper-tokens` carries the same palette block
-          the surface uses (globals.css), not a copy of it. */}
-      <PopoverContent align="end" className="paper-tokens w-[290px]">
+      {/* Radix portals this into <body>, outside `.dashboard-surface` — so on
+          its own it would resolve the palette from <html> and disagree with
+          the ledger it belongs to. `surface-tokens` carries the same
+          declaration blocks the surface does (globals.css), not a copy, so the
+          panel follows whichever theme the console is in. Renamed from
+          `paper-tokens`: the console is no longer always paper. */}
+      <PopoverContent align="end" className="surface-tokens w-[290px]">
         <form method="GET" action="/dashboard" className="flex flex-col gap-3">
           {/* A GET form submits only its own controls. Without these, setting a
               lens would silently clear every pill, the sort and the search. */}

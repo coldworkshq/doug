@@ -3,6 +3,7 @@ title: The deep read is a per-repository setting that narrows only, and the sett
 status: accepted
 date: 2026-08-23
 amends: ADR-0013
+amended_by: ADR-0020
 ---
 
 ## Context
@@ -44,7 +45,9 @@ and is looking for the place where Doug is turned down.
   `/about` and every `/docs` page render per request to choose between two
   words, and `proxy.ts` already hands an unauthenticated `/dashboard` request
   to AuthKit.
-- **The rail gear is "Account", not "Settings".** Two different things sharing
+- **The rail gear is "Account", not "Settings".** *(ADR-0020 adds a third
+  category to what it holds — how the console looks to you — while leaving
+  this naming rule in force.)* Two different things sharing
   one word on one screen is the confusion the gear/flag-line naming test
   already refuses.
 - **The rail is shared chrome on every `/dashboard` route**, extracted to

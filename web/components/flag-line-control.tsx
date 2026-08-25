@@ -16,6 +16,24 @@ const CELL_PANEL =
  *  position. */
 const PAGE_PANEL = "flex max-w-[560px] flex-col gap-3";
 
+/** THE SENTENCES UNDER EACH CONTROL, at a size someone can actually read.
+ *
+ *  They were text-[10.5px], which is where the "hard to read" report came
+ *  from, and it was NOT a contrast problem: --muted-foreground is 6.8:1 on
+ *  this surface, comfortably past AA and close to AAA. 10.5px is about
+ *  two-thirds of a browser's default body size, and these are full sentences
+ *  of running prose — not the tracked 9–10.5px small-caps labels around them,
+ *  which stay where they are because a five-character chip set in tracking is
+ *  read as a glyph, not as text.
+ *
+ *  12.5px, not 14: the measure is what caps it. The narrower of the two
+ *  panels is 360px, and 12.5px there is ~55 characters a line, which is
+ *  inside the comfortable 45-75 band. 14px would push it to ~48 and start
+ *  breaking these sentences across four lines inside a table cell.
+ *  leading-[1.55] because the default ratio is set for larger type and runs
+ *  these lines too tight to scan. */
+const PROSE = "max-w-[62ch] text-[12.5px] leading-[1.55] text-muted-foreground";
+
 /** The per-repository FLAG LINE — Doug's setting, not the preview gear.
  *
  *  Server-rendered, no client boundary: a <details>, two <form>s and a server
@@ -217,7 +235,7 @@ export function FlagLineControl({
           </form>
         </>,
         <>
-          <p className="text-[10.5px] text-muted-foreground">
+          <p className={PROSE}>
             One line for both scorers. Unset, Doug uses {defaults.reader.toFixed(2)} on deep reads and {defaults.fallback.toFixed(2)} when the reader didn&apos;t run.
             Applies to reviews from now on — past verdicts keep the line they were scored against, and open PRs keep their check until a new commit.
             {value !== null && value >= 0.9 && " Close to flag-nothing on the fallback scorer."}
@@ -228,7 +246,7 @@ export function FlagLineControl({
               sentence draws still holds there — it is just not the confusion
               that surface has. */}
           {layout === "cell" && (
-            <p className="text-[10.5px] text-muted-foreground">
+            <p className={PROSE}>
               This is Doug&apos;s line for new reviews — the preview gear above only re-bands what&apos;s on screen.
             </p>
           )}
@@ -262,7 +280,7 @@ export function FlagLineControl({
            went with the allowlist in #144. Do not reinstate copy hedging what
            this control does: the toggle is now the only thing that decides,
            and saying otherwise would be the D8 dishonesty in reverse. */
-        <p className="text-[10.5px] text-muted-foreground">
+        <p className={PROSE}>
           On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
           Off, Doug stops updating the comment; the last one it posted stays where it is.
         </p>,
@@ -291,7 +309,7 @@ export function FlagLineControl({
            in, and invites them to think the band is still the reader's. Two
            sentences, one per state, rather than one sentence that is wrong
            half the time. */
-        <p className="text-[10.5px] text-muted-foreground">
+        <p className={PROSE}>
           On, Doug sends the diff to the reader and scores what it finds. Off, no diff leaves your repository — Doug scores on
           structural signals alone and records no findings.
           {value === null &&
@@ -303,7 +321,7 @@ export function FlagLineControl({
 
       {/* Not attached to any one control: it is true of all three, and the
           third rule Doug is built on. Route, never block. */}
-      <p className="text-[10.5px] text-muted-foreground">
+      <p className={PROSE}>
         Doug routes either way: every pull request still gets a check run, and no setting here blocks a merge.
       </p>
     </div>

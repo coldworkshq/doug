@@ -111,7 +111,7 @@ export function CoverageRuler({
         )}
         {unseenShare > 0 && (
           <div
-            className="relative min-w-0.5 overflow-hidden rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            className="relative min-w-0.5 overflow-hidden rounded-[2px] border border-dashed border-[var(--cov-unread)] bg-[repeating-linear-gradient(135deg,var(--cov-unread)_0_1.5px,transparent_1.5px_5px)]"
             style={{ flex: `${unseenShare} 1 0` }}
             title={
               unseenCount
@@ -138,7 +138,7 @@ export function CoverageRuler({
         </span>
         <span className="flex items-center gap-1.5">
           <span
-            className="inline-block size-2 rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            className="inline-block size-2 rounded-[2px] border border-dashed border-[var(--cov-unread)] bg-[repeating-linear-gradient(135deg,var(--cov-unread)_0_1.5px,transparent_1.5px_5px)]"
             aria-hidden="true"
           />{" "}
           never read — budget

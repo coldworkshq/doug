@@ -54,202 +54,272 @@
 
 :root,
 .dashboard-surface,
-.paper-tokens {
-  /* Light palette, matched to the GitHub Pages marketing site
-     (drewjst.github.io/doug) so the two surfaces read as one brand. Same
-     hex values as that site's :root, remapped onto shadcn's variable
-     names. This is now the default theme — see .dark below for the
-     "iridescent SaaS" look this app used exclusively before.
+.surface-tokens {
+  /* THE DEFAULT THEME. Light is what an unset preference renders — see the
+     `.dark` block below for the counterpart, which is reached only by an
+     explicit toggle (next-themes writes `defaultTheme="light"`, so no
+     system preference flips this on its own).
 
-     `.dashboard-surface` shares this block rather than copying it. The
-     signed-in dashboard is pinned to this light paper surface and does NOT
-     follow the theme toggle (Phase B RULING 1): re-declaring these custom
-     properties on the dashboard's own wrapper beats anything `.dark` sets on
-     <html>, because inheritance is the weakest source a custom property can
-     have. That is the same mechanism the deleted dashboard.module.css relied
-     on when it hardcoded `--card: #fff` on `.console`, minus the second copy
-     of the palette that could drift away from this one.
+     ONE declaration block, three selectors — never three copies. `:root`
+     dresses the public site; `.dashboard-surface` is the signed-in console's
+     wrapper; `.surface-tokens` is for console content that renders OUTSIDE
+     that wrapper while belonging to it (today exactly one thing: the threshold
+     gear's popover, which Radix portals into <body>).
 
-     Mirror image of the signed-in dashboard: /queue used to wrap itself in
-     `dark` to force the other direction. It now follows the site theme, so
-     this block is the default for every public page.
-     ENFORCED: lib/dashboard-contract.test.mjs, "the signed-in console stays
-     on the reference light paper surface".
+     WHY THE DASHBOARD IS STILL NAMED HERE now that it follows the toggle.
+     Phase B RULING 1 pinned the console to light by declaring these properties
+     on its own wrapper, where they beat anything `.dark` set on <html> —
+     inheritance is the weakest source a custom property can have. That ruling
+     is AMENDED, not deleted: light remains the default, and the pin is now
+     defeated deliberately by `.dark .dashboard-surface` (specificity 0,2,0
+     against this block's 0,1,0) rather than accidentally. Keeping the console
+     in this selector list is what makes the DEFAULT still light; deleting it
+     would leave the console inheriting :root and quietly reintroduce the
+     drift the ruling was written to prevent.
+     ENFORCED: lib/dashboard-contract.test.mjs.
 
-     `.paper-tokens` is the same declarations for content that renders OUTSIDE
-     the dashboard's wrapper while belonging to it — today that is exactly one
-     thing: the threshold gear's popover, which Radix renders through a portal
-     into <body>. A portal escapes `.dashboard-surface`, so without this the
-     panel inherits whatever `.dark` set on <html> and renders a dark card over
-     the light paper page. It carries the tokens and nothing else: the surface
-     paint (min-height, the dot grid) stays on `.dashboard-surface` below,
-     because a popover is not a page. */
-  --sheen: #5b6470;
-  --flag: #c93a2b;
-  --clear: #177a50;
+     PALETTE DIRECTION (2026-08-24). The neutrals are cool slate; the accent is
+     the only warm hue on the page. Before, both were warm — a cream ground
+     under a rust accent — and warm-on-warm is why nothing separated. Splitting
+     the temperature buys separation that costs no contrast ratio at all.
+     The measured changes, against the surface each thing renders on:
+       --card vs --background   1.03:1 -> 1.14:1  (cards had no lift at all)
+       --border vs --card       1.26:1 -> 1.64:1
+       --border vs --background 1.23:1 -> 1.43:1
+       --iridescent as text     4.01:1 -> 5.03:1  (was below AA)
+       accent chip on --accent  3.65:1 -> 5.15:1  (was below AA)
+     Body ink and the muted ramp were already AA and stayed there; they were
+     never the complaint. Raising --border is what the previous round (#193)
+     declined to do, having treated it as a fixed ceiling. */
+  --sheen: #4a5a6b;
+  --flag: #bf3125;
+  --clear: #0f6b48;
   /* Docs-only third status (Preview, between Available/--clear and
-     Planned/--sheen). Same hex the gh-pages docs site used for its
-     b-warn badge — not a token that site's marketing page ever needed. */
-  --warn: #9a6b12;
-  --iridescent: #d1571e;
+     Planned/--sheen). */
+  --warn: #8a5d0f;
 
-  --background: #fcfcfa;
-  --foreground: #111311;
+  /* ALWAYS A COLOUR, in both themes — never a gradient. 34 call sites read it
+     through `text-[var(--iridescent)]`, `border-[var(--iridescent)]` and
+     `color-mix(in srgb, var(--iridescent) 35%, transparent)`, and every one
+     of those is invalid CSS if the token holds a gradient: the focus ring
+     silently stops rendering rather than failing loudly. The gradient lives in
+     --brand-wash instead. ENFORCED: lib/design-system.test.mjs. */
+  --iridescent: #b0430d;
+  /* The brand gradient, for .text-iridescent / .bg-iridescent only. Solid in
+     light (matching the accent), a real gradient in dark. */
+  --brand-wash: #b0430d;
+
+  --background: #eef0f2;
+  --foreground: #15181c;
   --card: #ffffff;
-  --card-foreground: #111311;
+  --card-foreground: #15181c;
   --popover: #ffffff;
-  --popover-foreground: #111311;
-  --primary: #111311;
-  --primary-foreground: #fcfcfa;
-  --secondary: #f6f5f1;
-  --secondary-foreground: #111311;
-  --muted: #f6f5f1;
-  --muted-foreground: #545852;
-  --accent: #fbefe6;
-  --accent-foreground: #a83f0f;
+  --popover-foreground: #15181c;
+  --primary: #15181c;
+  --primary-foreground: #eef0f2;
+  --secondary: #e4e7ea;
+  --secondary-foreground: #15181c;
+  --muted: #e4e7ea;
+  --muted-foreground: #4e535a;
+  --accent: #fbe7d8;
+  --accent-foreground: #a8400c;
   --destructive: var(--flag);
-  --border: #e7e5de;
-  --input: #d9d6cd;
-  --ring: #d1571e;
-  --chart-1: #111311;
+  --border: #c4cbd2;
+  --input: #aab2ba;
+  --ring: #b0430d;
+  --chart-1: #15181c;
   --chart-2: var(--sheen);
   --chart-3: var(--flag);
-  --chart-4: #545852;
-  --chart-5: #d9d6cd;
+  --chart-4: #4e535a;
+  --chart-5: #aab2ba;
   --radius: 0.875rem;
   --sidebar: #ffffff;
-  --sidebar-foreground: #111311;
-  --sidebar-primary: #111311;
-  --sidebar-primary-foreground: #fcfcfa;
-  --sidebar-accent: #fbefe6;
-  --sidebar-accent-foreground: #a83f0f;
-  --sidebar-border: #e7e5de;
-  --sidebar-ring: #d1571e;
+  --sidebar-foreground: #15181c;
+  --sidebar-primary: #15181c;
+  --sidebar-primary-foreground: #eef0f2;
+  --sidebar-accent: #fbe7d8;
+  --sidebar-accent-foreground: #a8400c;
+  --sidebar-border: #c4cbd2;
+  --sidebar-ring: #b0430d;
+
+  /* Coverage ramp. Tokens rather than the literals the utilities used to
+     carry, because a fixed light-grey track on a dark card is unreadable —
+     and the utility block is under a character-identical lockstep with
+     console/app/globals.css, so the values have to move OUT of it to differ
+     per theme. Neutral in both directions: coverage is a magnitude, never a
+     judgement, so this ramp never borrows --flag/--clear. */
+  --cov-track: #dde1e5;
+  --cov-fill: #3f464d;
+  /* The "never read" band's hatching — the third rung of the same ramp, and a
+     token for the same reason: it renders on the card in both themes. */
+  --cov-unread: #b6bec6;
 
   --atmosphere:
     radial-gradient(
       50rem 26rem at 50% -8%,
-      rgba(209, 87, 30, 0.1),
+      rgba(176, 67, 13, 0.09),
       transparent 60%
     ),
-    radial-gradient(#d9d6cd 1px, transparent 1px);
+    radial-gradient(#dfe3e7 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 22px 22px;
 
   /* The one number both the docs sidebar's sticky offset (app/docs/layout.tsx)
      and its H2 scroll-margin (components/docs/prose.tsx) have to clear so
      neither sits under the floating SiteHeader. Not theme-dependent — lives
-     outside :root/.dark's split on purpose, so it isn't a color and never
+     outside the light/dark split on purpose, so it isn't a color and never
      needs a dark-mode counterpart. Sized for SiteHeader's `top-4` plus its
      current rendered height with margin; a header height change is the one
      edit that requires re-checking this value against those two usages. */
   --docs-content-offset: 7rem;
 }
 
-.dark {
-  /* Doug-web's original (and, until now, only) theme: dark SaaS palette
-     with an iridescent accent. Preserved exactly so toggling dark looks
-     identical to how this app looked before the light theme existed. */
-  --sheen: oklch(0.82 0.12 190);
-  --flag: oklch(0.72 0.16 40);
-  --clear: oklch(0.78 0.11 165);
-  --warn: #efa167;
-  --iridescent: linear-gradient(115deg, #5eead4 0%, #60a5fa 45%, #c084fc 100%);
+/* THE COUNTERPART, reached only by the toggle. Three selectors mirroring the
+   light block's three, in the same order and for the same reasons — the two
+   extra are what let the theme reach the signed-in console at all.
 
-  --background: oklch(0.155 0.02 265);
-  --foreground: oklch(0.93 0.01 260);
-  --card: oklch(0.2 0.022 265);
-  --card-foreground: oklch(0.93 0.01 260);
-  --popover: oklch(0.2 0.022 265);
-  --popover-foreground: oklch(0.93 0.01 260);
-  --primary: oklch(0.93 0.01 260);
-  --primary-foreground: oklch(0.17 0.02 265);
-  --secondary: oklch(0.24 0.022 265);
-  --secondary-foreground: oklch(0.93 0.01 260);
-  --muted: oklch(0.24 0.022 265);
-  --muted-foreground: oklch(0.66 0.015 260);
-  --accent: oklch(0.26 0.03 220);
-  --accent-foreground: oklch(0.9 0.06 195);
+   `.dark .dashboard-surface` is specificity (0,2,0) against the light block's
+   (0,1,0) on the same element, so it wins where plain inheritance from <html>
+   never could. That asymmetry IS the mechanism: light is the value the console
+   holds by default, dark is the value something had to reach in and set.
+
+   `.dark .surface-tokens` is not optional. The threshold gear's popover is
+   portalled into <body>, escaping .dashboard-surface; without this selector it
+   would inherit .dark's tokens for the palette but keep the light block's for
+   anything the portal's own scope re-declared, and render mismatched. The
+   light block had this exact bug in the other direction before .surface-tokens
+   existed — a dark card over a light page. */
+.dark,
+.dark .dashboard-surface,
+.dark .surface-tokens {
+  --sheen: #8fa6bd;
+  --flag: #f0705f;
+  --clear: #4cc08c;
+  --warn: #e0a44a;
+
+  /* A COLOUR here too — see the light block. The gradient this token used to
+     hold in dark is the reason the console could never follow the toggle
+     without every focus ring and accent border silently vanishing. */
+  --iridescent: #e8834f;
+  --brand-wash: linear-gradient(115deg, #f0a077 0%, #e8834f 45%, #d1603f 100%);
+
+  --background: #14161a;
+  --foreground: #e7e9ec;
+  --card: #1e2127;
+  --card-foreground: #e7e9ec;
+  --popover: #1e2127;
+  --popover-foreground: #e7e9ec;
+  --primary: #e7e9ec;
+  --primary-foreground: #14161a;
+  --secondary: #262a30;
+  --secondary-foreground: #e7e9ec;
+  --muted: #262a30;
+  --muted-foreground: #9ba3ac;
+  --accent: #3b2418;
+  --accent-foreground: #f0a077;
   --destructive: var(--flag);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: var(--sheen);
-  --chart-1: oklch(0.93 0.01 260);
+  --border: #3a4149;
+  --input: #4a525b;
+  --ring: #e8834f;
+  --chart-1: #e7e9ec;
   --chart-2: var(--sheen);
   --chart-3: var(--flag);
-  --chart-4: oklch(0.66 0.015 260);
-  --chart-5: oklch(0.45 0.02 260);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.2 0.022 265);
-  --sidebar-foreground: oklch(0.93 0.01 260);
-  --sidebar-primary: oklch(0.93 0.01 260);
-  --sidebar-primary-foreground: oklch(0.17 0.02 265);
-  --sidebar-accent: oklch(0.26 0.03 220);
-  --sidebar-accent-foreground: oklch(0.9 0.06 195);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --chart-4: #9ba3ac;
+  --chart-5: #4a525b;
+  --radius: 0.875rem;
+  --sidebar: #1e2127;
+  --sidebar-foreground: #e7e9ec;
+  --sidebar-primary: #e7e9ec;
+  --sidebar-primary-foreground: #14161a;
+  --sidebar-accent: #3b2418;
+  --sidebar-accent-foreground: #f0a077;
+  --sidebar-border: #3a4149;
+  --sidebar-ring: #e8834f;
+
+  /* Inverted, and still neutral: the track is the darker half here and the
+     fill the lighter, so an empty ruler still reads as absence rather than as
+     a filled bar in a colour nobody assigned a meaning. */
+  --cov-track: #2c3138;
+  --cov-fill: #aeb6bf;
+  --cov-unread: #5b646d;
 
   --atmosphere:
     radial-gradient(
       60rem 32rem at 15% -10%,
-      oklch(0.7 0.12 195 / 14%),
+      rgba(232, 131, 79, 0.10),
       transparent 60%
     ),
     radial-gradient(
       50rem 28rem at 85% -5%,
-      oklch(0.6 0.15 300 / 12%),
+      rgba(143, 166, 189, 0.08),
       transparent 60%
     ),
-    linear-gradient(oklch(1 0 0 / 2.5%) 1px, transparent 1px),
-    linear-gradient(90deg, oklch(1 0 0 / 2.5%) 1px, transparent 1px);
-  --atmosphere-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+    radial-gradient(#22262c 1px, transparent 1px);
+  --atmosphere-size: 100% 100%, 100% 100%, 22px 22px;
 }
 
-/* The signed-in dashboard's own surface: the light tokens above (shared, not
-   copied) plus the four values the deleted dashboard.module.css carried that
-   have NO equivalent in the palette. They keep their exact hex here rather
-   than being substituted — globals' nearest neighbours are visibly different
-   values (`--muted`/`--secondary` are #f6f5f1 against --rule-soft's #eae7df),
-   and --rule-soft alone draws every row divider in the run ledger, so
-   "close enough" would restyle the whole table.
+/* The signed-in console's own surface: the palette above (shared, not copied)
+   plus the three values the deleted dashboard.module.css carried that have NO
+   equivalent in the palette. They keep their own hex rather than being
+   substituted with globals' nearest neighbour — --rule-soft alone draws every
+   row divider in the run ledger, so "close enough" would restyle the whole
+   table.
 
-   #eceae3 / #3d403c are deliberately NOT here: they are the console's
-   .cov-track / .cov-fill, already ported as global utilities.
+   NOW DECLARED TWICE, once per theme, which is the change the toggle forced.
+   A single light-only declaration was safe only while the console could not
+   go dark: the moment it can, an un-inverted #eae7df divider is a near-white
+   line across a #14161a table. The dark counterparts are NOT the light values
+   darkened by eye — each was solved to the same job at the same ratio.
 
-   The paint is the module's own: a dot grid on paper, opaque, covering the
-   viewport — <body> keeps web's theme, so in dark mode this is what stops the
-   gutters showing through. */
+   --cov-track / --cov-fill are deliberately not here: they are the coverage
+   ramp, and they now live in the palette blocks above so the utilities that
+   read them can stay character-identical to console's. */
 .dashboard-surface {
-  /* RETUNED for contrast, not restyled (see the block comment above: these
-     three keep their own hex because the palette has no equivalent — that
-     rule is about not SUBSTITUTING globals' nearest neighbour, not about
-     freezing a value that fails to be legible).
+  /* THE THREE-STEP CHROME RAMP, bottom rung. Everything --dim paints is
+     9–10.5px uppercase set in tracking — the rail's SPACE/REPO labels, the
+     /runs header line, the dock's block sub-labels — i.e. the smallest text on
+     the page, so it gets the tightest scrutiny, not the loosest. 4.64:1 here,
+     a clear step below --muted-foreground (6.8:1), itself below --foreground
+     (15.6:1).
 
-     --dim was #aaa79f, which is 2.3:1. Everything it paints is 9–10.5px
-     uppercase set in tracking — the rail's SPACE/REPO labels, the /runs
-     header line, the dock's block sub-labels — i.e. the smallest text on the
-     page wearing the lowest contrast on the page. #757269 is 4.65:1, so it
-     clears AA for body-size text at a size well under it, and still sits a
-     clear step below --muted-foreground (7.0:1), which sits below
-     --foreground (18.3:1). The three-step chrome ramp is intact; only its
-     bottom rung moved.
+     --rule-soft is a row divider and must stay LIGHTER than --border, or a
+     rule inside the table outweighs the table's own edge. 1.33:1 against
+     --card, under --border's 1.64:1. That headroom is no longer the 0.02 the
+     previous round had to work inside: raising --border is exactly what this
+     change did, and the divider got the room as a result.
 
-     --rule-soft was #f1efe9 at 1.11:1 — a divider you infer rather than see,
-     under 34px rows of 11px text. #eae7df is 1.20:1, and the ceiling is not
-     taste: --border is 1.22:1, and a row divider heavier than the table's own
-     edge inverts the two. That 0.02 of headroom is the whole budget, which is
-     why the rest of the row separation came from height, not ink.
-
-     Figures are against --background #fcfcfa, the surface these render on —
-     NOT --card. */
-  --rule-soft: #eae7df;
-  --dim: #757269;
-  --row-hover: #faf9f5;
+     Figures are against the surface each renders on. */
+  --rule-soft: #dbe0e5;
+  --dim: #666c73;
+  --row-hover: #f6f7f8;
+  --surface-dot: #dfe3e7;
 
   min-height: 100vh;
   color: var(--foreground);
-  background: radial-gradient(var(--border) 1px, transparent 1px) var(--background);
+  /* THE DOT GRID GETS ITS OWN TOKEN, and this is not tidying. It used to paint
+     with --border, which was harmless only while --border was 1.23:1 — at that
+     weight the dots were a texture you had to look for. Raising --border to
+     1.43:1 for the sake of separating items raised the grid with it, and 20px
+     apart across a whole viewport that reads as noise rather than as paper.
+     The two jobs moved in opposite directions the moment one of them mattered:
+     a border is meant to be seen, and this is meant to be barely felt. */
+  background: radial-gradient(var(--surface-dot) 1px, transparent 1px) var(--background);
   background-size: 20px 20px;
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Same three, inverted. The ratios are held, not the hexes: --dim is 4.80:1 on
+   the dark card (light: 5.31:1 on white), and --rule-soft stays under --border
+   there too — 1.20:1 against --card where --border is 1.56:1. Splitting these
+   across two rules rather than folding them into the palette blocks keeps them
+   SCOPED: they stay undeclared on :root, so a component that drifts out of the
+   console still loses them loudly instead of borrowing a value that happens to
+   be defined site-wide.
+   ENFORCED: lib/design-system.test.mjs pins both directions. */
+.dark .dashboard-surface {
+  --rule-soft: #2a2f36;
+  --dim: #858d96;
+  --row-hover: #23272d;
+  --surface-dot: #22262c;
 }
 
 /* The dashboard's per-PR history disclosure, in CSS.
@@ -342,18 +412,22 @@
   .animate-rise {
     animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  /* Brand accent, for text and hairline highlights. --iridescent is a
-     solid color in light mode (matching the GitHub Pages site's h1 .hl)
-     and the original gradient in dark mode — background-clip handles
-     both uniformly. */
+  /* Brand wash, for display text and hairline highlights — marketing surfaces
+     only (app/page.tsx, app/about, app/scoreboard). It reads --brand-wash and
+     NOT --iridescent, and the split is load-bearing rather than cosmetic:
+     --brand-wash holds a gradient in dark mode, and `background-clip: text`
+     is the only context in this stylesheet where a gradient is a valid value
+     for what is otherwise used as a colour. Everything that needs an actual
+     colour — borders, focus rings, accent text in the console — reads
+     --iridescent, which is a colour in both themes. */
   .text-iridescent {
-    background: var(--iridescent);
+    background: var(--brand-wash);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
   }
   .bg-iridescent {
-    background: var(--iridescent);
+    background: var(--brand-wash);
   }
   /* Bento-style panel: solid card + hairline border, matching the
      GitHub Pages site's .cell. Used by the landing page, /queue,
@@ -396,8 +470,10 @@
   .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
 
   /* The two data colours. NEVER add a third, and never use --iridescent
-     here: it fails CVD separation against --flag at ΔE 6.1 in NORMAL
-     vision, so the two are indistinguishable side by side. --iridescent is
+     here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
+     than any two things a reader must tell apart, and closer still under
+     deuteranopia. For scale, the pair this rule protects — --flag against
+     --clear — is ΔE2000 57.9. --iridescent is
      chrome only (nav, focus, hover rules). */
   .data-flag  { color: var(--flag); }
   .data-clear { color: var(--clear); }
@@ -405,6 +481,6 @@
   /* Coverage is a magnitude, not a judgement — a neutral sequential ramp,
      never the flag/clear pair. Low coverage is alarmed by how empty the
      track looks, not by hue. */
-  .cov-track { background: #eceae3; }
-  .cov-fill  { background: #3d403c; }
+  .cov-track { background: var(--cov-track); }
+  .cov-fill  { background: var(--cov-fill); }
 }
