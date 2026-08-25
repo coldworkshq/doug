@@ -625,7 +625,20 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     on the next drain, and on every drain after it until the window closed.
     Whole-job try, including the post: `_post_pr_comment` swallows everything
     today, but a sweep that lets one job's raise skip the rest of the batch
-    would make the repair's reach depend on a contract held elsewhere.
+    would make the repair's reach depend on a contract held elsewhere. The
+    recovery is fenced on whether that call was entered, for the mirror image
+    of the same reason — once it owns the outcome, a raise from anywhere past
+    that point must not overwrite what it recorded with `failed:internal`,
+    which is retriable and would schedule another write for a comment that
+    already landed.
+
+    Rows here are whole `review_jobs` rows. That is a superset of what
+    `_post_pr_comment`, `_render_recorded` and `_instrument` read between
+    them — the identity columns, the head SHA and the job id — and it is
+    deliberately NOT routed through `_replay_recorded`, the one helper that
+    needs a value `ingest.claim` derives rather than selects
+    (`claim_generation`, which only fences `ingest.complete`, and this sweep
+    completes nothing).
     """
     jobs = store.jobs_with_unposted_pr_comment(
         max_retries=PR_COMMENT_MAX_RETRIES,
@@ -636,6 +649,7 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     attempted = 0
     for job in jobs:
         where = f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]}"
+        posting = False
         try:
             existing = (
                 store.find_verdict_by_id(job["verdict_id"])
@@ -671,6 +685,7 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
             owner, name = job["repo_full_name"].split("/", 1)
             _, summary = _render_recorded(job, existing)
             attempted += 1
+            posting = True
             _post_pr_comment(gh, owner, name, job, summary, fresh=False)
         except Exception as e:  # noqa: BLE001 — one bad job must not stop the sweep
             print(
@@ -678,6 +693,13 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
                 f"({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
+            if posting:
+                # `_post_pr_comment` owns the outcome from the moment it is
+                # entered, and it has already written one. Overwriting it with
+                # `failed:internal` would put a landed comment back in the
+                # retry set and buy a second write of a body that is already
+                # on the PR.
+                continue
             try:
                 store.record_pr_comment_outcome(job["id"], "failed:internal")
             except Exception as inner:  # noqa: BLE001 — the ledger is the fault here

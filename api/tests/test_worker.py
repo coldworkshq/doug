@@ -3192,6 +3192,74 @@ def test_a_swallowed_outcome_write_does_not_buy_an_unbounded_retry(
     assert _job(url)["pr_comment_attempts"] == worker.PR_COMMENT_MAX_RETRIES
 
 
+def test_a_raise_after_the_post_does_not_put_a_landed_comment_back_in_the_set(
+    tmp_path, monkeypatch, capsys
+):
+    """The post is inside the whole-job try so one job's raise cannot skip the
+    rest of the batch — and that is exactly what makes this reachable. Once
+    `_post_pr_comment` is entered it owns the outcome and has written one;
+    the recovery must not overwrite it with `failed:internal`, which is
+    retriable and would buy a second write of a body already on the PR.
+
+    `_post_pr_comment` swallows everything today, so this is a contract held
+    in another function. The fence is here because that is where the damage
+    would land, not there."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net", "updated"))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    posting = worker._post_pr_comment
+
+    def _records_then_raises(*a, **k):
+        posting(*a, **k)
+        raise RuntimeError("something after the write")
+
+    monkeypatch.setattr(worker, "_post_pr_comment", _records_then_raises)
+
+    assert worker.retry_unposted_comments() == 1
+
+    assert len(upserts) == 2
+    assert _job(url)["pr_comment_outcome"] == "updated"
+    assert "something after the write" in capsys.readouterr().err
+
+    # And the landed comment is not re-swept on the next pass.
+    monkeypatch.setattr(worker, "_post_pr_comment", posting)
+    assert worker.retry_unposted_comments() == 0
+    assert len(upserts) == 2
+
+
+def test_a_raise_before_the_post_still_records_a_retriable_outcome(
+    tmp_path, monkeypatch
+):
+    """The other side of the fence. Nothing was written to GitHub, so the
+    repair has to leave something the next pass can find — and it has to be
+    retriable, because whatever broke may not be broken next time. The claim
+    already spent the budget, so this converges rather than looping."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    def _shape_change(job, existing):
+        raise AttributeError("'Verdict' object has no attribute 'band'")
+
+    monkeypatch.setattr(worker, "_render_recorded", _shape_change)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == 1
+    row = _job(url)
+    assert row["pr_comment_outcome"] == "failed:internal"
+    assert row["pr_comment_attempts"] == 1
+
+
 # Every token `pr_comment.upsert` documents itself as returning, plus the two
 # `worker._pr_comment_outcome` adds ahead of it and the two the worker records
 # on its own behalf. Keeping the list here rather than only in ADR-0014's

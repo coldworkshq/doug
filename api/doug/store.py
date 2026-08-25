@@ -1679,26 +1679,29 @@ def claim_pr_comment_retry(job_id: int, *, attempts: int) -> bool:
     same statement so a row the original worker finished between our SELECT
     and our claim is not repaired after it landed.
 
-    The answer comes from rowcount here, where `claim_pr_comment_seq`
-    deliberately re-reads instead, and the difference is the reason that one
-    could not. There, the equality case updates a row to the value it already
-    holds, and "matched but unchanged" is exactly where drivers disagree
-    about what rowcount means. Here every WHERE that matches also moves
-    `pr_comment_attempts`, so matched and changed are the same set — the same
-    ground `reclaim_stalled` already stands on. A driver that declines to
-    report rowcount at all (-1) reads as a lost claim, which makes the sweep
-    a no-op rather than a duplicator: neither psycopg nor sqlite3 does that,
-    and if one ever did, silence is the safe direction to fail in.
+    The answer comes from RETURNING, not from rowcount, and not from a
+    re-read either. `ingest.claim` already fences its claim exactly this way
+    ("Lost a race after the SELECT"), and the two alternatives both fail
+    here. A re-read cannot disambiguate at all: winner and loser would both
+    read `attempts + 1`, unlike `claim_pr_comment_seq`, where the value read
+    back is the caller's own seq. Rowcount would be sound in principle —
+    every WHERE that matches here also CHANGES the value, so the "matched but
+    unchanged" case that function distrusts cannot arise — but it is a
+    property of the driver, and no CI job runs on Postgres to hold it. A
+    driver reporting matched-rather-than-changed would hand BOTH sweepers the
+    claim, which is the duplicate this exists to stop. RETURNING emits a row
+    only for a row actually updated, on both backends, so the ambiguity is
+    not traded for a smaller one — it is gone.
 
     Storage-disabled returns False. There is no ledger to have selected a row
-    from, so nothing can reach this honestly, and False is again the quiet
-    direction.
+    from, so nothing can reach this honestly, and False is the quiet
+    direction: no claim, no write, no duplicate.
     """
     engine = _get_engine()
     if engine is None:
         return False
     with engine.begin() as conn:
-        result = conn.execute(
+        won = conn.execute(
             update(review_jobs)
             .where(
                 review_jobs.c.id == job_id,
@@ -1709,8 +1712,9 @@ def claim_pr_comment_retry(job_id: int, *, attempts: int) -> bool:
                 ),
             )
             .values(pr_comment_attempts=attempts + 1)
-        )
-    return result.rowcount == 1
+            .returning(review_jobs.c.id)
+        ).scalar_one_or_none()
+    return won is not None
 
 
 def jobs_with_unposted_pr_comment(
@@ -1721,7 +1725,11 @@ def jobs_with_unposted_pr_comment(
     limit: int,
 ) -> list[dict]:
     """Done jobs whose sticky comment has not landed and can still be
-    retried, oldest first. Rows are the same shape `ingest.claim` returns.
+    retried, oldest first. Rows are whole `review_jobs` rows — NOT "what
+    `ingest.claim` returns", which is these columns plus values that call
+    derives (`claim_generation` is bumped by the claim itself). The caller
+    reads only stored columns, and must not hand these rows to anything that
+    completes or fences a job.
 
     "Not landed" is NULL or `failed:*`, and the exclusions are the point.
     `created` and `updated` are the write landing. Every `skipped*` is a

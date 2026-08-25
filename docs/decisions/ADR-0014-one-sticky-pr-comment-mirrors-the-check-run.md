@@ -177,7 +177,8 @@ tenant outside these three installations, not after.
   unlocked and both deployed instances sweep the same candidates on the same
   pass, so `store.claim_pr_comment_retry` reserves the row in one conditional
   UPDATE that also spends the repair — taken before the GitHub call, the same
-  order and for the same reason as `claim_pr_comment_seq`. The retry
+  order and for the same reason as `claim_pr_comment_seq`, and answered by
+  RETURNING the way `ingest.claim` answers its own. The retry
   re-verifies the target (`fresh=False`) and rebuilds its body through the
   same `_render_recorded` the replay path uses, so D2's byte-for-byte claim
   holds on the repair too.
@@ -343,11 +344,18 @@ tenant outside these three installations, not after.
   older revision, land `NULL` and are swept once. That is the honest
   outcome for them: nothing knows whether they posted, and an in-place edit
   of the same body is silent on GitHub while a missing comment is not. One
-  such row cannot become a duplicate: a comment that posted also wrote
-  `pr_comments.comment_id`, so the sweep takes `upsert`'s stored-id branch
-  and never lists — and a PR past `_PAGE_BOUND`, where the listing could not
-  find it, returns `failed:page-bound` rather than falling through to
-  create.
+  such row cannot become a duplicate, on either of the two paths it can take.
+  A comment that posted also wrote `pr_comments.comment_id`, so the sweep
+  takes `upsert`'s stored-id branch and never lists. A comment that posted
+  and then failed to record its id — `set_pr_comment_id` raising is not a
+  `RequestFailed`, so it leaves `failed:internal` — is found by the listing
+  instead, under its own marker and this App's authorship, and edited in
+  place. The one case where the listing cannot find a comment that exists is
+  a PR past `_PAGE_BOUND`, and that branch returns `failed:page-bound`
+  rather than falling through to create; its own comment says neither a long
+  PR nor a broken listing may. What remains is the failure `_is_ours`
+  already names — with no app id configured nothing matches and every write
+  duplicates — which predates this sweep and is not bounded by it.
 - **A comment that exhausts its retries goes silent.** *(Added 2026-08-24,
   issue #154.)* After three attempts the row keeps its `failed:*` outcome and
   the only trace is a stderr line — the same shape D8 refuses for the 403
