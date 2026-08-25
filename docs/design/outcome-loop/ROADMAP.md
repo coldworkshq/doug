@@ -444,8 +444,7 @@ scheduler pass after its `due_at` of 2026-08-21T20:23:41Z.
 `revert_sha` `bf7a440b`, `anchor_sha` `99011b78`, `revert_instant`
 2026-08-08T00:47:57Z inside `window_starts_at` 2026-08-06T20:23:41Z (the
 `TOLERANCE_DAYS = 1` lower bound) through `window_ends_at`
-2026-08-21T20:23:41Z,
-`source: git-labels`, `prereg_hash` `c8e30da3…60f2`.
+2026-08-21T20:23:41Z, `source: git-labels`, `prereg_hash` `c8e30da3…60f2`.
 
 **The audit ran both directions, not just the one the issue asked for.** Every
 merged PR (143 from the GitHub API, not from `main`'s subjects — that list
