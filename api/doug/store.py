@@ -427,10 +427,15 @@ review_jobs = Table(
     # 'unrecorded' so NULL cannot also mean "written before anything
     # recorded" — see that migration for what the rollout overlap leaves.
     Column("pr_comment_outcome", String(32)),
-    # Bounds the retry. Incremented on every attempt including the first, so
-    # worker.PR_COMMENT_MAX_ATTEMPTS is the total, not the retries on top of
-    # one. A comment that fails for a reason no retry can fix has to stop
-    # costing GitHub calls on every drain.
+    # How many times the retry sweep has CLAIMED this row. The write
+    # `process_job` makes is not counted here and needs no counter: it is
+    # fenced by the job claim itself, so only one worker can make it. This
+    # column bounds the repairs on top of that one, and it is spent by
+    # `claim_pr_comment_retry` BEFORE the GitHub call rather than by the
+    # outcome write after it — the same order `claim_pr_comment_seq` takes
+    # its reservation in, and for the same reason. Spending it afterwards
+    # would leave a swallowed ledger failure looking exactly like a repair
+    # that never ran, and re-post the same comment on every drain for a day.
     Column("pr_comment_attempts", Integer, nullable=False, server_default="0"),
     UniqueConstraint(
         "installation_id", "github_repo_id", "pr_number", "head_sha", name="uq_review_job"
@@ -1633,11 +1638,15 @@ def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
     happened. Recording only the failures would make "we decided not to
     comment" and "we died before commenting" the same row.
 
-    The attempt is counted here rather than at the call site so the two
-    cannot drift: an outcome written without spending an attempt is an
-    unbounded retry, and an attempt spent without an outcome is a comment
-    that goes quiet with attempts left. Storage-disabled is a no-op, matching
-    every other write in this family — the sweep is likewise a no-op there.
+    Deliberately does NOT count the attempt. `claim_pr_comment_retry` spends
+    it before the GitHub call instead, so that a failure here — which is
+    swallowed, because the job is done and the verdict durable — cannot leave
+    a row that looks untried. Counting on the way out made a lost ledger
+    write and a repair that never ran indistinguishable, and re-swept the
+    same job on every drain until the lookback window closed.
+
+    Storage-disabled is a no-op, matching every other write in this family —
+    the sweep is likewise a no-op there.
     """
     engine = _get_engine()
     if engine is None:
@@ -1646,16 +1655,67 @@ def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
         conn.execute(
             update(review_jobs)
             .where(review_jobs.c.id == job_id)
-            .values(
-                pr_comment_outcome=outcome[:32],
-                pr_comment_attempts=review_jobs.c.pr_comment_attempts + 1,
-            )
+            .values(pr_comment_outcome=outcome[:32])
         )
+
+
+def claim_pr_comment_retry(job_id: int, *, attempts: int) -> bool:
+    """Reserve this job's comment repair for one sweeper. True means write.
+
+    `jobs_with_unposted_pr_comment` is an unlocked SELECT, and `drain` runs
+    on every delivery with `--max-instances 2`, so both instances sweep the
+    same settled rows on the same pass — not by coincidence the way two
+    drainers meet on one PR, but every time, because the same query picks the
+    same candidates. Without a reservation both would call `upsert`, and for
+    a PR whose comment was never created the listing can miss a create the
+    other has not committed yet: two comments, two notifications, for one
+    review. That is the harm the complete-before-post ordering exists to
+    prevent, reintroduced by the repair for it.
+
+    One conditional UPDATE, taken BEFORE the GitHub call, that both tests the
+    attempt count and spends it — the same shape `claim_pr_comment_seq` uses
+    for the seq mark, for the same reason: reading and then writing would
+    leave the whole round trip as the window. The outcome is re-tested in the
+    same statement so a row the original worker finished between our SELECT
+    and our claim is not repaired after it landed.
+
+    The answer comes from rowcount here, where `claim_pr_comment_seq`
+    deliberately re-reads instead, and the difference is the reason that one
+    could not. There, the equality case updates a row to the value it already
+    holds, and "matched but unchanged" is exactly where drivers disagree
+    about what rowcount means. Here every WHERE that matches also moves
+    `pr_comment_attempts`, so matched and changed are the same set — the same
+    ground `reclaim_stalled` already stands on. A driver that declines to
+    report rowcount at all (-1) reads as a lost claim, which makes the sweep
+    a no-op rather than a duplicator: neither psycopg nor sqlite3 does that,
+    and if one ever did, silence is the safe direction to fail in.
+
+    Storage-disabled returns False. There is no ledger to have selected a row
+    from, so nothing can reach this honestly, and False is again the quiet
+    direction.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return False
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(review_jobs)
+            .where(
+                review_jobs.c.id == job_id,
+                review_jobs.c.pr_comment_attempts == attempts,
+                or_(
+                    review_jobs.c.pr_comment_outcome.is_(None),
+                    review_jobs.c.pr_comment_outcome.like("failed:%"),
+                ),
+            )
+            .values(pr_comment_attempts=attempts + 1)
+        )
+    return result.rowcount == 1
 
 
 def jobs_with_unposted_pr_comment(
     *,
-    max_attempts: int,
+    max_retries: int,
     settled_for_seconds: int,
     within_seconds: int,
     limit: int,
@@ -1673,10 +1733,15 @@ def jobs_with_unposted_pr_comment(
     Repositories banner (D8), and a retry that cannot converge would spend a
     GitHub call per drain forever to change nothing.
 
+    Selecting is not claiming. This is an unlocked read, and two instances
+    sweep the same rows on the same pass, so every caller has to win
+    `claim_pr_comment_retry` on a row before writing to GitHub with it.
+
     Three bounds, each closing a different way this could misfire:
 
-      * `max_attempts` — a comment failing for a reason no retry fixes has to
-        stop costing calls. The first attempt counts, so this is the total.
+      * `max_retries` — a comment failing for a reason no retry fixes has to
+        stop costing calls. It counts repairs only; the write `process_job`
+        already made is fenced by the job claim and needs no budget here.
       * `settled_for_seconds` — the gap between `ingest.complete` and the
         outcome write belongs to a worker that may still be alive inside it,
         and two drainers are the deployed configuration (`--max-instances
@@ -1709,7 +1774,7 @@ def jobs_with_unposted_pr_comment(
                         review_jobs.c.pr_comment_outcome.is_(None),
                         review_jobs.c.pr_comment_outcome.like("failed:%"),
                     ),
-                    review_jobs.c.pr_comment_attempts < max_attempts,
+                    review_jobs.c.pr_comment_attempts < max_retries,
                     review_jobs.c.finished_at <= now - timedelta(seconds=settled_for_seconds),
                     review_jobs.c.finished_at >= now - timedelta(seconds=within_seconds),
                 )

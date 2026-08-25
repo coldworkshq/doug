@@ -572,16 +572,16 @@ def process_job(job: dict) -> int | None:
 # owns the selection and this owns what "worth retrying" means — the same
 # split `ingest.MAX_ATTEMPTS` keeps for the review lane.
 #
-# Three attempts total, counting the one `process_job` already made: a
-# comment failing for a reason no retry fixes must stop costing GitHub calls.
-# Five minutes settled, because the gap between `ingest.complete` and the
-# outcome write belongs to a worker that may still be alive inside it, and
-# two drainers are the deployed configuration — sweeping a row still in that
-# gap is how one review notifies a PR twice. Twenty-four hours of lookback,
+# Two repairs on top of the write `process_job` already made: a comment
+# failing for a reason no retry fixes must stop costing GitHub calls. Five
+# minutes settled, because the gap between `ingest.complete` and the outcome
+# write belongs to a worker that may still be alive inside it, and two
+# drainers are the deployed configuration — sweeping a row still in that gap
+# is how one review notifies a PR twice. Twenty-four hours of lookback,
 # because a comment is worth repairing while the PR is still what people are
 # looking at, and because an unbounded window turns every cold start into a
 # walk of the ledger's whole history.
-PR_COMMENT_MAX_ATTEMPTS = 3
+PR_COMMENT_MAX_RETRIES = 2
 PR_COMMENT_SETTLED_SECONDS = 300
 PR_COMMENT_RETRY_WINDOW_SECONDS = 86_400
 PR_COMMENT_RETRY_BATCH = 20
@@ -615,13 +615,20 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     display-only and stale after a rename, so it re-verifies before writing —
     exactly the case `pr_comment.target_matches` exists for.
 
-    Best-effort per job, and the exception path still records: an outcome
-    written without an attempt spent would retry the same broken job on every
-    drain for a day. `failed:internal` keeps it in the retry set and lets
-    `PR_COMMENT_MAX_ATTEMPTS` end it.
+    Selecting a row is not owning it. The read is unlocked and both deployed
+    instances sweep the same candidates on the same pass, so every repair
+    goes through `store.claim_pr_comment_retry` first — which spends the
+    attempt in the statement that wins it, before any GitHub call.
+
+    Best-effort per job, and every path out of one records or claims: a
+    repair that neither wins a claim nor writes an outcome would be re-swept
+    on the next drain, and on every drain after it until the window closed.
+    Whole-job try, including the post: `_post_pr_comment` swallows everything
+    today, but a sweep that lets one job's raise skip the rest of the batch
+    would make the repair's reach depend on a contract held elsewhere.
     """
     jobs = store.jobs_with_unposted_pr_comment(
-        max_attempts=PR_COMMENT_MAX_ATTEMPTS,
+        max_retries=PR_COMMENT_MAX_RETRIES,
         settled_for_seconds=PR_COMMENT_SETTLED_SECONDS,
         within_seconds=PR_COMMENT_RETRY_WINDOW_SECONDS,
         limit=limit,
@@ -629,12 +636,6 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     attempted = 0
     for job in jobs:
         where = f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]}"
-        print(
-            f"doug: retrying comment for job {job['id']} {where} "
-            f"(attempt {job['pr_comment_attempts'] + 1} of {PR_COMMENT_MAX_ATTEMPTS}, "
-            f"last {job['pr_comment_outcome'] or 'unrecorded'})",
-            file=sys.stderr,
-        )
         try:
             existing = (
                 store.find_verdict_by_id(job["verdict_id"])
@@ -645,13 +646,32 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
                 # A 'done' row always carries the id ingest.complete wrote,
                 # so this is a verdict that went away underneath it. Terminal
                 # rather than `failed:*`: there is nothing for a later pass to
-                # find, and a retry that cannot converge is noise.
+                # find, and a retry that cannot converge is noise. Recorded
+                # without claiming — nothing is written to GitHub, so there is
+                # no write for a second sweeper to duplicate, and whichever of
+                # them records it first records the same thing.
                 print(f"doug: comment skipped:no-verdict {where}", file=sys.stderr)
                 store.record_pr_comment_outcome(job["id"], "skipped:no-verdict")
                 continue
+            if not store.claim_pr_comment_retry(
+                job["id"], attempts=job["pr_comment_attempts"]
+            ):
+                # The other instance owns this repair, or the original worker
+                # landed its outcome between the select and here. Ordinary,
+                # not a fault: silent, the way ingest.claim's lost race is.
+                continue
+            print(
+                f"doug: retrying comment for job {job['id']} {where} "
+                f"(retry {job['pr_comment_attempts'] + 1} of "
+                f"{PR_COMMENT_MAX_RETRIES}, "
+                f"last {job['pr_comment_outcome'] or 'unrecorded'})",
+                file=sys.stderr,
+            )
             gh = app_auth.installation_client(job["installation_id"])
             owner, name = job["repo_full_name"].split("/", 1)
             _, summary = _render_recorded(job, existing)
+            attempted += 1
+            _post_pr_comment(gh, owner, name, job, summary, fresh=False)
         except Exception as e:  # noqa: BLE001 — one bad job must not stop the sweep
             print(
                 f"doug: comment retry internal error on job {job['id']} "
@@ -666,9 +686,6 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
                     f"({type(inner).__name__}: {inner})",
                     file=sys.stderr,
                 )
-            continue
-        attempted += 1
-        _post_pr_comment(gh, owner, name, job, summary, fresh=False)
     return attempted
 
 

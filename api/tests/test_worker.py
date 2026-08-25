@@ -2968,7 +2968,7 @@ def test_a_comment_lost_after_the_job_completed_is_retried_without_a_new_sha(
     row = _job(url)
     assert row["status"] == "done" and row["head_sha"] == JOB["head_sha"]
     assert row["pr_comment_outcome"] == "updated"
-    assert row["pr_comment_attempts"] == 2
+    assert row["pr_comment_attempts"] == 1
     err = capsys.readouterr().err
     assert f"doug: retrying comment for job {job_id}" in err
     assert "last failed:net" in err
@@ -3057,7 +3057,9 @@ def test_a_landed_or_decided_comment_is_never_retried(
 
     assert worker.retry_unposted_comments() == 0
     assert len(upserts) == before
-    assert _job(url)["pr_comment_attempts"] == 1
+    # Never claimed, so no repair budget was spent on a row that never
+    # needed one — the counter is repairs, not writes.
+    assert _job(url)["pr_comment_attempts"] == 0
 
 
 def test_a_comment_still_inside_the_settle_window_is_left_alone(tmp_path, monkeypatch):
@@ -3100,10 +3102,44 @@ def test_a_comment_older_than_the_lookback_window_is_left_alone(tmp_path, monkey
     assert len(upserts) == 1
 
 
-def test_the_retry_gives_up_after_the_attempt_cap(tmp_path, monkeypatch):
+def test_the_retry_gives_up_after_the_retry_cap(tmp_path, monkeypatch):
     """A comment failing for a reason no retry fixes has to stop costing
-    GitHub calls on every drain for a day. The first attempt counts, so
-    PR_COMMENT_MAX_ATTEMPTS is the total and not the retries on top of it."""
+    GitHub calls on every drain for a day. The counter budgets REPAIRS: the
+    write process_job already made is fenced by the job claim and needs none,
+    so PR_COMMENT_MAX_RETRIES sits on top of it."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    assert _job(url)["pr_comment_attempts"] == 0
+    _settled(url, job_id)
+
+    swept = [worker.retry_unposted_comments() for _ in range(4)]
+
+    assert swept == [1, 1, 0, 0]
+    assert worker.PR_COMMENT_MAX_RETRIES == 2
+    assert len(upserts) == 1 + worker.PR_COMMENT_MAX_RETRIES == 3
+    assert _job(url)["pr_comment_attempts"] == 2
+
+
+def test_two_sweepers_racing_one_row_produce_exactly_one_comment(
+    tmp_path, monkeypatch
+):
+    """`--max-instances 2` means both instances run drain, and the sweep's
+    SELECT is unlocked — so unlike two drainers meeting on one PR by
+    coincidence, both pick the SAME settled rows on EVERY pass. Without a
+    reservation both would reach `upsert`, and for a PR whose comment was
+    never created the listing can miss a create the other has not committed:
+    two comments, two notifications, one review. That is the harm the
+    complete-before-post ordering exists to prevent, reintroduced by the
+    repair for it.
+
+    Standing in for the second instance by claiming the row underneath this
+    one, between its select and its write — the window the reservation has to
+    close, and the only one worth testing, since a claim taken after the
+    select has already lost."""
     url = _db(tmp_path, monkeypatch)
     _wire(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
@@ -3112,11 +3148,97 @@ def test_the_retry_gives_up_after_the_attempt_cap(tmp_path, monkeypatch):
     worker.process_job(ingest.claim())
     _settled(url, job_id)
 
-    swept = [worker.retry_unposted_comments() for _ in range(4)]
+    select_rows = store.jobs_with_unposted_pr_comment
 
-    assert swept == [1, 1, 0, 0]
-    assert len(upserts) == worker.PR_COMMENT_MAX_ATTEMPTS == 3
-    assert _job(url)["pr_comment_attempts"] == 3
+    def _peer_claims_first(**kwargs):
+        rows = select_rows(**kwargs)
+        assert store.claim_pr_comment_retry(job_id, attempts=0)  # the peer wins
+        return rows
+
+    monkeypatch.setattr(store, "jobs_with_unposted_pr_comment", _peer_claims_first)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == 1  # the peer's write, not a second one
+    assert _job(url)["pr_comment_attempts"] == 1
+
+
+def test_a_swallowed_outcome_write_does_not_buy_an_unbounded_retry(
+    tmp_path, monkeypatch
+):
+    """The attempt is spent by the claim, before the GitHub call, not by the
+    outcome write after it. `_post_pr_comment` swallows a ledger failure on
+    purpose — the verdict is durable and the job is done, so nothing there
+    may raise — and counting on the way out made a lost write and a repair
+    that never ran the same row. The same job would then be re-swept on every
+    drain for the whole lookback window, spending a GitHub call each time."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("failed:net",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+
+    def _ledger_down(*a, **k):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(store, "record_pr_comment_outcome", _ledger_down)
+
+    swept = [worker.retry_unposted_comments() for _ in range(3)]
+
+    assert swept == [1, 1, 0]
+    assert len(upserts) == 3
+    assert _job(url)["pr_comment_attempts"] == worker.PR_COMMENT_MAX_RETRIES
+
+
+# Every token `pr_comment.upsert` documents itself as returning, plus the two
+# `worker._pr_comment_outcome` adds ahead of it and the two the worker records
+# on its own behalf. Keeping the list here rather than only in ADR-0014's
+# reader-fed flags is what makes the classification testable: a token added to
+# `upsert` with no `failed:` prefix becomes terminal SILENTLY, and prose in a
+# record cannot fail.
+PR_COMMENT_TOKENS = {
+    "created": False,
+    "updated": False,
+    "skipped-stale": False,
+    "denied:403": False,
+    "failed:500": True,
+    "failed:net": True,
+    "failed:page-bound": True,
+    "skipped:off": False,
+    "skipped:no-active-row": False,
+    "skipped:no-ledger": False,
+    "skipped-target": False,
+    "skipped:no-verdict": False,
+    "failed:internal": True,
+}
+
+
+@pytest.mark.parametrize(("token", "retried"), sorted(PR_COMMENT_TOKENS.items()))
+def test_every_outcome_token_is_classified_on_purpose(
+    tmp_path, monkeypatch, token, retried
+):
+    """The retry set is a prefix rule — `failed:*` and nothing else — so a new
+    token that fails without saying `failed:` would inherit "terminal" with
+    nobody deciding it. This pins the whole vocabulary against the rule, and
+    pins that every token fits the column it is stored in: a value truncated
+    at 32 chars would be a silent lie about what happened.
+
+    Add a token to `pr_comment.upsert` or to `worker._pr_comment_outcome` and
+    this test is where it has to be classified."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    _wire_pr_comment(monkeypatch, outcomes=(token,))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    stored = _job(url)["pr_comment_outcome"]
+    assert stored == token, "token does not survive the column width"
+
+    _settled(url, job_id)
+
+    assert bool(worker.retry_unposted_comments()) is retried
 
 
 def test_the_retry_reverifies_the_target_before_writing(tmp_path, monkeypatch, capsys):

@@ -170,12 +170,17 @@ tenant outside these three installations, not after.
   those two: `created`/`updated` landed, every `skipped*` is a decision and a
   decision retried is a decision overridden, and `denied:403` is a tenant
   permission action that already has D8's marker and banner, so retrying it
-  would spend a call per drain to change nothing. Three bounds — three
-  attempts counting the original, five minutes settled before a `NULL` row is
-  read as abandoned rather than in flight, and a twenty-four-hour lookback.
-  The retry re-verifies the target (`fresh=False`) and rebuilds its body
-  through the same `_render_recorded` the replay path uses, so D2's
-  byte-for-byte claim holds on the repair too.
+  would spend a call per drain to change nothing. Three bounds — two repairs
+  on top of the write `process_job` already made, five minutes settled before
+  a `NULL` row is read as abandoned rather than in flight, and a
+  twenty-four-hour lookback. Selecting a row is not owning it: the read is
+  unlocked and both deployed instances sweep the same candidates on the same
+  pass, so `store.claim_pr_comment_retry` reserves the row in one conditional
+  UPDATE that also spends the repair — taken before the GitHub call, the same
+  order and for the same reason as `claim_pr_comment_seq`. The retry
+  re-verifies the target (`fresh=False`) and rebuilds its body through the
+  same `_render_recorded` the replay path uses, so D2's byte-for-byte claim
+  holds on the repair too.
 
 ## Rejected
 
@@ -315,16 +320,21 @@ tenant outside these three installations, not after.
   mark is set and every later write is guarded. Forcing those rows through a
   listing to read the marker was rejected: a PR past `pr_comment._PAGE_BOUND`
   would then fail every write forever rather than once.
-- **A comment can still be posted twice, and the settle period is what
-  prices it.** *(Added 2026-08-24, issue #154.)* A `NULL` outcome means "no
-  write recorded", which is what a crash between `ingest.complete` and the
-  comment leaves — but it is also, briefly, what a worker still inside that
-  gap leaves, and two drainers are the deployed configuration. The sweep
-  therefore ignores anything finished less than five minutes ago, the same
-  call `reclaim_stalled`'s lease makes about a live claim. The residual is a
-  write that outlives the settle period and then lands anyway; `upsert`'s
-  listing usually finds the comment and edits it, and the case where it does
-  not is the duplicate already priced above.
+- **Two guards keep the repair from becoming the duplicate it repairs, and
+  they close different windows.** *(Added 2026-08-24, issue #154; the
+  reservation added after Doug's review of the same PR.)* A `NULL` outcome
+  means "no write recorded", which is what a crash between `ingest.complete`
+  and the comment leaves — but it is also, briefly, what a worker still
+  inside that gap leaves. The settle period closes that one: nothing finished
+  less than five minutes ago is swept, the same call `reclaim_stalled`'s
+  lease makes about a live claim. It says nothing about the other window,
+  which is sharper — the sweep's read is unlocked, so both instances select
+  the *same* rows on *every* pass rather than meeting on one PR by
+  coincidence, and both would have reached `upsert`. `claim_pr_comment_retry`
+  closes that one. The residual is a first worker's write that outlives the
+  settle period and lands anyway; `upsert`'s listing usually finds the
+  comment and edits it, and the case where it does not is the duplicate
+  already priced above.
 - **`NULL` means one thing only from migration 016 forward.** Every `done`
   row written before that migration recorded nothing, so migration 016
   backfills them to `unrecorded` — without it the first sweep after deploy
@@ -332,7 +342,12 @@ tenant outside these three installations, not after.
   reach `done` during the rollout overlap, on an instance still running the
   older revision, land `NULL` and are swept once. That is the honest
   outcome for them: nothing knows whether they posted, and an in-place edit
-  of the same body is silent on GitHub while a missing comment is not.
+  of the same body is silent on GitHub while a missing comment is not. One
+  such row cannot become a duplicate: a comment that posted also wrote
+  `pr_comments.comment_id`, so the sweep takes `upsert`'s stored-id branch
+  and never lists — and a PR past `_PAGE_BOUND`, where the listing could not
+  find it, returns `failed:page-bound` rather than falling through to
+  create.
 - **A comment that exhausts its retries goes silent.** *(Added 2026-08-24,
   issue #154.)* After three attempts the row keeps its `failed:*` outcome and
   the only trace is a stderr line — the same shape D8 refuses for the 403

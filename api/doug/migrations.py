@@ -396,10 +396,21 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # honest answer for them, since nothing knows whether they posted.
             "UPDATE review_jobs SET pr_comment_outcome = 'unrecorded' "
             "WHERE status = 'done' AND pr_comment_outcome IS NULL",
-            # The sweep's selection is (status, pr_comment_outcome); without
-            # this it is a full scan of every job ever run, on every drain.
+            # (status, finished_at), NOT (status, pr_comment_outcome).
+            # Virtually every row in this table is 'done', so an outcome
+            # column second buys almost nothing and leaves the planner a
+            # range filter and a sort it cannot serve from the index. The
+            # sweep's actual selectivity is the twenty-four-hour window on
+            # finished_at, which this ordering serves as a range AND as the
+            # ORDER BY; the outcome and attempt predicates are then cheap
+            # residuals over one day of rows rather than over every job ever
+            # run. Not a partial index on the outcome predicate: the LIKE
+            # would have to be identical in the index and the query for
+            # Postgres to use it, and sqlite's partial-index rules are not
+            # the same rules, so the two backends could silently diverge on
+            # whether the sweep has an index at all.
             "CREATE INDEX IF NOT EXISTS ix_review_jobs_pr_comment_retry "
-            "ON review_jobs (status, pr_comment_outcome)",
+            "ON review_jobs (status, finished_at)",
         ),
     ),
 ]
