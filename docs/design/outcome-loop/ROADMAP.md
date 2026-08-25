@@ -387,6 +387,13 @@ path, no cross-tenant read, no silent partial reads.
   ("PR head sha at merge — not stored") **forward only**: rows written before
   this slice stay NULL, and it does not touch the locked §2.1 timestamp-match
   rule.
+  **The adjudicated half of "one receipt correct end-to-end" is now carried by
+  a production receipt, 2026-08-24 (#122).** `GET /v1/prs/68/receipt` returns a
+  real adjudication block on a real merge: window 14 `done`, `kind: revert`,
+  `revert_sha` `bf7a440b`, `source: git-labels`, stamped with the v9
+  `prereg_hash`. It is no longer fixtures and honesty-state tests standing in
+  for the thing. The 60-day block on that same receipt is still `pending`, due
+  2026-10-06, so the 60-day window remains unexercised end-to-end.
 - [x] Check-run footer: `adjudicated N · pending M · as of <date>` + `deep reads x/200`
   this cycle. Empty is the product (`adjudicated 0` still renders). Shipped in #106.
 - [x] Public Doug-on-Doug scoreboard page (dogfood proof, no auth) — `/scoreboard`
@@ -426,6 +433,46 @@ receipt correct end-to-end; scoreboard rendering live counts; then one full webh
 14-day cycle observed in prod. **"Observed" is load-bearing and was not implemented:** the first
 two days of the first cycle ran unobserved and red. The liveness item above is what makes the
 word mean anything.
+
+**THE DETECTOR'S FIRST POSITIVE FIRED, 2026-08-22 (#122, audited 2026-08-24).**
+Until this, "the detector works" rested entirely on true negatives — the
+2026-08-18 audit was 18/18 with 16 `clean` and 2 `censored`, and no `revert`
+had ever been written. PR #68 (merged 2026-08-07T20:23:41Z, reverted by #70
+the same day) adjudicated `kind: revert` at 2026-08-22T03:02:21Z, one
+scheduler pass after its `due_at` of 2026-08-21T20:23:41Z.
+`GET /v1/prs/68/receipt` carries what §10 requires and not a word less:
+`revert_sha` `bf7a440b`, `anchor_sha` `99011b78`, `revert_instant`
+2026-08-08T00:47:57Z inside `window_starts_at` 2026-08-06T20:23:41Z (the
+`TOLERANCE_DAYS = 1` lower bound) through `window_ends_at`
+2026-08-21T20:23:41Z, `source: git-labels`, `prereg_hash` `c8e30da3…60f2`.
+
+**The audit ran both directions, not just the one the issue asked for.** Every
+merged PR (143 from the GitHub API, not from `main`'s subjects — that list
+misses merges to other branches) was fetched by receipt and compared against
+`git log`. All 53 `status='done'` rows reconcile with the live scoreboard's
+`adjudicated: 53`: **50 `clean`, 2 `censored`, 1 `revert`.** No false
+negatives, because `bf7a440` is the only revert commit in this repository's
+entire history. No false positives, because nothing else is labelled `revert`
+— including #70 itself, the reverting PR, which is correctly `clean`. The two
+`censored` rows are #40 and #46, both merged to `gh-pages`, both
+`censor_reason: base_ref`, which is the `base_ref` censoring item above
+executing in production rather than in fixtures. #68 is also not vulnerable to
+the title-fallback collision of #166: `bf7a440` names its target by sha, and
+#68 was never relanded.
+
+**What this does NOT do: it does not move the miss rate.** #68's governing
+verdict scored **0.34 against a 0.30 threshold — `band: flagged`**, and §2.1's
+denominator is `tier='reader' AND band='cleared'`. Doug flagged the one PR that
+got reverted, so this positive sits outside the published denominator entirely.
+`instrument_snapshot` hardcodes `miss_rate=None` (`store.py:2020`) besides, so
+no surface computes a rate yet.
+
+**One full webhook-started 14-day cycle is now complete** — #68 was reviewed
+off a webhook on 2026-08-07, merged, clocked, and adjudicated on 2026-08-22.
+**"Observed" still is not.** This cycle was verified by hand, from a laptop,
+three days after it closed, which is the same posture that let the first cycle
+run dead for two days. The liveness item stays open and the gate's last clause
+stays unmet until it closes.
 
 ---
 

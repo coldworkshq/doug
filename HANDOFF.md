@@ -1,6 +1,7 @@
 # HANDOFF — doug
 
-State:    review — PR #213 open. Merged origin/main AGAIN (6bbb1a5, #211);
+State:    review — PR #213 open, MERGEABLE, all six CI jobs green. Merged
+          origin/main a third time (99f059f, #212);
           HANDOFF.md is the only file that conflicts, and it has now blocked
           CI twice — a CONFLICTING PR has no mergeable ref, so workflows
           never fire and the PR reads "no checks" rather than "blocked".
@@ -101,9 +102,146 @@ Pointers: branch feat/palette-contrast-dark-mode · web/app/globals.css +
 Everything below arrived on main in HANDOFF.md and is kept because this branch
 has no business deleting it. Its State/Next slots are dropped on merge: they
 describe whichever branch wrote them, and two status blocks in one file is how
-a handoff starts lying. This file conflicts on every merge for exactly that
-reason — one mutable slot block, every branch rewriting it.
+a handoff starts lying. This file conflicts on EVERY merge for exactly that
+reason — one mutable slot block, every branch rewriting it — and a conflicted
+PR has no mergeable ref, so CI silently does not run and the PR reads "no
+checks" rather than "blocked". That has now happened three times on #213.
 
+
+## #122 SETTLED — the detector's first positive, audited 2026-08-24
+
+**The positive.** PR #68 merged 2026-08-07T20:23:41Z and #70 reverted it the
+same day. Its 14-day clock came due 2026-08-21T20:23:41Z and adjudicated
+`kind: revert` at 2026-08-22T03:02:21Z, one scheduler pass later.
+`GET /v1/prs/68/receipt?repo=drewjst/doug` carries `revert_sha` `bf7a440b`,
+`anchor_sha` `99011b78`, `revert_instant` 2026-08-08T00:47:57Z,
+`window_starts_at` 2026-08-06T20:23:41Z (the `TOLERANCE_DAYS = 1` lower
+bound), `source: git-labels`, `prereg_hash` `c8e30da3…60f2`. Manual `git log`
+agrees: `bf7a440` says `This reverts commit 99011b78…` and is the only revert
+commit in this repository's history.
+
+**I audited the other direction too, which the issue did not ask for.** A
+false positive would discredit the instrument exactly as fast as a false
+negative. Every merged PR by receipt — 143 numbers from the GitHub API, NOT
+from `main`'s subjects, because that list silently misses merges to other
+branches — gives 53 `done` rows, matching the live scoreboard's
+`adjudicated: 53` exactly: 50 `clean`, 2 `censored`, 1 `revert`. Nothing else
+is labelled `revert`, including #70 itself, which is correctly `clean`. The
+two `censored` are #40 and #46, merged to `gh-pages`, `censor_reason:
+base_ref` — the `base_ref` censoring item running in production, not in
+fixtures. #166's title-fallback collision cannot touch #68: `bf7a440`
+attributes by sha, and #68 was never relanded.
+
+**THE PART THAT IS EASY TO MISREAD: this does not move the miss rate.** #68's
+governing verdict was **0.34 against a 0.30 threshold — `band: flagged`**.
+Prereg §2.1's denominator is `tier='reader' AND band='cleared'`. Doug flagged
+the one PR that got reverted, so the first positive sits OUTSIDE the published
+denominator. Anyone quoting "the detector's first miss" would be wrong twice
+over, because `instrument_snapshot` also hardcodes `miss_rate=None`
+(`store.py:2020`) and no surface computes a rate at all yet.
+
+**The M3 gate does not close on this.** One full webhook-started 14-day cycle
+is now complete, but "observed" is still not implemented: I verified this
+cycle by hand, three days after it closed, which is the same posture that let
+the first cycle run dead for two days. #121 stays open and the gate's last
+clause stays unmet.
+
+**Evidence for #121, NOT yet posted there — ask Andrew first.** The live
+scoreboard read
+`first_due: 2026-08-25T03:48:04Z` against `as_of: 2026-08-25T04:47:10Z` — a
+`first_due` strictly in the past with work outstanding, which is the exact
+contradiction #121 proposes to alert on, occurring while nothing is wrong. The
+adjudicator runs daily at 03:00Z, so any clock due after that sits untouched
+for up to about 24 hours by design. The check needs a tolerance of at least one
+scheduler period, or it fires every day.
+
+## Still unfiled — decision debt, Andrew's call
+
+Raised 2026-08-24 while answering "when do we move doug to coldworks and give
+it a public surface", deliberately NOT filed as issues yet because both are
+questions for Andrew rather than work:
+
+1. **Publication venue portability — SHARPER after #211.** The prereg names
+   `https://drewjst.github.io/doug/publication/` and §12 requires every prior
+   version stay published. #211 retired gh-pages to a redirect stub
+   (bd67e4a), and checked 2026-08-25: `drewjst.github.io/doug/` answers 200
+   while `drewjst.github.io/doug/publication/` answers **404**. Nothing is
+   lost — no publication exists yet, the first is provisionally 2027-01-15 —
+   but the venue a hashed document names is now a 404 under a retired site,
+   and a repo transfer to `coldworkshq` would move that host again. #211 did
+   not amend the prereg, and §12 says a venue change needs a new hashed
+   version. Decide where the venue lives before the first publication, not
+   after.
+2. **Series identity across a transfer.** The ledger keys on
+   `(installation_id, github_repo_id)`; only `github_repo_id` survives a
+   transfer between accounts. Decide which one the published denominator uses
+   BEFORE transferring — a ruling made once the split is visible is
+   indistinguishable from picking the flattering framing.
+
+---
+
+## Prior slot — docs accuracy sweep (#211, merged 2026-08-25)
+
+State:    review — docs accuracy sweep is a PR against main from branch
+          docs/accuracy-sweep (worktree .worktrees/docs-accuracy), 3 commits,
+          branch level with origin/main so CI fires. web 363/363, api
+          1661/1661, console 113/113, tsc clean, eslint clean (2 pre-existing
+          <img> warnings on /about). SHIPPED separately: gh-pages bd67e4a is
+          pushed and live — drewjst.github.io/doug is now a redirect to the
+          Cloud Run site. That push was the deploy; there is no PR for it.
+Next:     Andrew reviews and merges #211. Merging deploys (ADR-0009), so the
+          corrected /docs copy goes out with it. Doug already read it —
+          Cleared, risk 0.32, 1 medium + 3 low + 2 deviations, ALL SETTLED in
+          docs/findings-log.jsonl (4 real, 1 adjacent, 1 disproved) and fixed
+          in 94be0d3. Doug will read the new head; expect a second pass.
+Blockers: none.
+
+Not fixed, each a judgment call Andrew owns:
+- docs/design/competitor-imports/ is named for a concept that died in its own
+  grounding phase; the six files inside are all "cited head reads". The new
+  lane.md says so rather than renaming, because 3 files outside the folder
+  point at the path. Rename is a clean follow-up if wanted.
+- ADR-0018 owes a 20-PR cost pilot (~$1) before anyone quotes a per-read cost
+  after EFFORT went to high. No issue exists for it; AGENTS.md says there
+  should be one.
+- docs/design/reader-effort/preregistration.md's header still names ADR-0016
+  as its companion; ADR-0018 is what governs. Left as the record of what was
+  written then; lane.md carries the correction.
+
+Decisions this session:
+- Verified every number against code or the live API, never against another
+  doc — the two hosted surfaces already disagreed, so doc-vs-doc agreement
+  proves nothing — rejected: trusting the surface that looked freshest.
+- Retired gh-pages instead of rewriting it (Andrew's call) — repairing keeps
+  two copies of every claim, which is the mechanism that produced the drift —
+  rejected: fixing the ~9 false claims in place.
+- The docs copy states a DATED SNAPSHOT and names the command that prints
+  today's figure, and the pins check growth-invariants instead of exact counts
+  — an exact derived pin fails on every settle forever, so the copy becomes a
+  chore on unrelated PRs and the first person in a hurry deletes the pin rather
+  than the staleness (Doug's medium on #211, real). Verified: a prospective
+  append stays green, a backfill append fails — rejected: the exact derived
+  pin, and rejected: computing at render time, which .dockerignore forbids
+  (/docs is not in the web image's build context).
+- The rest-api sample shows field placeholders, not live counters — printing
+  53/179 and a frozen timestamp reintroduced the exact drift class this PR
+  removes, my own regression, caught by Doug (reader:docs-sample-drift) —
+  rejected: real values with a "counters move" caveat under them.
+- HANDOFF.md was NOT touched in the main checkout: a concurrent session owns
+  it there (feat/palette-contrast-dark-mode). This slot lives on the docs
+  branch only, so it will conflict on merge — drop this commit if that is not
+  worth it — rejected: editing the file another session is mid-write on.
+- gh-pages went out as a direct push, not a PR — it is a separate branch with
+  no CI, no reviewer and no deploy pipeline, and the push IS the publish;
+  a PR would have added a review surface for nobody — rejected: routing a
+  static-site retirement through main.
+Pointers: branch docs/accuracy-sweep @ bd5886b · branch gh-pages @ bd67e4a ·
+          web/app/docs/*, web/public/llms.txt, web/lib/public-surface.test.mjs ·
+          api/README.md · docs/REVIEWING.md (#186 conflict marker, closed) ·
+          docs/design/{walked-out,competitor-imports,reader-effort}/lane.md ·
+          live API https://doug-api-g7rm4l4e3q-uc.a.run.app
+
+---
 
 ## Prior slot — PR #202 (#154)
 
