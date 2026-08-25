@@ -54,7 +54,10 @@ Harvests are checkpointed — kill and relaunch with the same command to resume.
   anomalies under triage.
 - Per-repository settings (AVAILABLE): each connected repository carries its own
   flag line (the score at which Doug asks for a human), a PR-comment toggle, and a
-  deep-read toggle, all on /dashboard/settings. Deep read off means that repository
+  deep-read toggle. They are on /dashboard/settings, and the flag line is ALSO on
+  the repositories table, one column from the "needs you" count it decides — both
+  surfaces are sanctioned and render one control against one API (ADR-0013,
+  ADR-0019). Deep read off means that repository
   is scored on structural signals alone and no diff leaves it; on a repository with
   no flag line of its own it also moves the line Doug bands against, so he asks for
   a human less often rather than merely differently.
@@ -78,8 +81,8 @@ JSON schema is early-preview; printed tables are the stable contract.
 
 ## Doug's own findings (AVAILABLE — the log; there is no rate yet)
 Doug reviews every PR in his own repository and the dispositions are written down.
-Just under a third of prospective findings — 52 of 173 — are disproved by code he
-wasn't shown: he reads a diff,
+Just under a third of prospective findings are disproved by code he wasn't
+shown: he reads a diff,
 not a repository, and does not reliably separate what a diff PROVES from what it
 merely PERMITS. Two recurring failure classes: (1) a conclusion drawn from an
 absence in the diff ("this name is used and no import was added" — it was already
@@ -97,10 +100,14 @@ settled it. Two axes because one loses the interesting cases — a true finding 
 changed nothing is a re-report; a false finding that changed something found a real
 gap by the wrong route. Doug's strongest mode is "this code does not justify
 itself," and a single score would grade that as failure.
-NO RATE IS PUBLISHED. The log has 190 rows (178 prospective, 12 backfill). Backfill
-is excluded from every rate by construction. Of the prospective rows 173 are reviews
-of Doug's own repository and 5 are of another; every count here is the 173, because
-a rate computed across two repositories describes neither. When a number exists
+NO RATE IS PUBLISHED. Backfill is excluded from every rate by construction; the
+denominator is the prospective rows, scoped to one repository, because a rate
+computed across two describes neither. SNAPSHOT, NOT A COUNTER — as of 2026-08-24
+the log held 196 rows: 184 prospective, 12 backfill, and 179 of the prospective
+rows were reviews of Doug's own repository (53 disproved, 89 real, 37 adjacent).
+The log grows whenever a finding is settled, so do not quote those integers as
+current. The current figure comes from the log itself, which ships in the repo:
+`uv run python -m doug.findings_log rate --repo doug`. When a number exists
 it will NOT be called precision: whether a finding is TRUE is a different quantity
 from whether it PREDICTED A DEFECT, and a finding can be true and worthless or
 false and load-bearing.
