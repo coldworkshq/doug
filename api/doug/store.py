@@ -1686,10 +1686,10 @@ def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
     line into something a sweep can select on.
 
     Called for EVERY path out of `worker._post_pr_comment`, including the
-    skips and its own internal failures, because the value of NULL is what
-    the sweep reads: a 'done' row with no outcome is a write that never
-    happened. Recording only the failures would make "we decided not to
-    comment" and "we died before commenting" the same row.
+    skips and its own internal failures, because this is what CLEARS the
+    `PR_COMMENT_OWED` marker `ingest.complete` stamped. A path that returns
+    without recording leaves the marker standing, and the sweep then reads a
+    comment that WAS written as one that never was.
 
     Deliberately does NOT count the attempt. `claim_pr_comment_retry` spends
     it before the GitHub call instead, so that a failure here — which is
@@ -1787,15 +1787,10 @@ def jobs_with_unposted_pr_comment(
     reads only stored columns, and must not hand these rows to anything that
     completes or fences a job.
 
-    "Not landed" is NULL or `failed:*`, and the exclusions are the point.
-    `created` and `updated` are the write landing. Every `skipped*` is a
-    decision — the tenant's toggle, a repo the dashboard cannot show, a newer
-    job that already wrote, a PR number that turned out to belong to another
-    repo — and a decision retried is a decision overridden. `denied:403` is
-    excluded too, and that one is a judgement rather than a definition:
-    permission is a tenant action, it already has its own marker and the
-    Repositories banner (D8), and a retry that cannot converge would spend a
-    GitHub call per drain forever to change nothing.
+    "Not landed" is `_pr_comment_unlanded`, which is the single definition
+    and lives beside the reservation that has to agree with it — read the
+    rule there rather than restating it here, where a copy could drift into
+    describing a set the query does not select.
 
     Selecting is not claiming. This is an unlocked read, and two instances
     sweep the same rows on the same pass, so every caller has to win
@@ -1815,9 +1810,9 @@ def jobs_with_unposted_pr_comment(
         treated as in flight, the same call reclaim_stalled's lease makes.
       * `within_seconds` — a retry is worth making while the PR is still what
         people are looking at, and the bound is also what stops a cold start
-        from walking the ledger's whole history. Migration 016's backfill is
-        the other half of that; this one holds even where the backfill did
-        not reach.
+        from walking the ledger's whole history. It is NOT what makes old
+        rows safe; the marker is, by leaving anything completed before it
+        unselectable. This bounds how far back a repair is worth making.
 
     NULL `finished_at` cannot satisfy either comparison, so such a row is
     never swept. That is deliberate and the safe direction: a 'done' row with

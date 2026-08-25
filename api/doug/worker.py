@@ -292,7 +292,10 @@ def _replay_recorded(
     # complete before post: a lost claim must not emit a check run that a
     # second holder will also post via this path.
     if not ingest.complete(
-        job["id"], existing["id"], claim_generation=job["claim_generation"]
+        job["id"],
+        existing["id"],
+        claim_generation=job["claim_generation"],
+        owes_comment=True,
     ):
         print(
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
@@ -565,7 +568,10 @@ def process_job(job: dict) -> int | None:
     # head SHA, never meta's: by now pulls.get may already be returning a
     # newer commit, and that commit has its own job.
     if not ingest.complete(
-        job["id"], verdict_id, claim_generation=job["claim_generation"]
+        job["id"],
+        verdict_id,
+        claim_generation=job["claim_generation"],
+        owes_comment=True,
     ):
         print(
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
@@ -582,11 +588,17 @@ def process_job(job: dict) -> int | None:
 # split `ingest.MAX_ATTEMPTS` keeps for the review lane.
 #
 # Two repairs on top of the write `process_job` already made: a comment
-# failing for a reason no retry fixes must stop costing GitHub calls. Five
-# minutes settled, because the gap between `ingest.complete` and the outcome
-# write belongs to a worker that may still be alive inside it, and two
-# drainers are the deployed configuration — sweeping a row still in that gap
-# is how one review notifies a PR twice. Twenty-four hours of lookback,
+# failing for a reason no retry fixes must stop costing GitHub calls.
+# Fifteen minutes settled, because the gap between `ingest.complete` and the
+# outcome write belongs to a worker that may still be alive inside it, and
+# two drainers are the deployed configuration — sweeping a row still in that
+# gap is how one review notifies a PR twice. The number is deliberately
+# `ingest.STALL_LEASE_SECONDS`'s: this codebase has already decided how long
+# a worker may be silent before it is presumed dead, and answering that
+# question twice with two numbers would mean one of them is wrong. Copied
+# rather than imported, because the lease is tuned for a claim holding a paid
+# read and must be free to move without silently retuning this. Twenty-four
+# hours of lookback,
 # because a comment is worth repairing while the PR is still what people are
 # looking at, and because an unbounded window turns every cold start into a
 # walk of the ledger's whole history.
@@ -601,7 +613,7 @@ def process_job(job: dict) -> int | None:
 # the only one available is `claim_pr_comment`, whose loser is specified to
 # create rather than skip for exactly that reason.
 PR_COMMENT_MAX_RETRIES = 2
-PR_COMMENT_SETTLED_SECONDS = 300
+PR_COMMENT_SETTLED_SECONDS = 900
 PR_COMMENT_RETRY_WINDOW_SECONDS = 86_400
 PR_COMMENT_RETRY_BATCH = 20
 

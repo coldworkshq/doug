@@ -37,7 +37,7 @@ the ones that never landed at the end of each `drain`.
   every time.
 - Bounds: 2 repairs, 300s settled, 24h lookback, 20 per pass.
 
-## Doug's three reads, dispositioned
+## Doug's four reads, dispositioned
 
 Read 1 (8dc74d0) — 5 real, all fixed: race-condition (unlocked SELECT, both
 instances sweep the same rows every pass), unbounded-retry, error-handling-gap,
@@ -72,6 +72,26 @@ heuristic for liveness, not a fence. What remains is `pr_comment.upsert`'s own
 priced trade — its listing falls through to create rather than leave a comment
 that never appears — and a real fence would have to be held by the original
 writer.
+
+Read 4 (691371b) — 3 real, all fixed: invariant-depends-on-caller (the owed
+marker was stamped by `ingest.complete` unconditionally, so any future
+completion path that does not attempt a comment would leave a marker the sweep
+acts on — now `owes_comment`, defaulting to False, so a caller that forgets
+loses a repair rather than writing to a live PR); doc-code-mismatch (three
+docstrings still described the NULL-means-never-posted rule the marker
+replaced, and one still cited a backfill the migration no longer has);
+duplicate-side-effect (not closable, but the settle window went 300s -> 900s,
+which is `ingest.STALL_LEASE_SECONDS` — this codebase has already decided how
+long a worker may be silent before it is presumed dead, and answering that
+twice with two numbers means one is wrong). Deviation REAL: ADR-0014's D10
+said `NULL` was retriable in one sentence and unselectable in the next — the
+exact rule that decides whether a repair can duplicate a live comment. D10 is
+rewritten. Repeats already tracked: #204 (index lock), #203 (client mints),
+#201 (dark exhausted state).
+
+CI GREEN on 691371b: api, web, console and all three images. The web suite ran
+there rather than locally — this worktree has no node_modules — and the diff
+touches no web files.
 
 Deferred, with issues (AGENTS.md): #201 (a comment that exhausts its repairs
 goes dark, the shape D8 refuses), #203 (drain mints an installation client per

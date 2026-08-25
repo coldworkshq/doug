@@ -163,30 +163,45 @@ tenant outside these three installations, not after.
   guards the write — and the amendment is that it now holds on every path
   rather than one.*
 - **D10 — A comment that never landed is retried from the job that owed it,
-  without waiting for a new commit.** *(Added 2026-08-24, issue #154.)*
-  `review_jobs.pr_comment_outcome` records what every comment write did —
-  including its skips — and `worker.retry_unposted_comments`, run at the end
-  of each `drain`, re-posts the ones that show `NULL` or `failed:*`. Only
-  those two: `created`/`updated` landed, every `skipped*` is a decision and a
-  decision retried is a decision overridden, and `denied:403` is a tenant
-  permission action that already has D8's marker and banner, so retrying it
-  would spend a call per drain to change nothing. What it selects on is a
-  POSITIVE marker — `ingest.complete` stamps `owed` in the same statement that
-  makes the job 'done', and the comment write overwrites it moments later —
-  never the absence of an outcome: a row with none came from a revision that
-  did not stamp the marker, nothing knows whether it commented, and a repair
-  that guesses is a duplicate on a live PR. Three bounds — two repairs on top
-  of the write `process_job` already made, five minutes settled before a job
-  is read as abandoned rather than in flight, and a twenty-four-hour
-  lookback. Selecting a row is not owning it: the read is
-  unlocked and both deployed instances sweep the same candidates on the same
-  pass, so `store.claim_pr_comment_retry` reserves the row in one conditional
-  UPDATE that also spends the repair — taken before the GitHub call, the same
-  order and for the same reason as `claim_pr_comment_seq`, and answered by
-  RETURNING the way `ingest.claim` answers its own. The retry
-  re-verifies the target (`fresh=False`) and rebuilds its body through the
-  same `_render_recorded` the replay path uses, so D2's byte-for-byte claim
-  holds on the repair too.
+  without waiting for a new commit.** *(Added 2026-08-24, issue #154;
+  rewritten 2026-08-25 after Doug's fourth read of PR #202 caught this clause
+  describing two different rules — it named `NULL` as retriable in one
+  sentence and unselectable in the next, which is the exact rule that decides
+  whether a repair can duplicate a live comment.)*
+
+  `ingest.complete` stamps `review_jobs.pr_comment_outcome` with `owed` in
+  the same statement that makes the job 'done', and only when its caller says
+  the job owes a comment. Every path out of the comment write then overwrites
+  that marker with what actually happened — the landings, the skips and the
+  failures alike. `worker.retry_unposted_comments`, run at the end of each
+  `drain`, re-posts a job whose outcome is still `owed`, or is a `failed:*`.
+  `store._pr_comment_unlanded` is that rule's single definition, shared by
+  the selection and the reservation that has to agree with it.
+
+  Nothing else is retried, and each exclusion is its own argument.
+  `created`/`updated` are the write landing. Every `skipped*` is a decision,
+  and a decision retried is a decision overridden. `denied:403` is a tenant
+  permission action that already has D8's marker and banner, so a retry
+  spends a call per drain to change nothing it can change. An outcome that is
+  absent entirely — no marker at all — is a job completed by a revision that
+  did not stamp one: nothing knows whether it commented, and a repair that
+  guesses is a duplicate on a live PR.
+
+  Three bounds: two repairs on top of the write `process_job` already made,
+  fifteen minutes settled before a job is read as abandoned rather than in
+  flight (`ingest.STALL_LEASE_SECONDS`'s number, because this codebase has
+  already decided how long a worker may be silent before it is presumed
+  dead), and a twenty-four-hour lookback.
+
+  Selecting a row is not owning it. The read is unlocked and both deployed
+  instances sweep the same candidates on the same pass, so
+  `store.claim_pr_comment_retry` reserves the row in one conditional UPDATE
+  that also spends the repair — taken before the GitHub call, the same order
+  and for the same reason as `claim_pr_comment_seq`, and answered by
+  RETURNING the way `ingest.claim` answers its own. The retry re-verifies the
+  target (`fresh=False`) and rebuilds its body through the same
+  `_render_recorded` the replay path uses, so D2's byte-for-byte claim holds
+  on the repair too.
 
 ## Rejected
 
@@ -224,6 +239,13 @@ tenant outside these three installations, not after.
   check run on the same commit. Damaging the surface that worked in order to
   heal the one that did not is not a repair. `retry_unposted_comments` posts
   the comment alone instead.
+- **Stamping the `owed` marker on every completion.** The simpler shape, and
+  it puts the invariant in prose: a completion path that does not go on to
+  attempt a comment would leave a marker the sweep later acts on, and write
+  to a PR nobody asked it to. `ingest.complete` takes the decision from its
+  caller instead, defaulting to "does not owe one" — a caller that should
+  have said otherwise loses a repair, which is only the behaviour before
+  #154, while a caller wrongly stamped writes to a live PR.
 - **Retrying `denied:403`.** It is the one failure a retry cannot converge
   on: permission is restored by a tenant, not by a later attempt, and D8
   already surfaces it. Retrying would add a GitHub call per drain, per
@@ -332,11 +354,12 @@ tenant outside these three installations, not after.
   means "no write recorded", which is what a crash between `ingest.complete`
   and the comment leaves — but it is also, briefly, what a worker still
   inside that gap leaves. The settle period NARROWS that one — nothing
-  finished less than five minutes ago is swept, the same call
-  `reclaim_stalled`'s lease makes about a live claim — but it does not close
+  finished less than fifteen minutes ago is swept, the same call
+  `reclaim_stalled`'s lease makes about a live claim, at the same number —
+  but it does not close
   it, and calling it a fence would be a claim this record cannot support.
   Time is a heuristic for liveness: a long GitHub backoff or a paused
-  container can outlast five minutes, and what remains past it is `upsert`'s
+  container can outlast any window, and what remains past it is `upsert`'s
   own priced trade, a listing that cannot yet see a create falling through to
   create rather than leaving a comment that never appears. A real fence would
   have to be held by the original writer, and the only one available is

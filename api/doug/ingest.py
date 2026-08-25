@@ -476,7 +476,13 @@ def release(job_id: int, *, claim_generation: int) -> bool:
         return applied is not None
 
 
-def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> bool:
+def complete(
+    job_id: int,
+    verdict_id: int | None,
+    *,
+    claim_generation: int,
+    owes_comment: bool = False,
+) -> bool:
     """Mark a job done. verdict_id is None when the review produced no ledger
     row — a skipped PR is finished, not failed.
 
@@ -484,17 +490,27 @@ def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> b
     land 'done' still carrying the error text from the attempt that didn't
     work, or the row misreports what happened to it.
 
-    pr_comment_outcome is stamped PR_COMMENT_OWED here, in this statement and
-    not a later one, because this is the moment the job stops being
-    revivable. Every caller writes the sticky comment immediately after this
-    returns True, and 'done' is not in REVIVABLE — so from here until that
-    write reports back, a crash loses the comment with nothing to say it was
-    owed (issue #154). The marker is what worker's retry sweep selects on,
-    and the comment write overwrites it moments later with what actually
-    happened. It is deliberately positive rather than an absence: reading
-    NULL as "never written" needed a full-table backfill to tell it apart
-    from "written before this column existed", and still mistook every job an
-    older revision completed mid-rollout for a comment that never happened.
+    `owes_comment` stamps pr_comment_outcome with PR_COMMENT_OWED, in THIS
+    statement and not a later one, because this is the moment the job stops
+    being revivable. A caller that passes True writes the sticky comment
+    immediately after this returns, and 'done' is not in REVIVABLE — so from
+    here until that write reports back, a crash loses the comment with
+    nothing to say it was owed (issue #154). The marker is what worker's
+    retry sweep selects on, and the comment write overwrites it moments later
+    with what actually happened. It is deliberately positive rather than an
+    absence: reading NULL as "never written" needed a full-table backfill to
+    tell it apart from "written before this column existed", and still
+    mistook every job an older revision completed mid-rollout for a comment
+    that never happened.
+
+    It is a parameter, and it defaults to False, because the alternative was
+    an invariant held only in prose: stamping unconditionally would mean any
+    completion path that does not go on to attempt a comment leaves a marker
+    the sweep later acts on, and writes to a PR nobody asked it to. False is
+    also the right direction to be wrong in. A caller that should have said
+    True loses a repair — the behaviour before #154, a comment that returns
+    on the next push — while a caller wrongly stamped writes to a live PR,
+    and ADR-0014 puts the burden of proof on the write every time.
 
     Returns False when this caller no longer holds the claim — see release().
     """
@@ -508,7 +524,11 @@ def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> b
                 verdict_id=verdict_id,
                 finished_at=_db_now(conn),
                 error=None,
-                pr_comment_outcome=store.PR_COMMENT_OWED,
+                **(
+                    {"pr_comment_outcome": store.PR_COMMENT_OWED}
+                    if owes_comment
+                    else {}
+                ),
             )
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()

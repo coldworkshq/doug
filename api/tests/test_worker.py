@@ -1253,7 +1253,7 @@ def test_ingest_complete_raising_after_a_saved_verdict_does_not_double_score_on_
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id, *, claim_generation):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation, owes_comment=False):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
@@ -2562,7 +2562,7 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
     real_complete = ingest.complete
     armed = {"boom": True}
 
-    def _flaky_complete(job_id, verdict_id, *, claim_generation):
+    def _flaky_complete(job_id, verdict_id, *, claim_generation, owes_comment=False):
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
@@ -3309,6 +3309,33 @@ def test_every_outcome_token_is_classified_on_purpose(
     _settled(url, job_id)
 
     assert bool(worker.retry_unposted_comments()) is retried
+
+
+def test_a_completion_that_does_not_owe_a_comment_is_never_swept(
+    tmp_path, monkeypatch
+):
+    """`ingest.complete` stamps the owed marker only when its caller says the
+    job owes a comment, and the default is that it does not.
+
+    Stamping unconditionally would put the invariant in prose: any completion
+    path that does not go on to attempt a comment would leave a marker the
+    sweep later acts on, and write to a PR nobody asked it to. False is also
+    the right direction to be wrong in — a caller that should have said True
+    loses a repair, which is the behaviour before #154, while a caller
+    wrongly stamped writes to a live PR."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    claimed = ingest.claim()
+
+    assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
+
+    assert _job(url)["pr_comment_outcome"] is None
+    _settled(url, job_id)
+    assert worker.retry_unposted_comments() == 0
+    assert upserts == []
 
 
 def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(
