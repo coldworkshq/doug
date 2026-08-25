@@ -7,13 +7,11 @@ State:    review — docs accuracy sweep is a PR against main from branch
           <img> warnings on /about). SHIPPED separately: gh-pages bd67e4a is
           pushed and live — drewjst.github.io/doug is now a redirect to the
           Cloud Run site. That push was the deploy; there is no PR for it.
-Next:     Doug reads the PR; Andrew settles the findings into
-          docs/findings-log.jsonl and merges. Merging deploys (ADR-0009), so
-          the corrected /docs copy goes out with it. NOTE the log's counts are
-          quoted in the PR's own copy and pinned to the file — settling
-          findings appends rows, so the pin will fail until the page's numbers
-          are re-read from `findings_log rate --repo doug`. That is the pin
-          working, not a regression.
+Next:     Andrew reviews and merges #211. Merging deploys (ADR-0009), so the
+          corrected /docs copy goes out with it. Doug already read it —
+          Cleared, risk 0.32, 1 medium + 3 low + 2 deviations, ALL SETTLED in
+          docs/findings-log.jsonl (4 real, 1 adjacent, 1 disproved) and fixed
+          in 94be0d3. Doug will read the new head; expect a second pass.
 Blockers: none.
 
 Not fixed, each a judgment call Andrew owns:
@@ -35,10 +33,18 @@ Decisions this session:
 - Retired gh-pages instead of rewriting it (Andrew's call) — repairing keeps
   two copies of every claim, which is the mechanism that produced the drift —
   rejected: fixing the ~9 false claims in place.
-- The stale-count pin now derives from docs/findings-log.jsonl — a literal
-  cannot fail when the log grows, and that is the only way these numbers go
-  wrong; it stayed green through 55 appended rows — rejected: updating the
-  literal to 190.
+- The docs copy states a DATED SNAPSHOT and names the command that prints
+  today's figure, and the pins check growth-invariants instead of exact counts
+  — an exact derived pin fails on every settle forever, so the copy becomes a
+  chore on unrelated PRs and the first person in a hurry deletes the pin rather
+  than the staleness (Doug's medium on #211, real). Verified: a prospective
+  append stays green, a backfill append fails — rejected: the exact derived
+  pin, and rejected: computing at render time, which .dockerignore forbids
+  (/docs is not in the web image's build context).
+- The rest-api sample shows field placeholders, not live counters — printing
+  53/179 and a frozen timestamp reintroduced the exact drift class this PR
+  removes, my own regression, caught by Doug (reader:docs-sample-drift) —
+  rejected: real values with a "counters move" caveat under them.
 - HANDOFF.md was NOT touched in the main checkout: a concurrent session owns
   it there (feat/palette-contrast-dark-mode). This slot lives on the docs
   branch only, so it will conflict on merge — drop this commit if that is not
