@@ -445,13 +445,16 @@ def test_migration_016_declares_the_same_columns_as_their_tables(tmp_path):
     assert not store.review_jobs.c.pr_comment_attempts.nullable
 
 
-def test_migration_016_backfills_only_the_done_rows_that_predate_it(tmp_path):
-    """The watermark that lets NULL mean one thing. Every 'done' row written
-    before this column recorded nothing, so NULL there is "unknowable", not
-    "never posted" — and the sweep would re-post a comment on every PR in the
-    ledger's history. Rows that have not finished keep NULL: they have not
-    had a comment attempted yet, and marking them would make the sweep blind
-    to the very next crash."""
+def test_migration_016_touches_no_existing_row(tmp_path):
+    """It adds columns and an index and rewrites nothing, which is the point.
+
+    An earlier draft stamped every existing 'done' row so the sweep could
+    read NULL as "never posted". That needed one UPDATE across the whole
+    table — on Postgres, a new tuple version per row inside a startup
+    migration — purely to disambiguate an absence. The sweep reads
+    `ingest.complete`'s positive marker instead, so a row this migration
+    leaves NULL is invisible to it by construction. Pinned here because the
+    cheap-looking fix is to add the backfill back."""
     engine = create_engine(f"sqlite:///{tmp_path}/m16.db")
     store.metadata.create_all(engine)
     with engine.begin() as conn:
@@ -471,7 +474,8 @@ def test_migration_016_backfills_only_the_done_rows_that_predate_it(tmp_path):
                 "SELECT pr_number, pr_comment_outcome FROM review_jobs"
             ).all()
         )
-    assert rows == {1: "unrecorded", 2: None, 3: None, 4: None}
+    assert rows == {1: None, 2: None, 3: None, 4: None}
+    assert not [s for s in dict(migrations.MIGRATIONS)[16] if "UPDATE" in s.upper()]
 
 
 def test_migration_008_backfills_reader_prompt_hash(tmp_path):

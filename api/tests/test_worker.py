@@ -3005,10 +3005,11 @@ def test_the_repaired_comment_carries_the_same_body_the_first_attempt_did(
 def test_a_comment_the_worker_never_reached_is_retried(tmp_path, monkeypatch):
     """The other half of #154, and the half no in-process retry could reach:
     the instance dies between ingest.complete and the comment. Nothing was
-    attempted, nothing was recorded, and the job is 'done' — so a NULL
-    outcome on a settled row is the only evidence that a comment is owed.
-    Standing in for the death by cutting _post_pr_comment out of the first
-    pass entirely, which is what the crash does."""
+    attempted and nothing reported back — so the marker `ingest.complete`
+    stamped in the same statement that made the job 'done' is the only
+    evidence a comment is owed. Standing in for the death by cutting
+    _post_pr_comment out of the first pass entirely, which is what the crash
+    does."""
     url = _db(tmp_path, monkeypatch)
     _wire(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch, outcomes=("created",))
@@ -3019,7 +3020,8 @@ def test_a_comment_the_worker_never_reached_is_retried(tmp_path, monkeypatch):
 
     worker.process_job(ingest.claim())
     row = _job(url)
-    assert row["status"] == "done" and row["pr_comment_outcome"] is None
+    assert row["status"] == "done"
+    assert row["pr_comment_outcome"] == store.PR_COMMENT_OWED
     assert upserts == []
 
     monkeypatch.setattr(worker, "_post_pr_comment", posting)
@@ -3307,6 +3309,55 @@ def test_every_outcome_token_is_classified_on_purpose(
     _settled(url, job_id)
 
     assert bool(worker.retry_unposted_comments()) is retried
+
+
+def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(
+    tmp_path, monkeypatch
+):
+    """Rows completed by a revision that does not stamp `owed` — everything
+    the migration finds, and everything an older instance finishes during a
+    rollout — must stay out of the sweep. Nothing knows whether they
+    commented, and a repair that guesses is a duplicate on a live PR.
+
+    This is what buys the migration its lack of a backfill: the sweep reads a
+    positive marker, so "no marker" needs no UPDATE to be safe."""
+    url = _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch, outcomes=("created",))
+    _enable_pr_comment(monkeypatch)
+    job_id = ingest.enqueue(**JOB)
+    worker.process_job(ingest.claim())
+    _settled(url, job_id)
+    # The older revision's shape: done, finished, no marker, no outcome.
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            store.review_jobs.update()
+            .where(store.review_jobs.c.id == job_id)
+            .values(pr_comment_outcome=None)
+        )
+    before = len(upserts)
+
+    assert worker.retry_unposted_comments() == 0
+
+    assert len(upserts) == before
+    assert _job(url)["pr_comment_outcome"] is None
+
+
+def test_an_outcome_too_long_for_the_column_says_so(tmp_path, monkeypatch, capsys):
+    """Truncation cannot flip the retry classification — that reads a prefix,
+    and a prefix survives a truncation and cannot be created by one — so what
+    is at stake is the ledger claiming an outcome that never happened. Silent
+    is the part that is wrong; the slice itself is fine."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    ingest.enqueue(**JOB)
+    long_token = "failed:" + "x" * store.PR_COMMENT_OUTCOME_MAX
+
+    store.record_pr_comment_outcome(ingest.claim()["id"], long_token)
+
+    err = capsys.readouterr().err
+    assert f"over {store.PR_COMMENT_OUTCOME_MAX} chars" in err
+    assert repr(long_token) in err
 
 
 def test_the_retry_reverifies_the_target_before_writing(tmp_path, monkeypatch, capsys):

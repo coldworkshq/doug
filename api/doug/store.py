@@ -420,12 +420,21 @@ review_jobs = Table(
     # which on the surface GitHub actually shows (neutral checks stay folded)
     # is a lost review, not a missing badge.
     #
-    # NULL is "no outcome recorded". On a 'done' row past the grace period
-    # that means the write never happened: worker records an outcome for
-    # every path out of `_post_pr_comment`, including its own failures.
-    # Migration 016 backfills the rows that predate the column to
-    # 'unrecorded' so NULL cannot also mean "written before anything
-    # recorded" — see that migration for what the rollout overlap leaves.
+    # PR_COMMENT_OWED is written by `ingest.complete`, in the same statement
+    # that marks the job done, and overwritten moments later by whatever the
+    # comment write actually did. A row still holding it is a job that
+    # completed and then lost its comment — which is the signal the retry
+    # sweep reads.
+    #
+    # A POSITIVE marker rather than "NULL means it never ran", which is what
+    # this started as. NULL now means one thing only and needs no backfill to
+    # mean it: this row predates the column, or predates the revision that
+    # writes the marker. Those rows are invisible to the sweep, which is
+    # correct — nothing knows whether they commented, and re-posting on a
+    # guess is how a repair becomes a duplicate. Reading the absence instead
+    # cost a full-table UPDATE in the migration to disambiguate, and left
+    # every row completed by an older revision mid-rollout looking like a
+    # comment that never happened.
     Column("pr_comment_outcome", String(32)),
     # How many times the retry sweep has CLAIMED this row. The write
     # `process_job` makes is not counted here and needs no counter: it is
@@ -1622,6 +1631,50 @@ def pr_comment_denied_at(installation_id: int) -> datetime | None:
     return _as_utc(value)
 
 
+# What `ingest.complete` stamps on a job it marks done, meaning "this job
+# owes a sticky comment and has not written one yet". Neither a
+# `pr_comment.upsert` token nor a worker one, so it can never be mistaken for
+# an outcome that happened; short enough that PR_COMMENT_OUTCOME_MAX cannot
+# reach it.
+PR_COMMENT_OWED = "owed"
+
+# review_jobs.pr_comment_outcome's declared width. A token over it would be
+# stored mangled, so `record_pr_comment_outcome` says so out loud rather than
+# slicing in silence. Truncation cannot flip the retry classification in
+# either direction — that reads a PREFIX, and a prefix survives a truncation
+# and cannot be created by one — so what is at stake is a lie in the ledger
+# about what happened, not a comment retried wrongly.
+PR_COMMENT_OUTCOME_MAX = 32
+
+
+def _pr_comment_unlanded():
+    """The one definition of "this job still owes a comment", shared by the
+    sweep's selection and the reservation that fences it.
+
+    Two clauses, and they are not the same statement twice. `owed` is the
+    marker `ingest.complete` stamps and nothing has overwritten — the job
+    finished and its comment write never reported back. `failed:*` is a write
+    that reported a failure it might not repeat.
+
+    Everything else is deliberately absent. `created`/`updated` landed. Every
+    `skipped*` is a decision, and a decision retried is a decision
+    overridden. `denied:403` is a tenant permission action with its own
+    marker and banner (ADR-0014 D8); a retry cannot converge on it. NULL is a
+    row from before this column, or from a revision that did not stamp the
+    marker — nothing knows whether it commented, so re-posting on a guess is
+    how a repair becomes a duplicate.
+
+    One function because the SELECT and the UPDATE that claims what it
+    selected must agree exactly: a claim narrower than the selection makes
+    rows that can never be claimed, and a claim wider than it lets a landed
+    comment be repaired.
+    """
+    return or_(
+        review_jobs.c.pr_comment_outcome == PR_COMMENT_OWED,
+        review_jobs.c.pr_comment_outcome.like("failed:%"),
+    )
+
+
 def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
     """Record what this job's sticky-comment write did, and spend an attempt.
 
@@ -1651,11 +1704,17 @@ def record_pr_comment_outcome(job_id: int, outcome: str) -> None:
     engine = _get_engine()
     if engine is None:
         return
+    if len(outcome) > PR_COMMENT_OUTCOME_MAX:
+        print(
+            f"doug: comment outcome {outcome!r} is over "
+            f"{PR_COMMENT_OUTCOME_MAX} chars; storing it truncated",
+            file=sys.stderr,
+        )
     with engine.begin() as conn:
         conn.execute(
             update(review_jobs)
             .where(review_jobs.c.id == job_id)
-            .values(pr_comment_outcome=outcome[:32])
+            .values(pr_comment_outcome=outcome[:PR_COMMENT_OUTCOME_MAX])
         )
 
 
@@ -1706,10 +1765,7 @@ def claim_pr_comment_retry(job_id: int, *, attempts: int) -> bool:
             .where(
                 review_jobs.c.id == job_id,
                 review_jobs.c.pr_comment_attempts == attempts,
-                or_(
-                    review_jobs.c.pr_comment_outcome.is_(None),
-                    review_jobs.c.pr_comment_outcome.like("failed:%"),
-                ),
+                _pr_comment_unlanded(),
             )
             .values(pr_comment_attempts=attempts + 1)
             .returning(review_jobs.c.id)
@@ -1778,10 +1834,7 @@ def jobs_with_unposted_pr_comment(
                 select(review_jobs)
                 .where(
                     review_jobs.c.status == "done",
-                    or_(
-                        review_jobs.c.pr_comment_outcome.is_(None),
-                        review_jobs.c.pr_comment_outcome.like("failed:%"),
-                    ),
+                    _pr_comment_unlanded(),
                     review_jobs.c.pr_comment_attempts < max_retries,
                     review_jobs.c.finished_at <= now - timedelta(seconds=settled_for_seconds),
                     review_jobs.c.finished_at >= now - timedelta(seconds=within_seconds),

@@ -484,6 +484,18 @@ def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> b
     land 'done' still carrying the error text from the attempt that didn't
     work, or the row misreports what happened to it.
 
+    pr_comment_outcome is stamped PR_COMMENT_OWED here, in this statement and
+    not a later one, because this is the moment the job stops being
+    revivable. Every caller writes the sticky comment immediately after this
+    returns True, and 'done' is not in REVIVABLE — so from here until that
+    write reports back, a crash loses the comment with nothing to say it was
+    owed (issue #154). The marker is what worker's retry sweep selects on,
+    and the comment write overwrites it moments later with what actually
+    happened. It is deliberately positive rather than an absence: reading
+    NULL as "never written" needed a full-table backfill to tell it apart
+    from "written before this column existed", and still mistook every job an
+    older revision completed mid-rollout for a comment that never happened.
+
     Returns False when this caller no longer holds the claim — see release().
     """
     engine = _engine()
@@ -496,6 +508,7 @@ def complete(job_id: int, verdict_id: int | None, *, claim_generation: int) -> b
                 verdict_id=verdict_id,
                 finished_at=_db_now(conn),
                 error=None,
+                pr_comment_outcome=store.PR_COMMENT_OWED,
             )
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()

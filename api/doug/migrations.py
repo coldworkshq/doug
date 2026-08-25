@@ -384,18 +384,19 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ALTER TABLE review_jobs ADD COLUMN pr_comment_outcome VARCHAR(32)",
             "ALTER TABLE review_jobs ADD COLUMN pr_comment_attempts "
             "INTEGER NOT NULL DEFAULT 0",
-            # The watermark, and the reason NULL can mean something exact.
-            # Every 'done' row that predates this column was written by code
-            # that recorded nothing, so NULL there is "unknowable", not
-            # "never posted" — and the sweep would otherwise re-post a
-            # comment on every PR in the ledger's history. Backfilling the
-            # sentinel makes NULL mean one thing from here on: written by
-            # code that DOES record, and lost before it could. Rows that
-            # reach 'done' during the rollout overlap, on an instance still
-            # running the old revision, land NULL and are swept once — the
-            # honest answer for them, since nothing knows whether they posted.
-            "UPDATE review_jobs SET pr_comment_outcome = 'unrecorded' "
-            "WHERE status = 'done' AND pr_comment_outcome IS NULL",
+            # NO BACKFILL, deliberately, and the absence is the design. An
+            # earlier draft stamped every existing 'done' row so that NULL
+            # could mean "never posted" — which needed one UPDATE over the
+            # whole table (on Postgres, a new tuple version per row and a
+            # long transaction inside a startup migration) purely to
+            # disambiguate an absence. The sweep reads a POSITIVE marker
+            # instead: `ingest.complete` stamps `owed`, so a row this
+            # migration leaves NULL is invisible to the sweep by
+            # construction, and stays invisible until a completion writes the
+            # marker. That is also the honest answer for the rollout overlap,
+            # where an instance still on the older revision completes jobs
+            # without stamping anything: nothing knows whether those
+            # commented, and a repair that guesses is a duplicate.
             # (status, finished_at), NOT (status, pr_comment_outcome).
             # Virtually every row in this table is 'done', so an outcome
             # column second buys almost nothing and leaves the planner a

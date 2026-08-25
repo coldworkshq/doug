@@ -170,9 +170,12 @@ def _post_pr_comment(
     this surface means notifying every reviewer on the PR twice for one
     review. `retry_unposted_comments` is the third caller, repairing the
     consequence of that same ordering: by the time this runs the job is
-    already 'done', which no enqueue can revive, so the outcome recorded at
-    the bottom is the only thing that can bring a lost comment back without
-    waiting for a new head SHA (issue #154).
+    already 'done', which no enqueue can revive, so `ingest.complete`'s
+    `owed` marker and the outcome written here are the only things that can
+    bring a lost comment back without waiting for a new head SHA (issue
+    #154). Recording is therefore not bookkeeping — it is how the marker gets
+    cleared, and a path out of here that skips it is a comment the sweep will
+    write a second time.
 
     Its own stderr line, rather than fields appended to the reviewed/replayed
     lines: those are printed BEFORE `ingest.complete` on purpose (so a lost
@@ -201,22 +204,23 @@ def _post_pr_comment(
             f"({type(e).__name__}: {e})",
             file=sys.stderr,
         )
-    print(
-        f"doug: comment {outcome} {job['repo_full_name']}"
-        f"#{job['pr_number']}@{job['head_sha'][:12]}",
-        file=sys.stderr,
-    )
-    # After the line, not before it: the log is the surface an operator has
-    # during a database outage, and the outage is exactly when a write here
-    # would raise. Recorded for EVERY outcome including the skips, because
-    # `retry_unposted_comments` reads the absence of a value — a 'done' row
-    # with no outcome is a comment that never happened. Its own try for the
-    # same reason the rest of this function has one: the verdict is durable
-    # and the job is already marked done, so nothing in this file may hand it
-    # back to `ingest.fail`. A record that fails leaves the row NULL, and the
-    # sweep re-posts a comment that may already be live — an in-place edit of
-    # the same body, which GitHub does not notify on. That is the cheap side
-    # of this trade to be wrong on.
+    # BEFORE the line, not after it. Recorded for EVERY outcome including the
+    # skips, because it is what clears `ingest.complete`'s `owed` marker —
+    # leave any path here unrecorded and the retry sweep reads a job that
+    # commented as one that never did. The ordering used to be the other way
+    # round, to keep the log line ahead of a write that could fail during a
+    # database outage; it bought nothing (the write below swallows and logs
+    # its own failure, so the outage is visible either way) and it cost the
+    # sweep a real budget, because a raise from the f-string between them —
+    # an unrenderable job field — spent a retry and left the marker standing
+    # with nothing recorded.
+    #
+    # Its own try for the same reason the rest of this function has one: the
+    # verdict is durable and the job is already marked done, so nothing in
+    # this file may hand it back to `ingest.fail`. A record that fails leaves
+    # `owed` in place and the sweep re-posts a comment that may already be
+    # live — an in-place edit of the same body, which GitHub does not notify
+    # on. That is the cheap side of this trade to be wrong on.
     try:
         store.record_pr_comment_outcome(job["id"], outcome)
     except Exception as e:  # noqa: BLE001 — the comment is written; the job is done
@@ -225,6 +229,11 @@ def _post_pr_comment(
             f"({type(e).__name__}: {e})",
             file=sys.stderr,
         )
+    print(
+        f"doug: comment {outcome} {job['repo_full_name']}"
+        f"#{job['pr_number']}@{job['head_sha'][:12]}",
+        file=sys.stderr,
+    )
 
 
 def _render_recorded(job: dict, existing: dict) -> tuple[str, str]:
@@ -581,6 +590,16 @@ def process_job(job: dict) -> int | None:
 # because a comment is worth repairing while the PR is still what people are
 # looking at, and because an unbounded window turns every cold start into a
 # walk of the ledger's whole history.
+#
+# The settle period NARROWS the window in which a first worker is still
+# writing; it does not close it. Time is a heuristic for liveness, not a
+# fence — a long GitHub backoff or a paused container can outlast it — and
+# what remains past it is `pr_comment.upsert`'s own priced trade: a listing
+# that cannot yet see a create falls through to create, because the
+# alternative is a comment that never appears at all. ADR-0014 records that
+# residual. A real fence would have to be held by the original writer, and
+# the only one available is `claim_pr_comment`, whose loser is specified to
+# create rather than skip for exactly that reason.
 PR_COMMENT_MAX_RETRIES = 2
 PR_COMMENT_SETTLED_SECONDS = 300
 PR_COMMENT_RETRY_WINDOW_SECONDS = 86_400
@@ -597,6 +616,12 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     connection stayed lost until somebody pushed a new commit — and since
     ADR-0014 the comment is the surface GitHub actually shows (a neutral
     check run stays folded), so that was a lost review, not a missing badge.
+
+    What it selects on is a POSITIVE marker — `ingest.complete`'s `owed`,
+    still standing where an outcome should be — and not the absence of one. A
+    row with no outcome at all came from a revision that did not stamp the
+    marker; nothing knows whether it commented, and a repair that guesses is
+    a duplicate on a live PR.
 
     It repairs the comment ALONE rather than re-pending the job, and that is
     the whole reason this function exists instead of a status flip. Re-pending
@@ -649,6 +674,8 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
     attempted = 0
     for job in jobs:
         where = f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]}"
+        # `_post_pr_comment` records before it logs, so entering it is the
+        # point past which the outcome is owned. See the recovery below.
         posting = False
         try:
             existing = (
