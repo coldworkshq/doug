@@ -107,58 +107,66 @@ test("no spine node carries a verdict colour", async () => {
 test("the CVD reasoning survives the port from the console", async () => {
   // Intent: the comment IS the spec. A port that drops it leaves the next
   // reader with two hex values and no reason not to add a third.
+  //
+  // THE RULE IS PINNED HERE; THE NUMBER IN IT IS DISPUTED — see issue #210.
+  // "ΔE 6.1" does not reproduce from the values the sentence describes: the
+  // pair measured ΔE2000 10.8 / ΔE76 16.7 before the 2026-08-24 palette shift
+  // and 9.2 after. The rule it justifies (chrome is never a data colour) is
+  // sound and is why this assertion stays. Correcting the digits means editing
+  // two stylesheets and this line together, which is #210's job, not a silent
+  // fix inside an unrelated commit.
   const css = await readFile(cssUrl, "utf8");
   assert.match(css, /fails CVD separation against --flag at ΔE 6\.1/);
   assert.match(css, /Coverage is a magnitude, not a judgement/);
 });
 
-test("the dashboard surface keeps the orphan values it inherited, exactly", async () => {
+test("the surface-scoped values are pinned exactly, in BOTH themes", async () => {
   // Intent (plan A5.6, controller ruling): dashboard.module.css carried values
   // with NO equivalent in the palette, and the ruling was that they live at an
   // exact hex inside the scoped surface block — never substituted for globals'
   // nearest neighbour, never left dangling.
   //
-  // TWO OF THE THREE HAVE BEEN RETUNED ONCE, deliberately, and the pin moved
-  // with them rather than being loosened to a range. The ruling forbids
-  // SUBSTITUTION — swapping in a palette neighbour and calling the difference
-  // close enough — not correction: --dim shipped at #aaa79f, which is 2.3:1
-  // against --background while painting the smallest text on the page, and
-  // --rule-soft at #f1efe9 was a 1.11:1 row divider. They are now #757269
-  // (4.65:1) and #eae7df (1.20:1, still under --border's 1.22:1 so a row rule
-  // stays lighter than the table's edge). globals.css carries the arithmetic.
+  // The ruling forbids SUBSTITUTION — swapping in a palette neighbour and
+  // calling the difference close enough — not correction. They have now been
+  // corrected twice, and the pin moved with them rather than being loosened to
+  // a range: once when --dim shipped at 2.3:1 and --rule-soft at 1.11:1, and
+  // again when the palette raised --border and gave the divider room it had
+  // never had. globals.css carries the arithmetic.
   //
-  // The assertion stays exact for the same reason it always was: nothing here
-  // renders, so a value that drifts is invisible to every other test.
-  //
-  // This is pinned because the failure is silent and visual. `--rule-soft`
-  // alone draws every row divider in the run ledger; deleting it leaves
-  // `var(--rule-soft)` undefined and the dividers simply stop rendering, while
-  // substituting globals' `--muted`/`--secondary` (#f6f5f1, a visibly
-  // different value) restyles the whole table. Neither shows up in any other
-  // test, because no test renders. Before this test existed, removing the
-  // token left all 153 green — verified, not assumed.
-  //
-  // Three, not the four the module carried: #d4d1c8 was the hand-rolled
-  // ruler border and legend swatch, and both use sites ceased to exist when
-  // CoverageRuler replaced them (it brings console's own #c9c6bd). A token
-  // nobody references would be dead CSS, so it was correctly not carried.
+  // THE SECOND BLOCK IS NEW AND IS THE POINT. While the console was pinned
+  // light, one declaration was enough. Now that it follows the toggle, a
+  // light-only --rule-soft is a near-white rule across a #14161a table — a
+  // defect that is invisible to every other test here, because nothing in this
+  // suite renders. Both directions are pinned so neither can rot.
   //
   // If a value here ever gains a real palette home, delete it from the block
   // AND from this list in the same commit; do not loosen the assertion.
   const css = await readFile(cssUrl, "utf8");
-  const block = css.match(/\.dashboard-surface\s*\{[^}]+\}/g)?.join("\n") ?? "";
-  assert.ok(block, "the .dashboard-surface scope block is gone");
+  const scope = selector => {
+    const at = css.indexOf(selector);
+    assert.ok(at >= 0, `the ${selector.trim()} scope block is gone`);
+    return css.slice(at, css.indexOf("\n}", at));
+  };
 
-  assert.match(block, /--rule-soft:\s*#eae7df/);
-  assert.match(block, /--dim:\s*#757269/);
-  assert.match(block, /--row-hover:\s*#faf9f5/);
+  const light = scope("\n.dashboard-surface {");
+  assert.match(light, /--rule-soft:\s*#dbe0e5/);
+  assert.match(light, /--dim:\s*#666c73/);
+  assert.match(light, /--row-hover:\s*#f6f7f8/);
 
-  // …and the two that deliberately did NOT come here stay out: #eceae3 and
-  // #3d403c are the console's .cov-track/.cov-fill, already global utilities.
-  // A copy inside this scope would be a second source of truth for the
-  // coverage ramp.
-  assert.equal(block.includes("#eceae3"), false);
-  assert.equal(block.includes("#3d403c"), false);
+  const dark = scope("\n.dark .dashboard-surface {");
+  assert.match(dark, /--rule-soft:\s*#2a2f36/);
+  assert.match(dark, /--dim:\s*#858d96/);
+  assert.match(dark, /--row-hover:\s*#23272d/);
+
+  // …and the coverage ramp stays OUT of both. It is a palette token now
+  // (--cov-track / --cov-fill), because the utilities that read it are under a
+  // character-identical lockstep with console's and so could not hold two
+  // per-theme values themselves. A copy inside this scope would be a second
+  // source of truth for the ramp.
+  for (const [label, body] of [["light", light], ["dark", dark]]) {
+    assert.equal(body.includes("--cov-track"), false, `${label} surface re-declares the coverage ramp`);
+    assert.equal(body.includes("--cov-fill"), false, `${label} surface re-declares the coverage ramp`);
+  }
 });
 
 test("the surface-scoped tokens are used only where the surface is mounted", async () => {
@@ -188,7 +196,13 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
 
   const users = [];
   for (const rel of sources) {
-    if (rel.endsWith("lib/design-system.test.mjs")) continue;
+    // Tests NAME these tokens while pinning them and render nothing at all, so
+    // scanning them would demand a .dashboard-surface in a file that draws
+    // none. This is the same exemption the CHILD_OF_SURFACE scan below already
+    // makes, applied at the same breadth rather than to one file by name —
+    // dashboard-contract.test.mjs earned it the moment it started pinning that
+    // neither theme may leave `var(--rule-soft)` undeclared.
+    if (rel.endsWith(".test.mjs")) continue;
     const text = await readFile(new URL(rel, dir), "utf8");
     if (/var\(--(rule-soft|dim|row-hover)\)/.test(text)) users.push(rel);
   }
@@ -258,35 +272,52 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
   }
 });
 
-test("the dark palette never redeclares a token the dashboard surface pins", async () => {
-  // Doug, PR 102, reader:theme-inheritance-assumption. The light pinning works
-  // because .dashboard-surface redeclares these custom properties on the
-  // dashboard's own wrapper, and an inherited value is the weakest source a
-  // custom property can have. The previously pinned case was the literal
-  // `.dark` selector gaining `dashboard-surface`; this widens it to the whole
-  // mechanism — ANY rule under .dark that sets one of these tokens on a
-  // descendant would win where inheritance does not.
+test("--iridescent is a COLOUR in every theme, and the gradient is a separate token", async () => {
+  // Doug, PR 102, reader:theme-inheritance-assumption, inverted by the toggle.
+  //
+  // The old pin here said .dark must never redeclare a surface token, because
+  // doing so would defeat the light pinning. That pin is obsolete: defeating
+  // it is now the FEATURE, and lib/dashboard-contract.test.mjs pins the
+  // mechanism instead. What replaces it is the defect that mechanism uncovered
+  // and that nothing anywhere was guarding.
+  //
+  // .dark used to set `--iridescent: linear-gradient(...)`. That was harmless
+  // only for as long as the console could not go dark, because the console is
+  // the only place that reads the token AS A COLOUR — 30-odd call sites of
+  // `text-[var(--iridescent)]`, `border-[var(--iridescent)]` and
+  // `color-mix(in srgb, var(--iridescent) 35%, transparent)`. A gradient is
+  // not a valid colour in any of them, so the declaration is dropped and the
+  // focus ring simply stops rendering — no build error, no failing test, and
+  // an invisible keyboard focus indicator, which is an accessibility
+  // regression rather than a cosmetic one.
+  //
+  // So: --iridescent is a colour everywhere, and the gradient moved to
+  // --brand-wash, which only background-clip:text ever reads.
   const css = await readFile(cssUrl, "utf8");
-  const darkStart = css.search(/(?:^|\n)\.dark[^{]*\{/);
-  assert.ok(darkStart >= 0, "globals.css lost its .dark block");
 
-  // Every rule from the .dark block onward whose selector mentions .dark.
-  const rules = [...css.slice(darkStart).matchAll(/(^|\n)([^{}\n][^{}]*)\{([^}]*)\}/g)];
-  const darkRules = rules.filter(([, , selector]) => /\.dark\b/.test(selector));
-  assert.ok(darkRules.length > 0, "no .dark rule found — the scan is vacuous");
-
-  for (const [, , selector, body] of darkRules) {
-    assert.equal(
-      /--(rule-soft|dim|row-hover)\s*:/.test(body),
-      false,
-      `a .dark rule (${selector.trim()}) redeclares a dashboard-surface token`,
-    );
-    assert.equal(
-      selector.includes("dashboard-surface"),
-      false,
-      `a .dark rule (${selector.trim()}) claims the dashboard surface`,
-    );
+  const declarations = [...css.matchAll(/--iridescent:\s*([^;]+);/g)].map(m => m[1].trim());
+  assert.ok(declarations.length >= 2, "expected --iridescent in both palette blocks");
+  for (const value of declarations) {
+    assert.match(value, /^#[0-9a-f]{6}$/i, `--iridescent holds "${value}", which is not a colour`);
   }
+
+  // The gradient still exists — it is the brand — just under a name nothing
+  // reads as a colour.
+  const wash = [...css.matchAll(/--brand-wash:\s*([^;]+);/g)].map(m => m[1].trim());
+  assert.ok(wash.some(v => v.startsWith("linear-gradient")), "the brand gradient was lost, not moved");
+
+  // And the two utilities that want the gradient read the wash, never the
+  // colour — the one direction that would silently reintroduce the bug.
+  // Anchored on the rules, not on the palette comment that also names them.
+  const ruleAt = css.indexOf("  .text-iridescent {");
+  assert.ok(ruleAt >= 0, "the .text-iridescent utility is gone");
+  const washBlock = css.slice(ruleAt, css.indexOf("}", css.indexOf("  .bg-iridescent {")));
+  assert.match(washBlock, /background:\s*var\(--brand-wash\)/);
+  assert.equal(
+    washBlock.includes("var(--iridescent)"),
+    false,
+    ".text-iridescent/.bg-iridescent read the colour token again",
+  );
 });
 
 test("the per-PR disclosure fails open where :has() is unsupported", async () => {
@@ -318,4 +349,106 @@ test("the per-PR disclosure fails open where :has() is unsupported", async () =>
   // Where it is unsupported the affordance is withdrawn, so no caret claims a
   // collapsed state it cannot produce.
   assert.match(css, /@supports\s+not\s+selector\(:has\(\*\)\)\s*\{[\s\S]*?\.pr-disclosure\s*\{[^}]*display:\s*none/);
+});
+
+test("nothing rendered on the console surface paints a one-theme hex", async () => {
+  // THE DEFECT CLASS THE DARK TOGGLE CREATED, pinned so it cannot come back.
+  //
+  // While the console was pinned to light (RULING 1), a literal hex in a
+  // className was defensible, and two files said so in as many words:
+  // run-spine drew its nodes `bg-[#3d403c]` / `border-[#c9c6bd]` and
+  // coverage-ruler hatched the never-read band in #c9c6bd, each above a
+  // comment explaining that there was no dark variant to invent. Both were
+  // correct at the time and both became wrong in the same commit — a
+  // near-black dot on a near-black card, and a warm-beige hatch over #1e2127.
+  //
+  // The rule is a token or nothing. A hex cannot know what it is sitting on,
+  // and NOTHING in this suite renders, so the failure is invisible until
+  // somebody opens the page in the other theme. Comments are stripped first:
+  // the two files above still NAME their old hexes while explaining why they
+  // no longer use them, and a pin that fired on prose would push the next
+  // author into deleting the explanation to get green.
+  const dir = new URL("../", import.meta.url);
+  const surface = [
+    "app/dashboard/page.tsx",
+    "app/dashboard/settings/page.tsx",
+    "app/dashboard/pr/[number]/page.tsx",
+    "components/dashboard-rail.tsx",
+    "components/coverage-ruler.tsx",
+    "components/run-spine.tsx",
+    "components/census-panel.tsx",
+    "components/flag-line-control.tsx",
+    "components/threshold-gear.tsx",
+    "components/band-chip.tsx",
+    "components/score-strip.tsx",
+  ];
+
+  /** JS/TSX with comments removed. Deliberately not a parser: a `//` inside a
+   *  string would over-strip, and over-stripping this scan can only produce a
+   *  false PASS on a line that is already comment-shaped. */
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  const offenders = [];
+  for (const rel of surface) {
+    let source;
+    try {
+      source = await readFile(new URL(rel, dir), "utf8");
+    } catch {
+      // A file that moved is not this test's business to fail on, but a list
+      // that has quietly emptied itself IS — see the vacuity guard below.
+      continue;
+    }
+    for (const hex of strip(source).match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
+      offenders.push(`${rel}: ${hex}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "a console-surface file paints a literal colour, which cannot invert with the theme",
+  );
+
+  // The scan must actually be reading files. Without this, renaming every
+  // entry on the list above turns the assertion into a tautology.
+  const present = await Promise.all(
+    surface.map((rel) =>
+      readFile(new URL(rel, dir), "utf8").then(() => true, () => false),
+    ),
+  );
+  assert.ok(
+    present.filter(Boolean).length >= 8,
+    "the surface file list has gone stale — most of these no longer exist",
+  );
+});
+
+test("the console's dot grid does not ride on --border", async () => {
+  // Doug would call this a coupling, and it cost a visible regression before
+  // it was caught: the surface paints its paper texture with a radial-gradient
+  // whose colour was `var(--border)`. That was invisible at --border's old
+  // 1.23:1, and at the 1.43:1 the palette shift needed for item separation the
+  // same rule turned a 20px dot grid across the whole viewport into noise.
+  //
+  // The two properties pull in opposite directions BY DEFINITION — a border
+  // exists to be seen, a texture exists to be barely felt — so they must not
+  // share a token, however similar the two values look on any given day.
+  const css = await readFile(cssUrl, "utf8");
+  // ruleBody escapes the selector itself, so this is passed raw. It matches
+  // the paint rule rather than the palette block, because only the paint rule
+  // has `.dashboard-surface` sitting directly against its brace.
+  const surface = ruleBody(code(css), ".dashboard-surface");
+  assert.ok(surface, "the .dashboard-surface paint block is gone");
+  assert.match(surface, /background:\s*radial-gradient\(var\(--surface-dot\)/);
+  assert.equal(
+    /radial-gradient\(var\(--border\)/.test(surface),
+    false,
+    "the dot grid is painting with --border again",
+  );
+
+  // And the token it uses instead is declared in BOTH themes, or the grid
+  // silently stops rendering in whichever one forgot.
+  for (const [label, selector] of [["light", "\n.dashboard-surface {"], ["dark", "\n.dark .dashboard-surface {"]]) {
+    const at = css.indexOf(selector);
+    assert.ok(at >= 0, `the ${label} surface block is gone`);
+    assert.match(css.slice(at, css.indexOf("\n}", at)), /--surface-dot:\s*#/, `${label} leaves --surface-dot undeclared`);
+  }
 });

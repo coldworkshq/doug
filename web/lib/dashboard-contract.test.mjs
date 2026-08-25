@@ -84,53 +84,81 @@ test("organization switching and sign-out are POST server actions", async () => 
   assert.equal(actions.includes("export async function GET"), false);
 });
 
-test("the signed-in console stays on the reference light paper surface", async () => {
-  // The deleted dashboard.module.css hardcoded a whole light palette on
-  // `.console`, including `--card: #fff`, which shadowed the global `--card`
-  // for the entire subtree. THAT is why the dashboard rendered light no matter
-  // what web's theme toggle said, and deleting the module without a
-  // replacement would have silently retired the property along with the pin.
+test("light is the console's default, and dark is reachable on purpose", async () => {
+  // THIS TEST REPLACES "the signed-in console stays on the reference light
+  // paper surface" (Phase B RULING 1), which is AMENDED rather than dropped.
   //
-  // The replacement (RULING 1) is `.dashboard-surface`, which shares ONE
-  // declaration block with `:root` — not a second copy of the light values,
-  // which would drift. Because those custom properties are declared ON the
-  // dashboard's own wrapper, they beat anything `.dark` sets further up the
-  // tree: inheritance is the weakest source a custom property can have.
+  // What RULING 1 actually protected was never "the console must be light" for
+  // its own sake — it was that the console must not drift into a theme nobody
+  // chose. The deleted dashboard.module.css hardcoded a light palette on
+  // `.console`, and removing it without a replacement would have silently
+  // retired the property along with the pin. The amendment is that a person
+  // may now CHOOSE dark from the account menu; the thing still worth pinning
+  // is that choosing nothing still gets them light, and that the choice
+  // reaches every part of the console rather than half of it.
+  //
+  // So the three properties below are: (1) light is what the console holds by
+  // default, (2) dark is claimed deliberately and at a specificity that can
+  // actually win, and (3) portalled content follows the same theme as the
+  // surface it belongs to.
   const [css, page, gear] = await Promise.all([
     readFile(globalsUrl, "utf8"),
     readFile(pageUrl, "utf8"),
     readFile(gearUrl, "utf8"),
   ]);
 
-  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface,\n\.paper-tokens\s*\{([\s\S]*?)\n\}/);
+  // (1) DEFAULT. One declaration block, three selectors — not three copies,
+  // which would drift. The console is named here, which is what makes an
+  // unset preference render paper.
+  const light = css.match(/(?:^|\n):root,\n\.dashboard-surface,\n\.surface-tokens\s*\{([\s\S]*?)\n\}/);
   assert.ok(
     light,
-    "the dashboard scope no longer shares :root's light palette block — it now follows the dark toggle",
+    "the console scope no longer shares :root's light palette block — its default theme is now whatever :root inherits",
   );
-  // The exact reference background, not an approximation.
-  assert.match(light[1], /--background:\s*#fcfcfa/);
-  // The token whose shadowing is what actually forced light before.
+  // The exact reference values, not an approximation.
+  assert.match(light[1], /--background:\s*#eef0f2/);
   assert.match(light[1], /--card:\s*#ffffff/);
 
-  // ...and the dark palette must never claim the dashboard scope, which is the
-  // one edit that would defeat the mechanism above while leaving it in place.
-  const dark = css.match(/(?:^|\n)\.dark[^{]*\{/);
-  assert.ok(dark, "globals.css lost its .dark block");
-  assert.equal(dark[0].includes("dashboard-surface"), false);
+  // (2) DARK, claimed deliberately. `.dark .dashboard-surface` is (0,2,0)
+  // against the light block's (0,1,0) on the same element — the ONLY way to
+  // beat a declaration sitting on the element itself, since inheritance is the
+  // weakest source a custom property can have. A bare `.dark` on <html> is
+  // not enough and never was; that asymmetry is the whole mechanism.
+  const dark = css.match(/(?:^|\n)\.dark,\n\.dark \.dashboard-surface,\n\.dark \.surface-tokens\s*\{([\s\S]*?)\n\}/);
+  assert.ok(
+    dark,
+    "the dark palette no longer claims the console scope — the toggle cannot reach the dashboard",
+  );
+  assert.match(dark[1], /--background:\s*#14161a/);
 
-  // The mechanism is only real if the page actually mounts it.
+  // (3) The mechanism is only real if the page mounts it.
   assert.match(page, /className="dashboard-surface/);
 
-  // The block gained `.paper-tokens` (a third selector on the SAME
-  // declarations, not a second copy) so that content Radix portals out of the
-  // wrapper — the threshold gear's popover — still gets the paper palette.
-  // Pinned as part of the shared block precisely so nobody "fixes" a dark
-  // popover by pasting the values into a component.
-  assert.match(gear, /className="paper-tokens/);
+  // …and portalled content carries the same block. Radix renders the threshold
+  // gear's popover into <body>, escaping `.dashboard-surface` entirely, so
+  // without this it resolves the palette from <html> and can disagree with the
+  // ledger that opened it. Pinned as part of the shared blocks precisely so
+  // nobody "fixes" a mismatched popover by pasting values into a component.
+  assert.match(gear, /className="surface-tokens/);
+  assert.equal(
+    css.includes("paper-tokens"),
+    false,
+    "the old paper-tokens name survives somewhere — it now lies, since the console is not always paper",
+  );
+
+  // Neither theme may leave a surface-scoped token undeclared. The failure is
+  // silent and visual: `var(--rule-soft)` with no value simply stops drawing
+  // every row divider in the ledger, and nothing in this suite renders.
+  for (const [label, selector] of [["light", "\n.dashboard-surface {"], ["dark", "\n.dark .dashboard-surface {"]]) {
+    const at = css.indexOf(selector);
+    assert.ok(at >= 0, `the ${label} surface-token block is gone`);
+    const body = css.slice(at, css.indexOf("\n}", at));
+    for (const token of ["--rule-soft", "--dim", "--row-hover"]) {
+      assert.match(body, new RegExp(`${token}:\\s*#`), `${label} leaves ${token} undeclared`);
+    }
+  }
 
   // The 1440px canvas — the reference layout width the design was measured at.
-  // It moved from the module's six `max-width: 1440px` rules onto the page's
-  // own wrappers.
   assert.match(page, /max-w-\[1440px\]/);
 });
 

@@ -3,9 +3,13 @@
 // RunCoverage type from one module (its lib/runs.ts); web has them in
 // lib/coverage.ts and lib/session-api.ts respectively.
 //
-// The hardcoded #c9c6bd hatching is light-paper only, deliberately: the
-// dashboard is pinned to the console's light surface (RULING 1), so there is no
-// dark variant to invent here.
+// The "never read" hatching reads --cov-unread rather than a hardcoded hex.
+// It USED to be #c9c6bd on the argument that the dashboard was pinned to the
+// console's light surface (RULING 1) so no dark variant could exist. That
+// ruling is amended — the console follows the theme toggle now — and a fixed
+// warm-beige hatch over a #1e2127 card was exactly the defect the amendment
+// would have shipped. The token is declared in both palette blocks of BOTH
+// stylesheets, so this file stays identical on either side of the port.
 //
 // ENFORCED: lib/console-lockstep.test.mjs asserts this file is character-identical
 // to console's below the imports — render tests are against the house rule,
@@ -124,7 +128,7 @@ export function CoverageRuler({
         )}
         {unseenShare > 0 && (
           <div
-            className="relative min-w-0.5 overflow-hidden rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            className="relative min-w-0.5 overflow-hidden rounded-[2px] border border-dashed border-[var(--cov-unread)] bg-[repeating-linear-gradient(135deg,var(--cov-unread)_0_1.5px,transparent_1.5px_5px)]"
             style={{ flex: `${unseenShare} 1 0` }}
             title={
               unseenCount
@@ -151,7 +155,7 @@ export function CoverageRuler({
         </span>
         <span className="flex items-center gap-1.5">
           <span
-            className="inline-block size-2 rounded-[2px] border border-dashed border-[#c9c6bd] bg-[repeating-linear-gradient(135deg,#c9c6bd_0_1.5px,transparent_1.5px_5px)]"
+            className="inline-block size-2 rounded-[2px] border border-dashed border-[var(--cov-unread)] bg-[repeating-linear-gradient(135deg,var(--cov-unread)_0_1.5px,transparent_1.5px_5px)]"
             aria-hidden="true"
           />{" "}
           never read — budget

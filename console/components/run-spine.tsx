@@ -14,8 +14,8 @@ function Event({
 }) {
   const node =
     state === "done"
-      ? "bg-[#3d403c] border-[#3d403c]"
-      : "bg-background border-[#c9c6bd]";
+      ? "bg-foreground border-foreground"
+      : "bg-background border-input";
   return (
     <li className="relative pb-5 pl-5 last:pb-0 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-[3.5px] [&:not(:last-child)]:before:top-[11px] [&:not(:last-child)]:before:bottom-[-3px] [&:not(:last-child)]:before:w-px [&:not(:last-child)]:before:bg-border">
       <span className={`absolute left-0 top-[5px] size-2 rounded-full border-[1.5px] ${node}`} />

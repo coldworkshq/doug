@@ -4,6 +4,7 @@ import { signOutAction } from "@/app/auth/actions";
 import { switchConnectionAction } from "@/app/dashboard/actions";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { DougLogo } from "@/components/doug-logo";
+import { ThemeMenuItem } from "@/components/theme-menu-item";
 import { NoJsSubmit } from "@/components/no-js-submit";
 import type { RepositoryConnection } from "@/lib/session-api";
 
@@ -256,6 +257,11 @@ export function DashboardRail({
               </summary>
               <div className="absolute inset-x-4 bottom-[calc(100%+6px)] z-30 rounded-[5px] border border-border bg-card p-1 shadow-[0_10px_28px_-10px_rgba(0,0,0,.22)] max-lg:inset-x-auto max-lg:right-0 max-lg:top-[calc(100%+6px)] max-lg:bottom-auto max-lg:w-[196px]">
                 <Link href="/install/start" prefetch={false} className={MENU_ITEM}>Connect repositories</Link>
+                {/* Between the two, not beside the email itself: it is an
+                    account-level preference like the others, and it is the
+                    only one here that is reversible in a click, so it must not
+                    sit where a mis-aimed pointer lands on "Sign out". */}
+                <ThemeMenuItem className={MENU_ITEM} />
                 <form action={signOutAction}><button type="submit" className={MENU_ITEM}>Sign out</button></form>
               </div>
             </details>
