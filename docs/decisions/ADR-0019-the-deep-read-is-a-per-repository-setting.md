@@ -47,6 +47,22 @@ and is looking for the place where Doug is turned down.
 - **The rail gear is "Account", not "Settings".** Two different things sharing
   one word on one screen is the confusion the gear/flag-line naming test
   already refuses.
+- **The rail is shared chrome on every `/dashboard` route**, extracted to
+  a shared `DashboardRail`. Settings is a section of the dashboard, so
+  it keeps the dashboard's navigation. **This REVERSES what shipped with the
+  page** — see Consequences.
+- **`Settings` sits against `Account` at the foot of the rail, once.** It is
+  not a view of the ledger: the two entries above it swap what the table shows
+  and carry the filters across, and this one leaves the table. It belongs with
+  what it neighbours — who you are signed in as, and what Doug may do on your
+  behalf. It was in both the section list and the account gear, which was
+  defensible while they were far apart and is the same link twice at six
+  pixels.
+- **The two booleans are switches; the flag line is not.** `role="switch"` +
+  `aria-checked` on a submit button in its own form, so the control stays
+  JS-free and announces as a switch. The flag line is the one control here
+  with a VALUE rather than a state, and its three-way distinction — a number,
+  unset, or unset-and-showing-both-defaults — has no on/off to collapse into.
 - **Per-repository deep read**: `installation_repos.deep_read`
   (`NOT NULL DEFAULT TRUE`), set through the existing
   `PATCH /v1/sessions/repositories/{id}` behind `settings:write`, read by the
@@ -78,6 +94,15 @@ and is looking for the place where Doug is turned down.
   places, one API, one component.
 - **A session-aware header.** One word, paid for by turning `/about` and eleven
   `/docs` routes from static into per-request renders.
+- **A route-segment layout for the rail**, which is the obvious Next answer
+  and the wrong one here. It would have to fetch `connections` itself — a
+  second API round-trip per render on a page that already reads it; it cannot
+  see `searchParams`, so the repo filter could not live in it; and marking the
+  current section would need `usePathname`, a client boundary this shell is
+  built to avoid. A component taking the page's own data costs one prop and
+  moves no reads.
+- **A switch for the flag line**, for visual consistency with the two beside
+  it. It has a value, not a state.
 - **`DOUG_READER` per installation, through an allowlist env var**, the shape
   ADR-0017 used for grounding. It is an operator lever, and this is a tenant
   decision about their own repository; routing it through a deploy makes the
@@ -88,6 +113,20 @@ and is looking for the place where Doug is turned down.
 - **Folding a missing row into "off"**, matching `repo_pr_comment`. Rejected on
   the asymmetry in Consequences.
 - **Retroactively re-scoring anything.** Forward-only, like the line.
+- **Reading this as the second knob ADR-0013 rejected.** ADR-0013 refused two
+  *thresholds* for one question — "where is the line?" — and that refusal
+  stands: there is still one number, and this record adds no second one. The
+  deep read answers a different question, "is the diff opened at all?". The
+  objection has a real edge, raised by Doug on #195: on a repository with no
+  line of its own, the user-visible effect of this toggle INCLUDES moving
+  which default applies, so it is a lever over the line in practice even
+  though it is not a line. That is a consequence of which scorer ran, not a
+  second control over banding — a scorer that never opens the diff cannot
+  honour a line calibrated for one that does — and the honest answer is to say
+  so at the control rather than to pretend the effect is not there. The copy
+  does, in the tense that matches the repository's state. A second *threshold*
+  for the deterministic tier would be the thing ADR-0013 rejected, and is
+  still rejected.
 
 ## Consequences
 
@@ -118,6 +157,41 @@ and is looking for the place where Doug is turned down.
   indicator in the connections response is deferred to
   [#196](https://github.com/drewjst/doug/issues/196) — the issue is the
   tracker, not this line.
+- **THE SETTINGS PAGE SHIPPED WITHOUT THE RAIL, AND THAT WAS WRONG.** The
+  first cut argued the ledger's chrome exists to keep a scope, a filter set and
+  a selected run visible at once, and that this screen has none of those. That
+  was true about the rail's CONTENTS and wrong about what a rail is for:
+  leaving the navigation to reach your settings makes settings read as a
+  different product, and the only way back was one link. The two parts that
+  genuinely are the ledger's — the repo filter and the in-view readout — are
+  slots the settings route does not fill, so the original observation survives
+  as the reason those two are parameters rather than fixtures. Recorded here
+  rather than left in a commit message, because the reasoning it reverses was
+  shipped in a code comment one PR earlier and a reader who found only that
+  comment would think the current shell was an accident.
+- **A reconciliation fault now costs money, not just silence.** The fail-open
+  default above means a repository whose `installation_repos` row goes missing
+  keeps being deep-read, and deep reads are metered
+  (`store.record_deep_read`). That is the intended trade — a silently
+  downgraded verdict is worse than a paid read — but it makes reconciliation
+  drift a spend problem as well as a correctness one, and the only signal
+  today is the API's startup DRIFT line on stderr.
+- **A rolled-back API breaks the dashboard rather than degrading it.** The
+  two-step above protects the PROMOTION window (API before web); it says
+  nothing about a rollback, a canary, or a stale instance serving a body from
+  before the column. Web's guard is `exact()`, so such a body is rejected
+  whole and every dashboard shows `LedgerUnreachable`. That is the chosen
+  failure: loud, naming no cause it cannot prove, recoverable by rolling web
+  back too. The alternative Doug proposed on #195 — tolerate on read, refuse
+  to render the one control — is better on blast radius and worse on
+  contract clarity, and it applies identically to `pr_comment`, which shipped
+  the same way. Not settled field by field here; tracked as one decision in
+  [#197](https://github.com/drewjst/doug/issues/197).
+- **Merge order is enforced by the stack; deploy order is not.** #195 is based
+  on #194's branch, so GitHub will not merge it to `main` first. Merging #194
+  *starts* a deploy rather than finishing one (ADR-0009), so merging #195
+  minutes later can still land the API ahead of the web build that tolerates
+  its new key. Wait for #194's deploy, not just its merge.
 - All three settings writes now revalidate `/dashboard` and
   `/dashboard/settings`. Two surfaces disagreeing about a setting is worse than
   either being stale: it makes the reader doubt the write landed.

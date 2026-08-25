@@ -1,45 +1,67 @@
 # HANDOFF — doug
 
-State:    building — PR 1 of 2 DONE and green, not yet committed when this was
-          written. /dashboard/settings exists, the rail and the account gear
-          both link to it, and site-header.tsx carries a Dashboard link, which
-          was the actual complaint ("I can't access it from the web page").
-          web 356/356, tsc clean, lint clean (2 pre-existing <img> warnings on
-          /about), build clean — /dashboard/settings is ƒ and /about + /docs/*
-          stayed ○, which is the whole reason the header link is static.
-          NOT VERIFIED IN A BROWSER: /dashboard needs WorkOS auth + the API and
-          has no fixture mode, so the deploy is the first real look. Same
-          limitation the #193 session hit.
-Next:     PR 2 (api + web): migration 15 deep_read, store.repo_deep_read /
-          set_repo_deep_read, api.py PATCH field + projection,
-          review.score_one(deep_read=) gating BOTH reader.enabled() branches
-          (score AND read_intent at review.py:473), worker reads it beside
-          repo_threshold, then web tightens the guard to exact() and renders
-          the toggle. Plus the ADR-0013 amendment.
+State:    review — #198 open against main, carrying the stranded #195 work
+          plus Andrew's three UI follow-ups. Doug reviewed cd3f2fd: 7 findings,
+          all settled (3 real+changed, 4 disproved).
+          Real: an orphaned unclosed docblock in the rail (my line-range
+          extraction overran a boundary — swept the other three touched files,
+          clean); the fail-open deep_read default also costs SPEND, not just
+          silence, because deep reads are metered — added to ADR-0019; and
+          ADR-0019 said nothing about the rail while the code comment it
+          shipped with said "Deliberately NOT a rail-and-ledger shell", which
+          this PR reverses. The rail, the rejected route-segment layout, and
+          the reversal are now all in the record.
+          Disproved with evidence: the exact() rollback window is already #197;
+          migrations.apply() runs inside _get_engine() under the engine lock,
+          so no API instance can SELECT deep_read before migration 15 ran in
+          its own process; lint (no-unused-vars) was already green and
+          signOutAction is still used at page.tsx:1138 and :1255; the threshold
+          shift is the most-documented behaviour in the PR.
+
+          I REPEATED A MISTAKE I HAD ALREADY WRITTEN DOWN: citing web file
+          paths in an ADR. `components/dashboard-rail.tsx` and `layout.tsx`
+          tokenise to {components, dashboard, tsx, layout} and pulled ADR-0019
+          into "Fix a typo in the footer" again —
+          test_selection_on_dougs_own_records caught it a second time. RULE:
+          in any ADR, name the COMPONENT, never its path.
 Blockers: none.
 
-PR 1, as built:
-- web/app/dashboard/settings/page.tsx — server component, no client boundary.
-  Redirects to /dashboard for a failed connections read AND for every
-  door.state !== "runs", rather than growing a second copy of four empty
-  states that are already worded and pinned on the ledger.
-- FlagLineControl gained `layout: "cell" | "page"`. ONE component, one copy of
-  the forward-only promise, two boxes. The "preview gear above" sentence is
-  cell-only — there is no gear on the settings page.
-- PrCommentDenialBanner extracted to its own component and rendered on BOTH
-  surfaces. D8 would otherwise be recreated: a settings page reading
-  "PR comment · on" while every post is refused.
-- The rail gear's aria-label went "Settings" -> "Account". Two different things
-  named Settings on one screen is the same failure the gear/flag-line naming
-  test already refuses.
-- session-api.ts: `exactWithOptional` + `deepRead()`. deep_read is TOLERATED,
-  not required, and absent means ON — the column is NOT NULL DEFAULT TRUE, so
-  the only body that can omit it came from an API that read every repo.
-- Pins moved with the code, none dropped: the 4 denial-copy assertions now
-  read the component; design-system.test.mjs's surface-token list gained the
-  settings page (it mounts .dashboard-surface, so it earns the token);
-  public-surface.test.mjs's nav order pins /dashboard first.
+SEEN, not just tested: /dashboard/settings was rendered through a temporary
+harness route (deleted, tree clean) against fixture data, because the real
+page needs WorkOS auth + the API and has no fixture mode. That look caught two
+real defects, both fixed in 8acd9eb — the flat panel gave three settings no
+grouping, and a repo already set to deep-read-off was told what turning it off
+"would" do to its band. Verified across all three states. What the harness
+CANNOT show: the real page under real auth, an installation with many repos,
+and the redirect arms.
 
+Known and deliberately not fixed: three paragraphs per repository is a lot of
+page at forty repositories. Thinning it by splitting the copy between the page
+and the control would put the same forward-only promise in two files, which is
+what FlagLineControl's one-component design exists to refuse.
+
+PR 2, as built:
+- installation_repos.deep_read, NOT NULL DEFAULT TRUE (migration 15). TRUE is
+  the only honest backfill: every repo that existed before the column WAS read
+  whenever DOUG_READER was on.
+- NARROWS ONLY. review.score_one gates on `reader.enabled() and deep_read`.
+- read_intent takes the SAME gate. A repo that turned the LLM off turned off
+  the LLM, not one of the two things Doug asks it.
+- Off gets its own verdict rule, `deep-read-off`, distinct from
+  reader-unavailable (a fault) and reader-capped (a budget).
+- store.repo_deep_read defaults a MISSING row to True — the opposite of
+  repo_pr_comment, argued in ADR-0019: resolving that fault towards "off" here
+  silently downgrades the verdict AND moves the band, with nothing on the
+  check run saying why.
+- All three settings writes revalidate BOTH surfaces.
+- Doug's own intent selector caught a real defect in ADR-0019 before it
+  shipped: citing `web/components/*.tsx` tokenises to {web, components, tsx}
+  and pulled the record into "Fix a typo in the footer"
+  (test_selection_on_dougs_own_records). Fixed by naming the components, not
+  their paths. Worth remembering for any future ADR that cites a web file.
+
+Plan — the settings page (decided):
+Plan — the settings page (decided):
 Plan — the settings page (decided):
 Plan — the settings page (decided, not yet built):
 - TWO PRs, mandatory, not a preference. deploy.yml:162 promotes API before

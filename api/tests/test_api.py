@@ -5011,12 +5011,14 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                         "full_name": "drewjst/doug",
                         "needs_you_threshold": None,
                         "pr_comment": True,
+                        "deep_read": True,
                     },
                     {
                         "id": 12,
                         "full_name": "drewjst/notes",
                         "needs_you_threshold": None,
                         "pr_comment": True,
+                        "deep_read": True,
                     },
                 ],
                 "pr_comment_denied_at": None,
@@ -5035,12 +5037,14 @@ def test_connections_project_several_installations_and_explicit_live_repos(
                         "full_name": "lemahq/lema",
                         "needs_you_threshold": None,
                         "pr_comment": True,
+                        "deep_read": True,
                     },
                     {
                         "id": 22,
                         "full_name": "lemahq/lema-verify",
                         "needs_you_threshold": None,
                         "pr_comment": True,
+                        "deep_read": True,
                     },
                 ],
                 "pr_comment_denied_at": None,
@@ -5081,6 +5085,7 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
                     "full_name": "coldworkshq/coldworks",
                     "needs_you_threshold": None,
                     "pr_comment": True,
+                    "deep_read": True,
                 }
             ],
             "pr_comment_denied_at": None,
@@ -5224,12 +5229,14 @@ def test_connections_carry_each_repos_flag_line_and_both_process_defaults(
         "full_name": "acme/repo11",
         "needs_you_threshold": 0.9,
         "pr_comment": True,
+        "deep_read": True,
     }
     assert repos[12] == {
         "id": 12,
         "full_name": "acme/repo12",
         "needs_you_threshold": None,
         "pr_comment": True,
+        "deep_read": True,
     }
 
 
@@ -5416,7 +5423,7 @@ def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
 
     r = _patch_line(headers, 11, {"needs_you_threshold": 0.9})
     assert r.status_code == 200
-    assert r.json() == {"needs_you_threshold": 0.9, "pr_comment": True}
+    assert r.json() == {"needs_you_threshold": 0.9, "pr_comment": True, "deep_read": True}
     assert store.repo_threshold(101, 11) == 0.9
     assert (
         "needs_you_threshold installation=101 repo=11 None->0.9 by sub=user_01ABC"
@@ -5425,11 +5432,11 @@ def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
 
     r = _patch_line(headers, 11, {"needs_you_threshold": 0.6249})
     # the STORED value comes back; pr_comment untouched
-    assert r.json() == {"needs_you_threshold": 0.62, "pr_comment": True}
+    assert r.json() == {"needs_you_threshold": 0.62, "pr_comment": True, "deep_read": True}
 
     r = _patch_line(headers, 11, {"needs_you_threshold": None})
     assert r.status_code == 200
-    assert r.json() == {"needs_you_threshold": None, "pr_comment": True}
+    assert r.json() == {"needs_you_threshold": None, "pr_comment": True, "deep_read": True}
     assert store.repo_threshold(101, 11) is None
 
 
@@ -5443,13 +5450,13 @@ def test_patch_pr_comment_alone_does_not_touch_the_flag_line(tmp_path, monkeypat
     r = _patch_line(headers, 11, {"pr_comment": False})
 
     assert r.status_code == 200
-    assert r.json() == {"needs_you_threshold": 0.75, "pr_comment": False}
+    assert r.json() == {"needs_you_threshold": 0.75, "pr_comment": False, "deep_read": True}
     assert store.repo_threshold(101, 11) == 0.75
     assert store.repo_pr_comment(101, 11) is False
 
     r = _patch_line(headers, 11, {"needs_you_threshold": None})  # explicit null still clears
 
-    assert r.json() == {"needs_you_threshold": None, "pr_comment": False}
+    assert r.json() == {"needs_you_threshold": None, "pr_comment": False, "deep_read": True}
     assert store.repo_threshold(101, 11) is None
     assert store.repo_pr_comment(101, 11) is False
 
@@ -5500,6 +5507,71 @@ def test_connections_carry_pr_comment_and_the_denial_timestamp(tmp_path, monkeyp
     assert datetime.fromisoformat(denied_at) == at
 
 
+def test_patch_deep_read_alone_touches_neither_the_line_nor_the_comment(
+    tmp_path, monkeypatch, capsys
+):
+    """Three optional fields now share one field-set gate, and the third one
+    can break it the same way the second could: absent and explicit-null both
+    arrive as None, so a write gated on `is not None` would let a deep-read
+    toggle wipe the flag line beside it."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+    assert _patch_line(headers, 11, {"needs_you_threshold": 0.75}).status_code == 200
+    assert _patch_line(headers, 11, {"pr_comment": False}).status_code == 200
+    capsys.readouterr()  # drop the setup writes' own audit lines
+
+    r = _patch_line(headers, 11, {"deep_read": False})
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "needs_you_threshold": 0.75,
+        "pr_comment": False,
+        "deep_read": False,
+    }
+    assert store.repo_threshold(101, 11) == 0.75
+    assert store.repo_pr_comment(101, 11) is False
+    assert store.repo_deep_read(101, 11) is False
+    # Its own audit line, in the same format as the other two, and printed
+    # only because this field was written. It is the line worth having most:
+    # this is the setting that changes which SCORER ran.
+    err = capsys.readouterr().err
+    assert "deep_read installation=101 repo=11 True->False by sub=user_01ABC" in err
+    assert "needs_you_threshold" not in err
+    assert "pr_comment installation" not in err
+
+
+def test_deep_read_refuses_null_and_anything_that_is_not_a_json_boolean(
+    tmp_path, monkeypatch
+):
+    """Same refusal as pr_comment and for the same reason: the column is a
+    plain non-nullable bool, so `bool(None)` would quietly turn an explicit
+    null into "stop reading this repository" — the most expensive silent
+    coercion on this endpoint."""
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11,), claim=(11,))
+
+    assert _patch_line(headers, 11, {"deep_read": None}).status_code == 422
+    for bad in ("true", "false", 1, 0):
+        assert _patch_line(headers, 11, {"deep_read": bad}).status_code == 422, bad
+    assert _patch_line(headers, 11, {"dep_read": False}).status_code == 422
+    assert store.repo_deep_read(101, 11) is True
+
+    # 404 not 403 outside the session's claim, like every other field here.
+    assert _patch_line(headers, 999, {"deep_read": False}).status_code == 404
+
+
+def test_connections_carry_each_repos_deep_read(tmp_path, monkeypatch):
+    headers = _session_scope(tmp_path, monkeypatch, repos=(11, 12), claim=(11, 12))
+    store.set_repo_deep_read(101, 12, False)
+
+    body = TestClient(app).get("/v1/sessions/connections", headers=headers).json()
+
+    repos = {r["id"]: r for r in body["connections"][0]["repositories"]}
+    # True is the value every pre-existing row carries, and the value the web
+    # guard reads an ABSENT key as — so the two agree about the default in
+    # both directions.
+    assert repos[11]["deep_read"] is True
+    assert repos[12]["deep_read"] is False
+
+
 def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, monkeypatch):
     """404 not 403 for a repo the session cannot see (do not confirm it
     exists); 422 for anything that is not a JSON number in 0..1 or null —
@@ -5523,7 +5595,7 @@ def test_flag_line_write_fails_closed_outside_scope_and_on_bad_bodies(tmp_path, 
     # ints at the endpoints are numbers, not strings — accepted.
     r = _patch_line(headers, 11, {"needs_you_threshold": 1})
     assert r.status_code == 200
-    assert r.json() == {"needs_you_threshold": 1.0, "pr_comment": True}
+    assert r.json() == {"needs_you_threshold": 1.0, "pr_comment": True, "deep_read": True}
 
 
 def test_the_custom_validation_handler_still_returns_the_stock_422_body():

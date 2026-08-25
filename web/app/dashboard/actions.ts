@@ -16,6 +16,7 @@ import {
   SessionApiError,
   bindInstallation,
   getConnections,
+  setRepositoryDeepRead,
   setRepositoryPrComment,
   setRepositoryThreshold,
 } from "@/lib/session-api";
@@ -25,6 +26,7 @@ const FLAG_LINE_ERROR = "Doug could not save that flag line.";
 const FLAG_LINE_REAUTH =
   "Your session's repository access has aged out — sign in again to change settings.";
 const PR_COMMENT_ERROR = "Doug could not save that PR comment setting.";
+const DEEP_READ_ERROR = "Doug could not save that deep read setting.";
 
 /** Every route that renders the per-repository controls.
  *
@@ -179,6 +181,49 @@ export async function setFlagLineCommentAction(formData: FormData): Promise<void
       throw new Error(FLAG_LINE_REAUTH);
     }
     throw new Error(PR_COMMENT_ERROR);
+  }
+  revalidateDashboard();
+}
+
+/** Turn the deep read on or off for one repository.
+ *
+ *  A THIRD action for a fourth form, on the same principle as the second:
+ *  the control is JS-free, `formData.get` returns the first entry for a name,
+ *  and one action reading several fields off one form would let a toggle
+ *  click re-save whatever sat beside it.
+ *
+ *  `parseBool` again, and it earns its keep hardest here — `Boolean("false")`
+ *  is true, and the accident it would cause on this field is a repository
+ *  quietly switched back onto the paid reader by a click that meant to turn
+ *  it off. Anything that is not the literal "true" or "false" is refused
+ *  rather than defaulted. */
+export async function setDeepReadAction(formData: FormData): Promise<void> {
+  const repoId = parseGithubRepoId(formData.get("github_repo_id"));
+  const value = parseBool(formData.get("deep_read"));
+  if (repoId === null || value === undefined) throw new Error(DEEP_READ_ERROR);
+
+  const auth = await withAuth();
+  if (!auth.user || !auth.accessToken) throw new Error(DEEP_READ_ERROR);
+
+  // The API is authoritative about who may write this row; this pre-check only
+  // makes the failure legible when the id belongs to a connection other than
+  // the selected one — the same shape of check the two actions above make.
+  const { connections } = await getConnections(auth.accessToken);
+  const door = frontDoor(connections, auth.organizationId ?? null);
+  if (!door.current?.repositories.some((repository) => repository.id === repoId)) {
+    throw new Error(DEEP_READ_ERROR);
+  }
+
+  try {
+    await setRepositoryDeepRead(auth.accessToken, repoId, value);
+  } catch (error) {
+    // 401 is the one failure with a different remedy: the session's derived
+    // repository scope has aged past entitlements.TTL, and no amount of
+    // retrying this form fixes it.
+    if (error instanceof SessionApiError && error.status === 401) {
+      throw new Error(FLAG_LINE_REAUTH);
+    }
+    throw new Error(DEEP_READ_ERROR);
   }
   revalidateDashboard();
 }

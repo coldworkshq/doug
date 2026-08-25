@@ -199,6 +199,7 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
       "app/dashboard/page.tsx",
       "app/dashboard/pr/[number]/page.tsx",
       "app/dashboard/settings/page.tsx",
+      "components/dashboard-rail.tsx",
     ],
     "a file outside the dashboard surface now uses a token only declared on it",
   );
@@ -216,13 +217,44 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
   // row) and earns it by mounting its own .dashboard-surface. It is a
   // /dashboard route rendering the dashboard's own surface, not a component
   // lifted out of one.
+  //
+  // THE RAIL IS THE FOURTH AND IS THE CASE THE COMMENT ABOVE WARNED ABOUT — a
+  // piece of the dashboard extracted into components/. The decision it forces
+  // was taken rather than waved through: the rail cannot mount the surface,
+  // because it is a CHILD of the wrapper, so "move the token to :root" or
+  // "pass the colour in" were the alternatives. Both were refused — the rail
+  // is dashboard chrome and nothing else renders it — and the guarantee is
+  // kept in the shape that actually protects it: every file that renders the
+  // rail must mount the surface. A future page that imports it without the
+  // wrapper fails here, which is the regression this test exists to catch.
+  const CHILD_OF_SURFACE = { "components/dashboard-rail.tsx": "<DashboardRail" };
   for (const rel of users) {
     const source = await readFile(new URL(rel, dir), "utf8");
-    assert.match(
-      source,
-      /className="dashboard-surface/,
-      `${rel} uses a surface-scoped token without mounting the surface`,
-    );
+    const tag = CHILD_OF_SURFACE[rel];
+    if (!tag) {
+      assert.match(
+        source,
+        /className="dashboard-surface/,
+        `${rel} uses a surface-scoped token without mounting the surface`,
+      );
+      continue;
+    }
+    const mounts = [];
+    for (const other of sources) {
+      // Tests NAME the tag while pinning it; they do not render it. Scanning
+      // them would demand a .dashboard-surface in a file that draws nothing.
+      if (other === rel || other.endsWith(".test.mjs")) continue;
+      const text = await readFile(new URL(other, dir), "utf8");
+      if (text.includes(tag)) mounts.push({ other, text });
+    }
+    assert.ok(mounts.length > 0, `${rel} is rendered by nothing`);
+    for (const { other, text } of mounts) {
+      assert.match(
+        text,
+        /className="dashboard-surface/,
+        `${other} renders ${rel}, which uses a surface-scoped token, without mounting the surface`,
+      );
+    }
   }
 });
 

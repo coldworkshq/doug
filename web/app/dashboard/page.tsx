@@ -5,12 +5,18 @@ import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
 import { BandChip } from "@/components/band-chip";
-import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { CensusPanel } from "@/components/census-panel";
 import { CoverageRuler } from "@/components/coverage-ruler";
-import { DougLogo } from "@/components/doug-logo";
+import {
+  DashboardRail,
+  ScopePicker,
+  SUBMIT_BUTTON,
+  SWITCH_CONTROL,
+  SWITCH_LABEL,
+  SWITCH_SELECT,
+  connectionLabel,
+} from "@/components/dashboard-rail";
 import { FlagLineControl } from "@/components/flag-line-control";
-import { NoJsSubmit } from "@/components/no-js-submit";
 import { PrCommentDenialBanner } from "@/components/pr-comment-denial-banner";
 import { RunSpine } from "@/components/run-spine";
 import { ThresholdGear } from "@/components/threshold-gear";
@@ -63,9 +69,8 @@ import {
   type RunSummary,
 } from "@/lib/session-api";
 
-import { finishSetupAction, switchConnectionAction } from "./actions";
+import { finishSetupAction } from "./actions";
 
-const LEMA_LABEL = "Lema — separate product";
 
 /** The reference canvas width the empty states are measured at. The RUNS state
  *  no longer centres on it: a three-column instrument shell (rail · ledger ·
@@ -127,49 +132,11 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
  *  a 1440 laptop; below 1620 the ledger takes the whole width and the title
  *  is generous, which is the better half of a trade that has no free side. */
 
-/** A bordered control that wraps a <select>. The focus ring is on the wrapper,
- *  not the select, because the label and its value read as one control — and
- *  it is not optional: this is what changes whose data you are looking at.
- *  Stacked label-over-value in the rail, where the column is 212px and a
- *  side-by-side label would leave the org name six characters wide. */
-const SWITCH_CONTROL =
-  "mono flex w-full flex-col gap-[3px] rounded-[5px] border border-border bg-card px-2 py-[5px] " +
-  "focus-within:border-[var(--iridescent)] focus-within:outline-2 focus-within:outline-offset-2 " +
-  "focus-within:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--dim)]";
 
-const SWITCH_SELECT =
-  "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
 
-const SUBMIT_BUTTON =
-  "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
-  "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +
-  "focus-visible:border-[var(--iridescent)] focus-visible:text-foreground";
 
-/** One row of the settings menu — the connect link and the sign-out button
- *  share it so a <Link> and a <button type="submit"> render as one list.
- *
- *  Hoisted so each tag stays short and legible. The reachability pin in
- *  lib/dashboard-contract.test.mjs deliberately does NOT read this string — it
- *  pins the href and the label, so restyling can never fail an ordering
- *  guarantee. */
-const MENU_ITEM =
-  "mono block w-full cursor-pointer rounded-[3px] border-0 bg-transparent px-2 py-[7px] " +
-  "text-left text-[11px] text-muted-foreground no-underline hover:bg-accent " +
-  "hover:text-[var(--iridescent)] focus-visible:bg-accent focus-visible:outline-2 " +
-  "focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
 
-/** A rail entry. The current section is marked by a filled tick in the left
- *  gutter AND by weight and ink — three carriers, because the tick is 2px wide
- *  and the accent is the one colour on this page that is not allowed to mean
- *  anything about a verdict. */
-const RAIL_ITEM =
-  "mono relative flex items-center gap-2 border-l-2 border-transparent py-[7px] pr-2 pl-[13px] " +
-  "text-[11px] uppercase tracking-[.09em] text-[var(--dim)] no-underline " +
-  "hover:bg-[var(--row-hover)] hover:text-foreground " +
-  "aria-[current]:border-l-[var(--iridescent)] aria-[current]:bg-accent " +
-  "aria-[current]:font-semibold aria-[current]:text-foreground";
 
 /** The evidence pane's section headings. The `<span>` inside each one is a
  *  provenance sub-label, styled here rather than at the call site so the
@@ -215,53 +182,7 @@ function href(params: DashboardParams, changes: Record<string, string | null>): 
   return query ? `/dashboard?${query}` : "/dashboard";
 }
 
-function connectionLabel(connection: RepositoryConnection): string {
-  const label = connection.account_login.toLowerCase() === "lemahq"
-    ? LEMA_LABEL
-    : connection.label;
-  return label ? `${connection.account_login} · ${label}` : connection.account_login;
-}
 
-function ScopePicker({
-  connections,
-  current,
-}: {
-  connections: RepositoryConnection[];
-  current: RepositoryConnection | null;
-}) {
-  const ready = connections.filter(
-    (connection) => connection.status === "ready" && connection.organization_id,
-  );
-  if (ready.length === 0) return null;
-  return (
-    <form action={switchConnectionAction} className="flex flex-col gap-1.5 max-lg:w-[200px]">
-      <label className={SWITCH_CONTROL}>
-        <span className={SWITCH_LABEL}>space</span>
-        <AutoSubmitSelect
-          name="organization_id"
-          defaultValue={current?.organization_id ?? ""}
-          aria-label="Connected space"
-          className={SWITCH_SELECT}
-        >
-          {!current && <option value="" disabled>choose</option>}
-          {ready.map((connection) => (
-            <option key={connection.installation_id} value={connection.organization_id ?? ""}>
-              {connectionLabel(connection)}
-            </option>
-          ))}
-        </AutoSubmitSelect>
-      </label>
-      {/* Not deleted — rendered until the client proves it is not needed. It
-          used to be wrapped in a script-absent element, which covered strictly
-          less: that only renders when scripting is DISABLED, so it did nothing
-          in the two cases that actually happen — the seconds before hydration,
-          and a bundle that loaded and threw. In both, this form had no working
-          control at all and an operator could not switch spaces (Doug PR 103,
-          reader:js-dependency-regression). */}
-      <NoJsSubmit className={`${SUBMIT_BUTTON} w-full`}>open</NoJsSubmit>
-    </form>
-  );
-}
 
 function PendingConnections({ connections }: { connections: RepositoryConnection[] }) {
   const pending = connections.filter(
@@ -904,7 +825,12 @@ const REPO_COLUMNS: Array<{ label: string; cls: string }> = [
 /** One repository's flag line, keyed by `full_name` because that is the only
  *  name the rollup rows carry — the ledger joins runs to repositories by name,
  *  and the numeric id exists only on the connection's own list. */
-type FlagLineSetting = { id: number; needs_you_threshold: number | null; pr_comment: boolean };
+type FlagLineSetting = {
+  id: number;
+  needs_you_threshold: number | null;
+  pr_comment: boolean;
+  deep_read: boolean;
+};
 
 /** The flag-line cell, and the one row shape that gets no control.
  *
@@ -926,6 +852,7 @@ function FlagLineCell({
       githubRepoId={setting.id}
       value={setting.needs_you_threshold}
       prComment={setting.pr_comment}
+      deepRead={setting.deep_read}
       defaults={defaults}
     />
   );
@@ -1452,6 +1379,7 @@ export default async function DashboardPage({
           id: repository.id,
           needs_you_threshold: repository.needs_you_threshold,
           pr_comment: repository.pr_comment,
+          deep_read: repository.deep_read,
         },
       ]),
     );
@@ -1476,39 +1404,29 @@ export default async function DashboardPage({
   return (
     <div className="dashboard-surface">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[212px_minmax(0,1fr)]">
-        {/* THE RAIL. Scope lives here and filters do not: what this column
-            holds — which space, which repository — decides what the server
-            fetches, and everything over the ledger narrows what came back.
-            Separating them by a border rather than by wording is what stops a
-            pill being read as a change of scope.
+        {/* THE RAIL, shared with /dashboard/settings (components/dashboard-rail).
+            Scope lives in it and filters do not: what that column holds — which
+            space, which repository — decides what the server fetches, and
+            everything over the ledger narrows what came back.
 
-            Sticky and viewport-tall from `lg` up, a plain block below it, so
-            on a narrow screen the whole page is one document again. */}
-        {/* Below `lg` the rail is not a rail. Stacked as a column it filled an
-            entire 800px-tall screen with chrome and pushed the ledger under the
-            fold — so under 1024 it lays itself out as one wrapping horizontal
-            bar, which is the header this page had before the redesign. The
-            in-view readout is the one thing dropped rather than reflowed: it is
-            a convenience duplicate of numbers the census panel states in full,
-            and at this width the census panel is directly below the table. */}
-        <aside
-          aria-label="Dashboard navigation"
-          className="flex flex-col border-b border-border bg-card max-lg:flex-row max-lg:flex-wrap max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-2 max-lg:px-4 max-lg:py-2.5 lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-y-auto lg:border-r lg:border-b-0"
-        >
-          <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
-            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
-              <DougLogo size={19} /> doug
-              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">dashboard</span>
-            </Link>
-          </div>
-
-          <div className="flex flex-col gap-2 border-b border-border px-4 py-3.5 max-lg:flex-row max-lg:items-start max-lg:border-0 max-lg:p-0">
-            <ScopePicker connections={connections} current={current} />
-            {/* Stacked, not side by side: a 212px rail minus a submit button
-                leaves ~115px of select, and "all repositories" — the DEFAULT
-                value — truncates inside it. A scope control whose current value
-                cannot be read is one you have to open to learn the state of. */}
-            {current && <form method="GET" className="flex flex-col gap-1.5 max-lg:w-[210px]">
+            The two slots are the ledger's own, and are slots precisely so the
+            rail never has to know what `params` is: the repo filter changes the
+            FETCH, and the readout counts rows this page has in hand. Neither
+            means anything on the settings route, and neither can leak there
+            through shared chrome. */}
+        <DashboardRail
+          connections={connections}
+          current={current}
+          userEmail={user.email}
+          section={view === "repositories" ? "repositories" : "runs"}
+          runsHref={href(params, { view: null, page: null })}
+          repositoriesHref={href(params, { view: "repositories", page: null })}
+          filter={current && (
+            /* Stacked, not side by side: a 212px rail minus a submit button
+               leaves ~115px of select, and "all repositories" — the DEFAULT
+               value — truncates inside it. A scope control whose current value
+               cannot be read is one you have to open to learn the state of. */
+            <form method="GET" className="flex flex-col gap-1.5 max-lg:w-[210px]">
               <label className={SWITCH_CONTROL}>
                 <span className={SWITCH_LABEL}>repo</span>
                 <select name="repo" defaultValue={filters.repo} aria-label="Repository" className={SWITCH_SELECT}>
@@ -1518,92 +1436,14 @@ export default async function DashboardPage({
                 </select>
               </label>
               <button type="submit" className={`${SUBMIT_BUTTON} w-full`}>filter</button>
-            </form>}
-          </div>
-
-          <nav className="flex flex-col border-b border-border py-1.5 max-lg:flex-row max-lg:border-0 max-lg:py-0" aria-label="Dashboard sections">
-            {/* Both entries carry the current filters across, and both drop
-                `page`: a page number is a position in one list and means
-                nothing in the other. */}
-            <Link
-              href={href(params, { view: null, page: null })}
-              aria-current={view === "runs" ? "page" : undefined}
-              className={RAIL_ITEM}
-            >Runs</Link>
-            <Link
-              href={href(params, { view: "repositories", page: null })}
-              aria-current={view === "repositories" ? "page" : undefined}
-              className={RAIL_ITEM}
-            >Repositories</Link>
-            {/* The one section entry that carries NO filters across, because
-                there is nothing on it to narrow: /dashboard/settings is a list
-                of repositories and their controls, and a `?repo=` there would
-                be a parameter nothing reads. It takes no `aria-current` for the
-                same reason Docs does not — this page is never that route. */}
-            <Link href="/dashboard/settings" className={RAIL_ITEM}>Settings</Link>
-            {/* Still not built, and still said so. A nav entry that navigates
-                nowhere is a lie about the product; one that names itself as
-                unbuilt is a roadmap. */}
-            <span className={RAIL_ITEM}>Evidence <small className="ml-auto text-[8px] tracking-normal normal-case">later</small></span>
-            {/* Docs is a REAL destination and the only entry here that leaves
-                the dashboard, so it sits below a rule rather than in the run of
-                sections — and it takes no `aria-current`, because no /dashboard
-                URL is ever the docs page. Grouping it with the two unbuilt
-                placeholders would read as a fourth thing that might also be a
-                promise; it is the one link on this list that works today. */}
-            <Link href="/docs" className={`${RAIL_ITEM} mt-1.5 border-t border-t-border pt-[9px] max-lg:mt-0 max-lg:border-t-0 max-lg:pt-[7px]`}>Docs</Link>
-          </nav>
-
-          {door.state === "runs" && <div className="border-b border-border max-lg:hidden"><RailReadout runs={visible} scope={scope} /></div>}
-
-          {/* THE ACCOUNT MENU is a <details>, not a popover.
-              /dashboard is a server component and must stay one (RULING 2), and
-              the things behind this gear are the ones that most need to work
-              on an unhydrated page: signing out, connecting a repository, and
-              reaching the settings that turn Doug down.
-              The threshold gear can afford to be a Radix client leaf because a
-              view control that does not load costs you a view; a sign-out that
-              does not load strands you signed in. <details> is HTML, so the
-              menu works before hydration, after a bundle throws, and with
-              scripting off entirely.
-
-              It opens UPWARD on the rail (it sits at the bottom of a full-height
-              column) and downward in the narrow horizontal bar, where there is
-              nothing above it. Clicking away does not close it — the honest cost
-              of not reaching for JavaScript, and the gear toggles it back. */}
-          {/* `relative` is on the ROW, not on the <details>. The rail is an
-              overflow:auto container, so a panel that spills past it is clipped
-              rather than shown — and anchored to the gear (a ~25px box at the
-              right edge) a 196px panel hung 1px off the rail's left edge. Against
-              the row's padding box, `inset-x-4` makes the panel exactly the
-              rail's content width whatever that width becomes. */}
-          <div className="mono relative mt-auto flex items-center gap-2 border-t border-border px-4 py-3 text-[10.5px] text-muted-foreground max-lg:mt-0 max-lg:border-0 max-lg:p-0">
-            <span className="min-w-0 flex-1 truncate" title={user.email}>{user.email}</span>
-            <details className="flex-none">
-              <summary
-                aria-label="Account"
-                className="flex cursor-pointer list-none items-center rounded-[4px] border border-transparent p-1 text-muted-foreground hover:border-border hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)] [&::-webkit-details-marker]:hidden"
-              >
-                {/* The same cog the threshold gear draws, at the same weight —
-                    two gears on one screen that were drawn differently would
-                    read as two different kinds of control. */}
-                <svg viewBox="0 0 16 16" aria-hidden className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.4">
-                  <circle cx="8" cy="8" r="2.1" />
-                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" strokeLinecap="round" />
-                </svg>
-              </summary>
-              <div className="absolute inset-x-4 bottom-[calc(100%+6px)] z-30 rounded-[5px] border border-border bg-card p-1 shadow-[0_10px_28px_-10px_rgba(0,0,0,.22)] max-lg:inset-x-auto max-lg:right-0 max-lg:top-[calc(100%+6px)] max-lg:bottom-auto max-lg:w-[196px]">
-                {/* Also in the rail's section list, and that is not a
-                    duplicate to be tidied away: the list is where someone
-                    BROWSING finds it, and a gear is where someone LOOKING for
-                    settings looks first. Two doors to one room. */}
-                <Link href="/dashboard/settings" className={MENU_ITEM}>Settings</Link>
-                <Link href="/install/start" prefetch={false} className={MENU_ITEM}>Connect repositories</Link>
-                <form action={signOutAction}><button type="submit" className={MENU_ITEM}>Sign out</button></form>
-              </div>
-            </details>
-          </div>
-        </aside>
+            </form>
+          )}
+          readout={door.state === "runs" && (
+            <div className="border-b border-border max-lg:hidden">
+              <RailReadout runs={visible} scope={scope} />
+            </div>
+          )}
+        />
 
         <div className="min-w-0">
           <PendingConnections connections={connections} />

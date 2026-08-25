@@ -13,14 +13,23 @@ const actionsUrl = new URL("../app/dashboard/actions.ts", import.meta.url);
 // intent now lives.
 const globalsUrl = new URL("../app/globals.css", import.meta.url);
 const gearUrl = new URL("../components/threshold-gear.tsx", import.meta.url);
+// THE RAIL MOVED, AND THESE PINS MOVED WITH IT — none was dropped. It is a
+// component now (components/dashboard-rail.tsx) because /dashboard/settings
+// renders the same chrome; every assertion below that describes the scope
+// picker, the section list, the account menu or the connect link reads that
+// file, and the ones about where the rail sits RELATIVE to the page's state
+// branch still read the page, because that is a fact about the page.
+const railUrl = new URL("../components/dashboard-rail.tsx", import.meta.url);
 
 /** A source file with its comments removed.
  *
- *  Every assertion that says "this must NOT appear" needs it. The comments in
- *  these files EXPLAIN the rules — actions.ts spells out
- *  `revalidatePath(...paths)` as the call it refuses to make. Scanning the raw
- *  file, a negative pin fails on the prose that documents it, which trains the
- *  next person to delete the explanation rather than keep the rule. */
+ *  Every assertion below that says "this must NOT appear" needs it. The
+ *  comments in these files EXPLAIN the rules — the deep-read copy's docblock
+ *  quotes "default · 0.30 deep read / 0.62 fallback" as the string it is
+ *  describing, and actions.ts spells out `revalidatePath(...paths)` as the
+ *  call it refuses to make. Scanning the raw file, a negative pin fails on the
+ *  prose that documents it, which trains the next person to delete the
+ *  explanation rather than keep the rule. */
 function code(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
@@ -28,7 +37,7 @@ function code(text) {
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
   assert.match(page, /You're in\. Connect GitHub only when you want Doug to review repositories\./);
-  assert.match(page, /Lema — separate product/);
+  assert.match(await readFile(railUrl, "utf8"), /Lema — separate product/);
   assert.match(page, /What the reader was given/);
   // Intent: A COVERAGE RULER EXISTS ON THIS PAGE. Until Phase B PR 2 this was
   // `/coverageRuler/`, satisfied only by the CSS module's class name — after
@@ -65,8 +74,13 @@ test("organization switching and sign-out are POST server actions", async () => 
     actions,
     /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/,
   );
-  assert.match(page, /action=\{switchConnectionAction\}/);
-  assert.match(page, /action=\{signOutAction\}/);
+  const rail = await readFile(railUrl, "utf8");
+  assert.match(rail, /action=\{switchConnectionAction\}/);
+  assert.match(rail, /action=\{signOutAction\}/);
+  // The page still renders the rail, so the two controls are still on the
+  // screen this test is about — and it renders it ABOVE the state branch, which
+  // the reachability test below pins as an ordering property.
+  assert.match(page, /<DashboardRail/);
   assert.equal(actions.includes("export async function GET"), false);
 });
 
@@ -160,12 +174,13 @@ test("coverage, outcomes, and select focus use honest visual semantics", async (
   // on the CONTROL rather than on a class string. One level of indirection is
   // resolved deliberately: hoisting a long utility string into a const is a
   // normal edit, and it must not be able to drop the ring silently.
-  const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  const rail = await readFile(railUrl, "utf8");
+  const scopePicker = rail.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");
   assert.match(scopePicker, /aria-label="Connected space"/);
   const hoisted = scopePicker.match(/<label className=\{(\w+)\}/)?.[1];
   const controlClasses = hoisted
-    ? page.match(new RegExp(`const ${hoisted}\\s*=[\\s\\S]*?;\\n`))?.[0] ?? ""
+    ? rail.match(new RegExp(`const ${hoisted}\\s*=[\\s\\S]*?;\\n`))?.[0] ?? ""
     : scopePicker.match(/<label className="([^"]*)"/)?.[1] ?? "";
   assert.match(
     controlClasses,
@@ -225,15 +240,22 @@ test("repository connection and every pending setup remain reachable in all dash
   // link would have failed the reachability guarantee for a styling reason
   // while the invariant itself was untouched. Pasting the new class string
   // back in here would silently re-couple them.
-  const connectLink = page.match(/<Link\b[\s\S]{0,400}?>\s*Connect repositories\s*<\/Link>/);
+  //
+  // TWO FILES NOW, same property. The link moved into the rail component; what
+  // the page still owns is WHERE the rail sits, and it must sit above the
+  // state branch or the link stops existing in the states that need it most.
+  const rail = await readFile(railUrl, "utf8");
+  const connectLink = rail.match(/<Link\b[\s\S]{0,400}?>\s*Connect repositories\s*<\/Link>/);
   assert.ok(connectLink, "the header's 'Connect repositories' link is gone");
   assert.match(connectLink[0], /href="\/install\/start"/);
   // The branch anchor moved with #99: three states became four, dispatched on
   // `door.state` rather than on a connections-length check.
   const stateBranches = page.indexOf('door.state === "welcome"');
   const pendingStrip = page.indexOf("<PendingConnections connections={connections}");
+  const railMount = page.indexOf("<DashboardRail");
   assert.ok(stateBranches > 0, "the three-way state branch is gone");
-  assert.ok(connectLink.index < stateBranches, "connect repositories fell inside a state branch");
+  assert.ok(railMount >= 0, "the page stopped rendering the rail");
+  assert.ok(railMount < stateBranches, "the rail fell inside a state branch");
   assert.ok(
     pendingStrip >= 0 && pendingStrip < stateBranches,
     "the pending-setup strip fell inside a state branch",
@@ -311,12 +333,19 @@ test("a sign-in whose derivation failed says so instead of claiming nothing is c
 });
 
 test("state-mutating install links disable Next prefetch", async () => {
-  const page = await readFile(pageUrl, "utf8");
-  const installLinks = [...page.matchAll(/<Link\b[^>]*>/g)]
-    .map((match) => match[0])
+  // BOTH FILES, and the count is still two. One link is the rail's account
+  // menu, one is the empty state's; splitting the search per file would let a
+  // third grow unprefetched in whichever file the test stopped reading.
+  const sources = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(railUrl, "utf8"),
+    readFile(new URL("../app/dashboard/settings/page.tsx", import.meta.url), "utf8"),
+  ]);
+  const installLinks = sources
+    .flatMap((source) => [...source.matchAll(/<Link\b[^>]*>/g)].map((match) => match[0]))
     .filter((markup) => markup.includes('href="/install/start"'));
 
-  assert.equal(installLinks.length, 2);
+  assert.equal(installLinks.length, 3);
   for (const markup of installLinks) {
     assert.match(markup, /\bprefetch=\{false\}/);
   }
@@ -691,7 +720,8 @@ test("choosing a space opens it, and still works without JavaScript", async () =
   assert.match(noJs, /useSyncExternalStore/);
   assert.equal(noJs.includes("useEffect"), false, "the fallback resyncs state in an effect");
 
-  const scopePicker = page.match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  const scopePicker = (await readFile(railUrl, "utf8"))
+    .match(/function ScopePicker\([\s\S]*?\n\}\n/)?.[0] ?? "";
   assert.ok(scopePicker, "the scope picker is gone");
   assert.match(scopePicker, /<AutoSubmitSelect/);
   assert.match(scopePicker, /<NoJsSubmit/);
@@ -721,19 +751,35 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   const control = await readFile(new URL("../components/flag-line-control.tsx", import.meta.url), "utf8");
   assert.match(control, /PR comment/);
   assert.match(control, /setFlagLineCommentAction/);
-  const toggleForm = control.match(/<form action=\{setFlagLineCommentAction\}[\s\S]*?<\/form>/)?.[0] ?? "";
-  assert.ok(toggleForm, "the toggle form is gone");
+  // ONE FORM FOR EVERY SWITCH NOW, which is a stronger guarantee than the
+  // per-toggle slice this used to take: `SettingSwitch` owns the markup, so
+  // the isolation is proved once and cannot be got wrong by the next boolean
+  // setting someone adds. The call sites are pinned separately, below.
+  const toggleForm = control.match(/<form action=\{action\}>[\s\S]*?<\/form>/)?.[0] ?? "";
+  assert.ok(toggleForm, "the switch's form is gone");
   assert.equal(
     toggleForm.includes('name="needs_you_threshold"'),
     false,
-    "the toggle form carries the flag line field — every toggle would rewrite the line",
+    "the switch's form carries the flag line field — every toggle would rewrite the line",
   );
-  assert.match(toggleForm, /name="pr_comment"/);
-  assert.match(toggleForm, /name="github_repo_id"/);
-  // The button READS the current state and SUBMITS the opposite; a label that
+  // Exactly two named fields: the row it writes, and the one setting it owns.
+  const fields = [...toggleForm.matchAll(/name=\{?"?([a-z_]+)"?\}?/g)].map((m) => m[1]);
+  assert.deepEqual(fields.sort(), ["github_repo_id", "name"].sort());
+  // And the PR-comment call site asks for the field this test is about.
+  const prCall = control.match(/<SettingSwitch[\s\S]*?setFlagLineCommentAction[\s\S]*?\/>/)?.[0] ?? "";
+  assert.ok(prCall, "the PR comment switch is gone");
+  assert.match(prCall, /name="pr_comment"/);
+  assert.match(prCall, /label="PR comment"/);
+  assert.match(prCall, /on=\{prComment\}/);
+  // The switch READS the current state and SUBMITS the opposite; a label that
   // read the pending value would tell every operator the wrong thing about the
-  // repository in front of them.
-  assert.match(toggleForm, /PR comment · (\{|on|off)/);
+  // repository in front of them. It says so twice — the track's position, and
+  // the word beside it — because neither carrier alone survives a reader who
+  // cannot resolve a 28px fill or is listening rather than looking.
+  assert.match(toggleForm, /value=\{on \? "false" : "true"\}/);
+  assert.match(toggleForm, /role="switch"/);
+  assert.match(toggleForm, /aria-checked=\{on\}/);
+  assert.match(toggleForm, /\{on \? "on" : "off"\}/);
   // BOTH DIRECTIONS. Off is a STOP, not an undo (D3): the updates end and the
   // last comment stays. Copy that described only the on-state left the one
   // fact an operator needs at the moment of deciding unsaid, and a switch whose
@@ -749,6 +795,78 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   assert.equal(control.includes("Rolling out to Doug"), false);
   assert.equal(control.includes("first wave"), false);
 });
+
+test("the deep read toggle is its own form and states BOTH of its consequences", async () => {
+  const control = await readFile(
+    new URL("../components/flag-line-control.tsx", import.meta.url),
+    "utf8",
+  );
+  // The form isolation is `SettingSwitch`'s and is pinned once, in the PR
+  // comment test above. What is this switch's own is the field it writes and
+  // the state it reads, and neither can be got from the shared markup.
+  // `(?:(?!\/>)[\s\S])*?` rather than a bare lazy gap: a lazy `[\s\S]*?` starts
+  // at the FIRST <SettingSwitch — the PR comment one — and happily runs through
+  // its `/>` to reach setDeepReadAction, so the slice contains both switches
+  // and every "this field is absent" assertion below passes on the wrong one.
+  const call = control.match(/<SettingSwitch(?:(?!\/>)[\s\S])*?setDeepReadAction[\s\S]*?\/>/)?.[0] ?? "";
+  assert.ok(call, "the deep read switch is gone");
+  assert.match(call, /name="deep_read"/);
+  assert.match(call, /label="Deep read"/);
+  assert.match(call, /on=\{deepRead\}/);
+  assert.equal(
+    call.includes("needs_you_threshold"),
+    false,
+    "the deep read switch carries the flag line field",
+  );
+  assert.equal(call.includes("pr_comment"), false, "the deep read switch carries the PR comment field");
+  // THE THRESHOLD IS NOT A SWITCH, and must not become one. It is the only
+  // control here with a value rather than a state, and the three-way
+  // distinction it carries — a number, unset, or unset-and-showing-BOTH-
+  // defaults — has no on/off to collapse into.
+  assert.match(control, /name="needs_you_threshold"\n\s*type="number"/);
+  // …and it is wide enough to SHOW its value. A number input reserves room for
+  // its spinner, so 0.75 needed 76px of content in what was a 72px box and
+  // rendered as "0.7". A clipped number is worse than no number, because it
+  // looks like a number.
+  const box = control.match(/name="needs_you_threshold"[\s\S]*?className="([^"]*)"/)?.[1] ?? "";
+  const width = Number(box.match(/\bw-\[(\d+)px\]/)?.[1] ?? 0);
+  assert.ok(width >= 88, `the flag line box is ${width}px — too narrow to show 0.75`);
+
+  // TWO CONSEQUENCES, and this is the pin that matters. Turning the read off
+  // drops the repository to the deterministic scorer AND — with no flag line
+  // of its own — moves the band from the reader default to the deterministic
+  // one. Copy that named only the first would let someone switch off "the AI
+  // bit" and silently halve how often Doug asks for a human.
+  assert.match(control, /Doug scores on\s*\n?\s*structural signals alone/);
+  assert.match(control, /moves the line Doug bands against/);
+  // Conditional on the repository actually being unset, because a repo that
+  // has set 0.75 keeps 0.75 through this toggle. Promising a move there would
+  // be the same lie pointing the other way.
+  assert.match(control, /\{value === null &&/);
+  // Read from the API's own defaults, never hardcoded — same rule the flag
+  // line's copy follows, so this suite is not pinned to one deployment's
+  // environment. Asserted on the paragraph, not the file: the docblock above
+  // legitimately quotes the numbers while explaining them.
+  const consequence = code(control).match(/On, Doug sends the diff[\s\S]*?<\/p>/)?.[0] ?? "";
+  assert.ok(consequence, "the deep read consequence paragraph is gone");
+  assert.match(consequence, /defaults\.reader\.toFixed\(2\)/);
+  assert.match(consequence, /defaults\.fallback\.toFixed\(2\)/);
+  // AND IN THE RIGHT TENSE. On a repository where the read is already off the
+  // line has already moved, so copy describing what turning it off "would" do
+  // is a warning about a future the reader is standing in — and it invites
+  // them to believe the band is still the reader's. One sentence per state.
+  assert.match(consequence, /deepRead\s*\n?\s*\?/);
+  assert.match(consequence, /turning the read off also moves the line/);
+  assert.match(consequence, /the line Doug bands against moved with the read/);
+  for (const literal of ["0.30", "0.62"]) {
+    assert.equal(
+      consequence.includes(literal),
+      false,
+      `${literal} is hardcoded in the deep read copy`,
+    );
+  }
+});
+
 
 test("every settings write revalidates BOTH surfaces, not just the ledger", async () => {
   // THE BUG THIS PINS. Until /dashboard/settings there was one surface, so
@@ -779,6 +897,18 @@ test("every settings write revalidates BOTH surfaces, not just the ledger", asyn
     false,
     "a write still revalidates only the ledger",
   );
+});
+
+test("setDeepReadAction is a server action like the two beside it", async () => {
+  // Its revalidation is covered by the shared pin above, which counts EVERY
+  // write rather than this one — a third action that revalidated only the
+  // ledger has to fail there, not here. What is left is what is specific to
+  // this action.
+  const actions = await readFile(actionsUrl, "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function setDeepReadAction/);
+  assert.equal(actions.includes("export async function GET"), false);
+  assert.match(actions, /setRepositoryDeepRead\(auth\.accessToken, repoId, value\)/);
 });
 
 test("setFlagLineCommentAction is a server action, and the denial is stated on the page", async () => {

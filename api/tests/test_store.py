@@ -1448,7 +1448,13 @@ def test_session_connection_projection_intersects_claims_with_live_rows(
     assert rows[0]["organization_id"] == "org_acme"
     assert rows[0]["claimed_repo_ids"] == frozenset({11, 999})
     assert rows[0]["repositories"] == [
-        {"id": 11, "full_name": "acme/one", "needs_you_threshold": None, "pr_comment": True}
+        {
+            "id": 11,
+            "full_name": "acme/one",
+            "needs_you_threshold": None,
+            "pr_comment": True,
+            "deep_read": True,
+        }
     ]
     assert rows[0]["pr_comment_denied_at"] is None
 
@@ -3448,6 +3454,81 @@ def test_set_repo_pr_comment_keys_on_the_installation_row_and_leaves_updated_at(
     store.set_installation_repos(101, [], replace=True)
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)
     assert store.repo_pr_comment(101, 11) is False
+
+
+def test_repo_deep_read_defaults_to_on_and_survives_a_removed_row(tmp_path, monkeypatch):
+    """THE OPPOSITE DEFAULT TO pr_comment, deliberately.
+
+    An absent or removed row is a reconciliation fault either way. Resolving
+    it towards "off" is safe for the sticky comment — the cost is silence on
+    a PR nobody could have toggled. Here the cost is a silently downgraded
+    verdict: the repo drops to the deterministic tier, and with an unset line
+    drops from DOUG_READER_THRESHOLD to DOUG_THRESHOLD with it, so Doug asks
+    for a human on far fewer PRs and nothing says why. A missing row must not
+    be able to do that, so it reads as on.
+    """
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "acme", "Organization", "active")
+
+    assert store.repo_deep_read(101, 11) is True          # no row at all
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    assert store.repo_deep_read(101, 11) is True          # server default
+    assert store.set_repo_deep_read(101, 11, False) is True
+    assert store.repo_deep_read(101, 11) is False
+    assert store.repo_deep_read(101, 999) is True         # unknown repo
+
+    # Removed mid-flight: still READABLE and unchanged, like repo_threshold
+    # and unlike repo_pr_comment — a job already running against this repo
+    # keeps the setting it was configured with rather than silently changing
+    # scorer partway through. Not WRITABLE, though: rowcount 0 -> 404.
+    store.set_installation_repos(101, [], replace=True)
+    assert store.repo_deep_read(101, 11) is False
+    assert store.set_repo_deep_read(101, 11, True) is False
+
+
+def test_set_repo_deep_read_keys_on_the_installation_row_and_leaves_updated_at(
+    tmp_path, monkeypatch
+):
+    """Same two guarantees the other two settings writes carry: a transferred
+    repo has rows under two installations and one tenant's write must not
+    reach the other's, and `updated_at` is repo_id_for's tiebreaker between
+    duplicate registrations, so a settings write must not be a lever over it.
+    """
+    _db(tmp_path, monkeypatch)
+    for inst, login in ((101, "acme"), (202, "other")):
+        store.upsert_installation(inst, login, "Organization", "active")
+        store.set_installation_repos(inst, [(11, f"{login}/one")], replace=False)
+    with store._get_engine().connect() as conn:
+        before = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.installation_id == 101)
+        ).scalar_one()
+
+    assert store.set_repo_deep_read(101, 11, False) is True
+    assert store.repo_deep_read(202, 11) is True
+
+    with store._get_engine().connect() as conn:
+        after = conn.execute(
+            select(store.installation_repos.c.updated_at)
+            .where(store.installation_repos.c.installation_id == 101)
+        ).scalar_one()
+    assert after == before
+
+    # A webhook resync must not hand a repo back its reader — the tenant
+    # turned it off, and re-adding the repo is not them changing their mind.
+    store.set_installation_repos(101, [], replace=True)
+    store.set_installation_repos(101, [(11, "acme/one")], replace=False)
+    assert store.repo_deep_read(101, 11) is False
+
+
+def test_repo_deep_read_says_on_rather_than_guessing_without_a_ledger(monkeypatch):
+    """No ledger is not a preference either, and the same asymmetry applies:
+    an unreadable setting must not be able to turn the reader off."""
+    # _get_engine reads DATABASE_URL before it consults the cached engine, so
+    # unsetting the variable is enough — no reset hook needed.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert store.repo_deep_read(101, 11) is True
+    assert store.set_repo_deep_read(101, 11, False) is False
 
 
 def test_pr_comment_claim_round_trip(tmp_path, monkeypatch):
