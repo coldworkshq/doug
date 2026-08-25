@@ -1,5 +1,63 @@
 # HANDOFF — doug
 
+State:    review — docs accuracy sweep is a PR against main from branch
+          docs/accuracy-sweep (worktree .worktrees/docs-accuracy), 3 commits,
+          branch level with origin/main so CI fires. web 363/363, api
+          1661/1661, console 113/113, tsc clean, eslint clean (2 pre-existing
+          <img> warnings on /about). SHIPPED separately: gh-pages bd67e4a is
+          pushed and live — drewjst.github.io/doug is now a redirect to the
+          Cloud Run site. That push was the deploy; there is no PR for it.
+Next:     Doug reads the PR; Andrew settles the findings into
+          docs/findings-log.jsonl and merges. Merging deploys (ADR-0009), so
+          the corrected /docs copy goes out with it. NOTE the log's counts are
+          quoted in the PR's own copy and pinned to the file — settling
+          findings appends rows, so the pin will fail until the page's numbers
+          are re-read from `findings_log rate --repo doug`. That is the pin
+          working, not a regression.
+Blockers: none.
+
+Not fixed, each a judgment call Andrew owns:
+- docs/design/competitor-imports/ is named for a concept that died in its own
+  grounding phase; the six files inside are all "cited head reads". The new
+  lane.md says so rather than renaming, because 3 files outside the folder
+  point at the path. Rename is a clean follow-up if wanted.
+- ADR-0018 owes a 20-PR cost pilot (~$1) before anyone quotes a per-read cost
+  after EFFORT went to high. No issue exists for it; AGENTS.md says there
+  should be one.
+- docs/design/reader-effort/preregistration.md's header still names ADR-0016
+  as its companion; ADR-0018 is what governs. Left as the record of what was
+  written then; lane.md carries the correction.
+
+Decisions this session:
+- Verified every number against code or the live API, never against another
+  doc — the two hosted surfaces already disagreed, so doc-vs-doc agreement
+  proves nothing — rejected: trusting the surface that looked freshest.
+- Retired gh-pages instead of rewriting it (Andrew's call) — repairing keeps
+  two copies of every claim, which is the mechanism that produced the drift —
+  rejected: fixing the ~9 false claims in place.
+- The stale-count pin now derives from docs/findings-log.jsonl — a literal
+  cannot fail when the log grows, and that is the only way these numbers go
+  wrong; it stayed green through 55 appended rows — rejected: updating the
+  literal to 190.
+- HANDOFF.md was NOT touched in the main checkout: a concurrent session owns
+  it there (feat/palette-contrast-dark-mode). This slot lives on the docs
+  branch only, so it will conflict on merge — drop this commit if that is not
+  worth it — rejected: editing the file another session is mid-write on.
+- gh-pages went out as a direct push, not a PR — it is a separate branch with
+  no CI, no reviewer and no deploy pipeline, and the push IS the publish;
+  a PR would have added a review surface for nobody — rejected: routing a
+  static-site retirement through main.
+Pointers: branch docs/accuracy-sweep @ bd5886b · branch gh-pages @ bd67e4a ·
+          web/app/docs/*, web/public/llms.txt, web/lib/public-surface.test.mjs ·
+          api/README.md · docs/REVIEWING.md (#186 conflict marker, closed) ·
+          docs/design/{walked-out,competitor-imports,reader-effort}/lane.md ·
+          live API https://doug-api-g7rm4l4e3q-uc.a.run.app
+
+---
+
+## Prior slot — PR #202 (#154)
+
+
 State:    review — PR #202 (fixes #154) open against main, four commits,
           rebased onto 7cb45ec (#200). Doug read it three times — 8dc74d0
           (6 findings), 1db64a3 (5 + 3 deviations), b008221 (5 + 2). All
