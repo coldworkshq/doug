@@ -2,9 +2,11 @@
  *  the sidebar filter — all three derive from this one ordered tree instead
  *  of each guessing at page order independently.
  *
- *  Mirrors drewjst.github.io/doug/docs's five sidebar groups and eleven
- *  sections, but as real routes (one per page) instead of scrollspy anchors
- *  over one long document — see docs/superpowers/specs for why.
+ *  Five groups, eleven pages. The shape came from the GitHub Pages docs this
+ *  replaced — one long scrollspy document — reworked into real routes, one per
+ *  page; see docs/superpowers/specs for why. That site was retired to a
+ *  redirect on 2026-08-24 after three weeks of drift, so this tree is the
+ *  only docs structure there is; nothing upstream to mirror any more.
  */
 
 export type DocsStatus = "available" | "preview" | "planned";
