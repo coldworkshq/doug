@@ -71,7 +71,7 @@ export default function RestApiPage() {
           </>
         }
         rail={
-          <CodeBlock title="SAMPLE — empty-ledger snapshot">
+          <CodeBlock title="RESPONSE SHAPE — run it for the numbers">
             <Dim>$</Dim>{" "}
             <Bright>curl &quot;$DOUG_API_URL/v1/showcase/scoreboard&quot;</Bright>
             {"\n{\n  "}
@@ -81,11 +81,27 @@ export default function RestApiPage() {
             {",\n  "}
             <Str>&quot;adjudicated&quot;</Str>
             {": "}
-            <Kw>0</Kw>
+            <Dim>&lt;int&gt;</Dim>
             {",\n  "}
             <Str>&quot;pending&quot;</Str>
             {": "}
-            <Kw>0</Kw>
+            <Dim>&lt;int&gt;</Dim>
+            {",\n  "}
+            <Str>&quot;as_of&quot;</Str>
+            {": "}
+            <Dim>&lt;iso8601&gt;</Dim>
+            {",\n  "}
+            <Str>&quot;first_due&quot;</Str>
+            {": "}
+            <Dim>&lt;iso8601 | null&gt;</Dim>
+            {",\n  "}
+            <Str>&quot;deep_reads&quot;</Str>
+            {": "}
+            <Dim>&lt;int&gt;</Dim>
+            {", "}
+            <Str>&quot;deep_read_cap&quot;</Str>
+            {": "}
+            <Dim>&lt;int&gt;</Dim>
             {",\n  "}
             <Str>&quot;miss_rate&quot;</Str>
             {": "}
@@ -98,7 +114,14 @@ export default function RestApiPage() {
             <Str>&quot;label&quot;</Str>
             {": "}
             <Str>&quot;not yet decidable — a count, not a rate&quot;</Str>
-            {"\n}"}
+            {"\n}\n\n"}
+            <Dim>
+              {"# The counters move; a number printed here would\n"}
+              {"# be stale by the time you read it, so this shows\n"}
+              {"# the shape and the route is unauthenticated.\n"}
+              {"# miss_rate does NOT move: null until the\n"}
+              {"# pre-registered interval fires."}
+            </Dim>
           </CodeBlock>
         }
       />
