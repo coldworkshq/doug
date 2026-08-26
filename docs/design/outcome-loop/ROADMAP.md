@@ -478,6 +478,16 @@ stays unmet until it closes.
 
 ## M4 — Onboarding + the kill-criterion interviews *(~3d + calendar; overlaps M3's clock)*
 
+> **RULING 2026-08-26 (Andrew, in-session): the interviews are DEFERRED, not
+> run.** Nothing is public; Doug opens to the public first "so it has a
+> face," and the interview question is re-raised at the public launch. The
+> kill criterion is not retired — it cannot fire while deferred, and no
+> productization claim may lean on "the interviews didn't object." Two
+> consequences, both recorded: the org-move window no longer waits on the
+> interviews (the migration to coldworkshq started 2026-08-26, tracked in
+> #226), and the memory-lane Stage 1 stays Gate-B-blocked until the launch
+> re-raises this (coldworkshq/coldworks `docs/integration-plan.md` §3–4).
+
 - [ ] 90-day replay productized: harvest/replay against an installation, `source='replay'`,
   structurally excluded from prospective counters; replay panel on the scoreboard, visually distinct
 - [ ] Install/welcome: the dated IOU + first-adjudication date + projection of when the

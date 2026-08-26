@@ -3,9 +3,9 @@
 #
 # Workload Identity Federation lets a GitHub Actions run exchange its OIDC
 # token for short-lived GCP credentials. Nothing secret is stored in the
-# repo, which matters here because drewjst/doug is public.
+# repo, which matters here because coldworkshq/doug is public.
 #
-#   PROJECT=doug-prod0 REPO=drewjst/doug bash deploy/setup-cicd.sh
+#   PROJECT=doug-prod0 REPO=coldworkshq/doug bash deploy/setup-cicd.sh
 #
 # Idempotent: every create is guarded, so re-running is safe.
 set -euo pipefail
@@ -77,7 +77,7 @@ gcloud iam workload-identity-pools create "$POOL" \
 
 # The attribute-condition is the security boundary. Without it, ANY GitHub
 # repository on the internet could mint tokens for this pool and deploy
-# here. Pinning assertion.repository is what makes it drewjst/doug only.
+# here. Pinning assertion.repository is what makes it coldworkshq/doug only.
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --project "$PROJECT" --location=global --workload-identity-pool="$POOL" \
   --display-name="GitHub OIDC" \
