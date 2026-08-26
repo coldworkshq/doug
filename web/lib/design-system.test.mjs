@@ -493,3 +493,51 @@ test("the console's dot grid does not ride on --border", async () => {
     assert.match(css.slice(at, css.indexOf("\n}", at)), /--surface-dot:\s*#/, `${label} leaves --surface-dot undeclared`);
   }
 });
+
+test("the floating nav bar's light surface is a token scope, and it re-substitutes the ink", async () => {
+  // THE BAR IS LIGHT IN BOTH THEMES (components/site-header.tsx), and the
+  // mechanism is a token scope — the same one .dashboard-surface uses. Two
+  // ways to break it, both invisible in whichever theme you happened to be
+  // developing in:
+  //
+  //  1. A TOKEN THE BAR READS IS LEFT UNDECLARED. It then resolves to the
+  //     PAGE's value, which in dark mode is a colour picked to be seen against
+  //     #14161a — put on a white bar. `--muted-foreground` alone is six nav
+  //     links, the menu summary and the theme toggle going pale-on-white.
+  //
+  //  2. `text-foreground` IS DROPPED FROM THE BAR, and this is the subtle one.
+  //     `body` sets `color: var(--foreground)`, which is substituted AT THE
+  //     BODY: descendants inherit the resolved colour, not the variable, so
+  //     re-declaring --foreground inside the bar does nothing for anything
+  //     that merely inherits. The wordmark is the only control in the bar that
+  //     names no ink of its own, and without this class it inherits the page's
+  //     near-white into a near-white pill. Verified by deleting the class: the
+  //     token scope is still perfectly correct and the word "doug" disappears.
+  const css = await readFile(cssUrl, "utf8");
+  const at = css.indexOf("\n.site-bar {");
+  assert.ok(at >= 0, "the .site-bar token scope is gone — the bar follows the theme again");
+  const scope = css.slice(at, css.indexOf("\n}", at));
+
+  // Every token the bar's own utilities read. Adding a utility to the header
+  // that reads a token absent from this list is the regression above; adding
+  // it here without declaring it fails on the next line.
+  for (const token of [
+    "background", "foreground", "muted-foreground", "border",
+    "accent", "accent-foreground", "primary", "primary-foreground", "ring",
+  ]) {
+    assert.match(
+      scope,
+      new RegExp(`--${token}:\\s*#[0-9a-f]{3,6}`, "i"),
+      `.site-bar leaves --${token} to the page's theme, on a surface that does not follow it`,
+    );
+  }
+
+  const header = await readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8");
+  const bar = header.match(/className="site-bar[^"]*"/)?.[0];
+  assert.ok(bar, "nothing in site-header.tsx mounts the site-bar scope");
+  assert.match(
+    bar,
+    /\btext-foreground\b/,
+    "the bar mounts the token scope but never re-substitutes --foreground; inherited ink does not follow a re-declared token",
+  );
+});

@@ -253,6 +253,18 @@ test("the outcome label and tone-class helpers agree with console's originals", 
   agree("outcomeLabel", web.runsTime.outcomeLabel, con.runs.outcomeLabel, KINDS.map((k) => [k]));
   agree("outcomeToneClass", web.runsTime.outcomeToneClass, con.runs.outcomeToneClass,
     ["clear", "flag", "neutral"].map((t) => [t]));
+
+  // And what the two surfaces SAY those words mean. The ⓘ over each outcome
+  // column reads from these, so a drift here is the same defect one layer out:
+  // the dashboard and the console defining `clean` differently for the same
+  // `outcomes.kind` row, with nothing in either workspace's own suite able to
+  // see it. `null` for the window is included — RunDetail carries a nullable
+  // `window_days`, and the two copies have to agree on that branch too.
+  const WINDOWS = [14, 60, null];
+  agree("outcomeMeaning", web.runsTime.outcomeMeaning, con.runs.outcomeMeaning,
+    KINDS.flatMap((k) => WINDOWS.map((w) => [k, w])));
+  agree("outcomeWindowHint", web.runsTime.outcomeWindowHint, con.runs.outcomeWindowHint,
+    [[14], [60]]);
 });
 
 test("paging agrees with console's original", () => {

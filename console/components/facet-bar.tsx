@@ -1,6 +1,18 @@
 "use client";
 
+import { InfoDot } from "@/components/info-dot";
 import type { Facet, FacetKey } from "@/lib/facets";
+import { outcomeWindowHint } from "@/lib/runs";
+
+/** The two facet keys that narrow on an outcome, and the window each observes.
+ *  Keyed by FacetKey rather than parsed out of `facet.label`: the label is
+ *  presentation and the key is the contract (lib/facets.ts says so, and it is
+ *  under lockstep with web's copy). A facet that is not an outcome is absent,
+ *  not zero — `band` has no window. */
+const OUTCOME_FACET_WINDOWS: Partial<Record<FacetKey, number>> = {
+  outcome: 14,
+  outcome_60: 60,
+};
 
 /** The pill row above the table.
  *
@@ -45,10 +57,21 @@ export function FacetBar({
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3">
-      {facets.map((facet) => (
+      {facets.map((facet) => {
+        const outcomeWindow = OUTCOME_FACET_WINDOWS[facet.key];
+        return (
         <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
-          <span className="mono text-[10px] uppercase tracking-[.13em] text-muted-foreground">
+          {/* The group label carries the same ⓘ the table header does: this
+              row is where a reader first meets `clean` and `pending`, as pills
+              with counts, above the column that repeats them. The pills keep
+              their own `title`, which answers a different question — how many,
+              over what population — and overwriting it with a definition would
+              trade away a number the operator is mid-way through reading. */}
+          <span className="mono inline-flex items-center text-[10px] uppercase tracking-[.13em] text-muted-foreground">
             {facet.label}
+            {outcomeWindow !== undefined && (
+              <InfoDot label={facet.label} hint={outcomeWindowHint(outcomeWindow)} />
+            )}
           </span>
           {facet.options.map((option) => {
             const on = (selection[facet.key] ?? []).includes(option.value);
@@ -92,7 +115,8 @@ export function FacetBar({
             );
           })}
         </div>
-      ))}
+        );
+      })}
 
       {active && (
         <button
