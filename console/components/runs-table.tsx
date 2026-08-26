@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { BandChip } from "@/components/band-chip";
 import { CoverageBar } from "@/components/coverage-bar";
 import { FacetBar } from "@/components/facet-bar";
+import { InfoDot } from "@/components/info-dot";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -36,8 +37,10 @@ import {
 import {
   jobDuration,
   outcomeLabel,
+  outcomeMeaning,
   outcomeTone,
   outcomeToneClass,
+  outcomeWindowHint,
   relativeAge,
   utcTimestamp,
 } from "@/lib/runs";
@@ -55,6 +58,9 @@ interface Column {
   label: string;
   cls: string;
   sort?: SortKey;
+  /** The ⓘ's text. Present on the two outcome columns and nowhere else —
+   *  see InfoDot for why those two, and only those two, need one. */
+  hint?: string;
 }
 
 // 14d and 60d are two separate, always-shown, separately-labelled columns —
@@ -71,8 +77,13 @@ const COLUMNS: Column[] = [
   { label: "band", cls: "w-[112px]" },
   { label: "tier", cls: "w-[88px]" },
   { label: "read", cls: "w-[176px]", sort: "coverage" },
-  { label: "14d outcome", cls: "w-[100px]" },
-  { label: "60d outcome", cls: "w-[100px]" },
+  // "14d", not "14d outcome", and the word moved into the ⓘ rather than
+  // being lost. The header sets at 10px with .13em tracking, so "14d outcome"
+  // claims 80.6px of the 80px this column leaves after px-2.5 on both sides —
+  // it was already touching its neighbour before anything was added beside it.
+  // The facet bar above still spells both windows out in full.
+  { label: "14d", cls: "w-[100px]", hint: outcomeWindowHint(14) },
+  { label: "60d", cls: "w-[100px]", hint: outcomeWindowHint(60) },
   { label: "job", cls: "w-[118px]" },
   { label: "age", cls: "w-[54px] text-right", sort: "age" },
 ];
@@ -310,7 +321,12 @@ export function RunsTable({
                     className={`mono h-auto border-b border-border px-2.5 pb-[7px] text-[10px] font-medium uppercase tracking-[.13em] text-muted-foreground ${column.cls}`}
                   >
                     {column.sort === undefined ? (
-                      column.label
+                      <>
+                        {column.label}
+                        {column.hint && (
+                          <InfoDot label={column.label} hint={column.hint} />
+                        )}
+                      </>
                     ) : (
                       <button
                         type="button"
@@ -546,10 +562,18 @@ function RunRows({
  *  Only `flag` gets the extra weight. Bold is emphasis, and the two muted
  *  states — no row yet, and a row recording that the PR left the risk set
  *  unobserved — are precisely the ones with nothing to emphasise. */
-function OutcomeCell({ kind }: { kind: string | null }) {
+function OutcomeCell({ kind, windowDays }: { kind: string | null; windowDays: number }) {
   const tone = outcomeTone(kind);
   const weight = tone === "flag" ? " font-semibold" : "";
-  return <span className={outcomeToneClass(tone) + weight}>{outcomeLabel(kind)}</span>;
+  // The `title` is the ⓘ's sentence for THIS row's word — the reader who
+  // lands on a cell rather than on the header still gets the definition, and
+  // `windowDays` is passed in rather than inferred because the same word means
+  // a different thing in the two columns this component renders.
+  return (
+    <span title={outcomeMeaning(kind, windowDays)} className={outcomeToneClass(tone) + weight}>
+      {outcomeLabel(kind)}
+    </span>
+  );
 }
 
 /** The nine cells of one run. Children render the identical columns —
@@ -663,10 +687,10 @@ function RunCells({
           the other. See COLUMNS' docstring above for why a fallback would
           misrepresent the row. */}
       <TableCell className="mono h-[34px] px-2.5 text-xs">
-        <OutcomeCell kind={run.outcome_14} />
+        <OutcomeCell kind={run.outcome_14} windowDays={14} />
       </TableCell>
       <TableCell className="mono h-[34px] px-2.5 text-xs">
-        <OutcomeCell kind={run.outcome_60} />
+        <OutcomeCell kind={run.outcome_60} windowDays={60} />
       </TableCell>
       <TableCell className="mono h-[34px] px-2.5 text-[11px] text-muted-foreground">
         {jobLabel}

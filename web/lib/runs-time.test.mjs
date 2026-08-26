@@ -18,7 +18,9 @@ import test from "node:test";
 import {
   jobDuration,
   outcomeLabel,
+  outcomeMeaning,
   outcomeToneClass,
+  outcomeWindowHint,
   relativeAge,
   utcClock,
   utcDate,
@@ -148,4 +150,89 @@ test("utcDate and utcShortDate convert to UTC before slicing, so a day boundary 
   assert.equal(utcShortDate("2026-08-17T09:00:00Z"), "08-17");
   // Zoneless input is UTC, same regression utcClock pins above.
   assert.equal(utcDate("2026-08-06T00:30:00"), "2026-08-06");
+});
+
+// ---------------------------------------------------------------------------
+// outcomeMeaning / outcomeWindowHint — the ⓘ's text. NOT ported from console;
+// added with the affordance and then ported the other way, into
+// console/lib/runs.ts. console-lockstep.test.mjs runs both copies over the
+// same vocabulary, so the two ledgers cannot explain the same word differently.
+// ---------------------------------------------------------------------------
+
+test("every outcome sentence names the window it is talking about", () => {
+  // The whole reason 14d and 60d are two columns is that the same word means a
+  // different thing in each. A definition that did not say which window it was
+  // defining would hand that ambiguity straight back — one tooltip, two
+  // columns, no way to tell which one it just described.
+  for (const kind of [null, "clean", "revert", "censored", "hotfix"]) {
+    assert.match(outcomeMeaning(kind, 14), /\b14 days\b/, `14-day sentence for ${kind}`);
+    assert.match(outcomeMeaning(kind, 60), /\b60 days\b/, `60-day sentence for ${kind}`);
+    // …and it must not print the OTHER window's number, which is what a
+    // hardcoded sentence would do the moment one call site passed the wrong one.
+    assert.equal(/\b60 days\b/.test(outcomeMeaning(kind, 14)), false);
+  }
+});
+
+test("a window the row never recorded is described as one, not printed as null", () => {
+  // RunDetail.outcomes[].window_days is nullable — rows written before the
+  // outcome-loop identity migration carry NULL, and the detail tile already
+  // renders those as "window not recorded". The sentence beside it must not
+  // read "the null days after this pull request merged".
+  const sentence = outcomeMeaning("clean", null);
+  assert.equal(sentence.includes("null"), false);
+  assert.match(sentence, /outcome window after this pull request merged/);
+});
+
+test("clean is stated as the absence of a revert, never as the absence of defects", () => {
+  // THE MISREADING THIS AFFORDANCE EXISTS TO FIX, and the one that costs
+  // trust: "clean" is a fact about what did not happen on one branch inside
+  // one window, and a reader who takes it as "no bugs" over-trusts the whole
+  // ledger. The sentence has to refuse that reading out loud, not merely
+  // avoid asserting it.
+  const sentence = outcomeMeaning("clean", 14);
+  assert.match(sentence, /no revert/i);
+  assert.match(sentence, /not that the code was free of defects/i);
+});
+
+test("pending says the clock is unfinished, not the review", () => {
+  // The other half of the same defect, in the other direction: an operator who
+  // reads "pending" as "Doug has not looked at this yet" goes hunting for
+  // review work that is already done and scored. Every row in the ledger HAS a
+  // verdict — that is what puts it in the ledger.
+  const sentence = outcomeMeaning(null, 60);
+  assert.match(sentence, /review is already done/i);
+});
+
+test("censored is neither a pass nor a miss, and says so", () => {
+  // Same rule outcomeTone follows by giving it the NEUTRAL tone (#93): the
+  // window closed with nothing observable in it. A definition that let it read
+  // as either side would undo in prose what the colour rule protects.
+  const sentence = outcomeMeaning("censored", 14);
+  assert.match(sentence, /not a pass and not a miss/i);
+});
+
+test("an unknown kind is reported as unexplained, never given an invented meaning", () => {
+  // outcomeTone FLAGS a kind this build has never heard of rather than
+  // allowlisting the three it knows, because an allowlist is how a genuinely
+  // bad outcome arrives looking neutral. Explaining one would be the same
+  // defect in prose — a confident sentence about a word nobody defined.
+  const sentence = outcomeMeaning("graded-miss", 14);
+  assert.match(sentence, /graded-miss/);
+  assert.match(sentence, /no explanation for that word/i);
+});
+
+test("the column hint carries the whole vocabulary, not just the word under the cursor", () => {
+  // The ⓘ sits on the HEADER, where no single row's value is in play. It is
+  // read by someone who has not hovered a cell yet, so it has to define every
+  // word the column can show — including the two that are rare enough that a
+  // reader will meet them for the first time as a surprise.
+  const hint = outcomeWindowHint(14);
+  for (const word of ["Clean:", "Revert:", "Censored:", "Pending:"]) {
+    assert.match(hint, new RegExp(word), `the 14d hint never defines ${word}`);
+  }
+  // It must also say what the column IS before defining what it can say, and
+  // that the number is not an input to the score — the outcome is observed
+  // after the fact by a different loop entirely.
+  assert.match(hint, /not an input to the score/i);
+  assert.equal(/\b60 days\b/.test(hint), false, "the 14d hint quotes the 60-day window");
 });
