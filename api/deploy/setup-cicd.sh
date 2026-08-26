@@ -84,13 +84,24 @@ gcloud iam workload-identity-pools create "$POOL" \
 # assertion.ref needs no attribute-mapping entry. The deploy jobs run inside
 # GitHub's `production` environment, which switches the token's sub claim to
 # its environment form — inert here, because nothing conditions on sub.
+CONDITION="assertion.repository=='$REPO' && assertion.ref=='refs/heads/main'"
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --project "$PROJECT" --location=global --workload-identity-pool="$POOL" \
   --display-name="GitHub OIDC" \
   --issuer-uri="https://token.actions.githubusercontent.com" \
   --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository=='$REPO' && assertion.ref=='refs/heads/main'" 2>/dev/null \
-  || echo "provider exists (verify its attribute-condition pins $REPO and refs/heads/main)"
+  --attribute-condition="$CONDITION" 2>/dev/null \
+  || {
+    # An existing provider keeps whatever condition it was created with — a
+    # guarded create is exactly how the repository-only condition outlived
+    # the 2026-08-26 tightening until update-oidc was run by hand. Converge
+    # it here, loudly: a real failure (permissions, wrong pool) surfaces
+    # from the update instead of hiding behind "provider exists".
+    echo "provider exists — converging its attribute-condition"
+    gcloud iam workload-identity-pools providers update-oidc "$PROVIDER" \
+      --project "$PROJECT" --location=global --workload-identity-pool="$POOL" \
+      --attribute-condition="$CONDITION"
+  }
 
 POOL_ID="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL"
 
@@ -144,12 +155,8 @@ Verify the boundary held:
 
 It must print a condition naming $REPO and refs/heads/main. If it is
 empty, delete the provider and re-create it — an unconditioned pool is
-world-writable. If it names only the repository (the shape this script
-created before 2026-08-26), tighten it in place:
-
-  gcloud iam workload-identity-pools providers update-oidc $PROVIDER \\
-    --project $PROJECT --location=global --workload-identity-pool=$POOL \\
-    --attribute-condition="assertion.repository=='$REPO' && assertion.ref=='refs/heads/main'"
+world-writable. If it prints anything else, re-run this script: the
+provider step converges an existing provider's condition in place.
 
 If the first deploy still fails on 'iam.serviceAccounts.getAccessToken
 denied', that is propagation, not configuration. Re-run it:

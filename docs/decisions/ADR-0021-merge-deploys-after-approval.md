@@ -68,8 +68,12 @@ promote through with one developer.
   and re-running it re-requests approval.
 - One approval releases every job of that run which names the environment, so
   a both-services deploy is one click, not two.
-- Rollback by manual dispatch now also costs one approval. Accepted: the
-  person dispatching a rollback is the approver.
+- Rollback by manual dispatch now also costs one approval, and only a
+  dispatch on main can mint the credential — a dispatch on a tag or any
+  other branch is refused at the token exchange. Accepted: a dispatch
+  redeploys what main holds, so rolling back to an earlier state is a
+  revert on main or a Cloud Run traffic split, both of which ADR-0009
+  already names.
 - The filter job stays outside the environment on purpose. It only computes
   which services changed, holds no credential, and gating it would make every
   run — including ones that deploy nothing — demand an approval.
