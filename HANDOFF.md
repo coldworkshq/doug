@@ -1,5 +1,40 @@
 # HANDOFF — doug
 
+State:    building — #181 fixed on branch claude/github-issue-181-9e669e.
+          check_run.render's SUMMARY_LIMIT cut now NAMES the findings it
+          removed, counted over exactly what the summary table counts.
+          api suite 1689 passed, ruff clean.
+Next:     Open the PR (Closes #181) and let CI run.
+Blockers: none.
+Decisions this session:
+- The shortfall is counted over `_countable` — the same population
+  `_finding_counts` prints — so the notice subtracts from the number
+  already on the surface. Rejected counting every rendered bullet:
+  settlement notices are excluded from the table cell (they mark DISPROVED
+  findings, #109), so including them in the total would make the two
+  numbers unreconcilable, which is the whole defect.
+- The reserve is sized for the WIDEST notice the render could need and the
+  notice is then written from what the cut actually left, so the summary
+  lands a few bytes under 60,000 instead of exactly on it. Rejected a
+  fixed-point loop over the digit count: the circularity (count needs the
+  cut, cut needs the count's width) is worth three bytes, not a loop.
+- The cut backs up to the last line boundary, and a `<details>` it leaves
+  open is closed (a fold it emptied is dropped instead). Found while
+  writing this: an unterminated disclosure swallows the rest of the
+  document, so the truncation notice itself would have rendered inside a
+  collapsed block — #181's defect reintroduced by its own fix.
+- `dropped == 0` keeps the bare sentence: the cut ate prose sections below
+  the findings list, and "0 of 12 findings" sends a reader hunting for one
+  that is on the page.
+Pointers: branch claude/github-issue-181-9e669e ·
+          api/doug/check_run.py (`_truncation_notice`, `_shown_findings`,
+          `_countable`, `_trim_empty_fold`, `_close_details`, the cut at the
+          bottom of `render`) · api/tests/test_check_run.py (9 new tests) ·
+          #181
+
+--- prior stream (check-run file links + triage, PR #229) below, preserved ---
+
+
 State:    building — PR open: check-run findings get file links and a triage
           layout (branch comment-file-links-and-triage). Andrew asked for two
           things off the #227 review comment: links to the file/line of each
