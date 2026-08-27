@@ -415,20 +415,7 @@ def test_a_cut_that_reaches_no_finding_claims_no_shortfall():
     missing" would send a reader hunting for one that is already on the
     page."""
     verdict = FLAGGED.model_copy(deep=True)
-    huge = IntentRead(
-        alignment=41,
-        refs=["ADR-0002"],
-        findings=[
-            reader.DeviationFinding(
-                type=f"contradicts-ticket-{i}",
-                description="y" * 400,
-                severity="high",
-            )
-            for i in range(200)
-        ],
-        coverage=WHOLE,
-    )
-    _, summary = check_run.render("reader", verdict, huge, WHOLE)
+    _, summary = check_run.render("reader", verdict, _huge_deviations(), WHOLE)
     assert len(summary) <= check_run.SUMMARY_LIMIT
     assert check_run.TRUNCATION_LEAD in summary
     assert "missing from the list above" not in summary
@@ -471,6 +458,88 @@ def test_the_cut_ends_on_a_whole_line():
     last = body.splitlines()[-1]
     assert last.startswith("- ")
     assert last in [check_run._bullet(r, None) for r in _oversized().reasons]
+
+
+def _huge_deviations() -> IntentRead:
+    """An intent read whose section alone overruns the cap, so the cut
+    lands below the findings list rather than inside it."""
+    return IntentRead(
+        alignment=41,
+        refs=["ADR-0002"],
+        findings=[
+            reader.DeviationFinding(
+                type=f"contradicts-ticket-{i}",
+                description="y" * 400,
+                severity="high",
+            )
+            for i in range(200)
+        ],
+        coverage=WHOLE,
+    )
+
+
+def test_a_forged_bullet_inside_a_label_cannot_move_the_cursor():
+    """Doug's round-3 read. `reason.label` is model output built from a
+    repository's own diff, so a finding whose sentence embeds another
+    finding's rendered bullet could — under a substring search — advance
+    the cursor past a finding that was never displayed. The shortfall would
+    then be an attacker-chosen number in the one line this change adds to
+    be trusted. A bullet must BE a line, and `_oneline` collapses every
+    newline out of a label, so no label can forge one."""
+    real = "- **high** `b.py` — the second finding"
+    forger = f"- **high** `a.py` — see also {real}"
+    assert check_run._shown_findings(forger, [forger, real]) == 1
+    assert check_run._shown_findings(f"{forger}\n{real}", [forger, real]) == 2
+
+
+def test_an_indented_fold_body_is_not_read_as_an_empty_fold():
+    """Doug's round-3 read. `_trim_empty_fold` used to test the tail for
+    "\n- ", which quietly required that folds are never indented, that
+    every body line is a bullet, and that bullets keep their exact prefix.
+    A `_fold` that ever wrapped its body would have stripped an opener
+    above surviving findings and dropped them with no notice at all — this
+    module's own defect, committed by the code that fixes it."""
+    indented = (
+        "### Findings\n\n<details>\n<summary>2 low findings</summary>\n\n  * one\n  * two"
+    )
+    assert check_run._trim_empty_fold(indented) == indented
+    empty = "### Findings\n\n<details>\n<summary>2 low findings</summary>\n"
+    assert check_run._trim_empty_fold(empty) == "### Findings"
+    cut_mid_summary = "### Findings\n\n<details>\n<summary>2 low fin"
+    assert check_run._trim_empty_fold(cut_mid_summary) == "### Findings"
+
+
+def test_no_shape_renders_a_summary_over_the_cap():
+    """Doug's round-3 read, and the honest answer to it: the cap holds
+    through a chain of terms — the reserve covers the widest notice AND a
+    closer for every fold — so pinning the arithmetic pins nothing. The
+    invariant is what matters, and it is asserted on every shape that
+    reaches the cut from a different direction."""
+    settled = [
+        Reason(rule=code, label="Dropped 1 finding disproved at head", weight=0.0)
+        for code in sorted(SETTLED_REASON_CODES)
+    ]
+    ungraded = _oversized()
+    ungraded.reasons[0] = ungraded.reasons[0].model_copy(
+        update={"severity": "catastrophic" * 40}
+    )
+    forged = _oversized()
+    forged.reasons[0] = forged.reasons[0].model_copy(
+        update={"label": "<details><summary>x</summary>" * 20}
+    )
+    shapes = {
+        "all graded": (_oversized(), None, None),
+        "leading and fold": (_cut_inside_the_fold(), None, _snap()),
+        "with settlement notices": (_oversized(extra=settled), None, _snap()),
+        "severity out of vocabulary": (ungraded, None, _snap()),
+        "labels carrying details tags": (forged, None, _snap()),
+        "overrun below the findings": (FLAGGED, _huge_deviations(), _snap()),
+    }
+    for name, (verdict, intent, snap) in shapes.items():
+        _, summary = check_run.render("reader", verdict, intent, WHOLE, instrument=snap)
+        assert len(summary) <= check_run.SUMMARY_LIMIT, name
+        assert check_run.TRUNCATION_LEAD in summary, name
+        assert summary.count("<details>") == summary.count("</details>"), name
 
 
 def test_a_cut_that_lands_on_a_boundary_keeps_its_last_line():

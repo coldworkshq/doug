@@ -797,12 +797,26 @@ def _trim_empty_fold(kept: str) -> str:
     renders an empty triangle labelled "N low findings" directly above a
     notice saying those findings are missing — two contradictory claims
     about the same list. Dropping the opener leaves one.
+
+    "Empty" is decided on the disclosure's own structure — is there any
+    non-blank text after the `</summary>` line — rather than on what a
+    finding happens to look like. An earlier version tested the tail for
+    `"\n- "`, which quietly required that folds are never indented, that
+    every body line is a bullet, and that bullets keep their exact prefix;
+    a `_fold` that ever wrapped its body would have stripped an opener
+    above surviving findings and dropped them from the display with no
+    notice at all. Doug's own read of #233 found the coupling, round 3.
     """
     open_at = kept.rfind("\n<details>")
     if open_at < 0:
         return kept
     tail = kept[open_at:]
-    if "</details>" in tail or "\n- " in tail:
+    if "</details>" in tail:
+        return kept
+    # No `</summary>` means the cut landed inside the summary line itself,
+    # which is as empty as a disclosure gets.
+    _, _, body = tail.partition("</summary>")
+    if body.strip():
         return kept
     # The blank line `_fold` writes before the opener goes with it. It was
     # separating the disclosure from the list above, and there is no longer
@@ -857,20 +871,32 @@ def _whole_lines(body: str, cut: int) -> str:
 def _shown_findings(kept: str, bullets: list[str]) -> int:
     """How many of `bullets` survive whole in `kept`.
 
-    By position, not membership: the bullets are searched in the order they
-    were rendered from a cursor that only moves forward, so two identical
-    findings cannot both match one line, and a bullet the cut left
-    half-written counts as missing rather than shown. The first miss ends
-    the scan — every later bullet was rendered below a line the cut already
-    reached.
+    A bullet counts as shown when a WHOLE LINE equals it, matched against a
+    line cursor that only moves forward. Two identical findings therefore
+    consume two lines rather than matching one twice, a bullet the cut left
+    half-written is not equal to anything and counts as missing, and the
+    first miss ends the scan — every later bullet was rendered below a line
+    the cut already reached.
+
+    Whole lines, not substrings, and that is a security property rather
+    than tidiness: `reason.label` is model output built from a repository's
+    own diff, so a finding whose sentence embeds another finding's rendered
+    bullet would, under a substring search, advance the cursor past a
+    finding that was never displayed — an attacker-chosen number in the one
+    line this module added to be trusted. A bullet cannot forge a line
+    boundary, because `_oneline` collapses every newline out of it. Doug's
+    own read of #233 found this, round 3.
     """
-    pos = 0
-    for n, bullet in enumerate(bullets):
-        found = kept.find(bullet, pos)
-        if found < 0:
-            return n
-        pos = found + len(bullet)
-    return len(bullets)
+    shown = 0
+    lines = iter(kept.split("\n"))
+    for bullet in bullets:
+        for line in lines:
+            if line == bullet:
+                shown += 1
+                break
+        else:
+            return shown
+    return shown
 
 
 def render(

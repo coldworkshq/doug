@@ -172,3 +172,57 @@ rather than a stated limit. The mirror stays byte-for-byte, which is what
 ADR-0014 constrains. Recorded rather than dismissed: the deviation
 instrument has not passed its derangement check, so it enters no score, and
 this note is the whole of its effect.
+
+## Round 3 @ c395ebc — Cleared, 0.24, three low
+
+| # | rule | verdict | outcome |
+|---|------|---------|---------|
+| 1 | `reader:fragile-string-parsing` | **right about the coupling** | Fixed: `_trim_empty_fold` reads structure, not bullet syntax |
+| 2 | `reader:off-by-one` | **right that the arithmetic is unpinnable** | Fixed the right way: the invariant is now asserted on six shapes |
+| 3 | `reader:positional-string-matching` | **right, and it was reachable** | Fixed: `_shown_findings` matches whole lines |
+
+None of the three is a live defect, and all three are worth acting on. That
+is a different and more useful kind of finding than rounds 1 and 2
+produced, and it is the first read in this file where every finding
+survives.
+
+**1.** `_trim_empty_fold` decided a disclosure was empty by testing its
+tail for `"\n- "`. That quietly required three things `_fold` happens to do
+today: never indent, always emit bullets, always keep the exact prefix.
+A `_fold` that ever wrapped its body would have stripped an opener above
+surviving findings and dropped them from the display **with no notice at
+all** — this module's own defect, committed by the code that fixes it. The
+test is now structural: is there any non-blank text after the
+`</summary>` line.
+
+**2.** Doug is right that the cap holds through a chain — the reserve
+covers the widest reachable notice *and* a closer for every fold — and
+right that relaxing the length test from `==` to `<=` removed the only
+thing watching it. Pinning the arithmetic would pin the wrong thing. The
+invariant is what matters, and `test_no_shape_renders_a_summary_over_the_cap`
+now asserts it on six shapes that reach the cut from different directions,
+including an overrun below the findings list and labels carrying literal
+`<details>` tags.
+
+**3.** The strongest of the three. `_shown_findings` searched for each
+bullet as a substring from a forward cursor, so a finding whose
+model-authored sentence embedded another finding's rendered bullet could
+advance the cursor past a finding that was never displayed — an
+attacker-chosen number in the one line this PR added to be trusted. It
+matches whole lines now, which a label cannot forge: `_oneline` collapses
+every newline out of it.
+
+### What #234 costs, measured
+
+The same read prompted a check of the adversarial shape. 400 findings whose
+labels each carry 60 literal `<details>` inflate the fold reserve past the
+whole budget, and the summary collapses to its notice and footer:
+
+```
+len: 213   (cap 60,000)   balanced: True
+"400 of 400 findings are missing from the list above."
+```
+
+Bounded and honest — under the cap, tags balanced, shortfall true — but a
+repository's own diff should not get to decide how much of Doug's check run
+renders. Recorded on #234, which already has the fix that closes it.

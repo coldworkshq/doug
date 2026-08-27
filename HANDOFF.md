@@ -12,8 +12,16 @@ State:    review — PR #233 open (Closes #181), all 6 CI checks green on
           remove; unreachable from render, fixed anyway because it is a
           contract break in a tested pure helper). api suite 1691 passed,
           ruff clean.
-Next:     Andrew reviews/merges #233. All 6 checks were green on 7363b4b;
-          the `edge >= 0` fix needs one more CI pass.
+          Round 3 @ c395ebc: CLEARED 0.24, three low — none a live
+          defect, ALL THREE worth acting on and fixed (`_trim_empty_fold`
+          now reads structure not bullet syntax; `_shown_findings` matches
+          whole LINES, which closes a real forgery path where a label
+          embedding another finding's bullet moved the cursor; the cap
+          invariant is asserted on six shapes instead of pinned by
+          arithmetic). First read in this file where every finding
+          survives. api suite 1694 passed.
+Next:     Andrew reviews/merges #233. All 6 checks green on c395ebc; the
+          round-3 fixes need one more CI pass.
 Blockers: none.
 Decisions this session:
 - The shortfall is counted over `_countable` — the same population
