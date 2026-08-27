@@ -8,11 +8,14 @@ State:    building — PR open: check-run findings get file links and a triage
           diff, so it cannot derive a line; DOUG_VERIFY_INSTALLATIONS empty;
           hunk hashes deliberately drop the @@ header, hunks.py:46-60) —
           filed as #230.
-Next:     Andrew reviews/merges the PR. The merge deploys and the first real
-          check run IS the proof that GitHub renders <details> inside a check
-          run summary — the one thing in this change not verified locally.
-          If it renders literally, revert the two _fold calls; the links and
-          the severity ordering are unaffected.
+Next:     Andrew reviews/merges the PR (all 6 CI checks green). The merge
+          deploys and the first check run after it IS the proof that GitHub
+          renders <details> in a check run SUMMARY — the one thing here no
+          local test can reach. Prior art says yes: dorny/test-reporter
+          posts <details> through the Checks API under the same 65535 cap.
+          If it renders literally, revert the two _fold calls; links and
+          severity ordering are unaffected. Doug's check on #229 itself is
+          the DEPLOYED renderer, so it shows the old shape.
 Blockers: none. Suites green: api 1674, web 376, console 113, ruff check
           clean (ruff format is NOT a gate — 74 files predate it).
 Decisions this session:
