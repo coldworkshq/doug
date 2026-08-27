@@ -473,6 +473,32 @@ def test_the_cut_ends_on_a_whole_line():
     assert last in [check_run._bullet(r, None) for r in _oversized().reasons]
 
 
+def test_a_cut_that_lands_on_a_boundary_keeps_its_last_line():
+    """Doug's own read of this change, finding 1. Backing up to the last
+    newline is right when the cut split a line and wrong when it did not:
+    a cut that already ends a line loses a whole finding to punctuation,
+    and the notice then reports a shortfall the cap did not cause."""
+    body = "- one\n- two\n- three"
+    assert check_run._whole_lines(body, 12) == "- one\n- two"  # cut ON the newline
+    assert check_run._whole_lines(body, 15) == "- one\n- two"  # cut mid-word
+    assert check_run._whole_lines(body, len(body)) == body
+    assert check_run._whole_lines(body, 999) == body
+
+
+def test_the_shortfall_reconciles_with_a_degraded_findings_cell():
+    """Doug's own read of this change, finding 2. `_finding_counts` stops
+    naming severities the moment one finding carries a grade outside the
+    vocabulary and prints a bare count instead. The notice's total has to
+    reconcile with THAT number too — a reader cannot be asked to know which
+    of the cell's two shapes they are looking at."""
+    noisy = _oversized()
+    noisy.reasons[0] = noisy.reasons[0].model_copy(update={"severity": "catastrophic"})
+    _, summary = check_run.render("reader", noisy, None, WHOLE)
+    cell = [ln for ln in summary.splitlines() if ln.startswith("| **")][0]
+    assert f"{len(noisy.reasons)} findings" in cell
+    assert _shortfall(summary)[1] == len(noisy.reasons)
+
+
 def _cut_inside_the_fold():
     """A verdict whose leading findings fit and whose low ones do not, so
     the cut lands inside the collapsed disclosure."""

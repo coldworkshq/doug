@@ -823,6 +823,29 @@ def _close_details(kept: str) -> str:
     return _DETAILS_CLOSE * max(0, unclosed)
 
 
+def _whole_lines(body: str, cut: int) -> str:
+    """`body[:cut]`, ending on a line boundary.
+
+    A body sliced mid-word with an italic sentence bolted to its tail reads
+    as a rendering fault rather than a stated limit, and the half-bullet it
+    ends on is a finding a reader may act on without its file, its severity
+    or its verb.
+
+    The two guards are not defensive. A cut that already landed ON a
+    newline ends a whole line as it is, and backing up from there would
+    drop a bullet that fit — a real finding lost to punctuation. A cut past
+    the end of the body keeps the body, which is what the caller means by
+    "cut" when the overrun was somewhere else.
+    """
+    if cut >= len(body):
+        return body
+    kept = body[:cut]
+    if body[cut] == "\n":
+        return kept
+    edge = kept.rfind("\n")
+    return kept[:edge] if edge > 0 else kept
+
+
 def _shown_findings(kept: str, bullets: list[str]) -> int:
     """How many of `bullets` survive whole in `kept`.
 
@@ -984,15 +1007,10 @@ def render(
         # reserve, or closing it is what puts the summary over the cap.
         reserved += body.count("<details>") * len(_DETAILS_CLOSE)
         cut = max(0, SUMMARY_LIMIT - reserved - len(footer))
-        kept = body[:cut]
-        # Back up to the last line boundary, so the body ends on a whole
-        # line rather than mid-word with an italic sentence bolted to it.
         # The shortfall is counted AFTER all three of these, never before: a
         # bullet they remove is a finding the reader cannot see, and the
         # number has to be about what shipped.
-        if (edge := kept.rfind("\n")) > 0:
-            kept = kept[:edge]
-        kept = _trim_empty_fold(kept)
+        kept = _trim_empty_fold(_whole_lines(body, cut))
         kept += _close_details(kept)
         shortfall = total - _shown_findings(kept, counted)
         combined = kept + _truncation_notice(shortfall, total) + footer
