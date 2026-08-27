@@ -62,10 +62,16 @@ def test_apply_adds_the_columns_to_a_database_built_by_an_older_schema(tmp_path)
         )
         # Migration 003 indexes these; production gets the tables from
         # create_all before apply. The hand-built older schema needs stubs.
+        # repo_full_name rides along for migration 17: the column was born on
+        # the real table via create_all (no ALTER adds it anywhere in
+        # MIGRATIONS), and a stub without it would let 17's UPDATE land in
+        # _satisfied's "no such column" and record itself while renaming
+        # nothing — the issue #205 silent-skip, again.
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), "
-            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER)"
+            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER, "
+            "repo_full_name VARCHAR(200))"
         )
         conn.exec_driver_sql(
             "CREATE TABLE outcome_jobs ("
@@ -773,10 +779,16 @@ def test_migration_004_adds_claim_generation(tmp_path):
         conn.exec_driver_sql(
             "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL)"
         )
+        # repo_full_name rides along for migration 17: the column was born on
+        # the real table via create_all (no ALTER adds it anywhere in
+        # MIGRATIONS), and a stub without it would let 17's UPDATE land in
+        # _satisfied's "no such column" and record itself while renaming
+        # nothing — the issue #205 silent-skip, again.
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs ("
             "id INTEGER PRIMARY KEY, status VARCHAR(12), "
-            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER)"
+            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER, "
+            "repo_full_name VARCHAR(200))"
         )
         conn.exec_driver_sql(
             "CREATE TABLE outcome_jobs ("

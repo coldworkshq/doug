@@ -439,7 +439,19 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # registration history — the drewjst installation really did
             # register the old name — and repo_id_for resolves by
             # github_repo_id + newest-active row, never by display name.
+            # Rewriting the old row would also create a second active name
+            # mapping for the same repo, which is worse than the history.
             # JSON blobs (pr_meta, raw) keep old URLs; GitHub redirects them.
+            #
+            # The exclusion set is verified, not asserted (Doug's own read of
+            # this PR flagged the difference): these three plus
+            # installation_repos.full_name are the ONLY name-string columns
+            # in the schema. outcome_jobs keys on (installation_id,
+            # github_repo_id, pr_number) and carries no name, and no
+            # research-corpus rows exist in the app database (quarantine
+            # note below). Old-name receipt links in historical PR comments
+            # resolve through the junction, not these columns — their decay
+            # when the old row leaves 'active' is issue #228.
             "UPDATE verdicts SET repo='coldworkshq/doug' "
             "WHERE repo='drewjst/doug'",
             "UPDATE outcomes SET repo='coldworkshq/doug' "
