@@ -5,15 +5,14 @@ date: 2026-07-30
 amended_by: ADR-0022
 ---
 
-> **Amendment, 2026-08-26 (ADR-0022, proposed): the empty provider slot is
-> filled by an internal store, not by lema.** The clause "a lema-backed
-> provider sits behind the same interface, unimplemented, until lema exposes
-> decisions with status and repo scoping" is retired: lema is retired as a
-> product, and Doug's own `memory` schema supplies status-filtered records
-> behind the unchanged `IntentDoc` contract. Everything else here stands —
-> Doug owns the interface, Doug's decisions live in this directory, a
-> repository with no ADRs gets an inert feature. The amendment takes effect
-> when ADR-0022 is accepted.
+> **Amended by ADR-0022 (accepted 2026-08-27): the empty provider slot is
+> filled by an internal store, not by lema-the-product.** The clause "a
+> lema-backed provider sits behind the same interface, unimplemented, until
+> lema exposes decisions with status and repo scoping" is retired: lema is
+> retired as a product, and Doug's own `lema` schema supplies status-filtered
+> records behind the `IntentDoc` contract. Everything else here stands — Doug
+> owns the interface, Doug's decisions live in this directory, a repository
+> with no ADRs gets an inert feature.
 
 ## Context
 

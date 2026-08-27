@@ -1,7 +1,7 @@
 ---
 title: The memory spine is Postgres job tables under a frozen event envelope; Pub/Sub waits for a measured bottleneck
-status: proposed
-date: 2026-08-26
+status: accepted
+date: 2026-08-27
 ---
 
 ## Context
@@ -38,8 +38,8 @@ and in the design lock's item 3; on the Go side it is new code, owned by MS-6.
 
 ### The spine
 
-The memory schema's spine is two tables: `memory.events`, append-only, and
-`memory.jobs`, claimed with `FOR UPDATE SKIP LOCKED`. Producers write an
+The `lema` schema's spine is two tables: `lema.events`, append-only, and
+`lema.jobs`, claimed with `FOR UPDATE SKIP LOCKED`. Producers write an
 event; the store's own drains turn events into work; work writes records.
 Nothing else is on the path. No message broker, no task queue, no second
 datastore.
@@ -58,9 +58,9 @@ Every event carries:
 | Field | Rule |
 |---|---|
 | `event_type` | Closed vocabulary, registered per type. Registering a new type is additive. |
-| `payload_version` | Per `event_type`. A reader that meets a version it does not know **parks** the event: `parked` is a non-terminal `memory.jobs` status carrying the pair, re-claimed at every drain start by the binary that now knows it (lema's `SweepOrphans` arm, ported), and counted toward the oldest-pending-age alert. The drain never fails and never guesses. |
+| `payload_version` | Per `event_type`. A reader that meets a version it does not know **parks** the event: `parked` is a non-terminal `lema.jobs` status carrying the pair, re-claimed at every drain start by the binary that now knows it (lema's `SweepOrphans` arm, ported), and counted toward the oldest-pending-age alert. The drain never fails and never guesses. |
 | `idempotency_key` | **Producer-computed**, with a per-`event_type` derivation rule recorded in the registry and published as fixture vectors in the conformance artifact, and `UNIQUE`-indexed from the first migration. Re-posting the same event inserts once; the rule for merge-derived events excludes `batch_id`. |
-| `tenant_id` | **Store-resolved.** The wire carries `installation_id` and `github_repo_id`; the store resolves the internal `memory.tenants` id through `tenant_installations` and `tenant_repos` (ADR-0022) and refuses a body that names a `tenant_id` itself. |
+| `tenant_id` | **Store-resolved.** The wire carries `installation_id` and `github_repo_id`; the store resolves the internal `lema.tenants` id through `tenant_installations` and `tenant_repos` (ADR-0022) and refuses a body that names a `tenant_id` itself. |
 | `github_repo_id` | Mandatory on every event. |
 | `provenance` | ADR-0022's closed sum type, mandatory. Variants are registry rows; adding one is additive. |
 | `occurred_at` | Commitment time, GitHub-clocked per ADR-0022, mandatory. Orders everything. Refused if later than `recorded_at` plus the skew allowance. |
@@ -94,8 +94,8 @@ it.
 
 Pub/Sub — or any broker — is admitted when **a named Postgres measurement
 crosses a pre-registered threshold and stays there**: the oldest-pending-age
-policy on `memory.jobs`, whose threshold and sustained window are committed in
-the store's own pre-registration file before `memory.jobs` exists. That policy
+policy on `lema.jobs`, whose threshold and sustained window are committed in
+the store's own pre-registration file before `lema.jobs` exists. That policy
 is not one of Gate A's three — those are doug-lane policies and Gate A closes
 before this schema exists. It is created by the store's own deploy in
 `coldworkshq/memory-store` on a metric the Go drain exports, and Stage 1 does
@@ -115,7 +115,7 @@ table, at 5.6 events per day.
 **Cloud Tasks.** Same as above with a per-task HTTP target, which puts the
 drain behind a public-ish endpoint the store otherwise never exposes.
 
-**A transactional outbox into a broker.** The outbox *is* `memory.events`.
+**A transactional outbox into a broker.** The outbox *is* `lema.events`.
 Adding the broker behind it is the rejected item above with an extra hop.
 
 **One events table shared by both schemas.** Two writers on one table is the
@@ -163,7 +163,7 @@ deriver and correlator that the session lane's design routes captures through.
   out-of-order is allowed, so numbering is claimed, and a claimed number is
   released only by merge or by closing the pull request.
 - The bottleneck measurement exists from Stage 1 because creating and
-  test-firing the `memory.jobs` policy is a Stage-1 exit item. If the policy
+  test-firing the `lema.jobs` policy is a Stage-1 exit item. If the policy
   exists and never fires, the broker is never bought, and that is the intended
   outcome; if the policy does not exist, silence means nothing, and Stage 1
   has not exited.

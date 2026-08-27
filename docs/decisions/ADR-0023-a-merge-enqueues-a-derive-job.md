@@ -1,7 +1,7 @@
 ---
 title: A merge may enqueue a derive job; the drain, not the merge, buys the model read
-status: proposed
-date: 2026-08-26
+status: accepted
+date: 2026-08-27
 ---
 
 ## Context
@@ -56,7 +56,7 @@ background task — claims a bounded number of due rows per pass with `FOR
 UPDATE SKIP LOCKED`, charges `reader._charge(installation_scope)` before
 fetching the diff and parks the row on `SpendCapExceeded`, fetches the diff
 with the installation token, calls the model with the diff delimited as
-untrusted data, and emits `decision.derived` events into `memory.events` over
+untrusted data, and emits `decision.derived` events into `lema.events` over
 the producer wire (ADR-0024); the store materializes the records. The drain is
 Python, in `doug-api`, because it calls a model and the language law puts
 everything that calls a model in Python. The Go store never sees a diff. The

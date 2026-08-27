@@ -1,7 +1,7 @@
 ---
 title: Doug owns a derived memory store, and the store fills the provider slot ADR-0006 left empty
-status: proposed
-date: 2026-08-26
+status: accepted
+date: 2026-08-27
 amends: ADR-0006
 ---
 
@@ -52,7 +52,9 @@ on). The plan itself lives at `coldworkshq/coldworks` `docs/integration-plan.md`
 its per-item build order is `docs/build-orders/memory-store.md` there. This
 record was red-teamed on 2026-08-26 (six lenses, 60 findings filed, 38
 adjudicated by independent refuters, 11 standing); the cures are in the text
-below, and the funnel is recorded in the pull request.
+below, and the funnel is recorded at
+`docs/design/memory-lane/adversarial-review-2026-08-26.md`. Andrew signed all
+three on 2026-08-27.
 
 ## Decision
 
@@ -63,9 +65,9 @@ disk today. The Decision is what those deliverables must satisfy.
 
 ### The store
 
-Doug runs a memory store in a second Postgres schema, `memory`, on the same
+Doug runs a memory store in a second Postgres schema, `lema`, on the same
 Cloud SQL instance as the outcome ledger. The `doug` schema stays Python-owned
-and single-writer; the `memory` schema is Go-owned and single-writer, with
+and single-writer; the `lema` schema is Go-owned and single-writer, with
 row-level security keyed on a per-request tenant setting. **No foreign key
 ever crosses the schema boundary.** The two join on frozen natural keys —
 `(github_repo_id, pr_number, merge_commit_sha)`, the three-column identity
@@ -75,16 +77,19 @@ part of a key: the doug schema is never rewritten for tenancy, and after the
 organization move its ledger holds the same repository's history under two
 installation ids (150424894 and 153075663, per the ADR-0017 amendment). A join
 that keyed on the current installation id would silently miss every pre-move
-merge.
+merge. The schema is named `lema`, for the product whose semantics it
+carries (Andrew, 2026-08-27); the repository stays `coldworkshq/memory-store`,
+the MCP server keeps its name, and nothing in public copy carries a second
+product name.
 
 Tenancy is three tables, all Go-owned:
 
-- `memory.tenants(id, account_id)` — the internal id every memory row keys on,
+- `lema.tenants(id, account_id)` — the internal id every memory row keys on,
   anchored on the GitHub account id (user or organization).
-- `memory.tenant_installations(tenant_id, installation_id UNIQUE, valid_from,
+- `lema.tenant_installations(tenant_id, installation_id UNIQUE, valid_from,
   valid_to)` — every installation id a tenant has ever held. A reinstall is
   one new row; nothing is rewritten and every historical id still resolves.
-- `memory.tenant_repos(tenant_id, github_repo_id, valid_from, valid_to)` — the
+- `lema.tenant_repos(tenant_id, github_repo_id, valid_from, valid_to)` — the
   mutable link that mirrors doug's own `installation_repos`
   (`store.py:242-250`). A repository transfer between accounts is one row
   change on this table; the memory rows keep the tenant they were written
@@ -108,10 +113,10 @@ MS-2's first migration, not after it.
 **Isolation follows coldworks invariant 4**, which this codebase family has
 already proven live and regressed twice (`coldworks/db/001_init.sql:259-264`,
 `002`, `004`, `005`): the tenant setting is transaction-scoped
-(`set_config(..., true)`, never a session `SET`); every `memory.*` table is
+(`set_config(..., true)`, never a session `SET`); every `lema.*` table is
 `ENABLE` **and `FORCE` `ROW LEVEL SECURITY`**, because the table owner bypasses
 RLS otherwise; the runtime role is separate from the migrator and has no
-`BYPASSRLS`; any `memory.v*_` read view is created `WITH (security_invoker =
+`BYPASSRLS`; any `lema.v*_` read view is created `WITH (security_invoker =
 true, security_barrier = true)`; and a catalog test (ported from coldworks'
 `test_current_views_respect_rls`) fails CI on any table or view that breaks
 those rules. The store's own drains read across tenants under a named policy,
@@ -333,7 +338,7 @@ turns every embedding-model swap into a store release, and the language law
 exists so that the thing that calls a model is the thing that is graded.
 
 **Cross-schema foreign keys.** They couple two writers, make an organization
-transfer a cascade instead of one row, and put the memory schema's integrity
+transfer a cascade instead of one row, and put the `lema` schema's integrity
 in the hands of a migration framework it does not run under.
 
 **Keying rows or tenancy on `installation_id`.** GitHub reissues it on
@@ -353,9 +358,9 @@ reader's existing cap (ADR-0023), not by refusing to look.
   other rulings stand unchanged: Doug owns the provider interface and the
   contract; Doug's own decisions live in this directory, which is now one
   channel into the store rather than the only source; repositories without an
-  ADR directory get an inert feature, not an error. On signing, the same commit
-  that flips this record to `accepted` rewrites ADR-0006's banner from the
-  conditional form to an unconditional one.
+  ADR directory get an inert feature, not an error. The commit that accepted this
+  record (2026-08-27) rewrote ADR-0006's banner from the conditional form to
+  an unconditional one.
 - The wire contract is frozen at Stage 1's first migration. Changing a field is
   not a refactor; it reopens Stage 0 and needs a new signature (integration
   plan rule R9). Registering a new provenance variant or event type is
@@ -383,9 +388,11 @@ reader's existing cap (ADR-0023), not by refusing to look.
   event nulls a payload while keeping its hash and idempotency key, and a
   tenant purge on uninstall follows lema's ADR-0081 precedent, so the
   append-only law has one lawful purge path with a receipt.
-- This record is `proposed` until Andrew signs it. Under this directory's own
-  rule a `proposed` record never reaches the reader; ADR-0006's banner does,
-  and it says in its own text that it is not yet in effect.
+- This record is `accepted` and reaches the reader. The reader clips any
+  record past 4,000 characters (`intent.BODY_BUDGET`) and budgets on the
+  clipped size, so on a relevant pull request the model sees this record's
+  Context and the opening of its Decision, marked `[record truncated]`. The
+  full text governs people; the clipped text is what produces findings.
 - The open conformance artifact is a public commitment that outlives any
   private implementation. Publishing the fixtures means a second
   implementation could pass them; that is intended.

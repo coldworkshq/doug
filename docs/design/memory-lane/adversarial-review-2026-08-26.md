@@ -1,5 +1,8 @@
 # Adversarial review — Stage-0 memory ADRs (2026-08-26)
 
+> Note: the store's Postgres schema was renamed `memory` → `lema` on
+> 2026-08-27, after this review; the verdicts below use the pre-rename name.
+
 Artifact: coldworkshq/doug branch memory-adrs, docs/decisions/ADR-0022/0023/0024 + ADR-0006 amendment, frozen at ece6ffd.
 
 Filed 60 · fatal/high 38 · adjudicated 38 · survived 11 · refuted 27 · confirmed fatal 1
