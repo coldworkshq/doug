@@ -21,8 +21,14 @@ Blockers: none. Doug's own read of 3eb5776 dispositioned in
           and fixed/accepted, the ONE high is a false positive (claimed
           _verdict_bundle KeyErrors on r["file"] because the diff shows no
           SELECT change — the query is select(findings), whole-table). Clean
-          instance of #175. Suites green: api 1676, web 376, console 113,
-          ruff check clean (ruff format is NOT a gate — 74 files predate).
+          instance of #175. Round 2 @ 5983ef9: 1 more false positive
+          (missing-import; import sys is at worker.py:23) + 1 REAL defect
+          Doug found and 11 fold tests missed — an all-low list folded
+          itself into an empty ### Findings under a Flagged title. Fixed.
+          Both false positives describe states CI ALREADY makes unreachable
+          (1,677 tests; ruff F821) → filed #232, sharper form of #175.
+          Suites green: api 1677, web 376, console 113, ruff check clean
+          (ruff format is NOT a gate — 74 files predate it).
 Decisions this session:
 - File links are built from THIS module's owner/repo/head_sha with the path
   percent-encoded, NOT validated against PRMetadata.files — rejected the
