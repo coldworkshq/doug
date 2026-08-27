@@ -30,6 +30,27 @@ const NAV_LINKS = [
  *  stranger doesn't have to compete with six links that don't. Below `sm`
  *  those links live in a native <details> disclosure rather than vanishing.
  *
+ *  THE BAR IS LIGHT IN BOTH THEMES, and `site-bar` is what makes it so — a
+ *  token scope in globals.css, not a pile of `dark:` overrides here. It was
+ *  `bg-background/75`, the page's own ground: in light that is #eef0f2 over
+ *  #eef0f2, so nothing but the border separated the two, and in dark it was a
+ *  dark pill floating over a dark page under a dark glow. Chrome that floats
+ *  has to read as a separate plane, and light is the cheapest way to say so.
+ *  Re-declaring the palette on this one element is also the only way the theme
+ *  toggle follows: it is a client component this file cannot pass classes
+ *  into, and it paints in --muted-foreground/--accent like everything else in
+ *  the bar. globals.css carries the values and the ratios.
+ *
+ *  `text-foreground` ON THE BAR IS NOT REDUNDANT and is the one thing the
+ *  token scope cannot do for itself. `body` sets `color: var(--foreground)`,
+ *  which is substituted at the BODY — descendants inherit the resolved colour,
+ *  not the variable — so re-declaring --foreground further down changes
+ *  nothing an element merely inherits. Every other control in here names its
+ *  own ink (`text-muted-foreground`, `text-primary-foreground`); the wordmark
+ *  did not, and in dark mode it would have inherited the page's near-white ink
+ *  onto a near-white bar and vanished. This line re-substitutes the token
+ *  where the scope can reach it.
+ *
  *  Order is deliberate: Dashboard first, then the two live public surfaces
  *  (Scoreboard, Queue), Docs next as reference material, GitHub after that as
  *  the escape hatch to source, About last.
@@ -58,7 +79,7 @@ export function SiteHeader({
 }) {
   return (
     <header className={`sticky top-4 z-50 mx-auto w-full ${maxWidthClassName} px-6`}>
-      <div className="flex items-center justify-between gap-3 rounded-full border border-border bg-background/75 py-2 pr-2.5 pl-4 shadow-lg shadow-black/[0.04] backdrop-blur-md dark:shadow-black/30">
+      <div className="site-bar flex items-center justify-between text-foreground gap-3 rounded-full border border-border bg-background/90 py-2 pr-2.5 pl-4 shadow-lg shadow-black/[0.06] backdrop-blur-md dark:shadow-black/40">
         <Link
           href="/"
           className="font-heading flex shrink-0 items-center gap-2 text-base font-semibold tracking-tight"

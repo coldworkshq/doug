@@ -2,7 +2,20 @@
 title: Merging to main deploys to Cloud Run
 status: accepted
 date: 2026-07-30
+amended_by: ADR-0021
 ---
+
+> **Amendment, 2026-08-26 (ADR-0021): merging deploys after Andrew approves
+> the run.**
+>
+> The Decision below says push to main builds and deploys. The build and the
+> tests still run on every merge, but both deploy jobs now sit in the
+> `production` environment and wait for Andrew's approval, and the federation
+> provider only exchanges tokens for runs on main — "pinned by attribute
+> condition to this repository" undersold the boundary, because any branch of
+> this repository could mint the deployer credential. The rollback dispatch
+> goes through the same approval. The text below is kept as written for the
+> record; ADR-0021 carries the change and its reasons.
 
 ## Context
 

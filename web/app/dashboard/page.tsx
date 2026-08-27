@@ -42,7 +42,7 @@ import {
   thresholdChanges,
   withSelectedOptions,
 } from "@/lib/dashboard-view";
-import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
+import { type Facet, type FacetKey, type FacetSelection, buildFacets } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import {
   bandCensus,
@@ -54,7 +54,7 @@ import {
   severityCensus,
 } from "@/lib/ledger-census";
 import { type PageWindow, pageRangeLabel, pageSlice, parsePage } from "@/lib/paging";
-import { outcomeLabel, outcomeToneClass, relativeAge } from "@/lib/runs-time";
+import { outcomeLabel, outcomeMeaning, outcomeToneClass, outcomeWindowHint, relativeAge } from "@/lib/runs-time";
 import { filterRunsByQuery, normalizeQuery } from "@/lib/search";
 import { type SortKey, type SortState, nextSort, parseSort, sortGroups } from "@/lib/sorting";
 import { applyLens, parseThresholdLens, rebandedCount } from "@/lib/threshold-lens";
@@ -256,6 +256,42 @@ function RailReadout({ runs, scope }: { runs: RunSummary[]; scope: string }) {
   );
 }
 
+/** The ⓘ, and it is the only affordance on this page whose whole job is to
+ *  explain a word rather than to show one.
+ *
+ *  WHY IT EXISTS. `clean` and `pending` are the two most-rendered words in the
+ *  ledger and the two most misread: "clean" looks like a verdict about the
+ *  code, and "pending" looks like Doug still owes you a review. Neither is
+ *  what the column means (lib/runs-time.ts: outcomeMeaning carries the
+ *  sentences and the reasoning). Every other column on this page names a thing
+ *  the reader can see — a score, a repo, a percentage — so none of them needed
+ *  one, and none of them gets one.
+ *
+ *  A NATIVE `title`, not a popover. /dashboard is a server component (RULING 2)
+ *  and a tooltip is not worth a client boundary; `title` also survives with no
+ *  JavaScript, which is the same bar the pills, the pager and the search box
+ *  already clear. Its cost is a delay before the browser shows it, which is
+ *  acceptable for a definition nobody needs mid-scan.
+ *
+ *  `tabIndex={0}` so it is reachable without a mouse, and the aria-label
+ *  repeats the hint because a `title` alone is not reliably announced. The
+ *  circle is drawn with `border-current` rather than a colour of its own: it
+ *  is chrome inside whatever ink already renders it, and it must never look
+ *  like the two data colours a cell beside it might be carrying.
+ *
+ *  `tracking-normal` cancels the header's .13em, which would otherwise push
+ *  the `i` off the centre of its own circle. */
+function InfoDot({ label, hint }: { label: string; hint: string }) {
+  return (
+    <span
+      tabIndex={0}
+      title={hint}
+      aria-label={`${label}: ${hint}`}
+      className="mono ml-[5px] inline-flex size-[13px] flex-none cursor-help items-center justify-center rounded-full border border-current align-[-2px] text-[9px] leading-none font-normal tracking-normal normal-case opacity-60 hover:opacity-100 focus-visible:opacity-100"
+    >i</span>
+  );
+}
+
 function FilterChip({
   active,
   children,
@@ -306,6 +342,17 @@ function CoverageCell({ run }: { run: RunSummary }) {
  *  are pressed, and their denominator is that same set. At the page cap the
  *  set is only the newest N runs, and the title says so rather than calling it
  *  the scope. */
+/** The two facet keys that narrow on an outcome, and the window each one
+ *  observes. Keyed by FacetKey rather than parsed out of `facet.label`,
+ *  because the label is presentation and the key is the contract — lib/facets.ts
+ *  says so in as many words, and it is under a character-identical lockstep
+ *  with the console's copy, so nothing here may reach into it for a number.
+ *  A facet that is not an outcome is absent, not zero: `band` has no window. */
+const OUTCOME_FACET_WINDOWS: Partial<Record<FacetKey, number>> = {
+  outcome: 14,
+  outcome_60: 60,
+};
+
 function FacetBar({
   facets,
   selection,
@@ -323,9 +370,23 @@ function FacetBar({
   const active = Object.values(selection).some((values) => values && values.length > 0);
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border pb-2.5">
-      {facets.map((facet) => (
+      {facets.map((facet) => {
+        const outcomeWindow = OUTCOME_FACET_WINDOWS[facet.key];
+        return (
         <div key={facet.key} className="flex flex-wrap items-center gap-1.5">
-          <span className="mono text-[10px] uppercase tracking-[.13em] text-[var(--dim)]">{facet.label}</span>
+          {/* The group label carries the same ⓘ the table header does, because
+              this row is where a reader first meets `clean` and `pending` —
+              as pills, with counts, above the column that will repeat them.
+              The pills themselves keep their own `title`, which answers a
+              different question (how many, and over what population), and
+              overwriting it with a definition would trade a number the
+              operator is mid-way through reading for one they are not. */}
+          <span className="mono inline-flex items-center text-[10px] uppercase tracking-[.13em] text-[var(--dim)]">
+            {facet.label}
+            {outcomeWindow !== undefined && (
+              <InfoDot label={facet.label} hint={outcomeWindowHint(outcomeWindow)} />
+            )}
+          </span>
           {facet.options.map((option) => {
             const on = (selection[facet.key] ?? []).includes(option.value);
             // Frame and ink are computed separately and each utility is
@@ -364,7 +425,8 @@ function FacetBar({
             );
           })}
         </div>
-      ))}
+        );
+      })}
       {active && (
         <Link
           href={href(params, facetClearChanges())}
@@ -556,14 +618,26 @@ function RepoCountLine({
  *  surface). They are different observations of different windows: a row
  *  reading "clean" at 14d and "pending" at 60d is the honest picture, and
  *  collapsing them would let "clean" silently mean two different things
- *  depending on data the reader cannot see. */
-const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey }> = [
+ *  depending on data the reader cannot see.
+ *
+ *  THE TWO HEADERS SAY "14d" AND "60d", NOT "14d outcome", and the word they
+ *  drop moved into the ⓘ beside them rather than being lost. This is
+ *  arithmetic, not taste: the header sets at 10.5px in Geist Mono (0.6025em
+ *  advance) with .13em tracking, so a character costs 7.69px and "14d outcome"
+ *  claims 84.6px inside the 72px this column leaves after padding. It was
+ *  overflowing 12.6px into its neighbour before anything was added to it —
+ *  which is why the two labels sit shoulder to shoulder on screen with no gap
+ *  between the columns. "14d" plus the dot is 41px, and the tooltip says
+ *  "outcome" in its first six words. Widening instead was the alternative and
+ *  was refused: 60px of table width would have come out of the one flexible
+ *  column, which holds the title and is already the column that truncates. */
+const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey; hint?: string }> = [
   { label: "score", cls: "w-[58px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
   { label: "band", cls: "w-[106px]" },
   { label: "read", cls: "w-[104px]", sort: "coverage" },
-  { label: "14d outcome", cls: "w-[88px]" },
-  { label: "60d outcome", cls: "w-[88px]" },
+  { label: "14d", cls: "w-[88px]", hint: outcomeWindowHint(14) },
+  { label: "60d", cls: "w-[88px]", hint: outcomeWindowHint(60) },
   { label: "job", cls: "w-[76px]" },
   { label: "age", cls: "w-[42px] text-right" , sort: "age" },
 ];
@@ -674,11 +748,19 @@ function RunCells({
           were measured against 11.5px text and nothing re-measured them.
           Raising this needs the column widened past 88px first, which raises
           the table's 876px floor and comes out of the title. */}
+      {/* The `title` is the ⓘ's sentence for THIS row's word, so the reader
+          who lands on a cell rather than on the header still gets it — and
+          `truncate` means a cell can be showing `○ censore…`, where the
+          tooltip is the only place the whole word exists. It sits BEFORE
+          className deliberately: dashboard-contract.test.mjs pins that the
+          tone call and the label call stay within 40 characters of each
+          other, which is how it proves neither column fell back to the
+          other's value. */}
       <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
-        <span className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
+        <span title={outcomeMeaning(run.outcome_14, 14)} className={outcomeToneClass(outcomeTone(run.outcome_14))}>{outcomeLabel(run.outcome_14)}</span>
       </TableCell>
       <TableCell className={`mono ${TD} truncate text-[11.5px]`}>
-        <span className={outcomeToneClass(outcomeTone(run.outcome_60))}>{outcomeLabel(run.outcome_60)}</span>
+        <span title={outcomeMeaning(run.outcome_60, 60)} className={outcomeToneClass(outcomeTone(run.outcome_60))}>{outcomeLabel(run.outcome_60)}</span>
       </TableCell>
       {/* whitespace-normal, against TableCell's nowrap base: this is the one
           cell holding an arbitrary-length string (a job error), in a fixed
@@ -727,7 +809,16 @@ function RunTable({
                 : sort.key === column.sort ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
               className={`${TH} ${column.cls}`}
             >
-              {column.sort === undefined ? column.label : (
+              {column.sort === undefined ? (
+                <>
+                  {column.label}
+                  {/* Only the two outcome columns carry one — see InfoDot. A
+                      sortable column never does: its caret already owns the
+                      space to the right of the label, and two glyphs there
+                      would be two different invitations in one 72px cell. */}
+                  {column.hint && <InfoDot label={column.label} hint={column.hint} />}
+                </>
+              ) : (
                 <Link
                   href={href(params, sortChanges(nextSort(sort, column.sort)))}
                   className="text-inherit no-underline hover:text-foreground"
@@ -1099,7 +1190,7 @@ function Evidence({
                   and the outcome column above cannot describe the same row
                   differently — and neither can the console, which renders
                   through the very same two functions. */}
-              <strong className={"mono my-1 text-[15px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
+              <strong title={outcomeMeaning(outcome.kind, outcome.window_days)} className={"mono my-1 cursor-help text-[15px] " + outcomeToneClass(outcomeTone(outcome.kind))}>{outcomeLabel(outcome.kind)}</strong>
               <small className="mono text-[10px] text-muted-foreground">observed {new Date(outcome.observed_at).toLocaleDateString()}</small>
             </div>
           ))}
@@ -1512,12 +1603,18 @@ export default async function DashboardPage({
                   atCap={atCap}
                   params={params}
                 />
+                {/* SEARCH FIRST, THEN A RULE, THEN THE NARROWERS. The row used
+                    to open with two chips and bury the search box between them
+                    and the gear, which put the one control that takes typed
+                    input — and the only one that can find a run the reader
+                    already has in mind — third in the reading order and last in
+                    the tab order of a row it should start. Search is a
+                    different kind of act from the three beside it: it names a
+                    thing, where a chip or the gear narrows a set. The divider
+                    is that difference drawn, and it is `hidden sm:block`
+                    because at the wrap point a vertical rule ends up dangling
+                    at the end of a line, marking nothing. */}
                 <div className="flex flex-wrap items-center gap-[7px] py-2.5">
-                  {/* The dashboard's own two predicates. Not pills in the bar
-                      above: neither is a value a run carries on some dimension,
-                      so neither has a partition to count over. */}
-                  <FilterChip active={filters.lowCoverage} target={href(params, predicateChanges("coverage", filters.lowCoverage ? null : "low"))}>coverage &lt; 50%</FilterChip>
-                  <FilterChip active={filters.hasError} target={href(params, predicateChanges("error", filters.hasError ? null : "yes"))}>has error</FilterChip>
                   <form method="GET" action="/dashboard" className="flex items-center gap-1.5">
                     {/* A GET form submits ONLY its own controls, so without
                         these the search box would silently clear every pill set
@@ -1533,10 +1630,21 @@ export default async function DashboardPage({
                       name="q"
                       defaultValue={query}
                       placeholder="Search repo, PR, title…"
-                      className="mono h-[28px] w-[200px] rounded-[5px] border border-border bg-card px-2 text-[12px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                      className="mono h-[32px] w-[220px] rounded-[5px] border border-border bg-card px-2.5 text-[12.5px] text-foreground min-[1400px]:w-[300px] focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
                     />
-                    <button type="submit" className={SUBMIT_BUTTON}>search</button>
+                    {/* Matched to the input's new 32px rather than left at
+                        SUBMIT_BUTTON's natural 28: the two are one control,
+                        and the rail's own submit — the other user of this
+                        string — is a full-width button in a stacked form
+                        where the height would be wrong. */}
+                    <button type="submit" className={`${SUBMIT_BUTTON} h-[32px]`}>search</button>
                   </form>
+                  <span aria-hidden className="mx-1.5 hidden h-5 w-px flex-none bg-border sm:block" />
+                  {/* The dashboard's own two predicates. Not pills in the bar
+                      above: neither is a value a run carries on some dimension,
+                      so neither has a partition to count over. */}
+                  <FilterChip active={filters.lowCoverage} target={href(params, predicateChanges("coverage", filters.lowCoverage ? null : "low"))}>coverage &lt; 50%</FilterChip>
+                  <FilterChip active={filters.hasError} target={href(params, predicateChanges("error", filters.hasError ? null : "yes"))}>has error</FilterChip>
                   <ThresholdGear key={lens === null ? "none" : String(lens)} lens={lens} carried={carriedParams(params, ["threshold", "page"], { keepRun: true })} />
                 </div>
                 {view === "repositories" ? (

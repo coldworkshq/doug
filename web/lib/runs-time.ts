@@ -161,3 +161,68 @@ export function outcomeLabel(kind: string | null): string {
   if (kind === "revert") return "↩ revert";
   return kind;
 }
+
+/** "the 14 days after this pull request merged" — the window, in words, for
+ *  the sentences below. `null` is a window whose length the row did not
+ *  record, which the detail tile already renders as `?-day window`; it must
+ *  not be allowed to print "the null days after". */
+function windowPhrase(windowDays: number | null): string {
+  return windowDays === null
+    ? "the outcome window after this pull request merged"
+    : `the ${windowDays} days after this pull request merged`;
+}
+
+/** WHAT THE WORD IN THE CELL ACTUALLY CLAIMS — the text behind the ⓘ, and the
+ *  `title` on every rendered outcome.
+ *
+ *  These four words are the ledger's most misread column, and both halves of
+ *  the misreading are expensive. "clean" looks like a verdict about the code
+ *  and is not one: it is the absence of a revert ATTRIBUTED to this PR inside
+ *  a window, on the one branch a treeless clone can see. "pending" looks like
+ *  Doug still owes you a review and does not: the review is done and scored,
+ *  and what is unfinished is the clock. A reader who thinks "clean" means "no
+ *  bugs" will over-trust the ledger; one who thinks "pending" means "unread"
+ *  will hunt for work that is not there.
+ *
+ *  Every sentence names its window, because the same word means a different
+ *  thing in the 14-day column and the 60-day one — the same reason the two are
+ *  separate columns at all — see the COLUMNS docstring over each ledger's table.
+ *
+ *  The unknown-kind branch does NOT invent a meaning. `outcomeTone` flags a
+ *  kind this build has never heard of rather than allowlisting the three it
+ *  knows, and a tooltip that explained one would be the same defect in prose:
+ *  it says the ledger recorded a word this page cannot explain, which is true
+ *  and is the whole of what is known.
+ *
+ *  Kept beside `outcomeLabel` and `outcomeTone` so the word, its colour and
+ *  its meaning move together. */
+export function outcomeMeaning(kind: string | null, windowDays: number | null): string {
+  const window = windowPhrase(windowDays);
+  if (kind === null) {
+    return `Pending: ${window} have not finished running yet, so no outcome has been recorded. Doug's review is already done — this clock is not.`;
+  }
+  if (kind === "clean") {
+    return `Clean: no revert of this pull request was found on the default branch during ${window}. It means nothing reverted it in that window, not that the code was free of defects.`;
+  }
+  if (kind === "revert") {
+    return `Revert: a commit reverting this pull request landed on the default branch during ${window}. A revert against a verdict that cleared the pull request is what Doug publishes as a miss.`;
+  }
+  if (kind === "censored") {
+    return `Censored: ${window} closed without Doug being able to observe them — the pull request merged onto a branch the clone cannot see, or no clone was reachable. Not a pass and not a miss; it leaves the risk set.`;
+  }
+  return `The ledger recorded "${kind}" for ${window}. This build has no explanation for that word.`;
+}
+
+/** The ⓘ over the column header and the facet group: one window, all four
+ *  words, for a reader who has not yet hovered a cell. Same source as the
+ *  per-cell sentences above, so the header cannot promise a vocabulary the
+ *  cells do not use. */
+export function outcomeWindowHint(windowDays: number): string {
+  return [
+    `What happened over ${windowPhrase(windowDays)}. Recorded after the fact by the outcome loop — it is not an input to the score Doug gave this run.`,
+    outcomeMeaning("clean", windowDays),
+    outcomeMeaning("revert", windowDays),
+    outcomeMeaning("censored", windowDays),
+    outcomeMeaning(null, windowDays),
+  ].join("\n\n");
+}

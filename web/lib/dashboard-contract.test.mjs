@@ -307,10 +307,34 @@ test("the 14-day and 60-day outcomes render as two independent cells, never one 
       `the outcome columns must not collapse to one value (found "${collapsed}")`,
     );
   }
-  // Both columns carry their own label — a row is never left to infer which
-  // window a bare "outcome" header meant.
-  assert.match(page, /label:\s*"14d outcome"/);
-  assert.match(page, /label:\s*"60d outcome"/);
+  // BOTH COLUMNS NAME THEIR OWN WINDOW — a row is never left to infer which
+  // window a bare "outcome" header meant. That is the property; "14d outcome"
+  // was one spelling of it, and it is no longer the spelling. The headers now
+  // read "14d" / "60d" with the word they dropped in the ⓘ beside them,
+  // because "14d outcome" overflowed its own column (the arithmetic is in the
+  // COLUMNS comment). So the pin moved to the property rather than being
+  // deleted along with the string it used to check.
+  // Sliced to COLUMNS before matching, not scanned over the whole file:
+  // the repositories table declares its own `label:` entries, and a bare
+  // scan would judge this column set by another one's spelling.
+  const columnArray = page.match(/const COLUMNS[^=]*=\s*\[([\s\S]*?)\n\];/)?.[1];
+  assert.ok(columnArray, "COLUMNS is gone — the ledger has no pinned headers");
+  const labels = [...columnArray.matchAll(/label:\s*"([^"]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    labels.filter((label) => /^\d+d$/.test(label)),
+    ["14d", "60d"],
+    "the two outcome columns no longer name their windows",
+  );
+  assert.equal(
+    labels.includes("outcome"),
+    false,
+    'a bare "outcome" header leaves the reader to guess the window',
+  );
+  // …and each one hands back the word it dropped. A header shortened WITHOUT
+  // the ⓘ is the regression this half exists to catch: it would leave the
+  // ledger's most misread column labelled with nothing but a number.
+  assert.match(columnArray, /hint: outcomeWindowHint\(14\)/);
+  assert.match(columnArray, /hint: outcomeWindowHint\(60\)/);
 });
 
 test("repository connection and every pending setup remain reachable in all dashboard states", async () => {

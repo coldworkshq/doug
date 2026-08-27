@@ -322,6 +322,55 @@
   --surface-dot: #22262c;
 }
 
+/* THE PUBLIC SITE'S FLOATING NAV BAR, and the one surface on the marketing
+   pages that deliberately does NOT invert with the theme.
+
+   It is a bar that floats OVER the page rather than sitting in it, and it was
+   painted `bg-background/75` — the page's own ground, at three-quarters. In
+   light that is #eef0f2 over #eef0f2: the bar had no edge but its border. In
+   dark it was worse, a dark pill on a dark page under a dark glow, which is
+   the state this block exists to end. Chrome that floats has to read as a
+   separate plane, and the cheapest way to say "separate plane" is light.
+
+   THE MECHANISM IS THE ONE .dashboard-surface ALREADY USES, and it is a token
+   scope rather than a pile of `dark:` overrides on purpose. Everything in the
+   bar — the wordmark, six nav links, the theme toggle's sun/moon, the mobile
+   <details> menu, the Sign in pill — already paints in --foreground,
+   --muted-foreground, --accent, --border and --primary. Re-declaring those
+   here means every one of them follows without being touched, INCLUDING
+   components/theme-toggle.tsx, which is a client component the header cannot
+   pass classes into. An element's own declaration beats anything `.dark`
+   inherits from <html>, so this holds in both themes with no `!important` and
+   no specificity contest.
+
+   THE VALUES ARE THE LIGHT PALETTE'S, copied and not invented — same hexes as
+   the `:root` block above, so the bar cannot drift into a second palette.
+   The one exception is --background: the bar wants the LIFTED surface
+   (--card's #ffffff), not the page ground, because lifting is the whole point.
+   Its 90% fill over a dark page composites to roughly #e6e8ea, which is a
+   light bar and not a glare.
+
+   CONTRAST IS UNCHANGED OR BETTER: --foreground #15181c on #ffffff is 16.6:1,
+   --muted-foreground #4e535a is 7.3:1, and the Sign in pill is the light
+   theme's own inverted pair. Nothing here is a colour this stylesheet did not
+   already ship. */
+.site-bar {
+  --background: #ffffff;
+  --foreground: #15181c;
+  --muted-foreground: #4e535a;
+  --border: #c4cbd2;
+  --accent: #fbe7d8;
+  --accent-foreground: #a8400c;
+  --primary: #15181c;
+  --primary-foreground: #eef0f2;
+  /* The base layer puts `outline-ring/50` on every element, so the keyboard
+     focus ring inside the bar reads --ring like everything else. Left
+     undeclared it would keep the PAGE's ring — dark mode's lighter orange,
+     picked to be seen against #14161a — on a white bar. A light surface takes
+     the light theme's ring. */
+  --ring: #b0430d;
+}
+
 /* The dashboard's per-PR history disclosure, in CSS.
    /dashboard is a server component and stays one (RULING 2) — so expanding a
    PR's earlier runs cannot be React state, and it deliberately is not URL

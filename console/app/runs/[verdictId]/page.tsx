@@ -6,7 +6,7 @@ import { CoverageRuler } from "@/components/coverage-ruler";
 import { RunSpine } from "@/components/run-spine";
 import { Shell } from "@/components/shell";
 import { getRunDetail, isError } from "@/lib/api";
-import { outcomeLabel, outcomeTone, outcomeToneClass, utcDate, utcTimestamp } from "@/lib/runs";
+import { outcomeLabel, outcomeMeaning, outcomeTone, outcomeToneClass, utcDate, utcTimestamp } from "@/lib/runs";
 
 export const dynamic = "force-dynamic";
 
@@ -233,7 +233,10 @@ export default async function RunDetailPage({
                       IS a recorded outcome row, unlike the ungraded tile
                       below it; what was wrong was the colour and the glyph,
                       not the prominence. */}
-                  <div className={"mono mt-1.5 text-[17px] font-semibold " + outcomeToneClass(outcomeTone(o.kind))}>
+                  <div
+                    title={outcomeMeaning(o.kind, o.window_days)}
+                    className={"mono mt-1.5 cursor-help text-[17px] font-semibold " + outcomeToneClass(outcomeTone(o.kind))}
+                  >
                     {outcomeLabel(o.kind)}
                   </div>
                   <div className="mono mt-1 text-[10.5px] text-muted-foreground">
