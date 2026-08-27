@@ -209,3 +209,81 @@ Against that, finding 7 is the strongest argument in this document for the
 instrument. It is a defect in new code, invisible to the tests written for
 that code, in a module whose whole subject is how a summary is misread — and
 it was found by the reader, in the same read that invented a `NameError`.
+
+## Round three — Doug reading the fixes @ 58261b3
+
+**No false positives.** The two the previous rounds produced did not recur,
+`reader:empty-visible-section` is gone (fixed), and the two new findings are
+both real and both low. Risk held at 0.32; the deviation tier repeated the
+already-disclosed line-links gap and named #230 itself.
+
+| # | rule | severity | verdict | outcome |
+|---|------|----------|---------|---------|
+| 8 | `reader:unvalidated-model-text-in-markup` | low | **right** | In-vocabulary severities are emitted from `_SEVERITY_ORDER`; the rest are capped and unbolded |
+| 9 | `reader:output-size-budget` | low | **right, and quantified** | The link carries `head_sha[:12]`, not 40 |
+
+### 8 — the bold span was the one place model text still led
+
+`_bullet` rendered `reason.severity` verbatim inside `**...**`, with
+`_oneline` sanitisation and no cap, while paths beside it were capped at 400
+characters. `Reason.severity` is `str | None` on the model and validated by
+nothing, so its length was the model's to choose.
+
+Two changes, and they are separate arguments:
+
+- **In vocabulary, nothing is echoed.** `**high**` is now emitted from
+  `_SEVERITY_ORDER`. `_grade` had already lowercased and stripped the value
+  to pick the bucket, so echoing the raw string only carried the model's
+  casing and whitespace into the most load-bearing span in the list.
+- **Out of vocabulary, the text is capped at 24 characters and loses the
+  bold.** It is not dropped: `_finding_counts` degrades its own cell to a
+  plain count on exactly this input and promises the raw severity still
+  reaches the reader in the list. Bold is a ranking signal, and Doug cannot
+  rank a severity it does not recognise, so keeping the emphasis would have
+  claimed more than the read established.
+
+### 9 — the size finding is right, and smaller than it reads
+
+Doug is right in direction: every finding now carries a URL that did not
+exist before, and those bytes are spent against `SUMMARY_LIMIT`, where
+overrunning costs findings (#181). The magnitude is worth stating rather
+than leaving to intuition. For a representative finding — a 33-character
+rule, a 24-character path, a 180-character label:
+
+| | bytes |
+|---|---|
+| Old bullet | 232 |
+| New bullet, 40-char SHA | 373 |
+| New bullet, 12-char SHA | 345 |
+| Delta per finding, as shipped | **+113** |
+| Findings before the delta alone consumes `SUMMARY_LIMIT` | ~530 |
+
+So the regression is real and the practical exposure is small: a read
+returning tens of findings spends single-digit kilobytes of a 60,000-byte
+budget. The 28 bytes the abbreviated SHA saves are not the difference
+between fitting and not — they are taken because they are free. GitHub
+resolves any unambiguous prefix, `_since_section` already identifies a read
+by `sha[:12]` and `pr_comment` by `[:7]`, so the full 40 was the odd one out
+on a surface that never displays more than 12.
+
+What this does not fix is #181 itself: an overrun still drops findings
+without naming how many. That is unchanged by this PR and is the issue to
+act on if the budget ever binds.
+
+### Where the three rounds leave the instrument
+
+Nine findings across three reads of one PR:
+
+| | count |
+|---|---|
+| Real, acted on | 5 |
+| Real, accepted with reasons recorded | 1 |
+| Half right | 1 |
+| **False positives** | **2** |
+
+Both false positives came from the same mechanism and are #232. Both
+appeared in the first two rounds; the third round, reading the largest diff
+of the three, produced none. One finding — `reader:empty-visible-section` —
+was a defect in new code that eleven tests written for that code did not
+catch and that the author had explicitly considered and waved through. On
+this PR the instrument paid for itself on that one finding alone.

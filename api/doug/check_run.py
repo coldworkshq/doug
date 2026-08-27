@@ -344,9 +344,17 @@ def _file_link(path: str | None, source: Source | None) -> str | None:
         return None
     if len(path) > _PATH_LIMIT or _UNLINKABLE_PATH.search(path):
         return None
+    # The 12-character prefix, not the whole SHA. Every finding now carries a
+    # URL that did not exist before, and those bytes are spent against
+    # SUMMARY_LIMIT — where the cost of overrunning is dropped findings
+    # (#181). Twenty-eight bytes per finding is not the difference between
+    # fitting and not, but it is free: GitHub resolves any unambiguous
+    # prefix, `_since_section` already identifies a read by `sha[:12]` and
+    # `pr_comment` by `[:7]`, so the full 40 was the odd one out on a surface
+    # that never shows more.
     url = (
         f"https://github.com/{source.owner}/{source.repo}"
-        f"/blob/{source.head_sha}/{quote(path, safe='/')}"
+        f"/blob/{source.head_sha[:12]}/{quote(path, safe='/')}"
     )
     return f"[`{_path_span(path)}`]({url})"
 
@@ -454,6 +462,37 @@ def _triage(risks: list) -> tuple[list, list]:
     return leading, [r for r in risks if _grade(r) == "low"]
 
 
+# A severity outside `_SEVERITY_ORDER` still reaches the reader — that is
+# `_finding_counts`'s documented promise, made where it degrades its own
+# cell to a count — but it does so under a length it cannot exceed. The
+# field is `str | None` on the model and validated by nothing, so without a
+# cap one finding's severity can be as long as the whole summary.
+_SEVERITY_LABEL_LIMIT = 24
+
+
+def _severity_chip(grade: str, raw: str | None) -> str:
+    """The bold severity that leads a bullet, or an uncapitalised remnant.
+
+    In-vocabulary severities are emitted FROM `_SEVERITY_ORDER` rather than
+    echoed from the verdict, so the span that carries the most weight in the
+    list — bold, first, the thing a reader triages on — contains no model
+    text at all. `_grade` already lowercased and stripped it to match, so
+    echoing would only reintroduce whatever casing and whitespace the model
+    happened to send.
+
+    Out of vocabulary, the raw text is kept and both the bold and the cap
+    change meaning. Bold is a triage signal, and Doug cannot rank a severity
+    it does not recognise, so claiming one with the same emphasis the ranked
+    ones use would overstate what the read established. The cap is the other
+    half: `_oneline` collapses whitespace and neutralises tokens but bounds
+    nothing, and a 5,000-character severity would otherwise be bolded into
+    the lead of a bullet and counted against SUMMARY_LIMIT.
+    """
+    if grade in _SEVERITY_ORDER:
+        return f"**{grade}**"
+    return _oneline(raw or "")[:_SEVERITY_LABEL_LIMIT]
+
+
 def _bullet(reason, source: Source | None) -> str:
     """One finding, front-loaded so the list triages down its left edge.
 
@@ -469,8 +508,8 @@ def _bullet(reason, source: Source | None) -> str:
     this shape existed.
     """
     parts = []
-    if _grade(reason):
-        parts.append(f"**{_oneline(reason.severity)}**")
+    if grade := _grade(reason):
+        parts.append(_severity_chip(grade, reason.severity))
     link = _file_link(reason.file, source)
     if link is not None:
         parts.append(link)

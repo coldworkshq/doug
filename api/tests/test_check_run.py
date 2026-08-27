@@ -1026,7 +1026,7 @@ def test_a_findings_file_links_to_the_commit_that_was_read():
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, source=SOURCE)
     assert (
         "[`cache.py`](https://github.com/coldworkshq/doug/blob/"
-        f"{'c' * 40}/cache.py)" in summary
+        f"{'c' * 12}/cache.py)" in summary
     )
 
 
@@ -1060,6 +1060,7 @@ def test_a_paths_punctuation_cannot_end_the_url():
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
     href = summary[summary.index("(https://github.com"):summary.index(") · `reader:")]
     assert href.endswith("/src/a%29%20%28click%20x%29%20b.py")
+    assert f"/blob/{'c' * 12}/" in href
     # The visible half keeps the path verbatim. A path that could NOT be
     # shown verbatim loses its link instead — see
     # test_a_path_that_cannot_be_shown_verbatim_is_not_linked.
@@ -1211,3 +1212,44 @@ def test_an_all_low_list_does_not_fold_itself_into_an_empty_section():
     assert "- **low** · [`b.py`]" in findings
     # The only fold left in the summary is the standing notes'.
     assert summary.count("<details>") == 1
+
+
+def test_a_recognised_severity_is_emitted_from_this_modules_own_vocabulary():
+    """The bold span leading a bullet is the one a reader triages on, so it
+    carries no model text. `_grade` already lowercases and strips to decide
+    the bucket; echoing the raw string would put the model's casing and
+    whitespace into the most load-bearing span in the list for nothing."""
+    verdict = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(rule="reader:x", label="l", weight=0.0, severity="  HiGh  ")
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    assert "- **high** · `reader:x` — l" in summary
+    assert "HiGh" not in summary
+
+
+def test_an_unrecognised_severity_is_capped_and_not_bolded():
+    """`Reason.severity` is `str | None` on the model and validated by
+    nothing, so its length is the model's to choose. Two things change
+    outside the vocabulary: the text is bounded, because an unbounded one
+    would be spent against SUMMARY_LIMIT where overrunning costs findings
+    (#181); and it loses the bold, because bold is a ranking signal and Doug
+    cannot rank a severity it does not recognise.
+
+    It is not dropped — `_finding_counts` degrades its own cell to a plain
+    count on exactly this input, and promises the raw severity still reaches
+    the reader here."""
+    verdict = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(rule="reader:x", label="l", weight=0.0, severity="q" * 400)
+            ]
+        }
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    bullet = next(ln for ln in summary.splitlines() if ln.startswith("- q"))
+    assert bullet == f"- {'q' * check_run._SEVERITY_LABEL_LIMIT} · `reader:x` — l"
+    assert "**" not in bullet
