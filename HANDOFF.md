@@ -1,5 +1,46 @@
 # HANDOFF — doug
 
+State:    building — PR open: check-run findings get file links and a triage
+          layout (branch comment-file-links-and-triage). Andrew asked for two
+          things off the #227 review comment: links to the file/line of each
+          finding, and a condensed attention router. File links: DONE. Line
+          links: NOT possible without settling #131 (verify tier is shown no
+          diff, so it cannot derive a line; DOUG_VERIFY_INSTALLATIONS empty;
+          hunk hashes deliberately drop the @@ header, hunks.py:46-60).
+Next:     Andrew reviews/merges the PR. The merge deploys and the first real
+          check run IS the proof that GitHub renders <details> inside a check
+          run summary — the one thing in this change not verified locally.
+          If it renders literally, revert the two _fold calls; the links and
+          the severity ordering are unaffected.
+Blockers: none. Suites green: api 1674, web 376, console 113, ruff check
+          clean (ruff format is NOT a gate — 74 files predate it).
+Decisions this session:
+- File links are built from THIS module's owner/repo/head_sha with the path
+  percent-encoded, NOT validated against PRMetadata.files — rejected the
+  closed-set check because the repair path has no file list
+  (_verdict_bundle rebuilds a Reason from four columns), so links would
+  render on the paid read and vanish from the comment that ADR-0014 says
+  reproduces it byte for byte. A rule that holds on one path is worse than
+  a weaker rule that holds on both.
+- store._verdict_bundle now selects findings.c.file. Safe on the wire
+  because every consumer builds a Reason and Reason.file is exclude=True;
+  pinned by test_run_detail_reason_carries_exactly_the_keys_the_client_validates.
+- Low findings fold behind a <details> that NAMES ITS COUNT; ungraded
+  reasons never fold. Rejected a top-N cap: folding by position is a claim
+  about importance this module cannot make, and an unlabelled fold is #181's
+  defect (dropping findings without saying how many) reached by choice.
+- Model text may go in a <details> BODY (parsed as markdown, _oneline
+  governs it) and never in a <summary> LINE (raw HTML). _fold takes the
+  summary as a separate argument so the rule is enforceable, not remembered.
+- Deviation bullets deliberately left in the old shape — separate
+  unvalidated section, no file to link. Filed as an issue if it bothers
+  anyone; not silently in scope.
+Pointers: branch comment-file-links-and-triage · api/doug/check_run.py
+          (Source, _file_link, _fold, _by_severity, _triage, _bullet) ·
+          worker._source · store._verdict_bundle · #131 blocks line links
+
+--- prior stream (org move #226/#227, landed ea6d362) below, preserved ---
+
 State:    building — ORG MOVE IN FLIGHT (#226). Repo TRANSFERRED to
           coldworkshq/doug (id 1314318717, redirects live). WIF provider
           condition repointed (coldworkshq/doug && refs/heads/main — ref pin

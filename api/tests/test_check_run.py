@@ -868,7 +868,7 @@ def test_the_standing_notes_sit_below_the_findings():
     was written for a real misreading — they just stop being the first thing
     read."""
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
-    assert summary.index("### Findings") < summary.index(check_run.HOW_TO_READ_HEADING)
+    assert summary.index("### Findings") < summary.index(check_run.HOW_TO_READ_SUMMARY)
     for note in (check_run.RISK_NOTE, check_run.NEUTRAL_NOTE, check_run.FLAG_LINE_NOTE):
         assert note in summary
         assert summary.index("### Findings") < summary.index(note)
@@ -934,7 +934,7 @@ def test_since_section_never_says_resolved_or_fixed():
         _c(state="unknown", reason="left-diff", basis=None, pair_delta=None),
     ])
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
-    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_HEADING)]
+    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_SUMMARY)]
     assert "resolved" not in section.lower()
     assert "fixed" not in section.lower()
     assert "Doug has not verified a fix, so it stays listed." in section
@@ -988,6 +988,187 @@ def test_since_section_carries_no_ratio_or_rate():
     conv = _conv([_c(), _c(state="unknown", reason="not-reconfirmed", basis=None,
                            pair_delta=None)])
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
-    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_HEADING)]
+    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_SUMMARY)]
     assert "%" not in section
     assert "miss rate" not in section.lower()
+
+
+# --- file links and triage ---------------------------------------------------
+
+SOURCE = check_run.Source(owner="coldworkshq", repo="doug", head_sha="c" * 40)
+
+
+def _graded(*findings) -> object:
+    """A reader verdict built through the real producer, so a regression in
+    verdict_from_reader's `file` or `severity` handling fails these tests
+    rather than being masked by hand-set fields (the same reason FLAGGED is
+    built this way)."""
+    return reader.verdict_from_reader(
+        reader.ReaderVerdict(
+            risk_score=62,
+            rationale="r",
+            findings=[
+                reader.ReaderFinding(
+                    category_slug=slug, description=desc, file=path, severity=sev
+                )
+                for slug, desc, path, sev in findings
+            ],
+        ),
+        threshold=30,
+    )
+
+
+def test_a_findings_file_links_to_the_commit_that_was_read():
+    """The whole point of the link is that it lands on the bytes Doug
+    judged. A link to the branch tip would drift the moment anyone pushes,
+    and would quietly show a reader different code from the code the
+    finding is about — worse than no link, because it looks authoritative."""
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, source=SOURCE)
+    assert (
+        "[`cache.py`](https://github.com/coldworkshq/doug/blob/"
+        f"{'c' * 40}/cache.py)" in summary
+    )
+
+
+def test_without_a_source_the_file_is_still_named():
+    """The CLI and /v1/score review a diff for a caller that named no commit.
+    A finding must not lose its file because there was nowhere to point it."""
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE)
+    assert "`cache.py`" in summary
+    assert "https://github.com" not in summary
+
+
+def test_a_path_that_leaves_the_repository_renders_bare():
+    """`Reason.file` is free-form model output. These three shapes are the
+    ones that stop addressing a file inside the repository at all, so they
+    lose the link and keep the path — the reader still learns what the
+    finding named, and learns it verbatim."""
+    for path in ("/etc/passwd", "../../secrets.env", "https://evil.example/x"):
+        verdict = _graded(("slug", "d", path, "high"))
+        _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+        assert "https://github.com" not in summary, path
+        assert "](" not in summary, path
+
+
+def test_a_paths_punctuation_cannot_end_the_url():
+    """The failure this encoding exists for: an unencoded `)` closes the
+    markdown link, and everything the model wrote after it becomes live text
+    in a public PR comment posted under Doug's identity. Percent-encoding is
+    what makes the href a URL this module composed rather than model text
+    spliced into markdown."""
+    verdict = _graded(("slug", "d", "src/a) [click](x) b.py", "high"))
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    href = summary[summary.index("(https://github.com"):summary.index(") · `reader:")]
+    assert href.endswith("/src/a%29%20%5Bclick%5D%28x%29%20b.py")
+    # The visible half keeps the path readable and loses only the two
+    # characters that would end a code span or a link's text.
+    assert "[`src/a) [click(x) b.py`]" in summary
+
+
+def test_findings_lead_with_severity_and_are_ordered_by_it():
+    """Severity used to trail the model's sentence in italics — the far end
+    of a paragraph, and on a wrapped line often not on the same row as
+    anything identifying the finding. A list that routes attention has to be
+    triageable down its left edge."""
+    verdict = _graded(
+        ("low-one", "l", "a.py", "low"),
+        ("high-one", "h", "b.py", "high"),
+        ("medium-one", "m", "c.py", "medium"),
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    findings = summary[summary.index("### Findings"):]
+    assert findings.index("**high**") < findings.index("**medium**")
+    assert findings.index("**medium**") < findings.index("**low**")
+    assert "- **high** · [`b.py`]" in summary
+
+
+def test_low_findings_fold_and_the_fold_says_how_many():
+    """A disclosure labelled "more" is a list that will not say how much of
+    itself it is hiding — the defect #181 records against SUMMARY_LIMIT,
+    reached by choice instead of by a cap. Nothing is dropped: the folded
+    findings are in the body, which GitHub parses as markdown."""
+    verdict = _graded(
+        ("high-one", "h", "b.py", "high"),
+        ("low-one", "l1", "a.py", "low"),
+        ("low-two", "l2", "c.py", "low"),
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    assert "<summary>2 low findings</summary>" in summary
+    assert "l1" in summary and "l2" in summary
+    # The lead is what a reader sees without clicking, so it must not
+    # already contain them.
+    assert summary.index("**high**") < summary.index("<details>")
+
+
+def test_one_folded_finding_is_singular():
+    verdict = _graded(("high-one", "h", "b.py", "high"), ("low-one", "l", "a.py", "low"))
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    assert "<summary>1 low finding</summary>" in summary
+
+
+def test_nothing_folds_when_no_finding_is_low():
+    """The rule is semantic, not a cap. A PR whose findings are all medium
+    has nothing Doug graded as safe to defer, so it hides nothing."""
+    verdict = _graded(
+        ("one", "a", "a.py", "medium"),
+        ("two", "b", "b.py", "medium"),
+        ("three", "c", "c.py", "medium"),
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    # One `<details>` in the whole summary, and it is the standing notes'.
+    assert summary.count("<details>") == 1
+
+
+def test_an_ungraded_reason_never_folds_and_never_leads_the_graded_ones():
+    """Two rules at once, and they pull in opposite directions. settle.py's
+    weight-0 notice carries no severity, so Doug cannot say it is safe to
+    defer and must not hide it. It is also not a finding, so it must not sit
+    above a live high one, where "every finding was disproved" would head a
+    list that then contradicts it."""
+    verdict = _graded(("high-one", "h", "b.py", "high"), ("low-one", "l", "a.py", "low"))
+    verdict.reasons.append(Reason(rule="settled-missing-import", label="s", weight=0.0))
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    findings = summary[summary.index("### Findings"):]
+    assert findings.index("**high**") < findings.index("settled-missing-import")
+    assert findings.index("settled-missing-import") < findings.index("<details>")
+
+
+def test_the_deterministic_tiers_findings_are_untouched_by_the_triage():
+    """No reason on that tier carries a severity, so the sort is a no-op and
+    the fold is skipped entirely. The bullets render exactly as they did
+    before either existed — which is what keeps this change a rendering
+    change on the reader tier alone."""
+    plain = FLAGGED.model_copy(
+        update={
+            "reasons": [
+                Reason(rule="large-diff", label="1,400 lines", weight=0.3),
+                Reason(rule="no-tests", label="no test files", weight=0.2),
+            ]
+        }
+    )
+    _, summary = check_run.render("deterministic", plain, None, None, source=SOURCE)
+    assert "- `large-diff` — 1,400 lines" in summary
+    assert "- `no-tests` — no test files" in summary
+    assert summary.count("<details>") == 1
+
+
+def test_model_text_never_reaches_a_summary_line():
+    """A `<details>` body is markdown and `_oneline` governs it exactly as it
+    governs the top level. A `<summary>` line is raw HTML, where `_oneline`
+    neutralises nothing that matters and one `<` opens a tag — so the rule is
+    that only this module's own text goes there, and the count is the only
+    thing about the findings it may say."""
+    verdict = _graded(("low-one", "<img src=x onerror=alert(1)>", "a.py", "low"))
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    line = next(ln for ln in summary.splitlines() if ln.startswith("<summary>"))
+    assert line == "<summary>1 low finding</summary>"
+
+
+def test_the_standing_notes_are_folded_but_none_of_them_is_dropped():
+    """Folding and cutting are different acts. Every one of these notes was
+    written for a real misreading, so the fold may cost a returning reader a
+    click and may not cost anyone the text."""
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, source=SOURCE)
+    assert f"<summary>{check_run.HOW_TO_READ_SUMMARY}</summary>" in summary
+    for note in (check_run.RISK_NOTE, check_run.NEUTRAL_NOTE, check_run.FLAG_LINE_NOTE):
+        assert note in summary
