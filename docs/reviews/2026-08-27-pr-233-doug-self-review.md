@@ -226,3 +226,56 @@ len: 213   (cap 60,000)   balanced: True
 Bounded and honest — under the cap, tags balanced, shortfall true — but a
 repository's own diff should not get to decide how much of Doug's check run
 renders. Recorded on #234, which already has the fix that closes it.
+
+## Round 4 @ 182af56 — Flagged, 0.30, one medium and two low
+
+| # | rule | verdict | outcome |
+|---|------|---------|---------|
+| 1 | `reader:untrusted-input-string-parsing` | **right, and already filed** | No change — #234, with this exact measurement on it |
+| 2 | `reader:fragile-string-parsing` | **wrong that it is unenforced** | Test added at the level where a break would cost something |
+| 3 | `reader:weakened-test-assertion` | **right** | The reserve's waste is now bounded, not just its overrun |
+
+**1 is the same finding as round 3's third, promoted to `medium` and
+re-derived independently** — including the "400 of 400" number, which
+appears in this file and in the diff Doug read. It is what pushed the band
+to **Flagged** at exactly the flag line. The grading is defensible: a diff
+that can suppress a check run's whole findings list is the most
+consequential thing in this file. It is still #234's, not this PR's, and
+#234 carries the measurement.
+
+**2 is wrong on its own terms.** Doug says `_trim_empty_fold`'s safety
+"rests on a label being unable to start a line — a coupling that is not
+enforced anywhere". It is enforced, in `_oneline`, by the
+`" ".join(text.split())` on its first line, and it has been tested since
+before this PR (`test_oneline_neutralises_the_forms_that_have_side_effects
+_in_a_pr_comment` asserts `"line\nbreak"` collapses). What was missing is a
+test that ties the two modules together where a break would cost something,
+so `test_a_label_cannot_forge_a_fold_opener` now renders a finding whose
+label carries a full fake opener and asserts the finding below it survives.
+
+That test also demonstrates #234 from the other side, and the docstring
+says so: the tags do **not** balance, because this render never truncates
+and `_close_details` never runs. The ordinary path is the exposed one.
+
+**3 is right and the fix is not a return to `==`.** Doug's point is that
+`<=` would pass an off-by-many in the reserve arithmetic that silently cost
+findings — and it would, because wasted budget *is* dropped findings.
+`test_the_reserve_does_not_waste_the_budget` bounds the waste at 512 bytes
+across four fixture/footer combinations (observed: 90–253). Per-fixture,
+not universal: the line-boundary backup can legitimately cost as much as
+the longest rendered line.
+
+## Where this stops
+
+Four rounds, thirteen findings, six real. The rate is what makes it worth
+recording: rounds 1 and 2 produced three inventions between them, rounds 3
+and 4 produced none — every finding described the code as it is. What
+changed between them is the code itself. Rounds 1 and 2 read a diff whose
+new helpers were entangled with `render`; rounds 3 and 4 read small pure
+functions with stated contracts, and Doug reasoned about those correctly
+every time.
+
+The loop is stopped here deliberately, not because it converged. Round 4's
+only medium is #234, which no commit on this branch can close, and its two
+lows were both about test coverage rather than behaviour. A fifth read
+would be reading a diff of test files.

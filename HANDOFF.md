@@ -20,8 +20,16 @@ State:    review — PR #233 open (Closes #181), all 6 CI checks green on
           invariant is asserted on six shapes instead of pinned by
           arithmetic). First read in this file where every finding
           survives. api suite 1694 passed.
-Next:     Andrew reviews/merges #233. All 6 checks green on c395ebc; the
-          round-3 fixes need one more CI pass.
+          Round 4 @ 182af56: FLAGGED 0.30 — the one medium is #234
+          re-derived (a diff can suppress the whole findings list), which
+          no commit here can close; the two lows were test coverage and
+          are closed. LOOP STOPPED at round 4 on purpose: a fifth read
+          would be reading a diff of test files. Four rounds, 13 findings,
+          6 real; rounds 3-4 produced zero inventions against rounds 1-2's
+          three — the difference is small pure helpers with stated
+          contracts. api suite 1696 passed.
+Next:     Andrew reviews/merges #233. All 6 checks green on 182af56; the
+          round-4 tests need one more CI pass.
 Blockers: none.
 Decisions this session:
 - The shortfall is counted over `_countable` — the same population

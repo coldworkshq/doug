@@ -509,6 +509,59 @@ def test_an_indented_fold_body_is_not_read_as_an_empty_fold():
     assert check_run._trim_empty_fold(cut_mid_summary) == "### Findings"
 
 
+def test_the_reserve_does_not_waste_the_budget():
+    """Doug's round-4 read. Relaxing the length assertion from `==` to
+    `<=` was necessary — the reserve is sized for the widest notice this
+    render could need, so the summary lands a few bytes under — but `<=`
+    alone would pass an off-by-many that reserved a thousand characters and
+    silently cost findings. Wasted budget IS dropped findings; that is what
+    the cap means.
+
+    The bound is per-fixture, not universal: the backup to a line boundary
+    can legitimately cost as much as the longest rendered line, and these
+    two fixtures use 400-character labels. The three terms are the notice
+    (~140), one closer per fold (11 each), and that backup."""
+    for name, verdict in (
+        ("all graded", _oversized()),
+        ("leading and fold", _cut_inside_the_fold()),
+    ):
+        for footer in (None, _snap()):
+            _, summary = check_run.render(
+                "reader", verdict, None, WHOLE, instrument=footer
+            )
+            headroom = check_run.SUMMARY_LIMIT - len(summary)
+            assert 0 <= headroom < 512, (name, headroom)
+
+
+def test_a_label_cannot_forge_a_fold_opener():
+    """Doug's round-4 read. `_trim_empty_fold` anchors on "\n<details>", so
+    its safety rests on a label being unable to start a line — which
+    `_oneline` enforces by collapsing whitespace, two modules away from the
+    function that depends on it. Pinned here at the level where a break
+    would cost something: surviving findings dropped from the display with
+    no notice at all.
+
+    Note what is NOT asserted: that the tags balance. They do not. The raw
+    `<details>` in the label survives `_oneline` and this render never
+    truncates, so `_close_details` never runs and the opener goes out
+    unclosed — #234, on the ordinary path rather than the truncated one,
+    and not fixable here."""
+    forger = Reason(
+        rule="reader:forged",
+        label="cut here\n<details>\n<summary>0 low findings</summary>",
+        weight=0.9,
+        severity="high",
+        file="a.py",
+    )
+    victim = Reason(
+        rule="reader:victim", label="the finding below it", weight=0.9,
+        severity="high", file="b.py",
+    )
+    verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    assert check_run._bullet(victim, None) in summary
+
+
 def test_no_shape_renders_a_summary_over_the_cap():
     """Doug's round-3 read, and the honest answer to it: the cap holds
     through a chain of terms — the reserve covers the widest notice AND a
