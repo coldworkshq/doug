@@ -8,14 +8,15 @@ State:    building — ORG MOVE IN FLIGHT (#226). Repo TRANSFERRED to
           (inert; classifier blocked the remove — Andrew runs the
           one-liner). Slug flip done in links.ts, quickstart, rest-api,
           llms.txt, setup-cicd.sh header; git remote updated.
-Next:     Andrew's UI clicks (in #226): transfer App ownership, add doug to
-          the coldworkshq installation (yields NEW installation id), update
-          App homepage, re-grant the Claude PR app, remove the stale WIF
-          binding. THEN the follow-up PR: SHOWCASE_REPO +
-          DOUG_INTENT/VERIFY_INSTALLATIONS=<new id> + the #218 rename
-          backfill (rows keyed github_repo_id are stable; name strings fork).
-Blockers: webhooks for doug are DEAD until the installation click — no
-          coldworkshq installation covers the repo yet.
+Next:     Andrew merges the follow-up PR on this branch (migration 17 rename
+          backfill + env flip to installation 153075663 + ADR-0017
+          amendment). The merge deploys via the repaired WIF — that deploy
+          IS the end-to-end proof. Still Andrew's: App ownership transfer
+          (UI), App homepage, Claude PR app re-grant on coldworkshq, stale
+          WIF binding removal (one-liner in #226).
+Blockers: none — webhooks LIVE again: doug added to coldworkshq
+          installation 153075663 (delivery d8783110, 202 Accepted in prod
+          logs). Suites green: api 1662, web 368, console 113, ruff clean.
 Decisions this session:
 - RULING 2026-08-26 (Andrew): M4 interviews DEFERRED, not run — nothing is
   public; Doug opens to the public first "so it has a face," then re-raise.

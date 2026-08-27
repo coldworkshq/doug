@@ -189,7 +189,21 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
         conn.exec_driver_sql(
             "CREATE TABLE review_jobs (id INTEGER PRIMARY KEY, "
             "status VARCHAR(12) NOT NULL, "
-            "finished_at TIMESTAMP)"
+            "finished_at TIMESTAMP, "
+            "repo_full_name VARCHAR(200))"
+        )
+        # Migration 17's targets. Production has both from create_all long
+        # before this era, and 17's UPDATE must find real tables — "no such
+        # table" propagates by design (the PR #48 crash-loop guard), unlike
+        # the "no such column" _satisfied swallows.
+        conn.exec_driver_sql(
+            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, "
+            "repo VARCHAR(200) NOT NULL, pr_number INTEGER NOT NULL DEFAULT 0, "
+            "tier VARCHAR(20) NOT NULL DEFAULT 'deterministic')"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, "
+            "repo VARCHAR(200) NOT NULL, pr_number INTEGER NOT NULL DEFAULT 0)"
         )
         conn.execute(
             migrations.schema_migrations.insert(),
@@ -199,7 +213,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16]
+    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16, 17]
     # Not just "the version was recorded": the index migration 16 exists for
     # has to actually be on the table. See the stub's comment for how this
     # passed while it was not (issue #205).
@@ -934,7 +948,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
     # store.metadata.create_all() above already built the current table shapes,
     # so migrations 6 through 13 all find their ALTER/CREATE work satisfied
     # and still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     with engine.connect() as conn:
         app_ids = [
             r[0]
@@ -1051,3 +1065,73 @@ def test_run_evaluates_the_driver_message_not_the_sql_echoing_str():
     with pytest.raises(DatabaseError):
         migrations._run(_FakeEngine(missing_table_orig), statement)
     migrations._run(_FakeEngine(missing_column_orig), statement)  # must not raise
+
+
+def test_migration_17_renames_the_transferred_repo_and_nothing_else(tmp_path):
+    """The org move (#226): drewjst/doug became coldworkshq/doug with
+    github_repo_id unchanged. verdicts and outcomes join by (repo,
+    pr_number), so a pre-transfer verdict must carry the new name or it
+    never meets its post-transfer outcome and the verdict clock forks.
+    Rows belonging to other repos are not doug's and must not move.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/move.db")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(_OLDER_VERDICTS_DDL)
+        conn.exec_driver_sql(
+            "CREATE TABLE outcomes (id INTEGER PRIMARY KEY, repo VARCHAR(200) NOT NULL, "
+            "pr_number INTEGER NOT NULL DEFAULT 0)"
+        )
+        # Unlike the older-schema stubs above, this one carries
+        # repo_full_name: without the column, migration 17's UPDATE lands in
+        # _SATISFIED's "no such column" and the rename assertions below would
+        # be about nothing (the issue #205 lesson).
+        conn.exec_driver_sql(
+            "CREATE TABLE review_jobs ("
+            "id INTEGER PRIMARY KEY, status VARCHAR(12), "
+            "enqueued_at DATETIME, started_at DATETIME, verdict_id INTEGER, "
+            "repo_full_name VARCHAR(200))"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE outcome_jobs ("
+            "id INTEGER PRIMARY KEY, status VARCHAR(12), due_at DATETIME)"
+        )
+        for ddl in _OLDER_DEPENDENT_DDL:
+            conn.exec_driver_sql(ddl)
+        conn.exec_driver_sql(
+            "CREATE TABLE installations (id INTEGER PRIMARY KEY, "
+            "installation_id BIGINT NOT NULL UNIQUE, account_login VARCHAR(200), "
+            "account_type VARCHAR(20), state VARCHAR(20) NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL, token_hash TEXT)"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE installation_repos ("
+            "id INTEGER PRIMARY KEY, installation_id BIGINT NOT NULL, "
+            "github_repo_id BIGINT NOT NULL, full_name VARCHAR(200) NOT NULL, "
+            "state VARCHAR(20) NOT NULL, updated_at TIMESTAMP NOT NULL)"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO verdicts (id, repo, pr_number, tier) VALUES "
+            "(1, 'drewjst/doug', 68, 'reader'), (2, 'lemahq/lema', 643, 'reader')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO outcomes (id, repo, pr_number) VALUES "
+            "(1, 'drewjst/doug', 68), (2, 'coldworkshq/coldworks', 6)"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO review_jobs (id, status, repo_full_name) VALUES "
+            "(1, 'done', 'drewjst/doug')"
+        )
+    assert migrations.apply(engine) == ALL_VERSIONS
+    with engine.connect() as conn:
+        verdict_repos = dict(
+            conn.exec_driver_sql("SELECT id, repo FROM verdicts ORDER BY id").fetchall()
+        )
+        assert verdict_repos == {1: "coldworkshq/doug", 2: "lemahq/lema"}
+        outcome_repos = dict(
+            conn.exec_driver_sql("SELECT id, repo FROM outcomes ORDER BY id").fetchall()
+        )
+        assert outcome_repos == {1: "coldworkshq/doug", 2: "coldworkshq/coldworks"}
+        assert (
+            conn.exec_driver_sql("SELECT repo_full_name FROM review_jobs").scalar()
+            == "coldworkshq/doug"
+        )

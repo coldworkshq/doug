@@ -204,7 +204,7 @@ def test_api_deploy_carries_the_verify_installations_allowlist():
     service reviews, which is the failure design-lock.md:64 records against
     DOUG_INTENT=1 and which reader.verify_enabled_for exists to prevent."""
     body = _function_body("deploy")
-    assert "DOUG_VERIFY_INSTALLATIONS=150424894" in body
+    assert "DOUG_VERIFY_INSTALLATIONS=153075663" in body
     assert "DOUG_VERIFY=1" not in body
 
 

@@ -32,6 +32,15 @@ says produced those misses.
 Grounding is on for installation `150424894` (dogfood) and nobody else, through
 `DOUG_VERIFY_INSTALLATIONS` in `api/deploy/gcp.sh`.
 
+> **Amended 2026-08-26 (the org move, #226).** The dogfood installation is now
+> `153075663` on coldworkshq: the repo transferred out of the drewjst account,
+> and installation `150424894` no longer covers any doug repo. The decision is
+> unchanged — one installation, nobody else — but that installation now spans
+> both founder-owned dogfood repos (doug and coldworks), because allowlists
+> are installation-scoped and the org installation covers both. Grounding and
+> intent therefore now run on coldworks reviews too. Still dogfood, still one
+> env var to reverse.
+
 `reader.verify_enabled()` — a process-wide `DOUG_VERIFY == "1"` boolean —
 becomes `reader.verify_enabled_for(installation_id)`, matching
 `intent.enabled_for` and `pr_comment.allowed` in shape and in failure mode: an
