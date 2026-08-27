@@ -1159,10 +1159,15 @@ def test_model_text_never_reaches_a_summary_line():
     neutralises nothing that matters and one `<` opens a tag — so the rule is
     that only this module's own text goes there, and the count is the only
     thing about the findings it may say."""
-    verdict = _graded(("low-one", "<img src=x onerror=alert(1)>", "a.py", "low"))
+    verdict = _graded(
+        ("high-one", "h", "b.py", "high"),
+        ("low-one", "<img src=x onerror=alert(1)>", "a.py", "low"),
+    )
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
     line = next(ln for ln in summary.splitlines() if ln.startswith("<summary>"))
     assert line == "<summary>1 low finding</summary>"
+    # The label is not dropped; it is in the body, where markdown governs it.
+    assert "onerror=alert(1)" in summary
 
 
 def test_the_standing_notes_are_folded_but_none_of_them_is_dropped():
@@ -1189,3 +1194,20 @@ def test_a_path_that_cannot_be_shown_verbatim_is_not_linked():
     # code span removed.
     assert "`src/od d.py`" not in summary
     assert "`src/odd.py`" in summary
+
+
+def test_an_all_low_list_does_not_fold_itself_into_an_empty_section():
+    """A fold defers the less-actionable half of a list. An all-low list has
+    no other half, so folding it left `### Findings` as a heading, a blank
+    line and a collapsed disclosure — under a **Flagged** title, which a
+    reader skimming the summary reads as "no findings". That is #109's
+    misreading reached from the opposite direction, and it is the reason the
+    fold rule is "everything below the lead folds" rather than "every low
+    finding folds"."""
+    verdict = _graded(("one", "a", "a.py", "low"), ("two", "b", "b.py", "low"))
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    findings = summary[summary.index("### Findings"):summary.index("<details>")]
+    assert "- **low** · [`a.py`]" in findings
+    assert "- **low** · [`b.py`]" in findings
+    # The only fold left in the summary is the standing notes'.
+    assert summary.count("<details>") == 1

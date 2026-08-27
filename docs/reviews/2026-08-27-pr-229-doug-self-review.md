@@ -149,3 +149,62 @@ Two things, both worth carrying into the loop:
 - **The three low-and-medium findings were all worth acting on**, and two of
   them named things the author had considered and left implicit. Doug is
   better here at finding unstated reasoning than at finding defects.
+
+## Round two — Doug reading the fixes @ 5983ef9
+
+The fixes were themselves reviewed. Risk fell 0.42 → 0.32, and the read
+returned three medium and one low. Two were the already-dispositioned #2 and
+#3 above, unchanged. The two new ones split the same way the first round did:
+one hallucinated premise, one real defect.
+
+| # | rule | severity | verdict | outcome |
+|---|------|----------|---------|---------|
+| 6 | `reader:missing-import` | medium | **wrong** | No change. `import sys` is at `worker.py:23` |
+| 7 | `reader:empty-visible-section` | low | **right, and mine** | An all-low list no longer folds |
+
+### 6 is the same false positive as 1, in a different file
+
+Doug claimed `_source` writes to `sys.stderr` while the diff adds no
+`import sys` to `worker.py`, and concluded `NameError` on the degraded path.
+`import sys` is at line 23, outside the diff. `worker.py` has been printing
+to stderr for its whole life.
+
+Two rounds, two `medium`-or-higher findings, both from the same mechanism:
+a true statement about the diff, an invented statement about the file, and
+a severity priced on the invented one. Both would also have been caught by
+tooling that already runs — the first by 1,674 passing tests, the second by
+`ruff`'s F821, which fails CI on an undefined name. That is a sharper
+version of #175 than "cites code it never read": **the reader is reporting
+conditions that the repository's own gates make unreachable**, and it has no
+way to know a gate exists.
+
+### 7 is a real defect, and the best finding of either round
+
+When every finding is graded `low`, `_triage` returned an empty lead, so
+`### Findings` rendered as a heading, a blank line, and a collapsed
+disclosure — beneath a **Flagged** title. A reader skimming that sees a
+Findings section with nothing in it.
+
+This is #109's misreading reached from the opposite direction: that one put
+a "nothing survived" notice under a Flagged title and it read as a live
+defect; this one puts live defects under a Flagged title and they read as
+nothing. It was introduced by the fold in this PR, it was not caught by any
+of the eleven tests written for the fold, and the author considered the
+all-low case while writing `_triage` and judged it acceptable. Doug was
+right and the author was wrong.
+
+The rule is now "everything below the lead folds" rather than "every low
+finding folds": a fold defers the less-actionable half of a list, and an
+all-low list has no other half to defer to.
+
+### What round two adds to the instrument's record
+
+The first round's headline — that severity amplified a hallucination — holds
+with a second instance and gains a sharper form: both wrong findings
+described states that CI or the test suite makes impossible, which is a
+class of false positive a diff-only reader cannot self-check for.
+
+Against that, finding 7 is the strongest argument in this document for the
+instrument. It is a defect in new code, invisible to the tests written for
+that code, in a module whose whole subject is how a summary is misread — and
+it was found by the reader, in the same read that invented a `NameError`.

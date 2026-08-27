@@ -433,17 +433,25 @@ def _triage(risks: list) -> tuple[list, list]:
     finding whose severity came back outside `_SEVERITY_ORDER` — the case
     where Doug knows least about a finding, and so may hide least of it.
 
-    The fold is skipped entirely unless some finding is graded inside the
-    vocabulary, for the reason `_finding_counts` degrades its cell: a list
-    where "low" means whatever the model wrote that push is not one this
-    module can rank.
+    The fold is skipped entirely in two cases, and the second is a defect
+    this function shipped with:
+
+      * No finding is graded inside the vocabulary, for the reason
+        `_finding_counts` degrades its cell — a list where "low" means
+        whatever the model wrote that push is not one this module can rank.
+      * NOTHING outranks `low`. A fold defers the less-actionable half of a
+        list, and an all-low list has no other half to defer to: folding it
+        left `### Findings` with a heading, a blank line and a collapsed
+        disclosure under a **Flagged** title, which a reader skimming the
+        summary reads as "no findings" — the same misreading SETTLED_NOTE
+        exists to end (#109), reached from the opposite direction.
     """
     if not any(_grade(r) in _SEVERITY_ORDER for r in risks):
         return risks, []
-    return (
-        [r for r in risks if _grade(r) != "low"],
-        [r for r in risks if _grade(r) == "low"],
-    )
+    leading = [r for r in risks if _grade(r) != "low"]
+    if not leading:
+        return risks, []
+    return leading, [r for r in risks if _grade(r) == "low"]
 
 
 def _bullet(reason, source: Source | None) -> str:
