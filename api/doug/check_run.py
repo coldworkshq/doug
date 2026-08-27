@@ -294,6 +294,13 @@ def _path_span(path: str) -> str:
 def _file_link(path: str | None, source: Source | None) -> str | None:
     """`[`path`](blob url)` for one finding's file, or None to render it bare.
 
+    The file, never a line range. `Citation.locator` already emits the
+    `#L10-L12` anchor this would need, and the verify tier that produces it
+    grounds nothing (#131) — so a range would render on no finding at all
+    today, and on only the paid read if hunk attribution were used instead,
+    because a stored attribution keeps no line numbers (hunks.py). #230
+    holds that decision; this function is where the range would go.
+
     `Reason.file` is free-form model output — `verdict_from_reader` copies
     the schema's `file` string straight through (reader.py:1504) — so the
     safety of a link built from it cannot rest on the model having been

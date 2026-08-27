@@ -6,7 +6,8 @@ State:    building — PR open: check-run findings get file links and a triage
           finding, and a condensed attention router. File links: DONE. Line
           links: NOT possible without settling #131 (verify tier is shown no
           diff, so it cannot derive a line; DOUG_VERIFY_INSTALLATIONS empty;
-          hunk hashes deliberately drop the @@ header, hunks.py:46-60).
+          hunk hashes deliberately drop the @@ header, hunks.py:46-60) —
+          filed as #230.
 Next:     Andrew reviews/merges the PR. The merge deploys and the first real
           check run IS the proof that GitHub renders <details> inside a check
           run summary — the one thing in this change not verified locally.
@@ -33,11 +34,12 @@ Decisions this session:
   governs it) and never in a <summary> LINE (raw HTML). _fold takes the
   summary as a separate argument so the rule is enforceable, not remembered.
 - Deviation bullets deliberately left in the old shape — separate
-  unvalidated section, no file to link. Filed as an issue if it bothers
-  anyone; not silently in scope.
-Pointers: branch comment-file-links-and-triage · api/doug/check_run.py
-          (Source, _file_link, _fold, _by_severity, _triage, _bullet) ·
-          worker._source · store._verdict_bundle · #131 blocks line links
+  unvalidated section, no file to link. Filed as #231, not left as a PR
+  aside.
+Pointers: PR #229 · branch comment-file-links-and-triage ·
+          api/doug/check_run.py (Source, _file_link, _fold, _by_severity,
+          _triage, _bullet) · worker._source · store._verdict_bundle ·
+          #230 (line links, blocked by #131) · #231 (deviation bullets)
 
 --- prior stream (org move #226/#227, landed ea6d362) below, preserved ---
 
