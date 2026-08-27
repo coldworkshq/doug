@@ -262,10 +262,24 @@ def _source(job: dict) -> check_run.Source | None:
     commit, and that commit has its own job.
 
     None when the row cannot name a repository and a commit. Nothing about a
-    finding is lost — `check_run` renders the path as a plain code span.
+    finding is lost — `check_run` renders the path as a plain code span — but
+    it says so on stderr rather than dropping every link on a summary in
+    silence. A whole check run losing its links looks identical to a read
+    that named no files, and the two want opposite responses.
+
+    The slug is whatever the webhook delivered for THIS job, so a fresh read
+    always links the repository under its current name. A repair long after a
+    transfer links the old one and leans on GitHub's own redirect, which is
+    the same reliance `pr_comment`'s receipt links carry and is tracked for
+    both in #228.
     """
     owner, _, name = (job.get("repo_full_name") or "").partition("/")
     if not owner or not name or not job.get("head_sha"):
+        print(
+            f"doug: job {job.get('id')} names no repo/commit "
+            f"({job.get('repo_full_name')!r}) — findings render without links",
+            file=sys.stderr,
+        )
         return None
     return check_run.Source(owner=owner, repo=name, head_sha=job["head_sha"])
 

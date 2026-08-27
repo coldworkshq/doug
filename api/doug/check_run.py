@@ -269,8 +269,22 @@ class Source(NamedTuple):
 
 
 # A path this module refuses to put in a URL: absolute, containing a `..`
-# segment, carrying a control character, or already carrying a scheme.
-_UNLINKABLE_PATH = re.compile(r"^/|(^|/)\.\.(/|$)|[\x00-\x1f\x7f]|://")
+# segment, carrying a control character, already carrying a scheme, or
+# carrying either character `_path_span` drops.
+#
+# The last pair is about honesty rather than safety. A backtick or a `]` has
+# to leave the visible span — one closes the code span, the other ends the
+# link text — but the href is built from the raw path, so linking such a
+# path would show a reader one filename and send them to another. A link
+# that lies about its own destination is worse than no link, so these paths
+# keep the (repaired) span and lose the href.
+#
+# A backslash is deliberately NOT here. It is a legal character in a POSIX
+# filename, git reports paths with forward slashes on every platform, and a
+# path that is genuinely odd resolves to a 404 inside the reader's own
+# repository at the commit Doug read — the documented floor for this whole
+# function, and visible to the reader rather than silent.
+_UNLINKABLE_PATH = re.compile(r"^/|(^|/)\.\.(/|$)|[\x00-\x1f\x7f]|://|[`\]]")
 # Long enough for any real repo path (Git itself stops well short of this),
 # short enough that a pathological one cannot dominate the summary.
 _PATH_LIMIT = 400
@@ -282,11 +296,13 @@ def _path_span(path: str) -> str:
     Same rule as `_rule_span`, plus `]`: inside a link's `[...]` half a
     bracket ends the link text and hands the rest to the renderer. Both
     characters are dropped rather than split with a ZWSP, because neither
-    means anything in a path — and unlike the rule slug, this span has a
-    twin in the href beside it, where a dropped character would change
-    which file the link addresses. It does not: the href is built from the
-    RAW path, so the two disagree only in the visible half, and only for a
-    path containing a backtick.
+    means anything in a path.
+
+    Dropping them is only safe because a path carrying either one is never
+    linked (`_UNLINKABLE_PATH`). This span would otherwise sit beside an
+    href built from the RAW path, and a reader would be shown one filename
+    while the link addressed another — a link that lies about its own
+    destination, which is worse than the plain span this leaves instead.
     """
     return _oneline(path.replace("`", "").replace("]", ""))
 

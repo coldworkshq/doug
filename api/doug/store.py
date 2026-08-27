@@ -2362,6 +2362,12 @@ def _verdict_bundle(conn, v) -> dict:
         "score": v["score"],
         "band": v["band"],
         "threshold": v["threshold"],
+        # `reason_rows` comes from `select(findings)` above — the whole
+        # table, every column — so a key added here needs no change to the
+        # query. Said out loud because the opposite is the natural reading
+        # of a diff that adds a key and touches no SELECT, and a reviewer
+        # who reaches for it concludes KeyError on every bundle.
+        #
         # `file` is here for the check run's file links, which the repair
         # paths render from this bundle and nothing else — without it a
         # replayed summary would drop every link the paid read carried, and

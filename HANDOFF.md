@@ -16,8 +16,13 @@ Next:     Andrew reviews/merges the PR (all 6 CI checks green). The merge
           If it renders literally, revert the two _fold calls; links and
           severity ordering are unaffected. Doug's check on #229 itself is
           the DEPLOYED renderer, so it shows the old shape.
-Blockers: none. Suites green: api 1674, web 376, console 113, ruff check
-          clean (ruff format is NOT a gate — 74 files predate it).
+Blockers: none. Doug's own read of 3eb5776 dispositioned in
+          docs/reviews/2026-08-27-pr-229-doug-self-review.md: 4 of 5 real
+          and fixed/accepted, the ONE high is a false positive (claimed
+          _verdict_bundle KeyErrors on r["file"] because the diff shows no
+          SELECT change — the query is select(findings), whole-table). Clean
+          instance of #175. Suites green: api 1676, web 376, console 113,
+          ruff check clean (ruff format is NOT a gate — 74 files predate).
 Decisions this session:
 - File links are built from THIS module's owner/repo/head_sha with the path
   percent-encoded, NOT validated against PRMetadata.files — rejected the
@@ -39,6 +44,18 @@ Decisions this session:
 - Deviation bullets deliberately left in the old shape — separate
   unvalidated section, no file to link. Filed as #231, not left as a PR
   aside.
+- Paths carrying a backtick or `]` are no longer linked at all: _path_span
+  must drop both, the href used the raw path, so the link would have shown
+  one filename and addressed another — rejected: linking anyway and
+  accepting the mismatch.
+- The <details> risk is ACCEPTED, not resolved. No live check run carrying
+  <details> exists to inspect (scanned test-reporter, junit-report,
+  publish-unit-test-result-action, 8 large repos). Chain: docs say
+  output.summary "Can contain Markdown"; details/summary are on GitHub's
+  sanitizer allowlist; dorny/test-reporter ships them through checks.create
+  under the same 65535 cap. Downside is cosmetic on the SECONDARY surface
+  and reverts in two lines — rejected: writing a synthetic check run with
+  production app credentials to prove it (Andrew's call, not mine).
 Pointers: PR #229 · branch comment-file-links-and-triage ·
           api/doug/check_run.py (Source, _file_link, _fold, _by_severity,
           _triage, _bullet) · worker._source · store._verdict_bundle ·

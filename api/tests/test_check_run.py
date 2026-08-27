@@ -1056,13 +1056,14 @@ def test_a_paths_punctuation_cannot_end_the_url():
     in a public PR comment posted under Doug's identity. Percent-encoding is
     what makes the href a URL this module composed rather than model text
     spliced into markdown."""
-    verdict = _graded(("slug", "d", "src/a) [click](x) b.py", "high"))
+    verdict = _graded(("slug", "d", "src/a) (click x) b.py", "high"))
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
     href = summary[summary.index("(https://github.com"):summary.index(") · `reader:")]
-    assert href.endswith("/src/a%29%20%5Bclick%5D%28x%29%20b.py")
-    # The visible half keeps the path readable and loses only the two
-    # characters that would end a code span or a link's text.
-    assert "[`src/a) [click(x) b.py`]" in summary
+    assert href.endswith("/src/a%29%20%28click%20x%29%20b.py")
+    # The visible half keeps the path verbatim. A path that could NOT be
+    # shown verbatim loses its link instead — see
+    # test_a_path_that_cannot_be_shown_verbatim_is_not_linked.
+    assert "[`src/a) (click x) b.py`]" in summary
 
 
 def test_findings_lead_with_severity_and_are_ordered_by_it():
@@ -1172,3 +1173,19 @@ def test_the_standing_notes_are_folded_but_none_of_them_is_dropped():
     assert f"<summary>{check_run.HOW_TO_READ_SUMMARY}</summary>" in summary
     for note in (check_run.RISK_NOTE, check_run.NEUTRAL_NOTE, check_run.FLAG_LINE_NOTE):
         assert note in summary
+
+
+def test_a_path_that_cannot_be_shown_verbatim_is_not_linked():
+    """`_path_span` has to drop a backtick and a `]` — one closes the code
+    span, the other ends the link text — but the href is built from the raw
+    path. Linking such a path would show one filename and address another: a
+    link that lies about its own destination, which is worse than the plain
+    span this leaves instead."""
+    for path in ("src/we`ird.py", "src/od]d.py"):
+        verdict = _graded(("slug", "d", path, "high"))
+        _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+        assert "https://github.com" not in summary, path
+    # The file is still named, with only the character that cannot survive a
+    # code span removed.
+    assert "`src/od d.py`" not in summary
+    assert "`src/odd.py`" in summary
