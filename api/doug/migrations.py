@@ -422,6 +422,44 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "ON review_jobs (status, finished_at)",
         ),
     ),
+    (
+        17,
+        (
+            # The org move (#226, 2026-08-26): drewjst/doug transferred to
+            # coldworkshq/doug with github_repo_id 1314318717 unchanged.
+            # verdicts and outcomes join by (repo, pr_number) name strings,
+            # so a PR scored under the old name whose outcome lands under the
+            # new one would miss its join and fork the verdict clock; the
+            # dashboard and showcase queries key review_jobs.repo_full_name
+            # the same way. This file's first data migration: idempotent by
+            # construction (a second run matches zero rows), a no-op on any
+            # fresh database.
+            #
+            # installation_repos is deliberately NOT rewritten. Its rows are
+            # registration history — the drewjst installation really did
+            # register the old name — and repo_id_for resolves by
+            # github_repo_id + newest-active row, never by display name.
+            # Rewriting the old row would also create a second active name
+            # mapping for the same repo, which is worse than the history.
+            # JSON blobs (pr_meta, raw) keep old URLs; GitHub redirects them.
+            #
+            # The exclusion set is verified, not asserted (Doug's own read of
+            # this PR flagged the difference): these three plus
+            # installation_repos.full_name are the ONLY name-string columns
+            # in the schema. outcome_jobs keys on (installation_id,
+            # github_repo_id, pr_number) and carries no name, and no
+            # research-corpus rows exist in the app database (quarantine
+            # note below). Old-name receipt links in historical PR comments
+            # resolve through the junction, not these columns — their decay
+            # when the old row leaves 'active' is issue #228.
+            "UPDATE verdicts SET repo='coldworkshq/doug' "
+            "WHERE repo='drewjst/doug'",
+            "UPDATE outcomes SET repo='coldworkshq/doug' "
+            "WHERE repo='drewjst/doug'",
+            "UPDATE review_jobs SET repo_full_name='coldworkshq/doug' "
+            "WHERE repo_full_name='drewjst/doug'",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows

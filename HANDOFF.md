@@ -1,5 +1,55 @@
 # HANDOFF — doug
 
+State:    building — ORG MOVE IN FLIGHT (#226). Repo TRANSFERRED to
+          coldworkshq/doug (id 1314318717, redirects live). WIF provider
+          condition repointed (coldworkshq/doug && refs/heads/main — ref pin
+          was ALREADY live in prod, script text was stale) and the new
+          principalSet binding added; the stale drewjst/doug binding remains
+          (inert; classifier blocked the remove — Andrew runs the
+          one-liner). Slug flip done in links.ts, quickstart, rest-api,
+          llms.txt, setup-cicd.sh header; git remote updated.
+Next:     Andrew merges the follow-up PR on this branch (migration 17 rename
+          backfill + env flip to installation 153075663 + ADR-0017
+          amendment). The merge deploys via the repaired WIF — that deploy
+          IS the end-to-end proof. Still Andrew's: App ownership transfer
+          (UI), App homepage, Claude PR app re-grant on coldworkshq, stale
+          WIF binding removal (one-liner in #226).
+Blockers: none — webhooks LIVE again: doug added to coldworkshq
+          installation 153075663 (delivery d8783110, 202 Accepted in prod
+          logs). Suites green: api 1662, web 368, console 113, ruff clean.
+Decisions this session:
+- RULING 2026-08-26 (Andrew): M4 interviews DEFERRED, not run — nothing is
+  public; Doug opens to the public first "so it has a face," then re-raise.
+  Kill criterion not retired; it cannot fire while deferred. Consequence:
+  the org-move window's "after the interviews" gate dissolves — rejected:
+  running interviews pre-launch (no public surface to pitch from).
+- RULING 2026-08-26 (Andrew): start the org migration (drewjst/doug + App →
+  coldworkshq) now. Verified pre-move facts: deploy.yml still has NO
+  environment: gate, setup-cicd.sh:86 pins only assertion.repository (both
+  approved fixes UNLANDED); DOUG_INTENT/VERIFY_INSTALLATIONS=150424894 stop
+  covering doug at transfer; hardcoded slugs in web/lib/links.ts:5,
+  gcp.sh:55 SHOWCASE_REPO, quickstart/rest-api pages, llms.txt.
+- The MCP in question is Doug's (memory verbs, Stage 4, ex-lema), not
+  coldworks' — coldworks only reads a versioned view as `recovered`.
+  Corrected Andrew's "maybe that MCP is coldworks?" with the artifact +
+  ruling trail — rejected: treating the coldworks umbrella as owning
+  product surfaces.
+- Drift filed as issues per AGENTS.md: drewjst/doug#221 (ADR renumbering —
+  has drifted TWICE), drewjst/doug#222 (merge design has no in-repo record;
+  ADR-0006 unamended), coldworkshq/coldworks#20 (memory-store repo gated on
+  Stage-0 paper; home ruled private → own repo 2026-08-25).
+- Integration plan written to coldworkshq/coldworks docs/integration-plan.md
+  (repo-resident record; artifact a04b895b stays the visual companion) —
+  rejected: another artifact-only home, the exact failure mode being fixed.
+- The 2026-08-24 pass's build orders copied from /private/tmp scratchpad to
+  coldworks docs/build-orders/ with PROVENANCE.md (fleet mechanics
+  unapproved; 54 unrepaired script defects) — they would not have survived
+  a reboot.
+Pointers: coldworks docs/integration-plan.md · docs/build-orders/ ·
+          doug#221 #222 · coldworks#20 · artifacts a04b895b, b2942090
+
+--- prior stream (PR #213) below, preserved ---
+
 State:    review — PR #213 open, MERGEABLE, all six CI jobs green. Merged
           origin/main a third time (99f059f, #212);
           HANDOFF.md is the only file that conflicts, and it has now blocked

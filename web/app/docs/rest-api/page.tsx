@@ -77,7 +77,7 @@ export default function RestApiPage() {
             {"\n{\n  "}
             <Str>&quot;repo&quot;</Str>
             {": "}
-            <Str>&quot;drewjst/doug&quot;</Str>
+            <Str>&quot;coldworkshq/doug&quot;</Str>
             {",\n  "}
             <Str>&quot;adjudicated&quot;</Str>
             {": "}

@@ -249,7 +249,10 @@ def test_decision_prompt_is_not_the_ticket_prompt():
 # LARGER of the two paid reads (in=16601 vs in=14031 on #38), so this is the
 # expensive direction to be wrong in.
 
-DOGFOOD = 150424894
+# 153075663 since the org move (#226): the coldworkshq installation that
+# covers doug (and coldworks — allowlists are installation-scoped, ADR-0017's
+# 2026-08-26 amendment). The retired drewjst installation was 150424894.
+DOGFOOD = 153075663
 
 
 def _no_read_may_happen(monkeypatch):

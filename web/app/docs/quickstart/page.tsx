@@ -11,7 +11,7 @@ export const metadata = {
 };
 
 const TERMINAL = `# install (from the repo, for now)
-$ git clone https://github.com/drewjst/doug && cd doug/api
+$ git clone https://github.com/coldworkshq/doug && cd doug/api
 $ uv sync
 
 # backtest a year of history
@@ -80,7 +80,7 @@ export default function QuickstartPage() {
               <Comment># install (from the repo, for now)</Comment>
               {"\n"}
               <Dim>$</Dim> <Bright>
-                git clone https://github.com/drewjst/doug && cd doug/api
+                git clone https://github.com/coldworkshq/doug && cd doug/api
               </Bright>
               {"\n"}
               <Dim>$</Dim> <Bright>uv sync</Bright>

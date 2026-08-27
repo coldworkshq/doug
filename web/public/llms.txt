@@ -4,7 +4,7 @@
 > few to a human with evidence attached. Never blocks a merge. Status: EARLY
 > PREVIEW — public surfaces: /queue, /scoreboard, hosted /docs, GitHub App
 > check runs. The self-serve measurement tool is the backtest CLI. Docs:
-> /docs · Repo: https://github.com/drewjst/doug
+> /docs · Repo: https://github.com/coldworkshq/doug
 
 ## Status legend
 - AVAILABLE: works today
@@ -14,7 +14,7 @@
 ## Quickstart (AVAILABLE)
 Requirements: Python 3.14+, uv, a GitHub token (env or `gh` CLI; unauthenticated = 60 req/hr).
 
-    git clone https://github.com/drewjst/doug && cd doug/api
+    git clone https://github.com/coldworkshq/doug && cd doug/api
     uv sync
     uv run doug-backtest getsentry/sentry --limit 5000 --before 2026-06-15 --labels git
 
