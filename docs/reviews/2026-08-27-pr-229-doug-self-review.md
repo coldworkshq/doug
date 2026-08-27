@@ -202,7 +202,8 @@ all-low list has no other half to defer to.
 The first round's headline — that severity amplified a hallucination — holds
 with a second instance and gains a sharper form: both wrong findings
 described states that CI or the test suite makes impossible, which is a
-class of false positive a diff-only reader cannot self-check for.
+class of false positive a diff-only reader cannot self-check for. Filed as
+#232, because a paragraph here is not a tracker.
 
 Against that, finding 7 is the strongest argument in this document for the
 instrument. It is a defect in new code, invisible to the tests written for
