@@ -483,6 +483,9 @@ def test_a_cut_that_lands_on_a_boundary_keeps_its_last_line():
     assert check_run._whole_lines(body, 15) == "- one\n- two"  # cut mid-word
     assert check_run._whole_lines(body, len(body)) == body
     assert check_run._whole_lines(body, 999) == body
+    # No whole line at all: the empty string, not the half-written one.
+    # `> 0` here returned exactly the fragment this helper removes.
+    assert check_run._whole_lines("\nhalf a bullet", 8) == ""
 
 
 def test_the_shortfall_reconciles_with_a_degraded_findings_cell():

@@ -6,8 +6,14 @@ State:    review — PR #233 open (Closes #181), all 6 CI checks green on
           counts. Doug's own read of the PR dispositioned in
           docs/reviews/2026-08-27-pr-233-doug-self-review.md: 1 of 4 real
           (fixed here), 2 false positives, 1 real but not this PR's (#234).
-          api suite 1691 passed, ruff clean.
-Next:     Andrew reviews/merges #233. CI re-run pending on 7363b4b.
+          Round 2 @ 7363b4b: CLEARED 0.22, four low — one real
+          (`_whole_lines` used `edge > 0`, so a prefix whose only newline
+          is at index 0 returned the half-line the helper exists to
+          remove; unreachable from render, fixed anyway because it is a
+          contract break in a tested pure helper). api suite 1691 passed,
+          ruff clean.
+Next:     Andrew reviews/merges #233. All 6 checks were green on 7363b4b;
+          the `edge >= 0` fix needs one more CI pass.
 Blockers: none.
 Decisions this session:
 - The shortfall is counted over `_countable` — the same population

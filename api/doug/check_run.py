@@ -836,6 +836,14 @@ def _whole_lines(body: str, cut: int) -> str:
     drop a bullet that fit — a real finding lost to punctuation. A cut past
     the end of the body keeps the body, which is what the caller means by
     "cut" when the overrun was somewhere else.
+
+    `edge >= 0`, not `> 0`: a prefix whose only newline is the first
+    character contains no whole line at all, and the empty string is the
+    honest answer. `> 0` returned the half-written line instead — the one
+    thing this helper exists to remove. Unreachable from `render`, whose
+    body opens with a title line, but a helper that breaks its own contract
+    on one input is a trap for the next caller. Doug's own read of #233
+    found it, round 2.
     """
     if cut >= len(body):
         return body
@@ -843,7 +851,7 @@ def _whole_lines(body: str, cut: int) -> str:
     if body[cut] == "\n":
         return kept
     edge = kept.rfind("\n")
-    return kept[:edge] if edge > 0 else kept
+    return kept[:edge] if edge >= 0 else kept
 
 
 def _shown_findings(kept: str, bullets: list[str]) -> int:

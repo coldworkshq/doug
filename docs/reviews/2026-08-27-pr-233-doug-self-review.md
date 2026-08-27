@@ -125,3 +125,50 @@ wrong while getting the conclusion right. Grading it `low` was correct.
 Grading the two inventions `medium` was not, and it is the same
 amplification #229's write-up flagged: a hallucinated premise carries the
 severity of the consequence it imagines.
+
+## Round 2 @ 7363b4b — Cleared, 0.22, four low
+
+Doug re-read the branch after the fixes above. **Cleared**, four `low`
+findings, one unvalidated deviation. One is real.
+
+| # | rule | verdict | outcome |
+|---|------|---------|---------|
+| 1 | `reader:boundary-condition` | **wrong on reachability** | No change |
+| 2 | `reader:off-by-one` | **right** | Fixed: `edge >= 0`, pinned by a test |
+| 3 | `reader:fragile-string-parsing` | **already filed** | No change — #234, which Doug cites |
+| 4 | `reader:count-mismatch` | **a hypothetical, not a defect** | No change |
+| D1 | `beyond-ticket` (deviation) | **fair, and answered below** | No change |
+
+**2 is real and Doug is exactly right about it.** `_whole_lines` used
+`if edge > 0`, so a prefix whose only newline sits at index 0 returned the
+half-written trailing line — precisely the fragment the helper exists to
+remove. Unreachable from `render`, whose body opens with a title line, but
+the point stands on its own terms: this is now a small pure helper with a
+stated contract and its own tests, and a contract that fails on one input
+is a trap for the next caller. `>= 0` returns the empty string, which is
+the honest answer for "no whole line survived".
+
+**1 is unreachable twice over.** `cut` clamps to 0 only when
+`reserved + len(footer) > SUMMARY_LIMIT`; `reserved` is ~140 bytes and
+`_footer` is built from three integers and two dates, so the footer would
+need to be ~59,900 characters. It also predates this PR, and `post` slices
+`summary[:SUMMARY_LIMIT]` before the call, so an oversized body cannot
+reach GitHub even if the arithmetic did.
+
+**4 describes a future change, not this one.** `_shown_findings` relies on
+`counted` being in render order, which the two `strict=True` zips
+establish at the point the bullets are built. `_trim_empty_fold` removes an
+opener only when no bullet follows it, so it cannot reorder anything below
+a surviving bullet. The invariant is documented in the helper's docstring;
+if a later section splices bullets out of order, that is the change that
+has to answer for it.
+
+**D1 is fair.** The PR does more than name the dropped findings: it backs
+the cut up to a line boundary, closes an orphaned `<details>`, and splits
+the constant into `TRUNCATION_LEAD` / `TRUNCATION_NOTICE`. All three exist
+so the notice can be *read* — an unterminated disclosure hides the notice
+itself, and a notice welded to a half-word reads as a rendering fault
+rather than a stated limit. The mirror stays byte-for-byte, which is what
+ADR-0014 constrains. Recorded rather than dismissed: the deviation
+instrument has not passed its derangement check, so it enters no score, and
+this note is the whole of its effect.
