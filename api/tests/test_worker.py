@@ -57,7 +57,21 @@ VERDICT = Verdict(
     band=Band.FLAGGED,
     threshold=0.30,
     reasons=[
-        Reason(rule="reader:race-condition", label="Cache write is not guarded", weight=0.0)
+        # `file` and `severity` carry the same values RV's finding does,
+        # because this fixture stands in for what verdict_from_reader
+        # produces and both fields survive into the check run's bullet — the
+        # file as a link to the reviewed commit. A fixture that omitted them
+        # would let this whole suite pass while the repair path rendered a
+        # summary the paid read did not, which is the one thing
+        # test_the_repaired_comment_carries_the_same_body_the_first_attempt_did
+        # exists to catch.
+        Reason(
+            rule="reader:race-condition",
+            label="Cache write is not guarded",
+            weight=0.0,
+            severity="high",
+            file="cache.py",
+        )
     ],
 )
 

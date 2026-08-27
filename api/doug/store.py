@@ -2362,12 +2362,34 @@ def _verdict_bundle(conn, v) -> dict:
         "score": v["score"],
         "band": v["band"],
         "threshold": v["threshold"],
+        # `reason_rows` comes from `select(findings)` above — the whole
+        # table, every column — so a key added here needs no change to the
+        # query. Said out loud because the opposite is the natural reading
+        # of a diff that adds a key and touches no SELECT, and a reviewer
+        # who reaches for it concludes KeyError on every bundle.
+        #
+        # `file` is here for the check run's file links, which the repair
+        # paths render from this bundle and nothing else — without it a
+        # replayed summary would drop every link the paid read carried, and
+        # ADR-0014's claim is that the two are byte-identical.
+        #
+        # It does NOT reach the wire, and the reason is worth stating where
+        # the key is added rather than only where the field is declared:
+        # every consumer of this list builds a `Reason` from it (worker's
+        # `_render_recorded`, api's `_receipt_verdict` and
+        # `_run_detail_response`), and `Reason.file` is `exclude=True`, so
+        # FastAPI's model_dump drops it. A consumer that serialised this
+        # dict directly would publish it, and the exact-key validator in
+        # web/lib/session-api.ts rejects the whole payload for one extra
+        # key — which is the behaviour that would catch it, pinned by
+        # test_run_detail_reason_carries_exactly_the_keys_the_client_validates.
         "reasons": [
             {
                 "rule": r["rule"],
                 "label": r["label"],
                 "weight": r["weight"],
                 "severity": r["severity"],
+                "file": r["file"],
             }
             for r in reason_rows
         ],

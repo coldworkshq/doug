@@ -249,6 +249,41 @@ def _record_and_log(job: dict, outcome: str) -> None:
     )
 
 
+def _source(job: dict) -> check_run.Source | None:
+    """Where this job's PR lives, for the findings' file links.
+
+    Derived from the job row on EVERY path, the paid read included — which
+    also has `owner` and `name` unpacked in scope and could pass them
+    directly. It does not, because the repair path has only the job, and two
+    derivations of one link base are two things that can disagree about
+    which commit a finding's file was read at. `check_run.post` already
+    takes `job["head_sha"]` rather than the metadata's for the same reason:
+    by the time a job renders, `pulls.get` may be answering with a newer
+    commit, and that commit has its own job.
+
+    None when the row cannot name a repository and a commit. Nothing about a
+    finding is lost — `check_run` renders the path as a plain code span — but
+    it says so on stderr rather than dropping every link on a summary in
+    silence. A whole check run losing its links looks identical to a read
+    that named no files, and the two want opposite responses.
+
+    The slug is whatever the webhook delivered for THIS job, so a fresh read
+    always links the repository under its current name. A repair long after a
+    transfer links the old one and leans on GitHub's own redirect, which is
+    the same reliance `pr_comment`'s receipt links carry and is tracked for
+    both in #228.
+    """
+    owner, _, name = (job.get("repo_full_name") or "").partition("/")
+    if not owner or not name or not job.get("head_sha"):
+        print(
+            f"doug: job {job.get('id')} names no repo/commit "
+            f"({job.get('repo_full_name')!r}) — findings render without links",
+            file=sys.stderr,
+        )
+        return None
+    return check_run.Source(owner=owner, repo=name, head_sha=job["head_sha"])
+
+
 def _render_recorded(job: dict, existing: dict) -> tuple[str, str]:
     """Rebuild one durable verdict's check-run title and summary.
 
@@ -287,6 +322,7 @@ def _render_recorded(job: dict, existing: dict) -> tuple[str, str]:
         convergence=(
             store.convergence_for(existing["id"]) if existing["tier"] == "reader" else None
         ),
+        source=_source(job),
     )
 
 
@@ -559,6 +595,7 @@ def process_job(job: dict) -> int | None:
             if tier == "reader" and verdict_id is not None
             else None
         ),
+        source=_source(job),
     )
     # The one outcome of the three that bought a model read, and the only
     # line that says "paid read" — see the replay branch above for why those

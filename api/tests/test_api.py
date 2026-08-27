@@ -39,7 +39,20 @@ VERDICT_FOR_QUEUE = Verdict(
     score=0.62,
     band=Band.FLAGGED,
     threshold=0.30,
-    reasons=[Reason(rule="reader:race-condition", label="Unguarded write", weight=0.0)],
+    # `file` and `severity` are set for the same reason test_worker's fixture
+    # sets them: they are the two Reason fields that reach a surface, and a
+    # fixture that leaves `file` None lets every exact-key guard below pass
+    # without ever exercising the field those guards exist to keep off the
+    # wire.
+    reasons=[
+        Reason(
+            rule="reader:race-condition",
+            label="Unguarded write",
+            weight=0.0,
+            severity="high",
+            file="cache.py",
+        )
+    ],
 )
 PR_META = {"number": 1, "title": "Add cache", "author": "dev", "files": ["cache.py"]}
 
@@ -2874,7 +2887,15 @@ VERDICT = Verdict(
     score=0.62,
     band=Band.FLAGGED,
     threshold=0.30,
-    reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded", weight=0.0)],
+    reasons=[
+        Reason(
+            rule="reader:race-condition",
+            label="Cache write is not guarded",
+            weight=0.0,
+            severity="high",
+            file="cache.py",
+        )
+    ],
 )
 
 AUTH = {"X-Doug-Token": "t0ken"}
@@ -3007,7 +3028,10 @@ def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatc
     # VERDICT's one Reason carries no severity — total counts severity-NULL
     # findings (the brief's own note on RunFindingCounts), so total=1 while
     # the severity buckets stay at zero.
-    assert item["finding_counts"] == {"total": 1, "high": 0, "medium": 0, "low": 0}
+    # VERDICT's reason is graded `high`, so this exercises a non-zero bucket
+    # rather than only the total. The all-zero shape it used to assert could
+    # not tell a working severity projection from one that never ran.
+    assert item["finding_counts"] == {"total": 1, "high": 1, "medium": 0, "low": 0}
     assert item["job"]["status"] == "done" and item["job"]["attempts"] == 1
     assert item["outcome_14"] == "clean"
     assert item["outcome_60"] == "revert"
@@ -5806,3 +5830,30 @@ def test_an_unknown_provider_records_no_tenants_rather_than_failing(tmp_path, mo
     assert _record(client, provider="GoogleOAuth").status_code == 204
     assert _scope("user_01ABC") == []
     assert fake.paths == [], "an unknown provider must not spend a GitHub call"
+
+
+def test_receipt_reason_carries_exactly_the_keys_run_detail_does(tmp_path, monkeypatch):
+    """The second public surface that serialises `_verdict_bundle`'s reasons,
+    and until now the unguarded one.
+
+    `Reason.file` is kept off the wire by `exclude=True`, which FastAPI
+    honours through model_dump and nothing else honours at all — so the
+    guarantee holds exactly as far as every consumer building a `Reason`
+    rather than serialising the bundle dict. Run detail has been pinned since
+    the field existed because web/lib/session-api.ts validates a reason
+    against an exact key set and rejects the whole payload for one extra key.
+    The receipt has no such client check (web/lib/receipt-shape.ts types
+    reasons as `unknown[]`), which is why an extra key there would ship
+    silently and why the boundary is worth pinning here instead of noticing
+    it in production.
+    """
+    headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
+    _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
+
+    body = TestClient(app).get(
+        "/v1/prs/11/receipt?repo=acme/repo11", headers=headers
+    ).json()
+
+    reasons = body["latest_verdict"]["reasons"]
+    assert reasons, "fixture must produce a reason for this to guard anything"
+    assert sorted(reasons[0]) == ["label", "rule", "severity", "weight"]

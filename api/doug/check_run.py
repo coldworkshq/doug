@@ -29,6 +29,8 @@ that must not reach a comment must be neutralised here, not there.
 
 import re
 import sys
+from typing import NamedTuple
+from urllib.parse import quote
 
 from .models import Band, Verdict
 from .reader import Coverage, truncation_reason
@@ -43,11 +45,19 @@ SUMMARY_LIMIT = 60_000
 TITLE_LIMIT = 255
 
 # These two are STANDING text: identical on every PR, on both tiers. They
-# render under HOW_TO_READ_HEADING, below the findings, because ~120 words of
-# unconditional caveat above the first finding is how the old layout buried
-# the only part of the summary that changes from push to push. Honesty about
-# THIS run — the fallback, a partial read, the band — stays above, in the
+# render inside the HOW_TO_READ_SUMMARY fold, below the findings, because ~120
+# words of unconditional caveat above the first finding is how the old layout
+# buried the only part of the summary that changes from push to push. Honesty
+# about THIS run — the fallback, a partial read, the band — stays above, in the
 # alert. Conditional above, unconditional below; that is the whole rule.
+#
+# Below the findings was the first half of that fix and the fold is the second:
+# text that is byte-identical on every PR is text a returning reader has
+# already read, and three bullets of it under the findings still price every
+# visit at the cost of the first one. Collapsed, it costs a click on the one
+# visit that wants it. Nothing is dropped — folding and cutting are different
+# acts, and only one of them is honest about standing caveats each written for
+# a real misreading.
 NEUTRAL_NOTE = (
     "**Doug never blocks a merge.** This check is always neutral, whatever "
     "the band says."
@@ -62,7 +72,7 @@ RISK_NOTE = (
     "judgment."
 )
 FLAG_LINE_NOTE = "**The flag line is per repository**, set on the Doug dashboard."
-HOW_TO_READ_HEADING = "### How to read this"
+HOW_TO_READ_SUMMARY = "How to read this"
 
 _FALLBACK_BODY = (
     "This band and score come from the deterministic scorer, which never "
@@ -244,6 +254,133 @@ def _rule_span(rule: str) -> str:
     return _oneline(rule.replace("`", ""))
 
 
+class Source(NamedTuple):
+    """Where this PR's files live, so a finding's path can become a link.
+
+    Optional everywhere. The CLI and `/v1/score` review a diff for a caller
+    that named no commit to point at, and a finding must not lose its file
+    because there was nowhere to link it — so `None` renders the path as a
+    plain code span rather than dropping it.
+    """
+
+    owner: str
+    repo: str
+    head_sha: str
+
+
+# A path this module refuses to put in a URL: absolute, containing a `..`
+# segment, carrying a control character, already carrying a scheme, or
+# carrying either character `_path_span` drops.
+#
+# The last pair is about honesty rather than safety. A backtick or a `]` has
+# to leave the visible span — one closes the code span, the other ends the
+# link text — but the href is built from the raw path, so linking such a
+# path would show a reader one filename and send them to another. A link
+# that lies about its own destination is worse than no link, so these paths
+# keep the (repaired) span and lose the href.
+#
+# A backslash is deliberately NOT here. It is a legal character in a POSIX
+# filename, git reports paths with forward slashes on every platform, and a
+# path that is genuinely odd resolves to a 404 inside the reader's own
+# repository at the commit Doug read — the documented floor for this whole
+# function, and visible to the reader rather than silent.
+_UNLINKABLE_PATH = re.compile(r"^/|(^|/)\.\.(/|$)|[\x00-\x1f\x7f]|://|[`\]]")
+# Long enough for any real repo path (Git itself stops well short of this),
+# short enough that a pathological one cannot dominate the summary.
+_PATH_LIMIT = 400
+
+
+def _path_span(path: str) -> str:
+    """A finding's file as it renders inside a code span.
+
+    Same rule as `_rule_span`, plus `]`: inside a link's `[...]` half a
+    bracket ends the link text and hands the rest to the renderer. Both
+    characters are dropped rather than split with a ZWSP, because neither
+    means anything in a path.
+
+    Dropping them is only safe because a path carrying either one is never
+    linked (`_UNLINKABLE_PATH`). This span would otherwise sit beside an
+    href built from the RAW path, and a reader would be shown one filename
+    while the link addressed another — a link that lies about its own
+    destination, which is worse than the plain span this leaves instead.
+    """
+    return _oneline(path.replace("`", "").replace("]", ""))
+
+
+def _file_link(path: str | None, source: Source | None) -> str | None:
+    """`[`path`](blob url)` for one finding's file, or None to render it bare.
+
+    The file, never a line range. `Citation.locator` already emits the
+    `#L10-L12` anchor this would need, and the verify tier that produces it
+    grounds nothing (#131) — so a range would render on no finding at all
+    today, and on only the paid read if hunk attribution were used instead,
+    because a stored attribution keeps no line numbers (hunks.py). #230
+    holds that decision; this function is where the range would go.
+
+    `Reason.file` is free-form model output — `verdict_from_reader` copies
+    the schema's `file` string straight through (reader.py:1504) — so the
+    safety of a link built from it cannot rest on the model having been
+    reasonable. Two things carry it, and neither is a vocabulary check:
+
+      * The host, owner, repo and ref are all THIS module's. The worst a
+        path can address is the wrong file inside the repository the reader
+        is already looking at, at the commit Doug just reviewed — a 404
+        they can see, not a destination they cannot.
+      * Every segment is percent-encoded, so nothing inside the path can
+        end the URL and start something else. That is the property
+        `_LINK_RE` and `_URL_RE` protect by neutralising `](` and `://` in
+        model text: those spans stay neutralised, and this one is not model
+        text spliced into markdown but a URL this module composed.
+
+    Deliberately NOT validated against `PRMetadata.files`. The closed-set
+    check is the stronger rule and it was the first design, but the repair
+    path cannot run it: `store._verdict_bundle` rebuilds a Reason from four
+    columns and `_render_recorded` never sees PR metadata, so links would
+    render on the paid read and vanish from the comment that is supposed to
+    reproduce it byte for byte (ADR-0014). A rule that holds on one of the
+    two paths is worse here than a weaker rule that holds on both.
+    """
+    if not path or source is None:
+        return None
+    if len(path) > _PATH_LIMIT or _UNLINKABLE_PATH.search(path):
+        return None
+    # The 12-character prefix, not the whole SHA. Every finding now carries a
+    # URL that did not exist before, and those bytes are spent against
+    # SUMMARY_LIMIT — where the cost of overrunning is dropped findings
+    # (#181). Twenty-eight bytes per finding is not the difference between
+    # fitting and not, but it is free: GitHub resolves any unambiguous
+    # prefix, `_since_section` already identifies a read by `sha[:12]` and
+    # `pr_comment` by `[:7]`, so the full 40 was the odd one out on a surface
+    # that never shows more.
+    url = (
+        f"https://github.com/{source.owner}/{source.repo}"
+        f"/blob/{source.head_sha[:12]}/{quote(path, safe='/')}"
+    )
+    return f"[`{_path_span(path)}`]({url})"
+
+
+def _fold(summary: str, body: list[str]) -> list[str]:
+    """One collapsed `<details>` block.
+
+    `summary` must be THIS module's own text, and the split argument is what
+    makes that rule enforceable rather than remembered. A `<details>` body
+    separated from its tags by a blank line is parsed as markdown, so
+    everything inside is governed by `_oneline` exactly as it is outside and
+    model-authored spans are as safe there as anywhere. The `<summary>` line
+    is not markdown: it is raw HTML, where `_oneline` neutralises nothing
+    that matters and a single `<` opens a tag.
+    """
+    return [
+        "",
+        "<details>",
+        f"<summary>{summary}</summary>",
+        "",
+        *body,
+        "",
+        "</details>",
+    ]
+
+
 def _quote(reason) -> list[str]:
     # The label already opens "Partial read:" — reader.truncation_reason
     # writes the whole sentence. Adding a heading of our own printed the
@@ -260,6 +397,126 @@ def _quote(reason) -> list[str]:
 # why an unrecognised severity falls back to a plain count instead of being
 # escaped into a table cell.
 _SEVERITY_ORDER = ("high", "medium", "low")
+
+
+def _grade(reason) -> str:
+    """A reason's severity as this module compares it, or "" for ungraded.
+
+    The same normalisation `_finding_counts` applies before it decides
+    whether the table cell can name severities at all, so a finding cannot
+    be counted as `medium` in the header and sorted as ungraded in the list
+    below it.
+    """
+    return (reason.severity or "").strip().lower()
+
+
+def _by_severity(risks: list) -> list:
+    """`risks` ordered high, medium, low, then everything ungraded.
+
+    Stable inside each bucket, so the read's own order survives wherever the
+    severities tie, and a no-op on the deterministic tier, where no reason
+    carries a severity at all.
+
+    Ungraded reasons sort LAST, which is the one part of this worth arguing.
+    settle.py's weight-0 notices are context for the list rather than items
+    in it, so first would read as natural — but a settled notice above a
+    live high finding puts "every finding was disproved" at the top of a
+    list that then contradicts it, on exactly the shape that carries both.
+    """
+    order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
+    return sorted(risks, key=lambda r: order.get(_grade(r), len(order)))
+
+
+def _triage(risks: list) -> tuple[list, list]:
+    """(leading, folded) — the findings that lead, and the low ones behind a fold.
+
+    The rule is semantic, not a count. A cap of N folds by position, which
+    is a claim about importance this module has no basis for; `low` is a
+    claim the read itself made, about the finding rather than its rank. So
+    every `low` finding folds and everything else leads, and a PR whose
+    findings are all medium folds nothing at all.
+
+    Ungraded reasons never fold, whatever their rule. That covers the
+    deterministic scorer's rules, settle.py's notices, and the reader
+    finding whose severity came back outside `_SEVERITY_ORDER` — the case
+    where Doug knows least about a finding, and so may hide least of it.
+
+    The fold is skipped entirely in two cases, and the second is a defect
+    this function shipped with:
+
+      * No finding is graded inside the vocabulary, for the reason
+        `_finding_counts` degrades its cell — a list where "low" means
+        whatever the model wrote that push is not one this module can rank.
+      * NOTHING outranks `low`. A fold defers the less-actionable half of a
+        list, and an all-low list has no other half to defer to: folding it
+        left `### Findings` with a heading, a blank line and a collapsed
+        disclosure under a **Flagged** title, which a reader skimming the
+        summary reads as "no findings" — the same misreading SETTLED_NOTE
+        exists to end (#109), reached from the opposite direction.
+    """
+    if not any(_grade(r) in _SEVERITY_ORDER for r in risks):
+        return risks, []
+    leading = [r for r in risks if _grade(r) != "low"]
+    if not leading:
+        return risks, []
+    return leading, [r for r in risks if _grade(r) == "low"]
+
+
+# A severity outside `_SEVERITY_ORDER` still reaches the reader — that is
+# `_finding_counts`'s documented promise, made where it degrades its own
+# cell to a count — but it does so under a length it cannot exceed. The
+# field is `str | None` on the model and validated by nothing, so without a
+# cap one finding's severity can be as long as the whole summary.
+_SEVERITY_LABEL_LIMIT = 24
+
+
+def _severity_chip(grade: str, raw: str | None) -> str:
+    """The bold severity that leads a bullet, or an uncapitalised remnant.
+
+    In-vocabulary severities are emitted FROM `_SEVERITY_ORDER` rather than
+    echoed from the verdict, so the span that carries the most weight in the
+    list — bold, first, the thing a reader triages on — contains no model
+    text at all. `_grade` already lowercased and stripped it to match, so
+    echoing would only reintroduce whatever casing and whitespace the model
+    happened to send.
+
+    Out of vocabulary, the raw text is kept and both the bold and the cap
+    change meaning. Bold is a triage signal, and Doug cannot rank a severity
+    it does not recognise, so claiming one with the same emphasis the ranked
+    ones use would overstate what the read established. The cap is the other
+    half: `_oneline` collapses whitespace and neutralises tokens but bounds
+    nothing, and a 5,000-character severity would otherwise be bolded into
+    the lead of a bullet and counted against SUMMARY_LIMIT.
+    """
+    if grade in _SEVERITY_ORDER:
+        return f"**{grade}**"
+    return _oneline(raw or "")[:_SEVERITY_LABEL_LIMIT]
+
+
+def _bullet(reason, source: Source | None) -> str:
+    """One finding, front-loaded so the list triages down its left edge.
+
+    Severity leads, then the file, then the rule, then the model's sentence.
+    Severity used to trail the sentence in italics, which put the one span
+    that says how much this matters at the far end of a paragraph of prose —
+    the last place an eye scanning five findings arrives, and on a wrapped
+    line often not on the same row as anything identifying the finding.
+
+    Every part before the sentence is omitted when it is absent rather than
+    rendered empty, so a deterministic reason and a weight-0 notice — which
+    carry neither a severity nor a file — render exactly as they did before
+    this shape existed.
+    """
+    parts = []
+    if grade := _grade(reason):
+        parts.append(_severity_chip(grade, reason.severity))
+    link = _file_link(reason.file, source)
+    if link is not None:
+        parts.append(link)
+    elif reason.file:
+        parts.append(f"`{_path_span(reason.file)}`")
+    parts.append(f"`{_rule_span(reason.rule)}`")
+    return f"- {' · '.join(parts)} — {_oneline(reason.label)}"
 
 
 def _read_cell(tier: str) -> str:
@@ -487,6 +744,7 @@ def render(
     coverage: Coverage | None,
     instrument: InstrumentSnapshot | None = None,
     convergence: dict | None = None,
+    source: Source | None = None,
 ) -> tuple[str, str]:
     """(title, summary_md) for one verdict."""
     title = _headline(tier, verdict)
@@ -542,11 +800,19 @@ def render(
     if only_settled and verdict.band == Band.FLAGGED:
         lines += [SETTLED_NOTE, ""]
     if risks:
-        lines += [
-            f"- `{_rule_span(r.rule)}` — {_oneline(r.label)}"
-            + (f" _({_oneline(r.severity)})_" if r.severity else "")
-            for r in risks
-        ]
+        leading, folded = _triage(_by_severity(risks))
+        lines += [_bullet(r, source) for r in leading]
+        if folded:
+            # The count is in the summary line, and that is not decoration.
+            # A disclosure labelled "more" is a list that does not say how
+            # much of itself it is hiding — the same defect #181 records
+            # against SUMMARY_LIMIT dropping findings without naming how
+            # many, arrived at by choice rather than by a cap.
+            plural = "" if len(folded) == 1 else "s"
+            lines += _fold(
+                f"{len(folded)} low finding{plural}",
+                [_bullet(r, source) for r in folded],
+            )
     else:
         lines.append("- none")
 
@@ -579,8 +845,10 @@ def render(
 
     lines += _since_section(convergence)
 
-    lines += ["", HOW_TO_READ_HEADING, "", f"- {RISK_NOTE}", f"- {NEUTRAL_NOTE}",
-              f"- {FLAG_LINE_NOTE}"]
+    lines += _fold(
+        HOW_TO_READ_SUMMARY,
+        [f"- {RISK_NOTE}", f"- {NEUTRAL_NOTE}", f"- {FLAG_LINE_NOTE}"],
+    )
 
     footer = "\n".join(_footer(instrument)) if instrument is not None else ""
     body = "\n".join(lines)
