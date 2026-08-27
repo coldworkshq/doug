@@ -1,5 +1,76 @@
 # HANDOFF — doug
 
+State:    review — PR #233 open (Closes #181), all 6 CI checks green on
+          8bcb26c. check_run.render's SUMMARY_LIMIT cut now NAMES the
+          findings it removed, counted over exactly what the summary table
+          counts. Doug's own read of the PR dispositioned in
+          docs/reviews/2026-08-27-pr-233-doug-self-review.md: 1 of 4 real
+          (fixed here), 2 false positives, 1 real but not this PR's (#234).
+          Round 2 @ 7363b4b: CLEARED 0.22, four low — one real
+          (`_whole_lines` used `edge > 0`, so a prefix whose only newline
+          is at index 0 returned the half-line the helper exists to
+          remove; unreachable from render, fixed anyway because it is a
+          contract break in a tested pure helper). api suite 1691 passed,
+          ruff clean.
+          Round 3 @ c395ebc: CLEARED 0.24, three low — none a live
+          defect, ALL THREE worth acting on and fixed (`_trim_empty_fold`
+          now reads structure not bullet syntax; `_shown_findings` matches
+          whole LINES, which closes a real forgery path where a label
+          embedding another finding's bullet moved the cursor; the cap
+          invariant is asserted on six shapes instead of pinned by
+          arithmetic). First read in this file where every finding
+          survives. api suite 1694 passed.
+          Round 4 @ 182af56: FLAGGED 0.30 — the one medium is #234
+          re-derived (a diff can suppress the whole findings list), which
+          no commit here can close; the two lows were test coverage and
+          are closed. LOOP STOPPED at round 4 on purpose: a fifth read
+          would be reading a diff of test files. Four rounds, 13 findings,
+          6 real; rounds 3-4 produced zero inventions against rounds 1-2's
+          three — the difference is small pure helpers with stated
+          contracts. api suite 1696 passed.
+Next:     Andrew reviews/merges #233. All 6 checks green on 182af56; the
+          round-4 tests need one more CI pass.
+Blockers: none.
+Decisions this session:
+- The shortfall is counted over `_countable` — the same population
+  `_finding_counts` prints — so the notice subtracts from the number
+  already on the surface. Rejected counting every rendered bullet:
+  settlement notices are excluded from the table cell (they mark DISPROVED
+  findings, #109), so including them in the total would make the two
+  numbers unreconcilable, which is the whole defect.
+- The reserve is sized for the WIDEST notice the render could need and the
+  notice is then written from what the cut actually left, so the summary
+  lands a few bytes under 60,000 instead of exactly on it. Rejected a
+  fixed-point loop over the digit count: the circularity (count needs the
+  cut, cut needs the count's width) is worth three bytes, not a loop.
+- The cut backs up to the last line boundary, and a `<details>` it leaves
+  open is closed (a fold it emptied is dropped instead). Found while
+  writing this: an unterminated disclosure swallows the rest of the
+  document, so the truncation notice itself would have rendered inside a
+  collapsed block — #181's defect reintroduced by its own fix.
+- `dropped == 0` keeps the bare sentence: the cut ate prose sections below
+  the findings list, and "0 of 12 findings" sends a reader hunting for one
+  that is on the page.
+- Doug's finding 1 (low, `reader:off-by-one`) is REAL one case over from
+  where it was stated: the line-boundary backup fired even when the cut had
+  already landed on a newline, dropping a bullet that fit. Now
+  `_whole_lines`, tested directly. Findings 2 and 3 are false positives —
+  `_finding_counts`'s degraded branch prints the same number the notice
+  subtracts from, and the truncation string has no consumer outside the
+  module. Finding 2's second half was right (no test for the degraded
+  cell); that test exists now and passes unchanged.
+- `_oneline` does not neutralise a bare `<`, so a model label carrying
+  `<details>` collapses every finding below it, on the check run and in the
+  PR comment. Predates this PR — filed as #234, not fixed here.
+Pointers: branch claude/github-issue-181-9e669e ·
+          api/doug/check_run.py (`_truncation_notice`, `_shown_findings`,
+          `_countable`, `_trim_empty_fold`, `_close_details`, the cut at the
+          bottom of `render`) · api/tests/test_check_run.py (12 new tests) ·
+          PR #233 · #181 · #234
+
+--- prior stream (check-run file links + triage, PR #229) below, preserved ---
+
+
 State:    building — PR open: check-run findings get file links and a triage
           layout (branch comment-file-links-and-triage). Andrew asked for two
           things off the #227 review comment: links to the file/line of each

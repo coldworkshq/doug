@@ -6,7 +6,7 @@ intact — a router that blocks needs precision this evidence base does not
 have, and the honest surface for a judgment that might be wrong is one
 that costs nothing to ignore.
 
-Three things this surface must never smooth over:
+Four things this surface must never smooth over:
 
   * A deterministic fallback is not a read. review.score_one falls back
     silently when the reader is off or a read raised, and the Verdict is
@@ -22,6 +22,11 @@ Three things this surface must never smooth over:
     did not pass (2026-07-31). The instrument is not validated, so they
     render in their own labelled section and never touch band or score
     (ADR-0007).
+  * SUMMARY_LIMIT is the third place a finding can disappear, after
+    settle.py's two settlement rules. Those two name what they dropped and
+    why; so does this one — the cut states its shortfall against the count
+    in the table above it, so the emitted and displayed numbers reconcile
+    from the surface alone (#181).
 
 `pr_comment.py` mirrors this summary byte-for-byte inside a PR comment; anything
 that must not reach a comment must be neutralised here, not there.
@@ -131,7 +136,8 @@ SETTLED_NOTE = (
 # still exceed SUMMARY_LIMIT. A silent [:SUMMARY_LIMIT] slice reads as a
 # complete summary that happens to stop mid-sentence — the same "partial
 # reads as whole" problem this module exists to keep out of the findings.
-TRUNCATION_NOTICE = "\n\n_Truncated: this check run exceeded GitHub's summary limit._"
+TRUNCATION_LEAD = "Truncated: this check run exceeded GitHub's summary limit."
+TRUNCATION_NOTICE = f"\n\n_{TRUNCATION_LEAD}_"
 
 
 def _date(value) -> str:
@@ -524,6 +530,18 @@ def _read_cell(tier: str) -> str:
     return "validated diff reader" if tier == "reader" else "none — scorer only"
 
 
+def _countable(reason) -> bool:
+    """Whether this reason counts as a finding on this surface.
+
+    One predicate, three call sites, deliberately: the table's Findings
+    cell, the truncation notice's total, and the notice's shortfall all
+    have to be the same population or the notice subtracts from a number
+    nobody wrote. See `_finding_counts` for why settlement notices are not
+    findings.
+    """
+    return reason.rule not in SETTLED_REASON_CODES
+
+
 def _finding_counts(risks: list) -> str:
     """The summary table's Findings cell.
 
@@ -542,7 +560,7 @@ def _finding_counts(risks: list) -> str:
     the header of a summary whose body says nothing survived — the same
     misreading SETTLED_NOTE exists to end (#109).
     """
-    countable = [r for r in risks if r.rule not in SETTLED_REASON_CODES]
+    countable = [r for r in risks if _countable(r)]
     if not countable:
         return "none"
     graded = [(r.severity or "").strip().lower() for r in countable]
@@ -737,6 +755,150 @@ _UNKNOWN_SENTENCES = {
 SINCE_HEADING_FALLBACK = "### Since the previous read"
 
 
+def _truncation_notice(dropped: int, total: int) -> str:
+    """`TRUNCATION_NOTICE`, naming the findings the cut removed (#181).
+
+    A cut that drops findings and says only "truncated" leaves a check run
+    that cannot be reconciled with itself: the table counts what the read
+    emitted, the list shows what fit, and nothing on the surface says the
+    two are different numbers — a review that emitted 12 findings and
+    displayed 8 reads as a review that found 8. That is the output-side
+    form of the hole ADR-0012 closes on the input side, and the discipline
+    is settle.py's: nothing is dropped without a named reason.
+
+    Counted over exactly what `_finding_counts` counts, so the shortfall
+    subtracts from the number in the table rather than from some other
+    total. Settlement notices are excluded on both sides for the reason
+    they are excluded there — they mark findings that were DISPROVED, so
+    counting one as lost would report a missing defect where there was
+    never a defect to miss.
+
+    `dropped == 0` keeps the bare sentence. The cut landed past the
+    findings list and took prose sections instead, and "0 of 12 findings"
+    would send a reader hunting for one that is already on the page.
+    """
+    if dropped <= 0:
+        return TRUNCATION_NOTICE
+    verb = "is" if dropped == 1 else "are"
+    return (
+        f"\n\n_{TRUNCATION_LEAD} {dropped} of {total} findings {verb} "
+        "missing from the list above._"
+    )
+
+
+_DETAILS_CLOSE = "\n</details>"
+
+
+def _trim_empty_fold(kept: str) -> str:
+    """`kept` without a disclosure the cut left with nothing inside it.
+
+    `_fold` writes four lines before its first bullet, so a cut can land
+    between the `<details>` and everything it was hiding. Closing that as-is
+    renders an empty triangle labelled "N low findings" directly above a
+    notice saying those findings are missing — two contradictory claims
+    about the same list. Dropping the opener leaves one.
+
+    "Empty" is decided on the disclosure's own structure — is there any
+    non-blank text after the `</summary>` line — rather than on what a
+    finding happens to look like. An earlier version tested the tail for
+    `"\n- "`, which quietly required that folds are never indented, that
+    every body line is a bullet, and that bullets keep their exact prefix;
+    a `_fold` that ever wrapped its body would have stripped an opener
+    above surviving findings and dropped them from the display with no
+    notice at all. Doug's own read of #233 found the coupling, round 3.
+    """
+    open_at = kept.rfind("\n<details>")
+    if open_at < 0:
+        return kept
+    tail = kept[open_at:]
+    if "</details>" in tail:
+        return kept
+    # No `</summary>` means the cut landed inside the summary line itself,
+    # which is as empty as a disclosure gets.
+    _, _, body = tail.partition("</summary>")
+    if body.strip():
+        return kept
+    # The blank line `_fold` writes before the opener goes with it. It was
+    # separating the disclosure from the list above, and there is no longer
+    # a disclosure to separate.
+    return kept[:open_at].rstrip("\n")
+
+
+def _close_details(kept: str) -> str:
+    """Closing tags for every `<details>` the cut left open.
+
+    An unterminated disclosure swallows the rest of the document: the
+    truncation notice and the instrument footer would both render inside a
+    collapsed block, so the one line explaining why findings are missing
+    would itself be hidden behind a triangle. That is #181's own defect,
+    one level further out.
+    """
+    unclosed = kept.count("<details>") - kept.count("</details>")
+    return _DETAILS_CLOSE * max(0, unclosed)
+
+
+def _whole_lines(body: str, cut: int) -> str:
+    """`body[:cut]`, ending on a line boundary.
+
+    A body sliced mid-word with an italic sentence bolted to its tail reads
+    as a rendering fault rather than a stated limit, and the half-bullet it
+    ends on is a finding a reader may act on without its file, its severity
+    or its verb.
+
+    The two guards are not defensive. A cut that already landed ON a
+    newline ends a whole line as it is, and backing up from there would
+    drop a bullet that fit — a real finding lost to punctuation. A cut past
+    the end of the body keeps the body, which is what the caller means by
+    "cut" when the overrun was somewhere else.
+
+    `edge >= 0`, not `> 0`: a prefix whose only newline is the first
+    character contains no whole line at all, and the empty string is the
+    honest answer. `> 0` returned the half-written line instead — the one
+    thing this helper exists to remove. Unreachable from `render`, whose
+    body opens with a title line, but a helper that breaks its own contract
+    on one input is a trap for the next caller. Doug's own read of #233
+    found it, round 2.
+    """
+    if cut >= len(body):
+        return body
+    kept = body[:cut]
+    if body[cut] == "\n":
+        return kept
+    edge = kept.rfind("\n")
+    return kept[:edge] if edge >= 0 else kept
+
+
+def _shown_findings(kept: str, bullets: list[str]) -> int:
+    """How many of `bullets` survive whole in `kept`.
+
+    A bullet counts as shown when a WHOLE LINE equals it, matched against a
+    line cursor that only moves forward. Two identical findings therefore
+    consume two lines rather than matching one twice, a bullet the cut left
+    half-written is not equal to anything and counts as missing, and the
+    first miss ends the scan — every later bullet was rendered below a line
+    the cut already reached.
+
+    Whole lines, not substrings, and that is a security property rather
+    than tidiness: `reason.label` is model output built from a repository's
+    own diff, so a finding whose sentence embeds another finding's rendered
+    bullet would, under a substring search, advance the cursor past a
+    finding that was never displayed — an attacker-chosen number in the one
+    line this module added to be trusted. A bullet cannot forge a line
+    boundary, because `_oneline` collapses every newline out of it. Doug's
+    own read of #233 found this, round 3.
+    """
+    shown = 0
+    lines = iter(kept.split("\n"))
+    for bullet in bullets:
+        for line in lines:
+            if line == bullet:
+                shown += 1
+                break
+        else:
+            return shown
+    return shown
+
+
 def render(
     tier: str,
     verdict: Verdict,
@@ -799,9 +961,16 @@ def render(
     lines += ["", "### Findings", ""]
     if only_settled and verdict.band == Band.FLAGGED:
         lines += [SETTLED_NOTE, ""]
+    # Every countable finding's bullet, in the order it renders, so the cut
+    # at the bottom of this function can say how many of them it removed
+    # (#181). Kept as the rendered strings rather than line indices because
+    # the fold splices its body between tags this list must not know about.
+    counted: list[str] = []
     if risks:
         leading, folded = _triage(_by_severity(risks))
-        lines += [_bullet(r, source) for r in leading]
+        lead_bullets = [_bullet(r, source) for r in leading]
+        lines += lead_bullets
+        counted += [b for r, b in zip(leading, lead_bullets, strict=True) if _countable(r)]
         if folded:
             # The count is in the summary line, and that is not decoration.
             # A disclosure labelled "more" is a list that does not say how
@@ -809,10 +978,9 @@ def render(
             # against SUMMARY_LIMIT dropping findings without naming how
             # many, arrived at by choice rather than by a cap.
             plural = "" if len(folded) == 1 else "s"
-            lines += _fold(
-                f"{len(folded)} low finding{plural}",
-                [_bullet(r, source) for r in folded],
-            )
+            fold_bullets = [_bullet(r, source) for r in folded]
+            lines += _fold(f"{len(folded)} low finding{plural}", fold_bullets)
+            counted += [b for r, b in zip(folded, fold_bullets, strict=True) if _countable(r)]
     else:
         lines.append("- none")
 
@@ -857,9 +1025,29 @@ def render(
         # Keep the instrument lines (and the truncation marker) as a
         # reserved tail. Cutting from the front would drop the footer on
         # the oversized-findings case the cap is sized for.
-        reserved = TRUNCATION_NOTICE + footer
-        cut = max(0, SUMMARY_LIMIT - len(reserved))
-        combined = body[:cut] + reserved
+        #
+        # The reserve is sized for the WIDEST notice this render could need,
+        # and the notice is then written from what the cut actually left.
+        # Sizing it from the real shortfall would be circular — the count
+        # depends on the cut, the cut depends on how many digits the count
+        # takes — and settling that loop is not worth the two or three bytes
+        # of headroom it would win back. `dropped <= total` and both are
+        # rendered the same way, so the all-dropped notice is the longest
+        # one reachable and the summary can only land under the cap, never
+        # over it.
+        total = len(counted)
+        reserved = max(len(TRUNCATION_NOTICE), len(_truncation_notice(total, total)))
+        # Every fold the cut could leave open has to be closeable inside the
+        # reserve, or closing it is what puts the summary over the cap.
+        reserved += body.count("<details>") * len(_DETAILS_CLOSE)
+        cut = max(0, SUMMARY_LIMIT - reserved - len(footer))
+        # The shortfall is counted AFTER all three of these, never before: a
+        # bullet they remove is a finding the reader cannot see, and the
+        # number has to be about what shipped.
+        kept = _trim_empty_fold(_whole_lines(body, cut))
+        kept += _close_details(kept)
+        shortfall = total - _shown_findings(kept, counted)
+        combined = kept + _truncation_notice(shortfall, total) + footer
     return title[:TITLE_LIMIT], combined
 
 

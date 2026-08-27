@@ -7,6 +7,7 @@ back silently), a partial read must not read as a whole one, and nothing
 here may ever conclude anything but neutral.
 """
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 from doug import check_run, reader, store
 from doug.models import Band, Reason
 from doug.review import IntentRead
+from doug.settle import SETTLED_REASON_CODES
 
 # Built through the real producer rather than hand-constructed, so a
 # regression in verdict_from_reader's severity handling (reader.py:407-419)
@@ -309,8 +311,9 @@ def test_the_summary_is_truncated_below_githubs_cap():
         }
     )
     _, summary = check_run.render("reader", noisy, None, WHOLE)
-    assert len(summary) == check_run.SUMMARY_LIMIT
-    assert summary.endswith(check_run.TRUNCATION_NOTICE)
+    assert len(summary) <= check_run.SUMMARY_LIMIT
+    assert summary.endswith("missing from the list above._")
+    assert check_run.TRUNCATION_LEAD in summary
 
 
 def test_truncation_keeps_the_instrument_footer():
@@ -328,10 +331,361 @@ def test_truncation_keeps_the_instrument_footer():
     _, summary = check_run.render(
         "reader", noisy, None, WHOLE, instrument=_snap()
     )
-    assert len(summary) == check_run.SUMMARY_LIMIT
-    assert check_run.TRUNCATION_NOTICE in summary
+    assert len(summary) <= check_run.SUMMARY_LIMIT
+    assert check_run.TRUNCATION_LEAD in summary
     assert summary.endswith("deep reads 0/200 this cycle")
-    assert "adjudicated 0" in summary.split(check_run.TRUNCATION_NOTICE, 1)[1]
+    assert "adjudicated 0" in summary.split(check_run.TRUNCATION_LEAD, 1)[1]
+
+
+def _oversized(n: int = 300, *, extra: list | None = None):
+    """A verdict whose findings alone overrun SUMMARY_LIMIT.
+
+    Graded high/low in alternation so the render exercises both halves of
+    the triage — the leading list and the collapsed fold — on the one shape
+    where the cut can reach either.
+    """
+    reasons = [
+        Reason(
+            rule=f"reader:pattern-{i}",
+            label=f"{i} " + "x" * 400,
+            weight=0.0,
+            severity="high" if i % 2 else "low",
+            file=f"api/doug/module_{i}.py",
+        )
+        for i in range(n)
+    ]
+    return FLAGGED.model_copy(update={"reasons": reasons + list(extra or [])})
+
+
+def _shortfall(summary: str) -> tuple[int, int]:
+    """(dropped, total) as the truncation notice states them."""
+    m = re.search(r"(\d+) of (\d+) findings (?:is|are) missing", summary)
+    assert m is not None, "the cut named no shortfall"
+    return int(m.group(1)), int(m.group(2))
+
+
+def test_the_cut_names_how_many_findings_it_removed():
+    """#181. SUMMARY_LIMIT is the third place a finding can disappear, and
+    it was the only one that disappeared them silently: settle.py's two
+    rules each leave a weight-0 notice saying what they dropped and why,
+    while this cut appended "truncated" and left the reader to believe the
+    list was the whole list. A review that emits 12 findings and displays 8
+    then reads, on the check run, as a review that found 8 — the emitted
+    and displayed counts are both on the surface and there is nothing
+    connecting them."""
+    noisy = _oversized()
+    _, summary = check_run.render("reader", noisy, None, WHOLE)
+
+    dropped, total = _shortfall(summary)
+    shown = sum(1 for r in noisy.reasons if check_run._bullet(r, None) in summary)
+    assert dropped > 0, "this fixture must overrun the cap"
+    assert total == len(noisy.reasons)
+    assert shown + dropped == total
+
+
+def test_the_stated_shortfall_reconciles_with_the_table():
+    """The number the notice subtracts from has to be the number printed in
+    the summary table, or naming the shortfall buys nothing: a reader who
+    cannot do the arithmetic from the two figures in front of them is back
+    where they started."""
+    _, summary = check_run.render("reader", _oversized(), None, WHOLE)
+    cell = [ln for ln in summary.splitlines() if ln.startswith("| **")][0]
+    counted = sum(int(n) for n, _ in re.findall(r"(\d+) (high|medium|low)", cell))
+    assert counted == _shortfall(summary)[1]
+
+
+def test_settlement_notices_are_not_counted_as_lost_findings():
+    """settle.py's notices mark findings that were DISPROVED, so
+    `_finding_counts` excludes them from the table and the shortfall
+    excludes them for the same reason. Counting one as a lost finding would
+    report a missing defect where there was never a defect to miss — #109's
+    misreading, reached through the truncation notice."""
+    settled = [
+        Reason(rule=code, label="Dropped 1 finding disproved at head", weight=0.0)
+        for code in sorted(SETTLED_REASON_CODES)
+    ]
+    noisy = _oversized(extra=settled)
+    _, summary = check_run.render("reader", noisy, None, WHOLE)
+    assert _shortfall(summary)[1] == len(noisy.reasons) - len(settled)
+
+
+def test_a_cut_that_reaches_no_finding_claims_no_shortfall():
+    """The findings list renders near the top, so an overrun driven by the
+    sections below it costs prose, not findings. "0 of 12 findings are
+    missing" would send a reader hunting for one that is already on the
+    page."""
+    verdict = FLAGGED.model_copy(deep=True)
+    _, summary = check_run.render("reader", verdict, _huge_deviations(), WHOLE)
+    assert len(summary) <= check_run.SUMMARY_LIMIT
+    assert check_run.TRUNCATION_LEAD in summary
+    assert "missing from the list above" not in summary
+    for r in verdict.reasons:
+        assert check_run._bullet(r, None) in summary
+
+
+def test_severity_not_position_decides_what_survives_the_cut():
+    """#181's second half. The cut is positional, so what it removes is
+    decided entirely by the order the list renders in — and that order is
+    `_by_severity`'s, not the read's. A high finding the model happened to
+    emit last must still be on the page when 300 low ones are not."""
+    reasons = [
+        Reason(rule=f"reader:pattern-{i}", label=f"{i} " + "x" * 400, weight=0.0,
+               severity="low", file=f"api/doug/module_{i}.py")
+        for i in range(400)
+    ]
+    reasons[-1] = reasons[-1].model_copy(update={"severity": "high"})
+    verdict = FLAGGED.model_copy(update={"reasons": reasons})
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+
+    assert _shortfall(summary)[0] > 0
+    # Emitted last, rendered first: the one high finding leads the list.
+    assert summary.split("### Findings")[1].lstrip().startswith(
+        check_run._bullet(reasons[-1], None)
+    )
+    # Emitted second-to-last, rendered last, and cut: a low finding is what
+    # the overrun costs, whatever position the read gave it.
+    assert check_run._bullet(reasons[-2], None) not in summary
+
+
+def test_the_cut_ends_on_a_whole_line():
+    """A body sliced mid-word with an italic sentence bolted to its tail
+    reads as a rendering fault rather than a stated limit, and the last
+    half-bullet is a finding a reader may act on without its file, its
+    severity or its verb. Backing up to the line boundary costs a few
+    hundred of 60,000 characters."""
+    _, summary = check_run.render("reader", _oversized(), None, WHOLE)
+    body = summary.split(check_run.TRUNCATION_LEAD)[0].rstrip("\n_")
+    last = body.splitlines()[-1]
+    assert last.startswith("- ")
+    assert last in [check_run._bullet(r, None) for r in _oversized().reasons]
+
+
+def _huge_deviations() -> IntentRead:
+    """An intent read whose section alone overruns the cap, so the cut
+    lands below the findings list rather than inside it."""
+    return IntentRead(
+        alignment=41,
+        refs=["ADR-0002"],
+        findings=[
+            reader.DeviationFinding(
+                type=f"contradicts-ticket-{i}",
+                description="y" * 400,
+                severity="high",
+            )
+            for i in range(200)
+        ],
+        coverage=WHOLE,
+    )
+
+
+def test_a_forged_bullet_inside_a_label_cannot_move_the_cursor():
+    """Doug's round-3 read. `reason.label` is model output built from a
+    repository's own diff, so a finding whose sentence embeds another
+    finding's rendered bullet could — under a substring search — advance
+    the cursor past a finding that was never displayed. The shortfall would
+    then be an attacker-chosen number in the one line this change adds to
+    be trusted. A bullet must BE a line, and `_oneline` collapses every
+    newline out of a label, so no label can forge one."""
+    real = "- **high** `b.py` — the second finding"
+    forger = f"- **high** `a.py` — see also {real}"
+    assert check_run._shown_findings(forger, [forger, real]) == 1
+    assert check_run._shown_findings(f"{forger}\n{real}", [forger, real]) == 2
+
+
+def test_an_indented_fold_body_is_not_read_as_an_empty_fold():
+    """Doug's round-3 read. `_trim_empty_fold` used to test the tail for
+    "\n- ", which quietly required that folds are never indented, that
+    every body line is a bullet, and that bullets keep their exact prefix.
+    A `_fold` that ever wrapped its body would have stripped an opener
+    above surviving findings and dropped them with no notice at all — this
+    module's own defect, committed by the code that fixes it."""
+    indented = (
+        "### Findings\n\n<details>\n<summary>2 low findings</summary>\n\n  * one\n  * two"
+    )
+    assert check_run._trim_empty_fold(indented) == indented
+    empty = "### Findings\n\n<details>\n<summary>2 low findings</summary>\n"
+    assert check_run._trim_empty_fold(empty) == "### Findings"
+    cut_mid_summary = "### Findings\n\n<details>\n<summary>2 low fin"
+    assert check_run._trim_empty_fold(cut_mid_summary) == "### Findings"
+
+
+def test_the_reserve_does_not_waste_the_budget():
+    """Doug's round-4 read. Relaxing the length assertion from `==` to
+    `<=` was necessary — the reserve is sized for the widest notice this
+    render could need, so the summary lands a few bytes under — but `<=`
+    alone would pass an off-by-many that reserved a thousand characters and
+    silently cost findings. Wasted budget IS dropped findings; that is what
+    the cap means.
+
+    The bound is per-fixture, not universal: the backup to a line boundary
+    can legitimately cost as much as the longest rendered line, and these
+    two fixtures use 400-character labels. The three terms are the notice
+    (~140), one closer per fold (11 each), and that backup."""
+    for name, verdict in (
+        ("all graded", _oversized()),
+        ("leading and fold", _cut_inside_the_fold()),
+    ):
+        for footer in (None, _snap()):
+            _, summary = check_run.render(
+                "reader", verdict, None, WHOLE, instrument=footer
+            )
+            headroom = check_run.SUMMARY_LIMIT - len(summary)
+            assert 0 <= headroom < 512, (name, headroom)
+
+
+def test_a_label_cannot_forge_a_fold_opener():
+    """Doug's round-4 read. `_trim_empty_fold` anchors on "\n<details>", so
+    its safety rests on a label being unable to start a line — which
+    `_oneline` enforces by collapsing whitespace, two modules away from the
+    function that depends on it. Pinned here at the level where a break
+    would cost something: surviving findings dropped from the display with
+    no notice at all.
+
+    Note what is NOT asserted: that the tags balance. They do not. The raw
+    `<details>` in the label survives `_oneline` and this render never
+    truncates, so `_close_details` never runs and the opener goes out
+    unclosed — #234, on the ordinary path rather than the truncated one,
+    and not fixable here."""
+    forger = Reason(
+        rule="reader:forged",
+        label="cut here\n<details>\n<summary>0 low findings</summary>",
+        weight=0.9,
+        severity="high",
+        file="a.py",
+    )
+    victim = Reason(
+        rule="reader:victim", label="the finding below it", weight=0.9,
+        severity="high", file="b.py",
+    )
+    verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    assert check_run._bullet(victim, None) in summary
+
+
+def test_no_shape_renders_a_summary_over_the_cap():
+    """Doug's round-3 read, and the honest answer to it: the cap holds
+    through a chain of terms — the reserve covers the widest notice AND a
+    closer for every fold — so pinning the arithmetic pins nothing. The
+    invariant is what matters, and it is asserted on every shape that
+    reaches the cut from a different direction."""
+    settled = [
+        Reason(rule=code, label="Dropped 1 finding disproved at head", weight=0.0)
+        for code in sorted(SETTLED_REASON_CODES)
+    ]
+    ungraded = _oversized()
+    ungraded.reasons[0] = ungraded.reasons[0].model_copy(
+        update={"severity": "catastrophic" * 40}
+    )
+    forged = _oversized()
+    forged.reasons[0] = forged.reasons[0].model_copy(
+        update={"label": "<details><summary>x</summary>" * 20}
+    )
+    shapes = {
+        "all graded": (_oversized(), None, None),
+        "leading and fold": (_cut_inside_the_fold(), None, _snap()),
+        "with settlement notices": (_oversized(extra=settled), None, _snap()),
+        "severity out of vocabulary": (ungraded, None, _snap()),
+        "labels carrying details tags": (forged, None, _snap()),
+        "overrun below the findings": (FLAGGED, _huge_deviations(), _snap()),
+    }
+    for name, (verdict, intent, snap) in shapes.items():
+        _, summary = check_run.render("reader", verdict, intent, WHOLE, instrument=snap)
+        assert len(summary) <= check_run.SUMMARY_LIMIT, name
+        assert check_run.TRUNCATION_LEAD in summary, name
+        assert summary.count("<details>") == summary.count("</details>"), name
+
+
+def test_a_cut_that_lands_on_a_boundary_keeps_its_last_line():
+    """Doug's own read of this change, finding 1. Backing up to the last
+    newline is right when the cut split a line and wrong when it did not:
+    a cut that already ends a line loses a whole finding to punctuation,
+    and the notice then reports a shortfall the cap did not cause."""
+    body = "- one\n- two\n- three"
+    assert check_run._whole_lines(body, 12) == "- one\n- two"  # cut ON the newline
+    assert check_run._whole_lines(body, 15) == "- one\n- two"  # cut mid-word
+    assert check_run._whole_lines(body, len(body)) == body
+    assert check_run._whole_lines(body, 999) == body
+    # No whole line at all: the empty string, not the half-written one.
+    # `> 0` here returned exactly the fragment this helper removes.
+    assert check_run._whole_lines("\nhalf a bullet", 8) == ""
+
+
+def test_the_shortfall_reconciles_with_a_degraded_findings_cell():
+    """Doug's own read of this change, finding 2. `_finding_counts` stops
+    naming severities the moment one finding carries a grade outside the
+    vocabulary and prints a bare count instead. The notice's total has to
+    reconcile with THAT number too — a reader cannot be asked to know which
+    of the cell's two shapes they are looking at."""
+    noisy = _oversized()
+    noisy.reasons[0] = noisy.reasons[0].model_copy(update={"severity": "catastrophic"})
+    _, summary = check_run.render("reader", noisy, None, WHOLE)
+    cell = [ln for ln in summary.splitlines() if ln.startswith("| **")][0]
+    assert f"{len(noisy.reasons)} findings" in cell
+    assert _shortfall(summary)[1] == len(noisy.reasons)
+
+
+def _cut_inside_the_fold():
+    """A verdict whose leading findings fit and whose low ones do not, so
+    the cut lands inside the collapsed disclosure."""
+    reasons = [
+        Reason(rule=f"reader:pattern-h{i}", label=f"h{i} " + "x" * 400, weight=0.0,
+               severity="high", file=f"api/doug/high_{i}.py")
+        for i in range(10)
+    ] + [
+        Reason(rule=f"reader:pattern-l{i}", label=f"l{i} " + "x" * 400, weight=0.0,
+               severity="low", file=f"api/doug/low_{i}.py")
+        for i in range(300)
+    ]
+    return FLAGGED.model_copy(update={"reasons": reasons})
+
+
+def test_a_cut_inside_the_fold_closes_it():
+    """An unterminated <details> swallows the rest of the document. The
+    truncation notice and the instrument footer would both render inside a
+    collapsed block, so the one line saying findings are missing would
+    itself be hidden behind a triangle — #181's defect, one level out."""
+    _, summary = check_run.render(
+        "reader", _cut_inside_the_fold(), None, WHOLE, instrument=_snap()
+    )
+    assert summary.count("<details>") == summary.count("</details>") == 1
+    assert len(summary) <= check_run.SUMMARY_LIMIT
+    tail = summary.split("</details>", 1)[1]
+    assert check_run.TRUNCATION_LEAD in tail
+    assert "adjudicated 0" in tail
+
+
+def test_a_fold_the_cut_emptied_is_dropped_rather_than_closed():
+    """`_fold` writes four lines before its first bullet, so the cut can
+    land between the disclosure and everything it hides. An empty triangle
+    labelled "N low findings" sitting above a notice saying those findings
+    are missing is two contradictory claims about one list."""
+    kept = "### Findings\n\n- **high** `a.py` — one\n\n<details>\n<summary>3 low findings</summary>"
+    assert check_run._trim_empty_fold(kept).endswith("— one")
+    assert check_run._close_details(check_run._trim_empty_fold(kept)) == ""
+    # A fold that kept at least one bullet is closed, not dropped.
+    with_body = kept + "\n\n- **low** `b.py` — two"
+    assert check_run._trim_empty_fold(with_body) == with_body
+    assert check_run._close_details(with_body) == "\n</details>"
+
+
+def test_a_half_written_bullet_counts_as_missing():
+    """The cut lands mid-line far more often than on a boundary. A bullet
+    the cut left half-written is not a finding a reader can act on, and
+    counting it as shown would understate the shortfall by exactly the
+    finding most likely to be misread."""
+    kept = "- **high** `x` — the whole line\n- **high** `y` — half a li"
+    bullets = ["- **high** `x` — the whole line", "- **high** `y` — half a line"]
+    assert check_run._shown_findings(kept, bullets) == 1
+
+
+def test_identical_findings_are_counted_once_each():
+    """`_shown_findings` scans from a cursor that only moves forward. Two
+    findings that render to the same bullet — same severity, same file,
+    same sentence — must consume two matches, not match the one surviving
+    line twice and report a shortfall smaller than the list."""
+    bullet = "- **low** `api/doug/store.py` — the same sentence twice"
+    assert check_run._shown_findings(bullet, [bullet, bullet]) == 1
+    assert check_run._shown_findings(bullet + "\n" + bullet, [bullet, bullet]) == 2
 
 
 def test_deviations_render_under_an_unvalidated_heading():
