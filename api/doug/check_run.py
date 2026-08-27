@@ -842,7 +842,6 @@ def _shown_findings(kept: str, bullets: list[str]) -> int:
     return len(bullets)
 
 
-
 def render(
     tier: str,
     verdict: Verdict,
