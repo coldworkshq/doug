@@ -1778,17 +1778,19 @@ class FakeReconcileGH:
     None, which is the shape #259 is about: GitHub is removing the field, and
     the response that reaches the reconciler has 46 keys instead of 48. A key
     present with a null value is a different bug and this fake can express
-    both, because the fallback must fire on either.
+    both, because the lookup must fire on either.
 
-    `merged_events` supplies the issue-events fallback: {pr_number: commit_id}.
-    `events_calls` records every lookup so a test can prove the fallback is not
-    bought on the PRs that do not need it.
+    `merge_commits` supplies the GraphQL fallback: {pr_number: oid}. A number
+    absent from it answers `mergeCommit: null`, which is what GitHub returns
+    for a PR that was closed without merging. `graphql_calls` records every
+    lookup so a test can prove the fallback is not bought on the PRs that do
+    not need it.
     """
 
-    def __init__(self, pulls, merge_shas, *, trimmed=False, merged_events=None, event_pages=1):
+    def __init__(self, pulls, merge_shas, *, trimmed=False, merge_commits=None):
         self._merge_shas = merge_shas
-        self._merged_events = merged_events or {}
-        self.events_calls: list[tuple[int, int]] = []
+        self._merge_commits = merge_commits or {}
+        self.graphql_calls: list[int] = []
 
         def _get(*, owner, repo, pull_number):
             if trimmed:
@@ -1797,32 +1799,19 @@ class FakeReconcileGH:
                 body = {"merge_commit_sha": self._merge_shas.get(pull_number)}
             return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: body))
 
-        def _list_events(*, owner, repo, issue_number, per_page, page):
-            self.events_calls.append((issue_number, page))
-            commit_id = self._merged_events.get(issue_number)
-            headers = {}
-            if event_pages > 1:
-                headers["link"] = (
-                    f'<https://api.github.com/x?per_page={per_page}&page=2>; rel="next", '
-                    f'<https://api.github.com/x?per_page={per_page}&page={event_pages}>; rel="last"'
-                )
-            # Oldest first, and a merge is the last thing that happens to a PR:
-            # the merged event lives on the LAST page, never the first.
-            if page == event_pages and commit_id is not None:
-                events = [{"event": "merged", "commit_id": commit_id}]
-            else:
-                events = [{"event": "labeled"}]
-            return SimpleNamespace(
-                raw_response=SimpleNamespace(json=lambda: events, headers=headers)
-            )
-
         self.rest = SimpleNamespace(
             pulls=SimpleNamespace(
                 list=lambda **kw: SimpleNamespace(parsed_data=pulls),
                 get=_get,
-            ),
-            issues=SimpleNamespace(list_events=_list_events),
+            )
         )
+
+    def graphql(self, query, variables):
+        number = variables["number"]
+        self.graphql_calls.append(number)
+        oid = self._merge_commits.get(number)
+        commit = {"oid": oid} if oid is not None else None
+        return {"repository": {"pullRequest": {"mergeCommit": commit}}}
 
 
 def test_reconcile_outcomes_enqueues_a_missed_merge(tmp_path, monkeypatch):
@@ -1844,7 +1833,7 @@ def test_reconcile_outcomes_enqueues_a_missed_merge(tmp_path, monkeypatch):
     assert row_14["merged_head_sha"] == "a" * 40
 
 
-def test_reconcile_outcomes_falls_back_to_the_merged_event(tmp_path, monkeypatch):
+def test_reconcile_outcomes_falls_back_to_the_merge_commit(tmp_path, monkeypatch):
     """#259, the failure that made both of this Job's first executions sweep zero.
 
     GitHub is removing merge_commit_sha from REST pull payloads and already
@@ -1859,14 +1848,14 @@ def test_reconcile_outcomes_falls_back_to_the_merged_event(tmp_path, monkeypatch
     """
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
-    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={5: "e" * 40})
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merge_commits={5: "e" * 40})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
     assert worker.reconcile_outcomes(1) == 2  # 14- and 60-day windows
 
     rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
     assert {r["merge_commit_sha"] for r in rows} == {"e" * 40}
-    assert gh.events_calls == [(5, 1)]
+    assert gh.graphql_calls == [5]
 
 
 def test_reconcile_outcomes_does_not_buy_the_fallback_when_the_field_is_there(
@@ -1878,11 +1867,11 @@ def test_reconcile_outcomes_does_not_buy_the_fallback_when_the_field_is_there(
     every sweep forever, for a field that is present today."""
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
-    gh = FakeReconcileGH([pull], {5: "c" * 40}, merged_events={5: "e" * 40})
+    gh = FakeReconcileGH([pull], {5: "c" * 40}, merge_commits={5: "e" * 40})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
     assert worker.reconcile_outcomes(1) == 2
-    assert gh.events_calls == []
+    assert gh.graphql_calls == []
     rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
     assert {r["merge_commit_sha"] for r in rows} == {"c" * 40}
 
@@ -1898,7 +1887,7 @@ def test_reconcile_outcomes_skips_when_neither_source_carries_the_sha(
     how #259 stayed invisible for two executions."""
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
-    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={})
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merge_commits={})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
     assert worker.reconcile_outcomes(1) == 0
@@ -1906,31 +1895,26 @@ def test_reconcile_outcomes_skips_when_neither_source_carries_the_sha(
     assert "no usable merged event" in capsys.readouterr().err
 
 
-def test_the_merged_event_is_found_on_a_busy_pr(tmp_path, monkeypatch):
-    """The walk goes backwards after page 1, because the event is at the end.
+def test_reconcile_outcomes_skips_a_pr_the_graph_says_was_never_merged(
+    tmp_path, monkeypatch
+):
+    """`mergeCommit: null` is a correct answer, not an error.
 
-    Issue events come back oldest-first and a merge is the last thing that
-    happens to a PR. A forward walk under a page cap therefore reads the three
-    OLDEST pages of a busy thread and never reaches the one event it came for.
-
-    Doug caught that shape (reader:incomplete-pagination) and was right that the
-    consequence is permanent rather than retried: the reconciler runs this same
-    helper on every pass, so the same PR is skipped on every pass, silently and
-    forever. 40 pages here is well past any cap a forward walk could carry.
+    Two earlier drafts of this helper read the issue-events API and had to page
+    to find a `merged` event. Doug killed both: events come oldest-first, a
+    merge is late, and post-merge activity pushes it into the middle, so any
+    bounded walk skips a busy PR permanently and silently — the reconciler runs
+    this helper on every pass. The graph asks for one field and pages not at
+    all, which is why this test is about nulls rather than page counts.
     """
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
-    gh = FakeReconcileGH(
-        [pull], {}, trimmed=True, merged_events={5: "e" * 40}, event_pages=40
-    )
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merge_commits={})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
-    assert worker.reconcile_outcomes(1) == 2
-
-    rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
-    assert {r["merge_commit_sha"] for r in rows} == {"e" * 40}
-    # Page 1 first because almost every PR fits there, then the last page.
-    assert gh.events_calls == [(5, 1), (5, 40)]
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+    assert gh.graphql_calls == [5]
 
 
 def test_the_merged_event_sha_is_length_checked_like_the_payload_field(
@@ -1947,7 +1931,7 @@ def test_the_merged_event_sha_is_length_checked_like_the_payload_field(
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
     over_long = "f" * (store.outcome_jobs.c.merge_commit_sha.type.length + 1)
-    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={5: over_long})
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merge_commits={5: over_long})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
     assert worker.reconcile_outcomes(1) == 0

@@ -2599,8 +2599,24 @@ def _record_merge_with_lookup(payload: dict) -> None:
     Its own named function rather than a lambda or a partial so that the task
     shows up by name in a traceback, and so the one call site that is allowed
     to spend a token mint on a merge is greppable.
+
+    Nothing escapes. merge_sha.resolve already swallows transport failures, but
+    the row write after it does not, and this runs in a background task after
+    the 202 — so an exception here has no request to fail and would surface as
+    an unhandled server-side error with the outcome row silently missing
+    (Doug, `reader:error-handling-gap`). Caught and logged instead: the
+    6-hourly reconciler is the retry, and it can only be the retry if this
+    failure is visible rather than fatal.
     """
-    _record_merge(payload, allow_lookup=True)
+    try:
+        _record_merge(payload, allow_lookup=True)
+    except Exception as e:  # noqa: BLE001 — a background task has no caller to raise to
+        print(
+            f"doug: queued merge-commit lookup failed for PR "
+            f"#{_obj(payload.get('pull_request')).get('number')} "
+            f"({type(e).__name__}: {e}); the reconciler is the retry",
+            file=sys.stderr,
+        )
 
 
 def _payload_timestamp(raw) -> datetime | None:
@@ -2679,7 +2695,28 @@ def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
     if carried is None and not allow_lookup:
         # The fast path found nothing. Say so and let the caller queue the
         # lookup off the request path rather than paying for it here.
-        return can_look_up and merged_at is not None
+        #
+        # Both branches log. Doug caught the first version returning before the
+        # five-fact guard's message (`reader:silent-failure-path`): a merge with
+        # no installation id, no full_name, or no merged_at was dropped with no
+        # line at all, which is a REGRESSION in observability for exactly the
+        # case #259 is about — a lane going quiet and looking like nothing to do.
+        if can_look_up and merged_at is not None:
+            print(
+                f"doug: merged PR #{number} carried no merge_commit_sha; "
+                "queueing the merge-commit lookup off the request path",
+                file=sys.stderr,
+            )
+            return True
+        print(
+            f"doug: merged PR #{pr.get('number')} carried no merge_commit_sha "
+            "and cannot be looked up "
+            f"(merged_at={merged_at is not None}, installation="
+            f"{isinstance(installation_id, int)}, repo={bool(owner and name)}); "
+            "outcome clock not started",
+            file=sys.stderr,
+        )
+        return False
     merge_commit_sha = carried
     if merge_commit_sha is None and can_look_up:
         merge_commit_sha = merge_sha.resolve(

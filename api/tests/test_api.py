@@ -1246,16 +1246,9 @@ def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
     calls: list[int] = []
 
     class _Gh:
-        def __init__(self):
-            def _list_events(*, owner, repo, issue_number, per_page, page):
-                calls.append(issue_number)
-                return SimpleNamespace(
-                    raw_response=SimpleNamespace(
-                        json=lambda: [{"event": "merged", "commit_id": "e" * 40}]
-                    )
-                )
-
-            self.rest = SimpleNamespace(issues=SimpleNamespace(list_events=_list_events))
+        def graphql(self, query, variables):
+            calls.append(variables["number"])
+            return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
 
     monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
 
@@ -1311,15 +1304,8 @@ def test_the_queued_retry_cannot_double_a_row(tmp_path, monkeypatch):
     del payload["pull_request"]["merge_commit_sha"]
 
     class _Gh:
-        def __init__(self):
-            def _list_events(*, owner, repo, issue_number, per_page, page):
-                return SimpleNamespace(
-                    raw_response=SimpleNamespace(
-                        json=lambda: [{"event": "merged", "commit_id": "e" * 40}]
-                    )
-                )
-
-            self.rest = SimpleNamespace(issues=SimpleNamespace(list_events=_list_events))
+        def graphql(self, query, variables):
+            return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
 
     monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
 
@@ -1328,6 +1314,63 @@ def test_the_queued_retry_cannot_double_a_row(tmp_path, monkeypatch):
 
     jobs = _table(tmp_path, store.outcome_jobs)
     assert sorted(job["window_days"] for job in jobs) == [14, 60]
+
+
+def test_a_merge_that_cannot_be_looked_up_still_says_so(tmp_path, monkeypatch, capsys):
+    """The observability half, and it was a regression I introduced.
+
+    Doug caught the first version of this fix returning before the five-fact
+    guard's stderr line (`reader:silent-failure-path`): a merge with no
+    merge_commit_sha AND no way to look one up was dropped with no log at all.
+    That is worse than what it replaced, and it is exactly the shape of #259 —
+    a lane going quiet while looking like it had nothing to do. Both exits from
+    the fast path log now, and they say different things, because "queued" and
+    "dropped" are different states an operator must be able to tell apart.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+    del payload["pull_request"]["base"]["repo"]["full_name"]
+
+    assert api._record_merge(payload) is False
+    assert _table(tmp_path, store.outcome_jobs) == []
+    err = capsys.readouterr().err
+    assert "cannot be looked up" in err
+    assert "outcome clock not started" in err
+
+
+def test_the_queued_lookup_never_escapes_its_background_task(tmp_path, monkeypatch, capsys):
+    """A background task has no request to fail.
+
+    merge_sha.resolve swallows transport errors, but the row write after it does
+    not, and this runs after the 202 — so an exception here surfaces as an
+    unhandled server-side error with the outcome row silently missing
+    (Doug, `reader:error-handling-gap`). The reconciler is the retry, and it can
+    only be the retry if this failure is logged rather than fatal.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    # The lookup SUCCEEDS and the row write is what fails. resolve() already
+    # swallows transport errors, so a failing lookup never reaches the write —
+    # this test would prove nothing if the graph were the thing that broke.
+    monkeypatch.setattr(
+        api.app_auth, "installation_client",
+        lambda i: SimpleNamespace(
+            graphql=lambda q, v: {
+                "repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        api.store, "enqueue_outcome_jobs",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db is down")),
+    )
+
+    api._record_merge_with_lookup(payload)  # must not raise
+
+    assert "the reconciler is the retry" in capsys.readouterr().err
 
 
 def test_a_merge_webhook_that_carries_the_sha_mints_no_client(tmp_path, monkeypatch):
