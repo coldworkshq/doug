@@ -1,106 +1,94 @@
 # HANDOFF — doug
 
-State:    review — PR #233 open (Closes #181), all 6 CI checks green on
-          8bcb26c. check_run.render's SUMMARY_LIMIT cut now NAMES the
-          findings it removed, counted over exactly what the summary table
-          counts. Doug's own read of the PR dispositioned in
-          docs/reviews/2026-08-27-pr-233-doug-self-review.md: 1 of 4 real
-          (fixed here), 2 false positives, 1 real but not this PR's (#234).
-          Round 2 @ 7363b4b: CLEARED 0.22, four low — one real
-          (`_whole_lines` used `edge > 0`, so a prefix whose only newline
-          is at index 0 returned the half-line the helper exists to
-          remove; unreachable from render, fixed anyway because it is a
-          contract break in a tested pure helper). api suite 1691 passed,
+State:    review — #235 fixed, PR #243 OPEN off origin/main, branch
+          fix-235-findings-log-rule-prefix. a9a5e1c fixed the first CI run's
+          `web` failure; the head now also carries _RULE_RE pinning BOTH
+          halves kebab-case, ADR-0026, the preregistration amendment that
+          hangs on it, and #243's own review dispositioned into the log.
+          Verified locally before push: api 1702, web 376, console 113,
           ruff clean.
-          Round 3 @ c395ebc: CLEARED 0.24, three low — none a live
-          defect, ALL THREE worth acting on and fixed (`_trim_empty_fold`
-          now reads structure not bullet syntax; `_shown_findings` matches
-          whole LINES, which closes a real forgery path where a label
-          embedding another finding's bullet moved the cursor; the cap
-          invariant is asserted on six shapes instead of pinned by
-          arithmetic). First read in this file where every finding
-          survives. api suite 1694 passed.
-          Round 4 @ 182af56: FLAGGED 0.30 — the one medium is #234
-          re-derived (a diff can suppress the whole findings list), which
-          no commit here can close; the two lows were test coverage and
-          are closed. LOOP STOPPED at round 4 on purpose: a fifth read
-          would be reading a diff of test files. Four rounds, 13 findings,
-          6 real; rounds 3-4 produced zero inventions against rounds 1-2's
-          three — the difference is small pure helpers with stated
-          contracts. api suite 1696 passed.
-Next:     Andrew reviews/merges #233. All 6 checks green on 182af56; the
-          round-4 tests need one more CI pass.
-Blockers: none.
+          THE CHECKOUT MOVED MID-SESSION: ~/Projects/doughq/repo is gone,
+          the repo is now ~/Projects/coldworkshq/doug. Working tree, branch
+          and uncommitted changes all survived. `api/.venv/bin/python` works
+          again (`-m pytest` runs the whole suite); if `uv run` still fails
+          on the old baked-in paths, `uv sync --reinstall` in api/.
+Next:     Watch CI on #243, then Andrew merges. Unrelated and still standing:
+          the #229/#233 deploy approval below.
+Blockers: none
+
 Decisions this session:
-- The shortfall is counted over `_countable` — the same population
-  `_finding_counts` prints — so the notice subtracts from the number
-  already on the surface. Rejected counting every rendered bullet:
-  settlement notices are excluded from the table cell (they mark DISPROVED
-  findings, #109), so including them in the total would make the two
-  numbers unreconcilable, which is the whole defect.
-- The reserve is sized for the WIDEST notice the render could need and the
-  notice is then written from what the cut actually left, so the summary
-  lands a few bytes under 60,000 instead of exactly on it. Rejected a
-  fixed-point loop over the digit count: the circularity (count needs the
-  cut, cut needs the count's width) is worth three bytes, not a loop.
-- The cut backs up to the last line boundary, and a `<details>` it leaves
-  open is closed (a fold it emptied is dropped instead). Found while
-  writing this: an unterminated disclosure swallows the rest of the
-  document, so the truncation notice itself would have rendered inside a
-  collapsed block — #181's defect reintroduced by its own fix.
-- `dropped == 0` keeps the bare sentence: the cut ate prose sections below
-  the findings list, and "0 of 12 findings" sends a reader hunting for one
-  that is on the page.
-- Doug's finding 1 (low, `reader:off-by-one`) is REAL one case over from
-  where it was stated: the line-boundary backup fired even when the cut had
-  already landed on a newline, dropping a bullet that fit. Now
-  `_whole_lines`, tested directly. Findings 2 and 3 are false positives —
-  `_finding_counts`'s degraded branch prints the same number the notice
-  subtracts from, and the truncation string has no consumer outside the
-  module. Finding 2's second half was right (no test for the degraded
-  cell); that test exists now and passes unchanged.
-- `_oneline` does not neutralise a bare `<`, so a model label carrying
-  `<details>` collapses every finding below it, on the check run and in the
-  PR comment. Predates this PR — filed as #234, not fixed here.
-Pointers: branch claude/github-issue-181-9e669e ·
-          api/doug/check_run.py (`_truncation_notice`, `_shown_findings`,
-          `_countable`, `_trim_empty_fold`, `_close_details`, the cut at the
-          bottom of `render`) · api/tests/test_check_run.py (12 new tests) ·
-          PR #233 · #181 · #234
+- 2026-08-27: the issue's premise was wrong about 9 of its 18 "foreign" rows.
+  They are reader findings recorded without the tag — commits 7fa5869 (#71,
+  "Doug's review of #71 raised five findings") and da43e13 (#75) — and the
+  11 backfill untagged rows likewise (3f7d156). Bucketing them under (none)
+  would have traded a reader share inflated by foreign rows for one deflated
+  by its own — rejected: ship the slicing alone and leave 20 rows untagged.
+- All 20 rules tagged `reader:` in place, verdicts untouched, verified
+  field-by-field against HEAD as rule-only edits. Andrew approved the data
+  edit before it was made — rejected: leaving the log frozen.
+- `parse_row` now REQUIRES `<prefix>:<slug>`, so a fourth vocabulary
+  (`security:` is coming) cannot pool silently. Only the prefix shape is
+  pinned; the slug stays free-form because it is the reader's own
+  `category_slug` — rejected: a closed registry of known prefixes, which
+  would reject a real finding at disposition time.
+- The reader's real share is 48.3% (176 rows), not the 50.0% the pooled
+  file reads. The plan lane's 12 rows run 75% real. web/'s published
+  snapshot and the command it tells readers to run were both pooled and are
+  now scoped on both axes.
+- The local run missed `npm test --workspace=web`; ruff + pytest + tsc + lint
+  are not the CI gate for web/. public-surface.test.mjs guards the published
+  copy, and llms.txt is a SECOND surface carrying the same snapshot and
+  command — it was missed entirely until CI failed.
+- The guard's command assertion is now three asserts (command, --repo doug,
+  --rule-prefix reader:) instead of one contiguous regex — it survives a line
+  break and fails if anyone republishes the unscoped command — rejected:
+  unwrapping the command in the rail to satisfy the old regex.
+- public-surface.test.mjs mirrored the pooling in JS (dougRows filtered on
+  repo alone), now scoped through readerRows.
+- reader-effort preregistration AMENDED, not restated: 2 deviation rows fall
+  inside its recorded window, both on its last day, so the baseline table
+  stands and only the extraction changes — rejected: recomputing a
+  pre-registered baseline post hoc.
+Pointers: branch main (unbranched) · api/doug/findings_log.py (prefix_of,
+          normalize_prefix, _RULE_RE, rates(rule_prefix=)) ·
+          api/tests/test_findings_log.py · docs/findings-log.jsonl (20 rows) ·
+          docs/REVIEWING.md · web/app/docs/what-doug-gets-wrong/page.tsx ·
+          docs/design/reader-effort/preregistration.md ·
+          docs/superpowers/specs/2026-08-06-doug-console-design.md
 
---- prior stream (check-run file links + triage, PR #229) below, preserved ---
+--- prior stream (#229/#233 file links + triage) below, preserved ---
 
 
-State:    building — PR open: check-run findings get file links and a triage
-          layout (branch comment-file-links-and-triage). Andrew asked for two
-          things off the #227 review comment: links to the file/line of each
-          finding, and a condensed attention router. File links: DONE. Line
-          links: NOT possible without settling #131 (verify tier is shown no
-          diff, so it cannot derive a line; DOUG_VERIFY_INSTALLATIONS empty;
-          hunk hashes deliberately drop the @@ header, hunks.py:46-60) —
-          filed as #230.
-Next:     Andrew reviews/merges the PR (all 6 CI checks green). The merge
-          deploys and the first check run after it IS the proof that GitHub
-          renders <details> in a check run SUMMARY — the one thing here no
-          local test can reach. Prior art says yes: dorny/test-reporter
-          posts <details> through the Checks API under the same 65535 cap.
-          If it renders literally, revert the two _fold calls; links and
-          severity ordering are unaffected. Doug's check on #229 itself is
-          the DEPLOYED renderer, so it shows the old shape.
-Blockers: none. Doug's own read of 3eb5776 dispositioned in
-          docs/reviews/2026-08-27-pr-229-doug-self-review.md: 4 of 5 real
-          and fixed/accepted, the ONE high is a false positive (claimed
-          _verdict_bundle KeyErrors on r["file"] because the diff shows no
-          SELECT change — the query is select(findings), whole-table). Clean
-          instance of #175. Round 2 @ 5983ef9: 1 more false positive
-          (missing-import; import sys is at worker.py:23) + 1 REAL defect
-          Doug found and 11 fold tests missed — an all-low list folded
-          itself into an empty ### Findings under a Flagged title. Fixed.
-          Both false positives describe states CI ALREADY makes unreachable
-          (1,677 tests; ruff F821) → filed #232, sharper form of #175.
-          Suites green: api 1677, web 376, console 113, ruff check clean
-          (ruff format is NOT a gate — 74 files predate it).
+State:    review — BOTH MERGED, NEITHER LIVE. #229 (file links + triage
+          layout) merged f82b620 05:32 UTC; #233 (the summary cut names the
+          findings it drops, #181) merged 2ab538c 19:01 UTC. api/doug/check_run.py
+          on main renders `**severity** · [`path`](blob/<sha12>/path) · `rule``
+          and folds lows behind a counted <details>; pr_comment mirrors it
+          byte for byte (ADR-0014), so both surfaces get it. Line links are
+          still impossible (#230, blocked by #131) — the link reaches the
+          file at the commit Doug read, not the line.
+Next:     Andrew APPROVES the waiting deploy run 33038580214 (ea6d362, `web`
+          job, `production` environment, reviewer drewjst). Nothing has
+          deployed since 04:10 UTC because that run has held the
+          `deploy-refs/heads/main` concurrency lock for ~16h under
+          `cancel-in-progress: false`: #229's own deploy (33042841775) was
+          CANCELLED as a superseded queue entry, and #233's (33106436217) is
+          queued behind it. Approving releases the queue; 2ab538c touches
+          `api/`, so the changes filter sets api=true and check_run.py ships
+          with both PRs' work. The first check run after that IS the proof
+          that GitHub renders <details> in a check-run SUMMARY — the one
+          thing no local test reaches. If it renders literally, revert the
+          two _fold calls; links and severity ordering are unaffected.
+Blockers: the deploy queue is stalled on that single approval. Every Doug
+          comment Andrew is looking at today is the 04:10 UTC renderer, which
+          predates both merges — the old shape is expected, not a regression.
 Decisions this session:
+- 2026-08-27: the merged link work is invisible because of the approval
+  gate, not the code. ADR-0021's `production` reviewer plus
+  `cancel-in-progress: false` means one unapproved run silently cancels the
+  NEXT merge's deploy rather than queueing it — #229 shipped nothing and
+  said nothing. Diagnosis only; no workflow change made — rejected: relaxing
+  the gate or force-dispatching a deploy, both Andrew's call.
 - File links are built from THIS module's owner/repo/head_sha with the path
   percent-encoded, NOT validated against PRMetadata.files — rejected the
   closed-set check because the repair path has no file list

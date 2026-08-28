@@ -89,6 +89,26 @@ This is Doug's own review history, not a held-out corpus. It is the only
 labelled data that exists at the granularity the question asks about — *findings*,
 not revert-prediction.
 
+### Amendment, 2026-08-27: the corpus is the reader's rows, not the file's
+
+The baseline above was read off the whole file. The file is not one instrument:
+the plan lane writes `deviation:` / `beyond-ticket:` / `missing-from-pr:` rows
+into it in a different vocabulary, and `findings_log.rates()` had no way to keep
+them out of a share (#235). Two `deviation:` rows fall inside the recorded window
+— both on 2026-08-20, its last day — so the numbers in the table stand as
+recorded and are not restated here.
+
+What changes is the extraction, for this study and any that reuses it: the
+corpus is `rate --repo doug --rule-prefix reader:`, which is what "Doug's own
+review history" was always meant to name.
+
+Sanctioned by **ADR-0026**, which is what this amendment hangs on rather than
+its own reasonableness. Doug flagged the first draft of it as a deviation —
+amending a pre-registered document post hoc is not licensed by ADR-0004 or
+ADR-0018 — and that was correct about the mechanism even though no
+pre-registered number moves. ADR-0018 is the precedent for the shape: a record
+that names what it contradicts, not a quiet edit.
+
 ### Amendment, 2026-08-23: the AUC replication was cheaper than "declined" implies
 
 An earlier draft of this document justified the findings-log corpus partly on the

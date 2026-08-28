@@ -6,6 +6,12 @@ seeded from prose demonstrate the schema; they are quarantined the same way
 
 This module does not change ADR-0012's frozen five reader constants. It only makes the
 meta-review denominator enforceable: schema check, append, and rates.
+
+Two axes split the file, and both exist for the same reason. `repo` splits it
+because a `pr` is only unique inside one repository. The `rule` prefix splits it
+because more than one instrument writes here — the reader, the plan lane's
+deviation findings — and they speak different vocabularies. `patterns.from_rule`
+already refuses to pool them; so does `rates`.
 """
 
 from __future__ import annotations
@@ -32,6 +38,16 @@ REQUIRED = frozenset({"date", "pr", "layer", "rule", "verdict", "changed", "sett
 # mixes two of them is not a rate of anything.
 DEFAULT_REPO = "doug"
 _REPO_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# `rule` is `<prefix>:<slug>`, both halves kebab-case. The prefix names the
+# instrument that raised the finding and is the unit `rates` slices on. The slug
+# is pinned too, and that is not symmetry for its own sake: on the reader tier
+# the slug is `category_slug`, a free-form schema string with no enum and no
+# pattern (reader.py:130-137), so `reader:Foo Bar` and `reader:foo-bar` are both
+# reachable model output and would group as two patterns downstream
+# (`patterns.normalize` neither case-folds nor slugifies). Transcription is the
+# one place that can still be refused, so it is.
+_RULE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*$")
+NO_PREFIX = "(none)"
 LAYERS = frozenset({"doug", "agent-reviewer"})
 VERDICTS = frozenset({"real", "disproved", "adjacent"})
 SOURCES = frozenset({"prospective", "backfill"})
@@ -103,6 +119,15 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
     for key in ("date", "rule", "settled_by"):
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise FindingsLogError(f"{where}: {key} must be a non-empty string")
+    if not _RULE_RE.match(raw["rule"]):
+        raise FindingsLogError(
+            f"{where}: rule must be <prefix>:<slug>, both kebab-case, e.g. "
+            f"reader:missing-import (got {raw['rule']!r}). The prefix names the "
+            f"instrument that raised the finding, and an untagged rule lands in a "
+            f"share it does not belong to. If the reader emitted a slug in some "
+            f"other shape, kebab-case it here and put the original in `note` — the "
+            f"log is transcription, and two spellings of one defect are two patterns"
+        )
     repo = raw.get("repo", DEFAULT_REPO)
     if not isinstance(repo, str) or not _REPO_RE.match(repo):
         raise FindingsLogError(
@@ -125,6 +150,29 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
         repo=repo,
         note=note,
     )
+
+
+def prefix_of(rule: str) -> str:
+    """The instrument a rule belongs to — its prefix, colon included.
+
+    `NO_PREFIX` for an untagged rule. `parse_row` refuses those, so this only
+    reports on rows built in memory; it never silently files one under a real
+    instrument. Agrees with `patterns.RULE_PREFIX` by construction, pinned in
+    tests/test_findings_log.py.
+    """
+    head, sep, _ = rule.partition(":")
+    return head + sep if sep else NO_PREFIX
+
+
+def normalize_prefix(prefix: str) -> str:
+    """Accept `reader` for `reader:`.
+
+    A caller who drops the colon would otherwise scope to a prefix no row can
+    match and read the empty result as a measurement.
+    """
+    if prefix == NO_PREFIX or prefix.endswith(":"):
+        return prefix
+    return prefix + ":"
 
 
 def load_rows(path: Path | None = None) -> list[FindingRow]:
@@ -156,6 +204,7 @@ class Rates:
     by_verdict: dict[str, int]
     by_layer: dict[str, int]
     by_repo: dict[str, int]
+    by_rule_prefix: dict[str, int]
     changed_true: int
 
     def as_dict(self) -> dict[str, Any]:
@@ -164,6 +213,7 @@ class Rates:
             "by_verdict": dict(self.by_verdict),
             "by_layer": dict(self.by_layer),
             "by_repo": dict(self.by_repo),
+            "by_rule_prefix": dict(self.by_rule_prefix),
             "changed_true": self.changed_true,
             "share": {
                 v: (self.by_verdict.get(v, 0) / self.n if self.n else None)
@@ -172,21 +222,37 @@ class Rates:
         }
 
 
-def rates(rows: Iterable[FindingRow], *, repo: str | None = None) -> Rates:
-    """Prospective-only. Pass `repo` to scope: a share computed across two
-    repositories describes neither, so `by_repo` is always reported and the
-    scoped call is what any published number should come from."""
+def rates(
+    rows: Iterable[FindingRow],
+    *,
+    repo: str | None = None,
+    rule_prefix: str | None = None,
+) -> Rates:
+    """Prospective-only, and scoped on two axes for the same reason.
+
+    A share computed across two repositories describes neither, and neither does
+    one computed across two instruments: the reader's findings and the plan
+    lane's deviation findings are different vocabularies that happen to share a
+    file, exactly as `patterns.from_rule` says. So `by_repo` and
+    `by_rule_prefix` are always reported, and a published number should come
+    from a call scoped on both.
+    """
     prospective = [r for r in rows if r.source == "prospective"]
     if repo is not None:
         prospective = [r for r in prospective if r.repo == repo]
+    if rule_prefix is not None:
+        wanted = normalize_prefix(rule_prefix)
+        prospective = [r for r in prospective if prefix_of(r.rule) == wanted]
     by_verdict = Counter(r.verdict for r in prospective)
     by_layer = Counter(r.layer for r in prospective)
     by_repo = Counter(r.repo for r in prospective)
+    by_rule_prefix = Counter(prefix_of(r.rule) for r in prospective)
     return Rates(
         n=len(prospective),
         by_verdict=dict(by_verdict),
         by_layer=dict(by_layer),
         by_repo=dict(by_repo),
+        by_rule_prefix=dict(by_rule_prefix),
         changed_true=sum(1 for r in prospective if r.changed),
     )
 
@@ -242,6 +308,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="scope the rate to one repository (default: all, with by_repo shown)",
     )
+    rp.add_argument(
+        "--rule-prefix",
+        default=None,
+        help=(
+            "scope the rate to one instrument's vocabulary, e.g. reader: "
+            "(default: all, with by_rule_prefix shown)"
+        ),
+    )
 
     ap = sub.add_parser("append", help="append one prospective disposition")
     ap.add_argument("--pr", type=int, required=True)
@@ -266,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ok: {len(rows)} rows", file=sys.stderr)
             return 0
         if args.cmd == "rate":
-            scoped = rates(check(path), repo=args.repo)
+            scoped = rates(check(path), repo=args.repo, rule_prefix=args.rule_prefix)
             print(json.dumps(scoped.as_dict(), indent=2, sort_keys=True))
             return 0
         if args.cmd == "append":

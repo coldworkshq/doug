@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from doug import findings_log as fl
+from doug import patterns
 
 REPO_LOG = Path(__file__).resolve().parents[2] / "docs" / "findings-log.jsonl"
 
@@ -27,7 +28,7 @@ def test_rates_exclude_backfill():
             date="2026-08-03",
             pr=1,
             layer="doug",
-            rule="a",
+            rule="reader:a",
             verdict="disproved",
             changed=False,
             settled_by="x",
@@ -37,7 +38,7 @@ def test_rates_exclude_backfill():
             date="2026-08-03",
             pr=2,
             layer="doug",
-            rule="b",
+            rule="reader:b",
             verdict="real",
             changed=True,
             settled_by="y",
@@ -47,7 +48,7 @@ def test_rates_exclude_backfill():
             date="2026-08-03",
             pr=3,
             layer="agent-reviewer",
-            rule="c",
+            rule="reader:c",
             verdict="adjacent",
             changed=False,
             settled_by="z",
@@ -68,7 +69,7 @@ def test_parse_row_rejects_collapsed_verdict_changed():
                 "date": "2026-08-03",
                 "pr": 1,
                 "layer": "doug",
-                "rule": "x",
+                "rule": "reader:x",
                 "verdict": "real",
                 "changed": "yes",
                 "settled_by": "here",
@@ -150,7 +151,7 @@ def test_repo_must_be_a_slug():
                     "date": "2026-08-19",
                     "pr": 6,
                     "layer": "doug",
-                    "rule": "x",
+                    "rule": "reader:x",
                     "verdict": "real",
                     "changed": True,
                     "settled_by": "here",
@@ -165,7 +166,7 @@ def _row(repo: str, verdict: str = "real") -> fl.FindingRow:
         date="2026-08-19",
         pr=6,
         layer="doug",
-        rule="r",
+        rule="reader:r",
         verdict=verdict,
         changed=False,
         settled_by="s",
@@ -222,7 +223,7 @@ def test_cli_append_requires_repo(tmp_path, capsys):
                 "--layer",
                 "doug",
                 "--rule",
-                "x",
+                "reader:x",
                 "--verdict",
                 "real",
                 "--changed",
@@ -230,3 +231,127 @@ def test_cli_append_requires_repo(tmp_path, capsys):
                 "y",
             ]
         )
+
+
+def test_findings_log_and_patterns_name_the_reader_the_same_way():
+    # The two modules slice on the same string. If one is retyped and the other
+    # is not, `patterns.from_rule` and `rates(rule_prefix=...)` would disagree
+    # about which rows are reader findings while both looked correct.
+    assert fl.prefix_of("reader:missing-import") == patterns.RULE_PREFIX
+    assert patterns.from_rule("reader:missing-import") == "missing-import"
+
+
+def test_a_rule_must_name_the_instrument_that_raised_it():
+    # Without a prefix a row lands in whatever share happens to be computed
+    # next. `patterns.from_rule` already refuses to pool vocabularies; the
+    # schema has to refuse to accept an untagged one in the first place.
+    for bad in (
+        "missing-import",
+        ":missing-import",
+        "reader:",
+        "Reader:x",
+        "read er:x",
+        # The slug half is pinned for the same reason, and these are reachable:
+        # `category_slug` is a free-form schema string, so the reader can emit
+        # any of them, and `patterns.normalize` would group each as its own
+        # pattern beside the kebab-case spelling of the same defect.
+        "reader:Foo Bar",
+        "reader: x",
+        "reader:missing_import",
+        "reader:missing-import ",
+    ):
+        with pytest.raises(fl.FindingsLogError, match="rule"):
+            fl.parse_row(
+                {
+                    "date": "2026-08-27",
+                    "pr": 235,
+                    "layer": "doug",
+                    "rule": bad,
+                    "verdict": "real",
+                    "changed": True,
+                    "settled_by": "here",
+                    "source": "prospective",
+                }
+            )
+
+
+def _rule_row(rule: str, verdict: str = "real") -> fl.FindingRow:
+    return fl.FindingRow(
+        date="2026-08-27",
+        pr=235,
+        layer="doug",
+        rule=rule,
+        verdict=verdict,
+        changed=False,
+        settled_by="s",
+        source="prospective",
+    )
+
+
+def test_rates_scope_to_one_rule_prefix():
+    rows = [
+        _rule_row("reader:missing-import", "disproved"),
+        _rule_row("reader:unsafe-migration"),
+        _rule_row("deviation:contradicts-ticket"),
+    ]
+    everything = fl.rates(rows)
+    assert everything.n == 3
+    # Unscoped, the split is always visible, so a pooled share cannot be quoted
+    # unaware — the same guarantee `by_repo` gives.
+    assert everything.by_rule_prefix == {"reader:": 2, "deviation:": 1}
+
+    scoped = fl.rates(rows, rule_prefix="reader:")
+    assert scoped.n == 2
+    assert scoped.by_verdict == {"real": 1, "disproved": 1}
+    assert fl.rates(rows, rule_prefix="deviation:").n == 1
+    # A caller who drops the colon gets the rows, not a silent zero they would
+    # read as a measurement.
+    assert fl.rates(rows, rule_prefix="reader").n == 2
+
+
+def test_a_foreign_prefix_row_cannot_move_the_reader_share():
+    # The defect this pins (#235): `rates` split by verdict, layer and repo but
+    # not by instrument, so the plan lane's deviation findings — which run at a
+    # different real rate — were averaged into the reader's published share.
+    rows = fl.check(REPO_LOG)
+    before = fl.rates(rows, repo="doug", rule_prefix="reader:")
+    after = fl.rates(
+        [*rows, _rule_row("deviation:contradicts-ticket"), _rule_row("security:hardcoded-secret")],
+        repo="doug",
+        rule_prefix="reader:",
+    )
+    assert after.as_dict() == before.as_dict()
+    # And the reverse: pooled, those two rows do move it, which is why the
+    # scoped call is the one a published number comes from.
+    pooled = fl.rates([*rows, _rule_row("deviation:x"), _rule_row("security:y")], repo="doug")
+    assert pooled.as_dict() != fl.rates(rows, repo="doug").as_dict()
+
+
+def test_the_committed_log_has_no_untagged_rules():
+    # The 20 rows that predated the prefix requirement were reader findings
+    # recorded without the tag (commits 7fa5869 and da43e13 for the prospective
+    # nine, 3f7d156 for the backfill eleven). Leaving them untagged would have
+    # traded a reader share inflated by foreign rows for one deflated by its
+    # own.
+    prefixes = {fl.prefix_of(r.rule) for r in fl.check(REPO_LOG)}
+    assert fl.NO_PREFIX not in prefixes
+
+
+def test_append_refuses_an_untagged_rule_before_writing(tmp_path):
+    # append() re-parses through the same gate `check` uses, so the disposition
+    # is refused rather than written and found later. It does not guess the
+    # prefix: which instrument raised a finding is not derivable from its slug.
+    path = tmp_path / "log.jsonl"
+    path.write_text("")
+    with pytest.raises(fl.FindingsLogError, match="rule"):
+        fl.append(
+            pr=235,
+            layer="doug",
+            repo="doug",
+            rule="missing-import",
+            verdict="real",
+            changed=True,
+            settled_by="here",
+            path=path,
+        )
+    assert path.read_text() == ""
