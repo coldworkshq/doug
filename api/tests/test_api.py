@@ -1223,6 +1223,68 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     assert kicks == []
 
 
+def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
+    tmp_path, monkeypatch
+):
+    """#259 exposure 2, covered before it happens rather than after.
+
+    GitHub is removing merge_commit_sha from REST pull payloads. Webhook
+    payloads still carry it today, which is the only reason the outcome lane
+    has a source at all right now — the reconciler's copy is already gone on
+    some backend pools. When the removal reaches webhook serialization this
+    branch is where the lane goes dark AT THE SOURCE, and the only evidence
+    would be one stderr line per merge.
+
+    The key is deleted, not set to None: the trimmed response has 46 keys, not
+    48 with a null. Both must reach the fallback, and `merge_sha=None` in
+    test_a_merge_missing_the_facts... pins the other shape.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    calls: list[int] = []
+
+    class _Gh:
+        def __init__(self):
+            def _list_events(*, owner, repo, issue_number, per_page, page):
+                calls.append(issue_number)
+                return SimpleNamespace(
+                    raw_response=SimpleNamespace(
+                        json=lambda: [{"event": "merged", "commit_id": "e" * 40}]
+                    )
+                )
+
+            self.rest = SimpleNamespace(issues=SimpleNamespace(list_events=_list_events))
+
+    monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
+
+    assert _webhook("pull_request", payload).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert [job["window_days"] for job in sorted(jobs, key=lambda r: r["window_days"])] == [14, 60]
+    assert {job["merge_commit_sha"] for job in jobs} == {"e" * 40}
+    assert calls == [7]
+    # Still no read bought. The fallback is one REST call, not a model call.
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_a_merge_webhook_that_carries_the_sha_mints_no_client(tmp_path, monkeypatch):
+    """_record_merge runs inside the request, before the 202, so anything it
+    adds is on GitHub's 10-second delivery budget. The fallback costs a token
+    mint plus a REST call, and it must not be paid on the merges that do not
+    need it — which today is all of them."""
+    _hook_env(tmp_path, monkeypatch)
+
+    def _no(installation_id):
+        raise AssertionError("minted a client for a payload that carried the sha")
+
+    monkeypatch.setattr(api.app_auth, "installation_client", _no)
+
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+    assert {job["merge_commit_sha"] for job in _table(tmp_path, store.outcome_jobs)} == {"c" * 40}
+
+
 def test_a_merged_bot_pull_request_still_starts_the_outcome_clock(tmp_path, monkeypatch):
     """Bot-authored PRs skip the deep read, not the outcome loop. A
     Dependabot merge that lands is still production, and prereg §2.4

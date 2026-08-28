@@ -29,6 +29,7 @@ from . import (
     example_pack_service,
     ingest,
     install_flow,
+    merge_sha,
     outcome_queue,
     precision,
     reader,
@@ -2623,13 +2624,40 @@ def _record_merge(payload: dict) -> None:
         return
     base = _obj(pr.get("base"))
     merged_at = _payload_timestamp(pr.get("merged_at"))
-    merge_sha = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
     base_ref = _text(base.get("ref"), store.outcome_jobs.c.base_ref)
     number = pr.get("number")
     repo_id = _obj(base.get("repo")).get("id")
+    # #259. Webhook payloads still carry merge_commit_sha today; REST pull
+    # responses have already started arriving without it. When the removal
+    # reaches webhook serialization this branch is where the outcome lane goes
+    # dark AT THE SOURCE, with one log line to say so — so the fallback is
+    # wired here before it happens, not after.
+    #
+    # Two properties keep this safe on a webhook. It costs nothing while the
+    # field is present: resolve() only reaches for a client when it is not. And
+    # _record_merge is awaited inside the request, before the 202, so the
+    # fallback's token mint plus one REST call sit on GitHub's 10-second
+    # delivery budget — which they fit, and which the 6-hourly reconciler backs
+    # up anyway if a delivery is ever lost to it.
+    #
+    # owner/name come off base.repo.full_name, the same place worker.py reads
+    # them, and are used ONLY to address the API. Every id written to the row
+    # still comes off the payload as ids, never parsed out of a name.
+    installation_id = _obj(payload.get("installation")).get("id")
+    owner, _, name = str(_obj(base.get("repo")).get("full_name") or "").partition("/")
+    merge_commit_sha = None
+    if isinstance(number, int) and owner and name and isinstance(installation_id, int):
+        merge_commit_sha = merge_sha.resolve(
+            pr.get("merge_commit_sha"),
+            column=store.outcome_jobs.c.merge_commit_sha,
+            client=lambda: app_auth.installation_client(installation_id),
+            owner=owner, repo=name, number=number,
+        )
+    else:
+        merge_commit_sha = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
     if (
         merged_at is None
-        or not merge_sha
+        or not merge_commit_sha
         or not base_ref
         or not isinstance(number, int)
         or not isinstance(repo_id, int)
@@ -2659,7 +2687,7 @@ def _record_merge(payload: dict) -> None:
         payload["installation"]["id"],
         repo_id,
         number,
-        merge_sha,
+        merge_commit_sha,
         merged_at,
         base_ref,
         merged_head_sha=merged_head_sha,

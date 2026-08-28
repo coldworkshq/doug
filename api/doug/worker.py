@@ -29,6 +29,7 @@ from . import (
     check_run,
     example_pack_capture,
     ingest,
+    merge_sha,
     pr_comment,
     reader,
     review,
@@ -1364,7 +1365,7 @@ def reconcile_outcomes(installation_id: int) -> int:
                 continue
             try:
                 detail = gh.rest.pulls.get(owner=owner, repo=name, pull_number=number)
-                merge_sha = detail.raw_response.json().get("merge_commit_sha")
+                carried = detail.raw_response.json().get("merge_commit_sha")
             except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
@@ -1373,14 +1374,23 @@ def reconcile_outcomes(installation_id: int) -> int:
                     file=sys.stderr,
                 )
                 continue
-            if (
-                not isinstance(merge_sha, str)
-                or not merge_sha
-                or len(merge_sha) > store.outcome_jobs.c.merge_commit_sha.type.length
-            ):
+            # #259. GitHub is removing merge_commit_sha from this response and
+            # serves the trimmed shape from some backend pools already, sticky
+            # per connection — which is why both of this Job's first executions
+            # skipped every PR and swept zero. The fallback reads the same fact
+            # off the PR's `merged` event and costs one extra call only on the
+            # PRs whose field is absent.
+            merge_commit_sha = merge_sha.resolve(
+                carried,
+                column=store.outcome_jobs.c.merge_commit_sha,
+                client=lambda: gh,
+                owner=owner, repo=name, number=number,
+            )
+            if merge_commit_sha is None:
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
-                    "(missing or over-long merge_commit_sha)",
+                    "(no merge_commit_sha on the pull payload and no usable "
+                    "merged event)",
                     file=sys.stderr,
                 )
                 continue
@@ -1388,7 +1398,7 @@ def reconcile_outcomes(installation_id: int) -> int:
             if not isinstance(merged_head_sha, str):
                 merged_head_sha = None
             inserted = store.enqueue_outcome_jobs(
-                installation_id, repo_id, number, merge_sha, merged_at, base_ref,
+                installation_id, repo_id, number, merge_commit_sha, merged_at, base_ref,
                 merged_head_sha=merged_head_sha,
             )
             count += len(inserted)

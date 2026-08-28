@@ -1772,20 +1772,45 @@ def _closed_pull(
 
 class FakeReconcileGH:
     """pulls.list (no merge_commit_sha) + pulls.get (raw_response.json()
-    carries it) — the two-call shape reconcile_outcomes actually uses."""
+    carries it) — the two-call shape reconcile_outcomes actually uses.
 
-    def __init__(self, pulls, merge_shas):
+    `trimmed=True` OMITS the merge_commit_sha key rather than setting it to
+    None, which is the shape #259 is about: GitHub is removing the field, and
+    the response that reaches the reconciler has 46 keys instead of 48. A key
+    present with a null value is a different bug and this fake can express
+    both, because the fallback must fire on either.
+
+    `merged_events` supplies the issue-events fallback: {pr_number: commit_id}.
+    `events_calls` records every lookup so a test can prove the fallback is not
+    bought on the PRs that do not need it.
+    """
+
+    def __init__(self, pulls, merge_shas, *, trimmed=False, merged_events=None):
         self._merge_shas = merge_shas
+        self._merged_events = merged_events or {}
+        self.events_calls: list[int] = []
 
         def _get(*, owner, repo, pull_number):
-            body = {"merge_commit_sha": self._merge_shas.get(pull_number)}
+            if trimmed:
+                body = {"number": pull_number}
+            else:
+                body = {"merge_commit_sha": self._merge_shas.get(pull_number)}
             return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: body))
+
+        def _list_events(*, owner, repo, issue_number, per_page, page):
+            self.events_calls.append(issue_number)
+            commit_id = self._merged_events.get(issue_number)
+            events = [{"event": "labeled"}]
+            if commit_id is not None:
+                events.append({"event": "merged", "commit_id": commit_id})
+            return SimpleNamespace(raw_response=SimpleNamespace(json=lambda: events))
 
         self.rest = SimpleNamespace(
             pulls=SimpleNamespace(
                 list=lambda **kw: SimpleNamespace(parsed_data=pulls),
                 get=_get,
-            )
+            ),
+            issues=SimpleNamespace(list_events=_list_events),
         )
 
 
@@ -1806,6 +1831,89 @@ def test_reconcile_outcomes_enqueues_a_missed_merge(tmp_path, monkeypatch):
     assert row_14["merge_commit_sha"] == "c" * 40
     assert row_14["base_ref"] == "main"
     assert row_14["merged_head_sha"] == "a" * 40
+
+
+def test_reconcile_outcomes_falls_back_to_the_merged_event(tmp_path, monkeypatch):
+    """#259, the failure that made both of this Job's first executions sweep zero.
+
+    GitHub is removing merge_commit_sha from REST pull payloads and already
+    serves the trimmed shape from some backend pools, sticky per keep-alive
+    connection — so one long-lived client sees it for every PR it reads. The
+    guard was right and the field was gone, which is indistinguishable in the
+    logs from "nothing to reconcile" and is why 100% skips looked green.
+
+    The `merged` event carries the same sha and is not part of the deprecated
+    pair. Without this the outcome lane's healing path stays dead and Gate A's
+    "one execution healing a missed job" verifier can never pass.
+    """
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={5: "e" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 2  # 14- and 60-day windows
+
+    rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
+    assert {r["merge_commit_sha"] for r in rows} == {"e" * 40}
+    assert gh.events_calls == [5]
+
+
+def test_reconcile_outcomes_does_not_buy_the_fallback_when_the_field_is_there(
+    tmp_path, monkeypatch
+):
+    """The cost half of the fix, and the reason it can ship before the rollout
+    reaches us: one extra call per PR, only on the PRs whose field is absent.
+    A fallback that ran unconditionally would double this Job's API spend on
+    every sweep forever, for a field that is present today."""
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
+    gh = FakeReconcileGH([pull], {5: "c" * 40}, merged_events={5: "e" * 40})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 2
+    assert gh.events_calls == []
+    rows = _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs)
+    assert {r["merge_commit_sha"] for r in rows} == {"c" * 40}
+
+
+def test_reconcile_outcomes_skips_when_neither_source_carries_the_sha(
+    tmp_path, monkeypatch, capsys
+):
+    """Fail soft, and say which of the two sources failed.
+
+    The old log line said "missing or over-long merge_commit_sha", which was
+    true and told an operator nothing about whether the fallback had been
+    tried. A skip that cannot be told apart from a skip for another reason is
+    how #259 stayed invisible for two executions."""
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
+    assert "no usable merged event" in capsys.readouterr().err
+
+
+def test_the_merged_event_sha_is_length_checked_like_the_payload_field(
+    tmp_path, monkeypatch
+):
+    """The column guard belongs to the column, not to one source of the value.
+
+    merge_commit_sha is a VARCHAR and Postgres answers an over-long INSERT with
+    StringDataRightTruncation, which here escapes both try blocks and unwinds
+    the whole installation — every repo after this one skipped, on this pass
+    and every later one. A fallback that skipped the length check would have
+    reintroduced exactly that, from a source nobody was watching. sqlite stores
+    the long value happily, so a green local suite is not evidence here."""
+    _installed(tmp_path, monkeypatch)
+    pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
+    over_long = "f" * (store.outcome_jobs.c.merge_commit_sha.type.length + 1)
+    gh = FakeReconcileGH([pull], {}, trimmed=True, merged_events={5: over_long})
+    monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
+
+    assert worker.reconcile_outcomes(1) == 0
+    assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
 
 
 def test_reconcile_outcomes_skips_a_pr_closed_without_merging(tmp_path, monkeypatch):
