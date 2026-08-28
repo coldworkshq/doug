@@ -1,25 +1,28 @@
 ---
 title: The risk read runs Claude through Vertex, and clears a non-inferiority bar before it does
-status: proposed
+status: accepted
 date: 2026-08-28
 ---
 
-> **This record is INCOMPLETE ON PURPOSE and cannot be signed as it stands.**
+> **SIGNED 2026-08-28. The bar was declared before the run, and the run has not
+> happened.**
 >
-> Section **The bar** has four blank numbers. They are founder-only under R11
-> and they are a pre-registration: filling them in after a run is worth nothing,
-> and filling them in by an agent's guess is worse, because it would look like a
-> declared bar while being a fabricated one.
+> This record shipped on 2026-08-28 with its bar table blank and a note saying
+> it could not be signed as it stands. Andrew set the two governing numbers the
+> same day — a 5.0 pp absolute margin on validated yield, scored on a 300-PR
+> sample — and the two derived constraints follow from them and from bounds
+> already in the code. See **The bar**.
 >
-> Sign this record by writing those four numbers and flipping `status` in the
-> same commit. Merging it at `proposed` is safe — `proposed` records do not
-> reach Doug's reader — and changes nothing about what runs.
+> **Nothing has run.** Signing this record declares the bar; it does not report
+> a result. No traffic has moved to Vertex, and none does until the paired
+> silent run clears the table below. If the run fails, the bar does not widen —
+> that is the failure this file is arranged to prevent, and it is stated again
+> in Consequences.
 >
-> Companion record: **ADR-0027** moves the *mechanical* tier's vendor boundary.
-> This one moves the *risk and intent* reads' transport. They are separate on
-> purpose: ADR-0027's tier is validated by code on every call, and this one's is
-> not validated by anything downstream, which is the whole distinction ADR-0016
-> drew and this record does not blur.
+> Companion record: **ADR-0027** moves the *mechanical* tier's vendor boundary
+> and is also `accepted`. They are separate on purpose: ADR-0027's tier is
+> validated by code on every call, and this one's is not validated by anything
+> downstream, which is the distinction ADR-0016 drew and neither record blurs.
 
 ## Context
 
@@ -95,7 +98,11 @@ unit, findings are nested evidence within a PR and never counted as independent
 samples, and nothing surfaces to a customer or touches a published number until
 the bar is met.
 
-**3. The bar is declared before the run and is founder-only.** See below.
+**3. The bar is declared before the run and is founder-only.** Declared
+2026-08-28; see **The bar**. Two numbers are Andrew's ruling and two are derived
+from them and from bounds already in the code, and the derivation of each is
+recorded so that a later reader cannot mistake a derived constraint for a
+measured one.
 
 **4. `anthropic[vertex]` is declared explicitly in `api/pyproject.toml`.**
 `google-auth` arrives transitively through `google-cloud-storage` today. That is
@@ -113,18 +120,67 @@ transition with an outage attached.
 
 ## The bar
 
-**UNFILLED. Founder-only under R11. Do not run against these.**
+**Declared 2026-08-28, before any Vertex call. Frozen.**
 
-| Quantity | Value | Notes |
+The baseline is Doug's own reader corpus as ADR-0026 defines the extraction —
+`rate --repo doug --rule-prefix reader:`, which is what "Doug's own review
+history" was always meant to name:
+
+| Disposition | n | share |
 |---|---|---|
-| Corpus and size | ______ | The frozen PR snapshots the paired run scores |
-| Non-inferiority margin on PR-level validated yield | ______ | The margin below the current transport that still counts as non-inferior |
-| False-positive burden ceiling | ______ | Declared, not measured after |
-| Latency and reliability constraints | ______ | The read sits inside a 300s Cloud Run request; `MAX_READ_RETRIES = 1` exists because of that arithmetic |
+| `real` | 68 | 44.4% |
+| `disproved` | 49 | 32.0% |
+| `adjacent` | 36 | 23.5% |
 
-The margin is the number that matters and the one most likely to be filled in
-loosely. A margin wide enough that nothing can fail it converts this record from
-a measurement into a formality.
+| Quantity | Value |
+|---|---|
+| **Corpus** | A 300-PR sample drawn from the frozen 653-PR replay corpus. The sample is drawn, committed, and hash-recorded **before the first call**, and both arms score the identical set. |
+| **Non-inferiority margin, PR-level validated yield** | The Vertex arm's `real` share is **≥ 39.4%** — 5.0 percentage points below the 44.4% baseline. |
+| **False-positive burden ceiling** | The Vertex arm's `disproved` share is **≤ 37.0%** — 5.0 percentage points above the 32.0% baseline. |
+| **Latency** | p95 whole-read **≤ 240s**, and no single read exceeds it. |
+| **Reliability** | The Vertex arm's hard-failure rate is at most **1.0 pp above** the Anthropic arm's on the same 300 PRs. |
+
+### Where each number comes from
+
+The two governing numbers are Andrew's, set 2026-08-28. The two derived ones are
+not independent judgments and are recorded here so that nobody later mistakes
+them for measurements.
+
+- **The 5.0 pp margin is the ruling.** It was chosen against the alternatives:
+  3 pp needs roughly 800 PRs per arm to separate a true drop from sampling
+  noise, which the 653-PR corpus cannot supply, so that bar would be
+  underpowered and its PASS would not mean what it says. 10 pp passes at about
+  100 per arm but certifies a visible product regression — roughly 30 lost real
+  findings per 300 PRs — as acceptable.
+- **300 PRs is the ruling**, and it is what powers 5 pp. A2 states that shadow
+  doubles the deep-read bill and that sampling is a decision to make **before**
+  switching it on, which is why the size is here and not in a later note.
+- **The false-positive ceiling is the margin, mirrored.** A transition that
+  holds `real` steady by producing more `disproved` has not held anything
+  steady. Using a different figure on this side would need its own derivation,
+  and there is none.
+- **240s is already in the code, not a new choice.** `DEFAULT_READ_TIMEOUT_S`
+  is 120s per HTTP attempt and `MAX_READ_RETRIES` is 1, so the whole read is
+  bounded by 240s plus backoff. That bound exists because `POST /v1/score/read`
+  buys its read inside the request and Cloud Run's `--timeout 300` kills it
+  otherwise, pinned by
+  `test_read_timeout_budget_fits_inside_the_cloud_run_timeout`. A transport
+  that cannot hold it produces platform 504s instead of the reader-unavailable
+  fallback this module contracts for.
+- **Reliability is stated as a difference, not a level,** because no baseline
+  transport-failure rate has ever been recorded. Both arms run the same 300 PRs
+  in the same window, so the comparison is available even though the level is
+  not. Recording the level for the first time is a side effect of this run and
+  is reported, not barred.
+
+### What this table does not do
+
+It does not license surfacing. Clearing it establishes review quality,
+calibration, cost, latency, and reliability against the current transport. It
+cannot establish that surfacing the Vertex arm changes a merge decision, a code
+change, or reviewer effort, because only a surfaced review can do that. A2
+reserves that claim for a later opt-in randomized surfaced-policy stage, and
+this record does not reach it.
 
 ## Rejected
 

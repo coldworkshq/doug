@@ -1,6 +1,6 @@
 ---
 title: The mechanical tier may run a non-Anthropic model, and ADR-0016's scope claim is ratified
-status: proposed
+status: accepted
 date: 2026-08-28
 amends: ADR-0016
 ---

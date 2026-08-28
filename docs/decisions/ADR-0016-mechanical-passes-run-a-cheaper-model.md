@@ -5,32 +5,34 @@ date: 2026-08-23
 amended_by: ADR-0027
 ---
 
-> **Proposed amendment, 2026-08-28 (ADR-0027): the tier's vendor boundary, and
-> the sign-off this record asks for.**
+> **Amended 2026-08-28 (ADR-0027): the scope claim below is RATIFIED, and the
+> tier may leave Anthropic.**
 >
-> **Nothing below has changed yet.** ADR-0027 is `proposed`, so it does not reach
-> the reader and this record governs the tier as written. The banner is here
-> because `docs/decisions/README.md` requires both sides of an amendment to be
-> marked, and because a reader who acts on the section titled "This record is
-> self-authorized" should know that the sign-off it asks for is drafted and
-> waiting rather than forgotten.
+> ADR-0027 is `accepted`. Two things below have changed and this banner exists
+> rather than an in-place edit, for the reason this record's own sibling
+> ADR-0012 gives: an edit erases what was decided and why.
 >
-> ADR-0027 does two things when it is signed. It ratifies the scope claim below
-> — that ADR-0012's constants describe the risk read and not every call in
-> `reader.py` — which this record explicitly asks Andrew to settle and which is
-> provisional until then. And it lets the mechanical tier run a model from a
-> provider other than Anthropic, which this record never considered: every
-> alternative in its Rejected section is an Anthropic model. That second half
-> costs a re-run of ADR-0015's pre-registered attribution study, a recorded
-> grounding rate for `verify_finding`, and a manifest that can tell two
-> mechanical models apart, all before any swap ships.
+> **The section titled "This record is self-authorized, and that is worth
+> naming" is answered.** It asks Andrew to settle one question — whether
+> ADR-0012's five constants describe the risk read or every call in
+> `reader.py`. They describe the risk read. `verify_finding` and
+> `attribute_findings` were never inside the freeze. The scope claim below is
+> no longer provisional; read it as settled.
+>
+> **The tier's vendor boundary has moved.** Every alternative in the Rejected
+> section below is an Anthropic model, because the question of leaving the
+> vendor was never asked here. ADR-0027 asks it and answers yes, under three
+> conditions that all bind before production traffic reaches a foreign model:
+> re-run ADR-0015's span-verification study against the frozen batches (C1), a
+> recorded before-and-after grounding rate for `verify_finding` (C2), and a
+> manifest that can tell two mechanical models apart (C3, filed as #263).
 >
 > **The tier split itself is untouched.** `amends`, not `supersedes`: the
 > judgment/mechanical division, the three pinned tests, and the rejection of
-> moving the settlement passes all stand exactly as written.
+> moving the settlement passes all stand exactly as written below.
 >
-> The line citations in the Decision and Rejected sections below have drifted.
-> The attribution range check is at `reader.py:1669`, not `reader.py:1607-1610`.
+> The line citations in the Decision and Rejected sections have drifted. The
+> attribution range check is at `reader.py:1669`, not `reader.py:1607-1610`.
 
 ## Context
 
