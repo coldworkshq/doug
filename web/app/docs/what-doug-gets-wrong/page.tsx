@@ -125,7 +125,7 @@ export default function WhatDougGetsWrongPage() {
             <Bright>{"}"}</Bright>
             {"\n\n"}
             <Comment>
-              {"# as of 2026-08-24 — a snapshot, not a\n#   counter. 196 rows; 184 prospective,\n#   12 backfill excluded from every rate.\n#   Doug's own repo is 179 of those:\n#   53 disproved, 89 real, 37 adjacent.\n\n# today's number, from the log itself:\n# python -m doug.findings_log rate --repo doug"}
+              {"# as of 2026-08-27 — a snapshot, not a\n#   counter. 205 rows; 193 prospective,\n#   12 backfill excluded from every rate.\n#   The reader's own findings on doug are\n#   176 of those: 54 disproved, 85 real,\n#   37 adjacent. The plan lane writes here\n#   too, in its own vocabulary; a share\n#   across both describes neither.\n\n# today's number, from the log itself:\n# python -m doug.findings_log rate \\\n#     --repo doug --rule-prefix reader:"}
             </Comment>
           </CodeBlock>
         }

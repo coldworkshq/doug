@@ -159,8 +159,9 @@ a repo opens Runs filtered to it.
 Four panels, each carrying its own N and provenance:
 
 - **Judgment** — findings-log rates by layer (`doug` / `agent-reviewer`)
-  and by rule. Prospective rows only; backfill rows are quarantined from
-  every rate, exactly as `findings_log` already enforces.
+  and by rule, one instrument's vocabulary at a time. Prospective rows only;
+  backfill rows are quarantined from every rate, exactly as `findings_log`
+  already enforces.
 - **Coverage** — read-percentage distribution, count under 30%,
   most-frequently-unseen paths, `file_cut` frequency by file. This is the
   evidence base for read-budget routing.
@@ -182,7 +183,7 @@ Operator-token only, behind the existing `_operator_only` gate that
 | `GET /v1/runs/{verdict_id}` | `find_verdict_by_id` + `_verdict_bundle`, plus the fields that bundle currently omits: `model`, `prompt_hash`, `risk_score`, `rationale`, `scored_at`, `source`, `head_sha`, `repo`, `installation_id`. Plus the `review_jobs` row and the `outcome_jobs` / `outcomes` rows. |
 | `GET /v1/repos` | `installations` ⋈ `installation_repos` ⋈ per-repo verdict rollups. |
 | `GET /v1/health` | Job counts by status, oldest pending age, 24-hour failures, outcome clocks due. (AMENDED 2026-08-07: the original row also listed per-installation `reconciled_at`. That column does not exist — it is MT3 / migration 8, unstarted — so it was never buildable as written. See `2026-08-07-console-health-failure-surface-design.md`.) |
-| `GET /v1/evidence/findings-log` | `findings_log.rates()` over the JSONL, served rather than imported at build time because it changes with every PR. |
+| `GET /v1/evidence/findings-log` | `findings_log.rates()` over the JSONL, served rather than imported at build time because it changes with every PR. Scoped on both axes — `repo=` and `rule_prefix=` — because more than one instrument writes to that file and a share across two of them describes neither (#235). |
 | `GET /v1/evidence/coverage` | Read-percentage distribution, unseen-path frequency, `file_cut` frequency. |
 
 Public and unauthenticated: `GET /v1/showcase/queue`, serving only the repo
