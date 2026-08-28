@@ -1,8 +1,17 @@
 # HANDOFF — doug
 
-State:    review — #235 fixed, PR #243 OPEN off origin/main (b1a3ac7,
-          branch fix-235-findings-log-rule-prefix). uv run pytest -q: 1702
-          passed; ruff clean; web tsc clean (2 pre-existing img warnings).
+State:    review — #235 fixed, PR #243 OPEN off origin/main, branch
+          fix-235-findings-log-rule-prefix. a9a5e1c fixed the first CI run's
+          `web` failure; the head now also carries _RULE_RE pinning BOTH
+          halves kebab-case, ADR-0026, the preregistration amendment that
+          hangs on it, and #243's own review dispositioned into the log.
+          Verified locally before push: api 1702, web 376, console 113,
+          ruff clean.
+          THE CHECKOUT MOVED MID-SESSION: ~/Projects/doughq/repo is gone,
+          the repo is now ~/Projects/coldworkshq/doug. Working tree, branch
+          and uncommitted changes all survived. `api/.venv/bin/python` works
+          again (`-m pytest` runs the whole suite); if `uv run` still fails
+          on the old baked-in paths, `uv sync --reinstall` in api/.
 Next:     Watch CI on #243, then Andrew merges. Unrelated and still standing:
           the #229/#233 deploy approval below.
 Blockers: none
@@ -26,6 +35,16 @@ Decisions this session:
   file reads. The plan lane's 12 rows run 75% real. web/'s published
   snapshot and the command it tells readers to run were both pooled and are
   now scoped on both axes.
+- The local run missed `npm test --workspace=web`; ruff + pytest + tsc + lint
+  are not the CI gate for web/. public-surface.test.mjs guards the published
+  copy, and llms.txt is a SECOND surface carrying the same snapshot and
+  command — it was missed entirely until CI failed.
+- The guard's command assertion is now three asserts (command, --repo doug,
+  --rule-prefix reader:) instead of one contiguous regex — it survives a line
+  break and fails if anyone republishes the unscoped command — rejected:
+  unwrapping the command in the rail to satisfy the old regex.
+- public-surface.test.mjs mirrored the pooling in JS (dougRows filtered on
+  repo alone), now scoped through readerRows.
 - reader-effort preregistration AMENDED, not restated: 2 deviation rows fall
   inside its recorded window, both on its last day, so the baseline table
   stands and only the extraction changes — rejected: recomputing a

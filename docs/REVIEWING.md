@@ -220,8 +220,8 @@ a mixed figure cannot be quoted unaware. The value is a lowercase slug and the
 schema refuses anything else, because a typo does not fail loudly — it silently
 splits one repository's denominator in two.
 
-`rule` is `<prefix>:<slug>`, and the prefix names **the instrument that raised
-the finding** — `reader:` for the diff reader, `deviation:` / `beyond-ticket:` /
+`rule` is `<prefix>:<slug>`, **both halves kebab-case** (`[a-z0-9]+(-[a-z0-9]+)*`),
+and the prefix names **the instrument that raised the finding** — `reader:` for the diff reader, `deviation:` / `beyond-ticket:` /
 `missing-from-pr:` for the plan lane. More than one instrument writes to this
 file and they do not speak the same vocabulary, so a share pooled across them is
 a share of nothing: on 2026-08-27 the plan lane's 12 rows ran 75% real against
@@ -230,9 +230,14 @@ already refuses to pool the two; `rate --rule-prefix reader:` is the equivalent
 here, and an unscoped `rate` prints `by_rule_prefix` for the same reason it
 prints `by_repo`. **The prefix is required** — the schema rejects an untagged
 rule, because an untagged row does not fail loudly, it just lands in whichever
-share is computed next. The 20 rows written before that was enforced were
-reader findings recorded without the tag and were corrected in place, verdicts
-untouched (#235); leaving them alone would only have swapped a share inflated by
+share is computed next. The slug is pinned too, because on the reader tier it is
+`category_slug` — a free-form schema string with no enum and no pattern — so
+`reader:Foo Bar` is reachable model output and would group as its own pattern
+beside `reader:foo-bar`. Transcription is the last place that can refuse it: if
+the reader emitted some other shape, kebab-case it here and put the original in
+`note`. The 20 rows written before any of this was enforced were reader findings
+recorded without the tag and were corrected in place, verdicts untouched
+(ADR-0026, #235); leaving them alone would only have swapped a share inflated by
 foreign rows for one deflated by its own.
 
 (Shown wrapped; it is one line in the file. `jq -e . docs/findings-log.jsonl` is the check.)

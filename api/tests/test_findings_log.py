@@ -245,7 +245,21 @@ def test_a_rule_must_name_the_instrument_that_raised_it():
     # Without a prefix a row lands in whatever share happens to be computed
     # next. `patterns.from_rule` already refuses to pool vocabularies; the
     # schema has to refuse to accept an untagged one in the first place.
-    for bad in ("missing-import", ":missing-import", "reader:", "Reader:x", "read er:x"):
+    for bad in (
+        "missing-import",
+        ":missing-import",
+        "reader:",
+        "Reader:x",
+        "read er:x",
+        # The slug half is pinned for the same reason, and these are reachable:
+        # `category_slug` is a free-form schema string, so the reader can emit
+        # any of them, and `patterns.normalize` would group each as its own
+        # pattern beside the kebab-case spelling of the same defect.
+        "reader:Foo Bar",
+        "reader: x",
+        "reader:missing_import",
+        "reader:missing-import ",
+    ):
         with pytest.raises(fl.FindingsLogError, match="rule"):
             fl.parse_row(
                 {

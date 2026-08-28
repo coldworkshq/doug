@@ -38,11 +38,15 @@ REQUIRED = frozenset({"date", "pr", "layer", "rule", "verdict", "changed", "sett
 # mixes two of them is not a rate of anything.
 DEFAULT_REPO = "doug"
 _REPO_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-# `rule` is `<prefix>:<slug>`. The prefix names the instrument that raised the
-# finding and is the unit `rates` slices on; only its shape is pinned, because
-# the slug after it is the reader's own free-form `category_slug` and a schema
-# that second-guessed it would reject real findings at disposition time.
-_RULE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*:.")
+# `rule` is `<prefix>:<slug>`, both halves kebab-case. The prefix names the
+# instrument that raised the finding and is the unit `rates` slices on. The slug
+# is pinned too, and that is not symmetry for its own sake: on the reader tier
+# the slug is `category_slug`, a free-form schema string with no enum and no
+# pattern (reader.py:130-137), so `reader:Foo Bar` and `reader:foo-bar` are both
+# reachable model output and would group as two patterns downstream
+# (`patterns.normalize` neither case-folds nor slugifies). Transcription is the
+# one place that can still be refused, so it is.
+_RULE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*$")
 NO_PREFIX = "(none)"
 LAYERS = frozenset({"doug", "agent-reviewer"})
 VERDICTS = frozenset({"real", "disproved", "adjacent"})
@@ -117,9 +121,12 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
             raise FindingsLogError(f"{where}: {key} must be a non-empty string")
     if not _RULE_RE.match(raw["rule"]):
         raise FindingsLogError(
-            f"{where}: rule must be <prefix>:<slug>, e.g. reader:missing-import "
-            f"(got {raw['rule']!r}) — the prefix names the instrument that raised "
-            f"the finding, and an untagged rule lands in a share it does not belong to"
+            f"{where}: rule must be <prefix>:<slug>, both kebab-case, e.g. "
+            f"reader:missing-import (got {raw['rule']!r}). The prefix names the "
+            f"instrument that raised the finding, and an untagged rule lands in a "
+            f"share it does not belong to. If the reader emitted a slug in some "
+            f"other shape, kebab-case it here and put the original in `note` — the "
+            f"log is transcription, and two spellings of one defect are two patterns"
         )
     repo = raw.get("repo", DEFAULT_REPO)
     if not isinstance(repo, str) or not _REPO_RE.match(repo):
