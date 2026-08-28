@@ -100,7 +100,7 @@ export function CheckRunCard({
             ].map(([k, v, tone]) => (
               <div key={k} className="min-w-0 bg-card px-2.5 py-2">
                 <dt className="text-[10px] tracking-wider text-muted-foreground uppercase">{k}</dt>
-                <dd className={`mt-0.5 truncate font-medium ${tone}`}>{v}</dd>
+                <dd className={`mt-0.5 font-medium break-words ${tone}`}>{v}</dd>
               </div>
             ))}
           </dl>
@@ -138,7 +138,12 @@ export function CheckRunCard({
               {shown.map((r) => (
                 <li key={r.rule} className="flex gap-2">
                   <span className="text-muted-foreground">–</span>
-                  <span className="min-w-0">
+                  {/* Two lines, then a cut. A reader finding is a full
+                      sentence (seen live: 60+ words), and three of them
+                      unclamped make the hero taller than the viewport. The
+                      real check run shows the whole sentence; this is a
+                      facsimile, and the queue page has the rest. */}
+                  <span className="line-clamp-2 min-w-0">
                     {r.severity ? (
                       <span className="text-muted-foreground">{r.severity} · </span>
                     ) : null}
