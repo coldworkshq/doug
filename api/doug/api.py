@@ -2593,6 +2593,16 @@ def _enqueue_pull_request(payload: dict) -> int | None:
     )
 
 
+def _record_merge_with_lookup(payload: dict) -> None:
+    """_record_merge's retry, off the request path.
+
+    Its own named function rather than a lambda or a partial so that the task
+    shows up by name in a traceback, and so the one call site that is allowed
+    to spend a token mint on a merge is greppable.
+    """
+    _record_merge(payload, allow_lookup=True)
+
+
 def _payload_timestamp(raw) -> datetime | None:
     """One of GitHub's ISO-8601 timestamps, or None if it is unusable.
 
@@ -2609,19 +2619,34 @@ def _payload_timestamp(raw) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
-def _record_merge(payload: dict) -> None:
+def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
     """Start the outcome-observation window on a merge, and nothing else.
 
     A merge must never buy a model read: there is no new diff, and this is
     the one webhook branch whose whole job is to note that the clock has
     started. The adjudicator picks the row up once due_at passes.
+
+    Returns True when the row was not written because `merge_commit_sha` was
+    absent and `allow_lookup` was False — the caller's signal to retry this
+    same payload off the request path. Every other outcome returns False,
+    including the outcomes that are deliberate no-ops.
+
+    `allow_lookup` is the #259 fallback switch and it is OFF by default on
+    purpose. ADR-0023 characterizes this branch as latency-bound and
+    redelivered on any non-2xx, and Doug flagged the first version of this fix
+    for putting a token mint plus a REST call in front of the 202
+    (`reader:blocking-io-in-request-path`). Both were right. The in-request
+    call keeps the fast path it always had; the lookup runs in a background
+    task after the 202. Writing the row twice is safe — `enqueue_outcome_jobs`
+    dedups, which `test_a_redelivered_merge_does_not_start_a_second_clock`
+    pins — so the retry needs no coordination with the first attempt.
     """
     pr = _obj(payload.get("pull_request"))
     if not pr.get("merged"):
         # Closed without merging. Nothing shipped, so there is no outcome to
         # observe — and a row here would put a PR that never landed into the
         # denominator of a claim about shipped code.
-        return
+        return False
     base = _obj(pr.get("base"))
     merged_at = _payload_timestamp(pr.get("merged_at"))
     base_ref = _text(base.get("ref"), store.outcome_jobs.c.base_ref)
@@ -2633,28 +2658,36 @@ def _record_merge(payload: dict) -> None:
     # dark AT THE SOURCE, with one log line to say so — so the fallback is
     # wired here before it happens, not after.
     #
-    # Two properties keep this safe on a webhook. It costs nothing while the
-    # field is present: resolve() only reaches for a client when it is not. And
-    # _record_merge is awaited inside the request, before the 202, so the
-    # fallback's token mint plus one REST call sit on GitHub's 10-second
-    # delivery budget — which they fit, and which the 6-hourly reconciler backs
-    # up anyway if a delivery is ever lost to it.
+    # The fast path never pays for it: when the payload carries the field, this
+    # function does exactly what it did before. When it does not, the lookup
+    # runs after the 202 (see allow_lookup above), so nothing new sits on
+    # GitHub's 10-second delivery budget, and the 6-hourly reconciler is a
+    # second backstop if the background task is lost to a restart.
     #
     # owner/name come off base.repo.full_name, the same place worker.py reads
     # them, and are used ONLY to address the API. Every id written to the row
     # still comes off the payload as ids, never parsed out of a name.
     installation_id = _obj(payload.get("installation")).get("id")
     owner, _, name = str(_obj(base.get("repo")).get("full_name") or "").partition("/")
-    merge_commit_sha = None
-    if isinstance(number, int) and owner and name and isinstance(installation_id, int):
+    carried = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
+    can_look_up = (
+        isinstance(number, int)
+        and isinstance(installation_id, int)
+        and bool(owner)
+        and bool(name)
+    )
+    if carried is None and not allow_lookup:
+        # The fast path found nothing. Say so and let the caller queue the
+        # lookup off the request path rather than paying for it here.
+        return can_look_up and merged_at is not None
+    merge_commit_sha = carried
+    if merge_commit_sha is None and can_look_up:
         merge_commit_sha = merge_sha.resolve(
-            pr.get("merge_commit_sha"),
+            carried,
             column=store.outcome_jobs.c.merge_commit_sha,
             client=lambda: app_auth.installation_client(installation_id),
             owner=owner, repo=name, number=number,
         )
-    else:
-        merge_commit_sha = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
     if (
         merged_at is None
         or not merge_commit_sha
@@ -2675,7 +2708,7 @@ def _record_merge(payload: dict) -> None:
             "outcome clock not started",
             file=sys.stderr,
         )
-        return
+        return False
     # Pre-registration §11 item 7, forward only. Deliberately read AFTER the
     # five-fact guard above and left out of it: merged_head_sha drives
     # neither censoring (base_ref) nor tenancy (github_repo_id), the two
@@ -2931,7 +2964,15 @@ async def github_webhook(
             # Its own branch, never PR_ACTIONS: a merge starts the outcome
             # clock and must not buy a read. No drain is kicked, because
             # nothing reviewable was queued.
-            await run_in_threadpool(_record_merge, payload)
+            #
+            # #259: when the payload carries no merge_commit_sha, the row is
+            # not written here and the lookup is queued instead. Queued, not
+            # inline, for the same reason the installation-created branch
+            # queues its reconcile — it goes over the network, and this branch
+            # is latency-bound under ADR-0023. enqueue_outcome_jobs dedups, so
+            # the retry cannot double a row.
+            if await run_in_threadpool(_record_merge, payload):
+                background.add_task(_record_merge_with_lookup, payload)
         else:
             job_id = await run_in_threadpool(_enqueue_pull_request, payload)
             if job_id is not None:

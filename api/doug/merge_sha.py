@@ -22,13 +22,19 @@ when the removal reaches webhook serialization, and covering it now is the
 difference between a fix and a second incident.
 """
 
+import re
 import sys
 
 _PER_PAGE = 100
 # A merged PR carries a handful of issue events, not hundreds. The cap is here
 # so that a pathological thread cannot turn one reconcile pass into an
-# unbounded page walk with the whole installation waiting behind it.
+# unbounded page walk with the whole installation waiting behind it. It is a
+# request budget, not a reachable depth — see the walk order below.
 _MAX_PAGES = 3
+
+# rel="last" from a Link header, which is how GitHub says how many pages there
+# are without a count endpoint.
+_LAST_PAGE = re.compile(r'[?&]page=(\d+)[^>]*>;\s*rel="last"')
 
 
 def _usable(value, column) -> str | None:
@@ -48,8 +54,27 @@ def _usable(value, column) -> str | None:
     return value
 
 
+def _last_page(headers) -> int | None:
+    """The `rel="last"` page number from a Link header, or None."""
+    link = headers.get("link") or headers.get("Link")
+    if not link:
+        return None
+    found = _LAST_PAGE.search(link)
+    return int(found.group(1)) if found else None
+
+
 def from_merged_event(client, *, owner: str, repo: str, number: int, column) -> str | None:
     """The `commit_id` of the PR's `merged` event, or None.
+
+    **Walks backwards from the last page after the first.** Issue events come
+    back oldest-first and a merge is the last thing that happens to a PR, so on
+    a busy thread the event is at the END. Doug caught the first version of this
+    walking forward under a 3-page cap (`reader:incomplete-pagination`) and was
+    right about the consequence being permanent rather than retried: the
+    reconciler uses this same helper on every pass, so a PR past the cap would
+    be skipped forever, silently. Page 1 is still tried first because almost
+    every PR fits there — five checked on 2026-08-28 carried 2 to 5 events — and
+    that keeps the ordinary case at one call.
 
     Fails soft on everything. A transport error, an unreadable body, a PR with
     no merged event, or a commit_id too long for the column all return None and
@@ -57,7 +82,8 @@ def from_merged_event(client, *, owner: str, repo: str, number: int, column) -> 
     fact the caller has already failed to get; it must not be able to turn a
     skipped row into a raised exception.
     """
-    for page in range(1, _MAX_PAGES + 1):
+    page, budget, last = 1, _MAX_PAGES, None
+    while page is not None and budget > 0:
         try:
             resp = client.rest.issues.list_events(
                 owner=owner, repo=repo, issue_number=number,
@@ -71,7 +97,8 @@ def from_merged_event(client, *, owner: str, repo: str, number: int, column) -> 
                 file=sys.stderr,
             )
             return None
-        if not isinstance(events, list) or not events:
+        budget -= 1
+        if not isinstance(events, list):
             return None
         for event in events:
             if not isinstance(event, dict) or event.get("event") != "merged":
@@ -84,13 +111,17 @@ def from_merged_event(client, *, owner: str, repo: str, number: int, column) -> 
                     file=sys.stderr,
                 )
             return sha
-        if len(events) < _PER_PAGE:
-            return None
-    print(
-        f"doug: no merged event for {owner}/{repo}#{number} in "
-        f"{_MAX_PAGES * _PER_PAGE} events",
-        file=sys.stderr,
-    )
+        if page == 1:
+            last = _last_page(getattr(resp.raw_response, "headers", {}) or {})
+            page = last if last and last > 1 else None
+        else:
+            page = page - 1 if page - 1 > 1 else None
+    if last and last > 1:
+        print(
+            f"doug: no merged event for {owner}/{repo}#{number} in the first "
+            f"and last {_MAX_PAGES - 1} of {last} event pages",
+            file=sys.stderr,
+        )
     return None
 
 

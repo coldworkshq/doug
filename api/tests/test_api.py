@@ -1269,6 +1269,67 @@ def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
     assert _table(tmp_path, store.review_jobs) == []
 
 
+def test_the_in_request_half_of_a_merge_never_looks_the_sha_up(tmp_path, monkeypatch):
+    """The property Doug asked for, proved where the test client cannot hide it.
+
+    Starlette's TestClient runs background tasks before returning, so a webhook
+    round-trip cannot tell "inside the request" from "after the 202". Calling
+    _record_merge directly can: with allow_lookup at its default, a payload
+    missing merge_commit_sha must mint nothing, write nothing, and return True
+    to ask for the retry.
+
+    ADR-0023 makes this branch latency-bound and redelivered on any non-2xx.
+    Doug flagged the first version of this fix for putting a token mint plus a
+    REST call in front of the 202 (reader:blocking-io-in-request-path), and on a
+    slow or rate-limited lookup that is a delivery over GitHub's 10-second
+    budget — which means a redelivery, on the one branch where the payload is
+    the only source of the fact.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    def _no(installation_id):
+        raise AssertionError("minted a client inside the request")
+
+    monkeypatch.setattr(api.app_auth, "installation_client", _no)
+
+    assert api._record_merge(payload) is True
+    assert _table(tmp_path, store.outcome_jobs) == []
+
+
+def test_the_queued_retry_cannot_double_a_row(tmp_path, monkeypatch):
+    """The retry needs no coordination with the first attempt, and this is why.
+
+    _record_merge_with_lookup re-runs the whole function on the same payload.
+    If enqueue_outcome_jobs did not dedup, a merge whose field arrives late
+    would land two 14-day rows and two 60-day rows, and every published rate
+    built on that denominator would be wrong in the flattering direction.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    class _Gh:
+        def __init__(self):
+            def _list_events(*, owner, repo, issue_number, per_page, page):
+                return SimpleNamespace(
+                    raw_response=SimpleNamespace(
+                        json=lambda: [{"event": "merged", "commit_id": "e" * 40}]
+                    )
+                )
+
+            self.rest = SimpleNamespace(issues=SimpleNamespace(list_events=_list_events))
+
+    monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
+
+    api._record_merge_with_lookup(payload)
+    api._record_merge_with_lookup(payload)
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert sorted(job["window_days"] for job in jobs) == [14, 60]
+
+
 def test_a_merge_webhook_that_carries_the_sha_mints_no_client(tmp_path, monkeypatch):
     """_record_merge runs inside the request, before the 202, so anything it
     adds is on GitHub's 10-second delivery budget. The fallback costs a token
