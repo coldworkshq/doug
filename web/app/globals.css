@@ -507,6 +507,57 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  /* LANDING-PAGE utilities (app/page.tsx and components/landing/). Kept
+     above the ported block below so the lockstep guard's slice is untouched. */
+
+  /* The hero's display cut. Bricolage's width axis pulled to 85 so the
+     headline sets like the lettering on an instrument dial rather than the
+     default cut every site loads. Optical size stays automatic — a variation
+     setting lists only the axes it names, so opsz still follows font-size.
+     The axis only exists because app/layout.tsx asks for it. */
+  .display-condensed {
+    font-variation-settings: "wdth" 85;
+  }
+
+  /* A bordered group whose cells share ONE hairline between them, so a 3-up
+     reads as one instrument with divisions rather than three cards floating
+     near each other. The gap IS the border: the grid's background shows
+     through the 1px gutters. */
+  .hairline-grid {
+    display: grid;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hairline-grid > * {
+    background: var(--card);
+  }
+
+  /* The clock on the lifecycle rail draws in from the merge, left to right —
+     the one page-load motion beyond the shared rise. */
+  @keyframes draw {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  .animate-draw {
+    transform-origin: left center;
+    animation: draw 1.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* Both entrance animations are decoration; a reader who asked for less
+     motion gets the finished frame immediately. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-rise,
+    .animate-draw {
+      animation: none;
+    }
+  }
+
   /* Data utilities ported from console/app/globals.css:164-179 — comments
      verbatim, because they are the spec. Keep the two files in lockstep —
      ENFORCED: lib/console-lockstep.test.mjs asserts this block is
