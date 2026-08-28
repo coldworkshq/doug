@@ -95,10 +95,30 @@ ADR-0021, unchanged: nothing to promote through with one developer.
   build: a candidate revision takes no traffic until its tagged URL returns 200,
   and the previous revision keeps serving if it does not.
 - Deleting the environment changes the OIDC token's `sub` claim back to its
-  ref form. Nothing conditions on `sub` — verified live against the deployer
-  service account's bindings while settling #223 — so the token exchange is
-  unaffected.
+  ref form. Nothing conditions on `sub`, verified live on 2026-08-28 rather
+  than carried over from #223: the deployer service account's *only* binding
+  is `principalSet://…/attribute.repository/coldworkshq/doug` on
+  `roles/iam.workloadIdentityUser` — no `principal://…/subject/` member exists
+  — and the applied provider condition reads
+  `assertion.repository=='coldworkshq/doug' && assertion.ref=='refs/heads/main'`,
+  which names neither `sub` nor the environment. The exchange is unaffected.
+- Nothing the deploy jobs read was scoped to the deleted environment.
+  `deploy.yml` references no `secrets.*` at all and exactly two `vars.*` —
+  `GCP_WIF_PROVIDER` and `GCP_DEPLOY_SA` — both repository-level, created
+  2026-07-30, four weeks before the environment existed. The environment was
+  created by #223 carrying one protection rule and no values of its own.
 - ADR-0021 keeps `status: accepted`: its ref pin is in force and the reader
   must still see it. Its reviewer-gate half is marked amended in place.
+- ADR-0021 required the setup script's condition, its printed verify command,
+  and the applied provider to keep saying the same thing. With no workflow-layer
+  gate behind it, that requirement is load-bearing rather than tidy, so two of
+  the three are now pinned by a test rather than by prose:
+  `test_setup_cicd_pins_both_the_repository_and_the_ref` asserts the script's
+  `CONDITION` names both clauses and that the create and update arms spend the
+  same variable. The script's exists-arm *converges* the live provider onto
+  `CONDITION`, so a weakened string does not merely fail to tighten a new
+  provider — the next run loosens the one in production. Drift between the
+  script and the applied provider still cannot be caught from a test; that
+  check is issue #247.
 - The trigger to revisit is ADR-0009's, unchanged: a second developer, or the
   first deploy-caused incident that breaks someone else's day.

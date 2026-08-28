@@ -2,8 +2,10 @@
 # gate: once a change is on main it deploys with nothing further to click
 # (ADR-0025, retiring ADR-0021's reviewer gate and restoring ADR-0009's
 # "merging deploys"). There is no staging environment to promote through,
-# and no GitHub environment on these jobs — a protection rule added to one
-# would re-gate the pipeline without changing a line of this file.
+# and neither deploy job names a GitHub environment: the `production`
+# environment is deleted, not just stripped of its reviewer rule, because a
+# job that still named one could be re-gated by a settings click with no
+# diff for anyone to review. Re-gating now means editing this file.
 #
 # Tests run again here even though CI already ran them on the PR: a direct
 # push to main skips the PR entirely, and "deployed a red build" is the one
