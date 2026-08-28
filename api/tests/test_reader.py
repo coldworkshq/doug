@@ -1068,6 +1068,45 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
     )
 
 
+def test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run():
+    """ADR-0028's claim, made to fail loudly — the same treatment C3 got.
+
+    Doug applied this PR's own reasoning back to it (`missing-from-pr`): ADR-0027
+    C3 was given a guard because "a condition that binds only in prose does not
+    bind", and ADR-0028 makes an identical prose claim — that no traffic moves to
+    Vertex until the paired silent run clears the declared bar — with nothing in
+    code to hold it. The objection is correct and consistent, so the guard is
+    symmetric.
+
+    Two existing tests already fail on a Vertex swap
+    (test_default_client_never_carries_the_sdk_default_timeout and
+    test_both_clients_bound_the_whole_read_not_just_one_attempt), but they fail
+    on the timeout arguments, incidentally, and their message would send the
+    reader to the Cloud Run arithmetic rather than to the unrun bar. A guard
+    whose failure names the wrong reason is how a transition ships anyway.
+
+    Source inspection rather than construction, because constructing either
+    client needs live credentials. It is deliberately crude for the same reason
+    the C3 guard is: impossible to trip over by accident, trivial to remove on
+    purpose. The transport is one identifier in two functions, so there is
+    nothing subtle for this to miss.
+
+    To remove this test: run the paired study, record the result against the four
+    numbers in ADR-0028's bar table, and delete it in the PR that lands the
+    Vertex client, citing that result. A failed run does not widen the bar and it
+    does not delete this test either.
+    """
+    import inspect
+
+    for fn in (reader._client, reader._verify_client):
+        src = inspect.getsource(fn)
+        assert "anthropic.Anthropic(" in src, f"{fn.__name__} no longer builds the client it did"
+        assert "Vertex" not in src, (
+            f"{fn.__name__} builds a Vertex client, but ADR-0028's paired "
+            "non-inferiority run has not been recorded. Run the bar first."
+        )
+
+
 def test_the_mechanical_tier_has_not_left_anthropic_while_the_manifest_cannot_say_so():
     """ADR-0027 C3, made to fail loudly instead of resting on prose.
 

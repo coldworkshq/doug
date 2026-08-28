@@ -140,6 +140,19 @@ measured one.
 `google-auth` arrives transitively through `google-cloud-storage` today. That is
 an accident of the dependency graph, and a transport that depends on an
 accident is a transport that breaks when an unrelated dependency is dropped.
+Done 2026-08-28, and it added **no new package**: `uv.lock` gains no entry, and
+`requests` — which Doug flagged as possibly arriving with the extra — was
+already there three times over before the change. The declaration makes an
+existing dependency explicit; it does not enlarge the runtime image.
+
+**4a. Declaring the dependency is not permission to use it.**
+`test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run` fails the
+suite if either client function builds a Vertex client. Doug turned this
+record's own reasoning back on it: ADR-0027's C3 got a guard because a condition
+that binds only in prose does not bind, and item 2 below is the same kind of
+claim. The guard is symmetric, and the test names how to remove it — run the
+study, record the result against the bar table, delete it in the PR that lands
+the client. A failed run does not delete it either.
 
 **5. Credentials follow the existing GCP path.** No new secret class, no new
 key material in the service. If that turns out to be false in the build, this
