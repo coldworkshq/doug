@@ -132,7 +132,7 @@ conditions, all of which bind before production traffic reaches it.
   in Context is a blocker, not a note: while `instrument_id` cannot distinguish
   two mechanical models, a swap silently pools two instruments in a corpus that
   `example_pack_eval.py` partitions by exactly that hash. Fixing it needs code
-  and a migration, so it gets an issue and lands before the swap, not after.
+  and a migration, so it lands before the swap, not after. Filed as **#263**.
 
 **3. The request path forks per vendor.** A vendor adapter owns its own parameter
 names and its own defaults. `MECHANICAL_EFFORT` is not translated into a foreign
@@ -188,9 +188,11 @@ amendment to a boundary record, which is how a boundary stops being one.
   by its own terms and the tier stays inside Anthropic. Signing is flipping
   `status` and rewriting ADR-0016's banner in the same commit, the ADR-0022
   precedent.
-- **C3 is an issue and a migration**, filed against this record. It is the only
-  condition here that cannot be discharged by running something that already
-  exists.
+- **C3 is #263, and it is code plus a migration.** It is the only condition
+  here that cannot be discharged by running something that already exists, and
+  it is worth doing whether or not this record is signed: the manifest's job is
+  to say what produced a row, and today it under-describes the instrument by two
+  paid model calls.
 - **C1 costs one span-verification run per candidate model.** The corpus, the
   harness, and the bars exist, so the cost is compute and a grading pass, not
   design.
