@@ -290,6 +290,24 @@ class HealthResponse(BaseModel):
     as_of: datetime
 
 
+class QueueLaneLiveness(BaseModel):
+    """One lane's answer to "is anything sitting past the point where the
+    drain that should have taken it demonstrably did not run". The age is
+    measured server-side against the same clock that stamped the row, so a
+    poller never subtracts a ledger timestamp from its own clock."""
+
+    ok: bool
+    oldest_age_seconds: float | None
+    bar_seconds: int
+
+
+class QueueLivenessResponse(BaseModel):
+    ok: bool
+    review: QueueLaneLiveness
+    outcome: QueueLaneLiveness
+    as_of: datetime
+
+
 class JobItem(BaseModel):
     """One job from either lane. Lane-specific fields are None on the other
     lane rather than absent, so the console has one row type to render.

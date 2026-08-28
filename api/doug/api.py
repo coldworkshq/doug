@@ -49,6 +49,8 @@ from .models import (
     JobListResponse,
     PRMetadata,
     QueueItem,
+    QueueLaneLiveness,
+    QueueLivenessResponse,
     QueueResponse,
     QueueSummary,
     ReadScoreRequest,
@@ -236,6 +238,71 @@ async def _validation_error_handler(
 @app.get("/healthz")
 def healthz() -> dict[str, str | bool]:
     return {"ok": True, "version": __version__}
+
+
+# Liveness bars for /healthz/queues, beside the route because nothing else
+# enforces them: they are alerting thresholds, not lane semantics. The review
+# bar is minutes because a fresh-pending row only ever waits for the drain
+# that follows the webhook response that enqueued it. The outcome bar is the
+# adjudicator's daily cadence plus slack: an overdue row is healthy right up
+# until the sweep that should have claimed it demonstrably did not run.
+REVIEW_PENDING_LIVENESS_SECONDS = 30 * 60
+OUTCOME_OVERDUE_LIVENESS_SECONDS = 26 * 3600
+
+
+@app.get("/healthz/queues")
+def healthz_queues(response: Response) -> QueueLivenessResponse:
+    """Per-lane oldest-pending-age contradiction, as an HTTP status.
+
+    The 2026-08-16 adjudicator outage looked exactly like health: every
+    surface reported `adjudicated 0`, the designed empty state (#121). The
+    contradiction the system can compute on itself — work sitting past the
+    point where its drain provably did not run — has to leave the process to
+    be worth anything, so this route is unauthenticated and collapses it to
+    a status code an uptime check can watch: 200 inside the bars, 503 out.
+
+    Ages only, no rows and no repo names: it crosses installations the same
+    way /v1/health does, which is why that route is operator-only and this
+    one must never grow a field that identifies a tenant.
+
+    Retries are deliberately not measured. A pending row with attempts > 0
+    legitimately waits for the next drain trigger on a quiet service, so a
+    bar on retry age would page on designed behaviour until it was muted —
+    and a muted policy is the 2026-08-16 state with extra steps.
+    """
+    if not store.enabled():
+        # 503, never a zeroed payload: zeros render as "nothing is wrong"
+        # on a deployment that cannot answer the question at all.
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    data = store.job_health(
+        review_lease_seconds=ingest.STALL_LEASE_SECONDS,
+        review_max_attempts=ingest.MAX_ATTEMPTS,
+        outcome_lease_seconds=outcome_queue.STALL_LEASE_SECONDS,
+        outcome_max_attempts=outcome_queue.MAX_ATTEMPTS,
+    )
+    if data is None:
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    as_of = data["as_of"]
+
+    def _age(ts: datetime | None) -> float | None:
+        return None if ts is None else max(0.0, (as_of - ts).total_seconds())
+
+    review_age = _age(data["review"]["oldest_pending_at"])
+    outcome_age = _age(data["outcome"]["oldest_overdue_due_at"])
+    review = QueueLaneLiveness(
+        ok=review_age is None or review_age <= REVIEW_PENDING_LIVENESS_SECONDS,
+        oldest_age_seconds=review_age,
+        bar_seconds=REVIEW_PENDING_LIVENESS_SECONDS,
+    )
+    outcome = QueueLaneLiveness(
+        ok=outcome_age is None or outcome_age <= OUTCOME_OVERDUE_LIVENESS_SECONDS,
+        oldest_age_seconds=outcome_age,
+        bar_seconds=OUTCOME_OVERDUE_LIVENESS_SECONDS,
+    )
+    ok = review.ok and outcome.ok
+    if not ok:
+        response.status_code = 503
+    return QueueLivenessResponse(ok=ok, review=review, outcome=outcome, as_of=as_of)
 
 
 @app.post("/v1/score")
