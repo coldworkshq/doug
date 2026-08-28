@@ -1,15 +1,13 @@
 # HANDOFF — doug
 
-State:    review — landing facelift BUILT on branch landing-facelift (off
-          main), UNCOMMITTED. Andrew asked for a /frontend-design pass:
-          Langfuse x Mem0 x Vercel, keep the logo, more content that sells
-          Doug (what, how, why, cheaper than running /code-review on all).
-          Verified: web 376 pass, tsc clean, eslint clean (2 pre-existing
+State:    review — landing facelift is PR #252 OPEN off origin/main
+          (e61fa03), branch landing-facelift, one commit, rebased over #246
+          (HANDOFF.md conflict resolved by stacking streams). Verified after
+          the rebase: web 376 pass, tsc clean, eslint clean (2 pre-existing
           <img> warnings on /about). Screenshotted at 1280 light+dark and
-          390 light; dev server stopped.
-Next:     Andrew reviews (`npm run dev --workspace=web`, open /). If it
-          holds: commit on landing-facelift, open a PR. Open question for
-          Andrew: the cost section names `/code-review` by name — keep or
+          390 light, fixture data only — no local API.
+Next:     Watch CI on #252, then Andrew merges. Open question for Andrew:
+          the cost section names `/code-review` by name — keep or
           generalise.
 Blockers: none
 
