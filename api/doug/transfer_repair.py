@@ -274,6 +274,14 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     The outcome_jobs rows are re-settled as 'done' to match, so the pair
     cannot part company — a restored censoring with a pending job would be
     adjudicated a second time and write a duplicate.
+
+    Timestamps are coerced back by asking the TABLE which columns are
+    DateTime, not from a hand-written list. `_serialise` stringifies every
+    datetime it finds, so any list here is a second place to remember, and
+    the two only have to disagree once — a timestamp column added later
+    would re-insert as a raw string during an incident rollback, which is
+    the worst possible moment to discover it. `outcomes` carries exactly one
+    such column today; this stays correct when it carries two.
     """
     rows = json.loads(manifest_path.read_text())
     if len(rows) != expect_outcomes:
@@ -285,10 +293,17 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
 
     from datetime import datetime
 
+    from sqlalchemy import DateTime
+
+    temporal = {
+        column.name
+        for column in store.outcomes.columns
+        if isinstance(column.type, DateTime)
+    }
     restored = []
     for row in rows:
         row = dict(row)
-        for key in ("observed_at",):
+        for key in temporal:
             if isinstance(row.get(key), str):
                 row[key] = datetime.fromisoformat(row[key])
         restored.append(row)
