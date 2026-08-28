@@ -1,16 +1,20 @@
 # HANDOFF — doug
 
-State:    review — PR #246 OPEN off origin/main (6250124, branch
+State:    review — PR #246 OPEN off origin/main (6d907b1, branch
           worktree-restore-auto-deploy, in worktree
           .claude/worktrees/restore-auto-deploy). Restores automated
           deploy-on-merge: ADR-0021's reviewer gate retired, its WIF ref
           pin kept. The `production` GitHub environment is already DELETED
           live (2026-08-28) — that half is done and does not wait on merge.
-          Doug's 3 findings + 2 deviations on e72f135 all settled in
-          6250124; 5 rows in docs/findings-log.jsonl.
-Next:     Watch CI on #246, then Andrew merges. That merge deploys
-          automatically with nothing to click; confirm doug-api and
-          doug-web promote.
+          Doug's 3 findings + 2 deviations on e72f135 all settled;
+          5 rows in docs/findings-log.jsonl. Rebased onto c081aaa (#243)
+          to clear a findings-log conflict. All six CI checks green;
+          mergeable.
+          ALREADY PROVEN LIVE: run 33141122253 deployed c081aaa to
+          production in 10m08s with no approval step, vs 17h00m / 8h56m /
+          one cancelled at 13h29m under the gate. Both services promoted,
+          which also settles auth-config-change empirically.
+Next:     Andrew merges #246. Nothing to click afterwards.
 Blockers: none
 
 Decisions this session:
