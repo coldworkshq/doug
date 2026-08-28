@@ -86,8 +86,8 @@ export default function WhatDougGetsWrongPage() {
                 Backfill was reconstructed from write-ups after the fact
                 and is excluded from every rate by construction; the
                 denominator is the prospective rows, scoped to one
-                repository, because a rate computed across two describes
-                neither. The counts beside this paragraph are a{" "}
+                repository and one instrument, because a rate computed
+                across two of either describes neither. The counts beside this paragraph are a{" "}
                 <b className="font-semibold text-foreground">
                   dated snapshot, not a live counter
                 </b>
@@ -125,7 +125,7 @@ export default function WhatDougGetsWrongPage() {
             <Bright>{"}"}</Bright>
             {"\n\n"}
             <Comment>
-              {"# as of 2026-08-27 — a snapshot, not a\n#   counter. 205 rows; 193 prospective,\n#   12 backfill excluded from every rate.\n#   The reader's own findings on doug are\n#   176 of those: 54 disproved, 85 real,\n#   37 adjacent. The plan lane writes here\n#   too, in its own vocabulary; a share\n#   across both describes neither.\n\n# today's number, from the log itself:\n# python -m doug.findings_log rate \\\n#     --repo doug --rule-prefix reader:"}
+              {"# as of 2026-08-27 — a snapshot, not a\n#   counter. 205 rows; 193 prospective,\n#   12 backfill excluded from every rate.\n#   The reader on doug is 176 of those:\n#   54 disproved, 85 real, 37 adjacent.\n#   The plan lane writes here too, in its\n#   own vocabulary, and is not in that\n#   figure.\n\n# today's number, from the log itself:\n# python -m doug.findings_log rate \\\n#     --repo doug --rule-prefix reader:"}
             </Comment>
           </CodeBlock>
         }

@@ -101,16 +101,19 @@ changed nothing is a re-report; a false finding that changed something found a r
 gap by the wrong route. Doug's strongest mode is "this code does not justify
 itself," and a single score would grade that as failure.
 NO RATE IS PUBLISHED. Backfill is excluded from every rate by construction; the
-denominator is the prospective rows, scoped to one repository, because a rate
-computed across two describes neither. SNAPSHOT, NOT A COUNTER — as of 2026-08-24
-the log held 196 rows: 184 prospective, 12 backfill, and 179 of the prospective
-rows were reviews of Doug's own repository (53 disproved, 89 real, 37 adjacent).
-The log grows whenever a finding is settled, so do not quote those integers as
-current. The current figure comes from the log itself, which ships in the repo:
-`uv run python -m doug.findings_log rate --repo doug`. When a number exists
-it will NOT be called precision: whether a finding is TRUE is a different quantity
-from whether it PREDICTED A DEFECT, and a finding can be true and worthless or
-false and load-bearing.
+denominator is the prospective rows, scoped to one repository AND one
+instrument, because a rate computed across two of either describes neither —
+the diff reader writes `reader:` rows, the plan lane writes `deviation:` /
+`beyond-ticket:` / `missing-from-pr:` rows, and they are different vocabularies.
+SNAPSHOT, NOT A COUNTER — as of 2026-08-27 the log held 205 rows: 193
+prospective, 12 backfill, and 176 of the prospective rows were the reader on
+Doug's own repository (54 disproved, 85 real, 37 adjacent). The log grows
+whenever a finding is settled, so do not quote those integers as current. The
+current figure comes from the log itself, which ships in the repo:
+`uv run python -m doug.findings_log rate --repo doug --rule-prefix reader:`.
+When a number exists it will NOT be called precision: whether a finding is TRUE
+is a different quantity from whether it PREDICTED A DEFECT, and a finding can be
+true and worthless or false and load-bearing.
 
 ## MCP — Pattern Garden (PLANNED — no server exists yet)
 An MCP server a coding agent queries BEFORE writing. Serves outcome-anchored

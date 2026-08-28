@@ -69,22 +69,27 @@ const [
  *  snapshot.
  *
  *  `repo` defaults to "doug" because it was optional in the file before the
- *  field existed (docs/REVIEWING.md:211) — same default the CLI applies, so
- *  this scope matches `findings_log rate --repo doug`. */
+ *  field existed (docs/REVIEWING.md:211) — same default the CLI applies. The
+ *  `reader:` filter is the second half of that scope: the plan lane writes
+ *  `deviation:` / `beyond-ticket:` / `missing-from-pr:` rows into the same
+ *  file in a different vocabulary, and a share across both describes neither
+ *  (#235). Together these match
+ *  `findings_log rate --repo doug --rule-prefix reader:`. */
 const logRows = findingsLog
   .split("\n")
   .filter((line) => line.trim())
   .map((line) => JSON.parse(line));
 const prospective = logRows.filter((r) => r.source !== "backfill");
 const dougRows = prospective.filter((r) => (r.repo ?? "doug") === "doug");
+const readerRows = dougRows.filter((r) => r.rule.startsWith("reader:"));
 const counts = {
   total: logRows.length,
   prospective: prospective.length,
   backfill: logRows.length - prospective.length,
-  doug: dougRows.length,
-  disproved: dougRows.filter((r) => r.verdict === "disproved").length,
-  real: dougRows.filter((r) => r.verdict === "real").length,
-  adjacent: dougRows.filter((r) => r.verdict === "adjacent").length,
+  reader: readerRows.length,
+  disproved: readerRows.filter((r) => r.verdict === "disproved").length,
+  real: readerRows.filter((r) => r.verdict === "real").length,
+  adjacent: readerRows.filter((r) => r.verdict === "adjacent").length,
 };
 
 /** The field of ONE record, or null.
@@ -345,11 +350,16 @@ test("what Doug gets wrong quotes a dated snapshot, not a live count", () => {
     assert.match(source, /as of 20\d\d-\d\d-\d\d/i, `${name}: as-of date`);
     assert.match(source, /snapshot/i, `${name}: says it is a snapshot`);
     // And must hand the reader the instrument, so a stale figure is
-    // recoverable without waiting for anyone to edit this page.
+    // recoverable without waiting for anyone to edit this page. Both scopes
+    // are pinned separately, because they can be a line apart in the copy and
+    // because the unscoped command is the one that published a pooled share
+    // in the first place (#235).
+    assert.match(source, /findings_log rate/, `${name}: names the command`);
+    assert.match(source, /--repo doug/, `${name}: scopes to one repository`);
     assert.match(
       source,
-      /findings_log rate --repo doug/,
-      `${name}: names the command that prints today's figure`,
+      /--rule-prefix reader:/,
+      `${name}: scopes to one instrument`,
     );
   }
 
@@ -361,7 +371,7 @@ test("what Doug gets wrong quotes a dated snapshot, not a live count", () => {
     total: Number(/([\d,]+) rows/.exec(wrong)?.[1]?.replace(/,/g, "")),
     prospective: Number(/([\d,]+) prospective/.exec(wrong)?.[1]?.replace(/,/g, "")),
     backfill: Number(/([\d,]+) backfill/.exec(wrong)?.[1]?.replace(/,/g, "")),
-    doug: Number(/repo is ([\d,]+) of those/.exec(wrong)?.[1]?.replace(/,/g, "")),
+    reader: Number(/reader on doug is ([\d,]+) of those/.exec(wrong)?.[1]?.replace(/,/g, "")),
     disproved: Number(/([\d,]+) disproved/.exec(wrong)?.[1]?.replace(/,/g, "")),
     real: Number(/([\d,]+) real/.exec(wrong)?.[1]?.replace(/,/g, "")),
     adjacent: Number(/([\d,]+) adjacent/.exec(wrong)?.[1]?.replace(/,/g, "")),
@@ -371,11 +381,11 @@ test("what Doug gets wrong quotes a dated snapshot, not a live count", () => {
   }
   assert.equal(snapshot.total, snapshot.prospective + snapshot.backfill);
   assert.equal(
-    snapshot.doug,
+    snapshot.reader,
     snapshot.disproved + snapshot.real + snapshot.adjacent,
-    "the three verdicts must partition the doug-scoped rows",
+    "the three verdicts must partition the scoped rows",
   );
-  assert.ok(snapshot.doug <= snapshot.prospective);
+  assert.ok(snapshot.reader <= snapshot.prospective);
   assert.ok(
     snapshot.total <= counts.total,
     `the snapshot claims ${snapshot.total} rows but the log holds ${counts.total} — a snapshot cannot exceed the present`,
