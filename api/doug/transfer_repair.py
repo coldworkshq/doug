@@ -274,6 +274,21 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     The outcome_jobs rows are re-settled as 'done' to match, so the pair
     cannot part company — a restored censoring with a pending job would be
     adjudicated a second time and write a duplicate.
+
+    Temporal values are coerced back by asking the TABLE what each column
+    holds, not from a hand-written list. `_serialise` stringifies every
+    value with an `.isoformat()`, so any list here is a second place to
+    remember, and the two only have to disagree once — a column added later
+    would re-insert as a raw string during an incident rollback, which is
+    the worst possible moment to discover it.
+
+    Keyed on `python_type`, not `isinstance(..., DateTime)`: `Date` and
+    `Time` are siblings of `DateTime` in SQLAlchemy, not subclasses, so an
+    isinstance check narrows the bug class instead of closing it while
+    looking like it closed it. `python_type` is the exact mirror of
+    `_serialise`'s duck-typed test — the three types that own `.isoformat()`
+    are the three that own `.fromisoformat()`. `outcomes` carries one such
+    column today; this stays correct whatever it carries next.
     """
     rows = json.loads(manifest_path.read_text())
     if len(rows) != expect_outcomes:
@@ -283,14 +298,53 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     if not rows:
         return 0
 
-    from datetime import datetime
+    from datetime import date, datetime, time
+
+    # datetime before date: datetime IS a date subclass, so the other order
+    # would parse every timestamp as a bare day and silently drop its time.
+    parsers = (datetime, time, date)
+    temporal: dict[str, type] = {}
+    for column in store.outcomes.columns:
+        # Broad except, and deliberately so: this is reflection over a type
+        # this function does not own, on the incident-recovery path. The
+        # documented failure is NotImplementedError, but a custom type is
+        # free to raise anything from a property, and a rollback that dies
+        # introspecting a column it did not even need is strictly worse than
+        # one that skips it. A type that cannot name a python_type was never
+        # serialised as an ISO string either — `_serialise` only converts
+        # what carries `.isoformat()` — so skipping loses nothing.
+        try:
+            python_type = column.type.python_type
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(python_type, type):
+            # issubclass() would raise TypeError on a non-class.
+            continue
+        for parser in parsers:
+            if issubclass(python_type, parser):
+                temporal[column.name] = parser
+                break
 
     restored = []
     for row in rows:
         row = dict(row)
-        for key in ("observed_at",):
+        for key, parser in temporal.items():
             if isinstance(row.get(key), str):
-                row[key] = datetime.fromisoformat(row[key])
+                try:
+                    row[key] = parser.fromisoformat(row[key])
+                except ValueError as exc:
+                    # Abort, never fall back to inserting the raw string.
+                    # A manifest that is hand-edited or from an older format
+                    # is not a reason to write text into a timestamp column
+                    # and call the ledger restored; it is a reason to stop
+                    # and say which value could not be read. Naming the file,
+                    # row and column is the whole point — a bare ValueError
+                    # from `fromisoformat` mid-incident says none of them.
+                    raise RepairInvariantError(
+                        f"{manifest_path}: outcome id {row.get('id')!r} column "
+                        f"{key!r} holds {row[key]!r}, which is not ISO-8601. "
+                        "Nothing was restored."
+                    ) from exc
         restored.append(row)
 
     with engine.begin() as conn:

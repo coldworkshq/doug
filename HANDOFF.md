@@ -1,92 +1,88 @@
 # HANDOFF — doug
 
-State:    review — the org move's real casualty was the OUTCOME LOOP, not the
-          dashboard. Fix + repair built and green on branch
-          worktree-backfill-historical-runs (worktree
-          .claude/worktrees/backfill-historical-runs). api 1714 passed, ruff
-          clean, web 376, console 113.
-Next:     Open the PR, merge, DEPLOY (the fix only helps once deployed), then
-          run the repair against prod with the proxy up:
-            uv run python scripts/repair_transfer_censored.py --dry-run \
-              --from-gcp doug-prod0
-            uv run python scripts/repair_transfer_censored.py --apply \
-              --expect-outcomes 15 --manifest <abs path> --from-gcp doug-prod0
-          Dry-run against prod already returns exactly 15/15/15.
-Blockers: none. Deadline: the next wrong censoring lands 2026-08-30 (PR 108).
+State:    review — PR #257 OPEN off main (9d56db2, branch
+          enforce-lineage-pairing, worktree
+          .claude/worktrees/backfill-historical-runs). All 6 checks green,
+          MERGEABLE, Doug CLEARED at 0.28. api 1731, ruff clean, web 376,
+          console 114. Its parent #251 is MERGED (334c37d) and DEPLOYED
+          (doug-api-00175-wad, 04:58:40Z; the adjudicator job shares that
+          image digest). The production repair RAN at 05:18Z.
+Next:     Andrew merges #257. Then the ONLY thing outstanding is watching
+          the 2026-08-29 03:00 UTC drain settle the 15 repaired jobs.
+Blockers: none. No deadline left — the fix is deployed, so nothing new is
+          being censored.
 
-## What was actually wrong
+## What this was
 
-Andrew's report was "the dashboard lost every pre-org-move run". True, and
-harmless — but underneath it the outcome adjudicator had been silently
-destroying the dogfood corpus since the transfer.
+Andrew asked why the dashboard had lost every pre-org-move run. It had —
+261 runs / 121 PRs behind an installation filter, nothing deleted. Under
+that, the outcome adjudicator had been censoring the dogfood corpus daily
+since the 2026-08-26 transfer: `_repository_identity` read
+`installations.state='deleted' or installation_repos.state != 'active'` as
+permanent blindness, which is exactly what a transfer leaves behind while
+the repo stays readable under its successor. Censoring is terminal and
+removes a PR from the risk set, so it ran in the flattering direction with
+nothing to alert on. 15 PRs lost their 14-day grade (93-107); 165 jobs were
+queued to follow through 2026-10-25.
 
-`outcome_queue._repository_identity` set
-`permanent = installation_state == "deleted" or repo.state != "active"`.
-After the 2026-08-26 transfer BOTH held for installation 150424894 +
-github_repo_id 1314318717 (`installations.state='deleted'`,
-`installation_repos.state='removed'`) while the repo stayed perfectly
-readable under active installation 153075663. `permanently_unreachable`
-makes outcome_worker adjudicate with `revert_map={}, default_branch=None`,
-which settles every job as `censored` — terminal, never retried, and a
-censored PR leaves the risk set, so this ran in the flattering direction.
+## Repair: APPLIED 2026-08-28 05:18Z — verified
 
-Measured in prod (SELECT only, scratchpad/census{,2,3,4}.py):
-  2026-08-26  11 clean    PRs 82-92   — last healthy day
-  2026-08-27  13 censored PRs 93-105
-  2026-08-28   2 censored PRs 106-107
-165 more pending jobs were queued to follow, through 2026-10-25, covering
-every 60-day window for PRs 28-223.
+  manifest  ~/doug-transfer-repair-2026-08-28.json  (11 KB — KEEP until the
+            drain is confirmed; `--rollback --expect-outcomes 15` undoes it)
+  wrongly-censored outcomes remaining   0  (was 15)
+  legitimate base_ref censorings        PRs 40, 46 SURVIVED
+  14-day jobs for PRs 93-107            15 pending, attempts still 0
+  drewjst/doug outcome rows (#256 fork) gone
+  total outcomes                        717 (was 732 — exactly 15, nothing else)
 
-## What shipped
+The last drain ran 03:02Z, two hours BEFORE the repair, so it has not seen
+the requeued jobs. Next drain 2026-08-29 03:00 UTC (scheduler
+doug-adjudicator-daily, `0 3 * * *`). Confirm with:
 
-1. `outcome_queue._live_registration` — resolve a repo id to the
-   installation that covers it NOW (both `installation_repos.state` and
-   `installations.state` active, newest wins, matching `store.repo_id_for`).
-   Consulted ONLY when a row would otherwise be censored, so nothing about
-   which jobs get adjudicated widens. `ClaimedBatch.reader_installation_id`
-   carries it; `outcome_worker._repository_evidence` mints the clone token
-   through it. The outcome still settles under the job's own installation —
-   who paid for the verdict does not change.
-2. `store.installation_lineage` + `_tenant_ids`, and `installation_ids=` on
-   run_history / latest_reviews / _load_verdict_row / run_detail /
-   job_health. `api._readable_installations` unions the lineage with the
-   session's own installation. Tenancy boundary is unchanged: every caller
-   pairs it with `repo_ids=` over the same proven set, so a row is visible
-   only if the session provably holds that repo NOW and the writing
-   installation provably held it once. Test
-   `test_the_lineage_widens_installations_but_never_repositories` pins that.
-3. `doug/transfer_repair.py` + `scripts/repair_transfer_censored.py` —
-   dry-run/apply/rollback with a manifest of the whole deleted row. Repairs
-   a row only when it is censored AND `censor_reason == 'unreachable'` AND a
-   live successor installation exists. The two legitimate `base_ref`
-   censorings (PRs 40, 46, 2026-08-18) are excluded by that predicate, not
-   by a date.
+  SELECT kind, count(*) FROM outcomes
+  WHERE github_repo_id = 1314318717 AND observed_at >= CURRENT_DATE GROUP BY 1;
+
+Want clean/revert. If `censored` returns, the deployed job is not running
+the new code — roll back with the manifest.
 
 ## Decisions this session
 
-- RULING (Andrew): fix identity resolution, do not write migration 18.
-  Rejected: flipping installation_id across 261 verdicts + 269 review_jobs +
-  79 outcomes + 244 outcome_jobs — mirrors migration 17 but is a one-off
-  (the next transfer needs migration 19) and erases that drewjst ever
-  scored those runs. Precedent for the chosen shape: #218 ("installation_id
-  remains operational plumbing only") and #228's name-alias fix.
-- RULING (Andrew): the pre-App CI-token era stays out — 87 runs / 43 PRs
-  (PRs 9-53) with installation_id AND github_repo_id both NULL. Adopting
-  them means inventing a tenancy no installation ever had, and
-  `include_untenanted=False` is load-bearing (it also excludes 653
-  probe-corpus rows). Filed as an issue.
-- `receipt` and `_select_governing_verdict` deliberately NOT widened:
-  §2.2's publication partition keys on installation_id, so widening it
-  would change a pre-registered published quantity. Filed separately.
-- #228's hazard has ALREADY FIRED, contrary to its "when it flips" framing:
-  the old junction row is `removed` today, so historical sticky-comment
-  receipt links are 404ing now.
+- RULING (Andrew): fix identity resolution, not migration 18. Rejected:
+  flipping installation_id across 261 verdicts + 269 review_jobs + 79
+  outcomes + 244 outcome_jobs — a one-off that erases that drewjst ever
+  scored those runs. Precedent: #218, #228.
+- RULING (Andrew): the pre-App CI-token era stays out (87 runs / 43 PRs,
+  PRs 9-53, NULL installation_id AND github_repo_id). Issue #249.
+- `receipt` and `_select_governing_verdict` NOT widened: §2.2's publication
+  partition keys on installation_id, so widening changes a published
+  quantity. Issue #250 — until it lands, restored runs' receipt LINKS 404.
+- #251's squash merge (04:54:58Z) landed one commit behind the branch, so
+  two hardening commits missed it. That is what #257 recovers. Neither was
+  a live defect; the repair behaved identically either way.
+- 21 Doug findings dispositioned across four review rounds, all in
+  docs/findings-log.jsonl. Three earned issues: #256 (run_history joins
+  outcomes on repo NAME, already forked in prod), #258 (make the read-scope
+  pairing a TYPE — the same finding recurred four times and the fourth read
+  correctly said the pairing is verified by grep, not by types).
+- Pushed back once and recorded it: Doug wanted an unparseable manifest
+  timestamp to fall back to inserting the raw value. Writing text into a
+  timestamp column and calling the ledger restored is worse than stopping.
+  The abort stays; what changed is that it now names file, row, column and
+  value.
+
+## Issues opened
+
+#249 pre-App runs invisible · #250 receipts/queue installation-pinned ·
+#255 should a transfer between UNRELATED accounts carry review history
+(tenancy contract decision debt) · #256 name-keyed outcome join ·
+#258 ReadScope type. Commented on #218 and #228 (#228's hazard has ALREADY
+FIRED — old junction row is `removed`, so historical receipt links 404 now).
 
 Pointers: api/doug/outcome_queue.py `_live_registration` ·
-          api/doug/outcome_worker.py:105 · api/doug/store.py
-          `installation_lineage` / `_tenant_ids` · api/doug/api.py
-          `_readable_installations` · api/doug/transfer_repair.py ·
-          scratchpad/census{,2,3,4}.py · issues #218, #228
+          api/doug/outcome_worker.py `reader_installation_id` ·
+          api/doug/store.py `installation_lineage` / `_tenant_ids` ·
+          api/doug/api.py `_readable_installations` ·
+          api/doug/transfer_repair.py + scripts/repair_transfer_censored.py
 
 --- prior stream (#252 landing facelift) below, preserved ---
 

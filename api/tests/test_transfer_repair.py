@@ -389,3 +389,171 @@ def test_the_registry_lookup_is_bounded_by_the_censored_repos(tmp_path, monkeypa
 
     assert report.outcomes == 1
     assert seen == [{REPO_ID}], "the registry lookup must see only censored repos"
+
+
+def test_rollback_coerces_every_timestamp_column_the_table_declares(tmp_path, monkeypatch):
+    """`_serialise` stringifies every datetime it finds, so a hand-written
+    list of columns to convert back is a second place to remember. Ask the
+    table instead: a timestamp column added later must not re-insert as a
+    raw string during an incident rollback."""
+    from sqlalchemy import DateTime
+
+    declared = {
+        c.name for c in store.outcomes.columns if isinstance(c.type, DateTime)
+    }
+    assert declared, "the guard is vacuous if outcomes declares no timestamp"
+
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    _job(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+    transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
+
+    # Every declared timestamp really did serialise as a string, so the
+    # coercion below is doing work rather than passing through.
+    written = json.loads(manifest.read_text())[0]
+    assert {k for k in declared if written.get(k) is not None}, "nothing to coerce"
+    assert all(
+        isinstance(written[k], str) for k in declared if written.get(k) is not None
+    )
+
+    transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1)
+
+    with create_engine(url).connect() as conn:
+        row = conn.execute(select(store.outcomes)).mappings().one()
+    for name in declared:
+        if row[name] is not None:
+            assert not isinstance(row[name], str), f"{name} came back as a string"
+
+
+def test_rollback_coerces_date_and_time_columns_not_only_datetime(tmp_path, monkeypatch):
+    """`Date` and `Time` are siblings of `DateTime` in SQLAlchemy, not
+    subclasses. An isinstance(..., DateTime) check narrows this bug class
+    while looking like it closed it, so the resolver keys on python_type.
+    Drives all three against a stand-in table rather than waiting for
+    `outcomes` to grow one."""
+    from datetime import date, datetime, time
+
+    from sqlalchemy import Column, Date, DateTime, Integer, MetaData, Table, Time
+
+    url = _db(tmp_path, monkeypatch)
+    # Carries the four key columns rollback's job re-settle joins on, so
+    # this drives the real function rather than a fragment of it.
+    probe = Table(
+        "probe", MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("installation_id", Integer),
+        Column("github_repo_id", Integer),
+        Column("pr_number", Integer),
+        Column("window_days", Integer),
+        Column("stamp", DateTime(timezone=True)),
+        Column("day", Date),
+        Column("clock", Time),
+    )
+    monkeypatch.setattr(store, "outcomes", probe)
+    engine = create_engine(url)
+    probe.create(engine)
+
+    original = {
+        "id": 1,
+        "installation_id": OLD,
+        "github_repo_id": REPO_ID,
+        "pr_number": 93,
+        "window_days": 14,
+        "stamp": datetime(2026, 8, 28, 3, 2, 23, tzinfo=UTC),
+        "day": date(2026, 8, 28),
+        "clock": time(3, 2, 23),
+    }
+    serialised = transfer_repair._serialise(original)
+    assert all(isinstance(serialised[k], str) for k in ("stamp", "day", "clock")), (
+        "the guard is vacuous unless _serialise really stringified all three"
+    )
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([serialised]) + "\n")
+
+    transfer_repair.rollback(engine, manifest_path=manifest, expect_outcomes=1)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(probe)).mappings().one()
+    # A raw string surviving here is the defect: 'day' and 'clock' would
+    # have been re-inserted as text under the old isinstance(DateTime) check.
+    assert row["day"] == original["day"]
+    assert row["clock"] == original["clock"]
+    assert not isinstance(row["stamp"], str), "DateTime column came back as a string"
+
+
+def test_a_column_whose_python_type_explodes_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """Reflection over a type this module does not own, on the recovery
+    path. A rollback that dies introspecting a column it did not need is
+    strictly worse than one that skips it — and a type that cannot name a
+    python_type was never serialised as an ISO string either."""
+    from sqlalchemy import Column, Integer, MetaData, String, Table
+    from sqlalchemy.types import TypeDecorator
+
+    class Hostile(TypeDecorator):
+        impl = String
+        cache_ok = True
+
+        @property
+        def python_type(self):
+            raise AttributeError("this type refuses to say")
+
+    url = _db(tmp_path, monkeypatch)
+    probe = Table(
+        "probe", MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("installation_id", Integer),
+        Column("github_repo_id", Integer),
+        Column("pr_number", Integer),
+        Column("window_days", Integer),
+        Column("odd", Hostile),
+    )
+    monkeypatch.setattr(store, "outcomes", probe)
+    engine = create_engine(url)
+    probe.create(engine)
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([{
+        "id": 1, "installation_id": OLD, "github_repo_id": REPO_ID,
+        "pr_number": 93, "window_days": 14, "odd": "not-a-timestamp",
+    }]) + "\n")
+
+    assert transfer_repair.rollback(
+        engine, manifest_path=manifest, expect_outcomes=1
+    ) == 1
+
+    with create_engine(url).connect() as conn:
+        assert conn.execute(select(probe.c.odd)).scalar_one() == "not-a-timestamp"
+
+
+def test_an_unparseable_timestamp_aborts_and_names_what_it_could_not_read(
+    tmp_path, monkeypatch
+):
+    """Deliberately NOT a fallback to inserting the raw value: writing text
+    into a timestamp column and calling the ledger restored is worse than
+    stopping. What was missing is the diagnosis — a bare ValueError from
+    fromisoformat names neither the file, the row, nor the column."""
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    _job(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+    transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
+
+    rows = json.loads(manifest.read_text())
+    rows[0]["observed_at"] = "last Tuesday"
+    manifest.write_text(json.dumps(rows) + "\n")
+
+    with pytest.raises(transfer_repair.RepairInvariantError) as caught:
+        transfer_repair.rollback(
+            create_engine(url), manifest_path=manifest, expect_outcomes=1
+        )
+
+    message = str(caught.value)
+    assert "observed_at" in message, "must name the column"
+    assert "last Tuesday" in message, "must name the value"
+    assert str(manifest) in message, "must name the file"
+    # And it aborted before writing: the outcome is still deleted.
+    assert _outcome_ids(url) == []

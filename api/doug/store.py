@@ -2429,7 +2429,7 @@ def _load_verdict_row(
     and run_detail both start here, each still checking the None case itself,
     before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
     query = select(verdicts).where(verdicts.c.id == verdict_id)
-    if (tenants := _tenant_ids(installation_id, installation_ids)) is not None:
+    if (tenants := _tenant_ids(installation_id, installation_ids, repo_ids)) is not None:
         query = query.where(verdicts.c.installation_id.in_(tenants))
     if repo_ids is not None:
         query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
@@ -3151,7 +3151,7 @@ def latest_reviews(
     # dropped, and the PR disappears instead of falling back. A CI row
     # (installation_id NULL) on a tenant's own PR is precisely that case.
     scoped = verdicts.c.tier != EXTERNAL_TIER
-    if (tenants := _tenant_ids(installation_id, installation_ids)) is not None:
+    if (tenants := _tenant_ids(installation_id, installation_ids, repo_ids)) is not None:
         scoped = scoped & (verdicts.c.installation_id.in_(tenants))
     if repo_ids is not None:
         # Same placement rule as the tenant filter above: INSIDE the grouped
@@ -3217,7 +3217,7 @@ def run_history(
         return []
     from sqlalchemy import case, desc, func, select
 
-    tenants = _tenant_ids(installation_id, installation_ids)
+    tenants = _tenant_ids(installation_id, installation_ids, repo_ids)
     query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
     if not include_untenanted:
         query = query.where(verdicts.c.installation_id.is_not(None))
@@ -4245,7 +4245,9 @@ def installation_lineage(github_repo_ids: frozenset[int]) -> frozenset[int]:
 
 
 def _tenant_ids(
-    installation_id: int | None, installation_ids: frozenset[int] | None
+    installation_id: int | None,
+    installation_ids: frozenset[int] | None,
+    repo_ids: frozenset[int] | set[int] | None = None,
 ) -> frozenset[int] | None:
     """One tenant filter from either spelling, or None for no filter.
 
@@ -4253,10 +4255,22 @@ def _tenant_ids(
     caller, `installation_ids` for a session that has resolved a repository's
     installation lineage. Giving both is a caller bug, not a union — it would
     silently mean whichever the reader assumed — so it raises.
+
+    `installation_ids` REQUIRES `repo_ids`, and that is the whole safety
+    argument made checkable rather than merely documented. A lineage spans
+    every installation that ever registered the caller's repositories, so on
+    its own it is wider than one tenant; what keeps it safe is that a row
+    must ALSO be for a repository the caller provably holds now. An earlier
+    draft left that pairing as a convention every call site had to remember,
+    which is exactly the shape that survives review and then breaks two
+    refactors later. Unpaired, it raises here instead.
     """
     if installation_ids is not None:
         if installation_id is not None:
             raise ValueError("pass installation_id or installation_ids, never both")
+        if repo_ids is None:
+            raise ValueError("installation_ids requires repo_ids — a lineage is only "
+                             "safe paired with the proven repo set it was derived from")
         return frozenset(installation_ids)
     return None if installation_id is None else frozenset({installation_id})
 
