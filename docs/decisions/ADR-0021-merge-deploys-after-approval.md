@@ -3,7 +3,21 @@ title: A merge deploys only after Andrew approves the run
 status: accepted
 date: 2026-08-26
 amends: ADR-0009
+amended_by: ADR-0025
 ---
+
+> **Amendment, 2026-08-28 (ADR-0025): the reviewer gate is retired; the ref
+> pin stands.**
+>
+> The Decision below has two halves. The second — the federation provider
+> pinning `refs/heads/main` as well as the repository — is in force and is now
+> the only boundary between a branch and production. The first is not: neither
+> deploy job names a GitHub environment any more, the `production` environment
+> is deleted, and a merge to main deploys without waiting. In the 32 hours the
+> gate was live it cancelled one merge's deploy outright and held others for up
+> to 17 hours, which is the main-versus-production drift ADR-0009 exists to
+> prevent. `amends`, not `supersedes`: retiring the gate does not retire the
+> ref pin. ADR-0025 carries the evidence.
 
 ## Context
 

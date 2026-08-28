@@ -17,6 +17,7 @@ from pathlib import Path
 GCP_PATH = Path(__file__).resolve().parents[1] / "deploy" / "gcp.sh"
 GCP = GCP_PATH.read_text()
 DEPLOY_WORKFLOW = GCP_PATH.parents[2] / ".github" / "workflows" / "deploy.yml"
+SETUP_CICD = GCP_PATH.parent / "setup-cicd.sh"
 
 
 def _active_lines() -> list[str]:
@@ -1137,6 +1138,50 @@ def test_preregistration_change_refreshes_the_adjudicator_hash():
         'echo "api=$api"', 1
     )[0]
     assert "docs/design/outcome-loop/publication-preregistration.md" in change_filter
+
+
+def test_setup_cicd_pins_both_the_repository_and_the_ref():
+    """The attribute condition is the only boundary left (ADR-0025).
+
+    ADR-0021 required the script's condition, its printed verify command, and
+    the applied provider to keep saying the same thing. Two of those three are
+    checkable here. The script's exists-arm *converges* the live provider onto
+    CONDITION, so weakening the string does not merely fail to tighten a new
+    provider — the next run of this script actively loosens the one in
+    production. Dropping the ref clause is what let any branch of this repo
+    mint the deployer credential until 2026-08-24, and with the reviewer gate
+    gone there is no second thing to catch it.
+    """
+    setup = SETUP_CICD.read_text()
+    [condition] = [
+        ln for ln in setup.splitlines() if ln.startswith("CONDITION=")
+    ]
+    assert "assertion.repository=='$REPO'" in condition
+    assert "assertion.ref=='refs/heads/main'" in condition
+
+    # Both gcloud arms must spend the same variable. A literal in either one
+    # is how the two silently diverge.
+    for arm in ("create-oidc", "update-oidc"):
+        body = setup.split(f"providers {arm}", 1)[1].split("\n\n", 1)[0]
+        assert '--attribute-condition="$CONDITION"' in body, arm
+
+
+def test_deploy_jobs_name_no_github_environment():
+    """A merge to main must deploy without waiting for a human (ADR-0025,
+    restoring ADR-0009).
+
+    This pins the absence of `environment:`, not the absence of a protection
+    rule, because the rule lives in GitHub settings where no diff can show it.
+    While ADR-0021's `environment: production` was here, one merge's deploy sat
+    unapproved for 13h29m and was then cancelled outright — evicted from the
+    concurrency group's pending slot by the next merge, with nothing going red.
+    Re-adding the key is what makes that reachable again, so re-adding the key
+    is what has to be reviewed.
+    """
+    workflow = DEPLOY_WORKFLOW.read_text()
+    active = [ln for ln in workflow.splitlines() if not ln.lstrip().startswith("#")]
+    offenders = [ln for ln in active if ln.lstrip().startswith("environment:")]
+    assert not offenders, f"a deploy job names a GitHub environment: {offenders}"
 
 
 def test_web_deploy_runs_the_auth_entry_smoke_after_promotion():

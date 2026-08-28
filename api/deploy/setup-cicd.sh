@@ -81,9 +81,14 @@ gcloud iam workload-identity-pools create "$POOL" \
 # and pinning assertion.ref is what makes it main only — without the ref pin,
 # any branch of this repo could mint the deployer credential (verified live
 # 2026-08-24). The condition evaluates CEL over the RAW assertion, so
-# assertion.ref needs no attribute-mapping entry. The deploy jobs run inside
-# GitHub's `production` environment, which switches the token's sub claim to
-# its environment form — inert here, because nothing conditions on sub.
+# assertion.ref needs no attribute-mapping entry.
+#
+# Since ADR-0025 retired the reviewer gate, this condition is the ONLY
+# boundary between a branch and production — there is no GitHub environment
+# on the deploy jobs any more. Weakening either clause here silently reopens
+# the path on the next run of this script, because the exists-arm below
+# converges the live provider onto whatever CONDITION says.
+# test_setup_cicd_pins_both_the_repository_and_the_ref guards the string.
 CONDITION="assertion.repository=='$REPO' && assertion.ref=='refs/heads/main'"
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --project "$PROJECT" --location=global --workload-identity-pool="$POOL" \
