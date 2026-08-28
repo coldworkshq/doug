@@ -1068,6 +1068,37 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
     )
 
 
+def test_the_mechanical_tier_has_not_left_anthropic_while_the_manifest_cannot_say_so():
+    """ADR-0027 C3, made to fail loudly instead of resting on prose.
+
+    ADR-0027 is `accepted`, so the mechanical tier's vendor boundary is open in
+    the directory the reader consumes. Three conditions bind before a foreign
+    model may serve production traffic, and C3 is the one that is code rather
+    than a measurement: WholeInstrumentManifestV0 carries one `provider` and one
+    `pinned_model_id`, both describing the risk read, and MECHANICAL_MODEL
+    reaches no durable surface but the cost log. So two reads that ran different
+    mechanical models hash to the same instrument_id, while ADR-0015 makes
+    findings.hunks — the attribution pass's output — part of convergence
+    identity, and example_pack_eval.py partitions the corpus by exactly that
+    hash.
+
+    Doug flagged the gap as `beyond-ticket` on the signing PR: the record says
+    the conditions bind, and nothing made the unenforceable-by-accident state
+    fail. This is that guard. It is deliberately crude — a vendor check, not a
+    model allowlist — because its whole job is to be impossible to trip over by
+    accident and trivial to remove on purpose once #263 lands and the manifest
+    can tell two mechanical models apart.
+
+    To remove this test: close #263 first, then delete it in the same PR that
+    changes MECHANICAL_MODEL, citing #263. Do not relax it to keep a swap green.
+    """
+    assert reader.MECHANICAL_MODEL.startswith("claude-"), (
+        "MECHANICAL_MODEL left Anthropic while WholeInstrumentManifestV0 still "
+        "cannot record which mechanical model produced a row (ADR-0027 C3, #263). "
+        "Land the manifest change first."
+    )
+
+
 def test_the_two_paid_reads_did_not_follow_the_mechanical_tier_down():
     """The freeze binds the risk read, and ADR-0007 binds the intent read to
     the same instrument. Splitting the model per call makes "unify these two

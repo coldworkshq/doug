@@ -248,12 +248,22 @@ def test_selection_on_dougs_own_records():
     assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == []
 
     # The other half of that move, pinned so it cannot regress silently: a
-    # change to the file those two records govern IS read against them. If this
-    # ever returns [], the anthropic[vertex] declaration can be dropped with
-    # nothing to say so, which is exactly what ADR-0028 item 4 exists to prevent.
-    pyproject = sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"])
-    assert "ADR-0028" in pyproject
-    assert "ADR-0027" in pyproject
+    # change to the file those two records govern must be read against them, or
+    # the anthropic[vertex] declaration ADR-0028 item 4 requires can be dropped
+    # with nothing to say so.
+    #
+    # Asserted through relevance(), not select(). Doug flagged the select()
+    # form as brittle and was right: select() is ranked and bounded by MAX_DOCS,
+    # so any future record that also mentions dependencies could displace one of
+    # these two and fail the suite with no regression behind it. relevance() is
+    # the property this test is actually about — does this change bear on that
+    # record — and it is per-record, so it cannot be crowded out.
+    by_id = {d.id: d for d in docs}
+    for adr in ("ADR-0027", "ADR-0028"):
+        assert (
+            intent.relevance("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"], by_id[adr])
+            > 0
+        ), f"{adr} governs api/pyproject.toml and must be read against a change to it"
 
     # And the set stays tight rather than padding out to MAX_DOCS.
     # store.py's bound moved to 4 when ADR-0011 (migration list) joined the

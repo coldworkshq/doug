@@ -52,6 +52,38 @@ constants against `scripts/llm_probe.py` — not clients, not transports — so 
 stays green by construction. This record does not amend ADR-0012 and must not
 be read as narrowing it.
 
+### The frozen MODEL, and what happens to it on Vertex
+
+Doug raised this as a `missing-from-pr` deviation and it was a real hole: ADR-0018
+keeps ADR-0012's freeze on `MODEL` explicitly binding, byte-identical to
+`scripts/llm_probe.py`, and an earlier draft of this record authorized Vertex
+without saying how a Vertex model identifier reconciles with that constant or
+which test would catch a divergence. Checked and answered:
+
+- **Vertex model IDs carry no prefix.** A current-generation model uses the bare
+  first-party ID, so the string is `claude-opus-5` on both transports. `MODEL`
+  does not move, and `test_reader_and_probe_share_the_validated_prompt_bytes`
+  — which compares `SYSTEM`, `SCHEMA`, `MODEL` and `MAX_TOKENS` against the
+  probe, not clients or transports — stays green by construction rather than by
+  anyone remembering to keep it green.
+- **`effort` is generally available on Vertex.** `EFFORT = "high"` carries over
+  unchanged, so ADR-0018's divergence from the probe is unaffected.
+- **The construction is `AnthropicVertex(project_id=..., region=...)`** from the
+  same `anthropic` package, authenticated by GCP application default
+  credentials. No Anthropic API key, no second SDK.
+
+**The guard, and the one case that breaks it.** Dated *snapshot* IDs on Vertex
+use an `@` separator (`claude-opus-4-5@20251101`) where the first-party API uses
+a hyphen. Doug's question — which test would catch the divergence — has this
+answer: when the client change lands, the Vertex client is constructed with
+`reader.MODEL` **verbatim**, with no transport-specific mapping, and that is
+pinned by test. A mapping layer is the thing to refuse, because it is how
+`MODEL` comes to say one thing while the wire says another, which is the exact
+state ADR-0012's freeze exists to make impossible.
+
+If Doug ever pins a dated snapshot, the two transports stop sharing a string and
+this record is wrong. That reopens it; it does not get worked around.
+
 ### The thing that is not free
 
 `WholeInstrumentManifestV0` carries a `provider` field, hardcoded `"anthropic"`
@@ -172,6 +204,35 @@ them for measurements.
   in the same window, so the comparison is available even though the level is
   not. Recording the level for the first time is a side effect of this run and
   is reported, not barred.
+
+### Provenance of the two ruled numbers
+
+Doug reviewed the commit that filled this table and raised the right objection
+(`contradicts-ticket`, high): the banner above said the numbers were
+founder-only and that the record could not be signed as it stands, and then the
+same commit supplied them, with the only evidence of authorization being prose
+added by that commit. Left there, a protected pre-registration and a fabricated
+one are indistinguishable in the record.
+
+So the mechanism is written down rather than asserted:
+
+- The two ruled numbers were **chosen by Andrew on 2026-08-28** from enumerated
+  alternatives, each with its arithmetic stated before the choice: margins of
+  3 pp, 5 pp, 10 pp, and a Wilson-lower-bound variant; corpora of 300 PRs, the
+  full 653, and the 153-row findings-log set. 5 pp and 300 were selected. The
+  rejected options and why they lose are in **Where each number comes from**,
+  which is what makes this a choice on the record rather than a preference.
+- The other two are **derived, and labelled derived**, from those two plus
+  bounds already in the code. No third quantity was invented.
+- **The founder act that ratifies this record is the merge**, not the prose. An
+  agent can write a number into a file; it cannot merge a PR into `main`. If
+  the numbers here are not Andrew's, the correct response is to reject the PR,
+  and this paragraph is the instruction to do so.
+
+That is weaker than a signature on a separate artifact and it is worth naming as
+weaker. What it is not is self-certifying: the authorization is an act by a
+different party, recorded in git, on a record that states in advance what the
+act means.
 
 ### What this table does not do
 
