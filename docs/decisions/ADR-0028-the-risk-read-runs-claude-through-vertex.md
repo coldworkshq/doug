@@ -2,6 +2,7 @@
 title: The risk read runs Claude through Vertex, and clears a non-inferiority bar before it does
 status: accepted
 date: 2026-08-28
+amends: ADR-0012
 ---
 
 > **SIGNED 2026-08-28. The bar was declared before the run, and the run has not
@@ -49,8 +50,22 @@ dependency extra.
 `MODEL`, and `MAX_TOKENS` is untouched, and
 `test_reader_and_probe_share_the_validated_prompt_bytes` compares those four
 constants against `scripts/llm_probe.py` — not clients, not transports — so it
-stays green by construction. This record does not amend ADR-0012 and must not
-be read as narrowing it.
+stays green by construction. **This record `amends` ADR-0012, and the earlier draft that said it did not was
+wrong.** Doug caught the inconsistency (`beyond-ticket`): this same PR marks
+both sides of the ADR-0016/ADR-0027 amendment and then authorizes a vendor
+boundary change to the frozen judgment tier with no banner on the freeze record
+at all. Asserting "the freeze covers constants, not transports" IS a claim about
+what ADR-0012 means, made by the record that benefits from it — the exact
+self-authorized scope claim ADR-0016 was criticized for and ADR-0027 exists to
+ratify. So it is declared as an amendment and marked on both sides.
+
+What it amends is the freeze's SCOPE, not its list. `SYSTEM`, `SCHEMA`, `MODEL`
+and `MAX_TOKENS` remain frozen, byte-identical to the probe, and the coverage
+bar on `DIFF_BUDGET` is untouched. What this record settles is that the freeze
+governs the request's constants and not the transport that carries them —
+which, because the Vertex ID is the same string, is a distinction with no
+observable difference today and a real one the moment a dated snapshot is
+pinned.
 
 ### The frozen MODEL, and what happens to it on Vertex
 

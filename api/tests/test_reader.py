@@ -1099,9 +1099,19 @@ def test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run():
     import inspect
 
     for fn in (reader._client, reader._verify_client):
-        src = inspect.getsource(fn)
-        assert "anthropic.Anthropic(" in src, f"{fn.__name__} no longer builds the client it did"
-        assert "Vertex" not in src, (
+        # Comments and docstrings stripped first. Doug flagged the whole-source
+        # form as brittle (`reader:brittle-test-assertion`) and was right: a
+        # comment mentioning Vertex would fail the suite for a reason that has
+        # nothing to do with the policy. Only executable lines are inspected.
+        code = "\n".join(
+            line.split("#")[0]
+            for line in inspect.getsource(fn).splitlines()
+            if not line.strip().startswith(("#", '"""', "'''"))
+        )
+        assert "anthropic.Anthropic(" in code, (
+            f"{fn.__name__} no longer builds the client it did"
+        )
+        assert "Vertex(" not in code, (
             f"{fn.__name__} builds a Vertex client, but ADR-0028's paired "
             "non-inferiority run has not been recorded. Run the bar first."
         )
@@ -1128,8 +1138,16 @@ def test_the_mechanical_tier_has_not_left_anthropic_while_the_manifest_cannot_sa
     accident and trivial to remove on purpose once #263 lands and the manifest
     can tell two mechanical models apart.
 
-    To remove this test: close #263 first, then delete it in the same PR that
-    changes MECHANICAL_MODEL, citing #263. Do not relax it to keep a swap green.
+    **It is the only thing holding C1 and C2 as well, and that is deliberate.**
+    Doug noted that C1 (re-run ADR-0015's span-verification) and C2 (a recorded
+    grounding rate for verify_finding) are prose-only, enforceable in practice
+    only by this guard — which the record says can be deleted once #263 lands.
+    Correct, so the removal condition below is all three, not one.
+
+    To remove this test: close #263, record C1's replication result against
+    ADR-0015's frozen bars, record C2's before-and-after grounding rate, and
+    then delete it in the same PR that changes MECHANICAL_MODEL, citing all
+    three. Do not relax it to keep a swap green.
     """
     assert reader.MECHANICAL_MODEL.startswith("claude-"), (
         "MECHANICAL_MODEL left Anthropic while WholeInstrumentManifestV0 still "
