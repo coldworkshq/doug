@@ -3805,7 +3805,31 @@ def test_tenant_ids_refuses_both_spellings_rather_than_unioning_them():
     """Silently unioning would mean whichever filter the reader assumed, and
     the two disagree exactly where it matters — a transferred repo."""
     assert store._tenant_ids(101, None) == frozenset({101})
-    assert store._tenant_ids(None, frozenset({101, 303})) == frozenset({101, 303})
+    assert store._tenant_ids(None, frozenset({101, 303}), frozenset({11})) == frozenset(
+        {101, 303}
+    )
     assert store._tenant_ids(None, None) is None
     with pytest.raises(ValueError, match="never both"):
-        store._tenant_ids(101, frozenset({303}))
+        store._tenant_ids(101, frozenset({303}), frozenset({11}))
+
+
+def test_a_lineage_without_its_repo_set_is_refused_not_trusted(tmp_path, monkeypatch):
+    """The lineage spans every installation that ever held the caller's
+    repos, so on its own it is wider than one tenant. What makes it safe is
+    the paired repo_ids filter — and a safety argument that lives only in a
+    docstring is one refactor from being wrong. Unpaired, it raises."""
+    _db(tmp_path, monkeypatch)
+    lineage = frozenset({101, 303})
+
+    with pytest.raises(ValueError, match="requires repo_ids"):
+        store._tenant_ids(None, lineage, None)
+    assert store._tenant_ids(None, lineage, frozenset({11})) == lineage
+
+    # And through the real read paths, which is where it would actually bite.
+    for call in (
+        lambda: store.run_history(installation_ids=lineage),
+        lambda: store.latest_reviews(installation_ids=lineage),
+        lambda: store.run_detail(1, installation_ids=lineage),
+    ):
+        with pytest.raises(ValueError, match="requires repo_ids"):
+            call()

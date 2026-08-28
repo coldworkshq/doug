@@ -389,3 +389,39 @@ def test_the_registry_lookup_is_bounded_by_the_censored_repos(tmp_path, monkeypa
 
     assert report.outcomes == 1
     assert seen == [{REPO_ID}], "the registry lookup must see only censored repos"
+
+
+def test_rollback_coerces_every_timestamp_column_the_table_declares(tmp_path, monkeypatch):
+    """`_serialise` stringifies every datetime it finds, so a hand-written
+    list of columns to convert back is a second place to remember. Ask the
+    table instead: a timestamp column added later must not re-insert as a
+    raw string during an incident rollback."""
+    from sqlalchemy import DateTime
+
+    declared = {
+        c.name for c in store.outcomes.columns if isinstance(c.type, DateTime)
+    }
+    assert declared, "the guard is vacuous if outcomes declares no timestamp"
+
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    _job(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+    transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
+
+    # Every declared timestamp really did serialise as a string, so the
+    # coercion below is doing work rather than passing through.
+    written = json.loads(manifest.read_text())[0]
+    assert {k for k in declared if written.get(k) is not None}, "nothing to coerce"
+    assert all(
+        isinstance(written[k], str) for k in declared if written.get(k) is not None
+    )
+
+    transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1)
+
+    with create_engine(url).connect() as conn:
+        row = conn.execute(select(store.outcomes)).mappings().one()
+    for name in declared:
+        if row[name] is not None:
+            assert not isinstance(row[name], str), f"{name} came back as a string"
