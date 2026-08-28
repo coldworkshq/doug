@@ -425,3 +425,60 @@ def test_rollback_coerces_every_timestamp_column_the_table_declares(tmp_path, mo
     for name in declared:
         if row[name] is not None:
             assert not isinstance(row[name], str), f"{name} came back as a string"
+
+
+def test_rollback_coerces_date_and_time_columns_not_only_datetime(tmp_path, monkeypatch):
+    """`Date` and `Time` are siblings of `DateTime` in SQLAlchemy, not
+    subclasses. An isinstance(..., DateTime) check narrows this bug class
+    while looking like it closed it, so the resolver keys on python_type.
+    Drives all three against a stand-in table rather than waiting for
+    `outcomes` to grow one."""
+    from datetime import date, datetime, time
+
+    from sqlalchemy import Column, Date, DateTime, Integer, MetaData, Table, Time
+
+    url = _db(tmp_path, monkeypatch)
+    # Carries the four key columns rollback's job re-settle joins on, so
+    # this drives the real function rather than a fragment of it.
+    probe = Table(
+        "probe", MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("installation_id", Integer),
+        Column("github_repo_id", Integer),
+        Column("pr_number", Integer),
+        Column("window_days", Integer),
+        Column("stamp", DateTime(timezone=True)),
+        Column("day", Date),
+        Column("clock", Time),
+    )
+    monkeypatch.setattr(store, "outcomes", probe)
+    engine = create_engine(url)
+    probe.create(engine)
+
+    original = {
+        "id": 1,
+        "installation_id": OLD,
+        "github_repo_id": REPO_ID,
+        "pr_number": 93,
+        "window_days": 14,
+        "stamp": datetime(2026, 8, 28, 3, 2, 23, tzinfo=UTC),
+        "day": date(2026, 8, 28),
+        "clock": time(3, 2, 23),
+    }
+    serialised = transfer_repair._serialise(original)
+    assert all(isinstance(serialised[k], str) for k in ("stamp", "day", "clock")), (
+        "the guard is vacuous unless _serialise really stringified all three"
+    )
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([serialised]) + "\n")
+
+    transfer_repair.rollback(engine, manifest_path=manifest, expect_outcomes=1)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(probe)).mappings().one()
+    # A raw string surviving here is the defect: 'day' and 'clock' would
+    # have been re-inserted as text under the old isinstance(DateTime) check.
+    assert row["day"] == original["day"]
+    assert row["clock"] == original["clock"]
+    assert not isinstance(row["stamp"], str), "DateTime column came back as a string"

@@ -275,13 +275,20 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     cannot part company — a restored censoring with a pending job would be
     adjudicated a second time and write a duplicate.
 
-    Timestamps are coerced back by asking the TABLE which columns are
-    DateTime, not from a hand-written list. `_serialise` stringifies every
-    datetime it finds, so any list here is a second place to remember, and
-    the two only have to disagree once — a timestamp column added later
+    Temporal values are coerced back by asking the TABLE what each column
+    holds, not from a hand-written list. `_serialise` stringifies every
+    value with an `.isoformat()`, so any list here is a second place to
+    remember, and the two only have to disagree once — a column added later
     would re-insert as a raw string during an incident rollback, which is
-    the worst possible moment to discover it. `outcomes` carries exactly one
-    such column today; this stays correct when it carries two.
+    the worst possible moment to discover it.
+
+    Keyed on `python_type`, not `isinstance(..., DateTime)`: `Date` and
+    `Time` are siblings of `DateTime` in SQLAlchemy, not subclasses, so an
+    isinstance check narrows the bug class instead of closing it while
+    looking like it closed it. `python_type` is the exact mirror of
+    `_serialise`'s duck-typed test — the three types that own `.isoformat()`
+    are the three that own `.fromisoformat()`. `outcomes` carries one such
+    column today; this stays correct whatever it carries next.
     """
     rows = json.loads(manifest_path.read_text())
     if len(rows) != expect_outcomes:
@@ -291,21 +298,31 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     if not rows:
         return 0
 
-    from datetime import datetime
+    from datetime import date, datetime, time
 
-    from sqlalchemy import DateTime
+    # datetime before date: datetime IS a date subclass, so the other order
+    # would parse every timestamp as a bare day and silently drop its time.
+    parsers = (datetime, time, date)
+    temporal: dict[str, type] = {}
+    for column in store.outcomes.columns:
+        try:
+            python_type = column.type.python_type
+        except NotImplementedError:
+            # A custom type that declines to name one cannot have been
+            # serialised as an ISO string either — _serialise only converts
+            # what carries .isoformat().
+            continue
+        for parser in parsers:
+            if python_type is parser or issubclass(python_type, parser):
+                temporal[column.name] = parser
+                break
 
-    temporal = {
-        column.name
-        for column in store.outcomes.columns
-        if isinstance(column.type, DateTime)
-    }
     restored = []
     for row in rows:
         row = dict(row)
-        for key in temporal:
+        for key, parser in temporal.items():
             if isinstance(row.get(key), str):
-                row[key] = datetime.fromisoformat(row[key])
+                row[key] = parser.fromisoformat(row[key])
         restored.append(row)
 
     with engine.begin() as conn:
