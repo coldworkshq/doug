@@ -577,6 +577,21 @@ would bite a real tenant.
   not a future risk. Decide deliberately rather than by omission — D2 moves the
   full sweep INTO that Job, so leaving it unscheduled until MT3 lands is a
   defensible choice and an unrecorded one is not.
+  **Decided 2026-08-28 (#123): scheduled, not dark.** `gcp.sh
+  schedule-reconcile` installs the 6h trigger and the Job took its first
+  two executions ever the same day. Both swept zero: every merged PR in
+  the window skipped on `(missing or over-long merge_commit_sha)`, and
+  the cause is upstream — GitHub is mid-rollout removing the deprecated
+  `merge_commit_sha` and `assignee` fields from PR payloads, serving
+  mixed responses across backends. The guard held exactly as designed;
+  the field's removal breaks the sweep (and, when it reaches webhook
+  payloads, the merge-time enqueue at `api.py`'s webhook handler) and is
+  tracked as #259. This is D2's shape with none of its batching:
+  the full serial sweep now runs on a schedule instead of in the reaped
+  startup thread, with the 3600s timeout as headroom (`gcp.sh`'s
+  `reconcile_job` comment). MT3's cursor / batching / call-budget work
+  stays open — this line records the scheduling choice, it does not close
+  the item.
   (Next free migration: **13** — 9 is Front Door Phase 1a, 10 is
   `review_jobs.base_sha`, 11 is `installation_repos.needs_you_threshold`
   (the per-repo needs-you threshold,
