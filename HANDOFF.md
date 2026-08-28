@@ -1,12 +1,13 @@
 # HANDOFF — doug
 
-State:    review — PR #246 OPEN off origin/main (aeea209, branch
+State:    review — PR #246 OPEN off origin/main (6250124, branch
           worktree-restore-auto-deploy, in worktree
           .claude/worktrees/restore-auto-deploy). Restores automated
-          deploy-on-merge: ADR-0021's reviewer gate is retired, its WIF
-          ref pin is kept. The `production` GitHub environment is already
-          DELETED live (gh api -X DELETE, 2026-08-28) — that half is done
-          and does not wait for the merge.
+          deploy-on-merge: ADR-0021's reviewer gate retired, its WIF ref
+          pin kept. The `production` GitHub environment is already DELETED
+          live (2026-08-28) — that half is done and does not wait on merge.
+          Doug's 3 findings + 2 deviations on e72f135 all settled in
+          6250124; 5 rows in docs/findings-log.jsonl.
 Next:     Watch CI on #246, then Andrew merges. That merge deploys
           automatically with nothing to click; confirm doug-api and
           doug-web promote.
@@ -29,13 +30,34 @@ Decisions this session:
 - 2026-08-28: ADR-0025 `amends` ADR-0021, not `supersedes` — the ref pin
   survives and must keep reaching the reader. Markers on both sides, plus
   ADR-0009's banner corrected (it still asserted the gate).
+- 2026-08-28: Doug's auth-config-change and missing-config-dependency are
+  both DISPROVED, but only after checking live rather than asserting —
+  deployer SA's only binding is the principalSet on attribute.repository
+  (no principal://.../subject/ member), applied condition is
+  repository && refs/heads/main, deploy.yml has zero secrets.* and two
+  repo-scoped vars.*. Rejected: leaving ADR-0025's "verified while settling
+  #223" citation, which was the thing the finding correctly objected to.
+- 2026-08-28: beyond-ticket was the sharpest finding — the ref pin became a
+  single point of failure and was defended only in prose. Two of ADR-0021's
+  three "must agree" legs now pinned by
+  test_setup_cicd_pins_both_the_repository_and_the_ref (mutation-verified
+  red). Third leg deferred to #247, NOT landed blind: it needs a gcloud
+  call from the deploy job and the deployer SA probably cannot read the
+  pool — a 403 would fail healthy deploys, the same trap #225 named.
 
-Pointers: branch worktree-restore-auto-deploy · PR #246 ·
-          .github/workflows/deploy.yml ·
-          api/tests/test_deploy_gcp.py::test_deploy_jobs_name_no_github_environment ·
+Watch out:
+- Running a mutation test on a file the background /code-review agent is
+  also editing will clobber its fix on restore. It happened here with
+  deploy.yml; re-check `git status` after any backup-restore cycle.
+- api/.venv in THIS worktree is fresh. The one in the main checkout still
+  needs `uv sync --reinstall` after the org move.
+
+Pointers: branch worktree-restore-auto-deploy · PR #246 · issues #247 (open,
+          WIF drift check) and #225 (closing from #246 as obsolete) ·
+          .github/workflows/deploy.yml · api/deploy/setup-cicd.sh ·
+          api/tests/test_deploy_gcp.py (both new guards) ·
           docs/decisions/ADR-0025-a-merge-deploys-without-waiting.md ·
-          ADR-0021 and ADR-0009 amendment banners.
+          ADR-0021 and ADR-0009 amendment banners ·
+          docs/findings-log.jsonl (last 5 rows).
           Prior session's #235/PR #243 work is on branch
           fix-235-findings-log-rule-prefix in the main checkout.
-          api/.venv in THIS worktree is fresh; the one in the main checkout
-          still needs `uv sync --reinstall` after the org move.
