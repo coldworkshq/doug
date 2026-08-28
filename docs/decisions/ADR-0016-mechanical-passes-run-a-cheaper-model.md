@@ -2,7 +2,35 @@
 title: The verify and attribution passes run their own model, not the frozen one
 status: accepted
 date: 2026-08-23
+amended_by: ADR-0027
 ---
+
+> **Proposed amendment, 2026-08-28 (ADR-0027): the tier's vendor boundary, and
+> the sign-off this record asks for.**
+>
+> **Nothing below has changed yet.** ADR-0027 is `proposed`, so it does not reach
+> the reader and this record governs the tier as written. The banner is here
+> because `docs/decisions/README.md` requires both sides of an amendment to be
+> marked, and because a reader who acts on the section titled "This record is
+> self-authorized" should know that the sign-off it asks for is drafted and
+> waiting rather than forgotten.
+>
+> ADR-0027 does two things when it is signed. It ratifies the scope claim below
+> — that ADR-0012's constants describe the risk read and not every call in
+> `reader.py` — which this record explicitly asks Andrew to settle and which is
+> provisional until then. And it lets the mechanical tier run a model from a
+> provider other than Anthropic, which this record never considered: every
+> alternative in its Rejected section is an Anthropic model. That second half
+> costs a re-run of ADR-0015's pre-registered attribution study, a recorded
+> grounding rate for `verify_finding`, and a manifest that can tell two
+> mechanical models apart, all before any swap ships.
+>
+> **The tier split itself is untouched.** `amends`, not `supersedes`: the
+> judgment/mechanical division, the three pinned tests, and the rejection of
+> moving the settlement passes all stand exactly as written.
+>
+> The line citations in the Decision and Rejected sections below have drifted.
+> The attribution range check is at `reader.py:1669`, not `reader.py:1607-1610`.
 
 ## Context
 
