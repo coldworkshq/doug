@@ -3780,3 +3780,32 @@ def test_save_review_persists_the_attribution_on_the_findings_row(tmp_path, monk
             .order_by(store.findings.c.id)
         ).all()
     assert [(r.label, r.hunks) for r in rows] == [("a", ["3" * 64]), ("b", None)]
+
+
+def test_installation_lineage_reads_removed_registrations_and_fails_closed(
+    tmp_path, monkeypatch
+):
+    """The registration this read exists for is the INACTIVE one — a
+    transferred repo's old installation is exactly the row `active_repos`
+    filters out. An empty claim must still return an empty set: a session
+    with no proven repos gets no installations, never every installation."""
+    _db(tmp_path, monkeypatch)
+    store.upsert_installation(101, "drewjst", "User", "deleted")
+    store.upsert_installation(303, "coldworkshq", "Organization", "active")
+    store.set_installation_repos(101, [(11, "drewjst/doug")], replace=False)
+    store.set_installation_repos(303, [(11, "coldworkshq/doug")], replace=False)
+    store.set_installation_repos(101, [], replace=True)  # transfer removes the old row
+
+    assert store.installation_lineage(frozenset({11})) == frozenset({101, 303})
+    assert store.installation_lineage(frozenset()) == frozenset()
+    assert store.installation_lineage(frozenset({999})) == frozenset()
+
+
+def test_tenant_ids_refuses_both_spellings_rather_than_unioning_them():
+    """Silently unioning would mean whichever filter the reader assumed, and
+    the two disagree exactly where it matters — a transferred repo."""
+    assert store._tenant_ids(101, None) == frozenset({101})
+    assert store._tenant_ids(None, frozenset({101, 303})) == frozenset({101, 303})
+    assert store._tenant_ids(None, None) is None
+    with pytest.raises(ValueError, match="never both"):
+        store._tenant_ids(101, frozenset({303}))

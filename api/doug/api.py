@@ -638,11 +638,21 @@ def queue(
         repo_ids = effective
     thr = default_threshold() if threshold is None else threshold
     if store.enabled():
+        # The operator view crosses installations already and has no proven
+        # repo set to pair a lineage with, so it keeps the plain filter. Both
+        # scoped callers — session and tenant key — reach here having proved
+        # `repo_ids` against the live ledger, which is the pairing
+        # `_readable_installations` requires.
+        scope = (
+            {"installation_id": installation_id}
+            if is_operator or repo_ids is None
+            else {"installation_ids": _readable_installations(installation_id, repo_ids)}
+        )
         items = _rows_to_items(
             store.latest_reviews(
                 repo=repo if is_operator else None,  # operator keeps the display filter
-                installation_id=installation_id,
                 repo_ids=repo_ids,
+                **scope,
             )
         )
     else:
@@ -1225,6 +1235,37 @@ def _session_read_context(authorization: str, scope: str) -> tenancy.SessionCont
     return ctx
 
 
+def _readable_installations(
+    installation_id: int, repo_ids: frozenset[int]
+) -> frozenset[int]:
+    """Every installation whose rows this caller may READ, for these repos.
+
+    Takes the id rather than a context because both scoped callers need it
+    and they carry different types — `SessionContext` for a browser session,
+    `TokenContext` for a dispensed tenant key. The id is the only field this
+    wants from either.
+
+    A caller writes as exactly one installation and always will —
+    `installation_id` stays the only answer to "who am I" for settings
+    (SessionContext's docstring, and MT1's reason for it). Reads are the
+    different question: a repository transferred between accounts keeps
+    `github_repo_id` and changes installation, so scoping history to the
+    current installation makes a repo's past disappear on its move date.
+
+    The current installation is unioned in unconditionally rather than
+    trusted to appear in the lineage, so a caller still reads its own rows
+    during the window between an install and its first
+    `installation_repositories` reconcile.
+
+    Every caller pairs this with `repo_ids=` over the SAME set passed here.
+    That pairing is the tenancy boundary, and it is why widening the
+    installation filter leaks nothing: a row must be for a repository this
+    caller provably holds now, written by an installation that provably
+    held it once.
+    """
+    return store.installation_lineage(repo_ids) | {installation_id}
+
+
 def _session_write_context(authorization: str) -> tenancy.SessionContext:
     """A session allowed to change per-repo settings. Same resolver as reads
     (org-bound, live-scoped, fails closed on stale entitlement) — the scope
@@ -1380,7 +1421,7 @@ def session_runs(
     rows = store.run_history(
         limit=limit,
         offset=offset,
-        installation_id=ctx.installation_id,
+        installation_ids=_readable_installations(ctx.installation_id, effective),
         repo_ids=effective,
     )
     return RunListResponse(
@@ -1398,7 +1439,7 @@ def session_run_detail(
     ctx = _session_read_context(authorization, "queue:read")
     row = store.run_detail(
         verdict_id,
-        installation_id=ctx.installation_id,
+        installation_ids=_readable_installations(ctx.installation_id, ctx.repo_ids),
         repo_ids=ctx.repo_ids,
     )
     if row is None:

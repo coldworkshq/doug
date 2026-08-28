@@ -40,6 +40,24 @@ class ClaimedBatch:
     repo_full_name: str | None
     permanently_unreachable: bool
     jobs: list[dict]
+    evidence_installation_id: int | None = None
+
+    @property
+    def reader_installation_id(self) -> int:
+        """The installation whose token can actually reach this repository.
+
+        Normally the key's own. It differs only after a repository transfer,
+        where the job was written under an installation that no longer covers
+        the repo and `_repository_identity` re-resolved the live one. The
+        outcome row still settles under `key.installation_id` — who paid for
+        the verdict does not change because someone else can now read the
+        git history.
+        """
+        return (
+            self.key.installation_id
+            if self.evidence_installation_id is None
+            else self.evidence_installation_id
+        )
 
 
 def _engine():
@@ -93,7 +111,55 @@ def _claim_query(key: RepositoryKey, now: datetime):
     )
 
 
-def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool]:
+def _live_registration(conn, github_repo_id: int) -> tuple[int, str] | None:
+    """The installation that covers this repository NOW, and its name.
+
+    Keyed on `github_repo_id` alone, which is the only identity a GitHub
+    repository transfer preserves (#218: "installation_id remains
+    operational plumbing only").
+
+    Ties break on `(updated_at DESC, id DESC)` — newest registration wins —
+    which is `store.repo_id_for`'s order, so the installation this
+    adjudicates through and the one a receipt resolves to cannot drift
+    apart. More than one active row for a repo id is itself a ledger bug
+    (`repo_id_for`'s docstring names the three shapes that produce it); this
+    picks deterministically rather than taking whatever the planner returned
+    first.
+
+    One deliberate difference from `repo_id_for`: this also requires the
+    installation itself to be active. An active junction row under a deleted
+    installation is stale registration history, and trusting it would mint a
+    token GitHub refuses — turning a censoring into an infinite retry, which
+    is worse. `repo_id_for` serves a display name and has no token to mint.
+
+    None when nothing active covers the id, which is the ordinary case: one
+    installation, one registration, already the key's own.
+    """
+    row = conn.execute(
+        select(
+            store.installation_repos.c.installation_id,
+            store.installation_repos.c.full_name,
+        )
+        .join(
+            store.installations,
+            store.installations.c.installation_id
+            == store.installation_repos.c.installation_id,
+        )
+        .where(
+            store.installation_repos.c.github_repo_id == github_repo_id,
+            store.installation_repos.c.state == "active",
+            store.installations.c.state == "active",
+        )
+        .order_by(
+            store.installation_repos.c.updated_at.desc(),
+            store.installation_repos.c.id.desc(),
+        )
+        .limit(1)
+    ).first()
+    return (int(row.installation_id), str(row.full_name)) if row else None
+
+
+def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool, int | None]:
     installation_state = conn.execute(
         select(store.installations.c.state)
         .where(store.installations.c.installation_id == key.installation_id)
@@ -113,8 +179,28 @@ def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool]:
     permanent = installation_state == "deleted" or (
         repo is not None and repo.state != "active"
     )
+
+    # A transfer looks EXACTLY like an uninstall from inside the old
+    # installation: its junction row goes 'removed' and its installation can
+    # go 'deleted', so both clauses above fire while the repository is
+    # perfectly readable under whoever holds it now. Censoring on that reads
+    # a bookkeeping event as evidence of blindness — in the flattering
+    # direction, since a censored PR leaves the risk set. So before
+    # censoring, ask whether anything live still covers this repo id; the
+    # answer is the same identity `store.repo_id_for` would give a reader.
+    #
+    # Only reached when `permanent` is already true. An installation that is
+    # merely suspended, or a repo whose registry row is absent, keeps
+    # retrying through its own key exactly as before — this widens nothing
+    # about which jobs get adjudicated, only who reads the git history for
+    # the ones that would otherwise be thrown away.
+    if permanent and (live := _live_registration(conn, key.github_repo_id)) is not None:
+        successor_id, successor_name = live
+        if successor_id != key.installation_id:
+            return successor_name, False, successor_id
+
     if repo is not None:
-        return str(repo.full_name), permanent
+        return str(repo.full_name), permanent, None
 
     fallback = conn.execute(
         select(store.verdicts.c.repo)
@@ -125,7 +211,7 @@ def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool]:
         .order_by(store.verdicts.c.id.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return (str(fallback) if fallback is not None else None), permanent
+    return (str(fallback) if fallback is not None else None), permanent, None
 
 
 def claim_repository(key: RepositoryKey) -> ClaimedBatch | None:
@@ -161,8 +247,8 @@ def claim_repository(key: RepositoryKey) -> ClaimedBatch | None:
                 .order_by(store.outcome_jobs.c.due_at, store.outcome_jobs.c.id)
             ).mappings()
         ]
-        repo_full_name, permanent = _repository_identity(conn, key)
-    return ClaimedBatch(key, repo_full_name, permanent, current)
+        repo_full_name, permanent, evidence_id = _repository_identity(conn, key)
+    return ClaimedBatch(key, repo_full_name, permanent, current, evidence_id)
 
 
 def reclaim_stalled(older_than_seconds: int = STALL_LEASE_SECONDS) -> int:
