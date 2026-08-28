@@ -305,15 +305,23 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     parsers = (datetime, time, date)
     temporal: dict[str, type] = {}
     for column in store.outcomes.columns:
+        # Broad except, and deliberately so: this is reflection over a type
+        # this function does not own, on the incident-recovery path. The
+        # documented failure is NotImplementedError, but a custom type is
+        # free to raise anything from a property, and a rollback that dies
+        # introspecting a column it did not even need is strictly worse than
+        # one that skips it. A type that cannot name a python_type was never
+        # serialised as an ISO string either — `_serialise` only converts
+        # what carries `.isoformat()` — so skipping loses nothing.
         try:
             python_type = column.type.python_type
-        except NotImplementedError:
-            # A custom type that declines to name one cannot have been
-            # serialised as an ISO string either — _serialise only converts
-            # what carries .isoformat().
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(python_type, type):
+            # issubclass() would raise TypeError on a non-class.
             continue
         for parser in parsers:
-            if python_type is parser or issubclass(python_type, parser):
+            if issubclass(python_type, parser):
                 temporal[column.name] = parser
                 break
 
@@ -322,7 +330,21 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
         row = dict(row)
         for key, parser in temporal.items():
             if isinstance(row.get(key), str):
-                row[key] = parser.fromisoformat(row[key])
+                try:
+                    row[key] = parser.fromisoformat(row[key])
+                except ValueError as exc:
+                    # Abort, never fall back to inserting the raw string.
+                    # A manifest that is hand-edited or from an older format
+                    # is not a reason to write text into a timestamp column
+                    # and call the ledger restored; it is a reason to stop
+                    # and say which value could not be read. Naming the file,
+                    # row and column is the whole point — a bare ValueError
+                    # from `fromisoformat` mid-incident says none of them.
+                    raise RepairInvariantError(
+                        f"{manifest_path}: outcome id {row.get('id')!r} column "
+                        f"{key!r} holds {row[key]!r}, which is not ISO-8601. "
+                        "Nothing was restored."
+                    ) from exc
         restored.append(row)
 
     with engine.begin() as conn:

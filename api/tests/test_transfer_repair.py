@@ -482,3 +482,78 @@ def test_rollback_coerces_date_and_time_columns_not_only_datetime(tmp_path, monk
     assert row["day"] == original["day"]
     assert row["clock"] == original["clock"]
     assert not isinstance(row["stamp"], str), "DateTime column came back as a string"
+
+
+def test_a_column_whose_python_type_explodes_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """Reflection over a type this module does not own, on the recovery
+    path. A rollback that dies introspecting a column it did not need is
+    strictly worse than one that skips it — and a type that cannot name a
+    python_type was never serialised as an ISO string either."""
+    from sqlalchemy import Column, Integer, MetaData, String, Table
+    from sqlalchemy.types import TypeDecorator
+
+    class Hostile(TypeDecorator):
+        impl = String
+        cache_ok = True
+
+        @property
+        def python_type(self):
+            raise AttributeError("this type refuses to say")
+
+    url = _db(tmp_path, monkeypatch)
+    probe = Table(
+        "probe", MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("installation_id", Integer),
+        Column("github_repo_id", Integer),
+        Column("pr_number", Integer),
+        Column("window_days", Integer),
+        Column("odd", Hostile),
+    )
+    monkeypatch.setattr(store, "outcomes", probe)
+    engine = create_engine(url)
+    probe.create(engine)
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([{
+        "id": 1, "installation_id": OLD, "github_repo_id": REPO_ID,
+        "pr_number": 93, "window_days": 14, "odd": "not-a-timestamp",
+    }]) + "\n")
+
+    assert transfer_repair.rollback(
+        engine, manifest_path=manifest, expect_outcomes=1
+    ) == 1
+
+    with create_engine(url).connect() as conn:
+        assert conn.execute(select(probe.c.odd)).scalar_one() == "not-a-timestamp"
+
+
+def test_an_unparseable_timestamp_aborts_and_names_what_it_could_not_read(
+    tmp_path, monkeypatch
+):
+    """Deliberately NOT a fallback to inserting the raw value: writing text
+    into a timestamp column and calling the ledger restored is worse than
+    stopping. What was missing is the diagnosis — a bare ValueError from
+    fromisoformat names neither the file, the row, nor the column."""
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    _job(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+    transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
+
+    rows = json.loads(manifest.read_text())
+    rows[0]["observed_at"] = "last Tuesday"
+    manifest.write_text(json.dumps(rows) + "\n")
+
+    with pytest.raises(transfer_repair.RepairInvariantError) as caught:
+        transfer_repair.rollback(
+            create_engine(url), manifest_path=manifest, expect_outcomes=1
+        )
+
+    message = str(caught.value)
+    assert "observed_at" in message, "must name the column"
+    assert "last Tuesday" in message, "must name the value"
+    assert str(manifest) in message, "must name the file"
+    # And it aborted before writing: the outcome is still deleted.
+    assert _outcome_ids(url) == []
