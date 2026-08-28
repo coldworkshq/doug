@@ -1139,6 +1139,24 @@ def test_preregistration_change_refreshes_the_adjudicator_hash():
     assert "docs/design/outcome-loop/publication-preregistration.md" in change_filter
 
 
+def test_deploy_jobs_name_no_github_environment():
+    """A merge to main must deploy without waiting for a human (ADR-0025,
+    restoring ADR-0009).
+
+    This pins the absence of `environment:`, not the absence of a protection
+    rule, because the rule lives in GitHub settings where no diff can show it.
+    While ADR-0021's `environment: production` was here, one merge's deploy sat
+    unapproved for 13h29m and was then cancelled outright — evicted from the
+    concurrency group's pending slot by the next merge, with nothing going red.
+    Re-adding the key is what makes that reachable again, so re-adding the key
+    is what has to be reviewed.
+    """
+    workflow = DEPLOY_WORKFLOW.read_text()
+    active = [ln for ln in workflow.splitlines() if not ln.lstrip().startswith("#")]
+    offenders = [ln for ln in active if ln.lstrip().startswith("environment:")]
+    assert not offenders, f"a deploy job names a GitHub environment: {offenders}"
+
+
 def test_web_deploy_runs_the_auth_entry_smoke_after_promotion():
     """A root-only 200 missed the production dashboard cookie crash and the
     absent sign-in route. The deploy must invoke the executable smoke that

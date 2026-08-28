@@ -5,17 +5,19 @@ date: 2026-07-30
 amended_by: ADR-0021
 ---
 
-> **Amendment, 2026-08-26 (ADR-0021): merging deploys after Andrew approves
-> the run.**
+> **Amendment, 2026-08-26 (ADR-0021), narrowed 2026-08-28 (ADR-0025): the
+> federation provider is pinned to main, not just to this repository.**
 >
-> The Decision below says push to main builds and deploys. The build and the
-> tests still run on every merge, but both deploy jobs now sit in the
-> `production` environment and wait for Andrew's approval, and the federation
-> provider only exchanges tokens for runs on main — "pinned by attribute
-> condition to this repository" undersold the boundary, because any branch of
-> this repository could mint the deployer credential. The rollback dispatch
-> goes through the same approval. The text below is kept as written for the
-> record; ADR-0021 carries the change and its reasons.
+> One clause of the Decision below is amended: "pinned by attribute condition
+> to this repository" undersold the boundary, because any branch of this
+> repository could mint the deployer credential. The condition now pins the
+> ref as well, so only a run on `refs/heads/main` can exchange its token — and
+> a rollback dispatch on a tag or any other branch is refused there.
+>
+> ADR-0021 also held every deploy for Andrew's approval. That half lasted 32
+> hours and is retired: ADR-0025 found it cancelled one merge's deploy outright
+> and held others up to 17 hours, so "push to main builds and deploys" below is
+> current text, not history.
 
 ## Context
 

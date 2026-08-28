@@ -1,8 +1,9 @@
-# Merge to main ships it — after approval. Solo repo, so the PR reviews the
-# change, and the `production` environment holds each deploy job until Andrew
-# approves the run (ADR-0021, amending ADR-0009's "merging deploys"). There
-# is no staging environment to promote through. The rollback path below goes
-# through the same approval.
+# Merge to main ships it. Solo repo, so the pull request is the whole review
+# gate: once a change is on main it deploys with nothing further to click
+# (ADR-0025, retiring ADR-0021's reviewer gate and restoring ADR-0009's
+# "merging deploys"). There is no staging environment to promote through,
+# and no GitHub environment on these jobs — a protection rule added to one
+# would re-gate the pipeline without changing a line of this file.
 #
 # Tests run again here even though CI already ran them on the PR: a direct
 # push to main skips the PR entirely, and "deployed a red build" is the one
@@ -10,8 +11,10 @@
 #
 # Auth is Workload Identity Federation — no long-lived service-account key
 # in a public repo's secrets. The provider's attribute condition only
-# exchanges tokens for runs on refs/heads/main, so no other branch of this
-# repo can mint the deployer credential. Setup: api/deploy/setup-cicd.sh
+# exchanges tokens for runs on refs/heads/main (ADR-0021, still in force),
+# so no other branch of this repo can mint the deployer credential, and that
+# ref pin is now the only thing standing between a branch and production.
+# Setup: api/deploy/setup-cicd.sh
 name: deploy
 
 on:
@@ -93,9 +96,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
-    # Waits for Andrew's approval (required reviewer on `production`). One
-    # approval releases every job in the run that names this environment.
-    environment: production
     defaults:
       run:
         working-directory: api
@@ -170,7 +170,6 @@ jobs:
     needs: [changes, api]
     if: ${{ !cancelled() && !failure() && needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
