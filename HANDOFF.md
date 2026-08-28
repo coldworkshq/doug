@@ -1,12 +1,10 @@
 # HANDOFF — doug
 
-State:    building — #235 (findings_log.rates() pooled non-reader: vocabularies
-          into one denominator). Fix complete and green locally; not yet
-          committed, no branch, no PR. api suite 1684 passed; web tsc clean,
-          lint warnings pre-existing.
-Next:     Branch off main, commit the four-part change, open the PR with
-          `Closes #235`. The rest of the tree (#229/#233 deploy approval below)
-          is untouched by this work.
+State:    review — #235 fixed, PR #243 OPEN off origin/main (b1a3ac7,
+          branch fix-235-findings-log-rule-prefix). uv run pytest -q: 1702
+          passed; ruff clean; web tsc clean (2 pre-existing img warnings).
+Next:     Watch CI on #243, then Andrew merges. Unrelated and still standing:
+          the #229/#233 deploy approval below.
 Blockers: none
 
 Decisions this session:
