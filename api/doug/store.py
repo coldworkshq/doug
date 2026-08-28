@@ -3360,7 +3360,6 @@ def job_health(
     outcome_max_attempts: int,
     repo: str | None = None,
     installation_id: int | None = None,
-    installation_ids: frozenset[int] | None = None,
 ) -> dict | None:
     """Fixed-size health aggregates for both job lanes.
 
@@ -3382,7 +3381,12 @@ def job_health(
     from sqlalchemy import func, select
 
     rj, oj = review_jobs, outcome_jobs
-    tenants = _tenant_ids(installation_id, installation_ids)
+    # No installation lineage here, deliberately: /v1/health is operator-only
+    # (api.py's `_operator_only`), crosses every installation by design, and
+    # takes `installation_id` as a query parameter rather than from a proven
+    # scope. There is no `repo_ids` to pair a lineage with, and pairing is
+    # what makes widening safe.
+    tenants = None if installation_id is None else frozenset({installation_id})
 
     def _scope_review(q):
         if repo:

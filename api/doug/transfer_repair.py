@@ -88,8 +88,16 @@ def _censor_reason(detail) -> str | None:
     return detail.get("censor_reason") if isinstance(detail, dict) else None
 
 
-def _live_installations(conn: Connection) -> dict[int, int]:
+def _live_installations(conn: Connection, repo_ids: set[int]) -> dict[int, int]:
     """github_repo_id -> the installation that actively covers it now.
+
+    Bounded by `repo_ids`, which is the set of repositories that actually
+    have a censored outcome — a handful on any deployment, because censoring
+    is rare. An earlier draft read EVERY active registration and fed the
+    whole key set into an `IN (...)` against `outcomes`; that is fine at 15
+    rows and generates an enormous list on a large install. The cardinality
+    runs the other way round: start from the censorings, not from the
+    registry.
 
     Both states must be live, and ties break on `(updated_at, id)` — newest
     registration wins — because this must agree with
@@ -97,6 +105,8 @@ def _live_installations(conn: Connection) -> dict[int, int]:
     repair would requeue jobs the very next drain censors again, and the
     manifest would record a repair that did not hold.
     """
+    if not repo_ids:
+        return {}
     rows = conn.execute(
         select(
             store.installation_repos.c.github_repo_id,
@@ -108,6 +118,7 @@ def _live_installations(conn: Connection) -> dict[int, int]:
             == store.installation_repos.c.installation_id,
         )
         .where(
+            store.installation_repos.c.github_repo_id.in_(repo_ids),
             store.installation_repos.c.state == "active",
             store.installations.c.state == "active",
         )
@@ -123,23 +134,34 @@ def _live_installations(conn: Connection) -> dict[int, int]:
 
 
 def inspect(conn: Connection) -> RepairReport:
-    """Every censoring this transfer repair would undo. Reads only."""
-    live = _live_installations(conn)
-    if not live:
-        return RepairReport(())
+    """Every censoring this transfer repair would undo. Reads only.
 
+    Censorings first, registry second. The censored set is the small one on
+    every deployment, so it bounds the registry lookup rather than the other
+    way round.
+    """
     candidates = conn.execute(
         select(store.outcomes).where(
             store.outcomes.c.kind == "censored",
-            store.outcomes.c.github_repo_id.in_(live),
+            store.outcomes.c.github_repo_id.is_not(None),
             store.outcomes.c.installation_id.is_not(None),
         )
         .order_by(store.outcomes.c.github_repo_id, store.outcomes.c.pr_number)
     ).mappings().all()
+    if not candidates:
+        return RepairReport(())
+
+    live = _live_installations(
+        conn, {int(row["github_repo_id"]) for row in candidates}
+    )
 
     rows: list[RepairRow] = []
     for row in candidates:
-        successor = live[int(row["github_repo_id"])]
+        successor = live.get(int(row["github_repo_id"]))
+        if successor is None:
+            # Nothing live covers this repo id, so the censoring stands: a
+            # real uninstall, not a transfer.
+            continue
         if successor == int(row["installation_id"]):
             # The installation that wrote it still covers the repo, so
             # whatever made this unreachable was not a transfer.
@@ -184,48 +206,65 @@ def apply(
     `expect_outcomes` is the operator's assertion from a prior --dry-run. It
     is checked inside the transaction, so a set that changed between the two
     runs aborts rather than repairing a population nobody looked at.
+
+    A file write inside a database transaction cannot join its rollback, so
+    the two are reconciled explicitly. The manifest is written BEFORE the
+    delete on purpose — a CRASH between the two leaves a manifest naming
+    rows that still exist, which `rollback` reports as already-present,
+    whereas the other order loses them outright. But a clean ROLLBACK is a
+    different case: nothing was deleted, so the manifest describes no work,
+    and leaving it on disk would trip the already-exists guard and block the
+    retry. So the file is removed on the way out of a failed transaction,
+    and only then.
     """
     if manifest_path.exists():
         raise RepairInvariantError(f"manifest {manifest_path} already exists")
 
-    with engine.begin() as conn:
-        report = inspect(conn)
-        if report.outcomes != expect_outcomes:
-            raise RepairInvariantError(
-                f"expected {expect_outcomes} censored outcomes, found {report.outcomes}"
-            )
-        if not report.rows:
-            manifest_path.write_text(json.dumps([], indent=2) + "\n")
-            return report
-
-        ids = [row.outcome_id for row in report.rows]
-        deleted = conn.execute(
-            select(store.outcomes).where(store.outcomes.c.id.in_(ids))
-        ).mappings().all()
-        # The manifest lands BEFORE the delete: a crash between the two
-        # leaves a manifest naming rows that still exist, which `rollback`
-        # reports as already-present. The other order loses them outright.
-        manifest_path.write_text(
-            json.dumps([_serialise(row) for row in deleted], indent=2) + "\n"
-        )
-
-        conn.execute(delete(store.outcomes).where(store.outcomes.c.id.in_(ids)))
-
-        job_ids = [row.job_id for row in report.rows if row.job_id is not None]
-        if job_ids:
-            # attempts is left alone: these jobs did not fail an attempt,
-            # they completed with the wrong answer. Zeroing it would hand a
-            # genuinely broken job a fresh budget of ten.
-            conn.execute(
-                update(store.outcome_jobs)
-                .where(store.outcome_jobs.c.id.in_(job_ids))
-                .values(
-                    status="pending",
-                    started_at=None,
-                    finished_at=None,
-                    error=None,
+    wrote_manifest = False
+    try:
+        with engine.begin() as conn:
+            report = inspect(conn)
+            if report.outcomes != expect_outcomes:
+                raise RepairInvariantError(
+                    f"expected {expect_outcomes} censored outcomes, found {report.outcomes}"
                 )
+            if not report.rows:
+                manifest_path.write_text(json.dumps([], indent=2) + "\n")
+                return report
+
+            ids = [row.outcome_id for row in report.rows]
+            deleted = conn.execute(
+                select(store.outcomes).where(store.outcomes.c.id.in_(ids))
+            ).mappings().all()
+            manifest_path.write_text(
+                json.dumps([_serialise(row) for row in deleted], indent=2) + "\n"
             )
+            wrote_manifest = True
+
+            conn.execute(delete(store.outcomes).where(store.outcomes.c.id.in_(ids)))
+
+            job_ids = [row.job_id for row in report.rows if row.job_id is not None]
+            if job_ids:
+                # attempts is left alone: these jobs did not fail an attempt,
+                # they completed with the wrong answer. Zeroing it would hand
+                # a genuinely broken job a fresh budget of ten.
+                conn.execute(
+                    update(store.outcome_jobs)
+                    .where(store.outcome_jobs.c.id.in_(job_ids))
+                    .values(
+                        status="pending",
+                        started_at=None,
+                        finished_at=None,
+                        error=None,
+                    )
+                )
+    except BaseException:
+        # Only unlinks what THIS call wrote — the already-exists guard above
+        # has already refused if a manifest was there beforehand, so this can
+        # never remove an earlier apply's record.
+        if wrote_manifest:
+            manifest_path.unlink(missing_ok=True)
+        raise
     return report
 
 

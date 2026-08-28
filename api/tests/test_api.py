@@ -2565,7 +2565,14 @@ def test_queue_tenant_repo_restriction_never_reaches_store_as_a_name(tmp_path, m
         "/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token},
     )
     assert r.status_code == 200
-    assert calls == [{"repo": None, "installation_id": 150424894, "repo_ids": frozenset({1})}]
+    # installation_ids, not installation_id: a scoped caller reads its repo's
+    # whole installation lineage (see _readable_installations). Here that is
+    # the one installation, because nothing else ever registered repo id 1 —
+    # which is the point. The lineage is derived from the proven repo_ids
+    # beside it, so no repo NAME reaches the store either way.
+    assert calls == [
+        {"repo": None, "installation_ids": frozenset({150424894}), "repo_ids": frozenset({1})}
+    ]
 
 
 def test_queue_unresolvable_token_401s_before_touching_store(tmp_path, monkeypatch):

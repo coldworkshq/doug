@@ -315,8 +315,77 @@ def test_the_repair_and_the_worker_pick_the_same_successor(tmp_path, monkeypatch
 
     with engine.connect() as conn:
         worker = outcome_queue._live_registration(conn, REPO_ID)
-        repair = transfer_repair._live_installations(conn)
+        repair = transfer_repair._live_installations(conn, {REPO_ID})
 
     assert worker is not None
     assert worker[0] == NEW
     assert repair[REPO_ID] == worker[0]
+
+
+def test_a_rolled_back_apply_leaves_no_manifest_to_block_the_retry(tmp_path, monkeypatch):
+    """The manifest is written inside the transaction and cannot join its
+    rollback. If a clean rollback left the file behind, the already-exists
+    guard would block the retry of a repair that did nothing — an operator
+    stuck on a stale file during an incident."""
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    _job(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+
+    engine = create_engine(url)
+    boom = RuntimeError("the delete blew up")
+
+    def _explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(transfer_repair, "delete", _explode)
+    with pytest.raises(RuntimeError, match="blew up"):
+        transfer_repair.apply(engine, expect_outcomes=1, manifest_path=manifest)
+
+    assert not manifest.exists()
+    # And the ledger is untouched, so the retry has the same work to do.
+    assert len(_outcome_ids(url)) == 1
+    assert _jobs(url)[0]["status"] == "done"
+
+
+def test_a_failed_apply_never_removes_a_manifest_it_did_not_write(tmp_path, monkeypatch):
+    """The cleanup must be scoped to this call's own file. A prior apply's
+    manifest is the only record of what it deleted."""
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('[{"id": 1}]\n')
+
+    with pytest.raises(transfer_repair.RepairInvariantError, match="already exists"):
+        transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
+
+    assert manifest.read_text() == '[{"id": 1}]\n'
+
+
+def test_the_registry_lookup_is_bounded_by_the_censored_repos(tmp_path, monkeypatch):
+    """Cardinality runs censorings -> registry, not the other way round. An
+    earlier draft read every active registration and fed the whole key set
+    into an IN (...) against outcomes, which is fine at 15 rows and enormous
+    on a large install."""
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    _outcome(url, pr_number=93)
+    # A thousand other repositories, none of them censored.
+    for n in range(1000):
+        store.set_installation_repos(NEW, [(500000 + n, f"coldworkshq/r{n}")], replace=False)
+
+    seen: list[set[int]] = []
+    real = transfer_repair._live_installations
+
+    def spy(conn, repo_ids):
+        seen.append(set(repo_ids))
+        return real(conn, repo_ids)
+
+    monkeypatch.setattr(transfer_repair, "_live_installations", spy)
+    with create_engine(url).connect() as conn:
+        report = transfer_repair.inspect(conn)
+
+    assert report.outcomes == 1
+    assert seen == [{REPO_ID}], "the registry lookup must see only censored repos"
