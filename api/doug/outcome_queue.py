@@ -116,11 +116,21 @@ def _live_registration(conn, github_repo_id: int) -> tuple[int, str] | None:
 
     Keyed on `github_repo_id` alone, which is the only identity a GitHub
     repository transfer preserves (#218: "installation_id remains
-    operational plumbing only"). Both states must be live — an active
-    junction row under a deleted installation is stale registration
-    history, not a reachable repo — and the newest row wins, matching
-    `store.repo_id_for`'s resolution order so two call sites cannot
-    disagree about who owns a repo.
+    operational plumbing only").
+
+    Ties break on `(updated_at DESC, id DESC)` — newest registration wins —
+    which is `store.repo_id_for`'s order, so the installation this
+    adjudicates through and the one a receipt resolves to cannot drift
+    apart. More than one active row for a repo id is itself a ledger bug
+    (`repo_id_for`'s docstring names the three shapes that produce it); this
+    picks deterministically rather than taking whatever the planner returned
+    first.
+
+    One deliberate difference from `repo_id_for`: this also requires the
+    installation itself to be active. An active junction row under a deleted
+    installation is stale registration history, and trusting it would mint a
+    token GitHub refuses — turning a censoring into an infinite retry, which
+    is worse. `repo_id_for` serves a display name and has no token to mint.
 
     None when nothing active covers the id, which is the ordinary case: one
     installation, one registration, already the key's own.
@@ -140,7 +150,10 @@ def _live_registration(conn, github_repo_id: int) -> tuple[int, str] | None:
             store.installation_repos.c.state == "active",
             store.installations.c.state == "active",
         )
-        .order_by(store.installation_repos.c.id.desc())
+        .order_by(
+            store.installation_repos.c.updated_at.desc(),
+            store.installation_repos.c.id.desc(),
+        )
         .limit(1)
     ).first()
     return (int(row.installation_id), str(row.full_name)) if row else None

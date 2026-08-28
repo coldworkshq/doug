@@ -91,11 +91,11 @@ def _censor_reason(detail) -> str | None:
 def _live_installations(conn: Connection) -> dict[int, int]:
     """github_repo_id -> the installation that actively covers it now.
 
-    Both states must be live, matching `outcome_queue._live_registration`:
-    an active junction row under a deleted installation is stale
-    registration history, not a reachable repository. Newest row wins, the
-    same tie-break `store.repo_id_for` uses, so the repair and the worker
-    cannot disagree about who owns a repo.
+    Both states must be live, and ties break on `(updated_at, id)` — newest
+    registration wins — because this must agree with
+    `outcome_queue._live_registration` exactly. If the two disagreed, the
+    repair would requeue jobs the very next drain censors again, and the
+    manifest would record a repair that did not hold.
     """
     rows = conn.execute(
         select(
@@ -111,9 +111,14 @@ def _live_installations(conn: Connection) -> dict[int, int]:
             store.installation_repos.c.state == "active",
             store.installations.c.state == "active",
         )
-        .order_by(store.installation_repos.c.id)
+        .order_by(
+            store.installation_repos.c.updated_at,
+            store.installation_repos.c.id,
+        )
     ).all()
-    # Ascending order with a plain overwrite leaves the newest row winning.
+    # Ascending order with a plain overwrite leaves the newest row winning,
+    # which is `_live_registration`'s DESC-plus-LIMIT-1 read from the other
+    # end.
     return {int(repo_id): int(installation_id) for repo_id, installation_id in rows}
 
 

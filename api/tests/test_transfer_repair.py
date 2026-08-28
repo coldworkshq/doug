@@ -282,3 +282,41 @@ def test_rollback_is_idempotent_over_rows_that_are_already_back(tmp_path, monkey
         == 0
     )
     assert len(_outcome_ids(url)) == 1
+
+
+def test_the_repair_and_the_worker_pick_the_same_successor(tmp_path, monkeypatch):
+    """Two competing active registrations is a ledger bug `repo_id_for`
+    already documents, but it must not make these two disagree: the repair
+    would requeue jobs the next drain censors again, and the manifest would
+    record a repair that did not hold."""
+    from datetime import timedelta as _td
+
+    from doug import outcome_queue
+
+    url = _db(tmp_path, monkeypatch)
+    _transferred_ledger(url)
+    other = 999111
+    store.upsert_installation(other, "someone-else", "Organization", "active")
+    store.set_installation_repos(other, [(REPO_ID, "someone-else/doug")], replace=False)
+    # Make the coldworkshq row the newer registration by updated_at, which is
+    # the field that decides — not insertion order.
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            store.installation_repos.update()
+            .where(store.installation_repos.c.installation_id == other)
+            .values(updated_at=NOW - _td(days=1))
+        )
+        conn.execute(
+            store.installation_repos.update()
+            .where(store.installation_repos.c.installation_id == NEW)
+            .values(updated_at=NOW)
+        )
+
+    with engine.connect() as conn:
+        worker = outcome_queue._live_registration(conn, REPO_ID)
+        repair = transfer_repair._live_installations(conn)
+
+    assert worker is not None
+    assert worker[0] == NEW
+    assert repair[REPO_ID] == worker[0]
