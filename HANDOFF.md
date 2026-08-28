@@ -1,5 +1,37 @@
 # HANDOFF — doug
 
+State:    review — landing facelift BUILT on branch landing-facelift (off
+          main), UNCOMMITTED. Andrew asked for a /frontend-design pass:
+          Langfuse x Mem0 x Vercel, keep the logo, more content that sells
+          Doug (what, how, why, cheaper than running /code-review on all).
+          Verified: web 376 pass, tsc clean, eslint clean (2 pre-existing
+          <img> warnings on /about). Screenshotted at 1280 light+dark and
+          390 light; dev server stopped.
+Next:     Andrew reviews (`npm run dev --workspace=web`, open /). If it
+          holds: commit on landing-facelift, open a PR. Open question for
+          Andrew: the cost section names `/code-review` by name — keep or
+          generalise.
+Blockers: none
+
+Decisions this session:
+- 2026-08-27: palette and tokens stay (design-system/dashboard-contract/
+  site-bar tests pin them); the facelift is layout, type, structure, copy.
+  Bricolage gets its opsz+wdth axes for a condensed hero — rejected: a new
+  display face (the console shares the brand tokens).
+- The hero object is a facsimile of the neutral check run rendered from the
+  live queue + scoreboard (headline, table, Needs-you note, footer lines) —
+  rejected: the stat card, which no competitor could not also render.
+- Cost claim is structural, no dollar figures: one bounded read per PR and
+  a human reads only the flagged fraction — ADR-0004 forbids "no model in
+  the hot path"; pricing belongs in the private hq repo.
+- Pinned copy stays in app/page.tsx (landing-copy.test.mjs,
+  public-surface.test.mjs, auth-entry.integration.test.mjs read it).
+Pointers: branch landing-facelift · web/app/page.tsx ·
+          web/components/landing/ · web/app/layout.tsx (font axes) ·
+          web/app/globals.css (landing utilities, ABOVE the lockstep block)
+
+--- prior stream (#246 deploy gate, merged) below, preserved ---
+
 State:    review — PR #246 OPEN off origin/main (6d907b1, branch
           worktree-restore-auto-deploy, in worktree
           .claude/worktrees/restore-auto-deploy). Restores automated

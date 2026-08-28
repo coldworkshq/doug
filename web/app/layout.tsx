@@ -5,9 +5,16 @@ import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
 
+// The width and optical-size axes are loaded on purpose: the landing hero
+// sets its headline at wdth 85 (globals.css `.display-condensed`), which is
+// a cut of this face nothing else on the site uses. Without the axes the
+// declaration is inert and the headline silently renders at the default
+// width — so if the hero ever looks like every other Bricolage site, check
+// here first.
 const bricolage = Bricolage_Grotesque({
   variable: "--font-bricolage",
   subsets: ["latin"],
+  axes: ["opsz", "wdth"],
 });
 
 const geistSans = Geist({
