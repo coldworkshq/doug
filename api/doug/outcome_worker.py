@@ -59,7 +59,14 @@ def _repository_evidence(batch, clone_root: Path):
     owner, separator, repo = batch.repo_full_name.partition("/")
     if not separator or not owner or not repo:
         raise ValueError(f"invalid repository full name {batch.repo_full_name!r}")
-    token, default_branch = _github_context(batch.key.installation_id, batch.repo_full_name)
+    # reader_installation_id, not key.installation_id: after a transfer the
+    # key names an installation whose token GitHub will not mint. The clone
+    # directory still keys on the JOB's installation, so two installations
+    # adjudicating the same repo id in one invocation cannot collide in a
+    # half-written clone.
+    token, default_branch = _github_context(
+        batch.reader_installation_id, batch.repo_full_name
+    )
     revert_map = git_labels.find_reverted_prs_evidenced(
         owner,
         repo,

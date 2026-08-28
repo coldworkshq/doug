@@ -5857,3 +5857,95 @@ def test_receipt_reason_carries_exactly_the_keys_run_detail_does(tmp_path, monke
     reasons = body["latest_verdict"]["reasons"]
     assert reasons, "fixture must produce a reason for this to guard anything"
     assert sorted(reasons[0]) == ["label", "rule", "severity", "weight"]
+
+
+def _transferred_scope(tmp_path, monkeypatch):
+    """A session on the installation a repository was transferred INTO.
+
+    Repo id 11 was registered by installation 101 (now removed there) and is
+    registered active by installation 303 — the exact shape the 2026-08-26
+    org move left: `github_repo_id` unchanged, both name strings and the
+    covering installation different.
+    """
+    _db(tmp_path, monkeypatch)
+    _use_bind_jwks(monkeypatch)
+    _connection_install(101, "drewjst", "User", [(11, "drewjst/doug")])
+    _connection_install(
+        303, "coldworkshq", "Organization", [(11, "coldworkshq/doug")], org_id="org_cw"
+    )
+    store.set_installation_repos(101, [], replace=True)
+    store.replace_session_entitlements("user_01ABC", [(303, (11,))])
+    return _session(org_id="org_cw")
+
+
+def test_a_transferred_repos_history_survives_the_move_in_the_runs_list(
+    tmp_path, monkeypatch
+):
+    """The runs list answers "what has Doug done" for a REPOSITORY. Scoping
+    it to the current installation makes that history begin on the transfer
+    date — 261 runs across 121 PRs vanished from this repo's own dashboard
+    on 2026-08-26 that way, with nothing deleted and nothing to warn anyone.
+    """
+    headers = _transferred_scope(tmp_path, monkeypatch)
+    before = store.save_review(
+        "coldworkshq/doug", 150, "reader", VERDICT,
+        installation_id=101, github_repo_id=11,
+    )
+    after = store.save_review(
+        "coldworkshq/doug", 243, "reader", VERDICT,
+        installation_id=303, github_repo_id=11,
+    )
+
+    listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
+    detail = TestClient(app).get(f"/v1/sessions/runs/{before}", headers=headers)
+
+    assert listed.status_code == 200
+    assert sorted(row["verdict_id"] for row in listed.json()["items"]) == sorted(
+        [before, after]
+    )
+    # A row the list shows must open, or the fix is half a fix.
+    assert detail.status_code == 200
+    assert detail.json()["pr_number"] == 150
+
+
+def test_the_lineage_widens_installations_but_never_repositories(tmp_path, monkeypatch):
+    """The tenancy boundary is `repo_ids`, not the installation filter. A
+    session reading a transferred repo must still see nothing for a repo it
+    does not hold, even when the row was written by an installation that IS
+    in its lineage — otherwise widening the tenant filter would have traded
+    a hidden history for a cross-repo leak."""
+    headers = _transferred_scope(tmp_path, monkeypatch)
+    mine = store.save_review(
+        "coldworkshq/doug", 150, "reader", VERDICT,
+        installation_id=101, github_repo_id=11,
+    )
+    # Same lineage installation, a repository this session never claimed.
+    not_mine = store.save_review(
+        "drewjst/private", 7, "reader", VERDICT,
+        installation_id=101, github_repo_id=12,
+    )
+
+    listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
+    refused = TestClient(app).get(f"/v1/sessions/runs/{not_mine}", headers=headers)
+
+    assert [row["verdict_id"] for row in listed.json()["items"]] == [mine]
+    assert refused.status_code == 404
+
+
+def test_an_installation_that_never_registered_the_repo_stays_unreadable(
+    tmp_path, monkeypatch
+):
+    """The other direction: a matching `github_repo_id` is not on its own a
+    licence to read another installation's row. Only installations that
+    provably registered THIS repository join the lineage."""
+    headers = _transferred_scope(tmp_path, monkeypatch)
+    stranger = store.save_review(
+        "stranger/repo", 99, "reader", VERDICT,
+        installation_id=404, github_repo_id=11,
+    )
+
+    listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
+    refused = TestClient(app).get(f"/v1/sessions/runs/{stranger}", headers=headers)
+
+    assert [row["verdict_id"] for row in listed.json()["items"]] == []
+    assert refused.status_code == 404

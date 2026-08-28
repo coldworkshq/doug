@@ -2422,14 +2422,15 @@ def _load_verdict_row(
     *,
     installation_id: int | None = None,
     repo_ids: frozenset[int] | None = None,
+    installation_ids: frozenset[int] | None = None,
 ):
     """The raw `verdicts` row for one id, or None. Shared by every by-id
     lookup so the query itself lives in exactly one place — find_verdict_by_id
     and run_detail both start here, each still checking the None case itself,
     before going their separate ways (bundle-only vs. bundle-plus-provenance)."""
     query = select(verdicts).where(verdicts.c.id == verdict_id)
-    if installation_id is not None:
-        query = query.where(verdicts.c.installation_id == installation_id)
+    if (tenants := _tenant_ids(installation_id, installation_ids)) is not None:
+        query = query.where(verdicts.c.installation_id.in_(tenants))
     if repo_ids is not None:
         query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
     return conn.execute(query.limit(1)).mappings().first()
@@ -2955,6 +2956,7 @@ def run_detail(
     *,
     installation_id: int | None = None,
     repo_ids: frozenset[int] | None = None,
+    installation_ids: frozenset[int] | None = None,
 ) -> dict | None:
     """Everything the console's forensic page shows for one run.
 
@@ -2973,6 +2975,7 @@ def run_detail(
             verdict_id,
             installation_id=installation_id,
             repo_ids=repo_ids,
+            installation_ids=installation_ids,
         )
         if v is None:
             return None
@@ -3126,6 +3129,7 @@ def latest_reviews(
     repo: str | None = None,
     installation_id: int | None = None,
     repo_ids: set[int] | None = None,
+    installation_ids: frozenset[int] | None = None,
 ) -> list[dict]:
     """Most recent verdict per (repo, pr) with findings — the live queue.
 
@@ -3147,8 +3151,8 @@ def latest_reviews(
     # dropped, and the PR disappears instead of falling back. A CI row
     # (installation_id NULL) on a tenant's own PR is precisely that case.
     scoped = verdicts.c.tier != EXTERNAL_TIER
-    if installation_id is not None:
-        scoped = scoped & (verdicts.c.installation_id == installation_id)
+    if (tenants := _tenant_ids(installation_id, installation_ids)) is not None:
+        scoped = scoped & (verdicts.c.installation_id.in_(tenants))
     if repo_ids is not None:
         # Same placement rule as the tenant filter above: INSIDE the grouped
         # subquery, or an out-of-selection row wins max(id) and its PR
@@ -3182,6 +3186,7 @@ def run_history(
     installation_id: int | None = None,
     repo_ids: frozenset[int] | None = None,
     include_untenanted: bool = False,
+    installation_ids: frozenset[int] | None = None,
 ) -> list[dict]:
     """Verdict HISTORY, newest first — every run, not one row per PR.
 
@@ -3196,6 +3201,11 @@ def run_history(
     probe corpora, CLI rows and the research quarantine out of a console
     that is meant to show tenant traffic.
 
+    `installation_ids` is the same tenant filter widened to a repository's
+    installation lineage, for a session reading a repo that has been
+    transferred; see `installation_lineage`. Exactly one of it and
+    `installation_id` may be given.
+
     Each row carries `coverage`, `finding_counts`, `job`, `outcome_14` and
     `outcome_60`. Every child join goes through an id-picking subquery
     because a plain outerjoin duplicates the verdict row whenever two
@@ -3207,13 +3217,14 @@ def run_history(
         return []
     from sqlalchemy import case, desc, func, select
 
+    tenants = _tenant_ids(installation_id, installation_ids)
     query = select(verdicts).where(verdicts.c.tier != EXTERNAL_TIER)
     if not include_untenanted:
         query = query.where(verdicts.c.installation_id.is_not(None))
     if repo:
         query = query.where(verdicts.c.repo == repo)
-    if installation_id is not None:
-        query = query.where(verdicts.c.installation_id == installation_id)
+    if tenants is not None:
+        query = query.where(verdicts.c.installation_id.in_(tenants))
     if repo_ids is not None:
         query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
     query = (
@@ -3318,9 +3329,9 @@ def run_history(
             .where(outcomes.c.repo.in_({k[0] for k in keys}))
             .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
         )
-        if installation_id is not None:
+        if tenants is not None:
             outcome_query = outcome_query.where(
-                outcomes.c.installation_id == installation_id
+                outcomes.c.installation_id.in_(tenants)
             )
         if repo_ids is not None:
             outcome_query = outcome_query.where(outcomes.c.github_repo_id.in_(repo_ids))
@@ -3349,6 +3360,7 @@ def job_health(
     outcome_max_attempts: int,
     repo: str | None = None,
     installation_id: int | None = None,
+    installation_ids: frozenset[int] | None = None,
 ) -> dict | None:
     """Fixed-size health aggregates for both job lanes.
 
@@ -3370,12 +3382,13 @@ def job_health(
     from sqlalchemy import func, select
 
     rj, oj = review_jobs, outcome_jobs
+    tenants = _tenant_ids(installation_id, installation_ids)
 
     def _scope_review(q):
         if repo:
             q = q.where(rj.c.repo_full_name == repo)
-        if installation_id is not None:
-            q = q.where(rj.c.installation_id == installation_id)
+        if tenants is not None:
+            q = q.where(rj.c.installation_id.in_(tenants))
         return q
 
     def _scope_outcome(q):
@@ -3389,8 +3402,8 @@ def job_health(
                     )
                 )
             )
-        if installation_id is not None:
-            q = q.where(oj.c.installation_id == installation_id)
+        if tenants is not None:
+            q = q.where(oj.c.installation_id.in_(tenants))
         return q
 
     with engine.connect() as conn:
@@ -4186,6 +4199,62 @@ def active_repos(installation_id: int) -> list[tuple[int, str]]:
                 )
             )
         ]
+
+
+def installation_lineage(github_repo_ids: frozenset[int]) -> frozenset[int]:
+    """Every installation that has ever registered one of these repositories.
+
+    A GitHub repository transfer moves a repo between installations while
+    `github_repo_id` stays put (#218: "installation_id remains operational
+    plumbing only; it never defines a published series"). The rows written
+    before the move keep the old installation forever, so a reader scoped to
+    one installation id sees a repository's history begin on its transfer
+    date — which is what happened to this repo on 2026-08-26, hiding 261
+    runs across 121 PRs behind a filter.
+
+    ANY state, deliberately: the whole point is the registration that is no
+    longer active. `installation_repos` keeps removed rows precisely because
+    they are history (migration 17's note), and this is the read that history
+    exists for.
+
+    This widens WHOSE rows a reader may see, never WHICH repositories — every
+    caller pairs it with a `repo_ids` filter over the same proven set, so a
+    row is visible only when the reader provably holds that repository now
+    AND the writing installation provably held it once. Passing an empty set
+    returns an empty set rather than everything, so a scopeless session fails
+    closed.
+    """
+    engine = _get_engine()
+    if engine is None or not github_repo_ids:
+        return frozenset()
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        return frozenset(
+            int(r)
+            for r in conn.execute(
+                select(installation_repos.c.installation_id)
+                .where(installation_repos.c.github_repo_id.in_(github_repo_ids))
+                .distinct()
+            ).scalars()
+        )
+
+
+def _tenant_ids(
+    installation_id: int | None, installation_ids: frozenset[int] | None
+) -> frozenset[int] | None:
+    """One tenant filter from either spelling, or None for no filter.
+
+    Read paths take both: `installation_id` for the ordinary single-tenant
+    caller, `installation_ids` for a session that has resolved a repository's
+    installation lineage. Giving both is a caller bug, not a union — it would
+    silently mean whichever the reader assumed — so it raises.
+    """
+    if installation_ids is not None:
+        if installation_id is not None:
+            raise ValueError("pass installation_id or installation_ids, never both")
+        return frozenset(installation_ids)
+    return None if installation_id is None else frozenset({installation_id})
 
 
 def repo_id_for(full_name: str) -> tuple[int, int] | None:

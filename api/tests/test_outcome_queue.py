@@ -385,3 +385,135 @@ def test_suspended_installation_retries_instead_of_censoring(tmp_path, monkeypat
     )
 
     assert batch.permanently_unreachable is False
+
+
+SUCCESSOR_ID = 153075663
+SUCCESSOR_REPO = "coldworkshq/doug"
+
+
+def _transfer(url: str, *, old_installation_state: str, junction_state: str) -> None:
+    """Put the ledger in the shape a repository transfer leaves behind.
+
+    The repo id never moves; the registration does. `_seed` has already
+    written the old installation and its junction row, so this only ages
+    those and adds the live pair.
+    """
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == INSTALLATION_ID)
+            .values(state=old_installation_state)
+        )
+        conn.execute(
+            update(store.installation_repos)
+            .where(store.installation_repos.c.installation_id == INSTALLATION_ID)
+            .values(state=junction_state)
+        )
+        conn.execute(
+            store.installations.insert(),
+            {
+                "installation_id": SUCCESSOR_ID,
+                "account_login": "coldworkshq",
+                "account_type": "Organization",
+                "state": "active",
+                "updated_at": NOW,
+            },
+        )
+        conn.execute(
+            store.installation_repos.insert(),
+            {
+                "installation_id": SUCCESSOR_ID,
+                "github_repo_id": REPO_ID,
+                "full_name": SUCCESSOR_REPO,
+                "state": "active",
+                "updated_at": NOW,
+            },
+        )
+
+
+def test_a_transferred_repository_is_adjudicated_not_censored(tmp_path, monkeypatch):
+    """A transfer leaves the old installation looking exactly like an
+    uninstall — junction 'removed', installation 'deleted' — while the
+    repository stays perfectly readable under its new owner. Censoring on
+    that empties the risk set in the flattering direction, which is what
+    happened to PRs 93-107 of this repo after the 2026-08-26 org move.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed(url, _job(pr_number=1))
+    _transfer(url, old_installation_state="deleted", junction_state="removed")
+
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+
+    assert batch.permanently_unreachable is False
+    assert batch.repo_full_name == SUCCESSOR_REPO
+    # The token is minted for whoever can actually reach the repo...
+    assert batch.reader_installation_id == SUCCESSOR_ID
+    # ...but the job, and the outcome it will settle into, still belong to
+    # the installation that paid for the verdict.
+    assert batch.key.installation_id == INSTALLATION_ID
+
+
+def test_an_uninstalled_repository_with_no_successor_still_censors(tmp_path, monkeypatch):
+    """The redirect must not become a way to never censor anything. With no
+    other live registration for the id, a real uninstall is still permanent
+    blindness and its jobs must leave the risk set."""
+    url = _db(tmp_path, monkeypatch)
+    _seed(url, _job(pr_number=1), repo_state="removed")
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == INSTALLATION_ID)
+            .values(state="deleted")
+        )
+
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+
+    assert batch.permanently_unreachable is True
+    assert batch.reader_installation_id == INSTALLATION_ID
+
+
+def test_a_successor_registration_under_a_dead_installation_is_not_live(
+    tmp_path, monkeypatch
+):
+    """An active junction row under a deleted installation is stale
+    registration history, not a reachable repository. Reading it as a
+    successor would mint a token GitHub refuses and retry forever."""
+    url = _db(tmp_path, monkeypatch)
+    _seed(url, _job(pr_number=1), repo_state="removed")
+    _transfer(url, old_installation_state="deleted", junction_state="removed")
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == SUCCESSOR_ID)
+            .values(state="deleted")
+        )
+
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+
+    assert batch.permanently_unreachable is True
+    assert batch.reader_installation_id == INSTALLATION_ID
+
+
+def test_a_live_installation_never_consults_the_successor_lookup(tmp_path, monkeypatch):
+    """The redirect is reached only when the row would otherwise be censored.
+    A healthy installation keeps adjudicating through its own token even when
+    another installation also registers the same repo id — which is the
+    during-transfer overlap, where both are briefly active."""
+    url = _db(tmp_path, monkeypatch)
+    _seed(url, _job(pr_number=1))
+    _transfer(url, old_installation_state="active", junction_state="active")
+
+    batch = outcome_queue.claim_repository(
+        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
+    )
+
+    assert batch.permanently_unreachable is False
+    assert batch.repo_full_name == REPO
+    assert batch.reader_installation_id == INSTALLATION_ID

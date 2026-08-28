@@ -1225,6 +1225,32 @@ def _session_read_context(authorization: str, scope: str) -> tenancy.SessionCont
     return ctx
 
 
+def _readable_installations(
+    ctx: tenancy.SessionContext, repo_ids: frozenset[int]
+) -> frozenset[int]:
+    """Every installation whose rows this session may READ, for these repos.
+
+    A session writes as exactly one installation and always will —
+    `ctx.installation_id` stays the only answer to "who am I" for settings
+    (SessionContext's docstring, and MT1's reason for it). Reads are the
+    different question: a repository transferred between accounts keeps
+    `github_repo_id` and changes installation, so scoping history to the
+    current installation makes a repo's past disappear on its move date.
+
+    The current installation is unioned in unconditionally rather than
+    trusted to appear in the lineage, so a session still reads its own rows
+    during the window between an install and its first
+    `installation_repositories` reconcile.
+
+    Every caller pairs this with `repo_ids=` over the SAME set passed here.
+    That pairing is the tenancy boundary, and it is why widening the
+    installation filter leaks nothing: a row must be for a repository this
+    session provably holds now, written by an installation that provably
+    held it once.
+    """
+    return store.installation_lineage(repo_ids) | {ctx.installation_id}
+
+
 def _session_write_context(authorization: str) -> tenancy.SessionContext:
     """A session allowed to change per-repo settings. Same resolver as reads
     (org-bound, live-scoped, fails closed on stale entitlement) — the scope
@@ -1380,7 +1406,7 @@ def session_runs(
     rows = store.run_history(
         limit=limit,
         offset=offset,
-        installation_id=ctx.installation_id,
+        installation_ids=_readable_installations(ctx, effective),
         repo_ids=effective,
     )
     return RunListResponse(
@@ -1398,7 +1424,7 @@ def session_run_detail(
     ctx = _session_read_context(authorization, "queue:read")
     row = store.run_detail(
         verdict_id,
-        installation_id=ctx.installation_id,
+        installation_ids=_readable_installations(ctx, ctx.repo_ids),
         repo_ids=ctx.repo_ids,
     )
     if row is None:
