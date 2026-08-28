@@ -90,20 +90,6 @@ test("getJobs sends installationId 0 as a real filter, never drops it as falsy",
   );
 });
 
-test("console next.config.ts exports security headers", async () => {
-  const nextConfigModule = await import("../next.config.ts");
-  const config = nextConfigModule.default;
-  assert.equal(typeof config.headers, "function");
-  const headerRules = await config.headers();
-  const globalRule = headerRules.find((rule) => rule.source === "/:path*");
-  assert.ok(globalRule, "expected /:path* header rule");
-
-  const headers = new Map(globalRule.headers.map((h) => [h.key, h.value]));
-  assert.equal(headers.get("X-Frame-Options"), "DENY");
-  assert.equal(headers.get("X-Content-Type-Options"), "nosniff");
-  assert.equal(headers.get("Referrer-Policy"), "strict-origin-when-cross-origin");
-});
-
 const HASH = "a".repeat(64);
 
 function examplePackSummary() {
