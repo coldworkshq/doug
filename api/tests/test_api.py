@@ -2407,7 +2407,7 @@ def test_dispense_never_rotates_an_existing_key(tmp_path, monkeypatch):
     assert tenancy.resolve(second["token"]) is not None
 
 
-def test_dispense_daily_cap_is_fail_open(tmp_path, monkeypatch):
+def test_dispense_daily_cap_is_a_uniform_404(tmp_path, monkeypatch):
     _api_db(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
@@ -2415,12 +2415,31 @@ def test_dispense_daily_cap_is_fail_open(tmp_path, monkeypatch):
     monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
     body = {"selection": "all", "owner": "drewjst"}
     headers = {"X-GitHub-Token": "t"}
-    # Over the cap → 404 (uniform).
     monkeypatch.setattr(store, "count_installation_tokens_minted_since", lambda i, s: 30)
     assert client.post("/v1/installations/token", json=body, headers=headers).status_code == 404
-    # Counter broken → None → allow (fail-open by spec).
+
+
+def test_dispense_daily_cap_refuses_when_count_fails(tmp_path, monkeypatch):
+    """None means the ledger could not count. That is a deployment fault
+    (503), not a uniform 404, and it must not mint."""
+    _api_db(tmp_path, monkeypatch)
+    _pepper_env(monkeypatch)
+    store.upsert_installation(150424894, "drewjst", "User", "active")
+    monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
+    monkeypatch.setattr(tenancy, "caller_login", lambda pat: "drewjst")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("minted a key while the daily cap could not be counted")
+
+    monkeypatch.setattr(tenancy, "mint_key", forbidden)
     monkeypatch.setattr(store, "count_installation_tokens_minted_since", lambda i, s: None)
-    assert client.post("/v1/installations/token", json=body, headers=headers).status_code == 200
+    r = client.post(
+        "/v1/installations/token",
+        json={"selection": "all", "owner": "drewjst"},
+        headers={"X-GitHub-Token": "t"},
+    )
+    assert r.status_code == 503
+    assert r.json() == {"detail": "no ledger configured"}
 
 
 def test_dispense_validation_is_uniform_404(tmp_path, monkeypatch):
