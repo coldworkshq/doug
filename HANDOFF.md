@@ -1,5 +1,159 @@
 # HANDOFF — doug
 
+State:    review — PR #273, branch `adr-0029-vertex-transport`, api 1773 pass,
+          ruff clean. Transport is Vertex, DEFAULT_TRANSPORT="vertex". NOT
+          DEPLOYED, and the deploy now REFUSES until quota exists.
+Next:     Andrew requests Vertex quota (below), then VERTEX_REGION=us-central1
+          and merge #273. Also rules on #268.
+Blockers: FOUNDER — Vertex throughput quota is ZERO in every serving region.
+          The deploy cannot succeed until it is granted. Tracked in #274.
+
+THE REGION QUESTION IS ANSWERED, by probe, not by guess (2026-08-28):
+- Model Garden enablement is DONE. `claude-opus-5` resolves in exactly THREE of
+  13 regions: us-east5, us-central1, europe-west4. `global` 404s — it is NOT
+  available, so any earlier suggestion to use the global endpoint is dead.
+- USE us-central1. The api service already runs there, so the call stays
+  in-region inside a request already bounded at 240s. europe-west4 would move
+  tenant source code to the EU for no reason; us-east5 adds a hop for none.
+- ALL THREE return 429: "Quota exceeded for
+  online_prediction_input_tokens_per_minute_per_base_model with base model
+  anthropic-claude-opus-5". The probe sends an EMPTY BODY and consumes no input
+  tokens — a quota rejection therefore means the allocation is ZERO, not that
+  the endpoint is busy. Access and throughput are separate grants and this
+  project has only the first.
+- Request quota for BOTH anthropic-claude-opus-5 AND anthropic-claude-sonnet-5
+  in us-central1: the mechanical tier rides the same transport and quota is per
+  base model. https://console.cloud.google.com/iam-admin/quotas?project=doug-prod0
+- Re-probe after: a 400 instead of a 429 means quota landed. 400 is the healthy
+  answer — the empty body is rejected on validation, having generated nothing.
+
+THE DEPLOY PREFLIGHT (`vertex_preflight` in gcp.sh), added this round:
+A set region is not a working one, and there are now TWO PROVEN ways the
+transport can be live and unusable while the deploy looks green: a region that
+does not serve the model (10 of 13), and access without quota (all 3). Both end
+in the same place — every read falls soft into the deterministic score, the
+check run still renders, and the deep read is silently gone. The preflight
+probes EACH model (ids read from reader.py, so they cannot drift) in the
+configured region and refuses on 404 / 401 / 403 / 429 with a distinct message
+each. 400 passes: the route resolved and nothing was generated.
+It does NOT check the runtime identity — it runs as the operator, not
+doug-api-sa. That half is the roles/aiplatform.user binding in `setup`, and
+ADR-0029 names the gap rather than papering over it.
+
+## What this is, and what it costs
+
+Andrew: the Anthropic console balance is running out, everything has to leave
+it. Directed the Vertex move REGARDLESS of ADR-0028's bar. That bar was never
+run and now never will be in its declared form. ADR-0029 records the direction,
+the reason, and that the new instrument era ships governed by nothing. ADR-0018
+is the precedent for the shape; ADR-0028 warned that doing it twice makes the
+exception the practice, and this is the second time.
+
+Production's whole console spend is four calls behind two clients. `settle.py`
+makes NO model call (pure AST) — verified, so there is no fifth. Both clients
+move, so nothing is left billing Anthropic.
+
+## Decisions this session
+
+- RULING (Andrew): move to Vertex without the paired run. The balance funds the
+  study or the cutover, not both. Rejected: run the bar first (the option that
+  should have won, lost only on funding); a smaller sample (reopens the ruled
+  300 and buys a number that cannot fail); re-declaring a corrected bar in the
+  same change that benefits from the answer.
+- ADR-0028's scope ambiguity settled: its prose said "risk and intent reads"
+  but its facts table and guard test both named `_verify_client`, which serves
+  neither. Both clients move. The mechanical tier's TRANSPORT moves; its VENDOR
+  does not — ADR-0027's C1/C2/C3 all still bind.
+- `provider` is computed, not hardcoded: "anthropic-vertex" vs "anthropic". This
+  moves instrument_id and partitions the corpus at the cutover, which is the one
+  part of ADR-0028 that survives intact.
+- No MODEL mapping layer, pinned by test. Vertex serves current-generation
+  models under the bare first-party id. A dated snapshot would break that and
+  reopens ADR-0028 rather than earning a mapping.
+- ANTHROPIC_API_KEY STAYS MOUNTED. It is the rollback
+  (`DOUG_READER_TRANSPORT=anthropic` on the running service, no deploy). It has
+  a clock: when the balance hits zero the rollback stops existing.
+- Region deliberately NOT defaulted. A wrong region fails every read soft into
+  the deterministic fallback, which reads as "the reader is down". The deploy
+  refuses instead.
+- Reopened #263 — it closed as COMPLETED by ACCIDENT, on the phrase "close #263
+  first" in 837ce57's body. That PR changed ADR text only; the manifest still
+  has no mechanical field, so ADR-0027 C3 is undischarged.
+
+## #268 — ADR-0028's bar was also not runnable, and this is FOUNDER work
+
+- The baseline does not reproduce. The record names `rate --repo doug
+  --rule-prefix reader:` and reports n=153 at 44.4/32.0/23.5. That command on
+  837ce57 itself returns n=201 at 49.3/30.8/19.9. All 8 scoping combinations
+  and every date cutoff checked; 68 `real` never occurs. The thresholds are
+  DERIVED from that table, so the declared 39.4% floor is 9.9 pp below the true
+  baseline — the 10 pp option ADR-0028 enumerates and rejects.
+- The corpus cannot produce the quantity. Dispositions live only in
+  docs/findings-log.jsonl, are hand-settled, and cover 34 doug PRs. The 653 is
+  llm-probe/sample.json (sentry 136+230) + llm-probe-grafana/sample.json
+  (grafana 57+230): PR NUMBERS and a binary defect/clean label. No findings, no
+  adjudicator. ~3,500 hand dispositions would be needed against a total of 201.
+
+## Verified
+
+- 1764 api tests pass, ruff clean. Five new reader tests, four new deploy tests.
+- Mutation-checked red: provider literal restored -> capture test fails;
+  DEFAULT_TRANSPORT flipped -> default test fails; env vars dropped, aiplatform
+  removed, IAM role changed -> deploy tests fail.
+- AnthropicVertex verified in the installed SDK 0.120.2: region REQUIRED,
+  project_id from ADC, max_retries defaults to 2 so it is still passed.
+DOUG'S REVIEW OF #273 — risk 0.62, 1 high / 3 medium / 2 low + 5 deviations.
+All nine dispositioned in docs/findings-log.jsonl. Four changed the code:
+- unsafe-default-flip (medium, REAL): DEFAULT_TRANSPORT was vertex, conflating
+  "where the deploy goes" with "what unconfigured environments get". A laptop,
+  script or CI job has no region and no ADC, so the client raises and every
+  read falls soft — silently. NOW DEFAULT_TRANSPORT=anthropic and the DEPLOY
+  pins vertex. ADR-0028 item 6's rollback property is unaffected.
+- deploy-blocking-precondition (medium, REAL): quota is zero, so an
+  unconditional preflight made every unrelated hotfix hostage to a founder
+  grant. R1 conflict. NOW `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy`
+  ships the current transport and never touches Vertex.
+- incomplete-error-handling (low, REAL): the preflight was a denylist, so 5xx
+  and empty output passed the gate it exists to provide. NOW an allowlist —
+  only 200 and 400.
+- missing-from-pr (deviation, REAL, THE BEST FINDING): ADR-0012's banner still
+  said "No traffic has moved" and named the deleted guard test as the
+  enforcement. Both false after this diff. ADR-0012 now carries
+  amended_by: ADR-0029 and a corrected banner; ADR-0027 got the same for the
+  mechanical tier's transport.
+- metric-label-change (medium, DISPROVED): checked every `provider` across
+  api/doug, web/ and console/ — only the manifest field and the reader setting
+  it. Every other hit is the IDENTITY provider. Recorded in ADR-0029.
+- unverified-external-api-contract (HIGH, REAL, NOT FIXED): #275, with the part
+  Doug missed — vertex_preflight CANNOT catch it. The probe posts an empty body
+  and pins 400 as healthy, and an unsupported output_config is ALSO a 400. The
+  gate is structurally blind to this exact failure. Fix is a second well-formed
+  probe where 200 is healthy; that is a paid call per deploy, so FOUNDER.
+
+SIDE FINDING — #264 is worse than its title. Adding ADR-0029 failed
+test_selection_on_dougs_own_records, and measuring showed why: across all 27
+accepted records "Correct a spelling mistake" selects 2, "Update the copyright
+year" selects 2, "Rename a css class" selects 3. Mechanism: hits_body counts a
+token appearing ANYWHERE in a record body, path segments (web/app/api/
+components) are in the change vocabulary, and 2 hits over a 6-token denominator
+is 0.333 against MIN_RELEVANCE 0.25. The one surviving negative case passes
+only because bump/ruff/makefile/gitignore appear in no record — lucky
+vocabulary, not a working floor. PINNED as the defect rather than relocated a
+second time, so fixing #264 fails that line and forces it back to []. Evidence
+posted to #264. NOT fixed here: a scoring change to an unvalidated tier does
+not belong in a transport migration.
+
+- UNVERIFIED, and it needs a live call: that Vertex accepts the `output_config`
+  block (effort + json_schema) these requests send. ADR-0028 asserts effort is
+  GA there; the structured-output shape was not confirmed against the wire.
+
+Pointers: branch adr-0028-paired-run · ADR-0029 + ADR-0028 amendment banner ·
+          api/doug/reader.py `_build_client` / `transport` / `provider_name` ·
+          api/deploy/gcp.sh (region guard, aiplatform, roles/aiplatform.user) ·
+          #268 (FOUNDER, the bar) · #263 (C3, reopened)
+
+--- prior stream (fail-closed mint cap) below, preserved ---
+
 State:    review — fail-closed daily mint cap, tests green
 Next:     Andrew merges the fail-closed mint cap PR. Over-cap stays 404;
           count `None` is 503 and does not mint.

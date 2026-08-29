@@ -41,6 +41,26 @@ cd "$API_DIR"
 
 PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
+# ADR-0029. The Vertex region the reader calls, and deliberately NOT defaulted
+# to $REGION. Claude is not served from every Vertex region and the api
+# service's own region is not necessarily one of them. A wrong value does not
+# fail loudly: every read fails soft into the deterministic score, which reads
+# as "the reader is down" rather than "the region is wrong", so a guessed
+# default would degrade the product silently. Checked at `deploy` only — the
+# other subcommands do not construct a reader.
+VERTEX_REGION=${VERTEX_REGION:-}
+# ADR-0029. Which transport THIS deploy pins on the service. Vertex is the
+# destination, and it is a variable rather than a literal for one reason: the
+# preflight below hard-fails while Vertex quota is zero, which would make an
+# unrelated urgent deploy hostage to a founder-level quota grant. R1 says
+# production Doug wins every conflict, and a hotfix that cannot ship because a
+# transport migration is half-finished is that conflict.
+#
+# `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy` ships the current
+# transport and skips the Vertex preflight entirely. Doug raised this
+# (`reader:deploy-blocking-precondition`) and it was a fair objection to a gate
+# that had no way out.
+READER_TRANSPORT=${READER_TRANSPORT:-vertex}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
@@ -60,9 +80,14 @@ setup() {
   # creates the default compute service account the secret bindings below
   # attach to — on a project that never touched Compute, that SA simply
   # does not exist and setup used to silently bind secrets to nobody.
+  # aiplatform: ADR-0029 moved the reader's transport to Vertex, so the api
+  # service calls it with application default credentials. Without the API
+  # enabled the failure arrives at runtime as a soft reader fallback rather
+  # than at deploy time, which is the shape this whole script exists to avoid.
   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
     secretmanager.googleapis.com cloudbuild.googleapis.com \
     artifactregistry.googleapis.com compute.googleapis.com \
+    aiplatform.googleapis.com \
     cloudscheduler.googleapis.com --project "$PROJECT"
 
   if ! gcloud sql instances describe "$INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
@@ -145,6 +170,13 @@ setup() {
   # green. Unsuppressed for the same reason as the secret bindings below.
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role=roles/cloudsql.client >/dev/null
+
+  # ADR-0029: the reader reaches Claude through Vertex on this identity's
+  # application default credentials, so the grant is IAM rather than a secret.
+  # That is the whole reason the transport move adds no new key material — and
+  # it is also why the Anthropic key stays bound below: it is the rollback.
+  gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:$SA" --role=roles/aiplatform.user >/dev/null
 
   # doug-workos-api-key reads every tenant's identity data and doug-workos-
   # client-id is what session_auth's JWKS URL is built from — without the
@@ -616,8 +648,112 @@ compute_prereg_hash() {
     "$PREREG_DOC"
 }
 
+# ADR-0029 / #274. The region check inside `deploy` proves a string is set. It
+# does not prove the model is reachable through it, and both ways that has
+# already gone wrong are invisible to a non-empty check:
+#
+#   1. `claude-opus-5` is served in THREE of thirteen Vertex regions for this
+#      project. Ten of them 404. A plausible-looking region is a coin flip.
+#   2. Model Garden access and throughput quota are separate grants. With
+#      access and no quota every call returns 429, which is indistinguishable
+#      from a healthy deploy until someone reads a verdict.
+#
+# Either one leaves reader.py falling soft into the deterministic score on
+# every read. That is the contracted behaviour for a stalled upstream and it
+# is exactly wrong here: the check run still renders, the PR still gets a
+# verdict, and the deep read is simply gone. Nothing pages, and the regression
+# is unattributable days later. So the deploy refuses instead, which is the
+# same trade `preregistration_preflight` and the showcase smoke already make.
+#
+# The probe posts an empty body. That fails request validation before the
+# model generates anything, so it costs nothing and cannot be rate-limited by
+# its own token count — which is what makes a 429 here mean "the allocation is
+# zero" rather than "we are momentarily busy".
+#
+# WHAT THIS DOES NOT CHECK: it runs as the operator's credentials, not as
+# doug-api-sa, so it proves the model is available in the region and says
+# nothing about whether the RUNTIME identity may call it. That half is the
+# roles/aiplatform.user binding in `setup`, asserted by
+# test_setup_enables_vertex_and_grants_the_api_identity_access.
+reader_models() {
+  python3 -c 'import re,pathlib,sys
+source = pathlib.Path("doug/reader.py").read_text()
+for name in ("MODEL", "MECHANICAL_MODEL"):
+    found = re.search(r"^%s = \"([^\"]+)\"" % name, source, re.M)
+    if not found:
+        sys.exit("could not read %s from doug/reader.py" % name)
+    print(found.group(1))'
+}
+
+vertex_preflight() {
+  local token model code
+  token=$(gcloud auth print-access-token --project "$PROJECT" 2>/dev/null)
+  if [ -z "$token" ]; then
+    echo "ERROR: no access token; run 'gcloud auth login' before deploying." >&2
+    return 1
+  fi
+  # Both tiers ride this transport under ADR-0029, so both are probed. The
+  # mechanical tier hits the same region and quota walls as the risk read and
+  # is billed on a separate per-base-model quota.
+  for model in $(reader_models); do
+    code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{}' \
+      "https://${VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${VERTEX_REGION}/publishers/anthropic/models/${model}:rawPredict")
+    # An ALLOWLIST, not a denylist. Doug flagged the earlier denylist
+    # (`reader:incomplete-error-handling`) and was right: a 5xx, or an empty
+    # string from a missing curl or a malformed URL, fell through as success
+    # and passed the gate this function exists to provide. Only two answers
+    # mean the route resolved — 400, the empty body rejected on validation
+    # having generated nothing, and 200 if the API ever accepts it.
+    case "$code" in
+      200|400) : ;;
+      404)
+        echo "ERROR: $model is not served in $VERTEX_REGION (404)." >&2
+        echo "Pick a region that serves it, or enable it in Vertex Model Garden." >&2
+        return 1 ;;
+      401|403)
+        echo "ERROR: $model in $VERTEX_REGION refused the operator credential ($code)." >&2
+        echo "Model Garden access for $PROJECT is missing, or the token cannot reach it." >&2
+        return 1 ;;
+      429)
+        echo "ERROR: $model in $VERTEX_REGION has no throughput quota (429)." >&2
+        echo "An empty-body probe consumes no input tokens, so a quota rejection here" >&2
+        echo "means the allocation is zero, not that the endpoint is busy. Request" >&2
+        echo "online_prediction_input_tokens_per_minute_per_base_model for" >&2
+        echo "anthropic-$model in $VERTEX_REGION, then re-run. See #274." >&2
+        return 1 ;;
+      000|"")
+        echo "ERROR: probe for $model in $VERTEX_REGION did not complete (network, timeout, or no curl)." >&2
+        return 1 ;;
+      *)
+        echo "ERROR: probe for $model in $VERTEX_REGION answered $code, which is not a" >&2
+        echo "resolved route. Only 200 and 400 mean the model is reachable; anything" >&2
+        echo "else is refused rather than assumed benign. See ADR-0029." >&2
+        return 1 ;;
+    esac
+  done
+}
+
 deploy() {
   preregistration_preflight
+  # ADR-0029. Refuse the deploy rather than ship a guessed Vertex region.
+  # DOUG_READER_TRANSPORT is pinned to vertex on the line below, so an empty
+  # CLOUD_ML_REGION would deploy a service whose every read raises at client
+  # construction and falls back to the deterministic score. That failure is
+  # silent by design — the reader contracts for a soft fallback — so it would
+  # surface as a quality regression nobody can attribute, days later. The
+  # rollback for a region that turns out wrong is DOUG_READER_TRANSPORT=anthropic
+  # on the running service, which needs no deploy.
+  if [ "$READER_TRANSPORT" = "vertex" ] && [ -z "$VERTEX_REGION" ]; then
+    echo "ERROR: set VERTEX_REGION to the Vertex region that serves $(grep -m1 '^MODEL' doug/reader.py | cut -d'"' -f2)." >&2
+    echo "It is not defaulted: a wrong region fails every read soft into the" >&2
+    echo "deterministic fallback instead of failing the deploy. See ADR-0029." >&2
+    exit 1
+  fi
+  # Only when this deploy actually pins Vertex. See READER_TRANSPORT above.
+  if [ "$READER_TRANSPORT" = "vertex" ]; then
+    vertex_preflight || exit 1
+  fi
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   if service_exists "$SERVICE"; then
     traffic_flags="--no-traffic --tag candidate"
@@ -714,7 +850,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

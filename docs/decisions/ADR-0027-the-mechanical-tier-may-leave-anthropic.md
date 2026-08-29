@@ -3,7 +3,29 @@ title: The mechanical tier may run a non-Anthropic model, and ADR-0016's scope c
 status: accepted
 date: 2026-08-28
 amends: ADR-0016
+amended_by: ADR-0029
 ---
+
+> **Amended by ADR-0029, 2026-08-28: the mechanical tier's TRANSPORT moved to
+> Vertex. Its VENDOR boundary and all three conditions below are untouched.**
+>
+> This record's Consequences describe ADR-0028 as moving "the risk and intent
+> reads' transport", and that is no longer the whole picture. ADR-0029 routes
+> both client construction sites through Vertex, `_verify_client` included, so
+> `verify_finding` and `attribute_findings` now reach the same `claude-sonnet-5`
+> weights over a different API surface. Doug raised the gap (`beyond-ticket`)
+> and it is marked here rather than only there.
+>
+> **Nothing about C1, C2 or C3 changes.** A transport is not a vendor. No
+> non-Anthropic model serves the mechanical tier, C3 (#263) is still
+> undischarged — it closed by accident on a commit-message keyword and has been
+> reopened — and the attribution study has not been re-run. This record still
+> governs any change of mechanical MODEL; ADR-0029 governs only how the request
+> reaches it.
+>
+> ADR-0029 also did what item 5 forbids without a paired run, and says so in
+> its own title. That was Andrew's direction against a funding constraint, not
+> a reinterpretation of this record.
 
 > **Two records in one, and only the first is free.**
 >

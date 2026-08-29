@@ -3,7 +3,7 @@ title: Keep the reader prompt and schema frozen; govern DIFF_BUDGET by a coverag
 status: accepted
 date: 2026-08-06
 supersedes: ADR-0002
-amended_by: ADR-0018, ADR-0028
+amended_by: ADR-0018, ADR-0028, ADR-0029
 ---
 
 > **Amendment, 2026-08-28 (ADR-0028): the freeze governs the constants, not the
@@ -27,10 +27,28 @@ amended_by: ADR-0018, ADR-0028
 > Vertex spells those with an `@` separator where the first-party API uses a
 > hyphen, and at that point the two stop sharing a string and ADR-0028 reopens.
 >
-> **No traffic has moved.** ADR-0028's non-inferiority bar is declared and has
-> not been run, and
-> `test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run` fails the
-> suite if a Vertex client ships before it does.
+> **Superseded by ADR-0029, 2026-08-28. Both sentences this paragraph used to
+> contain are now false.** It said no traffic had moved and that
+> `test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run` would fail
+> the suite if a Vertex client shipped first. Traffic moved without the bar
+> being run, by Andrew's direction, because the Anthropic balance funds the
+> paired study or the cutover and not both; and that test was deleted in the
+> same change, without the result its own docstring required for removal.
+>
+> Doug found this paragraph still asserting the old state
+> (`missing-from-pr`) on the PR that made it untrue, and it was the sharpest
+> finding of that review. `docs/decisions/README.md` requires an amendment to
+> be marked on BOTH sides for exactly this reason — a record left asserting
+> something false misleads every reader, this reader included. ADR-0028 was
+> corrected for the one-sided version of this defect five days ago, and the
+> same change repeated it one record over.
+>
+> **The freeze itself is untouched by ADR-0029.** `SYSTEM`, `SCHEMA`, `MODEL`
+> and `MAX_TOKENS` are unchanged, `MODEL` still reaches the wire verbatim with
+> no transport mapping, and `DIFF_BUDGET`'s coverage bar still governs. What
+> moved is the transport, and what is gone is the code-level guard that used to
+> hold it. ADR-0029 states plainly that the resulting instrument era ships
+> governed by nothing.
 
 > **Amendment, 2026-08-23 (ADR-0018): `EFFORT` is no longer frozen.**
 >

@@ -3,22 +3,48 @@ title: The risk read runs Claude through Vertex, and clears a non-inferiority ba
 status: accepted
 date: 2026-08-28
 amends: ADR-0012
+amended_by: ADR-0029
 ---
 
-> **SIGNED 2026-08-28. The bar was declared before the run, and the run has not
-> happened.**
+> **AMENDED BY ADR-0029, 2026-08-28. THE BAR BELOW WAS NEVER RUN, AND THE MOVE
+> SHIPPED ANYWAY. This record's title is inaccurate from that date onward: the
+> transport moved to Vertex WITHOUT clearing a non-inferiority bar.**
 >
-> This record shipped on 2026-08-28 with its bar table blank and a note saying
-> it could not be signed as it stands. Andrew set the two governing numbers the
-> same day — a 5.0 pp absolute margin on validated yield, scored on a 300-PR
-> sample — and the two derived constraints follow from them and from bounds
-> already in the code. See **The bar**.
+> Read **ADR-0029** before acting on anything in this file. Andrew directed the
+> move the same day this record was signed, because the Anthropic console
+> balance funds the paired study or the cutover and not both. ADR-0029 records
+> the direction, the reason, and the fact that the resulting instrument era
+> ships governed by nothing.
 >
-> **Nothing has run.** Signing this record declares the bar; it does not report
-> a result. No traffic has moved to Vertex, and none does until the paired
-> silent run clears the table below. If the run fails, the bar does not widen —
-> that is the failure this file is arranged to prevent, and it is stated again
-> in Consequences.
+> **The bar table below is also defective and must not be reused.** Its baseline
+> does not reproduce from the extraction this record names, and the corpus it
+> names holds no finding dispositions and so cannot produce the quantity it
+> measures. Both defects are recorded in **#268**, which is open and is a
+> founder ruling. A bar declared against the Vertex transport later starts from
+> #268, not from the table below.
+>
+> What survives unchanged: item 1, that `provider` names the API surface
+> actually called, so the labelled corpus partitions at the cutover; and item 6,
+> that the rollback is a value and not a redeploy. ADR-0029 implements both.
+>
+> ---
+>
+> *The original banner, kept because the history is the point:*
+>
+> > **SIGNED 2026-08-28. The bar was declared before the run, and the run has
+> > not happened.**
+> >
+> > This record shipped on 2026-08-28 with its bar table blank and a note
+> > saying it could not be signed as it stands. Andrew set the two governing
+> > numbers the same day — a 5.0 pp absolute margin on validated yield, scored
+> > on a 300-PR sample — and the two derived constraints follow from them and
+> > from bounds already in the code. See **The bar**.
+> >
+> > **Nothing has run.** Signing this record declares the bar; it does not
+> > report a result. No traffic has moved to Vertex, and none does until the
+> > paired silent run clears the table below. If the run fails, the bar does
+> > not widen — that is the failure this file is arranged to prevent, and it is
+> > stated again in Consequences.
 >
 > Companion record: **ADR-0027** moves the *mechanical* tier's vendor boundary
 > and is also `accepted`. They are separate on purpose: ADR-0027's tier is
@@ -179,6 +205,10 @@ not a release. A forced transition whose rollback needs a deploy is a forced
 transition with an outage attached.
 
 ## The bar
+
+**NEVER RUN. Defective. See the banner, ADR-0029, and #268. Nothing below was
+measured, and the two thresholds are derived from a baseline that does not
+reproduce from the command this section names.**
 
 **Declared 2026-08-28, before any Vertex call. Frozen.**
 
