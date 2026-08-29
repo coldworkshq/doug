@@ -1557,3 +1557,61 @@ def test_an_urgent_deploy_can_ship_without_vertex_at_all(tmp_path):
     assert "rawPredict" not in curl_log, "the Vertex preflight ran on a non-Vertex deploy"
     deploy_line = next(line for line in lines if line.startswith("run deploy doug-api"))
     assert "DOUG_READER_TRANSPORT=anthropic" in deploy_line
+
+
+def test_the_workflow_supplies_every_variable_the_deploy_requires():
+    """gcp.sh's `deploy` refuses when a required variable is unset, and the
+    workflow is the caller that matters. Nothing bound the two together.
+
+    This is not hypothetical. ADR-0029 added a required VERTEX_REGION, every
+    test here set it through the harness, `deploy` was mutation-verified to
+    refuse without it — and the workflow was never given it, because
+    `.github/workflows/deploy.yml` was not in that diff. The merge deployed
+    nothing: run 33237025355 died on `ERROR: set VERTEX_REGION`, leaving main
+    and production disagreeing, which is the drift ADR-0025 exists to prevent.
+
+    So the pin is derived rather than listed: every `${VAR:?...}` and every
+    `[ -z "$VAR" ]` refusal in the script has to appear in the deploy step's
+    env. A future required variable fails here instead of in CI after a merge.
+    """
+    script = GCP_PATH.read_text()
+    workflow = DEPLOY_WORKFLOW.read_text()
+    deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
+
+    required = set(re.findall(r"^(\w+)=\$\{\1:\?", script, re.M))
+    required |= {
+        name
+        for name in re.findall(r'\[ -z "\$(\w+)" \]', script)
+        if f"{name}=${{{name}:-}}" in script  # defaulted-empty, then refused
+    }
+    assert "VERTEX_REGION" in required, (
+        "the regression this test was written for is no longer detectable"
+    )
+
+    for name in sorted(required):
+        assert f"{name}:" in deploy_step, (
+            f"deploy/gcp.sh refuses without {name}, but the deploy step in "
+            f"deploy.yml never sets it — the merge would deploy nothing"
+        )
+
+
+def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
+    """The cutover is one word in deploy.yml, and it must not be flipped ahead
+    of the quota it depends on.
+
+    Vertex throughput quota is zero in every serving region (#274), so a
+    `vertex` pin here refuses every deploy — including one carrying an
+    unrelated hotfix, which R1 does not allow. This asserts the two halves stay
+    consistent: pinning Vertex requires a region, and the region has to be one
+    that actually serves the model. Measured 2026-08-28: us-east5, us-central1
+    and europe-west4, and nowhere else.
+    """
+    workflow = DEPLOY_WORKFLOW.read_text()
+    deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
+    transport = re.search(r"READER_TRANSPORT:\s*(\S+)", deploy_step).group(1)
+    region = re.search(r"VERTEX_REGION:\s*(\S+)", deploy_step).group(1)
+
+    assert transport in {"anthropic", "vertex"}, transport
+    assert region in {"us-east5", "us-central1", "europe-west4"}, (
+        f"{region} does not serve claude-opus-5; probed 13 regions on 2026-08-28"
+    )
