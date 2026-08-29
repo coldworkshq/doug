@@ -171,6 +171,17 @@ def record(ok, key, label, detail):
     if not ok:
         missing.append(key)
 
+def needs_for(key):
+    """One requirement's `needs` list, found by KEY, never by position.
+
+    This replaced `REQUIRED[2][2]` / `REQUIRED[3][2]` (Doug:
+    reader:fragile-index-coupling on b138a3c): a positional index silently
+    attaches a resolved filter to the wrong requirement the day the list is
+    reordered, producing a wrong-but-green audit — the defect class this
+    file exists to prevent, in the code that does the preventing.
+    """
+    return next(needs for k, _, needs in REQUIRED if k == key)
+
 # 1. A channel that reaches a human. Policies wired to nothing are the
 #    2026-08-16 state with extra steps.
 live = {c["name"]: c for c in channels if c.get("enabled", True)}
@@ -195,7 +206,7 @@ if check is None:
            "no check on " + LIVENESS_PATH + " exists for a policy to watch")
 else:
     check_id = check["name"].rsplit("/", 1)[-1]
-    REQUIRED[2][2].append(f'metric.labels.check_id = "{check_id}"')
+    needs_for("queue-liveness").append(f'metric.labels.check_id = "{check_id}"')
     host = (check.get("monitoredResource") or {}).get("labels", {}).get("host")
     record(True, "uptime-check", f"an uptime check polls {LIVENESS_PATH}",
            f"{check_id} -> {host}")
@@ -217,7 +228,7 @@ if metric is None:
            "no log metric counts the fallback line, so no policy can watch it")
 else:
     metric_type = "logging.googleapis.com/user/" + metric["name"]
-    REQUIRED[3][2].append(metric_type)
+    needs_for("reader-fallback").append(metric_type)
     record(True, "reader-fallback-metric",
            "a log metric counts reader fallback lines from doug-api",
            metric["name"])
@@ -229,6 +240,12 @@ for key, why, needs in REQUIRED:
     label = f"policy {key}"
     if key in missing:
         continue  # already failed above, and for a reason no filter can undo
+    # `all()` over an empty needs list is True, which would green this
+    # requirement on ANY policy in the project. The resolvers above either
+    # filled `needs` or recorded the key as missing (skipped just above), so
+    # an empty list reaching this line is a bug in THIS file — say so loudly
+    # rather than report a wrong PASS (Doug: reader:audit-false-positive).
+    assert needs, f"requirement {key} reached the matcher with no filters"
     match = next((p for p in policies
                   if any(all(n in (c.get("conditionThreshold") or {}).get("filter", "")
                              for n in needs)
