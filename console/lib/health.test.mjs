@@ -285,13 +285,23 @@ test("the fallback bars are the API's bars, to the second", async () => {
   // changing api.py (or the reverse) and this fails naming both values.
   const api = await readFile(new URL("../../api/doug/api.py", import.meta.url), "utf8");
   const read = (name) => {
-    const match = api.match(new RegExp(`^${name} = (.+)$`, "m"));
+    const match = api.match(new RegExp(`^${name} = ([^#\n]+)`, "m"));
     assert.ok(match, `${name} is gone from api/doug/api.py — the bar moved or was renamed`);
     // The API writes these as arithmetic ("30 * 60", "26 * 3600") because
     // the units are the point. Evaluate the product rather than pinning the
     // spelling, so a rewrite as "1800" is not a false failure.
-    const [left, right] = match[1].split("*").map((part) => Number(part.trim()));
-    return Number.isFinite(right) ? left * right : left;
+    //
+    // Any number of factors, and Python's underscore separators stripped:
+    // this module writes `26 * 3_600` itself, and `Number("3_600")` is NaN.
+    // A parser that quietly dropped a factor would fail while the two values
+    // AGREED — a false alarm on the test whose whole job is telling drift
+    // from agreement.
+    const factors = match[1].trim().split("*").map((part) => Number(part.trim().replace(/_/g, "")));
+    assert.ok(
+      factors.length > 0 && factors.every(Number.isFinite),
+      `cannot read ${name} from "${match[1].trim()}" — this parser handles a product of integer literals`,
+    );
+    return factors.reduce((a, b) => a * b, 1);
   };
   assert.equal(
     REVIEW_BAR_FALLBACK_SECONDS,

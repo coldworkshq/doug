@@ -47,7 +47,33 @@ TOKEN=$(gcloud auth print-access-token 2>/dev/null) || {
   echo "gcloud auth print-access-token failed — run 'gcloud auth login'" >&2; exit 2; }
 
 API="https://monitoring.googleapis.com/v3/projects/$PROJECT"
-fetch() { curl -sS -H "Authorization: Bearer $TOKEN" "$API/$1"; }
+
+# `set -e` is deliberately absent — the audit's non-zero exit is the whole
+# point, and -e would abort the script before anything could act on it. So
+# each read is checked here instead. A refused or malformed API response must
+# NOT fall through to a parser that sees no policies and reports them all
+# missing: that is a wrong answer wearing the right answer's clothes, which
+# is the failure mode this entire file exists to prevent.
+fetch() {
+  local body
+  body=$(curl -sS -H "Authorization: Bearer $TOKEN" "$API/$1") || {
+    echo "ERROR: could not reach $API/$1" >&2; return 3; }
+  printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    body = json.loads(raw)
+except ValueError:
+    print("ERROR: " + sys.argv[1] + " did not answer JSON: " + raw[:200], file=sys.stderr)
+    sys.exit(3)
+if isinstance(body, dict) and "error" in body:
+    err = body["error"]
+    print("ERROR: " + sys.argv[1] + " -> " + str(err.get("status", "")) + " "
+          + err.get("message", "unknown"), file=sys.stderr)
+    sys.exit(3)
+print(raw)
+' "$1"
+}
 post() {  # post <collection> <json>; prints the created resource name
   curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d "$2" "$API/$1" | python3 -c '
@@ -63,8 +89,14 @@ print("  created " + body["name"])
 MISSING_FILE=$(mktemp); trap 'rm -f "$MISSING_FILE"' EXIT
 
 audit() {  # prints the human report; writes one missing key per line to $MISSING_FILE
-  MISSING_FILE="$MISSING_FILE" python3 - "$(fetch alertPolicies)" \
-      "$(fetch notificationChannels)" "$(fetch uptimeCheckConfigs)" <<'PY'
+  local policies channels uptimes
+  # Each read on its own line, and each exit status checked: a `$(fetch ...)`
+  # written inline below would have its failure swallowed by the surrounding
+  # command's own status.
+  policies=$(fetch alertPolicies) || return 3
+  channels=$(fetch notificationChannels) || return 3
+  uptimes=$(fetch uptimeCheckConfigs) || return 3
+  MISSING_FILE="$MISSING_FILE" python3 - "$policies" "$channels" "$uptimes" <<'PY'
 import json, os, sys
 
 policies = json.loads(sys.argv[1]).get("alertPolicies", [])
@@ -175,6 +207,10 @@ PY
 
 PROJECT="$PROJECT" audit
 STATUS=$?
+# 3 is "could not ask", which is neither pass nor fail and must never be
+# mistaken for either. It stops here rather than reaching `apply`, which
+# would otherwise create duplicates of policies it merely could not see.
+[ $STATUS -eq 3 ] && { echo "could not audit $PROJECT — nothing was checked" >&2; exit 3; }
 missing() { grep -qx "$1" "$MISSING_FILE"; }
 
 if [ "$ACTION" = verify ] || [ $STATUS -eq 0 ]; then
@@ -195,8 +231,11 @@ if missing channel; then
 fi
 CHANNEL=$(fetch notificationChannels | python3 -c '
 import json, sys
-print(next(c["name"] for c in json.load(sys.stdin)["notificationChannels"]
-           if c.get("enabled", True)))')
+live = [c["name"] for c in json.load(sys.stdin).get("notificationChannels", [])
+        if c.get("enabled", True)]
+if not live:
+    print("no enabled notification channel", file=sys.stderr); sys.exit(1)
+print(live[0])') || exit 1
 
 if missing uptime-check; then
   # The STABLE service URL, never a revision URL: a check pinned to a
@@ -252,8 +291,12 @@ fi
 if missing queue-liveness; then
   CHECK_ID=$(fetch uptimeCheckConfigs | python3 -c '
 import json, sys
-print(next(u["name"].rsplit("/", 1)[-1] for u in json.load(sys.stdin)["uptimeCheckConfigs"]
-           if (u.get("httpCheck") or {}).get("path") == "/healthz/queues"))')
+found = [u["name"].rsplit("/", 1)[-1]
+         for u in json.load(sys.stdin).get("uptimeCheckConfigs", [])
+         if (u.get("httpCheck") or {}).get("path") == "/healthz/queues"]
+if not found:
+    print("no uptime check on /healthz/queues to watch", file=sys.stderr); sys.exit(1)
+print(found[0])') || exit 1
   echo "creating policy: queue liveness, watching $CHECK_ID"
   # COMPARISON_GT against thresholdValue 1 over REDUCE_COUNT_FALSE is GCP's
   # canonical uptime shape — "more than one checker reports failure" — and

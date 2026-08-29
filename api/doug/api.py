@@ -48,7 +48,6 @@ from .models import (
     HealthResponse,
     JobItem,
     JobListResponse,
-    OutcomeLaneHealth,
     PRMetadata,
     QueueItem,
     QueueLaneLiveness,
@@ -57,7 +56,6 @@ from .models import (
     QueueSummary,
     ReadScoreRequest,
     Reason,
-    ReviewLaneHealth,
     RunCoverage,
     RunDetailJob,
     RunDetailResponse,
@@ -1554,17 +1552,15 @@ def health(
     )
     if data is None:
         raise HTTPException(status_code=503, detail="no ledger configured")
-    return HealthResponse(
-        review=ReviewLaneHealth(
-            **data["review"],
-            liveness_bar_seconds=REVIEW_PENDING_LIVENESS_SECONDS,
-        ),
-        outcome=OutcomeLaneHealth(
-            **data["outcome"],
-            liveness_bar_seconds=OUTCOME_OVERDUE_LIVENESS_SECONDS,
-        ),
-        as_of=data["as_of"],
-    )
+    # Attached to the lane dicts rather than by naming every field of
+    # HealthResponse here: `job_health` builds a fresh dict per call, and
+    # the single splat is what lets a field added to both it and the
+    # response flow through without a third edit in this route. Spelling
+    # the envelope out was the alternative, and it turns "someone added a
+    # field" into a 500 at request time.
+    data["review"]["liveness_bar_seconds"] = REVIEW_PENDING_LIVENESS_SECONDS
+    data["outcome"]["liveness_bar_seconds"] = OUTCOME_OVERDUE_LIVENESS_SECONDS
+    return HealthResponse(**data)
 
 
 # The stored statuses each lane's queue actually writes. 'stalled',
