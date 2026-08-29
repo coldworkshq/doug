@@ -83,6 +83,11 @@ fetch() {  # fetch <path-or-url> <array-key>: every page of <array-key>, merged
   case "$1" in https://*) base="$1" ;; *) base="$API/$1" ;; esac
   case "$base" in *\?*) sep="&" ;; *) sep="?" ;; esac
   pages=$(mktemp) || return 3
+  # Registered with the global EXIT trap (Doug: reader:resource-leak): the
+  # explicit rm on every path below covers normal flow, but an interrupt
+  # mid-loop would otherwise strand the file. One variable is enough —
+  # fetch is never concurrent with itself.
+  FETCH_PAGES="$pages"
   while :; do
     # Bounded, and a repeated token is an error: a server echoing the same
     # nextPageToken forever would otherwise loop this into an unbounded
@@ -116,11 +121,15 @@ print(json.dumps(body))
 ' "$1" >> "$pages" || { rm -f "$pages"; return 3; }
     # No stderr suppression: the page already passed JSON validation above,
     # so a failure HERE is a real defect that must not be read as "no more
-    # pages" — that would silently truncate the listing.
+    # pages" — that would silently truncate the listing. The token is
+    # URL-ENCODED at extraction (Doug: reader:url-encoding-missing): page
+    # tokens are base64-ish and a literal "+" in the query decodes to a
+    # space server-side, truncating the listing or 400ing — the same
+    # wrong-but-green outcome the pagination fix exists to close.
     prev_token="$page_token"
     page_token=$(printf '%s' "$body" | python3 -c '
-import json, sys
-print(json.load(sys.stdin).get("nextPageToken", ""))') || {
+import json, sys, urllib.parse
+print(urllib.parse.quote(json.load(sys.stdin).get("nextPageToken", ""), safe=""))') || {
       rm -f "$pages"; echo "ERROR: could not read nextPageToken from $base" >&2; return 3; }
     [ -z "$page_token" ] && break
     if [ "$page_token" = "$prev_token" ]; then
@@ -160,7 +169,8 @@ print("  created " + body["name"])
 '
 }
 
-MISSING_FILE=$(mktemp); trap 'rm -f "$MISSING_FILE"' EXIT
+MISSING_FILE=$(mktemp); FETCH_PAGES=""
+trap 'rm -f "$MISSING_FILE" ${FETCH_PAGES:+"$FETCH_PAGES"}' EXIT
 
 audit() {  # prints the human report; writes one missing key per line to $MISSING_FILE
   local policies channels uptimes logmetrics
@@ -302,9 +312,15 @@ for key, why, needs in REQUIRED:
     # `all()` over an empty needs list is True, which would green this
     # requirement on ANY policy in the project. The resolvers above either
     # filled `needs` or recorded the key as missing (skipped just above), so
-    # an empty list reaching this line is a bug in THIS file — say so loudly
-    # rather than report a wrong PASS (Doug: reader:audit-false-positive).
-    assert needs, f"requirement {key} reached the matcher with no filters"
+    # an empty list reaching this line is a bug in THIS file — and it exits
+    # 3, the script's "could not ask", never 1: an internal audit bug must
+    # not be readable as a genuine missing-policy result, and exit 3 is the
+    # code apply refuses to act on (Doug: reader:audit-false-positive,
+    # reader:error-signalling-inconsistency).
+    if not needs:
+        print(f"BUG: requirement {key} reached the matcher with no filters "
+              "— the audit cannot answer honestly", file=sys.stderr)
+        sys.exit(3)
     match = next((p for p in policies
                   if any(all(n in (c.get("conditionThreshold") or {}).get("filter", "")
                              for n in needs)
