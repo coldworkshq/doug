@@ -54,6 +54,15 @@ TOKEN=$(gcloud auth print-access-token 2>/dev/null) || {
   echo "gcloud auth print-access-token failed — run 'gcloud auth login'" >&2; exit 2; }
 
 API="https://monitoring.googleapis.com/v3/projects/$PROJECT"
+# Log-based metrics live in the Logging API, not Monitoring. The reader-
+# fallback alert needs one: the reader's soft fallback prints a single stderr
+# line (reader.FALLBACK_LOG_TOKEN) and nothing else anywhere is loud about it.
+LOGAPI="https://logging.googleapis.com/v2/projects/$PROJECT"
+
+# The exact bytes reader.py prints when a read degrades to the deterministic
+# score. Pinned against the Python constant by test_monitoring_alerts.py —
+# edit either side alone and the suite names the drift.
+FALLBACK_TOKEN="reader fell back to deterministic"
 
 # `set -e` is deliberately absent — the audit's non-zero exit is the whole
 # point, and -e would abort the script before anything could act on it. So
@@ -62,9 +71,12 @@ API="https://monitoring.googleapis.com/v3/projects/$PROJECT"
 # missing: that is a wrong answer wearing the right answer's clothes, which
 # is the failure mode this entire file exists to prevent.
 fetch() {
-  local body
-  body=$(curl -sS -H "Authorization: Bearer $TOKEN" "$API/$1") || {
-    echo "ERROR: could not reach $API/$1" >&2; return 3; }
+  # Paths are relative to the Monitoring API unless they carry their own
+  # scheme — the Logging API reads below pass a full $LOGAPI URL.
+  local body url
+  case "$1" in https://*) url="$1" ;; *) url="$API/$1" ;; esac
+  body=$(curl -sS -H "Authorization: Bearer $TOKEN" "$url") || {
+    echo "ERROR: could not reach $url" >&2; return 3; }
   printf '%s' "$body" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -81,9 +93,11 @@ if isinstance(body, dict) and "error" in body:
 print(raw)
 ' "$1"
 }
-post() {  # post <collection> <json>; prints the created resource name
+post() {  # post <collection-or-url> <json>; prints the created resource name
+  local url
+  case "$1" in https://*) url="$1" ;; *) url="$API/$1" ;; esac
   curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -d "$2" "$API/$1" | python3 -c '
+    -d "$2" "$url" | python3 -c '
 import json, sys
 body = json.load(sys.stdin)
 if "error" in body:
@@ -96,21 +110,25 @@ print("  created " + body["name"])
 MISSING_FILE=$(mktemp); trap 'rm -f "$MISSING_FILE"' EXIT
 
 audit() {  # prints the human report; writes one missing key per line to $MISSING_FILE
-  local policies channels uptimes
+  local policies channels uptimes logmetrics
   # Each read on its own line, and each exit status checked: a `$(fetch ...)`
   # written inline below would have its failure swallowed by the surrounding
   # command's own status.
   policies=$(fetch alertPolicies) || return 3
   channels=$(fetch notificationChannels) || return 3
   uptimes=$(fetch uptimeCheckConfigs) || return 3
-  MISSING_FILE="$MISSING_FILE" python3 - "$policies" "$channels" "$uptimes" <<'PY'
+  logmetrics=$(fetch "$LOGAPI/metrics") || return 3
+  MISSING_FILE="$MISSING_FILE" FALLBACK_TOKEN="$FALLBACK_TOKEN" \
+    python3 - "$policies" "$channels" "$uptimes" "$logmetrics" <<'PY'
 import json, os, sys
 
 policies = json.loads(sys.argv[1]).get("alertPolicies", [])
 channels = json.loads(sys.argv[2]).get("notificationChannels", [])
 uptimes = json.loads(sys.argv[3]).get("uptimeCheckConfigs", [])
+logmetrics = json.loads(sys.argv[4]).get("metrics", [])
 
 LIVENESS_PATH = "/healthz/queues"
+FALLBACK_TOKEN = os.environ["FALLBACK_TOKEN"]
 
 # WHAT MUST EXIST. Each policy is identified by what it WATCHES, never by
 # its display name: a renamed policy still pages, and a policy renamed to
@@ -138,6 +156,13 @@ REQUIRED = [
      "/healthz/queues can — it answers 503 on work sitting past the point "
      "where its drain provably did not run.",
      ["monitoring.googleapis.com/uptime_check/check_passed"]),
+    ("reader-fallback",
+     "The reader dies QUIETLY by contract: a zero Anthropic balance, a "
+     "revoked key, a wrong Vertex region or a rejected request shape all "
+     "degrade every review to the deterministic score while the check run "
+     "keeps rendering (#274). The only loud trace is one stderr line per "
+     "fallen-back read; this policy watches the log metric counting them.",
+     []),  # completed below once the log metric resolves, like queue-liveness
 ]
 
 report, missing = [], []
@@ -174,6 +199,28 @@ else:
     host = (check.get("monitoredResource") or {}).get("labels", {}).get("host")
     record(True, "uptime-check", f"an uptime check polls {LIVENESS_PATH}",
            f"{check_id} -> {host}")
+
+# 2b. The reader-fallback log metric, resolved before the policy that has to
+#     name it — same shape as the uptime check above, and matched by what it
+#     COUNTS (the doug-api fallback line), never by its display name. Without
+#     it the policy would be matched on nothing, and `all(needs)` over an
+#     empty list is True for every policy in the project — the lema-prod0
+#     wrong-alarm defect again, one requirement over.
+metric = next((m for m in logmetrics
+               if FALLBACK_TOKEN in m.get("filter", "")
+               and "doug-api" in m.get("filter", "")), None)
+if metric is None:
+    record(False, "reader-fallback-metric",
+           "a log metric counts reader fallback lines from doug-api",
+           "without it the reader-fallback policy has nothing to watch")
+    record(False, "reader-fallback", "policy reader-fallback",
+           "no log metric counts the fallback line, so no policy can watch it")
+else:
+    metric_type = "logging.googleapis.com/user/" + metric["name"]
+    REQUIRED[3][2].append(metric_type)
+    record(True, "reader-fallback-metric",
+           "a log metric counts reader fallback lines from doug-api",
+           metric["name"])
 
 # 3. Each policy: present, enabled, and wired to a live channel. All three
 #    are load-bearing — "exists" is the weakest of them and the easiest to
@@ -323,6 +370,53 @@ print(json.dumps({
                       "groupByFields": ["resource.label.project_id", "resource.label.host"]}],
 }))' "$CHECK_ID")" \
     'doug#121, doug#260. The uptime check polls /healthz/queues, which answers 503 when either lane holds work past the point where its drain provably did not run (review: fresh-pending past the bar; outcome: overdue past the daily cadence plus slack), and when the ledger cannot answer at all. A failing check is therefore the queue contradiction OR total API death — the same alarm on purpose. The bars are served by the route itself, so they are never duplicated here.' || exit 1
+fi
+
+if missing reader-fallback-metric; then
+  echo "creating log-based metric doug-reader-fallback"
+  # The filter carries FALLBACK_TOKEN verbatim — the same bytes reader.py
+  # prints and the audit above matches on. textPayload uses the substring
+  # operator (:) deliberately: the line's tail is the SDK's error string,
+  # which is diagnostic and unstable.
+  post "$LOGAPI/metrics" "$(python3 -c '
+import json, sys
+print(json.dumps({
+    "name": "doug-reader-fallback",
+    "description": ("One count per LLM read that degraded to the deterministic "
+                    "score. The fallback is quiet by contract; this metric is "
+                    "the loud half. See api/doug/reader.py FALLBACK_LOG_TOKEN."),
+    "filter": ("resource.type=\"cloud_run_revision\" AND "
+               "resource.labels.service_name=\"doug-api\" AND "
+               "textPayload:\"%s\"" % sys.argv[1]),
+}))' "$FALLBACK_TOKEN")" || exit 1
+fi
+
+if missing reader-fallback; then
+  # Resolved from the API rather than assumed to be the name just created:
+  # a metric someone provisioned by hand under another name is still the
+  # thing to watch, exactly as the queue-liveness policy resolves check_id.
+  METRIC_NAME=$(fetch "$LOGAPI/metrics" | FALLBACK_TOKEN="$FALLBACK_TOKEN" python3 -c '
+import json, os, sys
+found = [m["name"] for m in json.load(sys.stdin).get("metrics", [])
+         if os.environ["FALLBACK_TOKEN"] in m.get("filter", "")
+         and "doug-api" in m.get("filter", "")]
+if not found:
+    print("no log metric counts the reader fallback line", file=sys.stderr); sys.exit(1)
+print(found[0])') || exit 1
+  echo "creating policy: reader fell back, watching $METRIC_NAME"
+  policy "Reader fell back to deterministic scoring (doug-api)" \
+    "log metric $METRIC_NAME > 0" \
+    "$(python3 -c '
+import json, sys
+print(json.dumps({
+    "filter": ("metric.type = \"logging.googleapis.com/user/%s\" AND "
+               "resource.type = \"cloud_run_revision\"" % sys.argv[1]),
+    "comparison": "COMPARISON_GT", "thresholdValue": 0, "duration": "0s",
+    "trigger": {"count": 1},
+    "aggregations": [{"alignmentPeriod": "300s", "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM"}],
+}))' "$METRIC_NAME")" \
+    'doug#274: at least one LLM read degraded to the deterministic score in a 5-minute window. The fallback is contracted behaviour and therefore silent everywhere a human looks — the check run renders, CI stays green, and only a reasons row says the deep read is gone. A zero Anthropic balance, a revoked key, a wrong Vertex region and a rejected request shape all produce exactly this signal, so treat one firing as the reader being DOWN until the log line names the cause: the tail of each doug-reader-fallback log entry carries the SDK error verbatim.' || exit 1
 fi
 
 echo

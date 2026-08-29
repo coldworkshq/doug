@@ -405,6 +405,20 @@ class ReaderError(RuntimeError):
     """A read failed (refusal, truncation, transport) — fall back and say so."""
 
 
+# The one string the reader-fallback alert matches on. The soft fallback is
+# contracted behaviour and therefore QUIET everywhere a human looks: the check
+# run still renders, CI stays green, and the only trace is a reasons row. A
+# zero balance, a revoked key, a wrong Vertex region and a rejected request
+# shape all wear that same silence, which is how a dead reader goes unnoticed
+# until someone reads verdicts by hand (#274). Every ReaderError catch site
+# that degrades a review to the deterministic score prints one stderr line
+# carrying this token, and deploy/monitoring.sh builds a log-based metric and
+# alert policy over exactly these bytes. test_monitoring_alerts.py pins all
+# the sites to this constant: change it here and the suite names every file
+# that still carries the old bytes.
+FALLBACK_LOG_TOKEN = "reader fell back to deterministic"
+
+
 class SpendCapExceeded(ReaderError):
     """This scope has spent its monthly deep-read budget; nothing was sent.
 
