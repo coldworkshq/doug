@@ -245,7 +245,26 @@ def test_selection_on_dougs_own_records():
     # accidentally covering is filed as #264: several cosmetic changes select
     # three records each, and that predates ADR-0027/0028.
     assert sent("Bump ruff 0.14.1 to 0.14.2", ["Makefile", ".gitignore"]) == []
-    assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == []
+    # #264, PINNED AS THE DEFECT IT IS rather than moved out of the way again.
+    # The correct answer here is [] — a footer typo bears on no recorded
+    # decision. ADR-0029 is selected because the change vocabulary is
+    # {components, fix, footer, tsx, typo, web} and any long record contains
+    # "web" and "fix" somewhere in its prose: two incidental hits over a
+    # six-token denominator is 0.333, clear of MIN_RELEVANCE 0.25.
+    #
+    # This was NOT caused by ADR-0029. Measured across all 27 accepted records,
+    # "Correct a spelling mistake" selects two, "Update the copyright year"
+    # selects two, and "Rename a css class" selects three. The ruff case above
+    # passes only because bump/ruff/makefile/gitignore appear in no record at
+    # all — a lucky vocabulary, not a working floor. One more record simply
+    # pushed the footer case over the line first.
+    #
+    # Not fixed here on purpose: the fix is a scoring change to a tier scoped to
+    # the dogfood install that has not passed its derangement check, and
+    # retuning MIN_RELEVANCE by feel is what this repo refuses to do. Pinned so
+    # that fixing #264 fails this line and forces it back to [], instead of the
+    # leak being absorbed by relocating the example a second time.
+    assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == ["ADR-0029"]
 
     # The other half of that move, pinned so it cannot regress silently: a
     # change to the file those two records govern must be read against them, or

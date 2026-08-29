@@ -107,11 +107,26 @@ MAX_READ_RETRIES = 1
 # a rollback that is an env change on the running service: a forced transition
 # whose rollback needs a deploy is a forced transition with an outage attached.
 #
-# The default is the destination, so `DOUG_READER_TRANSPORT=anthropic` is the
-# rollback and it takes effect on the next client construction.
+# The DEPLOY names the destination (`deploy/gcp.sh` pins it), and the default
+# here is what every UNCONFIGURED environment gets. Those are different jobs and
+# an earlier version of this conflated them, defaulting to Vertex so that the
+# production value was also the fallback everywhere else.
+#
+# Doug caught it (`reader:unsafe-default-flip`) and was right. Vertex needs a
+# region and application default credentials; a laptop, a script, a CI job or a
+# future worker has neither, so the default would raise at client construction
+# and every read would fail soft into the deterministic score. Silently — that
+# fallback is contracted behaviour for a stalled upstream, so nothing would say
+# the reader had stopped. Flipping the default confines this change to the one
+# path that is actually configured for it, and leaves every other context
+# behaving exactly as it did before.
+#
+# The rollback property ADR-0028 item 6 asked for is unaffected: production is
+# pinned by env, so reverting is still `DOUG_READER_TRANSPORT=anthropic` (or
+# clearing it) on the running service, with no release.
 TRANSPORT_VERTEX = "vertex"
 TRANSPORT_ANTHROPIC = "anthropic"
-DEFAULT_TRANSPORT = TRANSPORT_VERTEX
+DEFAULT_TRANSPORT = TRANSPORT_ANTHROPIC
 # What `provider` says on each transport. ADR-0028 item 1 ruled that the field
 # names the API surface actually called and not the vendor of the weights, so
 # this string moves instrument_id and partitions the labelled corpus at the

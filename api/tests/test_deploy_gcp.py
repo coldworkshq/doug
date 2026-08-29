@@ -212,18 +212,25 @@ def test_api_deploy_carries_the_verify_installations_allowlist():
 # --- ADR-0029: the reader's transport is Vertex, and its rollback is an env ---
 
 
-def test_api_deploy_pins_the_vertex_transport_and_carries_a_region():
+def test_api_deploy_pins_the_chosen_transport_and_carries_a_region():
     """The transport reaches the service through this line and nowhere else.
 
-    Dropped, the service falls back to reader.DEFAULT_TRANSPORT, which is
-    vertex — so the pin looks redundant until someone flips the default back
-    and every deploy silently follows. The region has no default anywhere by
-    design (see the guard test below), so it must be here or the deploy is
-    refused.
+    This is the pin that makes production Vertex. reader.DEFAULT_TRANSPORT is
+    `anthropic` precisely so that unconfigured environments do not inherit a
+    setting they cannot satisfy, which means dropping this line does not fail —
+    it quietly puts production back on the transport this whole change exists
+    to leave, still billing the account that is running out.
     """
     body = _function_body("deploy")
-    assert "DOUG_READER_TRANSPORT=vertex" in body
+    assert "DOUG_READER_TRANSPORT=$READER_TRANSPORT" in body
     assert "CLOUD_ML_REGION=$VERTEX_REGION" in body
+
+
+def test_the_deployed_transport_defaults_to_vertex():
+    """`READER_TRANSPORT` is a variable so an urgent deploy has a way past the
+    Vertex preflight, not so the destination becomes optional. Unset, a deploy
+    still ships Vertex."""
+    assert 'READER_TRANSPORT=${READER_TRANSPORT:-vertex}' in GCP_PATH.read_text()
 
 
 def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
@@ -810,7 +817,13 @@ exit 0
     curl.write_text(
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$CURL_LOG"
-printf '%s' '200'
+case "$*" in
+  # ADR-0029's probe posts an empty body, so 400 is what a reachable model
+  # actually answers. The fake says so rather than 200, which no live route
+  # returns for that request and which would make the allowlist untested.
+  *rawPredict*) printf '%s' '400' ;;
+  *) printf '%s' '200' ;;
+esac
 """
     )
     curl.chmod(0o755)
@@ -1503,3 +1516,44 @@ def test_a_deploy_without_a_usable_credential_is_refused(tmp_path):
     assert result.returncode != 0
     assert "gcloud auth login" in result.stderr
     assert not [line for line in lines if line.startswith("run deploy")]
+
+
+def test_an_unexpected_probe_answer_is_refused_not_assumed_benign(tmp_path):
+    """The preflight allowlists, and the reason is a fixed bug.
+
+    It used to refuse a named list of codes and let everything else through, so
+    a 5xx — or an empty string from a missing curl or a malformed URL — passed
+    the gate the function exists to provide. Doug flagged it
+    (`reader:incomplete-error-handling`). A check that fails open on the
+    outcomes nobody enumerated is not a check.
+    """
+    for code in ("500", "503", "302", ""):
+        case = tmp_path / f"c{code or 'empty'}"
+        case.mkdir()
+        result, lines, _ = _deploy_with_vertex_code(case, code)
+        assert result.returncode != 0, f"{code!r} passed the preflight"
+        assert not [line for line in lines if line.startswith("run deploy")], code
+
+
+def test_an_urgent_deploy_can_ship_without_vertex_at_all(tmp_path):
+    """R1: production Doug wins every conflict, including with this migration.
+
+    Vertex quota is zero today, so the preflight refuses — and with the gate
+    wired unconditionally, an unrelated hotfix could not ship until a
+    founder-level quota grant landed. Doug raised it as
+    `reader:deploy-blocking-precondition` and the objection was fair: a gate
+    with no way out stops being a safety check and starts being an outage.
+
+    `READER_TRANSPORT=anthropic` ships the current transport, needs no region,
+    and never touches Vertex. The probe answers 404 here to prove the preflight
+    is genuinely skipped rather than merely passing.
+    """
+    result, lines, curl_log = _deploy_with_vertex_code(
+        tmp_path, "404", {"READER_TRANSPORT": "anthropic", "VERTEX_REGION": ""}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [line for line in lines if line.startswith("run deploy")], "nothing deployed"
+    assert "rawPredict" not in curl_log, "the Vertex preflight ran on a non-Vertex deploy"
+    deploy_line = next(line for line in lines if line.startswith("run deploy doug-api"))
+    assert "DOUG_READER_TRANSPORT=anthropic" in deploy_line

@@ -49,6 +49,18 @@ REGION=${REGION:-us-central1}
 # default would degrade the product silently. Checked at `deploy` only — the
 # other subcommands do not construct a reader.
 VERTEX_REGION=${VERTEX_REGION:-}
+# ADR-0029. Which transport THIS deploy pins on the service. Vertex is the
+# destination, and it is a variable rather than a literal for one reason: the
+# preflight below hard-fails while Vertex quota is zero, which would make an
+# unrelated urgent deploy hostage to a founder-level quota grant. R1 says
+# production Doug wins every conflict, and a hotfix that cannot ship because a
+# transport migration is half-finished is that conflict.
+#
+# `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy` ships the current
+# transport and skips the Vertex preflight entirely. Doug raised this
+# (`reader:deploy-blocking-precondition`) and it was a fair objection to a gate
+# that had no way out.
+READER_TRANSPORT=${READER_TRANSPORT:-vertex}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
@@ -687,7 +699,14 @@ vertex_preflight() {
     code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST \
       -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{}' \
       "https://${VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${VERTEX_REGION}/publishers/anthropic/models/${model}:rawPredict")
+    # An ALLOWLIST, not a denylist. Doug flagged the earlier denylist
+    # (`reader:incomplete-error-handling`) and was right: a 5xx, or an empty
+    # string from a missing curl or a malformed URL, fell through as success
+    # and passed the gate this function exists to provide. Only two answers
+    # mean the route resolved — 400, the empty body rejected on validation
+    # having generated nothing, and 200 if the API ever accepts it.
     case "$code" in
+      200|400) : ;;
       404)
         echo "ERROR: $model is not served in $VERTEX_REGION (404)." >&2
         echo "Pick a region that serves it, or enable it in Vertex Model Garden." >&2
@@ -703,8 +722,13 @@ vertex_preflight() {
         echo "online_prediction_input_tokens_per_minute_per_base_model for" >&2
         echo "anthropic-$model in $VERTEX_REGION, then re-run. See #274." >&2
         return 1 ;;
-      000)
-        echo "ERROR: probe for $model in $VERTEX_REGION did not complete (network or timeout)." >&2
+      000|"")
+        echo "ERROR: probe for $model in $VERTEX_REGION did not complete (network, timeout, or no curl)." >&2
+        return 1 ;;
+      *)
+        echo "ERROR: probe for $model in $VERTEX_REGION answered $code, which is not a" >&2
+        echo "resolved route. Only 200 and 400 mean the model is reachable; anything" >&2
+        echo "else is refused rather than assumed benign. See ADR-0029." >&2
         return 1 ;;
     esac
   done
@@ -720,14 +744,16 @@ deploy() {
   # surface as a quality regression nobody can attribute, days later. The
   # rollback for a region that turns out wrong is DOUG_READER_TRANSPORT=anthropic
   # on the running service, which needs no deploy.
-  if [ -z "$VERTEX_REGION" ]; then
+  if [ "$READER_TRANSPORT" = "vertex" ] && [ -z "$VERTEX_REGION" ]; then
     echo "ERROR: set VERTEX_REGION to the Vertex region that serves $(grep -m1 '^MODEL' doug/reader.py | cut -d'"' -f2)." >&2
     echo "It is not defaulted: a wrong region fails every read soft into the" >&2
     echo "deterministic fallback instead of failing the deploy. See ADR-0029." >&2
     exit 1
   fi
-  # A set region is not a working one. See vertex_preflight's comment.
-  vertex_preflight || exit 1
+  # Only when this deploy actually pins Vertex. See READER_TRANSPORT above.
+  if [ "$READER_TRANSPORT" = "vertex" ]; then
+    vertex_preflight || exit 1
+  fi
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   if service_exists "$SERVICE"; then
     traffic_flags="--no-traffic --tag candidate"
@@ -824,7 +850,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=vertex,CLOUD_ML_REGION=$VERTEX_REGION${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

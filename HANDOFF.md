@@ -1,6 +1,6 @@
 # HANDOFF — doug
 
-State:    review — PR #273, branch `adr-0029-vertex-transport`, api 1768 pass,
+State:    review — PR #273, branch `adr-0029-vertex-transport`, api 1773 pass,
           ruff clean. Transport is Vertex, DEFAULT_TRANSPORT="vertex". NOT
           DEPLOYED, and the deploy now REFUSES until quota exists.
 Next:     Andrew requests Vertex quota (below), then VERTEX_REGION=us-central1
@@ -102,6 +102,47 @@ move, so nothing is left billing Anthropic.
   removed, IAM role changed -> deploy tests fail.
 - AnthropicVertex verified in the installed SDK 0.120.2: region REQUIRED,
   project_id from ADC, max_retries defaults to 2 so it is still passed.
+DOUG'S REVIEW OF #273 — risk 0.62, 1 high / 3 medium / 2 low + 5 deviations.
+All nine dispositioned in docs/findings-log.jsonl. Four changed the code:
+- unsafe-default-flip (medium, REAL): DEFAULT_TRANSPORT was vertex, conflating
+  "where the deploy goes" with "what unconfigured environments get". A laptop,
+  script or CI job has no region and no ADC, so the client raises and every
+  read falls soft — silently. NOW DEFAULT_TRANSPORT=anthropic and the DEPLOY
+  pins vertex. ADR-0028 item 6's rollback property is unaffected.
+- deploy-blocking-precondition (medium, REAL): quota is zero, so an
+  unconditional preflight made every unrelated hotfix hostage to a founder
+  grant. R1 conflict. NOW `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy`
+  ships the current transport and never touches Vertex.
+- incomplete-error-handling (low, REAL): the preflight was a denylist, so 5xx
+  and empty output passed the gate it exists to provide. NOW an allowlist —
+  only 200 and 400.
+- missing-from-pr (deviation, REAL, THE BEST FINDING): ADR-0012's banner still
+  said "No traffic has moved" and named the deleted guard test as the
+  enforcement. Both false after this diff. ADR-0012 now carries
+  amended_by: ADR-0029 and a corrected banner; ADR-0027 got the same for the
+  mechanical tier's transport.
+- metric-label-change (medium, DISPROVED): checked every `provider` across
+  api/doug, web/ and console/ — only the manifest field and the reader setting
+  it. Every other hit is the IDENTITY provider. Recorded in ADR-0029.
+- unverified-external-api-contract (HIGH, REAL, NOT FIXED): #275, with the part
+  Doug missed — vertex_preflight CANNOT catch it. The probe posts an empty body
+  and pins 400 as healthy, and an unsupported output_config is ALSO a 400. The
+  gate is structurally blind to this exact failure. Fix is a second well-formed
+  probe where 200 is healthy; that is a paid call per deploy, so FOUNDER.
+
+SIDE FINDING — #264 is worse than its title. Adding ADR-0029 failed
+test_selection_on_dougs_own_records, and measuring showed why: across all 27
+accepted records "Correct a spelling mistake" selects 2, "Update the copyright
+year" selects 2, "Rename a css class" selects 3. Mechanism: hits_body counts a
+token appearing ANYWHERE in a record body, path segments (web/app/api/
+components) are in the change vocabulary, and 2 hits over a 6-token denominator
+is 0.333 against MIN_RELEVANCE 0.25. The one surviving negative case passes
+only because bump/ruff/makefile/gitignore appear in no record — lucky
+vocabulary, not a working floor. PINNED as the defect rather than relocated a
+second time, so fixing #264 fails that line and forces it back to []. Evidence
+posted to #264. NOT fixed here: a scoring change to an unvalidated tier does
+not belong in a transport migration.
+
 - UNVERIFIED, and it needs a live call: that Vertex accepts the `output_config`
   block (effort + json_schema) these requests send. ADR-0028 asserts effort is
   GA there; the structured-output shape was not confirmed against the wire.

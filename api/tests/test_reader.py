@@ -1093,24 +1093,33 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
 # of them asserts that any bar was met, because none was.
 
 
-def test_the_default_transport_is_vertex_and_the_rollback_is_a_value(monkeypatch):
-    """ADR-0028 item 6: reverting must be a value change, not a release.
+def test_an_unconfigured_environment_does_not_silently_lose_its_reader(monkeypatch):
+    """The deploy names the destination; the default is what everything ELSE
+    gets, and those are different jobs.
 
-    A forced transition whose rollback needs a deploy is a forced transition
-    with an outage attached. The default is asserted against the literal so
-    that DEFAULT_TRANSPORT = TRANSPORT_ANTHROPIC cannot make this
-    tautologically true, and both directions are exercised: the point of the
-    constant is that the service can be moved back while it is running.
+    An earlier version of this change defaulted to Vertex, so production's
+    value was also the fallback on every laptop, script and CI job. Doug
+    flagged it (`reader:unsafe-default-flip`): none of those has a Vertex
+    region or application default credentials, so the client raises at
+    construction and the read falls soft into the deterministic score —
+    silently, because that fallback is the contracted behaviour for a stalled
+    upstream and says nothing about a misconfiguration.
+
+    Asserted against the literal so DEFAULT_TRANSPORT = TRANSPORT_VERTEX cannot
+    make this tautologically true. That production actually runs Vertex is
+    pinned separately, on the deploy, by
+    test_api_deploy_pins_the_chosen_transport_and_carries_a_region — which is
+    where it belongs, because that is the environment configured for it.
     """
-    assert reader.DEFAULT_TRANSPORT == "vertex"
+    assert reader.DEFAULT_TRANSPORT == "anthropic"
 
     monkeypatch.delenv("DOUG_READER_TRANSPORT", raising=False)
-    assert reader.transport() == reader.TRANSPORT_VERTEX
+    assert reader.transport() == reader.TRANSPORT_ANTHROPIC
 
     for value, expected in (
         ("vertex", reader.TRANSPORT_VERTEX),
         ("anthropic", reader.TRANSPORT_ANTHROPIC),
-        ("  Anthropic  ", reader.TRANSPORT_ANTHROPIC),
+        ("  Vertex  ", reader.TRANSPORT_VERTEX),
     ):
         monkeypatch.setenv("DOUG_READER_TRANSPORT", value)
         assert reader.transport() == expected, value
@@ -1204,7 +1213,12 @@ def test_the_transport_carries_MODEL_verbatim_with_no_mapping_layer():
         line.split("#")[0] for line in body.splitlines() if not line.strip().startswith("#")
     )
     assert "AnthropicVertex(" in code, "the Vertex client is no longer built here"
-    for forbidden in ("MODEL", "claude-", "@"):
+    # "MODEL" and "claude-" are what a mapping layer must name. A bare "@" was
+    # here too and is gone: Doug flagged the over-broad form
+    # (`reader:brittle-source-inspection-test`) and a decorator on this function
+    # would have tripped it for reasons unrelated to model mapping. A dated
+    # snapshot id is caught by "claude-" anyway, since it has to name the model.
+    for forbidden in ("MODEL", "claude-"):
         assert forbidden not in code, (
             f"_build_client names {forbidden!r}, which is a model-mapping layer. "
             "ADR-0028 refuses one: MODEL reaches the wire verbatim."

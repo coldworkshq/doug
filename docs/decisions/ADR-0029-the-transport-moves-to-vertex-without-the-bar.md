@@ -2,7 +2,7 @@
 title: The reader's transport moves to Vertex without ADR-0028's bar, by direction, because the balance funds one of the two
 status: accepted
 date: 2026-08-28
-amends: ADR-0028
+amends: ADR-0012, ADR-0027, ADR-0028
 ---
 
 > **This record authorizes an unmeasured instrument change and says so in its
@@ -101,11 +101,24 @@ rather than hardcoded. This moves `instrument_id` and partitions the labelled
 corpus at the cutover, exactly as ADR-0028 item 1 ruled. That partition is the
 one part of ADR-0028 this record does not weaken.
 
-**3. The transport is a value, and the rollback needs no deploy.**
-`DOUG_READER_TRANSPORT` is read at client construction and defaults to `vertex`.
-`DOUG_READER_TRANSPORT=anthropic` on the running service reverts it. An
-unreadable value falls back to the default rather than constructing something
-arbitrary, because a typo during a rollback must not become an outage.
+**3. The transport is a value, the deploy names the destination, and the
+default is what unconfigured environments get.** `DOUG_READER_TRANSPORT` is read
+at client construction. `deploy/gcp.sh` pins it to `vertex` on the service;
+`DEFAULT_TRANSPORT` is `anthropic`.
+
+Those are two different jobs and the first draft conflated them, defaulting to
+Vertex so that production's value was also the fallback everywhere else. Doug
+flagged it (`reader:unsafe-default-flip`) and was right: a laptop, a script or a
+CI job has no Vertex region and no application default credentials, so the
+client raises at construction and the read falls soft into the deterministic
+score — silently, because that fallback is contracted behaviour for a stalled
+upstream and says nothing about a misconfiguration. Flipping the default
+confines this change to the one environment configured for it.
+
+The rollback property is unaffected. Production is pinned by env, so reverting
+is still a value change on the running service and not a release. An unreadable
+value falls back to the default rather than constructing something arbitrary,
+because a typo during a rollback must not become an outage.
 
 **4. `ANTHROPIC_API_KEY` stays mounted.** It is the rollback. Removing it as
 cleanup would convert a one-command revert into a redeploy, which is the state
@@ -139,6 +152,22 @@ generates anything, so it costs nothing, and it cannot be rate-limited by its
 own token count — which is what lets a 429 be read as "the allocation is zero"
 rather than "the endpoint is busy". A 400 is the healthy answer.
 
+The preflight **allowlists**: only 200 and 400 pass. The first draft refused a
+named list and let everything else through, so a 5xx — or an empty string from a
+missing `curl` — passed the gate the function exists to provide. Doug flagged it
+(`reader:incomplete-error-handling`). A check that fails open on the outcomes
+nobody enumerated is not a check.
+
+**A Vertex deploy is gated; an urgent deploy is not.** `READER_TRANSPORT`
+selects what a deploy pins, and the preflight runs only when that is `vertex`.
+Quota is zero today, so an unconditional gate would have made every unrelated
+hotfix hostage to a founder-level quota grant — R1 says production Doug wins
+every conflict, and a hotfix blocked by a half-finished migration is that
+conflict. `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy` ships the current
+transport and never touches Vertex. Doug raised this as
+`reader:deploy-blocking-precondition` and it was a fair objection to a gate with
+no way out.
+
 **What the probe does not establish.** It runs as the operator's credentials,
 not as `doug-api-sa`, so it proves the model is reachable in the region and says
 nothing about whether the runtime identity may call it. That half is the
@@ -163,6 +192,16 @@ to remove it: run the study, record the result against the four numbers, and
 cite it. That is not what happened. The comment block that replaced it says so
 in the test file, where anyone changing this code will read it, rather than only
 here.
+
+**8. ADR-0012 and ADR-0027 are marked on their own sides.** ADR-0012's banner
+asserted that no traffic had moved and that the deleted guard test would fail
+the suite if a Vertex client shipped first; both are false after this record.
+ADR-0027's Consequences described the transport move as covering only the risk
+and intent reads. Doug found the first as `missing-from-pr` and the second as
+`beyond-ticket`, and both were right. `docs/decisions/README.md` requires both
+sides to be marked, and the first draft of this record repeated one record over
+the exact one-sided-amendment defect ADR-0028 had been corrected for five days
+earlier.
 
 ## Rejected
 
@@ -228,3 +267,11 @@ adds no new cloud relationship. Unchanged from ADR-0028.
 - **The mechanical tier's vendor boundary is untouched.** ADR-0027's C1, C2 and
   C3 all still bind. Moving its transport is not moving its vendor, and this
   record must not be cited as though it were.
+- **Nothing downstream reads the `provider` string, so the partition is by hash
+  only.** Doug raised `reader:metric-label-change` — that a dashboard or query
+  keyed on `"anthropic"` would silently split at the cutover. Checked across
+  `api/doug`, `web/`, and `console/`: the only occurrences are the manifest
+  field itself and the reader setting it. Every other `provider` in the tree is
+  the identity provider and unrelated. `example_pack_eval.py` partitions on
+  `instrument_id`, which is the intended behaviour and is a hash, not a label.
+  The finding names a real hazard and this codebase does not currently have it.
