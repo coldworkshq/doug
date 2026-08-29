@@ -443,10 +443,11 @@ path, no cross-tenant read, no silent partial reads.
   green daily adjudicator, 8.2 days on the oldest — #261. Still open, and the
   first thing this instrument found.
 
-  **Still silent, deliberately, and tracked as its own issue:** an outcome queue
-  that is EMPTY because nothing was ever enqueued reads 200 exactly like a
-  healthy one. Nothing records when a sweep last ran, so #121's fix cannot tell
-  those apart — see #267 and the issue it links.
+  **Still silent, deliberately, and tracked as #272:** an outcome queue that is
+  EMPTY because nothing was ever enqueued reads 200 exactly like a healthy one.
+  Nothing records when a sweep last ran, so #121's fix cannot tell those apart —
+  which is the shape #123 had. #272 needs a migration; #267 is its in-process
+  sibling.
 
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real
