@@ -70,14 +70,27 @@ FALLBACK_TOKEN="reader fell back to deterministic"
 # NOT fall through to a parser that sees no policies and reports them all
 # missing: that is a wrong answer wearing the right answer's clothes, which
 # is the failure mode this entire file exists to prevent.
-fetch() {
+fetch() {  # fetch <path-or-url> <array-key>: every page of <array-key>, merged
   # Paths are relative to the Monitoring API unless they carry their own
   # scheme — the Logging API reads below pass a full $LOGAPI URL.
-  local body url
-  case "$1" in https://*) url="$1" ;; *) url="$API/$1" ;; esac
-  body=$(curl -sS -H "Authorization: Bearer $TOKEN" "$url") || {
-    echo "ERROR: could not reach $url" >&2; return 3; }
-  printf '%s' "$body" | python3 -c '
+  #
+  # Pages are FOLLOWED, not assumed away (Doug: reader:pagination-not-handled
+  # on 1feb3dc). Every list read here paginates, and a resource past the
+  # first page would read as absent — verify failing on something that
+  # exists, and apply creating a duplicate of it. The merged result is
+  # exactly `{"<array-key>": [...all pages...]}`.
+  local base sep body page_token="" pages
+  case "$1" in https://*) base="$1" ;; *) base="$API/$1" ;; esac
+  case "$base" in *\?*) sep="&" ;; *) sep="?" ;; esac
+  pages=$(mktemp) || return 3
+  while :; do
+    body=$(curl -sS -H "Authorization: Bearer $TOKEN" \
+      "$base${page_token:+${sep}pageToken=${page_token}}") || {
+      rm -f "$pages"; echo "ERROR: could not reach $base" >&2; return 3; }
+    # Validate the page before anything downstream can mistake an error
+    # body for an empty list, and re-emit it COMPACT so one page is one
+    # line of the accumulator file (the API pretty-prints by default).
+    printf '%s' "$body" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 try:
@@ -90,8 +103,31 @@ if isinstance(body, dict) and "error" in body:
     print("ERROR: " + sys.argv[1] + " -> " + str(err.get("status", "")) + " "
           + err.get("message", "unknown"), file=sys.stderr)
     sys.exit(3)
-print(raw)
-' "$1"
+print(json.dumps(body))
+' "$1" >> "$pages" || { rm -f "$pages"; return 3; }
+    page_token=$(printf '%s' "$body" | python3 -c '
+import json, sys
+print(json.load(sys.stdin).get("nextPageToken", ""))' 2>/dev/null)
+    [ -z "$page_token" ] && break
+  done
+  # The pages file rides in argv, NOT `< "$pages"`: `python3 -` already
+  # takes its SCRIPT from stdin (the heredoc), so a second stdin
+  # redirection is silently clobbered and the merge would read nothing —
+  # every audit seeing zero resources. Caught by the stubbed-curl test
+  # before it shipped.
+  python3 - "$2" "$pages" <<'MERGE'
+import json, sys
+key, path = sys.argv[1], sys.argv[2]
+items = []
+with open(path) as fh:
+    for line in fh:
+        if line.strip():
+            items.extend(json.loads(line).get(key, []))
+print(json.dumps({key: items}))
+MERGE
+  local status=$?
+  rm -f "$pages"
+  return $status
 }
 post() {  # post <collection-or-url> <json>; prints the created resource name
   local url
@@ -114,10 +150,16 @@ audit() {  # prints the human report; writes one missing key per line to $MISSIN
   # Each read on its own line, and each exit status checked: a `$(fetch ...)`
   # written inline below would have its failure swallowed by the surrounding
   # command's own status.
-  policies=$(fetch alertPolicies) || return 3
-  channels=$(fetch notificationChannels) || return 3
-  uptimes=$(fetch uptimeCheckConfigs) || return 3
-  logmetrics=$(fetch "$LOGAPI/metrics") || return 3
+  policies=$(fetch alertPolicies alertPolicies) || return 3
+  channels=$(fetch notificationChannels notificationChannels) || return 3
+  uptimes=$(fetch uptimeCheckConfigs uptimeCheckConfigs) || return 3
+  # The Logging API read is required, not best-effort, on purpose (Doug:
+  # reader:error-handling-gap): an audit that skipped it would go on
+  # reporting the other requirements while unable to see the one this file
+  # was just extended for — a partial answer wearing the whole answer's
+  # clothes, exactly the failure the header forbids. Exit 3 is "could not
+  # ask", which apply refuses to act on.
+  logmetrics=$(fetch "$LOGAPI/metrics" metrics) || return 3
   MISSING_FILE="$MISSING_FILE" FALLBACK_TOKEN="$FALLBACK_TOKEN" \
     python3 - "$policies" "$channels" "$uptimes" "$logmetrics" <<'PY'
 import json, os, sys
@@ -300,7 +342,7 @@ if missing channel; then
   echo "would wire every alert to nothing, which is the outage with extra steps." >&2
   exit 1
 fi
-CHANNEL=$(fetch notificationChannels | python3 -c '
+CHANNEL=$(fetch notificationChannels notificationChannels | python3 -c '
 import json, sys
 live = [c["name"] for c in json.load(sys.stdin).get("notificationChannels", [])
         if c.get("enabled", True)]
@@ -332,6 +374,11 @@ print(json.dumps({
 fi
 
 policy() {  # policy <displayName> <conditionName> <conditionJSON> <documentation>
+  # alertStrategy.autoClose: a GT-threshold condition over a log-based or
+  # sparse metric never crosses BELOW the threshold when its series simply
+  # goes absent, so without this an incident can sit open forever after the
+  # cause stops (Doug: reader:alert-tuning on 1feb3dc). 30 minutes of no
+  # data closes it; a recurrence reopens it on the next matching line.
   post alertPolicies "$(python3 -c '
 import json, sys
 name, cond_name, cond, doc, channel = sys.argv[1:6]
@@ -340,6 +387,7 @@ print(json.dumps({
     "conditions": [{"displayName": cond_name, "conditionThreshold": json.loads(cond)}],
     "documentation": {"content": doc, "mimeType": "text/markdown"},
     "notificationChannels": [channel],
+    "alertStrategy": {"autoClose": "1800s"},
 }))' "$1" "$2" "$3" "$4" "$CHANNEL")"
 }
 
@@ -360,7 +408,7 @@ if missing api-5xx; then
 fi
 
 if missing queue-liveness; then
-  CHECK_ID=$(fetch uptimeCheckConfigs | python3 -c '
+  CHECK_ID=$(fetch uptimeCheckConfigs uptimeCheckConfigs | python3 -c '
 import json, sys
 found = [u["name"].rsplit("/", 1)[-1]
          for u in json.load(sys.stdin).get("uptimeCheckConfigs", [])
@@ -412,7 +460,7 @@ if missing reader-fallback; then
   # Resolved from the API rather than assumed to be the name just created:
   # a metric someone provisioned by hand under another name is still the
   # thing to watch, exactly as the queue-liveness policy resolves check_id.
-  METRIC_NAME=$(fetch "$LOGAPI/metrics" | FALLBACK_TOKEN="$FALLBACK_TOKEN" python3 -c '
+  METRIC_NAME=$(fetch "$LOGAPI/metrics" metrics | FALLBACK_TOKEN="$FALLBACK_TOKEN" python3 -c '
 import json, os, sys
 found = [m["name"] for m in json.load(sys.stdin).get("metrics", [])
          if os.environ["FALLBACK_TOKEN"] in m.get("filter", "")
