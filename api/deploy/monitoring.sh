@@ -29,6 +29,13 @@
 # under R11 and cannot be automated honestly. docs/OPERATIONS.md carries
 # that one command.
 #
+# Because it is create-only, a run that dies partway leaves the project
+# closer to correct than it found it and RE-RUNNING IS THE RECOVERY — the
+# second pass sees what the first created and asks only for the rest. That
+# is also why the uptime-check branch below stops deliberately: the policy
+# that follows has to name an id the check did not have a moment ago.
+# `verify` after any `apply` is what says whether it finished.
+#
 # Requires python3, and gcloud authed with monitoring.viewer for `verify` or
 # monitoring.editor for `apply`.
 set -uo pipefail

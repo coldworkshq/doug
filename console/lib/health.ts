@@ -260,13 +260,20 @@ export function classify(input: HealthPayload | { error: string }): HealthVerdic
       key: "clocks",
       word: "clocks",
       count: outcome.pending,
-      // The hours are read off the bar in force, never a literal: when the
+      // The quantity is read off the bar in force, never a literal: when the
       // adjudicator's schedule changes, the API's bar moves and this
       // sentence moves with it. A hardcoded "26h" beside a bar that had
       // become something else is a falsifiable claim rendered false, on the
       // one surface built to be trusted about silence.
+      //
+      // Through `ladder`, which FLOORS and drops to minutes under an hour,
+      // for the same reason. Rounding to whole hours broke the sentence in
+      // both directions the moment the bar stopped being a multiple of one:
+      // a 90-minute bar read "over 2h", which is false, and any bar under
+      // half an hour read "over 0h", which is not a claim at all. Flooring
+      // can only understate, and "over 1h" on a 90-minute bar is still true.
       detail: overduePastGrace
-        ? `no adjudicator pass in over ${Math.round(outcomeBar / 3_600)}h`
+        ? `no adjudicator pass in over ${ladder(outcomeBar * 1_000)}`
         : outcome.next_due_at,
       level: overduePastGrace ? "failing" : "clear",
     },

@@ -369,6 +369,30 @@ test("the clocks sentence names the bar in force, not a literal", () => {
   assert.equal(clocks.detail, "no adjudicator pass in over 12h");
 });
 
+test("the clocks sentence understates a fractional bar rather than overstating it", () => {
+  // "in over Nh" is a claim, so N must never exceed the bar. Rounding made
+  // a 90-minute bar say "over 2h" — false — and anything under half an hour
+  // say "over 0h", which is not a claim at all. Both are the falsifiable-
+  // but-false sentence the code comment above warns against.
+  const at = (secondsAgo) =>
+    new Date(Date.parse(AS_OF) - secondsAgo * 1_000).toISOString();
+  const detail = (barSeconds, ageSeconds) =>
+    classify(
+      payload({
+        outcome: {
+          pending: 1,
+          overdue: 1,
+          oldest_overdue_due_at: at(ageSeconds),
+          liveness_bar_seconds: barSeconds,
+        },
+      }),
+    ).cells.find((c) => c.key === "clocks").detail;
+
+  assert.equal(detail(90 * 60, 3 * 3_600), "no adjudicator pass in over 1h");
+  assert.equal(detail(20 * 60, 3 * 3_600), "no adjudicator pass in over 20m");
+  assert.equal(detail(26 * 3_600, 40 * 3_600), "no adjudicator pass in over 26h");
+});
+
 test("the labellers word a row against the bar they are handed", () => {
   // /jobs threads the same served bar into these, so a row the table calls
   // "not drained" is a row the pager would fire on. Same 45-minutes-at-a-
