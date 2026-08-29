@@ -193,7 +193,25 @@ cite it. That is not what happened. The comment block that replaced it says so
 in the test file, where anyone changing this code will read it, rather than only
 here.
 
-**8. ADR-0012 and ADR-0027 are marked on their own sides.** ADR-0012's banner
+**8. The cutover is one word in `.github/workflows/deploy.yml`.** That file
+sets `READER_TRANSPORT` on the deploy step, and it ships `anthropic` until
+Vertex quota exists (#274). `vertex` there pins the transport on the service and
+makes the preflight binding; `VERTEX_REGION: us-central1` is pre-staged beside
+it so the flip is genuinely one word and not a small research task performed
+under pressure.
+
+This item exists because the first version of this record did not have it, and
+the omission cost a deploy. `gcp.sh` gained a required `VERTEX_REGION` with a
+refusal, a mutation-verified test, and a harness that set it — and the workflow,
+which was not in that diff, never did. The merge of #273 deployed nothing: run
+33237025355 died on `ERROR: set VERTEX_REGION`, leaving `main` and production
+disagreeing, which is the drift ADR-0025 exists to prevent. A required variable
+with no test binding it to its caller is a variable that is only required in
+tests. `test_the_workflow_supplies_every_variable_the_deploy_requires` now
+derives the set from the script rather than listing it, so the next one fails
+before a merge instead of after.
+
+**9. ADR-0012 and ADR-0027 are marked on their own sides.** ADR-0012's banner
 asserted that no traffic had moved and that the deleted guard test would fail
 the suite if a Vertex client shipped first; both are false after this record.
 ADR-0027's Consequences described the transport move as covering only the risk
