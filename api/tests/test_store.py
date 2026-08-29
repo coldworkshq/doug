@@ -2754,8 +2754,7 @@ def test_mint_count_since_counts_only_this_installation(tmp_path, monkeypatch):
 
 
 def test_mint_count_returns_none_when_storage_off(monkeypatch):
-    """None, not 0: the caller treats None as 'cannot count' and allows —
-    the cap is fail-open by spec."""
+    """None, not 0: the caller treats None as 'cannot count' and refuses."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert store.count_installation_tokens_minted_since(150424894, datetime.now(UTC)) is None
 

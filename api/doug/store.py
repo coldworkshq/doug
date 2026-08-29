@@ -4535,9 +4535,8 @@ def installation_token_repo_ids(token_id: int) -> set[int]:
 def count_installation_tokens_minted_since(
     installation_id: int, since: datetime
 ) -> int | None:
-    """None on ANY failure, including storage-off. The daily mint cap is
-    fail-open by spec: a counting error must log-and-allow at the caller,
-    never refuse a legitimate mint because a SELECT hiccuped."""
+    """None on ANY failure, including storage-off. The caller fails closed
+    on None: a counting error must not mint."""
     engine = _get_engine()
     if engine is None:
         return None
@@ -4555,7 +4554,7 @@ def count_installation_tokens_minted_since(
                     )
                 ).scalar_one()
             )
-    except Exception:  # noqa: BLE001 — fail-open is the contract
+    except Exception:  # noqa: BLE001 — None means cannot count; caller fails closed
         return None
 
 

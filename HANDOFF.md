@@ -1,5 +1,25 @@
 # HANDOFF — doug
 
+State:    review — fail-closed daily mint cap, tests green
+Next:     Andrew merges the fail-closed mint cap PR. Over-cap stays 404;
+          count `None` is 503 and does not mint.
+Blockers: none
+
+Decisions this session:
+- RULING (Andrew): the daily mint cap fails closed. A count of `None` is
+  `503` (`no ledger configured`), the same deployment-fault class as a
+  missing ledger. Over-cap stays `404`. Rejected: keep fail-open (unbounded
+  mint during an outage); 404 on count failure (operators could not tell
+  "ledger down" from "you are over the cap").
+- Historical specs that named fail-open (`docs/superpowers/specs/2026-08-04-tenant-api-keys-design.md`,
+  ROADMAP MT5 closed line) stay as the record of what shipped. The live
+  contract is the caller.
+
+Pointers: api/doug/api.py `dispense_token` · api/tests/test_api.py
+          `test_dispense_daily_cap_*`
+
+--- prior stream (#257 lineage pairing / transfer repair) below, preserved ---
+
 State:    review — PR #257 OPEN off main (9d56db2, branch
           enforce-lineage-pairing, worktree
           .claude/worktrees/backfill-historical-runs). All 6 checks green,

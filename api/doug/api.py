@@ -1623,7 +1623,7 @@ def jobs(
 
 
 MAX_REPOS_PER_MINT = 20   # bounds PAT-side GitHub calls per request
-MAX_MINTS_PER_DAY = 30    # per installation per UTC day; fail-open
+MAX_MINTS_PER_DAY = 30    # per installation per UTC day; fail-closed
 
 
 class TokenRequest(BaseModel):
@@ -1658,7 +1658,9 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
     User install) for selection='all'; admin on EVERY named repo for
     selection='selected'. Every verification or validation failure is the
     same 404: a caller can never distinguish "exists but refused" from
-    "does not exist".
+    "does not exist". Hitting the daily mint cap is that 404. A ledger
+    that cannot count today's mints is 503, the same deployment fault as
+    a missing ledger — it must not mint.
 
     Mint APPENDS — it never rotates another key, so this endpoint is no
     longer a denial-of-service against the tenant's own integration (MT5).
@@ -1707,8 +1709,11 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
 
     midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     minted_today = store.count_installation_tokens_minted_since(installation_id, midnight)
-    if minted_today is not None and minted_today >= MAX_MINTS_PER_DAY:
-        # None means "could not count" and ALLOWS — the cap is fail-open.
+    if minted_today is None:
+        # Could not count: same class as a missing ledger. Over-cap stays
+        # 404 so an operator can tell "ledger down" from "you are over cap".
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if minted_today >= MAX_MINTS_PER_DAY:
         raise _not_found()
 
     minted_by = tenancy.caller_login(x_github_token)
