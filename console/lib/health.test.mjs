@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  ADJUDICATOR_GRACE_HOURS,
-  PENDING_THRESHOLD_MINUTES,
+  OUTCOME_BAR_FALLBACK_SECONDS,
+  REVIEW_BAR_FALLBACK_SECONDS,
+  resolveBar,
   classify,
   overdueReason,
   pendingReason,
 } from "./health.ts";
+
+// The fallbacks, in the units the assertions below think in. `payload()`
+// deliberately omits `liveness_bar_seconds`, so every test that does not set
+// one exercises the fallback path and these two are the bars in force.
+const PENDING_THRESHOLD_MINUTES = REVIEW_BAR_FALLBACK_SECONDS / 60;
+const ADJUDICATOR_GRACE_HOURS = OUTCOME_BAR_FALLBACK_SECONDS / 3_600;
 
 const AS_OF = "2026-08-07T12:00:00Z";
 
@@ -175,9 +183,11 @@ test("a zoneless lane timestamp is treated as UTC, matching parseUtc's conventio
     const zoneless = payload({
       review: {
         pending: 1,
-        // 16 minutes before AS_OF (PENDING_THRESHOLD_MINUTES + 1), with no
-        // trailing "Z" -- exactly what sqlite hands back for this field.
-        oldest_pending_at: "2026-08-07T11:44:00",
+        // One minute past the bar in force, with no trailing "Z" -- exactly
+        // what sqlite hands back for this field. Derived from the bar rather
+        // than written out, so moving the bar cannot leave this test
+        // asserting a shift it no longer produces.
+        oldest_pending_at: ago(PENDING_THRESHOLD_MINUTES + 1).replace("Z", ""),
       },
     });
     assert.equal(classify(zoneless).level, "degraded");
@@ -243,9 +253,155 @@ test("row labels parse zoneless timestamps as UTC, like everything else here", (
   const originalTz = process.env.TZ;
   process.env.TZ = "America/Los_Angeles"; // UTC-7 in August (PDT)
   try {
-    const zoneless = "2026-08-07T11:40:00"; // 20 minutes before AS_OF
-    assert.equal(pendingReason(zoneless, AS_OF), "not drained 20m");
+    // Comfortably past the bar in force, and derived from it for the same
+    // reason as the strip test above.
+    const minutes = PENDING_THRESHOLD_MINUTES + 10;
+    const zoneless = ago(minutes).replace("Z", "");
+    assert.equal(pendingReason(zoneless, AS_OF), `not drained ${minutes}m`);
   } finally {
     process.env.TZ = originalTz;
   }
+});
+
+
+// --- The bars come from the API (doug#121) -----------------------------
+//
+// Before this, the strip held its own bar: 15 minutes against the route's
+// 30. A review job pending 20 minutes read `degraded` here while
+// /healthz/queues answered 200 and the pager stayed silent. Two surfaces
+// disagreeing about one contradiction is the defect #121 exists to close —
+// an operator who learns the strip cries wolf stops reading it, and a strip
+// nobody reads is the 2026-08-16 outage again.
+
+test("the fallback bars are the API's bars, to the second", async () => {
+  // A SOURCE-TEXT PIN, and the only mechanism that can hold two languages
+  // to one number. `api/doug/api.py` owns the bars — /healthz/queues serves
+  // them and the Cloud Monitoring uptime check pages on them — and these
+  // constants are a copy used only when the API did not answer with one. A
+  // copy nothing checks is how the 15-vs-30 split happened in the first
+  // place.
+  //
+  // Mutation proof: change either constant in lib/health.ts without
+  // changing api.py (or the reverse) and this fails naming both values.
+  const api = await readFile(new URL("../../api/doug/api.py", import.meta.url), "utf8");
+  const read = (name) => {
+    const match = api.match(new RegExp(`^${name} = ([^#\n]+)`, "m"));
+    assert.ok(match, `${name} is gone from api/doug/api.py — the bar moved or was renamed`);
+    // The API writes these as arithmetic ("30 * 60", "26 * 3600") because
+    // the units are the point. Evaluate the product rather than pinning the
+    // spelling, so a rewrite as "1800" is not a false failure.
+    //
+    // Any number of factors, and Python's underscore separators stripped:
+    // this module writes `26 * 3_600` itself, and `Number("3_600")` is NaN.
+    // A parser that quietly dropped a factor would fail while the two values
+    // AGREED — a false alarm on the test whose whole job is telling drift
+    // from agreement.
+    const factors = match[1].trim().split("*").map((part) => Number(part.trim().replace(/_/g, "")));
+    assert.ok(
+      factors.length > 0 && factors.every(Number.isFinite),
+      `cannot read ${name} from "${match[1].trim()}" — this parser handles a product of integer literals`,
+    );
+    return factors.reduce((a, b) => a * b, 1);
+  };
+  assert.equal(
+    REVIEW_BAR_FALLBACK_SECONDS,
+    read("REVIEW_PENDING_LIVENESS_SECONDS"),
+    "the console's review-lane fallback has drifted from the bar the pager uses",
+  );
+  assert.equal(
+    OUTCOME_BAR_FALLBACK_SECONDS,
+    read("OUTCOME_OVERDUE_LIVENESS_SECONDS"),
+    "the console's outcome-lane fallback has drifted from the bar the pager uses",
+  );
+});
+
+test("a served bar governs, so the strip grades what the pager grades", () => {
+  // The bar the API sends wins over the copy. Proven with a bar the copy
+  // could never produce: at 60 minutes a 45-minute-old pending row is
+  // clear, where the 30-minute fallback would call it degraded. If the
+  // served value were ignored, this reads "degraded" and fails.
+  const served = classify(
+    payload({ review: { pending: 1, oldest_pending_at: ago(45), liveness_bar_seconds: 3_600 } }),
+  );
+  assert.equal(served.level, "clear");
+
+  // And the other direction: a tighter served bar makes a row degraded that
+  // the fallback would wave through.
+  const tight = classify(
+    payload({ review: { pending: 1, oldest_pending_at: ago(10), liveness_bar_seconds: 300 } }),
+  );
+  assert.equal(tight.level, "degraded");
+});
+
+test("a nonsense bar degrades to the copy, never to itself", () => {
+  // 0 grades every pending row as broken; a negative grades nothing as
+  // broken — which is SILENCE, the exact thing this surface exists to end.
+  // A malformed payload must land on the known-good copy in both
+  // directions, not on whatever arrived.
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1800", null, undefined]) {
+    assert.equal(
+      resolveBar({ liveness_bar_seconds: bad }, REVIEW_BAR_FALLBACK_SECONDS),
+      REVIEW_BAR_FALLBACK_SECONDS,
+      `a served bar of ${String(bad)} must not be honoured`,
+    );
+  }
+  assert.equal(resolveBar(undefined, REVIEW_BAR_FALLBACK_SECONDS), REVIEW_BAR_FALLBACK_SECONDS);
+  assert.equal(resolveBar({ liveness_bar_seconds: 42 }, REVIEW_BAR_FALLBACK_SECONDS), 42);
+});
+
+test("the clocks sentence names the bar in force, not a literal", () => {
+  // "no adjudicator pass in over 26h" is a falsifiable claim. When the
+  // adjudicator's schedule changes the API's bar moves, and a hardcoded 26
+  // would render that claim false on the one surface built to be trusted
+  // about silence.
+  const verdict = classify(
+    payload({
+      outcome: {
+        pending: 1,
+        overdue: 1,
+        oldest_overdue_due_at: new Date(Date.parse(AS_OF) - 20 * 3_600_000).toISOString(),
+        liveness_bar_seconds: 12 * 3_600,
+      },
+    }),
+  );
+  const clocks = verdict.cells.find((c) => c.key === "clocks");
+  assert.equal(verdict.level, "failing");
+  assert.equal(clocks.detail, "no adjudicator pass in over 12h");
+});
+
+test("the clocks sentence understates a fractional bar rather than overstating it", () => {
+  // "in over Nh" is a claim, so N must never exceed the bar. Rounding made
+  // a 90-minute bar say "over 2h" — false — and anything under half an hour
+  // say "over 0h", which is not a claim at all. Both are the falsifiable-
+  // but-false sentence the code comment above warns against.
+  const at = (secondsAgo) =>
+    new Date(Date.parse(AS_OF) - secondsAgo * 1_000).toISOString();
+  const detail = (barSeconds, ageSeconds) =>
+    classify(
+      payload({
+        outcome: {
+          pending: 1,
+          overdue: 1,
+          oldest_overdue_due_at: at(ageSeconds),
+          liveness_bar_seconds: barSeconds,
+        },
+      }),
+    ).cells.find((c) => c.key === "clocks").detail;
+
+  assert.equal(detail(90 * 60, 3 * 3_600), "no adjudicator pass in over 1h");
+  assert.equal(detail(20 * 60, 3 * 3_600), "no adjudicator pass in over 20m");
+  assert.equal(detail(26 * 3_600, 40 * 3_600), "no adjudicator pass in over 26h");
+});
+
+test("the labellers word a row against the bar they are handed", () => {
+  // /jobs threads the same served bar into these, so a row the table calls
+  // "not drained" is a row the pager would fire on. Same 45-minutes-at-a-
+  // 60-minute-bar case as the strip test above, on the other surface.
+  const at = new Date(Date.parse(AS_OF) - 45 * 60_000).toISOString();
+  assert.ok(pendingReason(at, AS_OF, 3_600).startsWith("pending"));
+  assert.ok(pendingReason(at, AS_OF, 600).startsWith("not drained"));
+
+  const due = new Date(Date.parse(AS_OF) - 20 * 3_600_000).toISOString();
+  assert.ok(overdueReason(due, AS_OF, 26 * 3_600).startsWith("overdue"));
+  assert.ok(overdueReason(due, AS_OF, 12 * 3_600).startsWith("clock overdue"));
 });

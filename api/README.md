@@ -14,6 +14,7 @@ uv run ruff check .     # lint
 | Route | What |
 |---|---|
 | `GET /healthz` | liveness |
+| `GET /healthz/queues` | per-lane oldest-pending-age contradiction as a status code — 200 inside the bars, 503 outside; unauthenticated, so an uptime check can watch it from outside the process (#121) |
 | `POST /v1/score` | PR metadata in, verdict out (score, band, reasons); pure, no read |
 | `POST /v1/score/read` | reader-tier scoring (LLM diff-read when enabled, deterministic fallback otherwise); token-gated, spends money |
 | `GET /v1/queue` | review queue — operator token sees everything, a dispensed tenant token sees only its installation |

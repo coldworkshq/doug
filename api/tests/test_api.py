@@ -3289,6 +3289,31 @@ def test_health_reports_both_lanes_constants(tmp_path, monkeypatch):
     assert body["outcome"]["max_attempts"] == outcome_queue.MAX_ATTEMPTS
 
 
+def test_health_publishes_the_same_liveness_bars_the_pager_uses(tmp_path, monkeypatch):
+    """One bar per lane, across every surface that grades the contradiction.
+
+    /healthz/queues (#260) owns the bars and the Cloud Monitoring uptime
+    check pages on them. The console strip used to hold its own copy — 15
+    minutes against the route's 30 — so a review job pending 20 minutes read
+    `degraded` on the console while the pager stayed silent. Two surfaces
+    disagreeing about one contradiction is the #121 defect, not a cosmetic
+    difference: an operator who learns the strip cries wolf stops reading
+    it, and a strip nobody reads is the 2026-08-16 outage again.
+
+    Mutation proof: point either bar here at a literal, or drop the field,
+    and the console's contract test (console/lib/health.test.mjs) is the
+    only thing left holding the two numbers together — which is the state
+    this test exists to make impossible.
+    """
+    _db(tmp_path, monkeypatch)
+    body = TestClient(app).get("/v1/health", headers=AUTH).json()
+    liveness = TestClient(app).get("/healthz/queues").json()
+    assert body["review"]["liveness_bar_seconds"] == api.REVIEW_PENDING_LIVENESS_SECONDS
+    assert body["outcome"]["liveness_bar_seconds"] == api.OUTCOME_OVERDUE_LIVENESS_SECONDS
+    assert body["review"]["liveness_bar_seconds"] == liveness["review"]["bar_seconds"]
+    assert body["outcome"]["liveness_bar_seconds"] == liveness["outcome"]["bar_seconds"]
+
+
 def test_health_carries_the_server_clock_as_of(tmp_path, monkeypatch):
     """Every age the console renders is as_of minus a timestamp. Without it
     the UI would subtract a server-written timestamp from a browser clock,

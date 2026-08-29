@@ -415,24 +415,47 @@ path, no cross-tenant read, no silent partial reads.
     Receipt: `/tmp/doug-60-day-backfill-20260811T224751Z`, durable copy at
     `workspace/research/task7-receipt-20260811T224751Z` (outside the repo).
 
-- [ ] **The instrument must be able to report its own silence.** `adjudicated 0`
+- [x] **The instrument must be able to report its own silence.** `adjudicated 0`
   renders identically whether nothing is due yet or the adjudicator is dead, and
   from 2026-08-16 to 2026-08-18 it rendered the second while `doug-prod0` held
   **zero alert policies and zero notification channels**. Nothing in the system
   said anything; the defect was found by reading Cloud Run execution status by
-  hand. `first_due` in the past together with `adjudicated 0` is a contradiction
-  the system can compute on itself — both fields are already in
-  `instrument_snapshot` and already public on `GET /v1/showcase/scoreboard`.
-  Minimum: surface that contradiction where an operator sees it, and alert on
-  `doug-adjudicator` `failedCount >= 1`. "Empty is the product" holds only while
-  empty-because-broken is a different and louder thing.
+  hand. "Empty is the product" holds only while empty-because-broken is a
+  different and louder thing. **Closed by #121**, in four pieces:
+  - `/healthz/queues` (#260) collapses the per-lane oldest-pending-age
+    contradiction to 200/503, so it can be watched from outside the process.
+    A Job that never *starts* emits no failure metric, so this — not
+    `failedCount` — is what catches 2026-08-16's actual shape.
+  - Three Cloud Monitoring policies in `doug-prod0`, all enabled and wired to a
+    channel that reaches a human: Cloud Run job `result=failed` (no
+    `service_name` filter, so it covers `doug-outcome-reconciler` too),
+    `doug-api` 5xx, and an uptime check on `/healthz/queues`.
+  - `api/deploy/monitoring.sh verify` — read-only, non-zero on anything unmet.
+    The policies were clicks before this, and clicks are not a record: a rebuilt
+    project or a disabled policy returned the project to silence with no diff to
+    review. `docs/OPERATIONS.md` § Alerting is the runbook.
+  - The console strip and the pager now grade against ONE bar per lane, served
+    on `/v1/health` as `liveness_bar_seconds`. The strip used to hold its own
+    copy — 15 minutes against the route's 30 — so a review job pending 20
+    minutes read `degraded` while the pager stayed silent.
+
+  **The alert has fired once and was right**: 21 outcome jobs overdue behind a
+  green daily adjudicator, 8.2 days on the oldest — #261. Still open, and the
+  first thing this instrument found.
+
+  **Still silent, deliberately, and tracked as #272:** an outcome queue that is
+  EMPTY because nothing was ever enqueued reads 200 exactly like a healthy one.
+  Nothing records when a sweep last ran, so #121's fix cannot tell those apart —
+  which is the shape #123 had. #272 needs a migration; #267 is its in-process
+  sibling.
 
 **Exit gate = Phase 0 dogfood gate:** drewjst/doug's own history backfilled and adjudicated with
 **100% agreement vs. a manual `git log` audit** (any disagreement = detector bug = stop); one real
 receipt correct end-to-end; scoreboard rendering live counts; then one full webhook-started
 14-day cycle observed in prod. **"Observed" is load-bearing and was not implemented:** the first
 two days of the first cycle ran unobserved and red. The liveness item above is what makes the
-word mean anything.
+word mean anything, and it is now closed — an unobserved cycle raises a 503 and pages, rather
+than rendering as a quiet day.
 
 **THE DETECTOR'S FIRST POSITIVE FIRED, 2026-08-22 (#122, audited 2026-08-24).**
 Until this, "the detector works" rested entirely on true negatives — the

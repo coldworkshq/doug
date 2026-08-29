@@ -69,10 +69,23 @@ export default async function JobsPage({
     ? { review: null, outcome: null }
     : { review: health.review.max_attempts, outcome: health.outcome.max_attempts };
 
+  // The liveness bars, per lane, off the same payload and with the same null
+  // caveat. These are the numbers /healthz/queues collapses to 200/503 for
+  // the uptime check that pages a human (doug#121, doug#260), so a row this
+  // table calls "not drained" is a row the pager would fire on. Null, not a
+  // literal, when health is unreadable: lib/health.ts then falls back to its
+  // own copy of the API's value rather than to a number invented here.
+  const bars = isError(health)
+    ? { review: null, outcome: null }
+    : {
+        review: health.review.liveness_bar_seconds ?? null,
+        outcome: health.outcome.liveness_bar_seconds ?? null,
+      };
+
   // Same independent-fetch caveat as caps above, threaded to JobsTable so
   // its overdue wording is measured against the server's clock, never the
-  // browser's — and so it can apply the same ADJUDICATOR_GRACE_HOURS
-  // boundary the health strip beside it already applies to the same rows.
+  // browser's — and so it can apply the same bar the health strip beside it
+  // already applies to the same rows.
   const asOf = isError(health) ? null : health.as_of;
 
   return (
@@ -102,15 +115,17 @@ export default async function JobsPage({
             title: "Review lane",
             result: review,
             cap: caps.review,
+            bar: bars.review,
           },
           {
             key: "outcome",
             title: "Outcome lane (adjudicator)",
             result: outcome,
             cap: caps.outcome,
+            bar: bars.outcome,
           },
         ] as const
-      ).map(({ key, title, result, cap }) =>
+      ).map(({ key, title, result, cap, bar }) =>
         isError(result) ? (
           // Never a number, never an empty table. An unreachable API and a
           // lane with no unhealthy jobs are different facts.
@@ -132,6 +147,7 @@ export default async function JobsPage({
               limit={result.limit}
               maxAttempts={cap}
               asOf={asOf}
+              livenessBarSeconds={bar}
               urlKey={key}
             />
           </Suspense>
