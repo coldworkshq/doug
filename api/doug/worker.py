@@ -29,6 +29,7 @@ from . import (
     check_run,
     example_pack_capture,
     ingest,
+    merge_sha,
     pr_comment,
     reader,
     review,
@@ -1263,6 +1264,7 @@ def reconcile_outcomes(installation_id: int) -> int:
     gh = app_auth.installation_client(installation_id)
     cutoff = datetime.now(UTC) - _MERGE_RECONCILE_LOOKBACK
     count = 0
+    skipped = 0
     for repo_id, full_name in store.active_repos(installation_id):
         owner, _, name = full_name.partition("/")
         pulls: list = []
@@ -1364,7 +1366,7 @@ def reconcile_outcomes(installation_id: int) -> int:
                 continue
             try:
                 detail = gh.rest.pulls.get(owner=owner, repo=name, pull_number=number)
-                merge_sha = detail.raw_response.json().get("merge_commit_sha")
+                carried = detail.raw_response.json().get("merge_commit_sha")
             except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
@@ -1373,25 +1375,51 @@ def reconcile_outcomes(installation_id: int) -> int:
                     file=sys.stderr,
                 )
                 continue
-            if (
-                not isinstance(merge_sha, str)
-                or not merge_sha
-                or len(merge_sha) > store.outcome_jobs.c.merge_commit_sha.type.length
-            ):
+            # #259. GitHub is removing merge_commit_sha from this response and
+            # serves the trimmed shape from some backend pools already, sticky
+            # per connection — which is why both of this Job's first executions
+            # skipped every PR and swept zero. The fallback reads the same fact
+            # off the PR's `merged` event and costs one extra call only on the
+            # PRs whose field is absent.
+            merge_commit_sha = merge_sha.resolve(
+                carried,
+                column=store.outcome_jobs.c.merge_commit_sha,
+                client=lambda: gh,
+                owner=owner, repo=name, number=number,
+            )
+            if merge_commit_sha is None:
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
-                    "(missing or over-long merge_commit_sha)",
+                    "(no merge_commit_sha on the pull payload and no "
+                    "mergeCommit in the graph)",
                     file=sys.stderr,
                 )
+                skipped += 1
                 continue
             merged_head_sha = getattr(getattr(p, "head", None), "sha", None)
             if not isinstance(merged_head_sha, str):
                 merged_head_sha = None
             inserted = store.enqueue_outcome_jobs(
-                installation_id, repo_id, number, merge_sha, merged_at, base_ref,
+                installation_id, repo_id, number, merge_commit_sha, merged_at, base_ref,
                 merged_head_sha=merged_head_sha,
             )
             count += len(inserted)
+    # #259, and the reason it hid for two executions: a sweep that skips every
+    # PR is indistinguishable from a sweep with nothing to do, because both are
+    # silent and both exit 0. Doug named the shape again on the fix itself
+    # (`reader:silent-degradation`) — a GraphQL permission or rate-limit problem
+    # would look exactly like "nothing to reconcile". One line per pass, and a
+    # pass that enqueued nothing while skipping something says so loudly.
+    #
+    # A real counter belongs in Cloud Monitoring next to the three policies on
+    # doug-prod0, not in a print. Filed as #267.
+    if skipped:
+        print(
+            f"doug: outcome reconcile for installation {installation_id} "
+            f"enqueued {count} and SKIPPED {skipped}"
+            + (" — every candidate was skipped" if count == 0 else ""),
+            file=sys.stderr,
+        )
     return count
 
 

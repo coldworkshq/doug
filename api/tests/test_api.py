@@ -1223,6 +1223,172 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     assert kicks == []
 
 
+def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
+    tmp_path, monkeypatch
+):
+    """#259 exposure 2, covered before it happens rather than after.
+
+    GitHub is removing merge_commit_sha from REST pull payloads. Webhook
+    payloads still carry it today, which is the only reason the outcome lane
+    has a source at all right now — the reconciler's copy is already gone on
+    some backend pools. When the removal reaches webhook serialization this
+    branch is where the lane goes dark AT THE SOURCE, and the only evidence
+    would be one stderr line per merge.
+
+    The key is deleted, not set to None: the trimmed response has 46 keys, not
+    48 with a null. Both must reach the fallback, and `merge_sha=None` in
+    test_a_merge_missing_the_facts... pins the other shape.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    calls: list[int] = []
+
+    class _Gh:
+        def graphql(self, query, variables=None):
+            calls.append(variables["number"])
+            return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
+
+    monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
+
+    assert _webhook("pull_request", payload).status_code == 202
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert [job["window_days"] for job in sorted(jobs, key=lambda r: r["window_days"])] == [14, 60]
+    assert {job["merge_commit_sha"] for job in jobs} == {"e" * 40}
+    assert calls == [7]
+    # Still no read bought. The fallback is one REST call, not a model call.
+    assert _table(tmp_path, store.review_jobs) == []
+
+
+def test_the_in_request_half_of_a_merge_never_looks_the_sha_up(tmp_path, monkeypatch):
+    """The property Doug asked for, proved where the test client cannot hide it.
+
+    Starlette's TestClient runs background tasks before returning, so a webhook
+    round-trip cannot tell "inside the request" from "after the 202". Calling
+    _record_merge directly can: with allow_lookup at its default, a payload
+    missing merge_commit_sha must mint nothing, write nothing, and return True
+    to ask for the retry.
+
+    ADR-0023 makes this branch latency-bound and redelivered on any non-2xx.
+    Doug flagged the first version of this fix for putting a token mint plus a
+    REST call in front of the 202 (reader:blocking-io-in-request-path), and on a
+    slow or rate-limited lookup that is a delivery over GitHub's 10-second
+    budget — which means a redelivery, on the one branch where the payload is
+    the only source of the fact.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    def _no(installation_id):
+        raise AssertionError("minted a client inside the request")
+
+    monkeypatch.setattr(api.app_auth, "installation_client", _no)
+
+    assert api._record_merge(payload) is True
+    assert _table(tmp_path, store.outcome_jobs) == []
+
+
+def test_the_queued_retry_cannot_double_a_row(tmp_path, monkeypatch):
+    """The retry needs no coordination with the first attempt, and this is why.
+
+    _record_merge_with_lookup re-runs the whole function on the same payload.
+    If enqueue_outcome_jobs did not dedup, a merge whose field arrives late
+    would land two 14-day rows and two 60-day rows, and every published rate
+    built on that denominator would be wrong in the flattering direction.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    class _Gh:
+        def graphql(self, query, variables=None):
+            return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
+
+    monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
+
+    api._record_merge_with_lookup(payload)
+    api._record_merge_with_lookup(payload)
+
+    jobs = _table(tmp_path, store.outcome_jobs)
+    assert sorted(job["window_days"] for job in jobs) == [14, 60]
+
+
+def test_a_merge_that_cannot_be_looked_up_still_says_so(tmp_path, monkeypatch, capsys):
+    """The observability half, and it was a regression I introduced.
+
+    Doug caught the first version of this fix returning before the five-fact
+    guard's stderr line (`reader:silent-failure-path`): a merge with no
+    merge_commit_sha AND no way to look one up was dropped with no log at all.
+    That is worse than what it replaced, and it is exactly the shape of #259 —
+    a lane going quiet while looking like it had nothing to do. Both exits from
+    the fast path log now, and they say different things, because "queued" and
+    "dropped" are different states an operator must be able to tell apart.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+    del payload["pull_request"]["base"]["repo"]["full_name"]
+
+    assert api._record_merge(payload) is False
+    assert _table(tmp_path, store.outcome_jobs) == []
+    err = capsys.readouterr().err
+    assert "cannot be looked up" in err
+    assert "outcome clock not started" in err
+
+
+def test_the_queued_lookup_never_escapes_its_background_task(tmp_path, monkeypatch, capsys):
+    """A background task has no request to fail.
+
+    merge_sha.resolve swallows transport errors, but the row write after it does
+    not, and this runs after the 202 — so an exception here surfaces as an
+    unhandled server-side error with the outcome row silently missing
+    (Doug, `reader:error-handling-gap`). The reconciler is the retry, and it can
+    only be the retry if this failure is logged rather than fatal.
+    """
+    _hook_env(tmp_path, monkeypatch)
+    payload = _closed_payload()
+    del payload["pull_request"]["merge_commit_sha"]
+
+    # The lookup SUCCEEDS and the row write is what fails. resolve() already
+    # swallows transport errors, so a failing lookup never reaches the write —
+    # this test would prove nothing if the graph were the thing that broke.
+    monkeypatch.setattr(
+        api.app_auth, "installation_client",
+        lambda i: SimpleNamespace(
+            graphql=lambda q, variables=None: {
+                "repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        api.store, "enqueue_outcome_jobs",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db is down")),
+    )
+
+    api._record_merge_with_lookup(payload)  # must not raise
+
+    assert "the reconciler is the retry" in capsys.readouterr().err
+
+
+def test_a_merge_webhook_that_carries_the_sha_mints_no_client(tmp_path, monkeypatch):
+    """_record_merge runs inside the request, before the 202, so anything it
+    adds is on GitHub's 10-second delivery budget. The fallback costs a token
+    mint plus a REST call, and it must not be paid on the merges that do not
+    need it — which today is all of them."""
+    _hook_env(tmp_path, monkeypatch)
+
+    def _no(installation_id):
+        raise AssertionError("minted a client for a payload that carried the sha")
+
+    monkeypatch.setattr(api.app_auth, "installation_client", _no)
+
+    assert _webhook("pull_request", _closed_payload()).status_code == 202
+    assert {job["merge_commit_sha"] for job in _table(tmp_path, store.outcome_jobs)} == {"c" * 40}
+
+
 def test_a_merged_bot_pull_request_still_starts_the_outcome_clock(tmp_path, monkeypatch):
     """Bot-authored PRs skip the deep read, not the outcome loop. A
     Dependabot merge that lands is still production, and prereg §2.4
