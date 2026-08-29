@@ -29,24 +29,30 @@ import { filterJobsByQuery, normalizeQuery } from "@/lib/search";
  *
  *  The two exceptions are `overdue` and fresh `pending`, and they are the
  *  same exception twice: `store.job_rows` applies no grace and no threshold,
- *  because both describe things the ledger does not store (a Cloud Scheduler
- *  cron; how often the drain is kicked). So a clock the adjudicator simply
- *  has not reached today, and a job enqueued one second ago, both arrive in
- *  the "unhealthy only" list while the strip beside them reads clear.
+ *  because the bars are alerting thresholds rather than lane semantics and
+ *  live beside the route that pages on them. So a clock the adjudicator
+ *  simply has not reached today, and a job enqueued one second ago, both
+ *  arrive in the "unhealthy only" list while the strip beside them reads
+ *  clear.
  *
  *  Those rows do belong on a page whose question is "what is Doug waiting
  *  on" — it is the WORDING that must not overstate. Both labellers live in
- *  `lib/health.ts` beside the thresholds they compare against, so the table
- *  and the strip grade against one definition and cannot contradict each
- *  other about the same row. They are also the only logic here that a test
- *  can reach: this component has no render-test infrastructure. */
-function reason(job: JobItem, asOf: string | null): string {
+ *  `lib/health.ts` and are handed the bars the API served, so this table,
+ *  the strip, and the /healthz/queues alert that pages a human all grade
+ *  against ONE definition per lane and cannot contradict each other about
+ *  the same row. They are also the only logic here that a test can reach:
+ *  this component has no render-test infrastructure. */
+function reason(job: JobItem, asOf: string | null, barSeconds: number | null): string {
   if (job.status === "failed") return `failed after ${job.attempts}`;
   if (job.stalled) return "lease expired";
-  if (job.overdue) return overdueReason(job.due_at, asOf);
+  // `?? undefined` rather than `?? <a number>`: an unreadable health payload
+  // must fall through to the labeller's own known-good copy of the API's
+  // bar, not to a literal invented at this call site.
+  if (job.overdue) return overdueReason(job.due_at, asOf, barSeconds ?? undefined);
   if (job.retrying) return `retrying, attempt ${job.attempts}`;
   if (job.status === "done" && job.verdict_id === null) return "skipped, no verdict";
-  if (job.status === "pending") return pendingReason(job.enqueued_at, asOf);
+  if (job.status === "pending")
+    return pendingReason(job.enqueued_at, asOf, barSeconds ?? undefined);
   return job.status;
 }
 
@@ -57,6 +63,7 @@ export function JobsTable({
   limit,
   maxAttempts,
   asOf,
+  livenessBarSeconds,
   urlKey,
 }: {
   title: string;
@@ -78,6 +85,12 @@ export function JobsTable({
   // own comment for why null degrades to neutral wording rather than a
   // fabricated age.
   asOf: string | null;
+  // THIS LANE's liveness bar, off the same payload, and the reason the
+  // wording here can be trusted: it is the number /healthz/queues collapses
+  // to 200/503 for the uptime check that pages a human. Null when the health
+  // payload could not be read — same independent-fetch caveat again — and
+  // the labeller then uses its own copy rather than a literal from here.
+  livenessBarSeconds: number | null;
   /** Distinguishes the two tables on /jobs so each keeps its own q/page. */
   urlKey: "review" | "outcome";
 }) {
@@ -96,8 +109,8 @@ export function JobsTable({
   );
 
   const filtered = useMemo(
-    () => filterJobsByQuery(jobs, query, (job) => reason(job, asOf)),
-    [jobs, query, asOf],
+    () => filterJobsByQuery(jobs, query, (job) => reason(job, asOf, livenessBarSeconds)),
+    [jobs, query, asOf, livenessBarSeconds],
   );
   const pageWindow = useMemo(
     () => pageSlice(filtered, page, DEFAULT_PAGE_SIZE),
@@ -206,7 +219,7 @@ export function JobsTable({
                     ) : null}
                   </TableCell>
                   <TableCell className="py-2 pr-3 whitespace-normal">
-                    {reason(job, asOf)}
+                    {reason(job, asOf, livenessBarSeconds)}
                   </TableCell>
                   <TableCell className="py-2 pr-3 tabular-nums">
                     {maxAttempts === null ? (

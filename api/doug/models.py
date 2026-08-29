@@ -267,6 +267,10 @@ class ReviewLaneHealth(BaseModel):
     failed_24h: int
     stall_lease_seconds: int
     max_attempts: int
+    # The bar /healthz/queues pages on for this lane, echoed so the console
+    # grades against what the pager measures rather than a second copy of
+    # the number. See api.py's REVIEW_PENDING_LIVENESS_SECONDS.
+    liveness_bar_seconds: int
 
 
 class OutcomeLaneHealth(BaseModel):
@@ -279,6 +283,8 @@ class OutcomeLaneHealth(BaseModel):
     failed: int
     stall_lease_seconds: int
     max_attempts: int
+    # As above; see api.py's OUTCOME_OVERDUE_LIVENESS_SECONDS.
+    liveness_bar_seconds: int
 
 
 class HealthResponse(BaseModel):

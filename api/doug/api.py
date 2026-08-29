@@ -48,6 +48,7 @@ from .models import (
     HealthResponse,
     JobItem,
     JobListResponse,
+    OutcomeLaneHealth,
     PRMetadata,
     QueueItem,
     QueueLaneLiveness,
@@ -56,6 +57,7 @@ from .models import (
     QueueSummary,
     ReadScoreRequest,
     Reason,
+    ReviewLaneHealth,
     RunCoverage,
     RunDetailJob,
     RunDetailResponse,
@@ -1527,6 +1529,17 @@ def health(
     The lane constants are passed in from the modules that enforce them, so
     the response reports what was actually measured with rather than a
     literal duplicated here.
+
+    The liveness bars are echoed for a sharper version of the same reason.
+    They are not measured with — `job_health` counts and takes minimums, and
+    applies no bar at all — so they are attached here rather than passed into
+    the store, which would be claiming a filter that does not exist. What
+    they buy is that the console grades the contradiction against the number
+    /healthz/queues actually pages on. Before this, the strip held its own
+    copy: 15 minutes against the route's 30, so a review job pending 20
+    minutes read `degraded` on the console while the pager stayed silent.
+    Two surfaces disagreeing about one contradiction is the failure #121
+    exists to close, not a cosmetic difference.
     """
     _operator_only(x_doug_token)
     if not store.enabled():
@@ -1541,7 +1554,17 @@ def health(
     )
     if data is None:
         raise HTTPException(status_code=503, detail="no ledger configured")
-    return HealthResponse(**data)
+    return HealthResponse(
+        review=ReviewLaneHealth(
+            **data["review"],
+            liveness_bar_seconds=REVIEW_PENDING_LIVENESS_SECONDS,
+        ),
+        outcome=OutcomeLaneHealth(
+            **data["outcome"],
+            liveness_bar_seconds=OUTCOME_OVERDUE_LIVENESS_SECONDS,
+        ),
+        as_of=data["as_of"],
+    )
 
 
 # The stored statuses each lane's queue actually writes. 'stalled',

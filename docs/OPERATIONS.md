@@ -1,5 +1,95 @@
 # Operations runbook
 
+## Alerting
+
+Doug's own silence is a defect, not a quiet day. From 2026-08-16 to 2026-08-18
+the adjudicator was dead and every surface reported `adjudicated 0` — the
+designed honest empty state, identical to the broken one. `doug-prod0` held no
+alert policies and no notification channels, so nothing said anything; the
+outage was found three days late by reading Cloud Run execution status by hand.
+"Empty is the product" holds only while empty-because-broken is a different and
+louder thing (#121).
+
+### Check that the alerting is there
+
+```
+PROJECT=doug-prod0 api/deploy/monitoring.sh verify
+```
+
+Read-only, and non-zero on anything unmet. This is the check that would have
+caught 2026-08-16 on day one, so run it after any project-level change and
+whenever you are about to trust a green dashboard.
+
+It requires five things, and each is load-bearing:
+
+| Requirement | What it catches |
+|---|---|
+| a notification channel that reaches a human | policies wired to nothing — the outage with extra steps |
+| an uptime check polling `/healthz/queues` | nothing on its own; it is what the third policy watches |
+| policy `job-failed` | an adjudicator or reconciler execution that ran and **failed** |
+| policy `api-5xx` | doug-api serving 5xx — a tenant-visible incident under R1 |
+| policy `queue-liveness` | work sitting past the point where its drain provably did not run |
+
+`job-failed` and `queue-liveness` are not redundant. A Job that **never starts**
+emits no failure metric at all, so `job-failed` cannot see it; `queue-liveness`
+can, because it measures the age of the work rather than the result of a run.
+That is the shape 2026-08-16 actually had.
+
+Policies are matched by what they **watch**, never by their display name: a
+renamed policy still pages, and a policy renamed to look right while watching
+nothing is the exact failure this file exists to prevent. Each must also be
+enabled and reach a live channel — "it exists" is the weakest of the three
+conditions and the easiest to mistake for the whole answer.
+
+### Create what is missing
+
+```
+PROJECT=doug-prod0 api/deploy/monitoring.sh apply
+```
+
+Creates only what is absent. It never modifies and never deletes, so a policy
+someone deliberately retuned survives it.
+
+It will not create the notification channel. An email channel needs a human to
+confirm the address, which is founder-only, and every policy created without
+one would fire into nothing:
+
+```
+gcloud beta monitoring channels create --project=doug-prod0 \
+  --display-name="Andrew (founder)" --type=email \
+  --channel-labels=email_address=<address>
+```
+
+Confirm the mail that follows, then run `apply`.
+
+### Do not "fix" the queue-liveness condition
+
+Its threshold reads `COMPARISON_GT` against `1` on `check_passed`, which is a
+boolean — so out of context it looks like a condition that can never fire. It
+is not. The aggregation is `REDUCE_COUNT_FALSE`, making the compared value the
+number of checkers reporting failure; this is Cloud Monitoring's canonical
+uptime shape and means "more than one checker sees it down". Changing it to
+`COMPARISON_LT` silences the alert.
+
+### When queue-liveness fires
+
+`/healthz/queues` answers 503, so either a lane is genuinely behind or the API
+cannot answer at all. Read the payload first — it names the lane, the age, and
+the bar it was measured against:
+
+```
+curl -s https://<doug-api host>/healthz/queues | python3 -m json.tool
+```
+
+Then `GET /v1/health` (operator token) for the counts behind that age, and
+`/jobs` in the console for the rows. **Mute nothing.** The one time this alert
+has fired so far it was correct: 21 outcome jobs overdue behind a green daily
+adjudicator, which is #261.
+
+The bars live in `api/doug/api.py` beside the route that pages on them, and are
+served in both `/healthz/queues` and `/v1/health` so the console grades rows
+against the same numbers. Do not add a second copy anywhere.
+
 ## Hosted Example Pack cohort
 
 This lane reuses the IAM-gated `doug-console` and the existing review worker. It
