@@ -1068,6 +1068,94 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
     )
 
 
+def test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run():
+    """ADR-0028's claim, made to fail loudly — the same treatment C3 got.
+
+    Doug applied this PR's own reasoning back to it (`missing-from-pr`): ADR-0027
+    C3 was given a guard because "a condition that binds only in prose does not
+    bind", and ADR-0028 makes an identical prose claim — that no traffic moves to
+    Vertex until the paired silent run clears the declared bar — with nothing in
+    code to hold it. The objection is correct and consistent, so the guard is
+    symmetric.
+
+    Two existing tests already fail on a Vertex swap
+    (test_default_client_never_carries_the_sdk_default_timeout and
+    test_both_clients_bound_the_whole_read_not_just_one_attempt), but they fail
+    on the timeout arguments, incidentally, and their message would send the
+    reader to the Cloud Run arithmetic rather than to the unrun bar. A guard
+    whose failure names the wrong reason is how a transition ships anyway.
+
+    Source inspection rather than construction, because constructing either
+    client needs live credentials. It is deliberately crude for the same reason
+    the C3 guard is: impossible to trip over by accident, trivial to remove on
+    purpose. The transport is one identifier in two functions, so there is
+    nothing subtle for this to miss.
+
+    To remove this test: run the paired study, record the result against the four
+    numbers in ADR-0028's bar table, and delete it in the PR that lands the
+    Vertex client, citing that result. A failed run does not widen the bar and it
+    does not delete this test either.
+    """
+    import inspect
+
+    for fn in (reader._client, reader._verify_client):
+        # Comments and docstrings stripped first. Doug flagged the whole-source
+        # form as brittle (`reader:brittle-test-assertion`) and was right: a
+        # comment mentioning Vertex would fail the suite for a reason that has
+        # nothing to do with the policy. Only executable lines are inspected.
+        code = "\n".join(
+            line.split("#")[0]
+            for line in inspect.getsource(fn).splitlines()
+            if not line.strip().startswith(("#", '"""', "'''"))
+        )
+        assert "anthropic.Anthropic(" in code, (
+            f"{fn.__name__} no longer builds the client it did"
+        )
+        assert "Vertex(" not in code, (
+            f"{fn.__name__} builds a Vertex client, but ADR-0028's paired "
+            "non-inferiority run has not been recorded. Run the bar first."
+        )
+
+
+def test_the_mechanical_tier_has_not_left_anthropic_while_the_manifest_cannot_say_so():
+    """ADR-0027 C3, made to fail loudly instead of resting on prose.
+
+    ADR-0027 is `accepted`, so the mechanical tier's vendor boundary is open in
+    the directory the reader consumes. Three conditions bind before a foreign
+    model may serve production traffic, and C3 is the one that is code rather
+    than a measurement: WholeInstrumentManifestV0 carries one `provider` and one
+    `pinned_model_id`, both describing the risk read, and MECHANICAL_MODEL
+    reaches no durable surface but the cost log. So two reads that ran different
+    mechanical models hash to the same instrument_id, while ADR-0015 makes
+    findings.hunks — the attribution pass's output — part of convergence
+    identity, and example_pack_eval.py partitions the corpus by exactly that
+    hash.
+
+    Doug flagged the gap as `beyond-ticket` on the signing PR: the record says
+    the conditions bind, and nothing made the unenforceable-by-accident state
+    fail. This is that guard. It is deliberately crude — a vendor check, not a
+    model allowlist — because its whole job is to be impossible to trip over by
+    accident and trivial to remove on purpose once #263 lands and the manifest
+    can tell two mechanical models apart.
+
+    **It is the only thing holding C1 and C2 as well, and that is deliberate.**
+    Doug noted that C1 (re-run ADR-0015's span-verification) and C2 (a recorded
+    grounding rate for verify_finding) are prose-only, enforceable in practice
+    only by this guard — which the record says can be deleted once #263 lands.
+    Correct, so the removal condition below is all three, not one.
+
+    To remove this test: close #263, record C1's replication result against
+    ADR-0015's frozen bars, record C2's before-and-after grounding rate, and
+    then delete it in the same PR that changes MECHANICAL_MODEL, citing all
+    three. Do not relax it to keep a swap green.
+    """
+    assert reader.MECHANICAL_MODEL.startswith("claude-"), (
+        "MECHANICAL_MODEL left Anthropic while WholeInstrumentManifestV0 still "
+        "cannot record which mechanical model produced a row (ADR-0027 C3, #263). "
+        "Land the manifest change first."
+    )
+
+
 def test_the_two_paid_reads_did_not_follow_the_mechanical_tier_down():
     """The freeze binds the risk read, and ADR-0007 binds the intent read to
     the same instrument. Splitting the model per call makes "unify these two

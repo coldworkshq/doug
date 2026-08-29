@@ -1,25 +1,29 @@
 ---
 title: The risk read runs Claude through Vertex, and clears a non-inferiority bar before it does
-status: proposed
+status: accepted
 date: 2026-08-28
+amends: ADR-0012
 ---
 
-> **This record is INCOMPLETE ON PURPOSE and cannot be signed as it stands.**
+> **SIGNED 2026-08-28. The bar was declared before the run, and the run has not
+> happened.**
 >
-> Section **The bar** has four blank numbers. They are founder-only under R11
-> and they are a pre-registration: filling them in after a run is worth nothing,
-> and filling them in by an agent's guess is worse, because it would look like a
-> declared bar while being a fabricated one.
+> This record shipped on 2026-08-28 with its bar table blank and a note saying
+> it could not be signed as it stands. Andrew set the two governing numbers the
+> same day — a 5.0 pp absolute margin on validated yield, scored on a 300-PR
+> sample — and the two derived constraints follow from them and from bounds
+> already in the code. See **The bar**.
 >
-> Sign this record by writing those four numbers and flipping `status` in the
-> same commit. Merging it at `proposed` is safe — `proposed` records do not
-> reach Doug's reader — and changes nothing about what runs.
+> **Nothing has run.** Signing this record declares the bar; it does not report
+> a result. No traffic has moved to Vertex, and none does until the paired
+> silent run clears the table below. If the run fails, the bar does not widen —
+> that is the failure this file is arranged to prevent, and it is stated again
+> in Consequences.
 >
-> Companion record: **ADR-0027** moves the *mechanical* tier's vendor boundary.
-> This one moves the *risk and intent* reads' transport. They are separate on
-> purpose: ADR-0027's tier is validated by code on every call, and this one's is
-> not validated by anything downstream, which is the whole distinction ADR-0016
-> drew and this record does not blur.
+> Companion record: **ADR-0027** moves the *mechanical* tier's vendor boundary
+> and is also `accepted`. They are separate on purpose: ADR-0027's tier is
+> validated by code on every call, and this one's is not validated by anything
+> downstream, which is the distinction ADR-0016 drew and neither record blurs.
 
 ## Context
 
@@ -46,8 +50,54 @@ dependency extra.
 `MODEL`, and `MAX_TOKENS` is untouched, and
 `test_reader_and_probe_share_the_validated_prompt_bytes` compares those four
 constants against `scripts/llm_probe.py` — not clients, not transports — so it
-stays green by construction. This record does not amend ADR-0012 and must not
-be read as narrowing it.
+stays green by construction. **This record `amends` ADR-0012, and the earlier draft that said it did not was
+wrong.** Doug caught the inconsistency (`beyond-ticket`): this same PR marks
+both sides of the ADR-0016/ADR-0027 amendment and then authorizes a vendor
+boundary change to the frozen judgment tier with no banner on the freeze record
+at all. Asserting "the freeze covers constants, not transports" IS a claim about
+what ADR-0012 means, made by the record that benefits from it — the exact
+self-authorized scope claim ADR-0016 was criticized for and ADR-0027 exists to
+ratify. So it is declared as an amendment and marked on both sides.
+
+What it amends is the freeze's SCOPE, not its list. `SYSTEM`, `SCHEMA`, `MODEL`
+and `MAX_TOKENS` remain frozen, byte-identical to the probe, and the coverage
+bar on `DIFF_BUDGET` is untouched. What this record settles is that the freeze
+governs the request's constants and not the transport that carries them —
+which, because the Vertex ID is the same string, is a distinction with no
+observable difference today and a real one the moment a dated snapshot is
+pinned.
+
+### The frozen MODEL, and what happens to it on Vertex
+
+Doug raised this as a `missing-from-pr` deviation and it was a real hole: ADR-0018
+keeps ADR-0012's freeze on `MODEL` explicitly binding, byte-identical to
+`scripts/llm_probe.py`, and an earlier draft of this record authorized Vertex
+without saying how a Vertex model identifier reconciles with that constant or
+which test would catch a divergence. Checked and answered:
+
+- **Vertex model IDs carry no prefix.** A current-generation model uses the bare
+  first-party ID, so the string is `claude-opus-5` on both transports. `MODEL`
+  does not move, and `test_reader_and_probe_share_the_validated_prompt_bytes`
+  — which compares `SYSTEM`, `SCHEMA`, `MODEL` and `MAX_TOKENS` against the
+  probe, not clients or transports — stays green by construction rather than by
+  anyone remembering to keep it green.
+- **`effort` is generally available on Vertex.** `EFFORT = "high"` carries over
+  unchanged, so ADR-0018's divergence from the probe is unaffected.
+- **The construction is `AnthropicVertex(project_id=..., region=...)`** from the
+  same `anthropic` package, authenticated by GCP application default
+  credentials. No Anthropic API key, no second SDK.
+
+**The guard, and the one case that breaks it.** Dated *snapshot* IDs on Vertex
+use an `@` separator (`claude-opus-4-5@20251101`) where the first-party API uses
+a hyphen. Doug's question — which test would catch the divergence — has this
+answer: when the client change lands, the Vertex client is constructed with
+`reader.MODEL` **verbatim**, with no transport-specific mapping, and that is
+pinned by test. A mapping layer is the thing to refuse, because it is how
+`MODEL` comes to say one thing while the wire says another, which is the exact
+state ADR-0012's freeze exists to make impossible.
+
+If Doug ever pins a dated snapshot, the two transports stop sharing a string and
+this record is wrong. That reopens it; it does not get worked around.
 
 ### The thing that is not free
 
@@ -95,12 +145,29 @@ unit, findings are nested evidence within a PR and never counted as independent
 samples, and nothing surfaces to a customer or touches a published number until
 the bar is met.
 
-**3. The bar is declared before the run and is founder-only.** See below.
+**3. The bar is declared before the run and is founder-only.** Declared
+2026-08-28; see **The bar**. Two numbers are Andrew's ruling and two are derived
+from them and from bounds already in the code, and the derivation of each is
+recorded so that a later reader cannot mistake a derived constraint for a
+measured one.
 
 **4. `anthropic[vertex]` is declared explicitly in `api/pyproject.toml`.**
 `google-auth` arrives transitively through `google-cloud-storage` today. That is
 an accident of the dependency graph, and a transport that depends on an
 accident is a transport that breaks when an unrelated dependency is dropped.
+Done 2026-08-28, and it added **no new package**: `uv.lock` gains no entry, and
+`requests` — which Doug flagged as possibly arriving with the extra — was
+already there three times over before the change. The declaration makes an
+existing dependency explicit; it does not enlarge the runtime image.
+
+**4a. Declaring the dependency is not permission to use it.**
+`test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run` fails the
+suite if either client function builds a Vertex client. Doug turned this
+record's own reasoning back on it: ADR-0027's C3 got a guard because a condition
+that binds only in prose does not bind, and item 2 below is the same kind of
+claim. The guard is symmetric, and the test names how to remove it — run the
+study, record the result against the bar table, delete it in the PR that lands
+the client. A failed run does not delete it either.
 
 **5. Credentials follow the existing GCP path.** No new secret class, no new
 key material in the service. If that turns out to be false in the build, this
@@ -113,18 +180,96 @@ transition with an outage attached.
 
 ## The bar
 
-**UNFILLED. Founder-only under R11. Do not run against these.**
+**Declared 2026-08-28, before any Vertex call. Frozen.**
 
-| Quantity | Value | Notes |
+The baseline is Doug's own reader corpus as ADR-0026 defines the extraction —
+`rate --repo doug --rule-prefix reader:`, which is what "Doug's own review
+history" was always meant to name:
+
+| Disposition | n | share |
 |---|---|---|
-| Corpus and size | ______ | The frozen PR snapshots the paired run scores |
-| Non-inferiority margin on PR-level validated yield | ______ | The margin below the current transport that still counts as non-inferior |
-| False-positive burden ceiling | ______ | Declared, not measured after |
-| Latency and reliability constraints | ______ | The read sits inside a 300s Cloud Run request; `MAX_READ_RETRIES = 1` exists because of that arithmetic |
+| `real` | 68 | 44.4% |
+| `disproved` | 49 | 32.0% |
+| `adjacent` | 36 | 23.5% |
 
-The margin is the number that matters and the one most likely to be filled in
-loosely. A margin wide enough that nothing can fail it converts this record from
-a measurement into a formality.
+| Quantity | Value |
+|---|---|
+| **Corpus** | A 300-PR sample drawn from the frozen 653-PR replay corpus. The sample is drawn, committed, and hash-recorded **before the first call**, and both arms score the identical set. |
+| **Non-inferiority margin, PR-level validated yield** | The Vertex arm's `real` share is **≥ 39.4%** — 5.0 percentage points below the 44.4% baseline. |
+| **False-positive burden ceiling** | The Vertex arm's `disproved` share is **≤ 37.0%** — 5.0 percentage points above the 32.0% baseline. |
+| **Latency** | p95 whole-read **≤ 240s**, and no single read exceeds it. |
+| **Reliability** | The Vertex arm's hard-failure rate is at most **1.0 pp above** the Anthropic arm's on the same 300 PRs. |
+
+### Where each number comes from
+
+The two governing numbers are Andrew's, set 2026-08-28. The two derived ones are
+not independent judgments and are recorded here so that nobody later mistakes
+them for measurements.
+
+- **The 5.0 pp margin is the ruling.** It was chosen against the alternatives:
+  3 pp needs roughly 800 PRs per arm to separate a true drop from sampling
+  noise, which the 653-PR corpus cannot supply, so that bar would be
+  underpowered and its PASS would not mean what it says. 10 pp passes at about
+  100 per arm but certifies a visible product regression — roughly 30 lost real
+  findings per 300 PRs — as acceptable.
+- **300 PRs is the ruling**, and it is what powers 5 pp. A2 states that shadow
+  doubles the deep-read bill and that sampling is a decision to make **before**
+  switching it on, which is why the size is here and not in a later note.
+- **The false-positive ceiling is the margin, mirrored.** A transition that
+  holds `real` steady by producing more `disproved` has not held anything
+  steady. Using a different figure on this side would need its own derivation,
+  and there is none.
+- **240s is already in the code, not a new choice.** `DEFAULT_READ_TIMEOUT_S`
+  is 120s per HTTP attempt and `MAX_READ_RETRIES` is 1, so the whole read is
+  bounded by 240s plus backoff. That bound exists because `POST /v1/score/read`
+  buys its read inside the request and Cloud Run's `--timeout 300` kills it
+  otherwise, pinned by
+  `test_read_timeout_budget_fits_inside_the_cloud_run_timeout`. A transport
+  that cannot hold it produces platform 504s instead of the reader-unavailable
+  fallback this module contracts for.
+- **Reliability is stated as a difference, not a level,** because no baseline
+  transport-failure rate has ever been recorded. Both arms run the same 300 PRs
+  in the same window, so the comparison is available even though the level is
+  not. Recording the level for the first time is a side effect of this run and
+  is reported, not barred.
+
+### Provenance of the two ruled numbers
+
+Doug reviewed the commit that filled this table and raised the right objection
+(`contradicts-ticket`, high): the banner above said the numbers were
+founder-only and that the record could not be signed as it stands, and then the
+same commit supplied them, with the only evidence of authorization being prose
+added by that commit. Left there, a protected pre-registration and a fabricated
+one are indistinguishable in the record.
+
+So the mechanism is written down rather than asserted:
+
+- The two ruled numbers were **chosen by Andrew on 2026-08-28** from enumerated
+  alternatives, each with its arithmetic stated before the choice: margins of
+  3 pp, 5 pp, 10 pp, and a Wilson-lower-bound variant; corpora of 300 PRs, the
+  full 653, and the 153-row findings-log set. 5 pp and 300 were selected. The
+  rejected options and why they lose are in **Where each number comes from**,
+  which is what makes this a choice on the record rather than a preference.
+- The other two are **derived, and labelled derived**, from those two plus
+  bounds already in the code. No third quantity was invented.
+- **The founder act that ratifies this record is the merge**, not the prose. An
+  agent can write a number into a file; it cannot merge a PR into `main`. If
+  the numbers here are not Andrew's, the correct response is to reject the PR,
+  and this paragraph is the instruction to do so.
+
+That is weaker than a signature on a separate artifact and it is worth naming as
+weaker. What it is not is self-certifying: the authorization is an act by a
+different party, recorded in git, on a record that states in advance what the
+act means.
+
+### What this table does not do
+
+It does not license surfacing. Clearing it establishes review quality,
+calibration, cost, latency, and reliability against the current transport. It
+cannot establish that surfacing the Vertex arm changes a merge decision, a code
+change, or reviewer effort, because only a surfaced review can do that. A2
+reserves that claim for a later opt-in randomized surfaced-policy stage, and
+this record does not reach it.
 
 ## Rejected
 

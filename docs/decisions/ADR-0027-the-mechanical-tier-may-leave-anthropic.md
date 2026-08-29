@@ -1,6 +1,6 @@
 ---
 title: The mechanical tier may run a non-Anthropic model, and ADR-0016's scope claim is ratified
-status: proposed
+status: accepted
 date: 2026-08-28
 amends: ADR-0016
 ---
@@ -133,6 +133,15 @@ conditions, all of which bind before production traffic reaches it.
   two mechanical models, a swap silently pools two instruments in a corpus that
   `example_pack_eval.py` partitions by exactly that hash. Fixing it needs code
   and a migration, so it lands before the swap, not after. Filed as **#263**.
+
+  **This condition is enforced, not asserted.**
+  `test_the_mechanical_tier_has_not_left_anthropic_while_the_manifest_cannot_say_so`
+  fails the suite if `MECHANICAL_MODEL` leaves Anthropic while the manifest
+  still cannot record which mechanical model produced a row. Doug flagged the
+  unguarded state on the signing PR (`beyond-ticket`) and it was right: a
+  condition that binds only in prose does not bind. The test names how to remove
+  it — close #263 first, then delete it in the same PR that changes the model —
+  so that it cannot be quietly relaxed to keep a swap green.
 
 **3. The request path forks per vendor.** A vendor adapter owns its own parameter
 names and its own defaults. `MECHANICAL_EFFORT` is not translated into a foreign

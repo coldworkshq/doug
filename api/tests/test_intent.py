@@ -234,8 +234,36 @@ def test_selection_on_dougs_own_records():
     assert lema[0] == "ADR-0006"
 
     # Changes that bear on no recorded decision must be read against none.
-    assert sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"]) == []
+    # This case used to name api/pyproject.toml. It moved because two records
+    # now make claims about that file's CONTENTS — ADR-0028 requires
+    # anthropic[vertex] to be declared there, ADR-0027 notes that a second SDK
+    # moves tool_versions and therefore instrument_id. A dependency change in
+    # that file genuinely bears on both, so selecting them is the reader working,
+    # not the floor leaking. The title is unchanged and the file set is one no
+    # record governs, which is what this assertion was always about.
+    # The move narrows what this proves, so the general weakness it was
+    # accidentally covering is filed as #264: several cosmetic changes select
+    # three records each, and that predates ADR-0027/0028.
+    assert sent("Bump ruff 0.14.1 to 0.14.2", ["Makefile", ".gitignore"]) == []
     assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == []
+
+    # The other half of that move, pinned so it cannot regress silently: a
+    # change to the file those two records govern must be read against them, or
+    # the anthropic[vertex] declaration ADR-0028 item 4 requires can be dropped
+    # with nothing to say so.
+    #
+    # Asserted through relevance(), not select(). Doug flagged the select()
+    # form as brittle and was right: select() is ranked and bounded by MAX_DOCS,
+    # so any future record that also mentions dependencies could displace one of
+    # these two and fail the suite with no regression behind it. relevance() is
+    # the property this test is actually about — does this change bear on that
+    # record — and it is per-record, so it cannot be crowded out.
+    by_id = {d.id: d for d in docs}
+    for adr in ("ADR-0027", "ADR-0028"):
+        assert (
+            intent.relevance("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"], by_id[adr])
+            > 0
+        ), f"{adr} governs api/pyproject.toml and must be read against a change to it"
 
     # And the set stays tight rather than padding out to MAX_DOCS.
     # store.py's bound moved to 4 when ADR-0011 (migration list) joined the

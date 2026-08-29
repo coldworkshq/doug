@@ -3,8 +3,34 @@ title: Keep the reader prompt and schema frozen; govern DIFF_BUDGET by a coverag
 status: accepted
 date: 2026-08-06
 supersedes: ADR-0002
-amended_by: ADR-0018
+amended_by: ADR-0018, ADR-0028
 ---
+
+> **Amendment, 2026-08-28 (ADR-0028): the freeze governs the constants, not the
+> transport that carries them.**
+>
+> ADR-0028 runs the risk and intent reads through Vertex. `MODEL` does not move
+> — a Vertex model ID carries no prefix, so the string is `claude-opus-5` on
+> both transports and `test_reader_and_probe_share_the_validated_prompt_bytes`
+> stays green by construction. `SYSTEM`, `SCHEMA` and `MAX_TOKENS` are
+> untouched, and `DIFF_BUDGET`'s coverage bar is untouched.
+>
+> **What changes is what the freeze is understood to cover.** ADR-0028 asserts
+> it governs the request's constants and not the serving stack, and that
+> assertion is recorded here rather than only there — Doug flagged the
+> one-sided version, and `docs/decisions/README.md` is explicit that an
+> amendment marked only on the newer record leaves this one asserting something
+> untrue to every reader, this reader included.
+>
+> The distinction has no observable difference while both transports answer to
+> the same model string. It becomes real the moment a dated snapshot is pinned:
+> Vertex spells those with an `@` separator where the first-party API uses a
+> hyphen, and at that point the two stop sharing a string and ADR-0028 reopens.
+>
+> **No traffic has moved.** ADR-0028's non-inferiority bar is declared and has
+> not been run, and
+> `test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run` fails the
+> suite if a Vertex client ships before it does.
 
 > **Amendment, 2026-08-23 (ADR-0018): `EFFORT` is no longer frozen.**
 >
