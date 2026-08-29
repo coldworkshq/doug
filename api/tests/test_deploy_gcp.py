@@ -722,6 +722,17 @@ def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$GCLOUD_LOG"
 printf '%s\\n' "$PWD" >> "$GCLOUD_CWD_LOG"
+# ADR-0029's vertex_preflight fetches a token before probing. Returning a
+# constant keeps the fake boundary deterministic; GCLOUD_NO_TOKEN makes the
+# fetch fail, which is the branch
+# test_a_deploy_without_a_usable_credential_is_refused covers.
+if [ "$1 $2" = "auth print-access-token" ]; then
+  if [ "${GCLOUD_NO_TOKEN:-}" = "1" ]; then
+    exit 1
+  fi
+  printf '%s\\n' 'fake-access-token'
+  exit 0
+fi
 previous=
 format=
 raw=0
@@ -1368,3 +1379,127 @@ def test_setup_keeps_workos_identity_secrets_off_the_console_service_account():
     assert "doug-workos-api-key" in after_web
     assert "doug-workos-client-id" in after_web
     assert "doug-workos-api-key" not in _function_body("console")
+
+
+# --- ADR-0029 / #274: a set region is not a working one -------------------
+
+
+def _deploy_with_vertex_code(tmp_path, code: str, extra_env: dict | None = None):
+    """Run `deploy` with the Vertex probe answering `code`.
+
+    Only the rawPredict URL is rewritten; every other curl still answers 200 so
+    the showcase smoke behaves normally and a refusal here can only come from
+    the preflight.
+    """
+    fake_bin, log = _fake_gcloud(tmp_path)
+    curl = fake_bin / "curl"
+    curl.write_text(
+        f"""#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+case "$*" in
+  *rawPredict*) printf '%s' '{code}' ;;
+  *) printf '%s' '200' ;;
+esac
+"""
+    )
+    curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GCLOUD_LOG": str(log),
+        "GCLOUD_CWD_LOG": str(tmp_path / "gcloud.cwd.log"),
+        "CURL_LOG": str(tmp_path / "curl.log"),
+        "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
+        "PROJECT": "doug-prod0",
+        "REGION": "us-central1",
+        "VERTEX_REGION": "us-central1",
+        **(extra_env or {}),
+    }
+    result = subprocess.run(
+        ["bash", str(GCP_PATH), "deploy"],
+        cwd=GCP_PATH.parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result, log.read_text().splitlines(), (tmp_path / "curl.log").read_text()
+
+
+def test_a_deploy_whose_model_is_not_served_in_the_region_is_refused(tmp_path):
+    """Ten of thirteen Vertex regions do not serve claude-opus-5 for this
+    project, so a plausible-looking region is a coin flip.
+
+    Without this the deploy goes green, the check run keeps rendering, and
+    every deep read falls soft into the deterministic score — the reader is
+    gone and nothing says so. Verified against the live API on 2026-08-28:
+    us-east5, us-central1 and europe-west4 resolve; global and nine others 404.
+    """
+    result, lines, _ = _deploy_with_vertex_code(tmp_path, "404")
+
+    assert result.returncode != 0
+    assert "not served in us-central1" in result.stderr
+    assert not [line for line in lines if line.startswith("run deploy")], (
+        "the deploy reached Cloud Run with an unreachable model"
+    )
+
+
+def test_a_deploy_without_vertex_quota_is_refused_and_says_why(tmp_path):
+    """Access and throughput are separate grants, and having only the first
+    fails exactly like having neither.
+
+    The message has to distinguish "the allocation is zero" from "the endpoint
+    is momentarily busy", because the two look identical and only one is worth
+    stopping a deploy for. The probe posts an empty body, which consumes no
+    input tokens, so a per-minute *input token* quota rejection cannot be
+    caused by this request's own size.
+    """
+    result, lines, _ = _deploy_with_vertex_code(tmp_path, "429")
+
+    assert result.returncode != 0
+    assert "no throughput quota" in result.stderr
+    assert "allocation is zero" in result.stderr
+    assert not [line for line in lines if line.startswith("run deploy")]
+
+
+def test_the_preflight_probes_both_tiers_not_only_the_risk_read(tmp_path):
+    """ADR-0029 moved both clients, so both models ride this transport.
+
+    Vertex quota is per base model. Probing only MODEL would let a deploy pass
+    with the mechanical tier unusable, which costs grounding and attribution
+    silently — the failure ADR-0027 C2 says nothing else would surface. The
+    ids are read from reader.py rather than repeated here so the probe cannot
+    drift from what the service actually calls.
+    """
+    from doug import reader
+
+    result, _, curl_log = _deploy_with_vertex_code(tmp_path, "400")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    probes = [line for line in curl_log.splitlines() if "rawPredict" in line]
+    assert any(reader.MODEL in line for line in probes), reader.MODEL
+    assert any(reader.MECHANICAL_MODEL in line for line in probes), reader.MECHANICAL_MODEL
+    assert reader.MODEL != reader.MECHANICAL_MODEL
+
+
+def test_a_400_from_the_probe_is_the_healthy_answer(tmp_path):
+    """The probe sends an empty body on purpose, so the model rejecting it is
+    success: the route resolved, the model exists, and nothing was generated.
+
+    Treating 400 as a failure would refuse every correct deploy, which is how
+    a safety check gets deleted rather than fixed.
+    """
+    result, lines, _ = _deploy_with_vertex_code(tmp_path, "400")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [line for line in lines if line.startswith("run deploy")]
+
+
+def test_a_deploy_without_a_usable_credential_is_refused(tmp_path):
+    """An empty token would make every probe fail in a way that reads like a
+    dead region. Naming the real cause is the difference between re-running
+    `gcloud auth login` and hunting a region that was fine all along."""
+    result, lines, _ = _deploy_with_vertex_code(tmp_path, "400", {"GCLOUD_NO_TOKEN": "1"})
+
+    assert result.returncode != 0
+    assert "gcloud auth login" in result.stderr
+    assert not [line for line in lines if line.startswith("run deploy")]

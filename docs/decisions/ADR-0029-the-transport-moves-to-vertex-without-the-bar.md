@@ -112,12 +112,42 @@ cleanup would convert a one-command revert into a redeploy, which is the state
 ADR-0028 item 6 exists to prevent. It leaves in its own change when the rollback
 window closes.
 
-**5. The region is required and has no default.** `deploy/gcp.sh` refuses to
-deploy without `VERTEX_REGION`. Claude is not served from every Vertex region and
-`us-central1` is not necessarily one of them, and a wrong region does not fail
-loudly — every read fails soft into the deterministic score, which reads as "the
-reader is down" rather than "the region is wrong". A guessed default would
-degrade the product silently, so the deploy fails instead.
+**5. The region is required, has no default, and is verified before the deploy.**
+`deploy/gcp.sh` refuses without `VERTEX_REGION`, then probes each model in that
+region and refuses again on 404, 401/403, or 429.
+
+A wrong region does not fail loudly. Every read falls soft into the
+deterministic score, which reads as "the reader is down" rather than "the region
+is wrong", so the regression is unattributable days later. A set region is also
+not a working one, and measurement rather than assumption says how far apart
+those are. Probed live on 2026-08-28 against `doug-prod0`:
+
+| Fact | Value |
+|---|---|
+| Regions probed | 13 |
+| Regions serving `claude-opus-5` | **3** — `us-east5`, `us-central1`, `europe-west4` |
+| `global` | **not served**, 404 |
+| Throughput quota on all three | **zero** — 429 on `online_prediction_input_tokens_per_minute_per_base_model` |
+
+Ten of thirteen regions 404, so a plausible-looking region is close to a coin
+flip. Model Garden access and throughput quota are separate grants, and holding
+only the first fails exactly like holding neither. Both states are invisible to
+a non-empty-string check, which is why item 5 is a probe and not a validation.
+
+The probe posts an empty body. That fails request validation before the model
+generates anything, so it costs nothing, and it cannot be rate-limited by its
+own token count — which is what lets a 429 be read as "the allocation is zero"
+rather than "the endpoint is busy". A 400 is the healthy answer.
+
+**What the probe does not establish.** It runs as the operator's credentials,
+not as `doug-api-sa`, so it proves the model is reachable in the region and says
+nothing about whether the runtime identity may call it. That half is the
+`roles/aiplatform.user` binding in `setup`. Two checks, two identities, and the
+gap between them is named rather than papered over.
+
+`VERTEX_REGION` is still not defaulted to `$REGION`, and the two coinciding at
+`us-central1` does not weaken that. Ten regions do not serve the model, which is
+the hazard; that the service's own region is one of the three is luck.
 
 **6. No mapping layer between `MODEL` and the wire.** Vertex serves
 current-generation models under the bare first-party id, so the string is
@@ -189,6 +219,10 @@ adds no new cloud relationship. Unchanged from ADR-0028.
   mounted and the balance is non-zero. When the balance reaches zero the rollback
   stops existing, and this transport becomes the only one. That is worth knowing
   before it happens rather than after.
+- **The transport cannot deploy until quota is granted.** All three serving
+  regions return 429 with a zero allocation today. That is a founder action and
+  it is tracked in **#274**, along with the region evidence. The preflight in
+  item 5 is what stops that state from shipping as a silent outage.
 - **`scripts/llm_probe.py` stays on the first-party API.** It reports what it
   measured, which is the same reason ADR-0018 left its `EFFORT` alone.
 - **The mechanical tier's vendor boundary is untouched.** ADR-0027's C1, C2 and

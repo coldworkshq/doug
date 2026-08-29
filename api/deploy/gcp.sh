@@ -636,6 +636,80 @@ compute_prereg_hash() {
     "$PREREG_DOC"
 }
 
+# ADR-0029 / #274. The region check inside `deploy` proves a string is set. It
+# does not prove the model is reachable through it, and both ways that has
+# already gone wrong are invisible to a non-empty check:
+#
+#   1. `claude-opus-5` is served in THREE of thirteen Vertex regions for this
+#      project. Ten of them 404. A plausible-looking region is a coin flip.
+#   2. Model Garden access and throughput quota are separate grants. With
+#      access and no quota every call returns 429, which is indistinguishable
+#      from a healthy deploy until someone reads a verdict.
+#
+# Either one leaves reader.py falling soft into the deterministic score on
+# every read. That is the contracted behaviour for a stalled upstream and it
+# is exactly wrong here: the check run still renders, the PR still gets a
+# verdict, and the deep read is simply gone. Nothing pages, and the regression
+# is unattributable days later. So the deploy refuses instead, which is the
+# same trade `preregistration_preflight` and the showcase smoke already make.
+#
+# The probe posts an empty body. That fails request validation before the
+# model generates anything, so it costs nothing and cannot be rate-limited by
+# its own token count — which is what makes a 429 here mean "the allocation is
+# zero" rather than "we are momentarily busy".
+#
+# WHAT THIS DOES NOT CHECK: it runs as the operator's credentials, not as
+# doug-api-sa, so it proves the model is available in the region and says
+# nothing about whether the RUNTIME identity may call it. That half is the
+# roles/aiplatform.user binding in `setup`, asserted by
+# test_setup_enables_vertex_and_grants_the_api_identity_access.
+reader_models() {
+  python3 -c 'import re,pathlib,sys
+source = pathlib.Path("doug/reader.py").read_text()
+for name in ("MODEL", "MECHANICAL_MODEL"):
+    found = re.search(r"^%s = \"([^\"]+)\"" % name, source, re.M)
+    if not found:
+        sys.exit("could not read %s from doug/reader.py" % name)
+    print(found.group(1))'
+}
+
+vertex_preflight() {
+  local token model code
+  token=$(gcloud auth print-access-token --project "$PROJECT" 2>/dev/null)
+  if [ -z "$token" ]; then
+    echo "ERROR: no access token; run 'gcloud auth login' before deploying." >&2
+    return 1
+  fi
+  # Both tiers ride this transport under ADR-0029, so both are probed. The
+  # mechanical tier hits the same region and quota walls as the risk read and
+  # is billed on a separate per-base-model quota.
+  for model in $(reader_models); do
+    code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{}' \
+      "https://${VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${VERTEX_REGION}/publishers/anthropic/models/${model}:rawPredict")
+    case "$code" in
+      404)
+        echo "ERROR: $model is not served in $VERTEX_REGION (404)." >&2
+        echo "Pick a region that serves it, or enable it in Vertex Model Garden." >&2
+        return 1 ;;
+      401|403)
+        echo "ERROR: $model in $VERTEX_REGION refused the operator credential ($code)." >&2
+        echo "Model Garden access for $PROJECT is missing, or the token cannot reach it." >&2
+        return 1 ;;
+      429)
+        echo "ERROR: $model in $VERTEX_REGION has no throughput quota (429)." >&2
+        echo "An empty-body probe consumes no input tokens, so a quota rejection here" >&2
+        echo "means the allocation is zero, not that the endpoint is busy. Request" >&2
+        echo "online_prediction_input_tokens_per_minute_per_base_model for" >&2
+        echo "anthropic-$model in $VERTEX_REGION, then re-run. See #274." >&2
+        return 1 ;;
+      000)
+        echo "ERROR: probe for $model in $VERTEX_REGION did not complete (network or timeout)." >&2
+        return 1 ;;
+    esac
+  done
+}
+
 deploy() {
   preregistration_preflight
   # ADR-0029. Refuse the deploy rather than ship a guessed Vertex region.
@@ -652,6 +726,8 @@ deploy() {
     echo "deterministic fallback instead of failing the deploy. See ADR-0029." >&2
     exit 1
   fi
+  # A set region is not a working one. See vertex_preflight's comment.
+  vertex_preflight || exit 1
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   if service_exists "$SERVICE"; then
     traffic_flags="--no-traffic --tag candidate"

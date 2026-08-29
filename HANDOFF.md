@@ -1,13 +1,44 @@
 # HANDOFF — doug
 
-State:    review — ADR-0029 branch `adr-0028-paired-run`, api 1764 pass, ruff
-          clean. The reader's transport is Vertex, DEFAULT_TRANSPORT="vertex".
-          NOT DEPLOYED. The deploy needs VERTEX_REGION and will refuse without it.
-Next:     Andrew (1) confirms the Vertex region that serves claude-opus-5 — the
-          deploy refuses without VERTEX_REGION and no default is supplied on
-          purpose; (2) reviews and merges the PR; (3) rules on #268.
-Blockers: the region value is founder-only (R11 spend/seam). Everything else is
-          landed and green.
+State:    review — PR #273, branch `adr-0029-vertex-transport`, api 1768 pass,
+          ruff clean. Transport is Vertex, DEFAULT_TRANSPORT="vertex". NOT
+          DEPLOYED, and the deploy now REFUSES until quota exists.
+Next:     Andrew requests Vertex quota (below), then VERTEX_REGION=us-central1
+          and merge #273. Also rules on #268.
+Blockers: FOUNDER — Vertex throughput quota is ZERO in every serving region.
+          The deploy cannot succeed until it is granted. Tracked in #274.
+
+THE REGION QUESTION IS ANSWERED, by probe, not by guess (2026-08-28):
+- Model Garden enablement is DONE. `claude-opus-5` resolves in exactly THREE of
+  13 regions: us-east5, us-central1, europe-west4. `global` 404s — it is NOT
+  available, so any earlier suggestion to use the global endpoint is dead.
+- USE us-central1. The api service already runs there, so the call stays
+  in-region inside a request already bounded at 240s. europe-west4 would move
+  tenant source code to the EU for no reason; us-east5 adds a hop for none.
+- ALL THREE return 429: "Quota exceeded for
+  online_prediction_input_tokens_per_minute_per_base_model with base model
+  anthropic-claude-opus-5". The probe sends an EMPTY BODY and consumes no input
+  tokens — a quota rejection therefore means the allocation is ZERO, not that
+  the endpoint is busy. Access and throughput are separate grants and this
+  project has only the first.
+- Request quota for BOTH anthropic-claude-opus-5 AND anthropic-claude-sonnet-5
+  in us-central1: the mechanical tier rides the same transport and quota is per
+  base model. https://console.cloud.google.com/iam-admin/quotas?project=doug-prod0
+- Re-probe after: a 400 instead of a 429 means quota landed. 400 is the healthy
+  answer — the empty body is rejected on validation, having generated nothing.
+
+THE DEPLOY PREFLIGHT (`vertex_preflight` in gcp.sh), added this round:
+A set region is not a working one, and there are now TWO PROVEN ways the
+transport can be live and unusable while the deploy looks green: a region that
+does not serve the model (10 of 13), and access without quota (all 3). Both end
+in the same place — every read falls soft into the deterministic score, the
+check run still renders, and the deep read is silently gone. The preflight
+probes EACH model (ids read from reader.py, so they cannot drift) in the
+configured region and refuses on 404 / 401 / 403 / 429 with a distinct message
+each. 400 passes: the route resolved and nothing was generated.
+It does NOT check the runtime identity — it runs as the operator, not
+doug-api-sa. That half is the roles/aiplatform.user binding in `setup`, and
+ADR-0029 names the gap rather than papering over it.
 
 ## What this is, and what it costs
 
