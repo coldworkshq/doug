@@ -79,11 +79,20 @@ fetch() {  # fetch <path-or-url> <array-key>: every page of <array-key>, merged
   # first page would read as absent — verify failing on something that
   # exists, and apply creating a duplicate of it. The merged result is
   # exactly `{"<array-key>": [...all pages...]}`.
-  local base sep body page_token="" pages
+  local base sep body page_token="" prev_token="" page_count=0 pages
   case "$1" in https://*) base="$1" ;; *) base="$API/$1" ;; esac
   case "$base" in *\?*) sep="&" ;; *) sep="?" ;; esac
   pages=$(mktemp) || return 3
   while :; do
+    # Bounded, and a repeated token is an error: a server echoing the same
+    # nextPageToken forever would otherwise loop this into an unbounded
+    # curl storm (Doug: reader:unbounded-loop). 50 pages is an order of
+    # magnitude past anything this project holds; hitting it means the API
+    # is misbehaving, which is exit 3 — "could not ask", never a guess.
+    page_count=$((page_count + 1))
+    if [ "$page_count" -gt 50 ]; then
+      rm -f "$pages"; echo "ERROR: $base did not finish paginating after 50 pages" >&2; return 3
+    fi
     body=$(curl -sS -H "Authorization: Bearer $TOKEN" \
       "$base${page_token:+${sep}pageToken=${page_token}}") || {
       rm -f "$pages"; echo "ERROR: could not reach $base" >&2; return 3; }
@@ -105,10 +114,18 @@ if isinstance(body, dict) and "error" in body:
     sys.exit(3)
 print(json.dumps(body))
 ' "$1" >> "$pages" || { rm -f "$pages"; return 3; }
+    # No stderr suppression: the page already passed JSON validation above,
+    # so a failure HERE is a real defect that must not be read as "no more
+    # pages" — that would silently truncate the listing.
+    prev_token="$page_token"
     page_token=$(printf '%s' "$body" | python3 -c '
 import json, sys
-print(json.load(sys.stdin).get("nextPageToken", ""))' 2>/dev/null)
+print(json.load(sys.stdin).get("nextPageToken", ""))') || {
+      rm -f "$pages"; echo "ERROR: could not read nextPageToken from $base" >&2; return 3; }
     [ -z "$page_token" ] && break
+    if [ "$page_token" = "$prev_token" ]; then
+      rm -f "$pages"; echo "ERROR: $base repeated a pageToken; refusing to loop" >&2; return 3
+    fi
   done
   # The pages file rides in argv, NOT `< "$pages"`: `python3 -` already
   # takes its SCRIPT from stdin (the heredoc), so a second stdin
@@ -440,9 +457,14 @@ fi
 if missing reader-fallback-metric; then
   echo "creating log-based metric doug-reader-fallback"
   # The filter carries FALLBACK_TOKEN verbatim — the same bytes reader.py
-  # prints and the audit above matches on. textPayload uses the substring
-  # operator (:) deliberately: the line's tail is the SDK's error string,
-  # which is diagnostic and unstable.
+  # prints and the audit above matches on. The substring operator (:) is
+  # deliberate: the line's tail is the SDK's error string, which is
+  # diagnostic and unstable. Both payload shapes are matched (Doug:
+  # reader:log-format-coupling): today the line arrives as Cloud Run
+  # unstructured stderr (textPayload); a future move to a structured
+  # logger promotes it to jsonPayload.message, and a filter pinned to one
+  # shape would zero the metric silently while the audit stayed green —
+  # the exact silent-reader failure this metric exists to close.
   post "$LOGAPI/metrics" "$(python3 -c '
 import json, sys
 print(json.dumps({
@@ -452,7 +474,8 @@ print(json.dumps({
                     "the loud half. See api/doug/reader.py FALLBACK_LOG_TOKEN."),
     "filter": ("resource.type=\"cloud_run_revision\" AND "
                "resource.labels.service_name=\"doug-api\" AND "
-               "textPayload:\"%s\"" % sys.argv[1]),
+               "(textPayload:\"%s\" OR jsonPayload.message:\"%s\")"
+               % (sys.argv[1], sys.argv[1])),
 }))' "$FALLBACK_TOKEN")" || exit 1
 fi
 
@@ -481,7 +504,17 @@ print(json.dumps({
     "aggregations": [{"alignmentPeriod": "300s", "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM"}],
 }))' "$METRIC_NAME")" \
-    'doug#274: at least one LLM read degraded to the deterministic score in a 5-minute window. The fallback is contracted behaviour and therefore silent everywhere a human looks — the check run renders, CI stays green, and only a reasons row says the deep read is gone. A zero Anthropic balance, a revoked key, a wrong Vertex region and a rejected request shape all produce exactly this signal, so treat one firing as the reader being DOWN until the log line names the cause: the tail of each doug-reader-fallback log entry carries the SDK error verbatim.' || exit 1
+    'doug#274: at least one LLM read degraded to the deterministic score in a 5-minute window. The fallback is contracted behaviour and therefore silent everywhere a human looks — the check run renders, CI stays green, and only a reasons row says the deep read is gone. A zero Anthropic balance, a revoked key, a wrong Vertex region and a rejected request shape all produce exactly this signal, so treat one firing as the reader being DOWN until the log line names the cause: the tail of each doug-reader-fallback log entry carries the SDK error verbatim.' || {
+    # A metric created moments ago can take a little while to become
+    # visible to the Monitoring API, so this rejection does not always
+    # mean anything is wrong (Doug: reader:resource-provisioning-race).
+    # Re-running IS the recovery, exactly as the header says: the second
+    # pass finds the metric present and creates only the policy.
+    echo "The reader-fallback policy was not created. If the log metric was" >&2
+    echo "created just above, Monitoring may not see it yet — wait a minute" >&2
+    echo "and re-run apply; the second pass creates only what is missing." >&2
+    exit 1
+  }
 fi
 
 echo
