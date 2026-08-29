@@ -455,6 +455,12 @@ def score_one(
             verdict.reasons.append(Reason(rule="reader-capped", label=str(e), weight=0.0))
             return "deterministic", verdict, None, None
         except reader.ReaderError as e:
+            # The verdict row is quiet by contract; this line is the loud half
+            # the alert watches. See reader.FALLBACK_LOG_TOKEN.
+            print(
+                f"doug: {reader.FALLBACK_LOG_TOKEN} (reader-unavailable): {e}",
+                file=sys.stderr,
+            )
             verdict = score(meta, threshold=threshold)
             verdict.reasons.append(
                 Reason(rule="reader-unavailable", label=str(e), weight=0.0)

@@ -355,6 +355,12 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
         capped.reasons.append(Reason(rule="reader-capped", label=str(e), weight=0.0))
         return capped
     except reader.ReaderError as e:
+        # The verdict row is quiet by contract; this line is the loud half
+        # the alert watches. See reader.FALLBACK_LOG_TOKEN.
+        print(
+            f"doug: {reader.FALLBACK_LOG_TOKEN} (reader-unavailable): {e}",
+            file=sys.stderr,
+        )
         fallback = score(req.pr)
         fallback.reasons.append(
             Reason(rule="reader-unavailable", label=str(e), weight=0.0)
