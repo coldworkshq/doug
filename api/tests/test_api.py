@@ -1246,7 +1246,7 @@ def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
     calls: list[int] = []
 
     class _Gh:
-        def graphql(self, query, variables):
+        def graphql(self, query, variables=None):
             calls.append(variables["number"])
             return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
 
@@ -1304,7 +1304,7 @@ def test_the_queued_retry_cannot_double_a_row(tmp_path, monkeypatch):
     del payload["pull_request"]["merge_commit_sha"]
 
     class _Gh:
-        def graphql(self, query, variables):
+        def graphql(self, query, variables=None):
             return {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
 
     monkeypatch.setattr(api.app_auth, "installation_client", lambda i: _Gh())
@@ -1358,7 +1358,7 @@ def test_the_queued_lookup_never_escapes_its_background_task(tmp_path, monkeypat
     monkeypatch.setattr(
         api.app_auth, "installation_client",
         lambda i: SimpleNamespace(
-            graphql=lambda q, v: {
+            graphql=lambda q, variables=None: {
                 "repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}
             }
         ),

@@ -55,18 +55,29 @@ def _usable(value, column) -> str | None:
     return value
 
 
-def _dig(data, *keys):
+def _dig(body, *keys):
     """Walk a GraphQL response, treating any missing or null level as absent.
 
     A PR that was closed without merging answers `mergeCommit: null`, which is
     a correct answer and not an error, so every level here has to tolerate null
     without raising.
+
+    **Unwraps a `data` envelope if there is one.** githubkit returns the
+    unwrapped payload — verified against the live API on 2026-08-28 — but Doug
+    pointed out that if that ever stopped being true, every lookup would return
+    None and fail soft, leaving the outcome lane dark behind one stderr line:
+    the exact failure this module exists to end, reintroduced one layer down,
+    and invisible because only fakes exercise the path in tests. Accepting both
+    shapes costs two lines and removes the failure mode rather than documenting
+    it. `repository` is never a GraphQL envelope key, so there is no ambiguity.
     """
+    if isinstance(body, dict) and "data" in body and "repository" not in body:
+        body = body.get("data")
     for key in keys:
-        if not isinstance(data, dict):
+        if not isinstance(body, dict):
             return None
-        data = data.get(key)
-    return data
+        body = body.get(key)
+    return body
 
 
 def from_merge_commit(client, *, owner: str, repo: str, number: int, column) -> str | None:
@@ -79,7 +90,9 @@ def from_merge_commit(client, *, owner: str, repo: str, number: int, column) -> 
     into a raised exception.
     """
     try:
-        data = client.graphql(_QUERY, {"owner": owner, "name": repo, "number": number})
+        data = client.graphql(
+            _QUERY, variables={"owner": owner, "name": repo, "number": number}
+        )
     except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
         print(
             f"doug: merge-commit lookup failed for {owner}/{repo}#{number} "

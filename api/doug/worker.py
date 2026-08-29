@@ -1264,6 +1264,7 @@ def reconcile_outcomes(installation_id: int) -> int:
     gh = app_auth.installation_client(installation_id)
     cutoff = datetime.now(UTC) - _MERGE_RECONCILE_LOOKBACK
     count = 0
+    skipped = 0
     for repo_id, full_name in store.active_repos(installation_id):
         owner, _, name = full_name.partition("/")
         pulls: list = []
@@ -1389,10 +1390,11 @@ def reconcile_outcomes(installation_id: int) -> int:
             if merge_commit_sha is None:
                 print(
                     f"doug: outcome reconcile skipped {full_name}#{number} "
-                    "(no merge_commit_sha on the pull payload and no usable "
-                    "merged event)",
+                    "(no merge_commit_sha on the pull payload and no "
+                    "mergeCommit in the graph)",
                     file=sys.stderr,
                 )
+                skipped += 1
                 continue
             merged_head_sha = getattr(getattr(p, "head", None), "sha", None)
             if not isinstance(merged_head_sha, str):
@@ -1402,6 +1404,22 @@ def reconcile_outcomes(installation_id: int) -> int:
                 merged_head_sha=merged_head_sha,
             )
             count += len(inserted)
+    # #259, and the reason it hid for two executions: a sweep that skips every
+    # PR is indistinguishable from a sweep with nothing to do, because both are
+    # silent and both exit 0. Doug named the shape again on the fix itself
+    # (`reader:silent-degradation`) — a GraphQL permission or rate-limit problem
+    # would look exactly like "nothing to reconcile". One line per pass, and a
+    # pass that enqueued nothing while skipping something says so loudly.
+    #
+    # A real counter belongs in Cloud Monitoring next to the three policies on
+    # doug-prod0, not in a print. Filed as #267.
+    if skipped:
+        print(
+            f"doug: outcome reconcile for installation {installation_id} "
+            f"enqueued {count} and SKIPPED {skipped}"
+            + (" — every candidate was skipped" if count == 0 else ""),
+            file=sys.stderr,
+        )
     return count
 
 

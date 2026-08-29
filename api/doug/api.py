@@ -2701,7 +2701,12 @@ def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
         # no installation id, no full_name, or no merged_at was dropped with no
         # line at all, which is a REGRESSION in observability for exactly the
         # case #259 is about — a lane going quiet and looking like nothing to do.
-        if can_look_up and merged_at is not None:
+        # base_ref and repo_id are checked HERE, not only in the five-fact guard
+        # below. Doug flagged the early return for queuing a retry that would
+        # mint a token and spend a GraphQL call only to be dropped by that guard
+        # (`reader:wasted-work-path`). A payload that cannot produce a row is a
+        # drop now, at zero cost, not a drop later at the cost of two calls.
+        if can_look_up and merged_at is not None and base_ref and isinstance(repo_id, int):
             print(
                 f"doug: merged PR #{number} carried no merge_commit_sha; "
                 "queueing the merge-commit lookup off the request path",
@@ -2712,7 +2717,8 @@ def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
             f"doug: merged PR #{pr.get('number')} carried no merge_commit_sha "
             "and cannot be looked up "
             f"(merged_at={merged_at is not None}, installation="
-            f"{isinstance(installation_id, int)}, repo={bool(owner and name)}); "
+            f"{isinstance(installation_id, int)}, repo={bool(owner and name)}, "
+            f"base_ref={bool(base_ref)}, repo_id={isinstance(repo_id, int)}); "
             "outcome clock not started",
             file=sys.stderr,
         )

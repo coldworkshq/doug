@@ -1806,7 +1806,7 @@ class FakeReconcileGH:
             )
         )
 
-    def graphql(self, query, variables):
+    def graphql(self, query, variables=None):
         number = variables["number"]
         self.graphql_calls.append(number)
         oid = self._merge_commits.get(number)
@@ -1879,12 +1879,14 @@ def test_reconcile_outcomes_does_not_buy_the_fallback_when_the_field_is_there(
 def test_reconcile_outcomes_skips_when_neither_source_carries_the_sha(
     tmp_path, monkeypatch, capsys
 ):
-    """Fail soft, and say which of the two sources failed.
+    """Fail soft, say which of the two sources failed, and say it at the pass level.
 
     The old log line said "missing or over-long merge_commit_sha", which was
-    true and told an operator nothing about whether the fallback had been
-    tried. A skip that cannot be told apart from a skip for another reason is
-    how #259 stayed invisible for two executions."""
+    true and told an operator nothing about whether the lookup had been tried.
+    A skip that cannot be told apart from a skip for another reason is how #259
+    stayed invisible for two executions — and the per-PR line alone does not fix
+    that, because a sweep that skips everything still exits 0 with no summary.
+    Doug named the same shape on the fix (`reader:silent-degradation`)."""
     _installed(tmp_path, monkeypatch)
     pull = _closed_pull(number=5, merged_at=NOW - timedelta(days=1))
     gh = FakeReconcileGH([pull], {}, trimmed=True, merge_commits={})
@@ -1892,7 +1894,51 @@ def test_reconcile_outcomes_skips_when_neither_source_carries_the_sha(
 
     assert worker.reconcile_outcomes(1) == 0
     assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
-    assert "no usable merged event" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "no mergeCommit in the graph" in err
+    # And the pass says it swept nothing while skipping something. Without this
+    # line a 100%-skip sweep and an empty sweep are the same silent exit 0,
+    # which is how #259 hid through two executions.
+    assert "every candidate was skipped" in err
+
+
+def test_the_lookup_reads_either_graphql_response_shape():
+    """Doug's sharpest finding on this PR, and the one only fakes could hide.
+
+    from_merge_commit digs straight for `repository`, which assumes the client
+    hands back the unwrapped payload. githubkit does — checked against the live
+    API on 2026-08-28 — but nothing in the suite proves it, because every test
+    here builds its own fake. If that assumption were ever wrong, every lookup
+    would return None and fail soft, leaving the outcome lane dark behind one
+    stderr line: the failure this module exists to end, reintroduced one layer
+    down and invisible.
+
+    So both shapes are accepted and both are pinned. The keyword name is pinned
+    too: githubkit's signature is graphql(query, variables=None), and an earlier
+    version of this test's own fake took `variables` positionally and failed
+    with a TypeError the moment the call started passing it by keyword — which
+    is exactly the second half of the finding, caught by it.
+    """
+    from doug import merge_sha
+
+    column = store.outcome_jobs.c.merge_commit_sha
+    inner = {"repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}}
+
+    class _Gh:
+        def __init__(self, body):
+            self.body, self.seen = body, {}
+
+        def graphql(self, query, variables=None):
+            self.seen.update(variables or {})
+            return self.body
+
+    for name, body in (("unwrapped", inner), ("data-enveloped", {"data": inner})):
+        gh = _Gh(body)
+        got = merge_sha.from_merge_commit(
+            gh, owner="o", repo="r", number=7, column=column
+        )
+        assert got == "e" * 40, f"{name} response was not read"
+        assert gh.seen == {"owner": "o", "name": "r", "number": 7}
 
 
 def test_reconcile_outcomes_skips_a_pr_the_graph_says_was_never_merged(
