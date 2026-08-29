@@ -951,6 +951,12 @@ def test_default_client_never_carries_the_sdk_default_timeout(monkeypatch):
             self.messages = _FakeMessages(INTENT_PAYLOAD, "end_turn")
 
     monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    # ADR-0029 made the transport a value, and the default is Vertex. Patching
+    # anthropic.Anthropic while the reader builds an AnthropicVertex would
+    # capture nothing and assert on an empty dict, so the transport this test
+    # is about is named rather than inherited. The bound is pinned on BOTH
+    # transports by test_both_clients_bound_the_whole_read_not_just_one_attempt.
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
 
     monkeypatch.delenv("DOUG_READ_TIMEOUT_S", raising=False)
     reader.read_diff(_pr(), "+ x", scope=SCOPE)
@@ -1068,52 +1074,140 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
     )
 
 
-def test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run():
-    """ADR-0028's claim, made to fail loudly — the same treatment C3 got.
+# --- ADR-0029: the transport moved to Vertex, by direction, unmeasured ---
+#
+# test_the_risk_read_has_not_moved_to_vertex_before_its_bar_is_run lived here.
+# Its docstring named one way to remove it: run ADR-0028's paired study,
+# record the result against the four numbers in the bar table, and delete it in
+# the PR that lands the Vertex client, citing that result.
+#
+# That is NOT what happened, and pretending otherwise is the failure the guard
+# existed to prevent. The study was never run. Andrew directed the move on
+# 2026-08-28 because the Anthropic balance funds the cutover or the study but
+# not both, and ADR-0029 records the direction, the reason, and the fact that
+# the new instrument era ships governed by nothing. ADR-0018 is the precedent
+# for the shape.
+#
+# The tests below replace it. They pin what IS true — the destination, the
+# rollback, the provider label, and the absence of a mapping layer — and none
+# of them asserts that any bar was met, because none was.
 
-    Doug applied this PR's own reasoning back to it (`missing-from-pr`): ADR-0027
-    C3 was given a guard because "a condition that binds only in prose does not
-    bind", and ADR-0028 makes an identical prose claim — that no traffic moves to
-    Vertex until the paired silent run clears the declared bar — with nothing in
-    code to hold it. The objection is correct and consistent, so the guard is
-    symmetric.
 
-    Two existing tests already fail on a Vertex swap
-    (test_default_client_never_carries_the_sdk_default_timeout and
-    test_both_clients_bound_the_whole_read_not_just_one_attempt), but they fail
-    on the timeout arguments, incidentally, and their message would send the
-    reader to the Cloud Run arithmetic rather than to the unrun bar. A guard
-    whose failure names the wrong reason is how a transition ships anyway.
+def test_the_default_transport_is_vertex_and_the_rollback_is_a_value(monkeypatch):
+    """ADR-0028 item 6: reverting must be a value change, not a release.
 
-    Source inspection rather than construction, because constructing either
-    client needs live credentials. It is deliberately crude for the same reason
-    the C3 guard is: impossible to trip over by accident, trivial to remove on
-    purpose. The transport is one identifier in two functions, so there is
-    nothing subtle for this to miss.
+    A forced transition whose rollback needs a deploy is a forced transition
+    with an outage attached. The default is asserted against the literal so
+    that DEFAULT_TRANSPORT = TRANSPORT_ANTHROPIC cannot make this
+    tautologically true, and both directions are exercised: the point of the
+    constant is that the service can be moved back while it is running.
+    """
+    assert reader.DEFAULT_TRANSPORT == "vertex"
 
-    To remove this test: run the paired study, record the result against the four
-    numbers in ADR-0028's bar table, and delete it in the PR that lands the
-    Vertex client, citing that result. A failed run does not widen the bar and it
-    does not delete this test either.
+    monkeypatch.delenv("DOUG_READER_TRANSPORT", raising=False)
+    assert reader.transport() == reader.TRANSPORT_VERTEX
+
+    for value, expected in (
+        ("vertex", reader.TRANSPORT_VERTEX),
+        ("anthropic", reader.TRANSPORT_ANTHROPIC),
+        ("  Anthropic  ", reader.TRANSPORT_ANTHROPIC),
+    ):
+        monkeypatch.setenv("DOUG_READER_TRANSPORT", value)
+        assert reader.transport() == expected, value
+
+
+def test_an_unreadable_transport_value_falls_back_to_the_default(monkeypatch):
+    """A typo must not construct an arbitrary client or crash every read.
+
+    The reader fails soft everywhere else on purpose, and a misspelled env var
+    is the one input an operator supplies under pressure — during the rollback
+    this constant exists to make possible. Falling back to the default is what
+    keeps a typo from becoming an outage.
+    """
+    for junk in ("", "   ", "bedrock", "vertexai", "anthropic-vertex"):
+        monkeypatch.setenv("DOUG_READER_TRANSPORT", junk)
+        assert reader.transport() == reader.DEFAULT_TRANSPORT, junk
+
+
+def test_provider_names_the_api_surface_and_the_two_transports_do_not_pool(monkeypatch):
+    """ADR-0028 item 1, which is the cost of the move rather than a detail.
+
+    `provider` names the API surface actually called, not the vendor of the
+    weights, so it moves instrument_id and partitions the labelled corpus at
+    the cutover. example_pack_eval.py partitions by exactly that hash, so the
+    partition is mechanical rather than a matter of discipline — but only while
+    the two strings actually differ. Asserting inequality is the whole test:
+    equal labels would silently pool two serving stacks, which is the
+    inheritance A2 forbids and the cost ADR-0028 chose to pay.
+    """
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_VERTEX)
+    vertex = reader.provider_name()
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    first_party = reader.provider_name()
+
+    assert vertex == "anthropic-vertex"
+    assert first_party == "anthropic"
+    assert vertex != first_party
+
+
+def test_the_capture_records_the_transport_that_actually_ran(monkeypatch):
+    """The manifest must say which surface produced the row, not which one the
+    module was written for.
+
+    `provider` was a hardcoded "anthropic" literal at the risk-read call site
+    until ADR-0029. A constant there survives the transport move, reads as
+    correct, and quietly pools the two eras in the one corpus that partitions
+    on it — the same defect ADR-0027 C3 describes for the mechanical tier.
+    """
+    recorded: list[str] = []
+
+    monkeypatch.setattr(
+        reader.example_pack_capture, "capture_requested", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        reader.example_pack_capture,
+        "record_attempt",
+        lambda **kw: recorded.append(kw["provider"]),
+    )
+
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_VERTEX)
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
+
+    assert recorded == ["anthropic-vertex", "anthropic"]
+
+
+def test_the_transport_carries_MODEL_verbatim_with_no_mapping_layer():
+    """ADR-0028 refuses a transport-specific model mapping by name.
+
+    A mapping is how MODEL comes to say one thing while the wire says another,
+    which is the state ADR-0012's freeze exists to make impossible. Vertex
+    serves current-generation models under the bare first-party id, so the
+    string is identical on both transports and nothing needs translating.
+
+    Source inspection, and crude on purpose — the same treatment the guard this
+    block replaced used, for the same reason. A mapping layer would have to
+    name MODEL or a model id inside the constructor, so the construction site
+    is asserted to name neither. If a dated snapshot is ever pinned the two
+    transports stop sharing a string, and that reopens ADR-0028; it does not
+    earn a mapping here.
     """
     import inspect
 
-    for fn in (reader._client, reader._verify_client):
-        # Comments and docstrings stripped first. Doug flagged the whole-source
-        # form as brittle (`reader:brittle-test-assertion`) and was right: a
-        # comment mentioning Vertex would fail the suite for a reason that has
-        # nothing to do with the policy. Only executable lines are inspected.
-        code = "\n".join(
-            line.split("#")[0]
-            for line in inspect.getsource(fn).splitlines()
-            if not line.strip().startswith(("#", '"""', "'''"))
-        )
-        assert "anthropic.Anthropic(" in code, (
-            f"{fn.__name__} no longer builds the client it did"
-        )
-        assert "Vertex(" not in code, (
-            f"{fn.__name__} builds a Vertex client, but ADR-0028's paired "
-            "non-inferiority run has not been recorded. Run the bar first."
+    source = inspect.getsource(reader._build_client)
+    body = source.split('"""')[2] if source.count('"""') >= 2 else source
+    code = "\n".join(
+        line.split("#")[0] for line in body.splitlines() if not line.strip().startswith("#")
+    )
+    assert "AnthropicVertex(" in code, "the Vertex client is no longer built here"
+    for forbidden in ("MODEL", "claude-", "@"):
+        assert forbidden not in code, (
+            f"_build_client names {forbidden!r}, which is a model-mapping layer. "
+            "ADR-0028 refuses one: MODEL reaches the wire verbatim."
         )
 
 
@@ -1216,23 +1310,36 @@ def test_both_clients_bound_the_whole_read_not_just_one_attempt(monkeypatch):
     only the arithmetic test in place. This asserts the argument reaches the
     SDK, for both clients — grounding runs inside the same synchronous request
     the risk read does, so _verify_client needs the same bound.
+
+    Both transports are checked. ADR-0029 made the transport a runtime value,
+    so "the client" is now two classes, and AnthropicVertex carries the same
+    SDK default of max_retries=2 that made this test necessary in the first
+    place. Pinning only the live transport would leave the rollback path — the
+    one taken while something is already wrong — unbounded.
     """
     import anthropic
 
-    seen: list[dict] = []
+    def _capturing(sink):
+        def _capture(**kwargs):
+            sink.append(kwargs)
+            return object()
 
-    def _capture(**kwargs):
-        seen.append(kwargs)
-        return object()
+        return _capture
 
-    monkeypatch.setattr(anthropic, "Anthropic", _capture)
-    reader._client()
-    reader._verify_client()
+    for env, attr in (
+        (reader.TRANSPORT_ANTHROPIC, "Anthropic"),
+        (reader.TRANSPORT_VERTEX, "AnthropicVertex"),
+    ):
+        seen: list[dict] = []
+        monkeypatch.setenv("DOUG_READER_TRANSPORT", env)
+        monkeypatch.setattr(anthropic, attr, _capturing(seen))
+        reader._client()
+        reader._verify_client()
 
-    assert len(seen) == 2
-    for kwargs in seen:
-        assert kwargs["max_retries"] == reader.MAX_READ_RETRIES
-        assert kwargs["timeout"] > 0
+        assert len(seen) == 2, f"{env}: expected both clients to be constructed"
+        for kwargs in seen:
+            assert kwargs["max_retries"] == reader.MAX_READ_RETRIES, env
+            assert kwargs["timeout"] > 0, env
 
 
 def test_reader_and_probe_share_the_validated_prompt_bytes():

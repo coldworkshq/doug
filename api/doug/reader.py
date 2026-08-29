@@ -15,11 +15,20 @@ Four remain, and 2 + 4 = 6 — an earlier version of this paragraph said
 Each divergence is pinned on BOTH sides by test, so nobody can re-anchor the
 instrument by "fixing the drift".
 
-Opt-in twice over: DOUG_READER=1 AND a resolvable Anthropic credential.
-Callers fall back to the deterministic score when either is missing or a
-read fails, and the fallback verdict says so in its reasons. The flag
-threshold (default 30) sits at the ~75-80th percentile of clean-PR risk
-scores on both probe repos — roughly the top quarter gets flagged.
+Opt-in twice over: DOUG_READER=1 AND a credential the selected transport can
+resolve. Which credential that is depends on DOUG_READER_TRANSPORT (ADR-0029):
+Vertex, the default, authenticates with GCP application default credentials and
+needs no key, and the first-party API needs ANTHROPIC_API_KEY. Callers fall back
+to the deterministic score when either half of the opt-in is missing or a read
+fails, and the fallback verdict says so in its reasons. The flag threshold
+(default 30) sits at the ~75-80th percentile of clean-PR risk scores on both
+probe repos — roughly the top quarter gets flagged.
+
+That fallback is load-bearing and it is also a hazard on this transport: a
+misconfigured region or a missing IAM grant produces the same soft fallback a
+stalled upstream does, so it reads as "the reader is down" rather than "the
+deploy is wrong". deploy/gcp.sh refuses to deploy without a Vertex region for
+exactly that reason.
 
 Every read is charged to a caller-named scope against a monthly cap before
 anything is sent (see _charge). On a deployment with a ledger that is a
@@ -93,6 +102,26 @@ DEFAULT_READ_TIMEOUT_S = 120
 # reader-unavailable fallback this module contracts for. Pinned against the
 # deployed value by test_read_timeout_budget_fits_inside_the_cloud_run_timeout.
 MAX_READ_RETRIES = 1
+# ADR-0029. Which API surface both tiers call. A value read at client
+# construction, never a build-time constant, because ADR-0028 item 6 asked for
+# a rollback that is an env change on the running service: a forced transition
+# whose rollback needs a deploy is a forced transition with an outage attached.
+#
+# The default is the destination, so `DOUG_READER_TRANSPORT=anthropic` is the
+# rollback and it takes effect on the next client construction.
+TRANSPORT_VERTEX = "vertex"
+TRANSPORT_ANTHROPIC = "anthropic"
+DEFAULT_TRANSPORT = TRANSPORT_VERTEX
+# What `provider` says on each transport. ADR-0028 item 1 ruled that the field
+# names the API surface actually called and not the vendor of the weights, so
+# this string moves instrument_id and partitions the labelled corpus at the
+# cutover. That partition is the point: two serving stacks for the same weights
+# can differ in defaults, snapshot pinning, retry and error surfaces, and none
+# of those differences is visible in a verdict row.
+PROVIDER_BY_TRANSPORT = {
+    TRANSPORT_VERTEX: "anthropic-vertex",
+    TRANSPORT_ANTHROPIC: "anthropic",
+}
 INPUT_POLICY_VERSION = "reader-input-v0"
 COVERAGE_POLICY_VERSION = "reader-coverage-v0"
 INFERENCE_PARAMETERS = (
@@ -840,18 +869,57 @@ def _client():
     rather than not at all keeps the transient-5xx recovery the SDK gives us;
     the second retry is what does not fit.
     """
-    import anthropic
-
-    return anthropic.Anthropic(timeout=read_timeout(), max_retries=MAX_READ_RETRIES)
+    return _build_client(read_timeout())
 
 
 def _verify_client():
     """Same posture as _client, on the tighter verify budget — retry bound
     included, for the same Cloud Run arithmetic. Grounding runs inside
     score_one, which runs inside the same synchronous request."""
+    return _build_client(verify_timeout())
+
+
+def transport() -> str:
+    """The API surface the next client will call. ADR-0029."""
+    value = os.environ.get("DOUG_READER_TRANSPORT", DEFAULT_TRANSPORT).strip().lower()
+    return value if value in PROVIDER_BY_TRANSPORT else DEFAULT_TRANSPORT
+
+
+def provider_name() -> str:
+    """What `provider` records for a read taken on the current transport."""
+    return PROVIDER_BY_TRANSPORT[transport()]
+
+
+def _build_client(timeout: float):
+    """The one construction site for both tiers, on either transport.
+
+    `MODEL` reaches the wire verbatim on both, with no transport-specific
+    mapping. ADR-0028 refuses a mapping layer by name, and the reason is the
+    freeze: a mapping is how `MODEL` comes to say one thing while the wire says
+    another, which is the state ADR-0012 exists to make impossible. Vertex
+    serves current-generation models under the bare first-party id, so the
+    string is the same on both transports. If a dated snapshot is ever pinned
+    the two stop sharing a string, and that reopens ADR-0028 rather than
+    earning a mapping here.
+
+    `region` is deliberately not defaulted. Claude is not served from every
+    Vertex region, and the api service's own region is not necessarily one of
+    them. A wrong region does not fail loudly: every read fails soft into the
+    deterministic score, which reads as "the reader is down" rather than "the
+    region is wrong". So the SDK's own ValueError — which names
+    `CLOUD_ML_REGION` — is left to raise, and `deploy/gcp.sh` refuses to deploy
+    without a value. `project_id` needs no such treatment because application
+    default credentials carry the project on Cloud Run.
+
+    `max_retries` is passed on both paths. AnthropicVertex defaults it to 2,
+    exactly as Anthropic does, so the Cloud Run arithmetic in `_client` binds
+    identically on the new transport and is not re-derived here.
+    """
     import anthropic
 
-    return anthropic.Anthropic(timeout=verify_timeout(), max_retries=MAX_READ_RETRIES)
+    if transport() == TRANSPORT_VERTEX:
+        return anthropic.AnthropicVertex(timeout=timeout, max_retries=MAX_READ_RETRIES)
+    return anthropic.Anthropic(timeout=timeout, max_retries=MAX_READ_RETRIES)
 
 
 def _sent_slice(diff: str, *, budget: int | None = None) -> str:
@@ -1158,7 +1226,7 @@ def _record_attempt(
             model_call_made=model_call_made,
             failure=failure,
             fallback_state=fallback_state,
-            provider="anthropic",
+            provider=provider_name(),
             model=MODEL,
             max_output_tokens=MAX_TOKENS,
             effort=EFFORT,

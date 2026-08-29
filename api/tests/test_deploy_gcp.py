@@ -209,6 +209,79 @@ def test_api_deploy_carries_the_verify_installations_allowlist():
     assert "DOUG_VERIFY=1" not in body
 
 
+# --- ADR-0029: the reader's transport is Vertex, and its rollback is an env ---
+
+
+def test_api_deploy_pins_the_vertex_transport_and_carries_a_region():
+    """The transport reaches the service through this line and nowhere else.
+
+    Dropped, the service falls back to reader.DEFAULT_TRANSPORT, which is
+    vertex — so the pin looks redundant until someone flips the default back
+    and every deploy silently follows. The region has no default anywhere by
+    design (see the guard test below), so it must be here or the deploy is
+    refused.
+    """
+    body = _function_body("deploy")
+    assert "DOUG_READER_TRANSPORT=vertex" in body
+    assert "CLOUD_ML_REGION=$VERTEX_REGION" in body
+
+
+def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
+    """A wrong or missing Vertex region does not fail loudly at runtime.
+
+    reader.py contracts for a soft fallback: a client that cannot be
+    constructed raises, the read falls back to the deterministic score, and the
+    verdict says the reader was unavailable. That is correct behaviour for a
+    stalled upstream and exactly wrong for a misconfiguration, because it
+    surfaces as a quality regression days later with nothing pointing at the
+    deploy. So the deploy refuses instead, and no default is supplied that
+    could make the refusal unreachable.
+    """
+    result, lines = _invoke_gcp(tmp_path, "deploy", {"VERTEX_REGION": ""})
+
+    assert result.returncode != 0
+    assert "VERTEX_REGION" in result.stderr
+    assert not [line for line in lines if line.startswith("run deploy")], (
+        "the deploy reached Cloud Run without a Vertex region"
+    )
+
+
+def test_setup_enables_vertex_and_grants_the_api_identity_access(tmp_path):
+    """The transport move adds no key material — the grant is IAM on the
+    runtime identity, reached through application default credentials.
+
+    Both halves are asserted because either one alone fails at runtime as a
+    soft reader fallback rather than at deploy time: the API disabled, and the
+    service account unable to call it.
+    """
+    lines = _run_gcp(tmp_path, "setup")
+
+    assert [
+        line
+        for line in lines
+        if line.startswith("services enable") and "aiplatform.googleapis.com" in line
+    ]
+    assert (
+        "projects add-iam-policy-binding doug-prod0 "
+        "--member=serviceAccount:doug-api-sa@doug-prod0.iam.gserviceaccount.com "
+        "--role=roles/aiplatform.user" in lines
+    )
+
+
+def test_the_anthropic_key_survives_the_vertex_cutover_because_it_is_the_rollback():
+    """ADR-0028 item 6: reverting is a value change, not a release.
+
+    DOUG_READER_TRANSPORT=anthropic on the running service is the rollback, and
+    it only works while ANTHROPIC_API_KEY is still mounted. Removing the secret
+    as cleanup after the cutover would convert a one-command rollback into a
+    redeploy — a forced transition with an outage attached, which is the state
+    the constant exists to prevent. It leaves when the rollback window closes,
+    deliberately and in its own change.
+    """
+    body = _function_body("deploy")
+    assert "ANTHROPIC_API_KEY=doug-anthropic-key:latest" in body
+
+
 def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy():
     """DOUG_SHOWCASE_REPO reaches the service only through this deploy. If
     it is wrong, /v1/showcase/queue 404s while /openapi.json and / both
@@ -751,6 +824,11 @@ def _invoke_gcp(
         "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
+        # ADR-0029. `deploy` refuses without it and that refusal is asserted by
+        # test_a_deploy_without_a_vertex_region_is_refused, so it is supplied
+        # here rather than defaulted in the script: a default in gcp.sh would
+        # make the refusal untestable and ship a guessed region.
+        "VERTEX_REGION": "us-east5",
         **(extra_env or {}),
     }
     result = subprocess.run(
@@ -819,6 +897,12 @@ esac
         "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
+        # This test builds its own env rather than going through _invoke_gcp,
+        # so ADR-0029's required region is supplied here too. Without it the
+        # deploy exits before curl ever runs and the test passes for the wrong
+        # reason — it asserts a NON-zero return code, which the region guard
+        # also produces.
+        "VERTEX_REGION": "us-east5",
     }
     result = subprocess.run(
         ["bash", str(GCP_PATH), "deploy"],

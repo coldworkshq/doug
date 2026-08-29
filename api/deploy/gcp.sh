@@ -41,6 +41,14 @@ cd "$API_DIR"
 
 PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
+# ADR-0029. The Vertex region the reader calls, and deliberately NOT defaulted
+# to $REGION. Claude is not served from every Vertex region and the api
+# service's own region is not necessarily one of them. A wrong value does not
+# fail loudly: every read fails soft into the deterministic score, which reads
+# as "the reader is down" rather than "the region is wrong", so a guessed
+# default would degrade the product silently. Checked at `deploy` only — the
+# other subcommands do not construct a reader.
+VERTEX_REGION=${VERTEX_REGION:-}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
@@ -60,9 +68,14 @@ setup() {
   # creates the default compute service account the secret bindings below
   # attach to — on a project that never touched Compute, that SA simply
   # does not exist and setup used to silently bind secrets to nobody.
+  # aiplatform: ADR-0029 moved the reader's transport to Vertex, so the api
+  # service calls it with application default credentials. Without the API
+  # enabled the failure arrives at runtime as a soft reader fallback rather
+  # than at deploy time, which is the shape this whole script exists to avoid.
   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
     secretmanager.googleapis.com cloudbuild.googleapis.com \
     artifactregistry.googleapis.com compute.googleapis.com \
+    aiplatform.googleapis.com \
     cloudscheduler.googleapis.com --project "$PROJECT"
 
   if ! gcloud sql instances describe "$INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
@@ -145,6 +158,13 @@ setup() {
   # green. Unsuppressed for the same reason as the secret bindings below.
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role=roles/cloudsql.client >/dev/null
+
+  # ADR-0029: the reader reaches Claude through Vertex on this identity's
+  # application default credentials, so the grant is IAM rather than a secret.
+  # That is the whole reason the transport move adds no new key material — and
+  # it is also why the Anthropic key stays bound below: it is the rollback.
+  gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:$SA" --role=roles/aiplatform.user >/dev/null
 
   # doug-workos-api-key reads every tenant's identity data and doug-workos-
   # client-id is what session_auth's JWKS URL is built from — without the
@@ -618,6 +638,20 @@ compute_prereg_hash() {
 
 deploy() {
   preregistration_preflight
+  # ADR-0029. Refuse the deploy rather than ship a guessed Vertex region.
+  # DOUG_READER_TRANSPORT is pinned to vertex on the line below, so an empty
+  # CLOUD_ML_REGION would deploy a service whose every read raises at client
+  # construction and falls back to the deterministic score. That failure is
+  # silent by design — the reader contracts for a soft fallback — so it would
+  # surface as a quality regression nobody can attribute, days later. The
+  # rollback for a region that turns out wrong is DOUG_READER_TRANSPORT=anthropic
+  # on the running service, which needs no deploy.
+  if [ -z "$VERTEX_REGION" ]; then
+    echo "ERROR: set VERTEX_REGION to the Vertex region that serves $(grep -m1 '^MODEL' doug/reader.py | cut -d'"' -f2)." >&2
+    echo "It is not defaulted: a wrong region fails every read soft into the" >&2
+    echo "deterministic fallback instead of failing the deploy. See ADR-0029." >&2
+    exit 1
+  fi
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   if service_exists "$SERVICE"; then
     traffic_flags="--no-traffic --tag candidate"
@@ -714,7 +748,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=vertex,CLOUD_ML_REGION=$VERTEX_REGION${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
