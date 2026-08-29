@@ -207,6 +207,9 @@ def test_hosted_risk_capture_writes_manifest_pack_and_membership(monkeypatch):
             max_output_tokens=100,
             effort="medium",
             inference_parameters=(),
+            mechanical_parameters= (
+                NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+            ),
             system_prompt_bytes=b"system",
             output_schema_bytes=b"schema",
             diff_budget=1000,
@@ -297,6 +300,9 @@ def test_record_attempt_writes_exact_content_and_stable_findings(tmp_path):
             max_output_tokens=100,
             effort="medium",
             inference_parameters=(NameVersionV0(name="temperature", version="default"),),
+            mechanical_parameters= (
+                NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+            ),
             system_prompt_bytes=b"system",
             output_schema_bytes=b"schema",
             diff_budget=1000,
@@ -325,6 +331,9 @@ def test_record_attempt_writes_exact_content_and_stable_findings(tmp_path):
             max_output_tokens=100,
             effort="medium",
             inference_parameters=(NameVersionV0(name="temperature", version="default"),),
+            mechanical_parameters= (
+                NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+            ),
             system_prompt_bytes=b"system",
             output_schema_bytes=b"schema",
             diff_budget=1000,
@@ -361,6 +370,9 @@ def test_enabled_capture_without_worker_scope_is_visible_and_writes_nothing(tmp_
         max_output_tokens=1,
         effort="medium",
         inference_parameters=(),
+        mechanical_parameters= (
+            NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+        ),
         system_prompt_bytes=b"system",
         output_schema_bytes=b"schema",
         diff_budget=1,
