@@ -122,8 +122,11 @@ Kubernetes, whose projected tokens are rotated on disk by the kubelet. Nothing o
 Cloud Run rewrites that file, Google's tokens last about an hour, and the SDK
 re-reads the file on every exchange — so the first refresh after an hour would
 present a stale, already-exchanged token and fail. The token provider is a
-callable for that reason, and the single-use `jti` rule makes it the correct
-shape rather than merely the working one.
+callable for that reason: staleness, not replay protection. (An earlier draft of
+this record cited Anthropic's single-use `jti` rule here as well. That rule binds
+providers whose tokens carry a `jti`, such as GitHub Actions; the Google identity
+token documented for this path does not, so it is not the reason and the claim is
+withdrawn on all three copies rather than only in the code.)
 
 **Waiting for the Vertex cutover.** The two are independent, the key was expiring
 now, and coupling them would have made a credential rotation wait on a Google

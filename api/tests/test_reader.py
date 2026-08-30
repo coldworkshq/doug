@@ -1813,6 +1813,11 @@ def _clear_federation(monkeypatch):
 
 
 def _set_federation(monkeypatch, *, workspace=True):
+    # A mounted key makes federation_configured() False by design (ADR-0030's
+    # rollback), so a developer machine or runner with ANTHROPIC_API_KEY
+    # exported would fail every federation test spuriously. Doug caught it
+    # (`reader:test-env-leakage`); cleared here so no caller has to remember.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv(reader.FEDERATION_RULE_ENV, "fdrl_test")
     monkeypatch.setenv(reader.FEDERATION_ORG_ENV, "org-test")
     monkeypatch.setenv(reader.FEDERATION_SERVICE_ACCOUNT_ENV, "svac_test")
@@ -1935,10 +1940,15 @@ def test_federation_does_not_reach_the_vertex_transport(monkeypatch):
 def test_the_identity_token_is_fetched_fresh_for_every_exchange(monkeypatch):
     """A callable, never a cached string or a file.
 
-    Google's tokens last about an hour and carry a single-use `jti`. A token
-    read once and replayed on the SDK's refresh is rejected, so the provider
-    has to mint a new one per exchange. Pinned by calling it twice and
-    requiring two fetches.
+    Google's tokens last about an hour, and nothing on Cloud Run rewrites a
+    token file, so the provider has to be re-invocable rather than read once.
+    Pinned by calling it twice and requiring two fetches.
+
+    This docstring used to say Google's tokens carry a single-use `jti` and
+    that a replayed token is rejected. That is wrong — the Google identity
+    token documented for this path has no `jti` — and it was corrected in
+    reader.py while this copy stood, which is the one-sided-amendment defect
+    this repository keeps re-learning (Doug: `reader:stale-documentation`).
     """
     import google.oauth2.id_token
 
