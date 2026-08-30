@@ -1956,3 +1956,86 @@ def test_the_identity_token_is_fetched_fresh_for_every_exchange(monkeypatch):
     # The audience is matched exactly by the federation rule; a drift here is
     # a jwt_audience_mismatch on every read.
     assert reader.FEDERATION_AUDIENCE == "https://api.anthropic.com"
+
+
+def test_a_mounted_key_wins_so_the_rollback_actually_rolls_back(monkeypatch):
+    """ADR-0030 decision 4, pinned on the behaviour rather than the prose.
+
+    The SDK ranks an explicit `credentials=` constructor argument ABOVE
+    ANTHROPIC_API_KEY. A client built with federation credentials therefore
+    ignores a mounted key completely — which would make the documented
+    emergency rollback (`--update-secrets ANTHROPIC_API_KEY=...` on the running
+    service) a no-op, reached for during an incident, appearing to work and
+    changing nothing. Doug caught the gap between the record and the code
+    (`beyond-ticket` on 250c10e).
+
+    So the federation branch defers to a mounted key, and this is the test that
+    says the runbook is true.
+    """
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _set_federation(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-rollback")
+
+    assert reader.federation_configured() is False
+    reader._build_client(90.0)
+    assert "credentials" not in captured, (
+        "a mounted key was ignored, so ADR-0030's rollback does nothing"
+    )
+
+    # And removing it again returns the service to federation with no deploy,
+    # which is the other half of the same one-command story.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    captured.clear()
+    reader._build_client(90.0)
+    assert isinstance(
+        captured.get("credentials"), anthropic.WorkloadIdentityCredentials
+    )
+
+
+def test_the_federation_call_matches_the_installed_sdk(monkeypatch):
+    """The contract with the SDK, checked against the SDK and not a stub.
+
+    Every other federation test monkeypatches `anthropic.Anthropic` with a
+    **kwargs stub, so none of them would notice if `credentials` stopped being
+    a constructor parameter or a WorkloadIdentityCredentials field were
+    renamed — the client would raise at construction in production and every
+    read would fail soft, which is the unverified-external-contract shape that
+    earned #275 (Doug: `reader:untested-external-api-contract` on 250c10e).
+
+    Constructing the credentials object is offline: nothing is exchanged until
+    a request is made, so this costs no call and needs no network.
+    """
+    import inspect
+
+    import anthropic
+
+    assert "credentials" in inspect.signature(anthropic.Anthropic.__init__).parameters
+
+    credentials = anthropic.WorkloadIdentityCredentials(
+        identity_token_provider=lambda: "jwt",
+        federation_rule_id="fdrl_test",
+        organization_id="org-test",
+        service_account_id="svac_test",
+        workspace_id="wrkspc_test",
+    )
+    assert credentials is not None
+
+    # The real client, built by the real code path, with only the token
+    # provider stubbed out. Reaching construction at all proves the kwargs
+    # this module sends are the kwargs the SDK accepts.
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _set_federation(monkeypatch)
+    monkeypatch.setattr(reader, "_google_identity_token", lambda: "jwt")
+
+    client = reader._build_client(90.0)
+    assert isinstance(client, anthropic.Anthropic)

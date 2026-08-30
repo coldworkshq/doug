@@ -944,7 +944,23 @@ def federation_configured() -> bool:
     module's whole alerting story exists to prevent. Missing one id means the
     environment was not configured for federation, so the key path (or its
     absence) is the honest answer.
+
+    AND NO MOUNTED KEY, which is what makes ADR-0030's rollback real. The SDK
+    ranks an explicit `credentials=` constructor argument ABOVE
+    ANTHROPIC_API_KEY, so a client built with federation credentials ignores a
+    key in the environment entirely. Without this check, re-mounting the key on
+    the running service — the documented one-command recovery, reached for
+    during an incident — would change nothing at all, and every read would go
+    on failing exactly as before while the operator believed they had rolled
+    back. Doug caught it (`beyond-ticket` on 250c10e) and was right.
+
+    Deferring here restores the precedence the SDK documents and this
+    repository's runbook assumes: an explicitly mounted key wins, and
+    federation is what happens in its absence. It also costs nothing in the
+    steady state, because the deploy mounts no key.
     """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return False
     return all(
         os.environ.get(name)
         for name in (FEDERATION_RULE_ENV, FEDERATION_ORG_ENV, FEDERATION_SERVICE_ACCOUNT_ENV)
@@ -961,8 +977,18 @@ def _google_identity_token() -> str:
     A callable rather than ANTHROPIC_IDENTITY_TOKEN_FILE: Google's tokens last
     about an hour and nothing on Cloud Run would rewrite a file, so a file
     would go stale and every read after the first hour would fail soft. The
-    SDK re-invokes this before each exchange, which also satisfies the
-    single-use `jti` rule — a cached token replayed on a refresh is rejected.
+    SDK re-invokes this before each exchange, which is what keeps the presented
+    token inside its validity window.
+
+    Staleness is the reason, NOT replay protection. An earlier version of this
+    docstring claimed the callable "satisfies the single-use `jti` rule", and
+    that is unsupported: the Google identity token documented for this path
+    carries iss/aud/sub/azp/email/exp and no `jti`, so Anthropic's single-use
+    rule — which binds providers like GitHub Actions — does not apply here, and
+    the metadata server may well hand back the same token twice inside its
+    window. Doug flagged the assumption (`reader:stale-token-assumption`); the
+    finding's mechanism does not bite, but the claim was wrong and is gone
+    rather than restated.
     """
     import google.auth.transport.requests
     import google.oauth2.id_token

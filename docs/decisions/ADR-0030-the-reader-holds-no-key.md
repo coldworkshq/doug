@@ -83,9 +83,19 @@ gcloud run services update doug-api --region us-central1 \
   --update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest
 ```
 
-The key outranks federation, so restoring the mount restores the old credential
-with no code change and no deploy. It is never restored by editing the deploy
-script, which is what keeps decision 2's assertion true.
+Restoring the mount restores the old credential with no code change and no
+deploy. It is never restored by editing the deploy script, which is what keeps
+decision 2's assertion true.
+
+**This required code, not just precedence.** The SDK ranks an explicit
+`credentials=` constructor argument *above* `ANTHROPIC_API_KEY`, so a client
+built with federation credentials ignores a mounted key — and the first draft of
+this change did exactly that, which would have made the rollback above a no-op
+discovered during an incident. `federation_configured()` therefore defers to a
+mounted key and reports False, restoring the precedence the SDK documents and
+this record assumes. Doug caught the gap between this record and the code
+(`beyond-ticket`, 250c10e); it is pinned by
+`test_a_mounted_key_wins_so_the_rollback_actually_rolls_back`.
 
 **5. The four federation ids are plain environment variables in
 `deploy/gcp.sh`.** They name resources; they are not credentials. Putting them in
