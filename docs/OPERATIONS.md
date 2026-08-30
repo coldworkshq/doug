@@ -111,9 +111,40 @@ gcloud logging read 'resource.labels.service_name="doug-api"
 Read the error against the transport the service is actually on
 (`DOUG_READER_TRANSPORT` on the running revision):
 
-- **anthropic** — an authentication or billing error means the key is dead or
-  the console balance hit zero. Top up / rotate `doug-anthropic-key`. The
-  balance is a clock, not a fault (ADR-0029).
+- **anthropic** — a billing error means the console balance hit zero; top it
+  up. The balance is a clock, not a fault (ADR-0029).
+
+  An *authentication* error is a federation failure, not a dead key: under
+  ADR-0030 this service holds no key and proves its identity with a
+  Google-signed token for `doug-api-sa`. Read the deny reason on the Console's
+  **Workload identity → History** tab — it names the cause where the log line
+  cannot. The usual suspects are a dropped `ANTHROPIC_FEDERATION_RULE_ID` (or
+  its two siblings) on the revision, an archived rule or service account, and
+  a rule edited so its `sub`/`email`/`audience` no longer match the workload.
+
+  Emergency credential rollback, no deploy — the secret and its IAM binding are
+  kept for this:
+
+  ```
+  gcloud run services update doug-api --project doug-prod0 --region us-central1 \
+    --update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest
+  ```
+
+  The key outranks federation in SDK precedence, so this takes effect on the
+  next revision with no code change. Undo it with `--remove-secrets
+  ANTHROPIC_API_KEY`; never by editing `deploy/gcp.sh`, whose *absence* of that
+  mount is pinned by test.
+
+  **This rollback is TEMPORARY, by design.** `deploy` passes `--set-secrets`,
+  which is declarative and replaces the whole secret block, so the next deploy
+  — including any merge to main — drops the mount and returns the service to
+  federation. That is deliberate and is not a defect to fix: a mount preserved
+  across deploys would be a key silently outranking federation forever, unseen
+  in any diff, which is the exact hazard ADR-0030 exists to close. So treat the
+  mount as an incident measure with a clock on it: fix the federation
+  configuration, or re-apply the command after each deploy until you have.
+  If a deploy lands while the mount is doing real work, the reader-fallback
+  alert fires again rather than the reader going quiet.
 - **vertex** — a 404 is the region not serving the model, a 429 is zero
   throughput quota (#274), a 400 on every read is the request shape (#275).
   Rollback is `DOUG_READER_TRANSPORT=anthropic` on the running service — an

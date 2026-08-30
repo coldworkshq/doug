@@ -3,7 +3,26 @@ title: The reader's transport moves to Vertex without ADR-0028's bar, by directi
 status: accepted
 date: 2026-08-28
 amends: ADR-0012, ADR-0027, ADR-0028
+amended_by: ADR-0030
 ---
+
+> **Amended by ADR-0030, 2026-08-30: `ANTHROPIC_API_KEY` is no longer
+> mounted. Item 4 below is superseded to that extent; the rollback it
+> protects is intact.**
+>
+> The api service now authenticates to the first-party API by Workload
+> Identity Federation, so that transport is reachable with no key at all.
+> Item 4's reasoning — that removing the key would convert a one-command
+> revert into a redeploy — still holds and is still honored: the secret and
+> its IAM binding stay, and the rollback is
+> `--update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest` on the
+> running service. The key had to leave the MOUNT rather than merely be
+> unused, because it outranks federation in SDK credential precedence and a
+> leftover key silently wins.
+>
+> **The Consequences' "rollback has a clock" is now half true.** Its first
+> condition (the key stays mounted) is retired. Its second (the balance is
+> non-zero) is untouched, and remains the thing to watch.
 
 > **This record authorizes an unmeasured instrument change and says so in its
 > title.**
@@ -124,6 +143,11 @@ because a typo during a rollback must not become an outage.
 cleanup would convert a one-command revert into a redeploy, which is the state
 ADR-0028 item 6 exists to prevent. It leaves in its own change when the rollback
 window closes.
+
+> **Amended by ADR-0030.** It left in its own change, as this item anticipated,
+> but earlier than the closing of the rollback window and for a different
+> reason: federation reaches this transport without a key, so the revert stayed
+> one command. The secret and its binding remain for exactly that.
 
 **5. The region is required, has no default, and is verified before the deploy.**
 `deploy/gcp.sh` refuses without `VERTEX_REGION`, then probes each model in that
@@ -273,7 +297,8 @@ adds no new cloud relationship. Unchanged from ADR-0028.
   ruling. Nothing here fixes them, and a bar declared against this transport
   later must not inherit ADR-0028's table.
 - **The rollback has a clock.** It works only while `ANTHROPIC_API_KEY` is
-  mounted and the balance is non-zero. When the balance reaches zero the rollback
+  mounted and the balance is non-zero. (ADR-0030 retired the first condition:
+  the first-party transport now needs no key. The balance condition stands.) When the balance reaches zero the rollback
   stops existing, and this transport becomes the only one. That is worth knowing
   before it happens rather than after.
 - **The transport cannot deploy until quota is granted.** All three serving
