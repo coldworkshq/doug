@@ -12,6 +12,12 @@ dependencies = [
     # githubkit pulls it in; a dependency this codebase calls directly must be
     # declared, or an unrelated githubkit change can uninstall it.
     "httpx>=0.28.1",
+    # reader.py fetches the workload's own OIDC token through this for
+    # Workload Identity Federation. Same reasoning as httpx above: importable
+    # today only because google-cloud-storage pulls it in, and a dependency
+    # this codebase calls directly must be declared or an unrelated storage
+    # change can uninstall the reader's credential.
+    "google-auth>=2.56.3",
     "google-cloud-storage>=3.13.1",
     "psycopg[binary]>=3.3.4",
     "pyjwt[crypto]>=2.13.0",

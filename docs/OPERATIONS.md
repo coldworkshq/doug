@@ -111,9 +111,29 @@ gcloud logging read 'resource.labels.service_name="doug-api"
 Read the error against the transport the service is actually on
 (`DOUG_READER_TRANSPORT` on the running revision):
 
-- **anthropic** — an authentication or billing error means the key is dead or
-  the console balance hit zero. Top up / rotate `doug-anthropic-key`. The
-  balance is a clock, not a fault (ADR-0029).
+- **anthropic** — a billing error means the console balance hit zero; top it
+  up. The balance is a clock, not a fault (ADR-0029).
+
+  An *authentication* error is a federation failure, not a dead key: under
+  ADR-0030 this service holds no key and proves its identity with a
+  Google-signed token for `doug-api-sa`. Read the deny reason on the Console's
+  **Workload identity → History** tab — it names the cause where the log line
+  cannot. The usual suspects are a dropped `ANTHROPIC_FEDERATION_RULE_ID` (or
+  its two siblings) on the revision, an archived rule or service account, and
+  a rule edited so its `sub`/`email`/`audience` no longer match the workload.
+
+  Emergency credential rollback, no deploy — the secret and its IAM binding are
+  kept for this:
+
+  ```
+  gcloud run services update doug-api --project doug-prod0 --region us-central1 \
+    --update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest
+  ```
+
+  The key outranks federation in SDK precedence, so this takes effect on the
+  next revision with no code change. Undo it with `--remove-secrets
+  ANTHROPIC_API_KEY`; never by editing `deploy/gcp.sh`, whose *absence* of that
+  mount is pinned by test.
 - **vertex** — a 404 is the region not serving the model, a 429 is zero
   throughput quota (#274), a 400 on every read is the request shape (#275).
   Rollback is `DOUG_READER_TRANSPORT=anthropic` on the running service — an

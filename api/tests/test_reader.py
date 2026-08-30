@@ -1797,3 +1797,162 @@ def test_attribution_prompt_pair_is_frozen_separately():
     assert reader.ATTRIBUTION_PROMPT_HASH == _h.sha256(
         (reader.ATTRIBUTION_SYSTEM + repr(reader.ATTRIBUTION_SCHEMA)).encode()
     ).hexdigest()
+
+
+# --- Workload Identity Federation ------------------------------------------
+
+
+def _clear_federation(monkeypatch):
+    for name in (
+        reader.FEDERATION_RULE_ENV,
+        reader.FEDERATION_ORG_ENV,
+        reader.FEDERATION_SERVICE_ACCOUNT_ENV,
+        reader.FEDERATION_WORKSPACE_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _set_federation(monkeypatch, *, workspace=True):
+    monkeypatch.setenv(reader.FEDERATION_RULE_ENV, "fdrl_test")
+    monkeypatch.setenv(reader.FEDERATION_ORG_ENV, "org-test")
+    monkeypatch.setenv(reader.FEDERATION_SERVICE_ACCOUNT_ENV, "svac_test")
+    if workspace:
+        monkeypatch.setenv(reader.FEDERATION_WORKSPACE_ENV, "wrkspc_test")
+    else:
+        monkeypatch.delenv(reader.FEDERATION_WORKSPACE_ENV, raising=False)
+
+
+def test_federation_needs_every_id_not_any_of(monkeypatch):
+    """A half-configured federation must read as NOT configured.
+
+    Any-of would build a client that raises at the exchange, and every read
+    would fail soft into the deterministic score — the silent death this
+    module's alerting exists to catch, caused by a dropped env var rather than
+    an outage. Absent an id, the honest answer is that this environment was
+    not configured for federation.
+    """
+    _clear_federation(monkeypatch)
+    assert reader.federation_configured() is False
+
+    required = (
+        reader.FEDERATION_RULE_ENV,
+        reader.FEDERATION_ORG_ENV,
+        reader.FEDERATION_SERVICE_ACCOUNT_ENV,
+    )
+    for omitted in required:
+        _set_federation(monkeypatch)
+        monkeypatch.delenv(omitted, raising=False)
+        assert reader.federation_configured() is False, omitted
+
+    # The workspace id is NOT one of them: the rule is scoped to a single
+    # workspace, so the exchange does not need it.
+    _set_federation(monkeypatch, workspace=False)
+    assert reader.federation_configured() is True
+
+    _set_federation(monkeypatch)
+    assert reader.federation_configured() is True
+
+
+def test_the_first_party_client_federates_when_configured(monkeypatch):
+    """The credential fork, asserted on what actually reaches the SDK."""
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _set_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    credentials = captured.get("credentials")
+    assert isinstance(credentials, anthropic.WorkloadIdentityCredentials)
+    assert captured["timeout"] == 90.0
+    assert captured["max_retries"] == reader.MAX_READ_RETRIES
+    # No api_key is passed even as None: the key path and the federation path
+    # are alternatives, and the SDK would prefer a key over these credentials.
+    assert "api_key" not in captured
+
+
+def test_the_first_party_client_uses_a_key_when_federation_is_absent(monkeypatch):
+    """Unconfigured environments — a laptop, a script, CI — keep the old path.
+
+    Same posture as DEFAULT_TRANSPORT staying `anthropic`: the deploy is
+    configured for federation and nothing else is, so nothing else may quietly
+    depend on it.
+    """
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _clear_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    assert "credentials" not in captured
+    assert captured["timeout"] == 90.0
+
+
+def test_federation_does_not_reach_the_vertex_transport(monkeypatch):
+    """Two orthogonal facts, and the surface wins.
+
+    Vertex authenticates with application default credentials; a federation
+    rule says nothing about it. If both are configured — which production is,
+    for the duration of the transport migration — the transport choice decides,
+    and federation is simply not consulted.
+    """
+    import anthropic
+
+    built: dict = {}
+
+    class CapturingVertex:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    def _fail(**kwargs):  # pragma: no cover - asserted by not being called
+        raise AssertionError("the first-party client was built on the Vertex transport")
+
+    monkeypatch.setattr(anthropic, "AnthropicVertex", CapturingVertex)
+    monkeypatch.setattr(anthropic, "Anthropic", _fail)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_VERTEX)
+    _set_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    assert built["max_retries"] == reader.MAX_READ_RETRIES
+
+
+def test_the_identity_token_is_fetched_fresh_for_every_exchange(monkeypatch):
+    """A callable, never a cached string or a file.
+
+    Google's tokens last about an hour and carry a single-use `jti`. A token
+    read once and replayed on the SDK's refresh is rejected, so the provider
+    has to mint a new one per exchange. Pinned by calling it twice and
+    requiring two fetches.
+    """
+    import google.oauth2.id_token
+
+    calls: list = []
+
+    def _fetch(request, audience):
+        calls.append(audience)
+        return f"jwt-{len(calls)}"
+
+    monkeypatch.setattr(google.oauth2.id_token, "fetch_id_token", _fetch)
+
+    assert reader._google_identity_token() == "jwt-1"
+    assert reader._google_identity_token() == "jwt-2"
+    assert calls == [reader.FEDERATION_AUDIENCE] * 2
+    # The audience is matched exactly by the federation rule; a drift here is
+    # a jwt_audience_mismatch on every read.
+    assert reader.FEDERATION_AUDIENCE == "https://api.anthropic.com"
