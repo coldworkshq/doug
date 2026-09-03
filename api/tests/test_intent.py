@@ -271,11 +271,19 @@ def test_unrelated_changes_select_nothing_across_the_real_record_set():
     Measured on 2026-09-02 before the fix: 20 of 22 unrelated changes selected
     at least one record, most of them six, on incidental body hits — `web`,
     `fix`, `api`, `lock` — over a short change vocabulary. The mechanism is
-    intent._bears_on. Five cases from that sample are NOT in this list and
+    intent._bears_on. Three cases from that sample are NOT in this list and
     still select one record each, all through a title word that is also a
-    record's title word (`page`, `scoring`, `remove`); `scoring.py` against
-    ADR-0004 is the rule working, the others are the residual and are named
-    here rather than absorbed.
+    record's title word (`page` twice, `scoring`); `scoring.py` against
+    ADR-0004 is the rule working, the other two are the residual and are
+    named here rather than absorbed.
+
+    This test reads the live record set on purpose, so it can fail when a
+    record is added or edited. It did, the day after it was written: a note
+    added to ADR-0026 on #287 put `spelling` in that record's body, its
+    title already had `corrected`, and "Correct a spelling mistake" reached
+    it. That is the test doing its job — a record edit changed what a
+    cosmetic PR is read against — and the fix was to the mechanism (PR-title
+    verbs joined the stop list), not to this list.
     """
     docs = _real_records()
     unrelated = [
@@ -314,6 +322,23 @@ def test_a_file_named_for_a_record_reaches_it_whatever_the_title_says():
     chosen = [d.id for d in intent.select(docs, "Tidy up", ["doug/reader.py"])]
     assert "ADR-0012" in chosen
     assert all("reader" in intent._tokens(d.title) for d in docs if d.id in chosen)
+
+
+def test_a_pr_title_verb_is_not_a_subject():
+    """`remove`, `fix`, `correct` say what kind of change this is, never what
+    it is about. With `remove` as signal, "Remove the reviewer gate from the
+    deploy" ranked ADR-0018 ("...remove it from the freeze") above ADR-0025,
+    the record that governs it, and the relative floor cut ADR-0025 out.
+    """
+    docs = _real_records()
+    chosen = [
+        d.id
+        for d in intent.select(
+            docs, "Remove the reviewer gate from the deploy", [".github/workflows/deploy.yml"]
+        )
+    ]
+    assert "ADR-0025" in chosen, chosen
+    assert intent.select(docs, "Remove trailing whitespace", ["api/doug/patterns.py"]) == []
 
 
 def test_plurals_and_past_tense_do_not_split_one_subject_into_two():
