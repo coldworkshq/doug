@@ -103,8 +103,12 @@ def test_evidenced_loader_uses_the_shared_clone_and_parser(tmp_path, monkeypatch
         seen.update(owner=owner, repo=repo, dest=dest, token=token)
         return dest
 
+    def log_records(clone_dir, token=None):
+        seen.update(log_token=token)
+        return commits
+
     monkeypatch.setattr(git_labels, "clone_treeless", clone)
-    monkeypatch.setattr(git_labels, "_log_records", lambda clone_dir: commits)
+    monkeypatch.setattr(git_labels, "_log_records", log_records)
 
     result = git_labels.find_reverted_prs_evidenced(
         "drewjst", "doug", tmp_path, token="secret"
@@ -116,6 +120,8 @@ def test_evidenced_loader_uses_the_shared_clone_and_parser(tmp_path, monkeypatch
         "repo": "doug",
         "dest": tmp_path / "clones" / "drewjst-doug.git",
         "token": "secret",
+        # The log reads with the credential that cloned (doug#270).
+        "log_token": "secret",
     }
 
 
