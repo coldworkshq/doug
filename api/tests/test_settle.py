@@ -105,6 +105,15 @@ def test_a_name_the_extractor_cannot_read_keeps_the_finding():
     assert settle.claimed_names(f) == []
     src = "import os\n\nprint(os.getcwd(), file=sys.stderr)\n"
     assert settle.settle_many([f], lambda p: src) == [f]
+    # The file at head resolves the ambiguity. Doug's third read
+    # (`reader:over-conservative-early-return`): "does not import numpy" with
+    # numpy never written as code must still settle when numpy IS imported,
+    # and must still publish when it is not — which is the same sentence
+    # settling on the truth of its claim rather than on its punctuation.
+    f = _f(desc="calls `np.array` but does not import numpy")
+    assert settle.settle_many([f], lambda p: "import numpy as np\nimport numpy\n") == []
+    assert settle.settle_many([f], lambda p: "import os\n") == [f]
+    assert settle.settle_many([f], lambda p: "import os\nimport sys\n") == [f]
     # The same sentence with `sys` written as code claims both, and settles
     # only when both are imported.
     f = _f(desc="uses `os` correctly but does not import `sys` anywhere")

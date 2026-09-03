@@ -1210,8 +1210,10 @@ def test_pyproject_declares_the_vertex_extra_adr_0028_item_4_requires():
     import re
 
     pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    runtime = pyproject.split("[dependency-groups]", 1)[0]
-    dev = pyproject.split("[dependency-groups]", 1)[1]
+    assert "[dependency-groups]" in pyproject, (
+        "pyproject.toml has no [dependency-groups] table; the dev group moved or was dropped"
+    )
+    runtime, dev = pyproject.split("[dependency-groups]", 1)
     pattern = re.compile(r'"anthropic\[vertex\]>=')
     assert pattern.search(runtime), (
         "api/pyproject.toml no longer declares anthropic[vertex] as a runtime "

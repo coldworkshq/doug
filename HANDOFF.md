@@ -5,8 +5,10 @@ State:    review — #284 MERGED (c99fae2) one commit short of its tip; the
           branch `accuracy-settle-names-and-slug-fold`: settle.py
           claimed_names precision, patterns slug fold (#244), PR-title
           verbs in the intent stop list, ADR-0026 facts note. api 1818
-          pass, ruff clean, every guard mutation-red. Doug's first read of
-          #287 dispositioned (4 rows, 3 changed code).
+          pass, ruff clean, every guard mutation-red. Doug's three reads of
+          #287 dispositioned (15 rows, 7 changed code); each round's medium
+          on settle.py was right and the extractor now lets the file at
+          head resolve an ambiguous prose name.
 Next:     Andrew merges #287 and CHECKS main carries its tip (three squash
           merges have now dropped the last commit: #251, #284, and the
           #257 recovery). Then runs the #244 production query (on #244).
