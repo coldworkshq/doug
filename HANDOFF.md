@@ -1,10 +1,12 @@
 # HANDOFF — doug
 
-State:    building — branch `claude/doug-accuracy-improvements-c95c9b` off main
-          f6ea059. Code written for both lanes; running the full api suite.
-Next:     Full api suite + ruff green, then commit and open one PR closing
-          #264 and updating #274's code side. Re-verify with the harness that
-          the leak count is what the tests claim.
+State:    review — PR #284 OPEN off main f6ea059, branch
+          `claude/doug-accuracy-improvements-c95c9b`. api 1811 pass, ruff
+          clean, five mutation checks red. Closes #264; #274 commented
+          with the code-side update.
+Next:     Watch CI and Doug's review on #284, disposition findings in
+          docs/findings-log.jsonl, then Andrew merges. Nothing in #284
+          moves traffic; the Vertex flip waits on the capacity grant.
 Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
           lineage is gated on a Google Sales account team. Transport stays
           `anthropic` in deploy.yml until a grant lands.
