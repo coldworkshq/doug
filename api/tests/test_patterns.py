@@ -45,3 +45,40 @@ def test_from_rule_ignores_deterministic_reasons():
     assert patterns.from_rule("reader:unsafe-type-coercion") == "type-coercion"
     assert patterns.from_rule("size-large") is None
     assert patterns.from_rule("ledger-unavailable") is None
+
+
+def test_two_spellings_of_one_defect_group_to_one_pattern():
+    """#244. category_slug is free-form model output, and the production
+    findings.rule column is written straight from it (reader.py), so the
+    spelling is whatever the model chose that day. The grouping key folds
+    the spelling; it does not fold the word.
+    """
+    spellings = (
+        "missing-import",
+        "Missing Import",
+        "missing_import",
+        " missing-import ",
+        "MISSING--IMPORT",
+    )
+    for spelling in spellings:
+        assert patterns.normalize(spelling) == "missing-import", spelling
+    # The merge map still applies after the fold, so a shouted synonym
+    # reaches the same canonical pattern as its kebab-case twin.
+    assert patterns.normalize("Unhandled_Exception") == "error-handling-gap"
+    assert patterns.from_rule("reader:Missing Import") == "missing-import"
+    # Spelling folds; vocabulary does not. That judgement stays in SLUG_MERGES.
+    assert patterns.normalize("missing-imports") != patterns.normalize("missing-import")
+
+
+def test_a_slug_with_nothing_to_fold_keeps_its_raw_spelling():
+    """`---` and `!!` fold to the empty string. An empty pattern name would
+    pool every such slug into one bucket that downstream grouping treats as
+    a real pattern; each keeps its raw spelling and stays alone instead.
+    """
+    assert patterns.normalize("---") == "---"
+    assert patterns.normalize("!!") == "!!"
+    assert patterns.from_rule("reader:---") == "---"
+    assert patterns.normalize("") == ""
+    # Surrounding whitespace is not part of the spelling even when nothing
+    # else folds, so ` --- ` and `---` are one bucket.
+    assert patterns.normalize(" --- ") == "---"

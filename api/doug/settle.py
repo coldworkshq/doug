@@ -59,6 +59,10 @@ _IMPORT_SLUGS = frozenset(
 )
 
 _NAME_IN_BACKTICKS = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
+# The root of a dotted expression inside backticks: `sys.stderr` and
+# `file=sys.stderr` both name `sys`, and neither is a bare identifier.
+_BACKTICK_SPAN = re.compile(r"`([^`]+)`")
+_DOTTED_ROOT = re.compile(r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_]")
 _IMPORT_WORD = re.compile(r"\bimport\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 _SCHEMA_SLUGS = frozenset(
@@ -89,11 +93,54 @@ def looks_like_missing_import_finding(f: ReaderFinding) -> bool:
     )
 
 
-def claimed_names(f: ReaderFinding) -> list[str]:
-    """Names the finding asserts are absent. Empty ⇒ we cannot settle it."""
-    found: list[str] = []
-    for rx in (_NAME_IN_BACKTICKS, _IMPORT_WORD):
-        found.extend(rx.findall(f.description))
+# What follows the word "import" when the sentence is about an import rather
+# than naming one: "the import statement for `x`", "a `sys` import being
+# added". English, not identifiers, and short on purpose — anything not on
+# it and not written as code is treated as a name we cannot read, below.
+_IMPORT_PROSE = frozenset(
+    "statement statements line lines of for from is was being missing added "
+    "removed needed required".split()
+)
+
+
+def claimed_names(f: ReaderFinding, imported: set[str] | None = None) -> list[str]:
+    """Names the finding asserts are absent. Empty ⇒ we cannot settle it.
+
+    Settlement drops a finding only when EVERY claimed name is imported at
+    head, so the direction of each extraction error matters and they are not
+    symmetric:
+
+    - A name claimed that the finding did not mean (`being`, from "a `sys`
+      import being added" on PR #278's third read) is a permanent veto: it
+      is never imported, so a disproved finding stays published.
+    - A name the finding meant but the extractor missed makes settlement
+      EASIER: "uses `os` but does not import sys" claiming only `os` would
+      settle on `os` and hide a real absence. Doug's second read of #287
+      (`reader:logic-inversion-in-safety-claim`) caught the first version
+      of this function doing exactly that, and was right.
+
+    So: a bare identifier in backticks is a claim. The prose form "import X"
+    is a claim when X is also written as code (bare, or the root of a dotted
+    expression such as `os.path.join`); it is ignored when X is ordinary
+    English about an import (_IMPORT_PROSE); and when it is neither, the
+    file at head decides — if `imported` is given and X is among the names
+    the file imports, X was a name after all and is claimed ("does not
+    import numpy", with numpy imported, settles; Doug's third read,
+    `reader:over-conservative-early-return`). Otherwise nothing is claimed,
+    which keeps the finding: X is either prose we cannot read or a name that
+    is genuinely absent, and both of those must publish. A dotted root on
+    its own is never a claim, or `self.client.post` would veto everything.
+    """
+    bare: list[str] = _NAME_IN_BACKTICKS.findall(f.description)
+    roots: set[str] = set(bare)
+    for span in _BACKTICK_SPAN.findall(f.description):
+        roots.update(_DOTTED_ROOT.findall(span))
+    found = list(bare)
+    for word in _IMPORT_WORD.findall(f.description):
+        if word in roots or (imported is not None and word in imported):
+            found.append(word)
+        elif word.lower() not in _IMPORT_PROSE:
+            return []
     return list(dict.fromkeys(found))
 
 
@@ -146,11 +193,11 @@ def runtime_imported_names(source: str) -> set[str] | None:
 
 def is_disproved_by_file(f: ReaderFinding, source: str) -> bool:
     """True when every claimed name has a runtime import in the full file."""
-    names = claimed_names(f)
-    if not names:
-        return False
     imported = runtime_imported_names(source)
     if imported is None:
+        return False
+    names = claimed_names(f, imported)
+    if not names:
         return False
     return all(n in imported for n in names)
 

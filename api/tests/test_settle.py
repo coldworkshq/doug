@@ -60,6 +60,83 @@ def test_does_not_settle_undefined_name_via_later_assign():
     assert out.findings == [f]
 
 
+def test_a_prose_word_after_import_does_not_block_settlement():
+    """PR #278, third read. The first two reads settled `sys` against head;
+    the third phrased it as "a `sys` import being added" and the extractor
+    claimed `being`, so the finding it had already disproved was published.
+    Every claimed name must be imported, which makes one prose word a veto.
+    """
+    f = _f(
+        desc=(
+            "The new fallback print uses `file=sys.stderr` in api.py but the "
+            "diff does not show a `sys` import being added. If `sys` is not "
+            "already imported at module scope, the path raises NameError."
+        )
+    )
+    assert settle.claimed_names(f) == ["sys"]
+    src = "import sys\n\ndef f():\n    print('x', file=sys.stderr)\n"
+    assert settle.settle_many([f], lambda p: src) == []
+
+
+def test_a_dotted_root_corroborates_a_prose_import_claim_but_is_not_one():
+    """`os.path.join` with "no import of os" claims `os`. `self.client.post`
+    with the same sentence claims nothing for `self`: Doug's review of this
+    change (`reader:over-broad-regex`) pointed out that a dotted root taken as
+    a claim is a permanent veto — `self` is never imported — so a finding that
+    settles on `requests` alone would be published instead.
+    """
+    f = _f(desc="calls `os.path.join` but there is no import os anywhere in the file")
+    assert settle.claimed_names(f) == ["os"]
+    f = _f(
+        desc="calls `self.client.post` with `requests` never imported; import requests is absent"
+    )
+    assert settle.claimed_names(f) == ["requests"]
+    src = "import requests\n\nclass C:\n    def go(self):\n        return self.client.post\n"
+    assert settle.settle_many([f], lambda p: src) == []
+
+
+def test_a_name_the_extractor_cannot_read_keeps_the_finding():
+    """Doug's second read of #287 (`reader:logic-inversion-in-safety-claim`):
+    settlement needs EVERY claimed name imported, so a claim the extractor
+    misses makes settling easier, not harder. "uses `os` but does not import
+    sys" must not settle on `os` alone while `sys` is genuinely absent.
+    """
+    f = _f(desc="uses `os` correctly but does not import sys anywhere")
+    assert settle.claimed_names(f) == []
+    src = "import os\n\nprint(os.getcwd(), file=sys.stderr)\n"
+    assert settle.settle_many([f], lambda p: src) == [f]
+    # The file at head resolves the ambiguity. Doug's third read
+    # (`reader:over-conservative-early-return`): "does not import numpy" with
+    # numpy never written as code must still settle when numpy IS imported,
+    # and must still publish when it is not — which is the same sentence
+    # settling on the truth of its claim rather than on its punctuation.
+    f = _f(desc="calls `np.array` but does not import numpy")
+    assert settle.settle_many([f], lambda p: "import numpy as np\nimport numpy\n") == []
+    assert settle.settle_many([f], lambda p: "import os\n") == [f]
+    assert settle.settle_many([f], lambda p: "import os\nimport sys\n") == [f]
+    # The same sentence with `sys` written as code claims both, and settles
+    # only when both are imported.
+    f = _f(desc="uses `os` correctly but does not import `sys` anywhere")
+    assert settle.claimed_names(f) == ["os", "sys"]
+    assert settle.settle_many([f], lambda p: src) == [f]
+    assert settle.settle_many([f], lambda p: "import os\nimport sys\n") == []
+
+
+def test_the_prose_import_form_counts_only_when_the_name_is_also_code():
+    """`import X` in prose is kept as a claim only when X is written as code
+    elsewhere; otherwise a sentence like "the import statement is missing"
+    would claim `statement`, and a true absence would never settle because
+    `statement` is never imported.
+    """
+    assert settle.claimed_names(_f(desc="the import statement for `asyncio` is missing")) == [
+        "asyncio"
+    ]
+    assert settle.claimed_names(_f(desc="no import of anything is shown")) == []
+    # Nothing written as code: nothing claimed, nothing settled.
+    f = _f(desc="uses threading with no import")
+    assert settle.settle_many([f], lambda p: FILE) == [f]
+
+
 def test_keeps_finding_when_name_truly_absent():
     f = _f(desc="uses `asyncio` with no import")
     rv = ReaderVerdict(risk_score=40, rationale="x", findings=[f])
