@@ -149,6 +149,29 @@ cutover() {
     --project "$PROJECT" --region "$REGION" \
     --update-env-vars "DOUG_WEB_URL=https://$DOMAIN"
 
+  # THE THIRD PLACE THE HOSTNAME LIVES, and the only one that talks to search
+  # engines. The gh-pages branch serves a redirect stub at
+  # coldworkshq.github.io/doug/ whose <link rel="canonical"> and meta refresh
+  # both name the generated host. Left alone after a cutover it does not just
+  # send visitors to the old address — it tells crawlers the generated
+  # hostname is Doug's canonical one, which is the opposite of what a custom
+  # domain is for. It is a branch in git, not a deploy, so this reports it
+  # rather than editing it.
+  echo
+  echo -n "Checking the gh-pages redirect stub... "
+  local stub
+  stub=$(curl -sS --max-time 20 "https://coldworkshq.github.io/doug/" 2>/dev/null || true)
+  if printf '%s' "$stub" | grep -q "$DOMAIN"; then
+    echo "already names $DOMAIN."
+  else
+    echo "STILL NAMES THE OLD HOST."
+    echo "  Edit index.html on the gh-pages branch: the canonical link and the"
+    echo "  meta refresh both have to become https://$DOMAIN/. Until they do,"
+    echo "  the stub declares the generated hostname canonical to crawlers."
+    echo "  Consider pointing the repository's homepage URL at https://$DOMAIN"
+    echo "  in the same pass; it currently points at the stub."
+  fi
+
   echo
   echo "Done. Both hostnames still serve. Left deliberately undone:"
   echo "  - The old run.app redirect URI is still allowlisted in WorkOS."
