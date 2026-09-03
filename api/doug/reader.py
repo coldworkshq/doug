@@ -89,6 +89,36 @@ DIFF_BUDGET = 100_000
 # for the risk or intent reads.
 MECHANICAL_MODEL = "claude-sonnet-5"
 MECHANICAL_EFFORT = "medium"
+
+
+def mechanical_parameters() -> tuple[NameVersionV0, ...]:
+    """What the mechanical tier is configured to send, for the manifest.
+
+    ADR-0027 C3. `WholeInstrumentManifestV0` described the risk or intent read
+    and nothing else, so two reads that ran different mechanical models hashed
+    to the same `instrument_id` — while ADR-0015 makes `attribute_findings`'
+    validated output part of convergence identity, and `example_pack_eval.py`
+    partitions the corpus by exactly that hash. The two populations pooled and
+    nothing in the data said they should not.
+
+    Named per pass rather than as one block, because ADR-0027 permits the two
+    passes to run different models and a combined entry would hide that. The
+    keys are `<pass>.<parameter>` so a vendor fork adds parameters here rather
+    than translating `effort` into a foreign equivalent by guess, which
+    ADR-0027 item 3 refuses.
+
+    This describes CONFIGURATION, not a captured request. Attribution runs
+    after the read whose manifest this lands in, so there is no "what was
+    actually sent" to record at capture time. What keeps it honest is
+    test_the_manifest_matches_what_the_mechanical_requests_actually_send,
+    which asserts these values against the request dicts themselves.
+    """
+    return (
+        NameVersionV0(name="verify_finding.model", version=MECHANICAL_MODEL),
+        NameVersionV0(name="verify_finding.effort", version=MECHANICAL_EFFORT),
+        NameVersionV0(name="attribute_findings.model", version=MECHANICAL_MODEL),
+        NameVersionV0(name="attribute_findings.effort", version=MECHANICAL_EFFORT),
+    )
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
 # seconds, PER HTTP ATTEMPT — not the whole read. This comment claimed "whole
 # read incl. retries' backoff" until 2026-08-23; that was false, and it was the
@@ -1371,6 +1401,7 @@ def _record_attempt(
             max_output_tokens=MAX_TOKENS,
             effort=EFFORT,
             inference_parameters=INFERENCE_PARAMETERS,
+            mechanical_parameters=mechanical_parameters(),
             system_prompt_bytes=system.encode("utf-8"),
             output_schema_bytes=canonical_json_bytes(schema),
             diff_budget=DIFF_BUDGET,

@@ -183,6 +183,14 @@ class WholeInstrumentManifestV0(FrozenModel):
     max_output_tokens: int = Field(gt=0)
     effort: str = Field(min_length=1)
     inference_parameters: tuple[NameVersionV0, ...]
+    # ADR-0027 C3. The mechanical tier's identity — `verify_finding` and
+    # `attribute_findings` — as `<pass>.<parameter>` entries. Without it two
+    # reads that ran different mechanical models hash to the same
+    # instrument_id, while ADR-0015 makes attribution's validated output part
+    # of convergence identity and example_pack_eval.py partitions on that hash.
+    # Required rather than defaulted: a default would let a manifest built by
+    # an older call site silently claim a tier it never described.
+    mechanical_parameters: tuple[NameVersionV0, ...]
     system_prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     output_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     diff_budget: int = Field(gt=0)

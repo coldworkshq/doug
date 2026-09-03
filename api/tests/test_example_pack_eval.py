@@ -33,6 +33,9 @@ def _manifest(*, attempt_kind: str = "risk") -> WholeInstrumentManifestV0:
         max_output_tokens=6000,
         effort="medium",
         inference_parameters=(NameVersionV0(name="temperature", version="provider-default"),),
+        mechanical_parameters= (
+            NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+        ),
         system_prompt_sha256="1" * 64,
         output_schema_sha256="2" * 64,
         diff_budget=100_000,

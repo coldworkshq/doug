@@ -2049,3 +2049,136 @@ def test_the_federation_call_matches_the_installed_sdk(monkeypatch):
 
     client = reader._build_client(90.0)
     assert isinstance(client, anthropic.Anthropic)
+
+
+# --- ADR-0027 C3: the manifest names the mechanical tier -------------------
+
+
+def _captured_manifest_kwargs(monkeypatch) -> dict:
+    """Run one risk read with capture on and return record_attempt's kwargs."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        reader.example_pack_capture, "capture_requested", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        reader.example_pack_capture, "record_attempt", lambda **kw: seen.update(kw)
+    )
+    reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
+    return seen
+
+
+def test_a_mechanical_model_change_moves_instrument_id(monkeypatch):
+    """ADR-0027 C3, end to end and the reason the condition exists.
+
+    Before this, two reads that ran different mechanical models produced the
+    same instrument_id. That would be harmless if the mechanical passes were
+    decorative. ADR-0015 makes attribute_findings' validated output part of
+    convergence identity — code turns the model's picks into content hashes on
+    findings.hunks — and example_pack_eval.py partitions the corpus by exactly
+    that hash. So a swap changed what landed in the data while leaving the hash
+    that separates instrument eras unmoved, and the two populations pooled with
+    nothing in the data saying they should not.
+
+    Asserted through a real read rather than by constructing two manifests,
+    because the defect was never in the model — it was that the reader never
+    told the manifest. A manifest-only test passes while reader.py keeps the
+    tier to itself, which is precisely the state this replaces.
+    """
+    from doug.example_pack import WholeInstrumentManifestV0, sha256_hex
+
+    def manifest_for(kwargs) -> WholeInstrumentManifestV0:
+        return WholeInstrumentManifestV0(
+            provider=kwargs["provider"],
+            pinned_model_id=kwargs["model"],
+            max_output_tokens=kwargs["max_output_tokens"],
+            effort=kwargs["effort"],
+            inference_parameters=kwargs["inference_parameters"],
+            mechanical_parameters=kwargs["mechanical_parameters"],
+            system_prompt_sha256=sha256_hex(kwargs["system_prompt_bytes"]),
+            output_schema_sha256=sha256_hex(kwargs["output_schema_bytes"]),
+            diff_budget=kwargs["diff_budget"],
+            read_order="tier",
+            input_policy_version=reader.INPUT_POLICY_VERSION,
+            coverage_policy_version=reader.COVERAGE_POLICY_VERSION,
+            verifier_versions=(),
+            tool_versions=(),
+            failure_policy_version="reader-fallback-v0",
+            publication_policy_version="neutral-check-v0",
+            application_revision=None,
+            runtime_revision=None,
+            attempt_kind="risk",
+        )
+
+    before = manifest_for(_captured_manifest_kwargs(monkeypatch))
+    monkeypatch.setattr(reader, "MECHANICAL_MODEL", "some-other-model")
+    after = manifest_for(_captured_manifest_kwargs(monkeypatch))
+
+    assert before.instrument_id() != after.instrument_id(), (
+        "the mechanical model changed and instrument_id did not move — "
+        "two mechanical eras would pool in a corpus partitioned by that hash"
+    )
+
+
+def test_a_mechanical_effort_change_moves_instrument_id_too(monkeypatch):
+    """ADR-0027 item 3 lets a vendor fork own its own parameter names, so the
+    model is not the only thing that can change. Pinning only the model would
+    let a request-shape change ride along invisibly."""
+    before = _captured_manifest_kwargs(monkeypatch)["mechanical_parameters"]
+    monkeypatch.setattr(reader, "MECHANICAL_EFFORT", "high")
+    after = _captured_manifest_kwargs(monkeypatch)["mechanical_parameters"]
+
+    assert before != after
+
+
+def test_the_manifest_matches_what_the_mechanical_requests_actually_send():
+    """The manifest describes configuration, not a captured request, because
+    attribution runs after the read whose manifest it lands in. This is what
+    keeps that honest.
+
+    Without it the manifest could name claude-sonnet-5 while the request dicts
+    sent something else, and the resulting instrument_id would be a confident
+    description of a tier that never ran — worse than the missing field it
+    replaces, because it looks answered.
+    """
+    finding = reader.ReaderFinding(
+        category_slug="cap-mismatch",
+        description="Meter renders against the wrong cap",
+        file="api/doug/check_run.py",
+        severity="high",
+    )
+    verify_client = FakeClient(payload={"checks": []})
+    reader.verify_finding(finding, scope="verify:1", client=verify_client)
+
+    diff, cov, reasons = _attr_fixture()
+    attr_client = _AttrClient({"attributions": [{"finding": 0, "hunks": [1]}]})
+    reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=attr_client)
+
+    declared = {p.name: p.version for p in reader.mechanical_parameters()}
+    sent = {
+        "verify_finding.model": verify_client.messages.last_kwargs["model"],
+        "verify_finding.effort": verify_client.messages.last_kwargs["output_config"]["effort"],
+        "attribute_findings.model": attr_client.requests[0]["model"],
+        "attribute_findings.effort": attr_client.requests[0]["output_config"]["effort"],
+    }
+
+    assert declared == sent, (
+        "the manifest's mechanical entries disagree with the requests actually "
+        "built; instrument_id would describe a tier that never ran"
+    )
+
+
+def test_the_two_mechanical_passes_are_named_separately():
+    """ADR-0027 permits verify and attribution to run different models, and a
+    single combined entry would hide that the day they do. #263 left the choice
+    open; naming them separately is the answer, and this is what makes a later
+    collapse into one entry a deliberate edit rather than a tidy-up."""
+    names = {p.name for p in reader.mechanical_parameters()}
+    assert names == {
+        "verify_finding.model",
+        "verify_finding.effort",
+        "attribute_findings.model",
+        "attribute_findings.effort",
+    }

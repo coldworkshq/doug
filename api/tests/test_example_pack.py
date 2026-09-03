@@ -33,6 +33,9 @@ def _manifest(**changes) -> WholeInstrumentManifestV0:
         "max_output_tokens": 6000,
         "effort": "medium",
         "inference_parameters": (NameVersionV0(name="temperature", version="provider-default"),),
+        "mechanical_parameters": (
+            NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+        ),
         "system_prompt_sha256": "1" * 64,
         "output_schema_sha256": "2" * 64,
         "diff_budget": 100_000,
@@ -140,6 +143,18 @@ def test_request_or_evidence_byte_changes_pack_hash():
         {"application_revision": "git:abc"},
         {"runtime_revision": "doug-api-00042"},
         {"attempt_kind": "intent"},
+        # ADR-0027 C3. Before this field existed, a mechanical model swap left
+        # instrument_id unmoved while changing what attribution wrote into
+        # findings.hunks — which ADR-0015 makes part of convergence identity.
+        # Both halves are varied because ADR-0027 item 3 allows a vendor fork
+        # to change the parameters as well as the model.
+        {"mechanical_parameters": (
+            NameVersionV0(name="verify_finding.model", version="some-other-model"),
+        )},
+        {"mechanical_parameters": (
+            NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+            NameVersionV0(name="verify_finding.effort", version="high"),
+        )},
     ],
 )
 def test_every_whole_instrument_component_changes_instrument_id(change):
