@@ -1,21 +1,29 @@
 # HANDOFF — doug
 
-State:    review — PR #284 OPEN off main f6ea059, branch
-          `claude/doug-accuracy-improvements-c95c9b`. api 1812 pass, ruff
-          clean, five mutation checks red. CI green. Doug's two reads
-          dispositioned: 10 rows in docs/findings-log.jsonl, one changed
-          the code (stopword-ordering). Closes #264; #274 commented.
-Next:     Andrew merges #284. Nothing in it moves traffic; the Vertex flip
-          (`READER_TRANSPORT: vertex` in deploy.yml) waits on the capacity
-          grant, which needs a Google account team (#274, R11).
-Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
-          lineage is gated on a Google Sales account team.
+State:    review — #284 MERGED (c99fae2) one commit short of its tip; the
+          dropped commit (pyproject pin) is re-landed on #287. #287 OPEN,
+          branch `accuracy-settle-names-and-slug-fold`: settle.py
+          claimed_names precision, patterns slug fold (#244), PR-title
+          verbs in the intent stop list, ADR-0026 facts note. api 1818
+          pass, ruff clean, every guard mutation-red. Doug's first read of
+          #287 dispositioned (4 rows, 3 changed code).
+Next:     Andrew merges #287 and CHECKS main carries its tip (three squash
+          merges have now dropped the last commit: #251, #284, and the
+          #257 recovery). Then runs the #244 production query (on #244).
+Blockers: FOUNDER (#274): Vertex capacity is gated on a Google account
+          team; transport stays `anthropic` until the probe answers 400.
+          DENIED this session: reading doug-database-url for the #244
+          measurement. Handed over as a query, not routed around; the
+          check-run corpus (672 distinct slugs, 0 dirty) says it is empty.
 
-Doug's review, the finding worth remembering: reader:recall-regression
-(medium) said the title-naming rule silently drops binding records whose
-title uses other words. Checked against every graded deviation in the log
-(21 rows): none loses the record it cites. Recorded as adjacent, not
-disproved — the mechanism is right, the harm did not occur on the evidence.
+Lanes measured and closed this session, all offline:
+- #264 intent leak 20/22 -> 3/23 (naming rule + PR-verb stop words);
+  graded deviations lose no cited record (21/21); 60 real PRs still read.
+- settle.py missed PR #278's third read on the prose word `being`; fixed,
+  then Doug caught my over-broad dotted-root claim and that is fixed too.
+- #244 slug fold; 0 of 672 emitted slugs dirty, so no regrouping.
+Disproved reader rows are diverse (59 rules / 74 rows); no further
+deterministic settlement class is measurable yet. #245, #207 remain.
 
 Decisions this session (2026-09-02):
 - #264 mechanism: `intent._bears_on` — a record is a candidate only if the
