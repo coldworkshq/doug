@@ -94,6 +94,33 @@ status() {
 cutover() {
   local new_redirect="https://$DOMAIN/callback"
 
+  # THREE WRITES IN SEQUENCE AND NO ROLLBACK, so say what a failure left.
+  # The writes are ordered so that stopping between any two is survivable
+  # rather than broken: both redirect URIs are allowlisted before the first
+  # one runs, and both hostnames serve, so a half-applied cutover keeps
+  # sign-in working on the old address. What it does NOT survive is silence.
+  # A rebuild that fails leaves the secret rotated and the deployed bundle
+  # stale, and the next unrelated `gcp.sh web` — days later, by someone
+  # fixing something else — would complete the cutover without anyone
+  # deciding to. Naming the state is what makes that a known half-step
+  # rather than a surprise.
+  # NOT `local`. An EXIT trap runs after the function has returned, so a
+  # local would be out of scope by the time the trap reads it — and under
+  # `set -u` that is an unbound-variable error, which would make a SUCCESSFUL
+  # cutover exit non-zero with a confusing message. Verified, not assumed.
+  stage="nothing"
+  trap 'if [ "${stage:-}" != "done" ]; then
+          echo >&2
+          echo "cutover: STOPPED after: $stage" >&2
+          echo "  Both hostnames still serve and sign-in still works on the" >&2
+          echo "  old one, so nothing is down. But if the secret was rotated" >&2
+          echo "  and doug-web was not rebuilt, the next unrelated web deploy" >&2
+          echo "  finishes this cutover on its own. Re-run cutover now, or" >&2
+          echo "  roll the secret back with:" >&2
+          echo "    gcloud secrets versions list doug-workos-redirect-uri --project $PROJECT" >&2
+          echo "    gcloud secrets versions destroy <the new one> --project $PROJECT" >&2
+        fi' EXIT
+
   # Hazard 2, checked first because it is checkable without credentials: the
   # site must actually answer over HTTPS on the new name. A 200 here proves
   # DNS resolves, the certificate is issued and valid, and Cloud Run is
@@ -117,23 +144,46 @@ cutover() {
   local client_id authorize_code
   client_id=$(gcloud secrets versions access latest \
     --secret doug-workos-client-id --project "$PROJECT")
+  #
+  # PROCEED ONLY ON THE ANSWER THAT MEANS YES, never on the absence of the
+  # answer that means no. WorkOS redirects to the hosted UI when the URI is
+  # allowlisted and returns 400 when it is not, so a 302 is the evidence.
+  # Reading "not 400" as allowlisted would take a 5xx, a captive portal's
+  # 200, a proxy interception or an empty reply as permission to rotate the
+  # secret that breaks every sign-in — the exact failure this check exists
+  # to prevent, reached by the check itself.
+  #
+  # No -L: the redirect IS the signal, and following it discards it.
   authorize_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
     -G "https://api.workos.com/user_management/authorize" \
     --data-urlencode "client_id=$client_id" \
     --data-urlencode "redirect_uri=$new_redirect" \
     --data-urlencode "response_type=code" \
-    --data-urlencode "provider=authkit")
-  if [ "$authorize_code" = "400" ]; then
-    echo "cutover: WorkOS rejects $new_redirect. Add it under" >&2
-    echo "  Redirects in the WorkOS dashboard, KEEPING the existing URI," >&2
-    echo "  then re-run. Removing the old one is a separate, later step." >&2
-    exit 1
-  fi
-  echo "WorkOS answered $authorize_code for the new redirect URI."
+    --data-urlencode "provider=authkit" 2>/dev/null || echo "000")
+  case "$authorize_code" in
+    301|302|303|307|308)
+      echo "WorkOS redirected to the hosted UI: $new_redirect is allowlisted."
+      ;;
+    400)
+      echo "cutover: WorkOS rejects $new_redirect. Add it under" >&2
+      echo "  Redirects in the WorkOS dashboard, KEEPING the existing URI," >&2
+      echo "  then re-run. Removing the old one is a separate, later step." >&2
+      exit 1
+      ;;
+    *)
+      echo "cutover: WorkOS answered $authorize_code, which is neither the" >&2
+      echo "  redirect that means allowlisted nor the 400 that means not." >&2
+      echo "  That is not evidence either way, and rotating the redirect URI" >&2
+      echo "  on a guess breaks every sign-in. Check the WorkOS dashboard by" >&2
+      echo "  hand, then re-run." >&2
+      exit 1
+      ;;
+  esac
 
   echo "Pointing NEXT_PUBLIC_WORKOS_REDIRECT_URI at $new_redirect"
   printf '%s' "$new_redirect" | gcloud secrets versions add doug-workos-redirect-uri \
     --project "$PROJECT" --data-file=-
+  stage="the redirect-URI secret was rotated"
 
   # NEXT_PUBLIC_* is inlined into the client bundle at build time, so the
   # secret alone changes nothing until the image is rebuilt. This is the step
@@ -141,6 +191,7 @@ cutover() {
   # the service restarts, and the browser keeps sending the old URI.
   echo "Rebuilding doug-web so the new value reaches the client bundle..."
   PROJECT="$PROJECT" REGION="$REGION" ./deploy/gcp.sh web
+  stage="the secret was rotated and doug-web was rebuilt"
 
   # doug-api holds DOUG_WEB_URL for receipt links. gcp.sh's web_url() prefers
   # the mapped domain, so this converges rather than fighting the next deploy.
@@ -148,6 +199,7 @@ cutover() {
   gcloud run services update "$API_SERVICE" \
     --project "$PROJECT" --region "$REGION" \
     --update-env-vars "DOUG_WEB_URL=https://$DOMAIN"
+  stage="done"
 
   # THE THIRD PLACE THE HOSTNAME LIVES, and the only one that talks to search
   # engines. The gh-pages branch serves a redirect stub at
