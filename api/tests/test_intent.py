@@ -227,68 +227,133 @@ def test_selection_on_dougs_own_records():
     assert "ADR-0010" in comments
     assert "ADR-0003" not in comments
     lema = sent("Read decisions from lema's hosted API", ["doug/intent_providers.py"])
-    # ADR-0015 (post-read hunk attribution) joined the read/reader vocabulary
-    # cluster and rides along at the floor for this generic title; the pin
-    # that matters is that the lema record surfaces first — same posture as
-    # the inclusion/exclusion pin below.
-    assert lema[0] == "ADR-0006"
+    # Two records govern this change and both must be in front of the model:
+    # ADR-0006 (Doug does not depend on lema) and ADR-0022, which fills the
+    # provider slot ADR-0006 left empty with Doug's own store — a change that
+    # reads decisions from lema's API deviates from both. This line used to
+    # pin ADR-0006 first; ADR-0022 postdates that pin, and once `providers`
+    # folds to `provider` its title names the changed file. Ordering between
+    # two binding records is not the property; their presence at the top is.
+    assert set(lema[:2]) == {"ADR-0006", "ADR-0022"}, lema
 
     # Changes that bear on no recorded decision must be read against none.
-    # This case used to name api/pyproject.toml. It moved because two records
-    # now make claims about that file's CONTENTS — ADR-0028 requires
-    # anthropic[vertex] to be declared there, ADR-0027 notes that a second SDK
-    # moves tool_versions and therefore instrument_id. A dependency change in
-    # that file genuinely bears on both, so selecting them is the reader working,
-    # not the floor leaking. The title is unchanged and the file set is one no
-    # record governs, which is what this assertion was always about.
-    # The move narrows what this proves, so the general weakness it was
-    # accidentally covering is filed as #264: several cosmetic changes select
-    # three records each, and that predates ADR-0027/0028.
+    # #264 closed here. This case used to pass on luck — bump, ruff, makefile
+    # and gitignore appear in no record — while the footer case below was
+    # pinned as the leak. Both are now the same property, and
+    # test_unrelated_changes_select_nothing_across_the_real_record_set is
+    # what keeps it from hiding again.
     assert sent("Bump ruff 0.14.1 to 0.14.2", ["Makefile", ".gitignore"]) == []
-    # #264, PINNED AS THE DEFECT IT IS rather than moved out of the way again.
-    # The correct answer here is [] — a footer typo bears on no recorded
-    # decision. ADR-0029 is selected because the change vocabulary is
-    # {components, fix, footer, tsx, typo, web} and any long record contains
-    # "web" and "fix" somewhere in its prose: two incidental hits over a
-    # six-token denominator is 0.333, clear of MIN_RELEVANCE 0.25.
-    #
-    # This was NOT caused by ADR-0029. Measured across all 27 accepted records,
-    # "Correct a spelling mistake" selects two, "Update the copyright year"
-    # selects two, and "Rename a css class" selects three. The ruff case above
-    # passes only because bump/ruff/makefile/gitignore appear in no record at
-    # all — a lucky vocabulary, not a working floor. One more record simply
-    # pushed the footer case over the line first.
-    #
-    # Not fixed here on purpose: the fix is a scoring change to a tier scoped to
-    # the dogfood install that has not passed its derangement check, and
-    # retuning MIN_RELEVANCE by feel is what this repo refuses to do. Pinned so
-    # that fixing #264 fails this line and forces it back to [], instead of the
-    # leak being absorbed by relocating the example a second time.
-    assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == ["ADR-0029"]
+    assert sent("Fix a typo in the footer", ["web/components/footer.tsx"]) == []
 
-    # The other half of that move, pinned so it cannot regress silently: a
-    # change to the file those two records govern must be read against them, or
-    # the anthropic[vertex] declaration ADR-0028 item 4 requires can be dropped
-    # with nothing to say so.
-    #
-    # Asserted through relevance(), not select(). Doug flagged the select()
-    # form as brittle and was right: select() is ranked and bounded by MAX_DOCS,
-    # so any future record that also mentions dependencies could displace one of
-    # these two and fail the suite with no regression behind it. relevance() is
-    # the property this test is actually about — does this change bear on that
-    # record — and it is per-record, so it cannot be crowded out.
-    by_id = {d.id: d for d in docs}
-    for adr in ("ADR-0027", "ADR-0028"):
-        assert (
-            intent.relevance("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"], by_id[adr])
-            > 0
-        ), f"{adr} governs api/pyproject.toml and must be read against a change to it"
+    # api/pyproject.toml, which the ruff case used to name and moved away from
+    # when ADR-0027 and ADR-0028 made claims about that file's contents. The
+    # rationale for the move — "a dependency change there genuinely bears on
+    # both" — was a body match on `pyproject`, and body matches are exactly
+    # what #264 measured as noise. Under the naming rule a ruff bump names no
+    # record and is read against none; a change that names the subject reaches
+    # the records that govern it. Both halves pinned.
+    assert sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"]) == []
+    vertex_dep = sent("Declare anthropic[vertex] in pyproject", ["api/pyproject.toml"])
+    assert "ADR-0027" in vertex_dep and "ADR-0028" in vertex_dep
 
     # And the set stays tight rather than padding out to MAX_DOCS.
     # store.py's bound moved to 4 when ADR-0011 (migration list) joined the
     # store-schema cluster; reader.py is unchanged.
     assert len(sent("Tighten the reader prompt wording", ["doug/reader.py"])) <= 3
     assert len(sent("Add a deviations table to the ledger", ["doug/store.py"])) <= 4
+
+
+def test_unrelated_changes_select_nothing_across_the_real_record_set():
+    """#264's second done-criterion: several genuinely unrelated changes, not
+    two hand-picked ones, so the leak cannot hide behind a lucky vocabulary
+    as records accumulate.
+
+    Measured on 2026-09-02 before the fix: 20 of 22 unrelated changes selected
+    at least one record, most of them six, on incidental body hits — `web`,
+    `fix`, `api`, `lock` — over a short change vocabulary. The mechanism is
+    intent._bears_on. Five cases from that sample are NOT in this list and
+    still select one record each, all through a title word that is also a
+    record's title word (`page`, `scoring`, `remove`); `scoring.py` against
+    ADR-0004 is the rule working, the others are the residual and are named
+    here rather than absorbed.
+    """
+    docs = _real_records()
+    unrelated = [
+        ("Fix a typo in the README", ["README.md"]),
+        ("Update the favicon", ["web/public/favicon.ico"]),
+        ("Bump ruff 0.14.1 to 0.14.2", ["api/uv.lock"]),
+        ("Pin the Node version", [".nvmrc"]),
+        ("Ignore .DS_Store", [".gitignore"]),
+        ("Fix a typo in the footer", ["web/components/footer.tsx"]),
+        ("Correct a spelling mistake", ["web/components/footer.tsx"]),
+        ("Update the copyright year", ["LICENSE.md"]),
+        ("Rename a css class", ["web/app/globals.css"]),
+        ("Tidy imports", ["api/doug/hunks.py"]),
+        ("Add a unit test for hunks", ["api/tests/test_hunks.py"]),
+        ("Update dependencies", ["web/package.json", "web/package-lock.json"]),
+        ("Upgrade node to 22", [".nvmrc", "web/package.json"]),
+        ("Add an editorconfig", [".editorconfig"]),
+        ("Fix a flaky test", ["api/tests/test_worker.py"]),
+        ("Bump the python version in CI", [".github/workflows/ci.yml"]),
+    ]
+    leaked = {
+        title: [d.id for d in intent.select(docs, title, files)]
+        for title, files in unrelated
+        if intent.select(docs, title, files)
+    }
+    assert leaked == {}, leaked
+
+
+def test_a_file_named_for_a_record_reaches_it_whatever_the_title_says():
+    """The one exception to "two shared words or nothing", and it is the
+    property the path-tokenisation test has always pinned: a record titled
+    for `reader` binds a change to `reader.py`. Tidying reader.py IS a change
+    to the frozen reader, and that is the review the freeze exists for.
+    """
+    docs = _real_records()
+    chosen = [d.id for d in intent.select(docs, "Tidy up", ["doug/reader.py"])]
+    assert "ADR-0012" in chosen
+    assert all("reader" in intent._tokens(d.title) for d in docs if d.id in chosen)
+
+
+def test_plurals_and_past_tense_do_not_split_one_subject_into_two():
+    """`Post ... comments` must reach a record titled `posted` and one titled
+    `comment`; without folding, the naming rule would miss the records that
+    most plainly govern the change.
+    """
+    posted = _doc(
+        "ADR-0010", "The surface is a check run posted by the App", "The App posts each verdict."
+    )
+    comment = _doc(
+        "ADR-0014", "One sticky PR comment mirrors the check run", "Comments carry the verdict."
+    )
+    chosen = intent.select([posted, comment], "Post Doug verdicts as PR comments", ["x.yml"])
+    assert {d.id for d in chosen} == {"ADR-0010", "ADR-0014"}
+    # Folding is deliberately not a stemmer: `mode` is not `model`.
+    model = _doc("ADR-0016", "The verify pass runs its own model", "A different model.")
+    assert intent.select([model], "Fix dark mode contrast", ["globals.css"]) == []
+
+
+def test_directories_and_extensions_are_not_the_subject_of_a_change():
+    """`api`, `web`, `app` and `lock` are the repository's layout, and they
+    were the main carrier of the #264 leak. Only the file's own name counts.
+    """
+    api_record = _doc("ADR-0030", "The API key leaves the service", "api api api")
+    assert intent.select([api_record], "Fix a flaky test", ["api/tests/test_worker.py"]) == []
+    lock_record = _doc("ADR-0017", "Lock grounding on", "the uv.lock file")
+    assert intent.select([lock_record], "Bump ruff", ["api/uv.lock"]) == []
+    # The file's own name still does.
+    assert intent.select([api_record], "Tidy up", ["doug/api.py"]) != []
+
+
+def test_one_shared_word_is_a_coincidence():
+    """A long record contains most short words somewhere. One hit in the
+    title and nothing else is not a subject — the change has to name the
+    record twice, or name it by file.
+    """
+    record = _doc("ADR-0001", "Remove the reviewer gate", "Long prose about deploys.")
+    assert intent.select([record], "Remove trailing whitespace", ["patterns.py"]) == []
+    assert intent.select([record], "Remove the gate", ["deploy.yml"]) != []
 
 
 def _probe():

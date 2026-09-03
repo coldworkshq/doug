@@ -1,5 +1,49 @@
 # HANDOFF — doug
 
+State:    building — branch `claude/doug-accuracy-improvements-c95c9b` off main
+          f6ea059. Code written for both lanes; running the full api suite.
+Next:     Full api suite + ruff green, then commit and open one PR closing
+          #264 and updating #274's code side. Re-verify with the harness that
+          the leak count is what the tests claim.
+Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
+          lineage is gated on a Google Sales account team. Transport stays
+          `anthropic` in deploy.yml until a grant lands.
+
+Decisions this session (2026-09-02):
+- #264 mechanism: `intent._bears_on` — a record is a candidate only if the
+  change NAMES it in the record's title (a PR-title word or a changed file's
+  name), and one shared word is a coincidence unless it is the file's own
+  name. Path tokens are file stems only (no directories, no extensions).
+  Plural/past-tense folded (`_normalise`: -s at >=4, -ed at >=5; no stemmer).
+  MIN_RELEVANCE / RELATIVE_FLOOR untouched — nothing was retuned.
+  Measured on 28 accepted records: cosmetic leak 20/22 -> 5/23 (residual
+  named in the sampled test); every realistic positive intact; 60 real PRs
+  still 58/60 read, set sizes now 1-3 instead of 3-6.
+  Rejected: corpus-derived stop list (drops `reader`, kills the freeze
+  record); prefix matching (`mode` ~ `model`, lema pin breaks); retuning the
+  ratio floor (cannot separate two incidental words from two naming words).
+- lema pin relaxed from "ADR-0006 first" to "top two == {0006, 0022}":
+  ADR-0022 fills the provider slot 0006 left empty and postdates the pin;
+  with `providers`->`provider` its title names the changed file. Both bind.
+- pyproject pin flipped: ruff bump on api/pyproject.toml -> [] (its old
+  rationale was a body match, i.e. the noise); a change naming
+  anthropic[vertex] reaches ADR-0027/0028. Both halves pinned.
+- Vertex: `vertex_host` in gcp.sh mirrors the SDK table (us/eu -> rep hosts,
+  global -> bare host, else regional). deploy.yml stages VERTEX_REGION=us.
+  Workflow test now pins region in {us, global}. SDK host table pinned in
+  test_reader. OPERATIONS.md section rewritten for lineage quota;
+  ADR-0029 got a dated facts note (decision unchanged, no new ADR).
+  Probed 2026-09-02: `us` and `global` resolve, 429 on lineage quota.
+
+Pointers: api/doug/intent.py `_bears_on` `_file_names` `_normalise` ·
+          api/tests/test_intent.py (sampled negatives test) ·
+          api/deploy/gcp.sh `vertex_host` · .github/workflows/deploy.yml ·
+          api/tests/test_deploy_gcp.py `test_the_preflight_probes_the_host…` ·
+          api/tests/test_reader.py `test_the_installed_sdk_addresses…` ·
+          docs/OPERATIONS.md · ADR-0029 item 5 note · #264 · #274
+
+--- prior stream (#273 Vertex transport, merged) below, preserved ---
+
 State:    review — PR #273, branch `adr-0029-vertex-transport`, api 1773 pass,
           ruff clean. Transport is Vertex, DEFAULT_TRANSPORT="vertex". NOT
           DEPLOYED, and the deploy now REFUSES until quota exists.

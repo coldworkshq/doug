@@ -158,32 +158,48 @@ counts; they are the evidence the spend caps in `reader.py` are tuned from.
 
 Recorded from #274 so nobody re-derives it. Model Garden access and throughput
 quota are separate grants: access makes a model resolve (404 → 429), quota
-makes it serve (429 → 200/400). `claude-opus-5` resolves for this project in
-exactly `us-east5`, `us-central1`, `europe-west4`; `global` 404s. The console
-shows **no quota rows at all** for 5-family base models, so the console's
-"Edit quota" path cannot file the request — the Cloud Quotas API can, and it
-accepts the 5-family dimensions:
+makes it serve (429 → 200/400). Access is done for both `claude-opus-5` and
+`claude-sonnet-5`. Quota is not, and the rules for it are different from the
+4-family models. Google Support answered the quota case on 2026-08-29:
+
+- **Claude 5 quota is per lineage, not per model.** The base-model dimension
+  is `anthropic-claude-opus` and `anthropic-claude-sonnet`, unversioned. No
+  quota bucket named `anthropic-claude-opus-5` exists or can exist, which is
+  why scanning every `aiplatform` metric found none.
+- **Shared-lineage quota is served on the multi-region and global endpoints
+  only.** Single regions such as `us-central1` cannot be granted. The
+  location values that work are `us`, `eu`, and `global`. The service uses
+  `us`, which keeps tenant source in the US. The SDK maps `us` to
+  `aiplatform.us.rep.googleapis.com` and `global` to
+  `aiplatform.googleapis.com`; `vertex_host` in `deploy/gcp.sh` mirrors that
+  table so the preflight probes the host the service calls.
+- **The grant needs a Google account team.** Quota for Anthropic models is
+  not issued to projects without an assigned sales representative. The
+  self-service preference path is closed; the sales contact form
+  (https://cloud.google.com/contact) is the route. Founder action under R11.
+
+Probed 2026-09-02 with an empty body, which fails validation before any
+generation and costs nothing:
+
+| Location | Host | `claude-opus-5` | `claude-sonnet-5` |
+|---|---|---|---|
+| `us` | `aiplatform.us.rep.googleapis.com` | 429 `us_multi_region_online_prediction_requests_per_base_model`, base model `anthropic-claude-opus` | 429, same shape |
+| `global` | `aiplatform.googleapis.com` | 429 `global_online_prediction_requests_per_base_model` | 429, same shape |
+| `us-central1` | `us-central1-aiplatform.googleapis.com` | 429 under the versioned name | 429 |
+
+429 on the lineage quota is the "access granted, capacity zero" state. When
+the account team grants capacity, re-run the probe: 400 means quota landed and
+the deploy gate passes. Then set `READER_TRANSPORT: vertex` in
+`.github/workflows/deploy.yml`; `VERTEX_REGION: us` is already staged.
+
+To probe by hand:
 
 ```
-gcloud beta quotas preferences create --project=doug-prod0 \
-  --service=aiplatform.googleapis.com \
-  --quota-id=OnlinePredictionInputTokensPerMinutePerRegionPerBaseModel \
-  --dimensions=region=us-central1,base_model=anthropic-claude-opus-5 \
-  --preferred-value=100000 --email=<founder email> \
-  --justification="..." --preference-id=claude-opus-5-input-us-central1
+TOKEN=$(gcloud auth print-access-token --project doug-prod0)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' \
+  https://aiplatform.us.rep.googleapis.com/v1/projects/doug-prod0/locations/us/publishers/anthropic/models/claude-opus-5:rawPredict
 ```
-
-The three quota IDs that matter (per region, per `base_model`, both
-`anthropic-claude-opus-5` and `anthropic-claude-sonnet-5`):
-`OnlinePredictionInputTokensPerMinutePerRegionPerBaseModel` (floor ~50k/min —
-one read is ~30k input tokens), `OnlinePredictionOutputTokensPerMinutePerRegionPerBaseModel`
-(floor ~6k/min — `MAX_TOKENS` is 6,000), and
-`OnlinePredictionRequestsPerMinutePerProjectPerRegionPerBaseModel`.
-
-Track with `gcloud beta quotas preferences list --project=doug-prod0`; a grant
-shows as `grantedValue` moving off 0. Confirm on the wire with the empty-body
-probe (`vertex_preflight` in `deploy/gcp.sh` is the same check): 429 means no
-quota, 400 means quota landed and the deploy gate will pass.
 
 ## Hosted Example Pack cohort
 

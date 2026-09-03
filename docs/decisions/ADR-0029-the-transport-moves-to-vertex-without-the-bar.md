@@ -171,6 +171,20 @@ flip. Model Garden access and throughput quota are separate grants, and holding
 only the first fails exactly like holding neither. Both states are invisible to
 a non-empty-string check, which is why item 5 is a probe and not a validation.
 
+> **Facts updated 2026-09-02, decision unchanged.** Google Support answered the
+> quota case (#274): Claude 5 models carry shared-lineage quota under the
+> unversioned base models `anthropic-claude-opus` and `anthropic-claude-sonnet`,
+> and that quota is served on the multi-region and global endpoints only. A
+> single region cannot be granted, so the three regions in the table above are
+> not deployment targets for this lineage. Re-probed the same day: `us`
+> (`aiplatform.us.rep.googleapis.com`) and `global` now resolve for both models
+> and return 429 on the lineage quota. The staged value is `us`, which keeps
+> tenant source in the US. `vertex_host` in `deploy/gcp.sh` mirrors the SDK's
+> host table so the preflight probes the route the service will call. Nothing
+> in items 1 through 7 changes: the location is still required, still
+> undefaulted, and still probed before a deploy. The remaining gate is a
+> capacity grant, which Google issues only through an account team.
+
 The probe posts an empty body. That fails request validation before the model
 generates anything, so it costs nothing, and it cannot be rate-limited by its
 own token count — which is what lets a 429 be read as "the allocation is zero"

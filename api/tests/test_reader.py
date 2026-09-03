@@ -1908,6 +1908,35 @@ def test_the_first_party_client_uses_a_key_when_federation_is_absent(monkeypatch
     assert captured["timeout"] == 90.0
 
 
+@pytest.mark.parametrize(
+    ("location", "host"),
+    [
+        ("us", "aiplatform.us.rep.googleapis.com"),
+        ("eu", "aiplatform.eu.rep.googleapis.com"),
+        ("global", "aiplatform.googleapis.com"),
+        ("us-east5", "us-east5-aiplatform.googleapis.com"),
+    ],
+)
+def test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes(
+    location, host
+):
+    """CLOUD_ML_REGION=us has to mean the same thing to the SDK and to the
+    deploy gate, or the gate proves a route the service never calls.
+
+    Claude 5 lineage quota is served on the `us`/`eu` multi-region and
+    `global` endpoints only (#274), and those are not `<name>-aiplatform`
+    hosts. `vertex_host` in deploy/gcp.sh carries the same table as the SDK;
+    this pins the SDK half against the INSTALLED version, so an SDK downgrade
+    that predates multi-region support fails here rather than as every read
+    falling soft on a DNS miss. The other half is
+    test_the_preflight_probes_the_host_the_sdk_will_call.
+    """
+    import anthropic
+
+    client = anthropic.AnthropicVertex(region=location, project_id="p", access_token="t")
+    assert str(client.base_url).startswith(f"https://{host}/v1")
+
+
 def test_federation_does_not_reach_the_vertex_transport(monkeypatch):
     """Two orthogonal facts, and the surface wins.
 

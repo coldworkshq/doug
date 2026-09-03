@@ -712,20 +712,37 @@ for name in ("MODEL", "MECHANICAL_MODEL"):
     print(found.group(1))'
 }
 
+# The host a Vertex location is served from. This mirrors the SDK's own
+# table (anthropic.lib.vertex, `AnthropicVertex.__init__`), and it has to:
+# the preflight proves the route the SERVICE will call, so the two must
+# agree on what a location name means. Claude 5-family models are served
+# under shared-lineage quota on the multi-region and global endpoints only
+# (#274, Google Support, 2026-08-29), and those are not addressed as
+# `<name>-aiplatform.googleapis.com`. Pinned against the installed SDK by
+# test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes.
+vertex_host() {
+  case "$1" in
+    global) echo "aiplatform.googleapis.com" ;;
+    us|eu) echo "aiplatform.$1.rep.googleapis.com" ;;
+    *) echo "$1-aiplatform.googleapis.com" ;;
+  esac
+}
+
 vertex_preflight() {
-  local token model code
+  local token model code host
   token=$(gcloud auth print-access-token --project "$PROJECT" 2>/dev/null)
   if [ -z "$token" ]; then
     echo "ERROR: no access token; run 'gcloud auth login' before deploying." >&2
     return 1
   fi
+  host=$(vertex_host "$VERTEX_REGION")
   # Both tiers ride this transport under ADR-0029, so both are probed. The
   # mechanical tier hits the same region and quota walls as the risk read and
   # is billed on a separate per-base-model quota.
   for model in $(reader_models); do
     code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST \
       -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{}' \
-      "https://${VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${VERTEX_REGION}/publishers/anthropic/models/${model}:rawPredict")
+      "https://${host}/v1/projects/${PROJECT}/locations/${VERTEX_REGION}/publishers/anthropic/models/${model}:rawPredict")
     # An ALLOWLIST, not a denylist. Doug flagged the earlier denylist
     # (`reader:incomplete-error-handling`) and was right: a 5xx, or an empty
     # string from a missing curl or a malformed URL, fell through as success
@@ -745,9 +762,11 @@ vertex_preflight() {
       429)
         echo "ERROR: $model in $VERTEX_REGION has no throughput quota (429)." >&2
         echo "An empty-body probe consumes no input tokens, so a quota rejection here" >&2
-        echo "means the allocation is zero, not that the endpoint is busy. Request" >&2
-        echo "online_prediction_input_tokens_per_minute_per_base_model for" >&2
-        echo "anthropic-$model in $VERTEX_REGION, then re-run. See #274." >&2
+        echo "means the allocation is zero, not that the endpoint is busy. Claude 5" >&2
+        echo "quota is per LINEAGE (anthropic-claude-opus, anthropic-claude-sonnet)," >&2
+        echo "is served on the us/eu multi-region and global endpoints only, and is" >&2
+        echo "granted through a Google account team, not the console. See #274 and" >&2
+        echo "docs/OPERATIONS.md." >&2
         return 1 ;;
       000|"")
         echo "ERROR: probe for $model in $VERTEX_REGION did not complete (network, timeout, or no curl)." >&2
@@ -772,9 +791,11 @@ deploy() {
   # rollback for a region that turns out wrong is DOUG_READER_TRANSPORT=anthropic
   # on the running service, which needs no deploy.
   if [ "$READER_TRANSPORT" = "vertex" ] && [ -z "$VERTEX_REGION" ]; then
-    echo "ERROR: set VERTEX_REGION to the Vertex region that serves $(grep -m1 '^MODEL' doug/reader.py | cut -d'"' -f2)." >&2
-    echo "It is not defaulted: a wrong region fails every read soft into the" >&2
-    echo "deterministic fallback instead of failing the deploy. See ADR-0029." >&2
+    echo "ERROR: set VERTEX_REGION to the Vertex location that serves $(grep -m1 '^MODEL' doug/reader.py | cut -d'"' -f2)." >&2
+    echo "For the Claude 5 lineage that is 'us' (multi-region) or 'global', never a" >&2
+    echo "single region. It is not defaulted: a wrong location fails every read" >&2
+    echo "soft into the deterministic fallback instead of failing the deploy." >&2
+    echo "See ADR-0029 and #274." >&2
     exit 1
   fi
   # Only when this deploy actually pins Vertex. See READER_TRANSPORT above.
