@@ -96,25 +96,33 @@ def looks_like_missing_import_finding(f: ReaderFinding) -> bool:
 def claimed_names(f: ReaderFinding) -> list[str]:
     """Names the finding asserts are absent. Empty ⇒ we cannot settle it.
 
-    A name counts when the finding writes it as code: a bare identifier in
-    backticks, or the root of a dotted expression in backticks. The prose
-    form `import X` counts only when X is also written as code somewhere in
-    the description, because the word after "import" in prose is usually
-    prose. PR #278's third read said "the diff does not show a `sys` import
-    being added" and the old extractor claimed `being`; since every claimed
-    name must be imported for the finding to settle, one prose word kept a
-    finding the first two reads had already dropped. The extractor's error
-    ran in the safe direction — a finding was published, not hidden — but
-    it published a finding the file at head disproved.
+    Two ways a name is claimed, and the asymmetry between them is the point:
+
+    - A bare identifier in backticks (`sys`) is a claim on its own.
+    - The prose form "import X" is a claim only when X is also written as
+      code in the description — bare, or as the root of a dotted expression
+      such as `os.path.join`. The word after "import" in prose is usually
+      prose: PR #278's third read said "the diff does not show a `sys`
+      import being added", the old extractor claimed `being`, and because
+      every claimed name must be imported for a finding to settle, one prose
+      word republished a finding the first two reads had already dropped.
+
+    A dotted root is never a claim on its own. Doug's review of this change
+    (`reader:over-broad-regex`) was right that `self.client.post` or
+    `config.value` in backticks would otherwise become permanent vetoes —
+    `self` is never imported — so a finding that used to settle on `requests`
+    alone would be published. The root only corroborates a prose claim.
+
+    Errors here run in the safe direction: a name not claimed is a finding
+    kept, never a finding hidden.
     """
-    code_named: list[str] = []
+    bare: list[str] = _NAME_IN_BACKTICKS.findall(f.description)
+    roots: set[str] = set(bare)
     for span in _BACKTICK_SPAN.findall(f.description):
-        if _NAME_IN_BACKTICKS.fullmatch(f"`{span}`"):
-            code_named.append(span)
-        code_named.extend(_DOTTED_ROOT.findall(span))
-    found = list(code_named)
+        roots.update(_DOTTED_ROOT.findall(span))
+    found = list(bare)
     for word in _IMPORT_WORD.findall(f.description):
-        if word in code_named:
+        if word in roots:
             found.append(word)
     return list(dict.fromkeys(found))
 

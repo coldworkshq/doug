@@ -78,9 +78,21 @@ def test_a_prose_word_after_import_does_not_block_settlement():
     assert settle.settle_many([f], lambda p: src) == []
 
 
-def test_a_dotted_expression_in_backticks_names_its_root():
-    f = _f(desc="calls `os.path.join` and `json.dumps(x)` with neither imported")
-    assert settle.claimed_names(f) == ["os", "json"]
+def test_a_dotted_root_corroborates_a_prose_import_claim_but_is_not_one():
+    """`os.path.join` with "no import of os" claims `os`. `self.client.post`
+    with the same sentence claims nothing for `self`: Doug's review of this
+    change (`reader:over-broad-regex`) pointed out that a dotted root taken as
+    a claim is a permanent veto — `self` is never imported — so a finding that
+    settles on `requests` alone would be published instead.
+    """
+    f = _f(desc="calls `os.path.join` but there is no import os anywhere in the file")
+    assert settle.claimed_names(f) == ["os"]
+    f = _f(
+        desc="calls `self.client.post` with `requests` never imported; import requests is absent"
+    )
+    assert settle.claimed_names(f) == ["requests"]
+    src = "import requests\n\nclass C:\n    def go(self):\n        return self.client.post\n"
+    assert settle.settle_many([f], lambda p: src) == []
 
 
 def test_the_prose_import_form_counts_only_when_the_name_is_also_code():

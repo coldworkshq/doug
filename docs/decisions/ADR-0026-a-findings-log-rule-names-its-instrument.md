@@ -106,3 +106,14 @@ from the decisions directory rather than from `git log -S`.
 - `patterns.normalize` still neither case-folds nor slugifies, so a dirty
   `category_slug` in the production findings table can still split one pattern
   in two. That path is untouched by this record and is tracked separately.
+
+  > **Facts updated 2026-09-03, decision unchanged.** #287 made
+  > `patterns.normalize` fold spelling (lower-case, kebab, no edge dashes)
+  > before the merge map, closing the path above (#244). The transcription
+  > rule in this record stands on a different ground than the Context gave
+  > it: the log is hand-transcribed, so a dirty slug here is a transcription
+  > error rather than model output, and the last place that can refuse it
+  > still does. Measured the same day across every Doug check run on the
+  > last 120 PRs: 672 distinct reader slugs, none dirty, so the fold changes
+  > no historical grouping. Doug raised the shift in rationale on its review
+  > of #287 (`deviation:beyond-ticket`); this note is the record of it.
