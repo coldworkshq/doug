@@ -339,6 +339,10 @@ def test_a_pr_title_verb_is_not_a_subject():
     ]
     assert "ADR-0025" in chosen, chosen
     assert intent.select(docs, "Remove trailing whitespace", ["api/doug/patterns.py"]) == []
+    # Every inflection of a title verb is the same non-subject. The fold
+    # covers -s and -ed; -ing and the irregular forms are listed.
+    for title in ("Fixing a typo", "Removing whitespace", "Tidies the imports", "Bumped ruff"):
+        assert intent._tokens(title) <= {"typo", "whitespace", "import", "ruff"}, title
 
 
 def test_plurals_and_past_tense_do_not_split_one_subject_into_two():

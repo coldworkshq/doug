@@ -69,8 +69,9 @@ _WORD = re.compile(r"[a-z0-9]+")
 _STOP = frozenset(
     "the a an and or of to in for on with is are be by it this that we our "
     "use uses used using add adds added new not no from at as if then than "
-    "fix fixes fixed correct corrected remove removes removed update updates "
-    "updated rename renamed bump bumps tidy "
+    "fix fixes fixed fixing correct corrected correcting remove removes removed "
+    "removing update updates updated updating rename renames renamed renaming "
+    "bump bumps bumped bumping tidy tidies tidied tidying "
     "when what which why how doug decision decisions adr record records "
     "status accepted context rejected consequences".split()
 )

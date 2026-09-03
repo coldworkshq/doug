@@ -68,3 +68,14 @@ def test_two_spellings_of_one_defect_group_to_one_pattern():
     assert patterns.from_rule("reader:Missing Import") == "missing-import"
     # Spelling folds; vocabulary does not. That judgement stays in SLUG_MERGES.
     assert patterns.normalize("missing-imports") != patterns.normalize("missing-import")
+
+
+def test_a_slug_with_nothing_to_fold_keeps_its_raw_spelling():
+    """`---` and `!!` fold to the empty string. An empty pattern name would
+    pool every such slug into one bucket that downstream grouping treats as
+    a real pattern; each keeps its raw spelling and stays alone instead.
+    """
+    assert patterns.normalize("---") == "---"
+    assert patterns.normalize("!!") == "!!"
+    assert patterns.from_rule("reader:---") == "---"
+    assert patterns.normalize("") == ""

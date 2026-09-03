@@ -93,28 +93,39 @@ def looks_like_missing_import_finding(f: ReaderFinding) -> bool:
     )
 
 
+# What follows the word "import" when the sentence is about an import rather
+# than naming one: "the import statement for `x`", "a `sys` import being
+# added". English, not identifiers, and short on purpose — anything not on
+# it and not written as code is treated as a name we cannot read, below.
+_IMPORT_PROSE = frozenset(
+    "statement statements line lines of for from is was being missing added "
+    "removed needed required".split()
+)
+
+
 def claimed_names(f: ReaderFinding) -> list[str]:
     """Names the finding asserts are absent. Empty ⇒ we cannot settle it.
 
-    Two ways a name is claimed, and the asymmetry between them is the point:
+    Settlement drops a finding only when EVERY claimed name is imported at
+    head, so the direction of each extraction error matters and they are not
+    symmetric:
 
-    - A bare identifier in backticks (`sys`) is a claim on its own.
-    - The prose form "import X" is a claim only when X is also written as
-      code in the description — bare, or as the root of a dotted expression
-      such as `os.path.join`. The word after "import" in prose is usually
-      prose: PR #278's third read said "the diff does not show a `sys`
-      import being added", the old extractor claimed `being`, and because
-      every claimed name must be imported for a finding to settle, one prose
-      word republished a finding the first two reads had already dropped.
+    - A name claimed that the finding did not mean (`being`, from "a `sys`
+      import being added" on PR #278's third read) is a permanent veto: it
+      is never imported, so a disproved finding stays published.
+    - A name the finding meant but the extractor missed makes settlement
+      EASIER: "uses `os` but does not import sys" claiming only `os` would
+      settle on `os` and hide a real absence. Doug's second read of #287
+      (`reader:logic-inversion-in-safety-claim`) caught the first version
+      of this function doing exactly that, and was right.
 
-    A dotted root is never a claim on its own. Doug's review of this change
-    (`reader:over-broad-regex`) was right that `self.client.post` or
-    `config.value` in backticks would otherwise become permanent vetoes —
-    `self` is never imported — so a finding that used to settle on `requests`
-    alone would be published. The root only corroborates a prose claim.
-
-    Errors here run in the safe direction: a name not claimed is a finding
-    kept, never a finding hidden.
+    So the rule is: a bare identifier in backticks is a claim. The prose form
+    "import X" is a claim when X is also written as code (bare, or the root
+    of a dotted expression such as `os.path.join`); it is ignored when X is
+    ordinary English about an import (see _IMPORT_PROSE); and when it is
+    neither — a word we cannot read either way — nothing is claimed at all,
+    which keeps the finding. A dotted root on its own is never a claim, or
+    `self.client.post` would veto every settlement.
     """
     bare: list[str] = _NAME_IN_BACKTICKS.findall(f.description)
     roots: set[str] = set(bare)
@@ -124,6 +135,8 @@ def claimed_names(f: ReaderFinding) -> list[str]:
     for word in _IMPORT_WORD.findall(f.description):
         if word in roots:
             found.append(word)
+        elif word.lower() not in _IMPORT_PROSE:
+            return []
     return list(dict.fromkeys(found))
 
 

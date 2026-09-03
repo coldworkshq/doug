@@ -48,7 +48,11 @@ def slugify(raw: str) -> str:
     Only the spelling folds. Two different words stay two patterns —
     that judgement is SLUG_MERGES's, and it is hand-maintained on purpose.
     """
-    return _NOT_SLUG.sub("-", raw.strip().lower()).strip("-")
+    folded = _NOT_SLUG.sub("-", raw.strip().lower()).strip("-")
+    # A slug with no letters or digits folds to nothing. Grouping every such
+    # slug under "" would make one pattern out of unrelated garbage, so it
+    # keeps its raw spelling and stays its own bucket.
+    return folded or raw
 
 
 def normalize(slug: str) -> str:

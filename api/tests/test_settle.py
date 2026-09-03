@@ -95,6 +95,24 @@ def test_a_dotted_root_corroborates_a_prose_import_claim_but_is_not_one():
     assert settle.settle_many([f], lambda p: src) == []
 
 
+def test_a_name_the_extractor_cannot_read_keeps_the_finding():
+    """Doug's second read of #287 (`reader:logic-inversion-in-safety-claim`):
+    settlement needs EVERY claimed name imported, so a claim the extractor
+    misses makes settling easier, not harder. "uses `os` but does not import
+    sys" must not settle on `os` alone while `sys` is genuinely absent.
+    """
+    f = _f(desc="uses `os` correctly but does not import sys anywhere")
+    assert settle.claimed_names(f) == []
+    src = "import os\n\nprint(os.getcwd(), file=sys.stderr)\n"
+    assert settle.settle_many([f], lambda p: src) == [f]
+    # The same sentence with `sys` written as code claims both, and settles
+    # only when both are imported.
+    f = _f(desc="uses `os` correctly but does not import `sys` anywhere")
+    assert settle.claimed_names(f) == ["os", "sys"]
+    assert settle.settle_many([f], lambda p: src) == [f]
+    assert settle.settle_many([f], lambda p: "import os\nimport sys\n") == []
+
+
 def test_the_prose_import_form_counts_only_when_the_name_is_also_code():
     """`import X` in prose is kept as a claim only when X is written as code
     elsewhere; otherwise a sentence like "the import statement is missing"
