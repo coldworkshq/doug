@@ -150,19 +150,23 @@ jobs:
           # current transport and skips the Vertex preflight entirely; `vertex`
           # pins Vertex on the service and makes the preflight binding.
           #
-          # It is `anthropic` because Vertex throughput quota is still zero in
-          # every serving region (#274), so pinning `vertex` today would refuse
-          # every deploy — including one carrying an unrelated hotfix, which R1
-          # does not allow. Flip it when the quota grant lands and the probe
-          # answers 400 instead of 429.
+          # It is `anthropic` because Vertex throughput quota for the Claude 5
+          # lineage is still zero (#274) and is granted only through a Google
+          # account team, so pinning `vertex` today would refuse every deploy —
+          # including one carrying an unrelated hotfix, which R1 does not
+          # allow. Flip it when the grant lands and the probe answers 400
+          # instead of 429.
           READER_TRANSPORT: anthropic
           # Pre-staged so the flip above is genuinely one word. Unused while
           # READER_TRANSPORT is `anthropic`, because gcp.sh gates both the
-          # region check and the preflight on a Vertex deploy. Measured
-          # 2026-08-28: claude-opus-5 is served in us-east5, us-central1 and
-          # europe-west4 and nowhere else, `global` included. us-central1 keeps
-          # the call in the region this service already runs in.
-          VERTEX_REGION: us-central1
+          # location check and the preflight on a Vertex deploy. Claude 5
+          # models carry shared-lineage quota, which Google serves on the
+          # multi-region and global endpoints only — a single region such as
+          # us-central1 cannot be granted (#274, Support, 2026-08-29). `us`
+          # keeps tenant source in the US; `global` is the other valid value.
+          # Probed 2026-09-02: both resolve for claude-opus-5 and
+          # claude-sonnet-5 (429 on the lineage quota, not 404).
+          VERTEX_REGION: us
       - name: Confirm the live URL after promotion
         run: |
           # The candidate gate lives in gcp.sh; this re-checks the real

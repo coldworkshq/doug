@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 GCP_PATH = Path(__file__).resolve().parents[1] / "deploy" / "gcp.sh"
 GCP = GCP_PATH.read_text()
 DEPLOY_WORKFLOW = GCP_PATH.parents[2] / ".github" / "workflows" / "deploy.yml"
@@ -1703,12 +1705,20 @@ def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
     """The cutover is one word in deploy.yml, and it must not be flipped ahead
     of the quota it depends on.
 
-    Vertex throughput quota is zero in every serving region (#274), so a
+    Vertex throughput quota for the Claude 5 lineage is zero (#274), so a
     `vertex` pin here refuses every deploy — including one carrying an
     unrelated hotfix, which R1 does not allow. This asserts the two halves stay
-    consistent: pinning Vertex requires a region, and the region has to be one
-    that actually serves the model. Measured 2026-08-28: us-east5, us-central1
-    and europe-west4, and nowhere else.
+    consistent: pinning Vertex requires a location, and the location has to be
+    one Google can actually grant capacity on for this lineage.
+
+    That set is NOT the three single regions the first probe found. Google
+    Support (2026-08-29, on #274): Claude 5 quota is shared-lineage and is
+    served on the multi-region and global endpoints only, so `us-central1`
+    can resolve the model and still never be granted. `us` keeps tenant source
+    in the US; `global` is the other value. `eu` also resolves and is excluded
+    here for the same reason europe-west4 was — it moves tenant code to the EU
+    for no reason. Probed 2026-09-02: both `us` and `global` answer 429 on the
+    lineage quota for both models, which is "resolved, no capacity".
     """
     workflow = DEPLOY_WORKFLOW.read_text()
     deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
@@ -1716,6 +1726,39 @@ def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
     region = re.search(r"VERTEX_REGION:\s*(\S+)", deploy_step).group(1)
 
     assert transport in {"anthropic", "vertex"}, transport
-    assert region in {"us-east5", "us-central1", "europe-west4"}, (
-        f"{region} does not serve claude-opus-5; probed 13 regions on 2026-08-28"
+    assert region in {"us", "global"}, (
+        f"{region} is not an endpoint Google grants Claude 5 lineage quota on; "
+        "see #274 and docs/OPERATIONS.md"
     )
+
+
+@pytest.mark.parametrize(
+    ("location", "host"),
+    [
+        ("us", "aiplatform.us.rep.googleapis.com"),
+        ("eu", "aiplatform.eu.rep.googleapis.com"),
+        ("global", "aiplatform.googleapis.com"),
+        ("us-east5", "us-east5-aiplatform.googleapis.com"),
+    ],
+)
+def test_the_preflight_probes_the_host_the_sdk_will_call(tmp_path, location, host):
+    """A multi-region location is not addressed as `<name>-aiplatform`.
+
+    The preflight used to build `https://${VERTEX_REGION}-aiplatform...` for
+    every value, which is right for a single region and wrong for the three
+    locations Claude 5 lineage quota is actually served on: `us-aiplatform`
+    does not exist (404 on 2026-09-02), so a deploy to the one endpoint Google
+    can grant would have been refused by its own gate as "not served". The
+    table here is the SDK's own (anthropic.lib.vertex), and
+    test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes
+    holds the two together.
+    """
+    result, _, curl_log = _deploy_with_vertex_code(
+        tmp_path, "400", {"VERTEX_REGION": location}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    probes = [line for line in curl_log.splitlines() if "rawPredict" in line]
+    assert probes, "the preflight did not run"
+    for line in probes:
+        assert f"https://{host}/v1/projects/doug-prod0/locations/{location}/" in line, line

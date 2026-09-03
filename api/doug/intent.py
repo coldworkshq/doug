@@ -27,17 +27,23 @@ MAX_DOCS = 6
 DOC_BUDGET = 12_000  # chars across all selected records
 BODY_BUDGET = 4_000  # chars of any single record, matching the probe's ticket budget
 
-# Two floors, because "scored above zero" is not the same as "bears on this
-# change". Decision records from one team share vocabulary, so almost every
-# record scores slightly against almost every PR. Sending that tail asks the
-# model to find a deviation from a decision that has nothing to do with the
-# diff, which is how invented findings happen — and it degrades the
-# derangement check, because both arms end up full of the same noise.
+# "Scored above zero" is not the same as "bears on this change". Decision
+# records from one team share vocabulary, so almost every record scores
+# slightly against almost every PR. Sending that tail asks the model to find a
+# deviation from a decision that has nothing to do with the diff, which is how
+# invented findings happen — and it degrades the derangement check, because
+# both arms end up full of the same noise.
 #
-# MIN_RELEVANCE drops changes that match nothing in particular (a dependency
-# bump matches no decision, and should be read against none). RELATIVE_FLOOR
-# keeps the set tight around the best match rather than padding to MAX_DOCS,
-# and adapts to repos whose records are more or less verbose than these.
+# Whether a record bears on a change at all is decided by `_bears_on`, not by
+# a score threshold. Two ratio floors used to carry that job and could not
+# (#264): a ratio is normalised by the change's vocabulary, so a cosmetic PR
+# with five words in its title and path clears any floor on two incidental
+# body hits. Measured on 2026-09-02 against Doug's own 28 accepted records,
+# 20 of 22 unrelated changes — typo fixes, dependency bumps, a favicon —
+# selected at least one record, most of them six. The floors stay for what
+# they still do: MIN_RELEVANCE is a sanity bound on the score, and
+# RELATIVE_FLOOR keeps the set tight around the best match rather than
+# padding to MAX_DOCS.
 MIN_RELEVANCE = 0.25
 RELATIVE_FLOOR = 0.5  # fraction of the top-scoring record
 
@@ -92,12 +98,86 @@ def enabled_for(installation_id: int | None) -> bool:
     return str(installation_id) in {i.strip() for i in allow.split(",") if i.strip()}
 
 
+def _normalise(word: str) -> str:
+    """Fold the two inflections that split one term into two tokens.
+
+    `comments` and `comment`, `posted` and `post`, `deploys` and `deploy`
+    must meet, or a record titled for the thing being changed is missed on a
+    plural. Applied to both sides, so a wrong stem is harmless as long as it
+    is the same wrong stem: `status` becomes `statu` in the record and in the
+    change alike. Deliberately not a stemmer — no `-ing`, no vowel rules — so
+    that `mode` and `model` stay different words.
+    """
+    if len(word) >= 5 and word.endswith("ed"):
+        return word[:-2]
+    if len(word) >= 4 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
 def _tokens(text: str) -> set[str]:
-    return {w for w in _WORD.findall(text.lower()) if w not in _STOP and len(w) > 2}
+    # The stop list is checked on the folded form as well as the raw one, or
+    # an inflection the list does not spell out (`recorded`, `adrs`) survives
+    # as a stem the list does. Doug flagged the one-sided check
+    # (`reader:stopword-ordering`); three such words exist in the record set.
+    out: set[str] = set()
+    for w in _WORD.findall(text.lower()):
+        if len(w) <= 2 or w in _STOP:
+            continue
+        folded = _normalise(w)
+        if folded not in _STOP:
+            out.add(folded)
+    return out
+
+
+def _file_names(files: list[str]) -> set[str]:
+    """The name of each changed file, without its directories or extension.
+
+    `doug/reader.py` contributes `reader`; `web/app/about/page.tsx`
+    contributes `page`. Directory segments are the repository's layout, not
+    the change's subject — `api`, `web`, `app` and `components` appear in
+    nearly every record and were the main carrier of the #264 leak. An
+    extension says even less: `lock` matched six records for a `uv.lock` bump.
+    """
+    out: set[str] = set()
+    for path in files:
+        base = path.rsplit("/", 1)[-1]
+        stem = base.rsplit(".", 1)[0] if "." in base[1:] else base
+        out |= _tokens(stem.replace(".", " ").replace("_", " ").replace("-", " "))
+    return out
 
 
 def _change_tokens(title: str, files: list[str]) -> set[str]:
-    return _tokens(title) | _tokens(" ".join(files).replace("/", " ").replace(".", " "))
+    return _tokens(title) | _file_names(files)
+
+
+def _bears_on(title_words: set[str], file_names: set[str], doc: IntentDoc) -> bool:
+    """Does this record bear on the change at all? Pure, no I/O, no model.
+
+    Two rules, both about naming rather than overlap:
+
+    1. The change must name the record in its TITLE — a word of the PR title,
+       or the name of a changed file, appears in the record's title. A record
+       whose title shares nothing with the change is rarely binding on it,
+       and the alternative is what #264 measured: any long record contains
+       `web` and `fix` somewhere in its prose.
+    2. One shared word is a coincidence; two are a subject. The exception is
+       the file's own name: a record titled for `reader` binds a change to
+       `reader.py` whatever the PR is called, which is the property
+       test_file_paths_are_tokenised_for_matching has always pinned.
+
+    Neither rule is a tunable. Retuning MIN_RELEVANCE by feel was the fix this
+    repo refused, because a ratio floor cannot separate "two incidental words
+    over a short title" from "two words that name the subject".
+    """
+    head = _tokens(doc.title)
+    change = title_words | file_names
+    named = change & head
+    if not named:
+        return False
+    if file_names & head:
+        return True
+    return len(named | (change & _tokens(doc.body))) >= 2
 
 
 def relevance(
@@ -108,8 +188,12 @@ def relevance(
     Jaccard-style overlap, with the record's own title weighted above its
     body: a decision named "Freeze the reader's prompt" should surface for
     a PR touching reader.py even if the body never says "reader" again.
-    Path segments are tokenised, so `doug/reader.py` matches a record
-    about the reader.
+    File names are tokenised, so `doug/reader.py` matches a record about
+    the reader; directories and extensions are not (see `_file_names`).
+
+    This is the RANKING. Whether a record is a candidate at all is
+    `_bears_on`, which select() applies first; a score above zero here does
+    not mean the record reaches the model.
 
     `change` lets select() tokenise the PR once and reuse it across docs.
     """
@@ -135,11 +219,12 @@ def select(docs: list[IntentDoc], title: str, files: list[str]) -> list[IntentDo
     correct: most changes touch none of the recorded decisions, and a read
     against irrelevant records invites invented findings.
     """
-    change = _change_tokens(title, files)
+    title_words, file_names = _tokens(title), _file_names(files)
+    change = title_words | file_names
     scored = [
         (relevance(title, files, d, change=change), d)
         for d in docs
-        if d.status.lower() == BINDING
+        if d.status.lower() == BINDING and _bears_on(title_words, file_names, d)
     ]
     ranked = sorted(
         (sd for sd in scored if sd[0] >= MIN_RELEVANCE),
