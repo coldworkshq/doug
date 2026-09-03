@@ -1,21 +1,30 @@
 # HANDOFF — doug
 
-State:    review — PR #284 OPEN off main f6ea059, branch
-          `claude/doug-accuracy-improvements-c95c9b`. api 1812 pass, ruff
-          clean, five mutation checks red. CI green. Doug's two reads
-          dispositioned: 10 rows in docs/findings-log.jsonl, one changed
-          the code (stopword-ordering). Closes #264; #274 commented.
-Next:     Andrew merges #284. Nothing in it moves traffic; the Vertex flip
-          (`READER_TRANSPORT: vertex` in deploy.yml) waits on the capacity
-          grant, which needs a Google account team (#274, R11).
-Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
-          lineage is gated on a Google Sales account team.
+State:    review — two PRs open. #284 (intent naming rule + Vertex hosts,
+          branch `claude/doug-accuracy-improvements-c95c9b`, closes #264;
+          Doug's four reads dispositioned, 13 rows, two changed code).
+          #287 (settle.py claimed_names precision + patterns slug fold,
+          branch `accuracy-settle-names-and-slug-fold` off main 48d8dbd).
+          Both green: api 1817 pass, ruff clean, every guard mutation-red.
+Next:     Andrew merges #284 then #287, and runs the #244 production query
+          (in #287's body and on #244) to decide the backfill.
+Blockers: FOUNDER (#274): Vertex capacity is gated on a Google account
+          team; transport stays `anthropic` until the probe answers 400.
+          DENIED this session: reading the doug-database-url secret for
+          the #244 measurement. Handed over as a query, not routed around.
 
-Doug's review, the finding worth remembering: reader:recall-regression
-(medium) said the title-naming rule silently drops binding records whose
-title uses other words. Checked against every graded deviation in the log
-(21 rows): none loses the record it cites. Recorded as adjacent, not
-disproved — the mechanism is right, the harm did not occur on the evidence.
+Doug's review of #284, the two that changed code: reader:stopword-ordering
+(three inflected stop words survived the fold) and the pyproject guard
+(raised on every read; ADR-0028 item 4 now pinned by a deterministic test
+instead of a model read that might notice). The medium recall finding was
+checked against every graded deviation in the log (21): none loses its
+cited record.
+
+Second lane found by reading the disproved rows: the reader re-raises
+findings a mechanical check at head refutes. settle.py had the check and
+missed PR #278's third read on the word `being` after "import". Fixed in
+#287. Disproved reader rows are otherwise diverse (59 rules over 74 rows),
+so no further deterministic settlement class is measurable yet.
 
 Decisions this session (2026-09-02):
 - #264 mechanism: `intent._bears_on` — a record is a candidate only if the
