@@ -11,6 +11,7 @@ once on the Vertex transport.
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -431,3 +432,27 @@ def test_every_paid_pass_names_itself_on_its_span(monkeypatch):
         "reader.attribution",
     ]
     assert len(set(names)) == 4
+
+
+def test_the_suite_guard_clears_every_variable_tracing_reads(monkeypatch):
+    """conftest's guard must cover the whole switch, not most of it.
+
+    Exercised directly rather than trusted, because the way this decays is by
+    addition: a later variable joins tracing.enabled()'s all-of check and does
+    not join `_TRACING_ENV`, and from then on a developer's exported keys
+    reach the suite again. The symptom is silent — the tests still pass, and
+    the only evidence is fixture data appearing in a real Langfuse project.
+    """
+    import conftest
+
+    monkeypatch.setenv("DOUG_TRACING", "1")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-a-developers-own-key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-a-developers-own-key")
+    assert tracing.enabled(), "precondition: the switch is on before the guard runs"
+
+    guard = conftest._tracing_is_off_during_tests.__wrapped__()
+    next(guard)
+
+    assert not tracing.enabled()
+    for name in conftest._TRACING_ENV:
+        assert name not in os.environ

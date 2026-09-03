@@ -218,6 +218,17 @@ prompt and the diff slice — and the exact text it sent back. That is tenant
 source code from private repositories, held by Langfuse. Turn it on knowing
 that; ADR-0031 records the decision and the open subprocessor question.
 
+### Try it locally first
+
+Put the keys in `api/.env` and set `DOUG_TRACING=1` there. Nothing in `api/`
+reads a dotenv on its own — `uv run` ignores `.env` unless it is named — so
+`make api-dev` and `make dev` pass `--env-file .env` when that file exists.
+`make test` deliberately does not, and `api/tests/conftest.py` clears the
+switch as well, so a test run cannot put fixtures into a real project.
+
+Local tracing has none of the tenant exposure below, as long as you point it
+at your own repositories.
+
 ### Turn it on
 
 Both secrets, or nothing happens. Create them by hand so neither sits in shell
