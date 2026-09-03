@@ -79,3 +79,6 @@ def test_a_slug_with_nothing_to_fold_keeps_its_raw_spelling():
     assert patterns.normalize("!!") == "!!"
     assert patterns.from_rule("reader:---") == "---"
     assert patterns.normalize("") == ""
+    # Surrounding whitespace is not part of the spelling even when nothing
+    # else folds, so ` --- ` and `---` are one bucket.
+    assert patterns.normalize(" --- ") == "---"

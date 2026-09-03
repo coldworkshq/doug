@@ -52,7 +52,7 @@ def slugify(raw: str) -> str:
     # A slug with no letters or digits folds to nothing. Grouping every such
     # slug under "" would make one pattern out of unrelated garbage, so it
     # keeps its raw spelling and stays its own bucket.
-    return folded or raw
+    return folded or raw.strip() or raw
 
 
 def normalize(slug: str) -> str:
