@@ -147,10 +147,39 @@ def test_api_deploy_carries_the_web_url_for_receipt_links():
     """The receipt URL builds a dashboard link from DOUG_WEB_URL. If unset or
     empty, no link is generated and receipts degrade silently — the code
     tolerates this because a bootstrap deploy where doug-web does not exist yet
-    sets DOUG_WEB_URL=empty string via $(web_url). The link silently disappears
+    resolves web_url() to the empty string. The link silently disappears
     if this env var is dropped."""
     body = _function_body("deploy")
-    assert "DOUG_WEB_URL=$(web_url)" in body
+    assert "DOUG_WEB_URL=$web_base" in body
+    assert "web_base=$(web_url)" in body
+
+
+def test_the_web_url_is_resolved_before_the_deploy_argument_list():
+    """`set -e` DOES NOT FIRE for a command substitution embedded in an
+    argument, which is why this is a test and not a style preference.
+
+    web_url() refuses to choose when doug-web has more than one domain
+    mapping, because DOUG_WEB_URL is baked into the receipt link of every PR
+    comment Doug writes, in other people's repositories, where nothing
+    rewrites it. Spelled `DOUG_WEB_URL=$(web_url)` inside --set-env-vars,
+    that refusal is inert: bash prints the message, discards the non-zero
+    status, and deploys with an empty value the api reads as "no receipt
+    link". The guard against guessing would degrade into exactly the silence
+    it was written to prevent.
+
+        $ bash -c 'set -euo pipefail; f(){ return 1; }; echo "x=$(f)"; \
+            echo STILL-RUNNING'
+        x=
+        STILL-RUNNING
+
+    As an assignment statement the exit status is the statement's own and the
+    deploy stops. So the pin is on the SHAPE: resolve first, use the variable
+    second. Banning the old spelling by name is what makes reintroducing it
+    fail here rather than in production three deploys later.
+    """
+    body = _function_body("deploy")
+    assert "DOUG_WEB_URL=$(web_url)" not in body
+    assert body.index("web_base=$(web_url)") < body.index("DOUG_WEB_URL=$web_base")
 
 
 def test_api_deploy_carries_no_pr_comment_allowlist():

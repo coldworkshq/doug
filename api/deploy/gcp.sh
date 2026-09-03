@@ -821,9 +821,11 @@ deploy() {
   # DOUG_WEB_URL: the base URL of the doug-web service, used by receipt_url()
   # to build links to the PR comment dashboard (/dashboard/pr/{n}?repo=…).
   # Empty or unset → no link, and receipts degrade silently. The web_url()
-  # helper queries the live doug-web service, so on a bootstrap deploy where
-  # doug-web does not exist yet, $(web_url) is empty and DOUG_WEB_URL gets
-  # set to an empty string — exactly why the code tolerates empty values.
+  # helper prefers doug-web's mapped custom domain and falls back to the
+  # generated run.app URL, so on a bootstrap deploy where doug-web does not
+  # exist yet, $(web_url) is empty and DOUG_WEB_URL gets set to an empty
+  # string — exactly why the code tolerates empty values. The domain itself
+  # is mapped and cut over by deploy/domains.sh, not here.
   #
   # There is deliberately NO DOUG_PR_COMMENT_INSTALLATIONS here. The staged
   # rollout it gated (ADR-0014 D3a) ended on 2026-08-20 with issue #144; the
@@ -870,6 +872,19 @@ deploy() {
   # secret, but it lives in Secret Manager beside the key so the front door
   # has one place to look, and a missing one 503s /v1/installations/bind with
   # a named detail rather than refusing every session as if it were forged.
+  # RESOLVED INTO A VARIABLE FIRST, and that is load-bearing rather than
+  # tidy. `set -e` does not fire for a command substitution embedded in an
+  # argument: a web_url() that refuses would have its message printed and its
+  # non-zero status discarded, and the deploy would proceed with
+  # DOUG_WEB_URL= — which the api tolerates as "no receipt link". So a
+  # refusal to guess between two domain mappings would have degraded into
+  # silence at exactly the point it was written to prevent one. As an
+  # assignment statement the status is the statement's own, and the deploy
+  # stops. Verified, not assumed: bash -c 'set -e; f(){ return 1; };
+  # echo "x=$(f)"; echo still-running' prints still-running.
+  local web_base
+  web_base=$(web_url)
+
   gcloud run deploy "$SERVICE" \
     --source . \
     --project "$PROJECT" --region "$REGION" \
@@ -877,7 +892,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$web_base,DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags
@@ -1123,6 +1138,57 @@ console() {
 }
 
 web_url() {
+  # A CUSTOM DOMAIN DOES NOT CHANGE status.url. A Cloud Run service keeps
+  # reporting its generated run.app hostname for the life of the service, so
+  # reading status.url here is correct only while doug-web has no mapping.
+  #
+  # It matters because DOUG_WEB_URL is built from this function on every api
+  # deploy and lands in the receipt link of every PR comment Doug writes, in
+  # other people's repositories, permanently. Without this branch the failure
+  # is silent and delayed: deploy/domains.sh cutover sets DOUG_WEB_URL to the
+  # mapped domain, everything looks right, and then the next unrelated api
+  # deploy — days later, by someone fixing something else — quietly reverts
+  # every newly published link to the generated hostname. Nothing errors and
+  # no test covers a value that is read from a live service.
+  #
+  # THE LOOKUP MUST NOT BE ABLE TO STOP A DEPLOY. `gcloud beta` needs a
+  # component that may not be installed, the API may be disabled, and the
+  # caller may lack permission on the mapping resource. Under `set -euo
+  # pipefail` a bare assignment from a failing pipeline aborts the script,
+  # which would turn a missing beta component into "the api cannot ship" —
+  # R1's conflict exactly, and the same reason the Vertex preflight is a
+  # variable rather than a hard gate. `|| true` keeps a failed lookup
+  # indistinguishable from no mapping, which is the safe reading: the
+  # generated hostname always works.
+  local mapped count
+  mapped=$(gcloud beta run domain-mappings list \
+    --project "$PROJECT" --region "$REGION" \
+    --filter="spec.routeName=$WEB_SERVICE" \
+    --format="value(metadata.name)" 2>/dev/null || true)
+  count=$(printf '%s\n' "$mapped" | grep -c . || true)
+
+  if [ "$count" -gt 1 ] && [ -z "${DOUG_WEB_DOMAIN:-}" ]; then
+    # AMBIGUITY REFUSES; IT DOES NOT PICK. Two mappings on doug-web is a
+    # deliberate act — an apex beside a subdomain, or a staging alias — and
+    # `head -1` would resolve it by whatever order gcloud happens to return,
+    # then bake the answer into receipt links in other people's repositories
+    # where nothing rewrites them. A wrong permanent link is worse than a
+    # deploy that stops and names its own remedy.
+    echo "web_url: $WEB_SERVICE has $count domain mappings and no" >&2
+    echo "DOUG_WEB_DOMAIN to choose between them:" >&2
+    printf '  %s\n' $mapped >&2
+    echo "Re-run as DOUG_WEB_DOMAIN=<the public one> $0 $*" >&2
+    return 1
+  fi
+
+  if [ -n "${DOUG_WEB_DOMAIN:-}" ] && printf '%s\n' "$mapped" | grep -qx "$DOUG_WEB_DOMAIN"; then
+    echo "https://$DOUG_WEB_DOMAIN"
+    return
+  fi
+  if [ "$count" -eq 1 ]; then
+    printf 'https://%s\n' "$mapped"
+    return
+  fi
   gcloud run services describe "$WEB_SERVICE" --project "$PROJECT" --region "$REGION" \
     --format="value(status.url)"
 }

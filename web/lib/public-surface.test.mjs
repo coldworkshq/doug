@@ -28,6 +28,8 @@ const [
   readme,
   apiReadme,
   findingsLog,
+  footer,
+  links,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -48,6 +50,8 @@ const [
   readFile(new URL("../../README.md", import.meta.url), "utf8"),
   readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
   readFile(new URL("../../docs/findings-log.jsonl", import.meta.url), "utf8"),
+  readFile(new URL("../components/site-footer.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./links.ts", import.meta.url), "utf8"),
 ]);
 
 /** The log's own shape, for the pins below.
@@ -513,4 +517,27 @@ test("quickstart does not offer pip next to a uv-only 3.14 pin", () => {
 
 test("risk-routing meta does not call live hotspots learned", () => {
   assert.equal(risk.includes("learned hotspots"), false);
+});
+
+test("the brand footer attributes Doug to Coldworks, and links to the domain rather than a run.app URL", () => {
+  // Three separate ways this line goes wrong, so three pins rather than one.
+  //
+  // 1. The text disappears. A footer is the easiest place in the tree for a
+  //    line to be dropped in an unrelated layout edit and for nobody to
+  //    notice, because nothing renders differently enough to catch an eye.
+  assert.match(footer, /A Coldworks product/);
+  // 2. The href is retyped as a literal. The whole point of links.ts is that
+  //    a rename means editing one file; a hand-typed URL here silently opts
+  //    out of that and is what the GITHUB_REPO_SLUG comment already warns
+  //    about. Pin the import, not the string.
+  assert.match(footer, /COLDWORKS_URL/);
+  assert.doesNotMatch(footer, /href=\{?"https?:\/\//);
+  // 3. The link points at the Cloud Run origin. `coldworks.dev` was
+  //    registered 2026-08-20 (coldworks/docs/decisions.md) precisely so the
+  //    address in an email is not a generated hostname, and the spec's $id
+  //    has resolved to that host since the seed commit. A run.app URL in
+  //    public chrome is the regression this bans by name.
+  assert.match(links, /export const COLDWORKS_URL = "https:\/\/coldworks\.dev"/);
+  assert.equal(links.includes("run.app"), false);
+  assert.equal(footer.includes("run.app"), false);
 });
