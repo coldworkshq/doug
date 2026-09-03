@@ -1,5 +1,59 @@
 # HANDOFF — doug
 
+State:    review — branch `claude/doug-langfuse-integration-0dd80f` off main
+          48d8dbd. Langfuse tracing for the four paid model calls. api 1835
+          pass, ruff clean, five mutation checks red. Traced a real read
+          through the real Langfuse SDK with an in-memory OTel exporter:
+          `reader.risk` nests under `review coldworkshq/doug#284`, carrying
+          model, effort, usage, stop_reason, scope and session.
+Next:     Andrew reviews the PR. Tracing is OFF in production and stays off:
+          creating `doug-langfuse-public-key` and `doug-langfuse-secret-key`
+          is what turns it on, and that is founder-only (#289).
+Blockers: none for code. FOUNDER (#289): Langfuse becomes a subprocessor
+          holding tenant source code. Needs naming in the privacy surface, a
+          DPA, and rulings on residency and retention before the secrets exist.
+
+Decisions this session (2026-09-03):
+- Seam is the request dict, not the client. `tracing.create(client, request,
+  kind=, scope=, pr=)` replaces `client.messages.create(**request)` at all
+  four sites and forwards `request` untouched, reading model/system/messages
+  out of that same dict — so tracing cannot become the path by which the
+  ADR-0002/0012 freeze moves, and a pass that changes its model cannot forget
+  to update its tracing. Two tests pin it, including one asserting the SDK
+  kwargs are identical with tracing on and off.
+  Rejected: wrapping `_build_client` (a proxy sees the exception but not
+  stop_reason, the parsed output or the spend cap, and every reader test
+  injects `client=` so it would never run under test); emitting from
+  `_record_attempt` (gated on example-pack capture, hardcodes MODEL, carries
+  no scope).
+- Existence of the two secrets IS the switch — no separate TRACING variable.
+  A flag and a credential that can disagree gives two quiet half-configured
+  states. `langfuse_configured` in gcp.sh requires both; the fake gcloud in
+  test_deploy_gcp.py now defaults them ABSENT, so the two exact-allowlist pins
+  kept their lists unchanged and the on-state is pinned separately.
+- Trace root is the review job (drain wraps process_job), session is the head
+  SHA so a second push is a second session. Flush once per drain.
+- Measured: flush against an unreachable Langfuse costs ~4s for one span and
+  ~10s for a job's worth, bounded by the OTel exporter's retry budget, NOT by
+  the client `timeout` (2 and 5 gave the same figure). Reads themselves are
+  untouched — three traced reads took 0.2s. That measurement is why flush is
+  per drain and absent from the synchronous read route.
+- Langfuse Cloud US host, full prompt and response payloads. Andrew's call,
+  asked and answered this session. What leaves the boundary is stated plainly
+  in ADR-0031, the tracing.py docstring, OPERATIONS.md and .env.example.
+- Fail-soft is absolute and every guard has a test that goes red without it.
+  A tracing fault would otherwise read as "the reader is down" on every PR,
+  which is the misdiagnosis the Vertex transport already cost once.
+
+Pointers: api/doug/tracing.py · api/doug/reader.py:760,1481,1657,1894 ·
+          api/doug/worker.py `drain` · api/tests/test_tracing.py ·
+          api/tests/test_deploy_gcp.py `langfuse_configured` pins ·
+          api/deploy/gcp.sh · .github/workflows/deploy.yml LANGFUSE_HOST ·
+          ADR-0031 · docs/OPERATIONS.md "Langfuse tracing" · #289
+
+--- prior stream (#284 intent tier + Vertex gate) below, preserved ---
+
+
 State:    review — PR #284 OPEN off main f6ea059, branch
           `claude/doug-accuracy-improvements-c95c9b`. api 1812 pass, ruff
           clean, five mutation checks red. CI green. Doug's two reads

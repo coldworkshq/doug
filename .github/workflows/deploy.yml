@@ -167,6 +167,13 @@ jobs:
           # Probed 2026-09-02: both resolve for claude-opus-5 and
           # claude-sonnet-5 (429 on the lineage quota, not 404).
           VERTEX_REGION: us
+          # ADR-0031. Stated here rather than left to gcp.sh's default so that
+          # the jurisdiction tenant source code is traced into is visible in
+          # the same block that decides where it is read — same reasoning as
+          # VERTEX_REGION above, and the same answer: US. This has no effect
+          # until both Langfuse secrets exist; creating them is what turns
+          # tracing on. `https://cloud.langfuse.com` is the EU host.
+          LANGFUSE_HOST: https://us.cloud.langfuse.com
       - name: Confirm the live URL after promotion
         run: |
           # The candidate gate lives in gcp.sh; this re-checks the real

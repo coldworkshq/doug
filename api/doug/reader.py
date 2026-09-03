@@ -48,7 +48,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import example_pack_capture, hunks
+from . import example_pack_capture, hunks, tracing
 from .example_pack import (
     CoverageV0,
     FailureV0,
@@ -757,7 +757,9 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
         "messages": [{"role": "user", "content": _verify_user_text(finding)}],
     }
     try:
-        response = client.messages.create(**request)
+        response = tracing.create(
+            client, request, kind="verify", scope=scope, pr=None
+        )
     except Exception as e:  # noqa: BLE001 — same contract as read_diff
         raise ReaderError(f"{type(e).__name__}: {e}") from e
     _report_cost(response, kind="verify", scope=scope, pr=None, model=MECHANICAL_MODEL)
@@ -1476,7 +1478,9 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         request, attempt_kind="risk"
     )
     try:
-        response = client.messages.create(**request)
+        response = tracing.create(
+            client, request, kind="risk", scope=scope, pr=pr
+        )
     except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
         _record_attempt(
             attempt_kind="risk",
@@ -1650,7 +1654,9 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         request, attempt_kind="intent"
     )
     try:
-        response = client.messages.create(**request)
+        response = tracing.create(
+            client, request, kind="intent", scope=scope, pr=pr
+        )
     except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception
         _record_attempt(
             attempt_kind="intent",
@@ -1885,7 +1891,9 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
             "system": ATTRIBUTION_SYSTEM,
             "messages": [{"role": "user", "content": "\n".join(lines)}],
         }
-        response = client.messages.create(**request)
+        response = tracing.create(
+            client, request, kind="attribution", scope=scope, pr=None
+        )
         _report_cost(
             response, kind="attribution", scope=scope, pr=None, model=MECHANICAL_MODEL
         )
