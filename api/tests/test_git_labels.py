@@ -3,6 +3,8 @@ import subprocess
 from doug.backtest.git_labels import (
     Commit,
     clone_treeless,
+    find_reverted_prs_dated,
+    find_reverted_prs_evidenced,
     parse_revert_targets,
     parse_revert_targets_dated,
     parse_revert_targets_evidenced,
@@ -62,6 +64,56 @@ def test_reused_clone_fails_loud_when_authenticated_refresh_fails(tmp_path, monk
     assert kwargs["check"] is True
     assert token not in repr(command)
     assert kwargs["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
+
+
+def test_log_reads_with_the_same_credential_that_cloned(tmp_path, monkeypatch):
+    """A treeless clone has no trees. ``git log --all`` simplifies history by
+    comparing each merge's tree with its parents', so git lazily fetches
+    trees from the promisor remote *during the log*. If that fetch runs
+    without the installation token, it succeeds on a public repository and
+    exits 128 on a private one, so every private-repo outcome job fails on
+    its evidence read and burns an attempt (doug#270). Every git subprocess
+    that can talk to the remote must carry the credential, not only the clone.
+    """
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    token = "github-installation-secret"
+
+    for loader in (find_reverted_prs_evidenced, find_reverted_prs_dated):
+        calls.clear()
+        loader("coldworkshq", "coldworks", tmp_path / loader.__name__, token=token)
+
+        logs = [(c, k) for c, k in calls if "log" in c]
+        assert len(logs) == 1, loader.__name__
+        command, kwargs = logs[0]
+        assert token not in repr(command)
+        env = kwargs.get("env") or {}
+        assert env.get("GIT_CONFIG_KEY_0") == "http.https://github.com/.extraHeader", (
+            loader.__name__
+        )
+        assert token not in env.get("GIT_CONFIG_VALUE_0", "")
+        assert env["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+
+
+def test_log_without_a_token_adds_no_header(tmp_path, monkeypatch):
+    """The public backtest CLI runs unauthenticated; it must keep working."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    find_reverted_prs_evidenced("drewjst", "doug", tmp_path)
+
+    command, kwargs = next((c, k) for c, k in calls if "log" in c)
+    assert "GIT_CONFIG_KEY_0" not in (kwargs.get("env") or {})
 
 
 def test_squash_title_map_ignores_reverts_and_merges():

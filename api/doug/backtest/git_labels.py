@@ -133,8 +133,17 @@ _LOG_SEP = "\x1f"
 _LOG_REC = "\x1e"
 
 
-def _log_records(clone: Path) -> list[Commit]:
-    """Every commit, newest first. Bodies included — they carry the revert sha."""
+def _log_records(clone: Path, token: str | None = None) -> list[Commit]:
+    """Every commit, newest first. Bodies included — they carry the revert sha.
+
+    The log is a network operation on a treeless clone. ``git log --all``
+    simplifies history by comparing each merge's tree with its parents', and
+    ``--filter=tree:0`` left those trees behind, so git fetches them lazily
+    from the promisor remote *during the log*. That fetch must carry the same
+    credential as the clone: anonymous, it succeeds on a public repository
+    and exits 128 (``could not read Username``) on a private one, which is
+    how every private-repo outcome job failed its evidence read (doug#270).
+    """
     out = subprocess.run(
         [
             "git", "-C", str(clone), "log", "--all",
@@ -144,6 +153,7 @@ def _log_records(clone: Path) -> list[Commit]:
         capture_output=True,
         text=True,
         timeout=180,
+        env=_git_auth_env(token),
     )
     commits = []
     for record in out.stdout.split(_LOG_REC):
@@ -401,7 +411,7 @@ def find_reverted_prs_dated(
     clone_dir = cache_dir / "clones" / f"{owner}-{repo}.git"
     print(f"  treeless clone of {owner}/{repo}…", flush=True)
     clone_treeless(owner, repo, clone_dir, token=token)
-    commits = _log_records(clone_dir)
+    commits = _log_records(clone_dir, token=token)
     titles = pr_titles_from_subjects([c.subject for c in commits])
     dated = parse_revert_targets_dated(commits, titles)
 
@@ -425,7 +435,7 @@ def find_reverted_prs_evidenced(
     """
     clone_dir = cache_dir / "clones" / f"{owner}-{repo}.git"
     clone_treeless(owner, repo, clone_dir, token=token)
-    commits = _log_records(clone_dir)
+    commits = _log_records(clone_dir, token=token)
     titles = pr_titles_from_subjects([commit.subject for commit in commits])
     return parse_revert_targets_evidenced(commits, titles)
 
