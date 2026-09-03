@@ -334,6 +334,24 @@ def test_plurals_and_past_tense_do_not_split_one_subject_into_two():
     assert intent.select([model], "Fix dark mode contrast", ["globals.css"]) == []
 
 
+def test_folding_cannot_bypass_the_stop_list_or_shrink_a_word_to_noise():
+    """Two of Doug's findings on the fold, one real and one not.
+
+    Real: the stop list was checked before folding, so `recorded` and `adrs`
+    survived as `record` and `adr`, both stop words, and counted toward the
+    two-word rule. Disproved: no token folds below three characters — the
+    length guards on each suffix make the shortest result three — and every
+    fold is applied to both sides, so a wrong stem meets the same wrong stem.
+    """
+    for inflected in ("recorded", "adrs", "uses", "decisions"):
+        assert intent._tokens(inflected) == set(), inflected
+    for word in ("speed", "need", "bus", "buss", "status", "bases", "seed"):
+        assert len(intent._normalise(word)) >= 3, word
+    # The pair the fold exists for, and the pair it must keep apart.
+    assert intent._tokens("comments posted") == intent._tokens("comment post")
+    assert intent._tokens("mode") != intent._tokens("model")
+
+
 def test_directories_and_extensions_are_not_the_subject_of_a_change():
     """`api`, `web`, `app` and `lock` are the repository's layout, and they
     were the main carrier of the #264 leak. Only the file's own name counts.

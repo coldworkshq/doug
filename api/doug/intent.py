@@ -116,9 +116,18 @@ def _normalise(word: str) -> str:
 
 
 def _tokens(text: str) -> set[str]:
-    return {
-        _normalise(w) for w in _WORD.findall(text.lower()) if w not in _STOP and len(w) > 2
-    }
+    # The stop list is checked on the folded form as well as the raw one, or
+    # an inflection the list does not spell out (`recorded`, `adrs`) survives
+    # as a stem the list does. Doug flagged the one-sided check
+    # (`reader:stopword-ordering`); three such words exist in the record set.
+    out: set[str] = set()
+    for w in _WORD.findall(text.lower()):
+        if len(w) <= 2 or w in _STOP:
+            continue
+        folded = _normalise(w)
+        if folded not in _STOP:
+            out.add(folded)
+    return out
 
 
 def _file_names(files: list[str]) -> set[str]:

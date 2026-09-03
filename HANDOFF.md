@@ -1,15 +1,21 @@
 # HANDOFF — doug
 
 State:    review — PR #284 OPEN off main f6ea059, branch
-          `claude/doug-accuracy-improvements-c95c9b`. api 1811 pass, ruff
-          clean, five mutation checks red. Closes #264; #274 commented
-          with the code-side update.
-Next:     Watch CI and Doug's review on #284, disposition findings in
-          docs/findings-log.jsonl, then Andrew merges. Nothing in #284
-          moves traffic; the Vertex flip waits on the capacity grant.
+          `claude/doug-accuracy-improvements-c95c9b`. api 1812 pass, ruff
+          clean, five mutation checks red. CI green. Doug's two reads
+          dispositioned: 10 rows in docs/findings-log.jsonl, one changed
+          the code (stopword-ordering). Closes #264; #274 commented.
+Next:     Andrew merges #284. Nothing in it moves traffic; the Vertex flip
+          (`READER_TRANSPORT: vertex` in deploy.yml) waits on the capacity
+          grant, which needs a Google account team (#274, R11).
 Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
-          lineage is gated on a Google Sales account team. Transport stays
-          `anthropic` in deploy.yml until a grant lands.
+          lineage is gated on a Google Sales account team.
+
+Doug's review, the finding worth remembering: reader:recall-regression
+(medium) said the title-naming rule silently drops binding records whose
+title uses other words. Checked against every graded deviation in the log
+(21 rows): none loses the record it cites. Recorded as adjacent, not
+disproved — the mechanism is right, the harm did not occur on the evidence.
 
 Decisions this session (2026-09-02):
 - #264 mechanism: `intent._bears_on` — a record is a candidate only if the
