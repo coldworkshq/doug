@@ -35,10 +35,13 @@ import subprocess
 import sys
 from collections import defaultdict
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 
 from doug import convergence, hunks, store
 from doug.patterns import from_rule
+
+
+REQUIRED_TABLES = ("verdicts", "findings", "coverage")
 
 # The floor pre-registered in the design note. The operator must repeat it back;
 # a mismatch means they are working from a different version of the note.
