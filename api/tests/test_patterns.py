@@ -45,3 +45,26 @@ def test_from_rule_ignores_deterministic_reasons():
     assert patterns.from_rule("reader:unsafe-type-coercion") == "type-coercion"
     assert patterns.from_rule("size-large") is None
     assert patterns.from_rule("ledger-unavailable") is None
+
+
+def test_two_spellings_of_one_defect_group_to_one_pattern():
+    """#244. category_slug is free-form model output, and the production
+    findings.rule column is written straight from it (reader.py), so the
+    spelling is whatever the model chose that day. The grouping key folds
+    the spelling; it does not fold the word.
+    """
+    spellings = (
+        "missing-import",
+        "Missing Import",
+        "missing_import",
+        " missing-import ",
+        "MISSING--IMPORT",
+    )
+    for spelling in spellings:
+        assert patterns.normalize(spelling) == "missing-import", spelling
+    # The merge map still applies after the fold, so a shouted synonym
+    # reaches the same canonical pattern as its kebab-case twin.
+    assert patterns.normalize("Unhandled_Exception") == "error-handling-gap"
+    assert patterns.from_rule("reader:Missing Import") == "missing-import"
+    # Spelling folds; vocabulary does not. That judgement stays in SLUG_MERGES.
+    assert patterns.normalize("missing-imports") != patterns.normalize("missing-import")

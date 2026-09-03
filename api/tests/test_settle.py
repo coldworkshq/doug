@@ -60,6 +60,44 @@ def test_does_not_settle_undefined_name_via_later_assign():
     assert out.findings == [f]
 
 
+def test_a_prose_word_after_import_does_not_block_settlement():
+    """PR #278, third read. The first two reads settled `sys` against head;
+    the third phrased it as "a `sys` import being added" and the extractor
+    claimed `being`, so the finding it had already disproved was published.
+    Every claimed name must be imported, which makes one prose word a veto.
+    """
+    f = _f(
+        desc=(
+            "The new fallback print uses `file=sys.stderr` in api.py but the "
+            "diff does not show a `sys` import being added. If `sys` is not "
+            "already imported at module scope, the path raises NameError."
+        )
+    )
+    assert settle.claimed_names(f) == ["sys"]
+    src = "import sys\n\ndef f():\n    print('x', file=sys.stderr)\n"
+    assert settle.settle_many([f], lambda p: src) == []
+
+
+def test_a_dotted_expression_in_backticks_names_its_root():
+    f = _f(desc="calls `os.path.join` and `json.dumps(x)` with neither imported")
+    assert settle.claimed_names(f) == ["os", "json"]
+
+
+def test_the_prose_import_form_counts_only_when_the_name_is_also_code():
+    """`import X` in prose is kept as a claim only when X is written as code
+    elsewhere; otherwise a sentence like "the import statement is missing"
+    would claim `statement`, and a true absence would never settle because
+    `statement` is never imported.
+    """
+    assert settle.claimed_names(_f(desc="the import statement for `asyncio` is missing")) == [
+        "asyncio"
+    ]
+    assert settle.claimed_names(_f(desc="no import of anything is shown")) == []
+    # Nothing written as code: nothing claimed, nothing settled.
+    f = _f(desc="uses threading with no import")
+    assert settle.settle_many([f], lambda p: FILE) == [f]
+
+
 def test_keeps_finding_when_name_truly_absent():
     f = _f(desc="uses `asyncio` with no import")
     rv = ReaderVerdict(risk_score=40, rationale="x", findings=[f])

@@ -59,6 +59,10 @@ _IMPORT_SLUGS = frozenset(
 )
 
 _NAME_IN_BACKTICKS = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
+# The root of a dotted expression inside backticks: `sys.stderr` and
+# `file=sys.stderr` both name `sys`, and neither is a bare identifier.
+_BACKTICK_SPAN = re.compile(r"`([^`]+)`")
+_DOTTED_ROOT = re.compile(r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_]")
 _IMPORT_WORD = re.compile(r"\bimport\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 _SCHEMA_SLUGS = frozenset(
@@ -90,10 +94,28 @@ def looks_like_missing_import_finding(f: ReaderFinding) -> bool:
 
 
 def claimed_names(f: ReaderFinding) -> list[str]:
-    """Names the finding asserts are absent. Empty ⇒ we cannot settle it."""
-    found: list[str] = []
-    for rx in (_NAME_IN_BACKTICKS, _IMPORT_WORD):
-        found.extend(rx.findall(f.description))
+    """Names the finding asserts are absent. Empty ⇒ we cannot settle it.
+
+    A name counts when the finding writes it as code: a bare identifier in
+    backticks, or the root of a dotted expression in backticks. The prose
+    form `import X` counts only when X is also written as code somewhere in
+    the description, because the word after "import" in prose is usually
+    prose. PR #278's third read said "the diff does not show a `sys` import
+    being added" and the old extractor claimed `being`; since every claimed
+    name must be imported for the finding to settle, one prose word kept a
+    finding the first two reads had already dropped. The extractor's error
+    ran in the safe direction — a finding was published, not hidden — but
+    it published a finding the file at head disproved.
+    """
+    code_named: list[str] = []
+    for span in _BACKTICK_SPAN.findall(f.description):
+        if _NAME_IN_BACKTICKS.fullmatch(f"`{span}`"):
+            code_named.append(span)
+        code_named.extend(_DOTTED_ROOT.findall(span))
+    found = list(code_named)
+    for word in _IMPORT_WORD.findall(f.description):
+        if word in code_named:
+            found.append(word)
     return list(dict.fromkeys(found))
 
 
