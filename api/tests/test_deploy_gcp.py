@@ -226,6 +226,66 @@ def test_api_deploy_pins_the_chosen_transport_and_carries_a_region():
     assert "CLOUD_ML_REGION=$VERTEX_REGION" in body
 
 
+def test_the_api_deploy_mounts_no_anthropic_key():
+    """The one pin that makes federation real, and it is a pin on an ABSENCE.
+
+    ANTHROPIC_API_KEY sits ABOVE Workload Identity Federation in every SDK's
+    credential precedence. A key left in --set-secrets therefore does not
+    conflict with federation and does not error: it silently wins, and the
+    service goes on authenticating with the static credential everyone
+    believes was retired — no log line, no failed read, nothing to notice.
+    That is the same shape as the `reader:unsafe-default-flip` and stale-
+    binding defects this file already guards, so the absence is asserted
+    rather than trusted.
+
+    Re-adding the mount is a deliberate rollback (the secret and its IAM
+    binding are kept for exactly that), and it is done on the RUNNING service
+    with `gcloud run services update --update-secrets`, never by editing this
+    line back in — which is what keeps the rollback out of a deploy and this
+    assertion true.
+    """
+    body = _function_body("deploy")
+    assert "ANTHROPIC_API_KEY" not in body, (
+        "the api deploy mounts an Anthropic API key, which silently outranks "
+        "and disables Workload Identity Federation"
+    )
+
+
+def test_api_deploy_carries_every_federation_id():
+    """All four, or the client cannot exchange.
+
+    reader.federation_configured() requires the rule, organization and service
+    account ids together and falls back to the key path without them — so a
+    dropped variable here does not fail the deploy, it silently returns the
+    service to a credential this deploy no longer mounts, and every read falls
+    soft into the deterministic score. The workspace id is optional to the
+    exchange today (the rule is scoped to one workspace) and is carried anyway,
+    because broadening the rule later would otherwise 400 every read.
+    """
+    body = _function_body("deploy")
+    for name, value in (
+        ("ANTHROPIC_FEDERATION_RULE_ID", "$FEDERATION_RULE_ID"),
+        ("ANTHROPIC_ORGANIZATION_ID", "$FEDERATION_ORG_ID"),
+        ("ANTHROPIC_SERVICE_ACCOUNT_ID", "$FEDERATION_SERVICE_ACCOUNT_ID"),
+        ("ANTHROPIC_WORKSPACE_ID", "$FEDERATION_WORKSPACE_ID"),
+    ):
+        assert f"{name}={value}" in body, f"the deploy no longer carries {name}"
+
+
+def test_the_anthropic_key_secret_survives_as_the_rollback():
+    """setup() keeps binding the key even though deploy no longer mounts it.
+
+    Federation removes the key from the RUNNING SERVICE, not from the project:
+    the rollback is `--update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest`
+    on the live service, which needs the secret to exist and doug-api-sa to be
+    able to read it. Dropping the binding from setup would make the rollback a
+    privileged operation during an incident, which is when it is least
+    available.
+    """
+    setup = _function_body("setup")
+    assert "doug-anthropic-key" in setup
+
+
 def test_the_deployed_transport_defaults_to_vertex():
     """`READER_TRANSPORT` is a variable so an urgent deploy has a way past the
     Vertex preflight, not so the destination becomes optional. Unset, a deploy
@@ -275,18 +335,27 @@ def test_setup_enables_vertex_and_grants_the_api_identity_access(tmp_path):
     )
 
 
-def test_the_anthropic_key_survives_the_vertex_cutover_because_it_is_the_rollback():
-    """ADR-0028 item 6: reverting is a value change, not a release.
+def test_the_transport_rollback_needs_no_key_and_no_release():
+    """ADR-0028 item 6, re-pinned on its property after ADR-0030.
 
-    DOUG_READER_TRANSPORT=anthropic on the running service is the rollback, and
-    it only works while ANTHROPIC_API_KEY is still mounted. Removing the secret
-    as cleanup after the cutover would convert a one-command rollback into a
-    redeploy — a forced transition with an outage attached, which is the state
-    the constant exists to prevent. It leaves when the rollback window closes,
-    deliberately and in its own change.
+    This test used to assert that `ANTHROPIC_API_KEY=doug-anthropic-key:latest`
+    appeared in the deploy, because the first-party transport could not be
+    reached without it. ADR-0030 moved that transport to Workload Identity
+    Federation, so the key had to LEAVE the mount — it outranks federation in
+    SDK credential precedence, and a leftover key silently wins rather than
+    failing. The old assertion is therefore inverted, and its inverse now lives
+    in test_the_api_deploy_mounts_no_anthropic_key.
+
+    What ADR-0028 item 6 actually asked for is unchanged and is what is
+    asserted here: reverting the transport is a value change on the running
+    service, never a release. That holds only if the service already carries
+    both the transport variable and a working first-party credential, so both
+    are required together. Updated deliberately with a reason rather than
+    relaxed to keep a change green — the posture ADR-0027's fourth test names.
     """
     body = _function_body("deploy")
-    assert "ANTHROPIC_API_KEY=doug-anthropic-key:latest" in body
+    assert "DOUG_READER_TRANSPORT=$READER_TRANSPORT" in body
+    assert "ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID" in body
 
 
 def test_deploy_smokes_the_showcase_route_before_promoting_and_on_first_deploy():
@@ -1352,7 +1421,14 @@ def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
 
 def test_api_deploy_carries_exact_secret_allowlist_including_flow_signer(tmp_path):
     """The completion endpoint needs the shared signer, but no web session
-    cookie secret. Exactness prevents future credentials drifting in."""
+    cookie secret. Exactness prevents future credentials drifting in.
+
+    ANTHROPIC_API_KEY left this list in ADR-0030, when the reader moved to
+    Workload Identity Federation and the key stopped being a credential this
+    service holds. Its absence is not merely tolerated here: it is asserted on
+    purpose by test_the_api_deploy_mounts_no_anthropic_key, because a key that
+    drifts back in silently outranks federation instead of conflicting with it.
+    """
     lines = _run_gcp(tmp_path, "deploy")
     [api_deploy] = [
         line for line in lines if line.startswith("run deploy doug-api --source .")
@@ -1360,7 +1436,6 @@ def test_api_deploy_carries_exact_secret_allowlist_including_flow_signer(tmp_pat
     expected = (
         "DATABASE_URL=doug-database-url:latest,"
         "DOUG_API_TOKEN=doug-api-token:latest,"
-        "ANTHROPIC_API_KEY=doug-anthropic-key:latest,"
         "GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,"
         "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,"
         "DOUG_TOKEN_PEPPER=doug-token-pepper:latest,"
@@ -1557,3 +1632,61 @@ def test_an_urgent_deploy_can_ship_without_vertex_at_all(tmp_path):
     assert "rawPredict" not in curl_log, "the Vertex preflight ran on a non-Vertex deploy"
     deploy_line = next(line for line in lines if line.startswith("run deploy doug-api"))
     assert "DOUG_READER_TRANSPORT=anthropic" in deploy_line
+
+
+def test_the_workflow_supplies_every_variable_the_deploy_requires():
+    """gcp.sh's `deploy` refuses when a required variable is unset, and the
+    workflow is the caller that matters. Nothing bound the two together.
+
+    This is not hypothetical. ADR-0029 added a required VERTEX_REGION, every
+    test here set it through the harness, `deploy` was mutation-verified to
+    refuse without it — and the workflow was never given it, because
+    `.github/workflows/deploy.yml` was not in that diff. The merge deployed
+    nothing: run 33237025355 died on `ERROR: set VERTEX_REGION`, leaving main
+    and production disagreeing, which is the drift ADR-0025 exists to prevent.
+
+    So the pin is derived rather than listed: every `${VAR:?...}` and every
+    `[ -z "$VAR" ]` refusal in the script has to appear in the deploy step's
+    env. A future required variable fails here instead of in CI after a merge.
+    """
+    script = GCP_PATH.read_text()
+    workflow = DEPLOY_WORKFLOW.read_text()
+    deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
+
+    required = set(re.findall(r"^(\w+)=\$\{\1:\?", script, re.M))
+    required |= {
+        name
+        for name in re.findall(r'\[ -z "\$(\w+)" \]', script)
+        if f"{name}=${{{name}:-}}" in script  # defaulted-empty, then refused
+    }
+    assert "VERTEX_REGION" in required, (
+        "the regression this test was written for is no longer detectable"
+    )
+
+    for name in sorted(required):
+        assert f"{name}:" in deploy_step, (
+            f"deploy/gcp.sh refuses without {name}, but the deploy step in "
+            f"deploy.yml never sets it — the merge would deploy nothing"
+        )
+
+
+def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
+    """The cutover is one word in deploy.yml, and it must not be flipped ahead
+    of the quota it depends on.
+
+    Vertex throughput quota is zero in every serving region (#274), so a
+    `vertex` pin here refuses every deploy — including one carrying an
+    unrelated hotfix, which R1 does not allow. This asserts the two halves stay
+    consistent: pinning Vertex requires a region, and the region has to be one
+    that actually serves the model. Measured 2026-08-28: us-east5, us-central1
+    and europe-west4, and nowhere else.
+    """
+    workflow = DEPLOY_WORKFLOW.read_text()
+    deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
+    transport = re.search(r"READER_TRANSPORT:\s*(\S+)", deploy_step).group(1)
+    region = re.search(r"VERTEX_REGION:\s*(\S+)", deploy_step).group(1)
+
+    assert transport in {"anthropic", "vertex"}, transport
+    assert region in {"us-east5", "us-central1", "europe-west4"}, (
+        f"{region} does not serve claude-opus-5; probed 13 regions on 2026-08-28"
+    )

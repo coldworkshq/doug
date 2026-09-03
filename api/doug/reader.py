@@ -17,8 +17,9 @@ instrument by "fixing the drift".
 
 Opt-in twice over: DOUG_READER=1 AND a credential the selected transport can
 resolve. Which credential that is depends on DOUG_READER_TRANSPORT (ADR-0029):
-Vertex, the default, authenticates with GCP application default credentials and
-needs no key, and the first-party API needs ANTHROPIC_API_KEY. Callers fall back
+Vertex authenticates with GCP application default credentials, and the
+first-party API takes either Workload Identity Federation (no key at all — the
+deploy's posture, see `_build_client`) or ANTHROPIC_API_KEY. Callers fall back
 to the deterministic score when either half of the opt-in is missing or a read
 fails, and the fallback verdict says so in its reasons. The flag threshold
 (default 30) sits at the ~75-80th percentile of clean-PR risk scores on both
@@ -433,6 +434,20 @@ INTENT_SCHEMA = {
 
 class ReaderError(RuntimeError):
     """A read failed (refusal, truncation, transport) — fall back and say so."""
+
+
+# The one string the reader-fallback alert matches on. The soft fallback is
+# contracted behaviour and therefore QUIET everywhere a human looks: the check
+# run still renders, CI stays green, and the only trace is a reasons row. A
+# zero balance, a revoked key, a wrong Vertex region and a rejected request
+# shape all wear that same silence, which is how a dead reader goes unnoticed
+# until someone reads verdicts by hand (#274). Every ReaderError catch site
+# that degrades a review to the deterministic score prints one stderr line
+# carrying this token, and deploy/monitoring.sh builds a log-based metric and
+# alert policy over exactly these bytes. test_monitoring_alerts.py pins all
+# the sites to this constant: change it here and the suite names every file
+# that still carries the old bytes.
+FALLBACK_LOG_TOKEN = "reader fell back to deterministic"
 
 
 class SpendCapExceeded(ReaderError):
@@ -924,6 +939,95 @@ def _verify_client():
     return _build_client(verify_timeout())
 
 
+# --- Workload Identity Federation -----------------------------------------
+#
+# The first-party transport's credential when the deploy supplies one, and the
+# reason `doug-anthropic-key` is no longer mounted on the api service. The
+# workload presents a Google-signed OIDC token for its own service account,
+# Anthropic exchanges it for a token that lives ten minutes, and the SDK
+# re-exchanges before expiry. There is no static secret in the environment, in
+# Secret Manager's mount, or in anyone's shell history, and no key to expire
+# under a reader that fails soft when its credential dies.
+#
+# Deliberately NOT a transport. ADR-0029's DOUG_READER_TRANSPORT chooses which
+# API SURFACE is called; this chooses how the caller proves who it is on the
+# first-party one. Folding it into `transport()` would make a third enum value
+# that is really two orthogonal facts, and the rollback ADR-0028 item 6 asked
+# for — flip to the first-party API on a running service — has to keep working
+# whichever credential that API is reached with.
+FEDERATION_AUDIENCE = "https://api.anthropic.com"
+FEDERATION_RULE_ENV = "ANTHROPIC_FEDERATION_RULE_ID"
+FEDERATION_ORG_ENV = "ANTHROPIC_ORGANIZATION_ID"
+FEDERATION_SERVICE_ACCOUNT_ENV = "ANTHROPIC_SERVICE_ACCOUNT_ID"
+# Optional by design: the federation rule is scoped to ONE workspace, and the
+# exchange only needs this when a rule spans several. Sending it anyway is
+# harmless; omitting it when the rule is broadened is a 400.
+FEDERATION_WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID"
+
+
+def federation_configured() -> bool:
+    """Is the first-party client to authenticate by federation rather than a key?
+
+    ALL THREE required ids, never any-of. A half-configured federation would
+    otherwise construct a client that raises at the exchange, and every read
+    would fail soft into the deterministic score — the silent failure this
+    module's whole alerting story exists to prevent. Missing one id means the
+    environment was not configured for federation, so the key path (or its
+    absence) is the honest answer.
+
+    AND NO MOUNTED KEY, which is what makes ADR-0030's rollback real. The SDK
+    ranks an explicit `credentials=` constructor argument ABOVE
+    ANTHROPIC_API_KEY, so a client built with federation credentials ignores a
+    key in the environment entirely. Without this check, re-mounting the key on
+    the running service — the documented one-command recovery, reached for
+    during an incident — would change nothing at all, and every read would go
+    on failing exactly as before while the operator believed they had rolled
+    back. Doug caught it (`beyond-ticket` on 250c10e) and was right.
+
+    Deferring here restores the precedence the SDK documents and this
+    repository's runbook assumes: an explicitly mounted key wins, and
+    federation is what happens in its absence. It also costs nothing in the
+    steady state, because the deploy mounts no key.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return False
+    return all(
+        os.environ.get(name)
+        for name in (FEDERATION_RULE_ENV, FEDERATION_ORG_ENV, FEDERATION_SERVICE_ACCOUNT_ENV)
+    )
+
+
+def _google_identity_token() -> str:
+    """A FRESH Google-signed OIDC token for this workload, on every exchange.
+
+    Imported inside the function, like `anthropic` in _build_client, so that
+    nothing about a local checkout or a test run depends on GCP libraries
+    being importable at module load.
+
+    A callable rather than ANTHROPIC_IDENTITY_TOKEN_FILE: Google's tokens last
+    about an hour and nothing on Cloud Run would rewrite a file, so a file
+    would go stale and every read after the first hour would fail soft. The
+    SDK re-invokes this before each exchange, which is what keeps the presented
+    token inside its validity window.
+
+    Staleness is the reason, NOT replay protection. An earlier version of this
+    docstring claimed the callable "satisfies the single-use `jti` rule", and
+    that is unsupported: the Google identity token documented for this path
+    carries iss/aud/sub/azp/email/exp and no `jti`, so Anthropic's single-use
+    rule — which binds providers like GitHub Actions — does not apply here, and
+    the metadata server may well hand back the same token twice inside its
+    window. Doug flagged the assumption (`reader:stale-token-assumption`); the
+    finding's mechanism does not bite, but the claim was wrong and is gone
+    rather than restated.
+    """
+    import google.auth.transport.requests
+    import google.oauth2.id_token
+
+    return google.oauth2.id_token.fetch_id_token(
+        google.auth.transport.requests.Request(), FEDERATION_AUDIENCE
+    )
+
+
 def transport() -> str:
     """The API surface the next client will call. ADR-0029."""
     value = os.environ.get("DOUG_READER_TRANSPORT", DEFAULT_TRANSPORT).strip().lower()
@@ -956,14 +1060,35 @@ def _build_client(timeout: float):
     without a value. `project_id` needs no such treatment because application
     default credentials carry the project on Cloud Run.
 
-    `max_retries` is passed on both paths. AnthropicVertex defaults it to 2,
+    `max_retries` is passed on all paths. AnthropicVertex defaults it to 2,
     exactly as Anthropic does, so the Cloud Run arithmetic in `_client` binds
-    identically on the new transport and is not re-derived here.
+    identically on every transport and is not re-derived here.
+
+    The first-party path forks once more, on the CREDENTIAL rather than the
+    surface: with federation configured the client proves who it is with a
+    Google-signed token for its own service account and holds no key. The
+    branch is `federation_configured()` and not a try/except around the key,
+    because the SDK's own precedence puts ANTHROPIC_API_KEY ABOVE federation —
+    a leftover key silently shadows the whole mechanism, which is why the
+    deploy removes the mount rather than leaving it as a belt. Asserted by
+    test_the_api_deploy_mounts_no_anthropic_key.
     """
     import anthropic
 
     if transport() == TRANSPORT_VERTEX:
         return anthropic.AnthropicVertex(timeout=timeout, max_retries=MAX_READ_RETRIES)
+    if federation_configured():
+        return anthropic.Anthropic(
+            timeout=timeout,
+            max_retries=MAX_READ_RETRIES,
+            credentials=anthropic.WorkloadIdentityCredentials(
+                identity_token_provider=_google_identity_token,
+                federation_rule_id=os.environ[FEDERATION_RULE_ENV],
+                organization_id=os.environ[FEDERATION_ORG_ENV],
+                service_account_id=os.environ[FEDERATION_SERVICE_ACCOUNT_ENV],
+                workspace_id=os.environ.get(FEDERATION_WORKSPACE_ENV) or None,
+            ),
+        )
     return anthropic.Anthropic(timeout=timeout, max_retries=MAX_READ_RETRIES)
 
 

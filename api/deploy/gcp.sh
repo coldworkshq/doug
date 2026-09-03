@@ -61,6 +61,33 @@ VERTEX_REGION=${VERTEX_REGION:-}
 # (`reader:deploy-blocking-precondition`) and it was a fair objection to a gate
 # that had no way out.
 READER_TRANSPORT=${READER_TRANSPORT:-vertex}
+# Workload Identity Federation. How the api service proves who it is on the
+# FIRST-PARTY transport, replacing the ANTHROPIC_API_KEY mount that used to sit
+# in --set-secrets below. None of these four is a secret — they name resources,
+# and the credential is a Google-signed token the workload fetches for its own
+# service account at call time — so they are plain env vars and belong in this
+# file where a diff can review them, not in Secret Manager.
+#
+# The rule pins BOTH the service account email and its numeric unique ID, so
+# only doug-api-sa can mint a token against it, and only from a workload
+# Google itself signed for. There is no key to expire, rotate, leak, or paste
+# into a shell.
+#
+# ANTHROPIC_API_KEY OUTRANKS FEDERATION in every SDK's credential precedence.
+# That is why the mount is gone rather than kept as a fallback: a leftover key
+# does not fail, it silently wins, and the reader would go on billing a
+# credential everyone believes is retired. Pinned by
+# test_the_api_deploy_mounts_no_anthropic_key.
+#
+# The rollback is therefore an env change on the running service, exactly like
+# ADR-0029's transport rollback and with no deploy:
+#   gcloud run services update doug-api --region "$REGION" \
+#     --update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest
+# The secret and its IAM binding are deliberately left in place for that.
+FEDERATION_RULE_ID=${FEDERATION_RULE_ID:-fdrl_01C9roE2McZ4TRyAVyrBQ6oP}
+FEDERATION_ORG_ID=${FEDERATION_ORG_ID:-2f3e6be2-8390-4f32-a0bc-f2544ac86641}
+FEDERATION_SERVICE_ACCOUNT_ID=${FEDERATION_SERVICE_ACCOUNT_ID:-svac_01AsuQr8exnkCC8Tqv9KxQca}
+FEDERATION_WORKSPACE_ID=${FEDERATION_WORKSPACE_ID:-wrkspc_01AS2iPQV3Z6Z4ie76pn5YuW}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
@@ -849,8 +876,8 @@ deploy() {
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,ANTHROPIC_API_KEY=doug-anthropic-key:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION${example_pack_env:+,$example_pack_env}" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$(web_url),DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

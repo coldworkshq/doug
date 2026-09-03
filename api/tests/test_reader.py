@@ -1799,6 +1799,258 @@ def test_attribution_prompt_pair_is_frozen_separately():
     ).hexdigest()
 
 
+# --- Workload Identity Federation ------------------------------------------
+
+
+def _clear_federation(monkeypatch):
+    for name in (
+        reader.FEDERATION_RULE_ENV,
+        reader.FEDERATION_ORG_ENV,
+        reader.FEDERATION_SERVICE_ACCOUNT_ENV,
+        reader.FEDERATION_WORKSPACE_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _set_federation(monkeypatch, *, workspace=True):
+    # A mounted key makes federation_configured() False by design (ADR-0030's
+    # rollback), so a developer machine or runner with ANTHROPIC_API_KEY
+    # exported would fail every federation test spuriously. Doug caught it
+    # (`reader:test-env-leakage`); cleared here so no caller has to remember.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv(reader.FEDERATION_RULE_ENV, "fdrl_test")
+    monkeypatch.setenv(reader.FEDERATION_ORG_ENV, "org-test")
+    monkeypatch.setenv(reader.FEDERATION_SERVICE_ACCOUNT_ENV, "svac_test")
+    if workspace:
+        monkeypatch.setenv(reader.FEDERATION_WORKSPACE_ENV, "wrkspc_test")
+    else:
+        monkeypatch.delenv(reader.FEDERATION_WORKSPACE_ENV, raising=False)
+
+
+def test_federation_needs_every_id_not_any_of(monkeypatch):
+    """A half-configured federation must read as NOT configured.
+
+    Any-of would build a client that raises at the exchange, and every read
+    would fail soft into the deterministic score — the silent death this
+    module's alerting exists to catch, caused by a dropped env var rather than
+    an outage. Absent an id, the honest answer is that this environment was
+    not configured for federation.
+    """
+    _clear_federation(monkeypatch)
+    assert reader.federation_configured() is False
+
+    required = (
+        reader.FEDERATION_RULE_ENV,
+        reader.FEDERATION_ORG_ENV,
+        reader.FEDERATION_SERVICE_ACCOUNT_ENV,
+    )
+    for omitted in required:
+        _set_federation(monkeypatch)
+        monkeypatch.delenv(omitted, raising=False)
+        assert reader.federation_configured() is False, omitted
+
+    # The workspace id is NOT one of them: the rule is scoped to a single
+    # workspace, so the exchange does not need it.
+    _set_federation(monkeypatch, workspace=False)
+    assert reader.federation_configured() is True
+
+    _set_federation(monkeypatch)
+    assert reader.federation_configured() is True
+
+
+def test_the_first_party_client_federates_when_configured(monkeypatch):
+    """The credential fork, asserted on what actually reaches the SDK."""
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _set_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    credentials = captured.get("credentials")
+    assert isinstance(credentials, anthropic.WorkloadIdentityCredentials)
+    assert captured["timeout"] == 90.0
+    assert captured["max_retries"] == reader.MAX_READ_RETRIES
+    # No api_key is passed even as None: the key path and the federation path
+    # are alternatives, and the SDK would prefer a key over these credentials.
+    assert "api_key" not in captured
+
+
+def test_the_first_party_client_uses_a_key_when_federation_is_absent(monkeypatch):
+    """Unconfigured environments — a laptop, a script, CI — keep the old path.
+
+    Same posture as DEFAULT_TRANSPORT staying `anthropic`: the deploy is
+    configured for federation and nothing else is, so nothing else may quietly
+    depend on it.
+    """
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _clear_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    assert "credentials" not in captured
+    assert captured["timeout"] == 90.0
+
+
+def test_federation_does_not_reach_the_vertex_transport(monkeypatch):
+    """Two orthogonal facts, and the surface wins.
+
+    Vertex authenticates with application default credentials; a federation
+    rule says nothing about it. If both are configured — which production is,
+    for the duration of the transport migration — the transport choice decides,
+    and federation is simply not consulted.
+    """
+    import anthropic
+
+    built: dict = {}
+
+    class CapturingVertex:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    def _fail(**kwargs):  # pragma: no cover - asserted by not being called
+        raise AssertionError("the first-party client was built on the Vertex transport")
+
+    monkeypatch.setattr(anthropic, "AnthropicVertex", CapturingVertex)
+    monkeypatch.setattr(anthropic, "Anthropic", _fail)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_VERTEX)
+    _set_federation(monkeypatch)
+
+    reader._build_client(90.0)
+
+    assert built["max_retries"] == reader.MAX_READ_RETRIES
+
+
+def test_the_identity_token_is_fetched_fresh_for_every_exchange(monkeypatch):
+    """A callable, never a cached string or a file.
+
+    Google's tokens last about an hour, and nothing on Cloud Run rewrites a
+    token file, so the provider has to be re-invocable rather than read once.
+    Pinned by calling it twice and requiring two fetches.
+
+    This docstring used to say Google's tokens carry a single-use `jti` and
+    that a replayed token is rejected. That is wrong — the Google identity
+    token documented for this path has no `jti` — and it was corrected in
+    reader.py while this copy stood, which is the one-sided-amendment defect
+    this repository keeps re-learning (Doug: `reader:stale-documentation`).
+    """
+    import google.oauth2.id_token
+
+    calls: list = []
+
+    def _fetch(request, audience):
+        calls.append(audience)
+        return f"jwt-{len(calls)}"
+
+    monkeypatch.setattr(google.oauth2.id_token, "fetch_id_token", _fetch)
+
+    assert reader._google_identity_token() == "jwt-1"
+    assert reader._google_identity_token() == "jwt-2"
+    assert calls == [reader.FEDERATION_AUDIENCE] * 2
+    # The audience is matched exactly by the federation rule; a drift here is
+    # a jwt_audience_mismatch on every read.
+    assert reader.FEDERATION_AUDIENCE == "https://api.anthropic.com"
+
+
+def test_a_mounted_key_wins_so_the_rollback_actually_rolls_back(monkeypatch):
+    """ADR-0030 decision 4, pinned on the behaviour rather than the prose.
+
+    The SDK ranks an explicit `credentials=` constructor argument ABOVE
+    ANTHROPIC_API_KEY. A client built with federation credentials therefore
+    ignores a mounted key completely — which would make the documented
+    emergency rollback (`--update-secrets ANTHROPIC_API_KEY=...` on the running
+    service) a no-op, reached for during an incident, appearing to work and
+    changing nothing. Doug caught the gap between the record and the code
+    (`beyond-ticket` on 250c10e).
+
+    So the federation branch defers to a mounted key, and this is the test that
+    says the runbook is true.
+    """
+    import anthropic
+
+    captured: dict = {}
+
+    class Capturing:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", Capturing)
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    _set_federation(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-rollback")
+
+    assert reader.federation_configured() is False
+    reader._build_client(90.0)
+    assert "credentials" not in captured, (
+        "a mounted key was ignored, so ADR-0030's rollback does nothing"
+    )
+
+    # And removing it again returns the service to federation with no deploy,
+    # which is the other half of the same one-command story.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    captured.clear()
+    reader._build_client(90.0)
+    assert isinstance(
+        captured.get("credentials"), anthropic.WorkloadIdentityCredentials
+    )
+
+
+def test_the_federation_call_matches_the_installed_sdk(monkeypatch):
+    """The contract with the SDK, checked against the SDK and not a stub.
+
+    Every other federation test monkeypatches `anthropic.Anthropic` with a
+    **kwargs stub, so none of them would notice if `credentials` stopped being
+    a constructor parameter or a WorkloadIdentityCredentials field were
+    renamed — the client would raise at construction in production and every
+    read would fail soft, which is the unverified-external-contract shape that
+    earned #275 (Doug: `reader:untested-external-api-contract` on 250c10e).
+
+    Constructing the credentials object is offline: nothing is exchanged until
+    a request is made, so this costs no call and needs no network.
+    """
+    import inspect
+
+    import anthropic
+
+    assert "credentials" in inspect.signature(anthropic.Anthropic.__init__).parameters
+
+    credentials = anthropic.WorkloadIdentityCredentials(
+        identity_token_provider=lambda: "jwt",
+        federation_rule_id="fdrl_test",
+        organization_id="org-test",
+        service_account_id="svac_test",
+        workspace_id="wrkspc_test",
+    )
+    assert credentials is not None
+
+    # The real client, built by the real code path, with only the token
+    # provider stubbed out. Reaching construction at all proves the kwargs
+    # this module sends are the kwargs the SDK accepts.
+    monkeypatch.setenv("DOUG_READER_TRANSPORT", reader.TRANSPORT_ANTHROPIC)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _set_federation(monkeypatch)
+    monkeypatch.setattr(reader, "_google_identity_token", lambda: "jwt")
+
+    client = reader._build_client(90.0)
+    assert isinstance(client, anthropic.Anthropic)
+
+
 # --- ADR-0027 C3: the manifest names the mechanical tier -------------------
 
 

@@ -20,15 +20,17 @@ Read-only, and non-zero on anything unmet. This is the check that would have
 caught 2026-08-16 on day one, so run it after any project-level change and
 whenever you are about to trust a green dashboard.
 
-It requires five things, and each is load-bearing:
+It requires seven things, and each is load-bearing:
 
 | Requirement | What it catches |
 |---|---|
 | a notification channel that reaches a human | policies wired to nothing — the outage with extra steps |
 | an uptime check polling `/healthz/queues` | nothing on its own; it is what the third policy watches |
+| a log metric counting reader fallback lines | nothing on its own; it is what the `reader-fallback` policy watches |
 | policy `job-failed` | an adjudicator or reconciler execution that ran and **failed** |
 | policy `api-5xx` | doug-api serving 5xx — a tenant-visible incident under R1 |
 | policy `queue-liveness` | work sitting past the point where its drain provably did not run |
+| policy `reader-fallback` | an LLM read degrading to the deterministic score — the failure that is silent everywhere else |
 
 `job-failed` and `queue-liveness` are not redundant. A Job that **never starts**
 emits no failure metric at all, so `job-failed` cannot see it; `queue-liveness`
@@ -89,6 +91,99 @@ adjudicator, which is #261.
 The bars live in `api/doug/api.py` beside the route that pages on them, and are
 served in both `/healthz/queues` and `/v1/health` so the console grades rows
 against the same numbers. Do not add a second copy anywhere.
+
+### When reader-fallback fires
+
+An LLM read degraded to the deterministic score. This is contracted behaviour
+and therefore silent everywhere else: the check run renders, CI stays green,
+and only a reasons row says the deep read is gone — which is exactly why it
+pages (#274). Treat one firing as "the reader is down" until proven otherwise.
+
+The cause is in the log line the metric counted — its tail carries the SDK
+error verbatim:
+
+```
+gcloud logging read 'resource.labels.service_name="doug-api"
+  AND textPayload:"reader fell back to deterministic"' \
+  --project doug-prod0 --freshness 1d --format='value(textPayload)'
+```
+
+Read the error against the transport the service is actually on
+(`DOUG_READER_TRANSPORT` on the running revision):
+
+- **anthropic** — a billing error means the console balance hit zero; top it
+  up. The balance is a clock, not a fault (ADR-0029).
+
+  An *authentication* error is a federation failure, not a dead key: under
+  ADR-0030 this service holds no key and proves its identity with a
+  Google-signed token for `doug-api-sa`. Read the deny reason on the Console's
+  **Workload identity → History** tab — it names the cause where the log line
+  cannot. The usual suspects are a dropped `ANTHROPIC_FEDERATION_RULE_ID` (or
+  its two siblings) on the revision, an archived rule or service account, and
+  a rule edited so its `sub`/`email`/`audience` no longer match the workload.
+
+  Emergency credential rollback, no deploy — the secret and its IAM binding are
+  kept for this:
+
+  ```
+  gcloud run services update doug-api --project doug-prod0 --region us-central1 \
+    --update-secrets ANTHROPIC_API_KEY=doug-anthropic-key:latest
+  ```
+
+  The key outranks federation in SDK precedence, so this takes effect on the
+  next revision with no code change. Undo it with `--remove-secrets
+  ANTHROPIC_API_KEY`; never by editing `deploy/gcp.sh`, whose *absence* of that
+  mount is pinned by test.
+
+  **This rollback is TEMPORARY, by design.** `deploy` passes `--set-secrets`,
+  which is declarative and replaces the whole secret block, so the next deploy
+  — including any merge to main — drops the mount and returns the service to
+  federation. That is deliberate and is not a defect to fix: a mount preserved
+  across deploys would be a key silently outranking federation forever, unseen
+  in any diff, which is the exact hazard ADR-0030 exists to close. So treat the
+  mount as an incident measure with a clock on it: fix the federation
+  configuration, or re-apply the command after each deploy until you have.
+  If a deploy lands while the mount is doing real work, the reader-fallback
+  alert fires again rather than the reader going quiet.
+- **vertex** — a 404 is the region not serving the model, a 429 is zero
+  throughput quota (#274), a 400 on every read is the request shape (#275).
+  Rollback is `DOUG_READER_TRANSPORT=anthropic` on the running service — an
+  env change, no deploy — and it works only while the Anthropic key has
+  balance.
+
+The same `(paid read)` stderr lines that sit beside these carry per-read token
+counts; they are the evidence the spend caps in `reader.py` are tuned from.
+
+## Vertex capacity for the reader (Claude 5)
+
+Recorded from #274 so nobody re-derives it. Model Garden access and throughput
+quota are separate grants: access makes a model resolve (404 → 429), quota
+makes it serve (429 → 200/400). `claude-opus-5` resolves for this project in
+exactly `us-east5`, `us-central1`, `europe-west4`; `global` 404s. The console
+shows **no quota rows at all** for 5-family base models, so the console's
+"Edit quota" path cannot file the request — the Cloud Quotas API can, and it
+accepts the 5-family dimensions:
+
+```
+gcloud beta quotas preferences create --project=doug-prod0 \
+  --service=aiplatform.googleapis.com \
+  --quota-id=OnlinePredictionInputTokensPerMinutePerRegionPerBaseModel \
+  --dimensions=region=us-central1,base_model=anthropic-claude-opus-5 \
+  --preferred-value=100000 --email=<founder email> \
+  --justification="..." --preference-id=claude-opus-5-input-us-central1
+```
+
+The three quota IDs that matter (per region, per `base_model`, both
+`anthropic-claude-opus-5` and `anthropic-claude-sonnet-5`):
+`OnlinePredictionInputTokensPerMinutePerRegionPerBaseModel` (floor ~50k/min —
+one read is ~30k input tokens), `OnlinePredictionOutputTokensPerMinutePerRegionPerBaseModel`
+(floor ~6k/min — `MAX_TOKENS` is 6,000), and
+`OnlinePredictionRequestsPerMinutePerProjectPerRegionPerBaseModel`.
+
+Track with `gcloud beta quotas preferences list --project=doug-prod0`; a grant
+shows as `grantedValue` moving off 0. Confirm on the wire with the empty-body
+probe (`vertex_preflight` in `deploy/gcp.sh` is the same check): 429 means no
+quota, 400 means quota landed and the deploy gate will pass.
 
 ## Hosted Example Pack cohort
 
