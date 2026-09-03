@@ -821,9 +821,11 @@ deploy() {
   # DOUG_WEB_URL: the base URL of the doug-web service, used by receipt_url()
   # to build links to the PR comment dashboard (/dashboard/pr/{n}?repo=…).
   # Empty or unset → no link, and receipts degrade silently. The web_url()
-  # helper queries the live doug-web service, so on a bootstrap deploy where
-  # doug-web does not exist yet, $(web_url) is empty and DOUG_WEB_URL gets
-  # set to an empty string — exactly why the code tolerates empty values.
+  # helper prefers doug-web's mapped custom domain and falls back to the
+  # generated run.app URL, so on a bootstrap deploy where doug-web does not
+  # exist yet, $(web_url) is empty and DOUG_WEB_URL gets set to an empty
+  # string — exactly why the code tolerates empty values. The domain itself
+  # is mapped and cut over by deploy/domains.sh, not here.
   #
   # There is deliberately NO DOUG_PR_COMMENT_INSTALLATIONS here. The staged
   # rollout it gated (ADR-0014 D3a) ended on 2026-08-20 with issue #144; the
@@ -1123,6 +1125,30 @@ console() {
 }
 
 web_url() {
+  # A CUSTOM DOMAIN DOES NOT CHANGE status.url. A Cloud Run service keeps
+  # reporting its generated run.app hostname for the life of the service, so
+  # reading status.url here is correct only while doug-web has no mapping.
+  #
+  # It matters because DOUG_WEB_URL is built from this function on every api
+  # deploy and lands in the receipt link of every PR comment Doug writes, in
+  # other people's repositories, permanently. Without this branch the failure
+  # is silent and delayed: deploy/domains.sh cutover sets DOUG_WEB_URL to the
+  # mapped domain, everything looks right, and then the next unrelated api
+  # deploy — days later, by someone fixing something else — quietly reverts
+  # every newly published link to the generated hostname. Nothing errors and
+  # no test covers a value that is read from a live service.
+  #
+  # So the mapping is the source of truth for what the site is called, and
+  # status.url is the fallback for a service that has not been given a name.
+  local mapped
+  mapped=$(gcloud beta run domain-mappings list \
+    --project "$PROJECT" --region "$REGION" \
+    --filter="spec.routeName=$WEB_SERVICE" \
+    --format="value(metadata.name)" 2>/dev/null | head -n 1)
+  if [ -n "$mapped" ]; then
+    echo "https://$mapped"
+    return
+  fi
   gcloud run services describe "$WEB_SERVICE" --project "$PROJECT" --region "$REGION" \
     --format="value(status.url)"
 }
