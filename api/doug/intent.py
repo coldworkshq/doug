@@ -56,9 +56,22 @@ BINDING = "accepted"
 _WORD = re.compile(r"[a-z0-9]+")
 # Words that appear in every decision record and every PR title, so they
 # carry no signal about which record bears on which change.
+#
+# The second line is the verbs a PR title is made of. `fix`, `correct`,
+# `remove`, `update`, `rename`, `bump` and `tidy` say what kind of change
+# this is, never what it is about, and a record's title uses the same verbs
+# ("...were corrected in place", "...remove it from the freeze"). Measured
+# 2026-09-03 on the record set: with them as signal, "Correct a spelling
+# mistake" reached ADR-0026 on `corrected` plus one body word, and "Remove
+# the reviewer gate" ranked ADR-0018 (`remove`) above ADR-0025, the record
+# that governs it. Without them, three cosmetic leaks close and that
+# positive is restored; nothing else moves across 60 real PRs.
 _STOP = frozenset(
     "the a an and or of to in for on with is are be by it this that we our "
     "use uses used using add adds added new not no from at as if then than "
+    "fix fixes fixed fixing correct corrected correcting remove removes removed "
+    "removing update updates updated updating rename renames renamed renaming "
+    "bump bumps bumped bumping tidy tidies tidied tidying "
     "when what which why how doug decision decisions adr record records "
     "status accepted context rejected consequences".split()
 )

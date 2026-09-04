@@ -43,9 +43,10 @@ _REPO_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # is pinned too, and that is not symmetry for its own sake: on the reader tier
 # the slug is `category_slug`, a free-form schema string with no enum and no
 # pattern (reader.py:130-137), so `reader:Foo Bar` and `reader:foo-bar` are both
-# reachable model output and would group as two patterns downstream
-# (`patterns.normalize` neither case-folds nor slugifies). Transcription is the
-# one place that can still be refused, so it is.
+# reachable model output. `patterns.normalize` folds the spelling downstream
+# (#244), but the log is the hand-transcribed record and a dirty slug here is a
+# transcription error, not model output; transcription is the one place that
+# can still be refused, so it is.
 _RULE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*$")
 NO_PREFIX = "(none)"
 LAYERS = frozenset({"doug", "agent-reviewer"})

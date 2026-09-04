@@ -13,6 +13,8 @@ grows to fit the data would manufacture the distillability it is
 supposed to measure. tests/test_patterns.py pins these pairs.
 """
 
+import re
+
 SLUG_MERGES = {
     "missing-error-handling": "error-handling-gap",
     "unhandled-exception": "error-handling-gap",
@@ -29,9 +31,34 @@ SLUG_MERGES = {
 RULE_PREFIX = "reader:"
 
 
+_NOT_SLUG = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(raw: str) -> str:
+    """One spelling for one slug: lower-case, kebab, no edge dashes.
+
+    `category_slug` is free-form model output with no enum and no pattern
+    (reader.SCHEMA), so `Missing Import`, `missing_import` and
+    `missing-import ` are three spellings the model can and does produce
+    for one defect. Grouped raw, each becomes its own pattern beside the
+    kebab-case one, and the split lands directly in the distillability
+    measurement (#244). The frozen schema cannot be tightened (ADR-0012), so
+    the grouping key folds instead.
+
+    Only the spelling folds. Two different words stay two patterns —
+    that judgement is SLUG_MERGES's, and it is hand-maintained on purpose.
+    """
+    folded = _NOT_SLUG.sub("-", raw.strip().lower()).strip("-")
+    # A slug with no letters or digits folds to nothing. Grouping every such
+    # slug under "" would make one pattern out of unrelated garbage, so it
+    # keeps its raw spelling and stays its own bucket.
+    return folded or raw.strip() or raw
+
+
 def normalize(slug: str) -> str:
     """Canonical pattern name for a raw category_slug."""
-    return SLUG_MERGES.get(slug, slug)
+    folded = slugify(slug)
+    return SLUG_MERGES.get(folded, folded)
 
 
 def from_rule(rule: str) -> str | None:

@@ -1,8 +1,9 @@
 # HANDOFF — doug
 
-State:    review — branch `claude/doug-langfuse-integration-0dd80f` off main
-          48d8dbd. Langfuse tracing for the four paid model calls. api 1835
-          pass, ruff clean, five mutation checks red. Traced a real read
+State:    review — PR #290 OPEN, branch
+          `claude/doug-langfuse-integration-0dd80f`, merged up to main
+          1d205b9 (#287). Langfuse tracing for the four paid model calls.
+          api 1836 pass, ruff clean, five mutation checks red. Traced a real read
           through the real Langfuse SDK with an in-memory OTel exporter:
           `reader.risk` nests under `review coldworkshq/doug#284`, carrying
           model, effort, usage, stop_reason, scope and session.
@@ -51,25 +52,38 @@ Pointers: api/doug/tracing.py · api/doug/reader.py:760,1481,1657,1894 ·
           api/deploy/gcp.sh · .github/workflows/deploy.yml LANGFUSE_HOST ·
           ADR-0031 · docs/OPERATIONS.md "Langfuse tracing" · #289
 
---- prior stream (#284 intent tier + Vertex gate) below, preserved ---
+--- prior stream (#287 settle precision + slug fold) below, preserved ---
 
+MERGED as 1d205b9. The text below was written while it was still open and
+says so; it is kept for its decisions, not its state.
 
-State:    review — PR #284 OPEN off main f6ea059, branch
-          `claude/doug-accuracy-improvements-c95c9b`. api 1812 pass, ruff
-          clean, five mutation checks red. CI green. Doug's two reads
-          dispositioned: 10 rows in docs/findings-log.jsonl, one changed
-          the code (stopword-ordering). Closes #264; #274 commented.
-Next:     Andrew merges #284. Nothing in it moves traffic; the Vertex flip
-          (`READER_TRANSPORT: vertex` in deploy.yml) waits on the capacity
-          grant, which needs a Google account team (#274, R11).
-Blockers: none for code. FOUNDER (#274): Vertex quota for the Claude 5
-          lineage is gated on a Google Sales account team.
+State:    review — #284 MERGED (c99fae2) one commit short of its tip; the
+          dropped commit (pyproject pin) is re-landed on #287. #287 OPEN,
+          branch `accuracy-settle-names-and-slug-fold`: settle.py
+          claimed_names precision, patterns slug fold (#244), PR-title
+          verbs in the intent stop list, ADR-0026 facts note. api 1818
+          pass, ruff clean, every guard mutation-red. Doug's four reads of
+          #287 dispositioned (18 rows, 8 changed code); each round's medium
+          on settle.py was right and the extractor now lets the file at
+          head resolve an ambiguous prose name. Round four was repeats plus
+          three lows, so the review has converged; stop pushing.
+Next:     Andrew merges #287 and CHECKS main carries its tip (three squash
+          merges have now dropped the last commit: #251, #284, and the
+          #257 recovery). Then runs the #244 production query (on #244).
+Blockers: FOUNDER (#274): Vertex capacity is gated on a Google account
+          team; transport stays `anthropic` until the probe answers 400.
+          DENIED this session: reading doug-database-url for the #244
+          measurement. Handed over as a query, not routed around; the
+          check-run corpus (672 distinct slugs, 0 dirty) says it is empty.
 
-Doug's review, the finding worth remembering: reader:recall-regression
-(medium) said the title-naming rule silently drops binding records whose
-title uses other words. Checked against every graded deviation in the log
-(21 rows): none loses the record it cites. Recorded as adjacent, not
-disproved — the mechanism is right, the harm did not occur on the evidence.
+Lanes measured and closed this session, all offline:
+- #264 intent leak 20/22 -> 3/23 (naming rule + PR-verb stop words);
+  graded deviations lose no cited record (21/21); 60 real PRs still read.
+- settle.py missed PR #278's third read on the prose word `being`; fixed,
+  then Doug caught my over-broad dotted-root claim and that is fixed too.
+- #244 slug fold; 0 of 672 emitted slugs dirty, so no regrouping.
+Disproved reader rows are diverse (59 rules / 74 rows); no further
+deterministic settlement class is measurable yet. #245, #207 remain.
 
 Decisions this session (2026-09-02):
 - #264 mechanism: `intent._bears_on` — a record is a candidate only if the

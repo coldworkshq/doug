@@ -1190,6 +1190,38 @@ def test_the_capture_records_the_transport_that_actually_ran(monkeypatch):
     assert recorded == ["anthropic-vertex", "anthropic"]
 
 
+def test_pyproject_declares_the_vertex_extra_adr_0028_item_4_requires():
+    """ADR-0028 item 4: `anthropic[vertex]` is declared explicitly in
+    api/pyproject.toml, so the Vertex client's own dependencies cannot be lost
+    to an unrelated dependency change.
+
+    Until #284 the only thing guarding that line was the intent tier: any
+    change to pyproject.toml was read against ADR-0027/0028 by the model,
+    which might notice the extra going missing. #284's naming rule stopped
+    reading dependency bumps against records, and Doug raised it on every
+    read of that PR (`deviation:contradicts-ticket`) — correctly: a binding
+    requirement had gone from one soft guard to none. This is the hard one.
+    A paid read that might notice is replaced by a test that must.
+
+    Both the runtime dependency and the dev group are pinned, because the
+    suite imports the SDK too and a dev-only drop would pass CI while the
+    image lost the extra.
+    """
+    import re
+
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert "[dependency-groups]" in pyproject, (
+        "pyproject.toml has no [dependency-groups] table; the dev group moved or was dropped"
+    )
+    runtime, dev = pyproject.split("[dependency-groups]", 1)
+    pattern = re.compile(r'"anthropic\[vertex\]>=')
+    assert pattern.search(runtime), (
+        "api/pyproject.toml no longer declares anthropic[vertex] as a runtime "
+        "dependency; ADR-0028 item 4 requires it"
+    )
+    assert pattern.search(dev), "the dev group lost anthropic[vertex]"
+
+
 def test_the_transport_carries_MODEL_verbatim_with_no_mapping_layer():
     """ADR-0028 refuses a transport-specific model mapping by name.
 
