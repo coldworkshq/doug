@@ -95,6 +95,42 @@ exhausted balance fails every read soft into the deterministic score. What has
 changed is that the second source was never actually available, so the choice
 was between one transport and one transport plus an unfinished migration.
 
+### What this does to the dense arm's record
+
+ADR-0032 — "The dense arm embeds through Vertex at 768 unit-length
+dimensions" — is `proposed` and awaits a founder signature under R11. Nothing
+here changes its decision, and nothing here should: the reader's transport and
+the deriver's embedder are different subsystems, and embedding through Vertex
+under `doug-api-sa`'s application default credentials does not depend on which
+API surface the reader calls.
+
+Three of its *premises* are affected, and it states them in its own Context:
+
+1. **"ADR-0029 moved the reader's transport to Vertex."** It did not. That
+   record authorized the move, quota was never granted, and production never
+   took a Vertex read.
+2. **"One cloud relationship."** That was the posture the dense arm inherited,
+   and it is no longer true. With the reader on the first-party Anthropic API
+   and the embedder on Vertex there are two — an argument the dense arm makes
+   against alternative embedders and can no longer make in that form.
+3. **"ADR-0029 item 5's deploy preflight extends to this model."** That
+   preflight runs only when a deploy pins Vertex — `vertex_preflight` is gated
+   on `READER_TRANSPORT = vertex` in `deploy/gcp.sh` — and no deploy pins
+   Vertex now. The embedder needs its own trigger rather than an inheritance
+   that no longer fires.
+
+None of the three is fatal to the dense arm. Its model access and quota are
+already separate founder actions from the reader's (#274 is called out in that
+record as a separate line). But a record must not go to signature asserting a
+posture that changed underneath it, so this is filed as #294 rather than fixed
+here: amending a `proposed` record is the founder's call, not an agent's.
+
+The third premise is the one with a code consequence. If the dense arm ships
+inheriting a preflight that no longer fires, its first deploy has no
+model-access check at all — which is the silent misconfiguration the reader's
+own preflight exists to prevent, arriving by way of a record that thought it
+had one.
+
 ### Rejected
 
 **Deleting the Vertex code in this change.** It is about 140 references across

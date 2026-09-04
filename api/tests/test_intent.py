@@ -184,6 +184,38 @@ def _real_records():
     return out
 
 
+def test_no_two_decision_records_claim_the_same_number():
+    """The ADR sequence is a serialized resource, and nothing was checking it.
+
+    Two ADR-0032 records reached main from two lanes on the same day — the
+    dense arm's embedder (#285) and the Vertex reversal (#293) — because both
+    were written against a base that predated the other and neither re-checked
+    the sequence before merging. Nothing failed. The collision was found by
+    eye, days later, and only because someone happened to list the directory.
+
+    A duplicate number is not cosmetic here. These files are the intent tier's
+    input: `ADR-0032` in a code comment, a test, or another record no longer
+    identifies a record, so every cross-reference to it becomes ambiguous —
+    and the reader is handed two documents claiming to be the same decision.
+
+    Derived from the filenames rather than a maintained list, so a new record
+    is covered the moment it lands.
+    """
+    from collections import Counter
+    from pathlib import Path
+
+    directory = Path(__file__).resolve().parents[2] / "docs" / "decisions"
+    numbers = Counter(
+        f.name.split("-")[1] for f in directory.glob("ADR-*.md") if "-" in f.name
+    )
+    duplicates = {n: c for n, c in numbers.items() if c > 1}
+    assert not duplicates, (
+        f"two or more records claim the same ADR number: {sorted(duplicates)}. "
+        "The sequence is claimed, never raced (R5) — renumber the later one and "
+        "update every reference to it"
+    )
+
+
 def test_selection_on_dougs_own_records():
     """Synthetic docs alone cannot show the real failure: records written by
     one team share vocabulary, so nearly every record scores slightly against
@@ -253,17 +285,17 @@ def test_selection_on_dougs_own_records():
     # record and is read against none; a change that names the subject reaches
     # the records that govern it. Both halves pinned.
     #
-    # The Vertex half was ADR-0027 + ADR-0028 until ADR-0032 superseded 0028
+    # The Vertex half was ADR-0027 + ADR-0028 until ADR-0033 superseded 0028
     # and abandoned the move. The handover is the property worth pinning, not
     # either record: a change declaring the vertex extra must reach whichever
     # record currently governs it, and a superseded one must not be that
     # record — a reader told the transport is moving to Vertex would flag a
     # change that keeps the extra unpromoted as a deviation, and be exactly
-    # wrong. ADR-0032's title names Vertex, which is why the naming rule
+    # wrong. ADR-0033's title names Vertex, which is why the naming rule
     # reaches it.
     assert sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"]) == []
     vertex_dep = sent("Declare anthropic[vertex] in pyproject", ["api/pyproject.toml"])
-    assert "ADR-0027" in vertex_dep and "ADR-0032" in vertex_dep
+    assert "ADR-0027" in vertex_dep and "ADR-0033" in vertex_dep
     assert "ADR-0028" not in vertex_dep and "ADR-0029" not in vertex_dep
 
     # And the set stays tight rather than padding out to MAX_DOCS.

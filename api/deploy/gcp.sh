@@ -49,7 +49,7 @@ REGION=${REGION:-us-central1}
 # default would degrade the product silently. Checked at `deploy` only — the
 # other subcommands do not construct a reader.
 VERTEX_REGION=${VERTEX_REGION:-}
-# ADR-0032. Which transport THIS deploy pins on the service, and the default
+# ADR-0033. Which transport THIS deploy pins on the service, and the default
 # is the destination rather than a waypoint: the move to Vertex is abandoned
 # and the first-party API is where the reader stays. Matches
 # reader.DEFAULT_TRANSPORT, which has read `anthropic` throughout.
@@ -60,7 +60,7 @@ VERTEX_REGION=${VERTEX_REGION:-}
 # region refusal — failing for a reason with nothing to do with the incident.
 #
 # `READER_TRANSPORT=vertex ./deploy/gcp.sh deploy` still works and still runs
-# the preflight. Nothing selects it; see ADR-0032 item 2 for why the path is
+# the preflight. Nothing selects it; see ADR-0033 item 2 for why the path is
 # kept rather than deleted in the same change that abandoned it.
 READER_TRANSPORT=${READER_TRANSPORT:-anthropic}
 # Workload Identity Federation. How the api service proves who it is on the

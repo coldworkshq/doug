@@ -112,7 +112,7 @@ Read the error against the transport the service is actually on
 (`DOUG_READER_TRANSPORT` on the running revision):
 
 - **anthropic** — a billing error means the console balance hit zero; top it
-  up. The balance is a clock, not a fault (ADR-0032; the point was first made
+  up. The balance is a clock, not a fault (ADR-0033; the point was first made
   in ADR-0029, which that record superseded without retiring it). One
   provider, one balance, and an exhausted one fails every read soft into the
   deterministic score.
@@ -159,7 +159,7 @@ counts; they are the evidence the spend caps in `reader.py` are tuned from.
 
 ## Vertex, and why the reader does not use it (history)
 
-ADR-0032 abandoned the move to Vertex on 2026-09-03. **There is nothing to do
+ADR-0033 abandoned the move to Vertex on 2026-09-03. **There is nothing to do
 here.** The reader runs on the first-party Anthropic API, authenticating by
 Workload Identity Federation (ADR-0030), and production never took a Vertex
 read. This section is kept because the findings below cost real time to

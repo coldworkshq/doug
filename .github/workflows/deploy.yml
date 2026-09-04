@@ -146,7 +146,7 @@ jobs:
         env:
           PROJECT: ${{ env.PROJECT }}
           REGION: ${{ env.REGION }}
-          # ADR-0032. The transport, and it is settled: Doug stays on the
+          # ADR-0033. The transport, and it is settled: Doug stays on the
           # first-party Anthropic API and the move to Vertex is abandoned.
           # This is no longer a staged cutover waiting on a word — production
           # never took a Vertex read, and there is nothing to flip.
@@ -157,7 +157,7 @@ jobs:
           # test_the_workflow_ships_the_transport_the_decision_settled_on
           # pins this line to `anthropic` rather than to either of two.
           READER_TRANSPORT: anthropic
-          # Inert under ADR-0032, and kept rather than deleted for one
+          # Inert under ADR-0033, and kept rather than deleted for one
           # mechanical reason: gcp.sh refuses a Vertex deploy without it, and
           # test_the_workflow_supplies_every_variable_the_deploy_requires
           # derives its pin from those refusals rather than from a list. A
