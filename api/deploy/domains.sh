@@ -92,7 +92,33 @@ status() {
 }
 
 cutover() {
-  local new_redirect="https://$DOMAIN/callback"
+  # THE PATH IS NEVER HARDCODED, and this is the bug that made it a rule.
+  # It was written as "https://$DOMAIN/callback". web/lib/auth-origin.ts
+  # requires the redirect URI's path to be exactly "/auth/callback" and
+  # returns null for anything else, so /sign-in answered 503 "Sign-in is
+  # temporarily unavailable" on every host the moment the secret was
+  # rotated. Nothing else failed: the deploy was green, the secret read
+  # back correctly, and both hostnames served 200 at "/".
+  #
+  # A second literal that has to agree with a constant in the app is a
+  # second thing to keep in sync, and it will drift again. So take the URI
+  # already in use and replace ONLY the host. Whatever path the app
+  # requires today is the path this carries, without this script knowing
+  # what it is.
+  local current path new_redirect
+  current=$(gcloud secrets versions access latest \
+    --secret doug-workos-redirect-uri --project "$PROJECT") || {
+      echo "cutover: cannot read the current redirect URI to derive the new one." >&2
+      exit 1; }
+  path="${current#*://}"
+  path="/${path#*/}"
+  case "$path" in
+    /*/*|/*) ;;
+    *) echo "cutover: cannot parse a path out of '$current'." >&2; exit 1 ;;
+  esac
+  new_redirect="https://$DOMAIN$path"
+  echo "Current redirect URI: $current"
+  echo "New redirect URI:     $new_redirect"
 
   # THREE WRITES IN SEQUENCE AND NO ROLLBACK, so say what a failure left.
   # The writes are ordered so that stopping between any two is survivable
@@ -135,49 +161,45 @@ cutover() {
     exit 1
   fi
 
-  # Hazard 1. This is a real check, not a reminder to do one. WorkOS
-  # validates redirect_uri against the application allowlist at /authorize
-  # and answers 302 to the hosted UI when the URI is allowed, or 400 with
-  # invalid_redirect_uri when it is not. Asking WorkOS is the only way to
-  # know; asking the operator produces a yes either way.
+  # Hazard 1, and the check here was WRONG in a way that mattered: it read
+  # any answer that was not an exact 400 as "allowlisted". WorkOS answers
+  # 302 to /authorize whether or not the redirect_uri is allowed — the
+  # rejection happens at the END of the redirect chain, not at its start —
+  # so the check passed for a URI that was never on the allowlist and
+  # reported it as proof. Measured, not assumed:
+  #
+  #   allowlisted     -> ... .authkit.app/?client_id=...
+  #   NOT allowlisted -> https://error.workos.com/redirect-uri-invalid?...
+  #
+  # So follow the chain and read where it lands. -L, not -o /dev/null on the
+  # first hop.
   echo "Asking WorkOS whether $new_redirect is allowlisted..."
-  local client_id authorize_code
+  local client_id final
   client_id=$(gcloud secrets versions access latest \
     --secret doug-workos-client-id --project "$PROJECT")
-  #
-  # PROCEED ONLY ON THE ANSWER THAT MEANS YES, never on the absence of the
-  # answer that means no. WorkOS redirects to the hosted UI when the URI is
-  # allowlisted and returns 400 when it is not, so a 302 is the evidence.
-  # Reading "not 400" as allowlisted would take a 5xx, a captive portal's
-  # 200, a proxy interception or an empty reply as permission to rotate the
-  # secret that breaks every sign-in — the exact failure this check exists
-  # to prevent, reached by the check itself.
-  #
-  # No -L: the redirect IS the signal, and following it discards it.
-  authorize_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+  final=$(curl -sS -o /dev/null -L -w '%{url_effective}' --max-time 25 \
     -G "https://api.workos.com/user_management/authorize" \
     --data-urlencode "client_id=$client_id" \
     --data-urlencode "redirect_uri=$new_redirect" \
     --data-urlencode "response_type=code" \
-    --data-urlencode "provider=authkit" 2>/dev/null || echo "000")
-  case "$authorize_code" in
-    301|302|303|307|308)
-      echo "WorkOS redirected to the hosted UI: $new_redirect is allowlisted."
-      ;;
-    400)
-      echo "cutover: WorkOS rejects $new_redirect. Add it under" >&2
-      echo "  Redirects in the WorkOS dashboard, KEEPING the existing URI," >&2
-      echo "  then re-run. Removing the old one is a separate, later step." >&2
-      exit 1
-      ;;
+    --data-urlencode "provider=authkit" 2>/dev/null) || final=""
+  case "$final" in
+    *redirect-uri-invalid*)
+      echo "cutover: WorkOS REJECTS $new_redirect." >&2
+      echo "  Add exactly that URI under Redirects in the WorkOS dashboard," >&2
+      echo "  KEEPING the existing one, then re-run. Note the path: it is" >&2
+      echo "  $path, not /callback." >&2
+      exit 1 ;;
+    "")
+      echo "cutover: could not reach WorkOS to check the allowlist." >&2
+      exit 1 ;;
+    *authkit.app*|*authorize*)
+      echo "WorkOS accepted it: landed on $final" ;;
     *)
-      echo "cutover: WorkOS answered $authorize_code, which is neither the" >&2
-      echo "  redirect that means allowlisted nor the 400 that means not." >&2
-      echo "  That is not evidence either way, and rotating the redirect URI" >&2
-      echo "  on a guess breaks every sign-in. Check the WorkOS dashboard by" >&2
-      echo "  hand, then re-run." >&2
-      exit 1
-      ;;
+      echo "cutover: WorkOS sent the check somewhere unrecognised:" >&2
+      echo "  $final" >&2
+      echo "  That is not evidence either way. Check the dashboard by hand." >&2
+      exit 1 ;;
   esac
 
   echo "Pointing NEXT_PUBLIC_WORKOS_REDIRECT_URI at $new_redirect"
@@ -200,6 +222,38 @@ cutover() {
     --project "$PROJECT" --region "$REGION" \
     --update-env-vars "DOUG_WEB_URL=https://$DOMAIN"
   stage="done"
+
+  # THE CHECK THAT WOULD HAVE CAUGHT THE OUTAGE. Everything above can pass
+  # while sign-in is dead: the deploy is green, the secret reads back
+  # correctly, "/" serves 200 on both hosts, and WorkOS is happy. The one
+  # thing none of that exercises is the route that actually consumes the
+  # value. /sign-in answers 503 when web/lib/auth-origin.ts rejects the URI,
+  # and 307 to WorkOS when it accepts it, so ask it.
+  echo
+  echo -n "Checking /sign-in still authenticates... "
+  local signin
+  signin=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 25 \
+    "https://$DOMAIN/sign-in" 2>/dev/null) || signin="000"
+  case "$signin" in
+    30*)
+      echo "$signin, good."
+      ;;
+    503)
+      echo "503 — SIGN-IN IS DOWN."
+      echo "  auth-origin.ts rejected $new_redirect. Roll back now:" >&2
+      echo "    printf '%s' '$current' | gcloud secrets versions add \\" >&2
+      echo "      doug-workos-redirect-uri --project $PROJECT --data-file=-" >&2
+      echo "    gcloud run services update $WEB_SERVICE --project $PROJECT \\" >&2
+      echo "      --region $REGION --update-secrets \\" >&2
+      echo "      NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest" >&2
+      exit 1
+      ;;
+    *)
+      echo "$signin — unexpected."
+      echo "  Expected a redirect to WorkOS. Check before announcing this." >&2
+      exit 1
+      ;;
+  esac
 
   # THE THIRD PLACE THE HOSTNAME LIVES, and the only one that talks to search
   # engines. The gh-pages branch serves a redirect stub at
