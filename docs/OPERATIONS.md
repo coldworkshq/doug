@@ -278,6 +278,20 @@ That survives until the next deploy, which rebuilds the whole env block. To
 stop it for good, delete the two secrets; the next deploy then binds neither
 and adds no flag.
 
+### Telling the two populations apart
+
+`LANGFUSE_TRACING_ENVIRONMENT` stamps every span, and the deploy pins it to
+`production`. Set `local` in `api/.env` before your first local trace.
+
+Without it both sides carry the SDK's default of `default`, and a trace
+holding a tenant's private diff looks exactly like one holding your own
+repository. That is not repairable afterwards by filtering — nothing on an
+untagged span says which it was — so the only fix is deleting the project and
+starting over. Pinned by `test_production_traces_are_tagged_as_production`,
+which asserts the tag travels with `DOUG_TRACING` rather than standing alone.
+
+In Langfuse, the environment is a filter on the traces view.
+
 ### Where the data lands
 
 `https://us.cloud.langfuse.com`, staged as `LANGFUSE_HOST` in
