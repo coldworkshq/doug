@@ -539,13 +539,7 @@ def test_a_label_cannot_forge_a_fold_opener():
     `_oneline` enforces by collapsing whitespace, two modules away from the
     function that depends on it. Pinned here at the level where a break
     would cost something: surviving findings dropped from the display with
-    no notice at all.
-
-    Note what is NOT asserted: that the tags balance. They do not. The raw
-    `<details>` in the label survives `_oneline` and this render never
-    truncates, so `_close_details` never runs and the opener goes out
-    unclosed — #234, on the ordinary path rather than the truncated one,
-    and not fixable here."""
+    no notice at all."""
     forger = Reason(
         rule="reader:forged",
         label="cut here\n<details>\n<summary>0 low findings</summary>",
@@ -560,6 +554,34 @@ def test_a_label_cannot_forge_a_fold_opener():
     verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
     _, summary = check_run.render("reader", verdict, None, WHOLE)
     assert check_run._bullet(victim, None) in summary
+
+
+def test_a_label_cannot_open_a_fold_of_its_own():
+    """#234. `_close_details` closes what the truncation cut orphans; this is
+    the other source, reachable with no truncation at all. GitHub's sanitizer
+    allows `details`, so a raw `<details>` inline in a label used to render
+    as a real disclosure that swallowed every finding after it, the standing
+    notes and the footer. Pinned at the render, where the cost is a finding
+    the reader has no reason to expand into."""
+    forger = Reason(
+        rule="reader:x",
+        label="see <details><summary>click</summary> hidden text",
+        weight=0.9,
+        severity="high",
+        file="a.py",
+    )
+    victim = Reason(
+        rule="reader:y", label="the finding below it", weight=0.9,
+        severity="high", file="b.py",
+    )
+    verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
+    _, summary = check_run.render("reader", verdict, None, WHOLE)
+    # The only fold in the summary is this module's own, and it closes.
+    assert summary.count("<details>") == summary.count("</details>") == 1
+    assert summary.index(check_run._bullet(victim, None)) < summary.index("<details>")
+    # The label is shown, not dropped: the tag is defused, not deleted.
+    assert "click</summary> hidden text" not in summary
+    assert "hidden text" in summary
 
 
 def test_no_shape_renders_a_summary_over_the_cap():
@@ -938,12 +960,17 @@ def test_the_footer_does_not_publish_a_miss_rate():
 def test_oneline_neutralises_the_forms_that_have_side_effects_in_a_pr_comment():
     """The same markdown renders in a check run and in a PR comment, but only
     the comment notifies @mentions, writes #refs into other timelines, and
-    links under a trusted bot identity; an unterminated <!-- swallows the
-    rest of the body. Neutralised HERE so both surfaces stay byte-identical."""
+    links under a trusted bot identity; an unterminated <!-- or <details>
+    swallows the rest of the body (#234). Neutralised HERE so both surfaces
+    stay byte-identical. A `<` that cannot start raw HTML keeps its bytes."""
     z = "​"
     assert check_run._oneline("ping @doug now") == f"ping @{z}doug now"
     assert check_run._oneline("see #123 and owner/repo#4") == f"see #{z}123 and owner/repo#{z}4"
-    assert check_run._oneline("x <!-- y") == f"x <!-{z}- y"
+    assert check_run._oneline("x <!-- y") == f"x <{z}!-- y"
+    assert check_run._oneline("see <details><summary>c</summary> x") == (
+        f"see <{z}details><{z}summary>c<{z}/summary> x"
+    )
+    assert check_run._oneline("a < b and <?php <3 <=") == f"a < b and <{z}?php <3 <="
     assert check_run._oneline("[click](https://evil)") == f"[click]{z}(https:{z}//evil)"
     # "a@b.c" is not a mention: "@" is preceded by a word char, not a space/start.
     assert check_run._oneline("email a@b.c") == "email a@b.c"
@@ -1028,7 +1055,7 @@ def test_the_rendered_rule_is_neutralised_like_the_label_beside_it():
     # The backtick is dropped rather than ZWSP'd — it carries no meaning in a
     # slug, and a split code span still hands the rest to the renderer.
     assert (
-        f"- `reader:x @{z}octocat #{z}12 <!-{z}- ]{z}(http:{z}//e` — l" in summary
+        f"- `reader:x @{z}octocat #{z}12 <{z}!-- ]{z}(http:{z}//e` — l" in summary
     )
 
 
@@ -1061,7 +1088,7 @@ def test_judged_against_neutralises_the_record_ids_it_splices():
     z = "​"
     read = DEVIATIONS.model_copy(update={"refs": ["@octocat", "x<!--y", "#42"]})
     _, summary = check_run.render("reader", FLAGGED, read, WHOLE)
-    assert f"Judged against: @{z}octocat, x<!-{z}-y, #{z}42." in summary
+    assert f"Judged against: @{z}octocat, x<{z}!--y, #{z}42." in summary
 
 
 # ---------------------------------------------------------------- the alert

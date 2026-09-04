@@ -1,5 +1,33 @@
 # HANDOFF — doug
 
+State:    review — branch `claude/issue-234-status-a71df9`, fixing #234:
+          `check_run._oneline` let a raw `<` in model text open a real
+          `<details>` that swallowed every finding after it. Fixed with
+          `_TAG_OPEN_RE`; `_COMMENT_OPEN_RE` folded into it. api 1845 pass,
+          ruff clean, both guard tests red under mutation. GitHub's own
+          markdown API renders the defused label as `&lt;` and leaves the
+          module's own fold a real `<details>`.
+Next:     Andrew reviews and merges the PR, then checks main carries the
+          branch tip (squash merges have dropped the last commit before).
+Blockers: none.
+
+Decisions this session (2026-09-03):
+- Neutralise `<` only where CommonMark can start inline raw HTML: before an
+  ASCII letter, `/`, `!` or `?` (open tag, closing tag, comment/declaration,
+  processing instruction). Same ruling as `_REF_RE`: scope to what is live,
+  not to what looks like prose. `<!--` folds into this rule, so the
+  neutralised form becomes `<ZWSP!--` and the three tests pinning `<!-ZWSP-`
+  move with it. Rejected: an unconditional `<` (ZWSPs in every `x < y`);
+  keeping a separate comment rule (two rules for one token).
+- HTML blocks need not be chased: they start at a line start and every
+  `_oneline` span sits behind `- `, `> ` or a code span.
+
+Pointers: api/doug/check_run.py `_oneline` · api/tests/test_check_run.py
+          `test_oneline_neutralises_the_forms…`,
+          `test_a_label_cannot_forge_a_fold_opener` · #234 · #233
+
+--- prior stream (ADR-0033 renumber #295, MERGED as da83679) below, preserved ---
+
 State:    review — PR open off main 6b16591, branch
           `adr-0033-renumber-the-vertex-reversal`. api 1846 pass, ruff clean.
           #293 MERGED as 6b16591 carrying a DUPLICATE ADR number.
