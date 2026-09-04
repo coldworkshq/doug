@@ -146,26 +146,27 @@ jobs:
         env:
           PROJECT: ${{ env.PROJECT }}
           REGION: ${{ env.REGION }}
-          # ADR-0029. THE CUTOVER IS THIS ONE WORD. `anthropic` ships the
-          # current transport and skips the Vertex preflight entirely; `vertex`
-          # pins Vertex on the service and makes the preflight binding.
+          # ADR-0032. The transport, and it is settled: Doug stays on the
+          # first-party Anthropic API and the move to Vertex is abandoned.
+          # This is no longer a staged cutover waiting on a word — production
+          # never took a Vertex read, and there is nothing to flip.
           #
-          # It is `anthropic` because Vertex throughput quota for the Claude 5
-          # lineage is still zero (#274) and is granted only through a Google
-          # account team, so pinning `vertex` today would refuse every deploy —
-          # including one carrying an unrelated hotfix, which R1 does not
-          # allow. Flip it when the grant lands and the probe answers 400
-          # instead of 429.
+          # Redundant with gcp.sh's own default on purpose. The value that
+          # reaches production should be readable in the file that deploys it,
+          # not inferred from a script default, and
+          # test_the_workflow_ships_the_transport_the_decision_settled_on
+          # pins this line to `anthropic` rather than to either of two.
           READER_TRANSPORT: anthropic
-          # Pre-staged so the flip above is genuinely one word. Unused while
-          # READER_TRANSPORT is `anthropic`, because gcp.sh gates both the
-          # location check and the preflight on a Vertex deploy. Claude 5
-          # models carry shared-lineage quota, which Google serves on the
-          # multi-region and global endpoints only — a single region such as
-          # us-central1 cannot be granted (#274, Support, 2026-08-29). `us`
-          # keeps tenant source in the US; `global` is the other valid value.
-          # Probed 2026-09-02: both resolve for claude-opus-5 and
-          # claude-sonnet-5 (429 on the lineage quota, not 404).
+          # Inert under ADR-0032, and kept rather than deleted for one
+          # mechanical reason: gcp.sh refuses a Vertex deploy without it, and
+          # test_the_workflow_supplies_every_variable_the_deploy_requires
+          # derives its pin from those refusals rather than from a list. A
+          # hand-run `READER_TRANSPORT=vertex` deploy would otherwise fail
+          # here instead of at the preflight that is supposed to catch it.
+          #
+          # `us` was the value the abandoned migration would have used, for
+          # the residency reason that still applies: it keeps tenant source in
+          # the US. It leaves with the rest of the Vertex path.
           VERTEX_REGION: us
           # ADR-0031. Stated here rather than left to gcp.sh's default so that
           # the jurisdiction tenant source code is traced into is visible in

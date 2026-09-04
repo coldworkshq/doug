@@ -1,10 +1,20 @@
 ---
 title: The risk read runs Claude through Vertex, and clears a non-inferiority bar before it does
-status: accepted
+status: superseded
 date: 2026-08-28
 amends: ADR-0012
 amended_by: ADR-0029
+superseded_by: ADR-0032
 ---
+
+> **SUPERSEDED BY ADR-0032, 2026-09-03. THE MOVE TO VERTEX IS ABANDONED.**
+> Production never took a Vertex read. This record is history; it is no longer
+> fed to the intent tier, and nothing here binds a change.
+>
+> **Item 1 survives, and is restated in ADR-0032 item 3**: `provider` names the
+> API surface actually called, not the vendor of the weights. That is why
+> `WholeInstrumentManifestV0.provider` exists, and it is independent of which
+> surface is chosen.
 
 > **AMENDED BY ADR-0029, 2026-08-28. THE BAR BELOW WAS NEVER RUN, AND THE MOVE
 > SHIPPED ANYWAY. This record's title is inaccurate from that date onward: the

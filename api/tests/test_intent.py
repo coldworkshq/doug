@@ -252,9 +252,19 @@ def test_selection_on_dougs_own_records():
     # what #264 measured as noise. Under the naming rule a ruff bump names no
     # record and is read against none; a change that names the subject reaches
     # the records that govern it. Both halves pinned.
+    #
+    # The Vertex half was ADR-0027 + ADR-0028 until ADR-0032 superseded 0028
+    # and abandoned the move. The handover is the property worth pinning, not
+    # either record: a change declaring the vertex extra must reach whichever
+    # record currently governs it, and a superseded one must not be that
+    # record — a reader told the transport is moving to Vertex would flag a
+    # change that keeps the extra unpromoted as a deviation, and be exactly
+    # wrong. ADR-0032's title names Vertex, which is why the naming rule
+    # reaches it.
     assert sent("Bump ruff 0.14.1 to 0.14.2", ["api/pyproject.toml"]) == []
     vertex_dep = sent("Declare anthropic[vertex] in pyproject", ["api/pyproject.toml"])
-    assert "ADR-0027" in vertex_dep and "ADR-0028" in vertex_dep
+    assert "ADR-0027" in vertex_dep and "ADR-0032" in vertex_dep
+    assert "ADR-0028" not in vertex_dep and "ADR-0029" not in vertex_dep
 
     # And the set stays tight rather than padding out to MAX_DOCS.
     # store.py's bound moved to 4 when ADR-0011 (migration list) joined the

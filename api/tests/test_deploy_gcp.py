@@ -317,11 +317,68 @@ def test_the_anthropic_key_secret_survives_as_the_rollback():
     assert "doug-anthropic-key" in setup
 
 
-def test_the_deployed_transport_defaults_to_vertex():
-    """`READER_TRANSPORT` is a variable so an urgent deploy has a way past the
-    Vertex preflight, not so the destination becomes optional. Unset, a deploy
-    still ships Vertex."""
-    assert 'READER_TRANSPORT=${READER_TRANSPORT:-vertex}' in GCP_PATH.read_text()
+def _script_transport_default() -> str:
+    """What `deploy/gcp.sh` pins when the caller names no transport."""
+    match = re.search(
+        r"^READER_TRANSPORT=\$\{READER_TRANSPORT:-(\w+)\}", GCP_PATH.read_text(), re.M
+    )
+    assert match, "deploy/gcp.sh no longer defaults READER_TRANSPORT at all"
+    return match.group(1)
+
+
+def _workflow_transport() -> str:
+    """What `.github/workflows/deploy.yml` hands the deploy step."""
+    deploy_step = DEPLOY_WORKFLOW.read_text().split("bash deploy/gcp.sh deploy", 1)[1]
+    match = re.search(r"READER_TRANSPORT:\s*(\S+)", deploy_step)
+    assert match, "the deploy step no longer sets READER_TRANSPORT"
+    return match.group(1)
+
+
+def test_the_script_and_the_workflow_name_the_same_transport():
+    """The two places that decide the transport must not be able to disagree.
+
+    Doug raised this on the PR that created the duplication
+    (`reader:redundant-config-drift`), and was right. `deploy/gcp.sh` defaults
+    the value so a hand-run deploy is correct, and `deploy.yml` states it so
+    the value reaching production is readable in the file that deploys it.
+    Both are worth having. What is not worth having is two independent
+    assertions of the same constant, which is what the pins were: each test
+    checked its own file against the literal `anthropic`, so changing one file
+    and its own test left the other silently disagreeing.
+
+    Derived rather than restated, so this keeps biting after the decision
+    changes. If Vertex is ever reopened, whoever flips one of the two is told
+    about the other by a failure here rather than by a deploy that used a
+    transport nobody chose.
+    """
+    assert _script_transport_default() == _workflow_transport(), (
+        f"deploy/gcp.sh defaults to {_script_transport_default()!r} but "
+        f"deploy.yml ships {_workflow_transport()!r}; a hand-run deploy and a "
+        "merge would use different transports"
+    )
+
+
+def test_the_deployed_transport_is_the_first_party_api():
+    """ADR-0032, asserted once against both sources rather than twice.
+
+    The default is the destination, not an escape hatch. It was `vertex` while
+    that was where the reader was going, and a hand-run deploy — which is what
+    happens during an incident — took the Vertex branch and died on the region
+    refusal, failing for a reason with nothing to do with the incident.
+
+    Separate from the agreement test above because they fail for different
+    reasons and want different fixes: agreement failing means somebody changed
+    one file, and this failing means somebody changed the decision. Agreement
+    alone would let both drift to `vertex` together.
+    """
+    for source, value in (
+        ("deploy/gcp.sh", _script_transport_default()),
+        ("deploy.yml", _workflow_transport()),
+    ):
+        assert value == "anthropic", (
+            f"{source} ships {value!r}; ADR-0032 abandoned the Vertex move and "
+            "reopening it is a new decision record, not an edit to this value"
+        )
 
 
 def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
@@ -334,8 +391,14 @@ def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
     surfaces as a quality regression days later with nothing pointing at the
     deploy. So the deploy refuses instead, and no default is supplied that
     could make the refusal unreachable.
+
+    `READER_TRANSPORT=vertex` is named here rather than inherited. Under
+    ADR-0032 the default is `anthropic`, which skips the region check
+    entirely — so without this the test would pass while asserting nothing.
     """
-    result, lines = _invoke_gcp(tmp_path, "deploy", {"VERTEX_REGION": ""})
+    result, lines = _invoke_gcp(
+        tmp_path, "deploy", {"VERTEX_REGION": "", "READER_TRANSPORT": "vertex"}
+    )
 
     assert result.returncode != 0
     assert "VERTEX_REGION" in result.stderr
@@ -1517,6 +1580,12 @@ def _deploy_with_vertex_code(tmp_path, code: str, extra_env: dict | None = None)
     Only the rawPredict URL is rewritten; every other curl still answers 200 so
     the showcase smoke behaves normally and a refusal here can only come from
     the preflight.
+
+    `READER_TRANSPORT=vertex` is set explicitly. It used to be the script's
+    default, so these tests reached the preflight without naming the transport
+    they exercise; ADR-0032 made `anthropic` the default and they would
+    otherwise all pass by never running the code under test. A test of the
+    Vertex path should say it is testing the Vertex path.
     """
     fake_bin, log = _fake_gcloud(tmp_path)
     curl = fake_bin / "curl"
@@ -1540,6 +1609,7 @@ esac
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
         "VERTEX_REGION": "us-central1",
+        "READER_TRANSPORT": "vertex",
         **(extra_env or {}),
     }
     result = subprocess.run(
@@ -1709,34 +1779,28 @@ def test_the_workflow_supplies_every_variable_the_deploy_requires():
         )
 
 
-def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
-    """The cutover is one word in deploy.yml, and it must not be flipped ahead
-    of the quota it depends on.
+def test_the_workflow_ships_a_vertex_region_google_could_grant():
+    """The transport is pinned above; this is the region beside it.
 
-    Vertex throughput quota for the Claude 5 lineage is zero (#274), so a
-    `vertex` pin here refuses every deploy — including one carrying an
-    unrelated hotfix, which R1 does not allow. This asserts the two halves stay
-    consistent: pinning Vertex requires a location, and the location has to be
-    one Google can actually grant capacity on for this lineage.
+    Inert under ADR-0032, and kept only because gcp.sh refuses a Vertex deploy
+    without it. An inert value is still worth keeping honest: a wrong one
+    would strand exactly the hand-run `READER_TRANSPORT=vertex` deploy the
+    variable exists for, at the refusal rather than at the preflight that is
+    supposed to explain it.
 
-    That set is NOT the three single regions the first probe found. Google
-    Support (2026-08-29, on #274): Claude 5 quota is shared-lineage and is
-    served on the multi-region and global endpoints only, so `us-central1`
-    can resolve the model and still never be granted. `us` keeps tenant source
-    in the US; `global` is the other value. `eu` also resolves and is excluded
-    here for the same reason europe-west4 was — it moves tenant code to the EU
-    for no reason. Probed 2026-09-02: both `us` and `global` answer 429 on the
-    lineage quota for both models, which is "resolved, no capacity".
+    The valid set is not the three single regions the first probe found.
+    Google Support (2026-08-29, #274): Claude 5 quota is shared-lineage and is
+    served on the multi-region and global endpoints only, so `us-central1` can
+    resolve the model and still never be granted. `eu` is excluded for the
+    residency reason europe-west4 was — it moves tenant code to the EU for no
+    reason.
     """
-    workflow = DEPLOY_WORKFLOW.read_text()
-    deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
-    transport = re.search(r"READER_TRANSPORT:\s*(\S+)", deploy_step).group(1)
+    deploy_step = DEPLOY_WORKFLOW.read_text().split("bash deploy/gcp.sh deploy", 1)[1]
     region = re.search(r"VERTEX_REGION:\s*(\S+)", deploy_step).group(1)
 
-    assert transport in {"anthropic", "vertex"}, transport
     assert region in {"us", "global"}, (
         f"{region} is not an endpoint Google grants Claude 5 lineage quota on; "
-        "see #274 and docs/OPERATIONS.md"
+        "see ADR-0032 and docs/OPERATIONS.md"
     )
 
 

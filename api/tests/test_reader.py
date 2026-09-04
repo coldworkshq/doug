@@ -1190,10 +1190,16 @@ def test_the_capture_records_the_transport_that_actually_ran(monkeypatch):
     assert recorded == ["anthropic-vertex", "anthropic"]
 
 
-def test_pyproject_declares_the_vertex_extra_adr_0028_item_4_requires():
-    """ADR-0028 item 4: `anthropic[vertex]` is declared explicitly in
-    api/pyproject.toml, so the Vertex client's own dependencies cannot be lost
-    to an unrelated dependency change.
+def test_pyproject_declares_the_vertex_extra_the_kept_path_needs():
+    """`anthropic[vertex]` stays declared in api/pyproject.toml, so the Vertex
+    client's own dependencies cannot be lost to an unrelated dependency change.
+
+    The requirement came from ADR-0028 item 4, which ADR-0032 superseded when
+    it abandoned the move. It survives the supersede because ADR-0032 item 2
+    keeps the code path rather than deleting it, and a kept path that cannot
+    import is worse than a deleted one: it would fail at client construction,
+    which the reader turns into a soft fallback rather than an error. Both
+    leave together, in the deletion this record's issue tracks.
 
     Until #284 the only thing guarding that line was the intent tier: any
     change to pyproject.toml was read against ADR-0027/0028 by the model,
