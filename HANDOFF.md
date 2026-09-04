@@ -1,5 +1,31 @@
 # HANDOFF — doug
 
+State:    building — branch `claude/issue-234-status-a71df9`, fixing #234:
+          `check_run._oneline` lets a raw `<` in model text open a real
+          `<details>` that swallows every finding after it. Reproduced on
+          main 6af8d60 through the real `render` (2 openers, 1 closer).
+Next:     Add `_TAG_OPEN_RE` to `_oneline`, fold `_COMMENT_OPEN_RE` into it,
+          pin with a render-level test, mutation-check it, ruff, full suite,
+          PR with `Closes #234`.
+Blockers: none.
+
+Decisions this session (2026-09-03):
+- Neutralise `<` only where CommonMark can start inline raw HTML: before an
+  ASCII letter, `/`, `!` or `?` (open tag, closing tag, comment/declaration,
+  processing instruction). Same ruling as `_REF_RE`: scope to what is live,
+  not to what looks like prose. `<!--` folds into this rule, so the
+  neutralised form becomes `<ZWSP!--` and the three tests pinning `<!-ZWSP-`
+  move with it. Rejected: an unconditional `<` (ZWSPs in every `x < y`);
+  keeping a separate comment rule (two rules for one token).
+- HTML blocks need not be chased: they start at a line start and every
+  `_oneline` span sits behind `- `, `> ` or a code span.
+
+Pointers: api/doug/check_run.py `_oneline` · api/tests/test_check_run.py
+          `test_oneline_neutralises_the_forms…`,
+          `test_a_label_cannot_forge_a_fold_opener` · #234 · #233
+
+--- prior stream (#290 Langfuse tracing) below, preserved ---
+
 State:    review — PR #290 OPEN, branch
           `claude/doug-langfuse-integration-0dd80f`, merged up to main
           1d205b9 (#287). Langfuse tracing for the four paid model calls.

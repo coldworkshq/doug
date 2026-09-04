@@ -207,9 +207,19 @@ _MENTION_RE = re.compile(r"(?<!\w)@(?=\w)")
 # scope the match to "real" refs: every `#` immediately followed by a
 # digit gets one, unconditionally.
 _REF_RE = re.compile(r"#(?=\d)")
-# An unterminated `<!--` opens an HTML comment that swallows the rest of
-# the comment body.
-_COMMENT_OPEN_RE = re.compile(r"<!--")
+# A raw `<` before an ASCII letter, `/`, `!` or `?` is where CommonMark
+# starts inline raw HTML: an open tag, a closing tag, a comment or
+# declaration, a processing instruction. GitHub's sanitizer lets `details`
+# and `summary` through, so a model-authored `<details>` inline in a label
+# renders as a real disclosure, and an unclosed one swallows every finding
+# after it, the deviation section and the footer (#234). An unterminated
+# `<!--` did the same as a comment. A ZWSP after the `<` matches none of the
+# four forms, so markdown escapes it to `&lt;` and no tag exists for the
+# sanitizer to allow. Same ruling as `_REF_RE`: scope the match to what is
+# live, not to what reads as prose — `a < b` keeps its bytes. HTML *blocks*
+# are not chased: they must start a line, and every span this function
+# returns sits behind `- `, `> ` or a code span.
+_TAG_OPEN_RE = re.compile(r"<(?=[A-Za-z/!?])")
 # `[text](url)` is a live, clickable link rendered under a bot identity
 # users are taught to trust.
 _LINK_RE = re.compile(r"\]\(")
@@ -235,7 +245,7 @@ def _oneline(text: str) -> str:
     collapsed = " ".join(text.split())
     collapsed = _MENTION_RE.sub(f"@{_ZWSP}", collapsed)
     collapsed = _REF_RE.sub(f"#{_ZWSP}", collapsed)
-    collapsed = _COMMENT_OPEN_RE.sub(f"<!-{_ZWSP}-", collapsed)
+    collapsed = _TAG_OPEN_RE.sub(f"<{_ZWSP}", collapsed)
     collapsed = _LINK_RE.sub(f"]{_ZWSP}(", collapsed)
     collapsed = _URL_RE.sub(f":{_ZWSP}//", collapsed)
     return collapsed
@@ -1038,7 +1048,10 @@ def render(
         total = len(counted)
         reserved = max(len(TRUNCATION_NOTICE), len(_truncation_notice(total, total)))
         # Every fold the cut could leave open has to be closeable inside the
-        # reserve, or closing it is what puts the summary over the cap.
+        # reserve, or closing it is what puts the summary over the cap. The
+        # count is this module's own folds only: `_TAG_OPEN_RE` defuses a
+        # `<details>` in model text before it reaches `body`, so a diff cannot
+        # inflate the reserve and shrink its own findings list (#234).
         reserved += body.count("<details>") * len(_DETAILS_CLOSE)
         cut = max(0, SUMMARY_LIMIT - reserved - len(footer))
         # The shortfall is counted AFTER all three of these, never before: a
