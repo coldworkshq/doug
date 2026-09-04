@@ -26,65 +26,49 @@ Pointers: api/doug/check_run.py `_oneline` · api/tests/test_check_run.py
           `test_oneline_neutralises_the_forms…`,
           `test_a_label_cannot_forge_a_fold_opener` · #234 · #233
 
---- prior stream (Vertex reversal #293, MERGED as 6b16591) below, preserved ---
+--- prior stream (ADR-0033 renumber #295, MERGED as da83679) below, preserved ---
 
-State:    review — PR for the Vertex reversal open off main 6af8d60, branch
-          `vertex-decision-reversed`. api 1845 pass, ruff clean. #290
-          (Langfuse tracing) MERGED as 6af8d60, and main carries the whole
-          branch — tracing.py, conftest.py, the Makefile env wiring and the
-          rewritten .env.example are all on main, so the squash did NOT drop
-          the tip this time.
-Next:     Andrew reviews the Vertex PR; #274 closes when it merges. Tracing
-          is still OFF in production and stays off until the two Langfuse
-          secrets exist, which is gated on #289.
-Blockers: none. FOUNDER (#289): Langfuse subprocessor listing, DPA,
-          residency and retention, before the secrets are created.
+State:    review — PR open off main 6b16591, branch
+          `adr-0033-renumber-the-vertex-reversal`. api 1846 pass, ruff clean.
+          #293 MERGED as 6b16591 carrying a DUPLICATE ADR number.
+Next:     Andrew reviews the renumbering PR, then rules on #294 — the dense
+          arm's `proposed` ADR-0032 goes to signature on three premises the
+          Vertex reversal changed. Langfuse tracing is still off in
+          production (#289).
+Blockers: none for code. FOUNDER: #294 (amend a proposed record — R11), #289
+          (Langfuse subprocessor listing and DPA).
 
-Decisions this session (2026-09-03):
-- Vertex is abandoned. ADR-0032 supersedes ADR-0028 and ADR-0029; both flip
-  to `status: superseded`, which is the point — only `accepted` records reach
-  the intent tier, and two records asserting a destination the project had
-  abandoned would produce confident false deviation findings against any
-  transport change. ADR-0030 (federation) stands in full and got a banner
-  saying so, because it `amends: ADR-0029` and a reader would otherwise chase
-  a superseded record.
-  Scope asked and answered: reverse the decision only. The code deletion is
-  #291 — roughly 140 references across eight files, most of them tests
-  pinning real behaviour, and burying a four-line reversal in that diff makes
-  both harder to review.
-- gcp.sh defaults READER_TRANSPORT to `anthropic`. The workflow's pin was not
-  enough: a hand-run deploy is what happens during an incident, and the old
-  `vertex` default took the Vertex branch and died on the region refusal, for
-  a reason with nothing to do with the incident.
-- The workflow pin tightened from `in {anthropic, vertex}` to `== anthropic`.
-  There is no cutover left, so accepting either value accepts a regression.
-- Vertex-path tests now name `READER_TRANSPORT=vertex` explicitly instead of
-  inheriting it. Ten of them had been reaching the preflight on the default
-  alone and would have gone green while testing nothing.
-- Checked, not assumed: `provider` feeds `WholeInstrumentManifestV0` and
-  `instrument_id`, which example_pack_eval partitions the corpus by. It stays
-  `"anthropic"` on this path, so no stored pack's hash moves. That constraint
-  is written into #291 as something to verify.
+Decisions this session (2026-09-04):
+- The Vertex reversal is renumbered ADR-0032 -> ADR-0033. Two ADR-0032 files
+  reached main on the same day: the dense arm's embedder (#285, merged as
+  88cbddf) and the Vertex reversal (#293, merged as 6b16591). I raced R5's
+  serialized ADR sequence by branching off 1d205b9 and never re-checking the
+  number before opening the PR.
+- `test_no_two_decision_records_claim_the_same_number` now derives uniqueness
+  from the filenames. Nothing was checking, which is why the collision merged
+  and was then found by eye. Mutation-checked by recreating the duplicate.
+- ADR-0033 gained "What this does to the dense arm's record". Three premises
+  in the `proposed` ADR-0032 are now false: ADR-0029 never actually moved the
+  reader to Vertex, "one cloud relationship" is now two, and the Vertex
+  preflight it inherits is gated on `READER_TRANSPORT = vertex` and no longer
+  fires. The third has a code consequence — the embedder would ship with no
+  model-access check. Filed as #294; amending a record awaiting signature is
+  R11, not an agent's call.
 
-- Doug read #293 through the new tracing path (first real end-to-end use of
-  ADR-0031) and raised three findings; all three dispositioned in
-  docs/findings-log.jsonl. `reader:redundant-config-drift` was real and
-  changed the code: READER_TRANSPORT is stated in two files, which is right,
-  but each was pinned against the literal `anthropic` by its own test, so
-  changing one file and its own test left the other silently disagreeing.
-  Now a derived agreement pin (the two sources must match, whatever the value)
-  plus a separate decision pin (the value is `anthropic`). Mutation-checked
-  both drift directions and the both-flipped case, where agreement correctly
-  holds and only the decision pin goes red.
+NEAR MISS worth keeping: a hand-run `gcp.sh deploy` from the langfuse worktree
+was attempted while that tree was 3 commits behind main. `deploy` runs
+`gcloud run deploy --source .`, so it would have shipped a tree missing
+4ae5b25 — the fix for the callback path that took sign-in down (#286) —
+reverting it in production. It failed instead, on the pre-ADR-0033
+`VERTEX_REGION` refusal. Nothing checks the deploying tree against main.
 
-Pointers: docs/decisions/ADR-0032 · ADR-0028/0029 frontmatter · ADR-0030
-          banner · api/deploy/gcp.sh READER_TRANSPORT · deploy.yml ·
-          docs/OPERATIONS.md "Vertex, and why the reader does not use it" ·
-          api/tests/test_deploy_gcp.py `_deploy_with_vertex_code` ·
-          api/tests/test_intent.py `test_selection_on_dougs_own_records` ·
-          #274 · #291 · #289
+Pointers: docs/decisions/ADR-0033 · ADR-0028/0029/0030 banners ·
+          api/tests/test_intent.py `test_no_two_decision_records...` ·
+          api/deploy/gcp.sh · .github/workflows/deploy.yml ·
+          docs/OPERATIONS.md · #294 · #291 · #289
 
 --- prior stream (#290 Langfuse tracing, MERGED as 6af8d60) below, preserved ---
+
 
 State:    review — PR #290 OPEN, branch
           `claude/doug-langfuse-integration-0dd80f`, merged up to main

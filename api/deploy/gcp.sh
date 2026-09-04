@@ -49,7 +49,7 @@ REGION=${REGION:-us-central1}
 # default would degrade the product silently. Checked at `deploy` only — the
 # other subcommands do not construct a reader.
 VERTEX_REGION=${VERTEX_REGION:-}
-# ADR-0032. Which transport THIS deploy pins on the service, and the default
+# ADR-0033. Which transport THIS deploy pins on the service, and the default
 # is the destination rather than a waypoint: the move to Vertex is abandoned
 # and the first-party API is where the reader stays. Matches
 # reader.DEFAULT_TRANSPORT, which has read `anthropic` throughout.
@@ -60,7 +60,7 @@ VERTEX_REGION=${VERTEX_REGION:-}
 # region refusal — failing for a reason with nothing to do with the incident.
 #
 # `READER_TRANSPORT=vertex ./deploy/gcp.sh deploy` still works and still runs
-# the preflight. Nothing selects it; see ADR-0032 item 2 for why the path is
+# the preflight. Nothing selects it; see ADR-0033 item 2 for why the path is
 # kept rather than deleted in the same change that abandoned it.
 READER_TRANSPORT=${READER_TRANSPORT:-anthropic}
 # Workload Identity Federation. How the api service proves who it is on the
@@ -100,6 +100,14 @@ FEDERATION_WORKSPACE_ID=${FEDERATION_WORKSPACE_ID:-wrkspc_01AS2iPQV3Z6Z4ie76pn5Y
 # Tracing itself is NOT enabled by this variable. It turns on only when both
 # Langfuse secrets exist — see langfuse_configured below — so a deployment that
 # has never created them traces nothing and needs no flag to say so.
+#
+# LANGFUSE_TRACING_ENVIRONMENT rides alongside, pinned to `production` rather
+# than defaulted. It is not decoration: without it every span in the project
+# carries the SDK's `default`, so a trace holding a tenant's private diff is
+# indistinguishable from one holding a developer's own repository, and neither
+# can be filtered out of the other. That is unrecoverable after the fact —
+# nothing on an untagged span says which it was. `api/.env` sets `local` for
+# the same reason from the other side.
 LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}
 INSTANCE=doug-ledger
 SERVICE=doug-api
@@ -843,7 +851,7 @@ deploy() {
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   local langfuse_env="" langfuse_secret=""
   if langfuse_configured; then
-    langfuse_env="DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST"
+    langfuse_env="DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST,LANGFUSE_TRACING_ENVIRONMENT=production"
     langfuse_secret="LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest,LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest"
     echo "tracing: ON — reads will send prompts and responses to $LANGFUSE_HOST"
   else

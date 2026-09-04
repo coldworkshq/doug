@@ -359,7 +359,7 @@ def test_the_script_and_the_workflow_name_the_same_transport():
 
 
 def test_the_deployed_transport_is_the_first_party_api():
-    """ADR-0032, asserted once against both sources rather than twice.
+    """ADR-0033, asserted once against both sources rather than twice.
 
     The default is the destination, not an escape hatch. It was `vertex` while
     that was where the reader was going, and a hand-run deploy — which is what
@@ -376,7 +376,7 @@ def test_the_deployed_transport_is_the_first_party_api():
         ("deploy.yml", _workflow_transport()),
     ):
         assert value == "anthropic", (
-            f"{source} ships {value!r}; ADR-0032 abandoned the Vertex move and "
+            f"{source} ships {value!r}; ADR-0033 abandoned the Vertex move and "
             "reopening it is a new decision record, not an edit to this value"
         )
 
@@ -393,7 +393,7 @@ def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
     could make the refusal unreachable.
 
     `READER_TRANSPORT=vertex` is named here rather than inherited. Under
-    ADR-0032 the default is `anthropic`, which skips the region check
+    ADR-0033 the default is `anthropic`, which skips the region check
     entirely — so without this the test would pass while asserting nothing.
     """
     result, lines = _invoke_gcp(
@@ -1583,7 +1583,7 @@ def _deploy_with_vertex_code(tmp_path, code: str, extra_env: dict | None = None)
 
     `READER_TRANSPORT=vertex` is set explicitly. It used to be the script's
     default, so these tests reached the preflight without naming the transport
-    they exercise; ADR-0032 made `anthropic` the default and they would
+    they exercise; ADR-0033 made `anthropic` the default and they would
     otherwise all pass by never running the code under test. A test of the
     Vertex path should say it is testing the Vertex path.
     """
@@ -1782,7 +1782,7 @@ def test_the_workflow_supplies_every_variable_the_deploy_requires():
 def test_the_workflow_ships_a_vertex_region_google_could_grant():
     """The transport is pinned above; this is the region beside it.
 
-    Inert under ADR-0032, and kept only because gcp.sh refuses a Vertex deploy
+    Inert under ADR-0033, and kept only because gcp.sh refuses a Vertex deploy
     without it. An inert value is still worth keeping honest: a wrong one
     would strand exactly the hand-run `READER_TRANSPORT=vertex` deploy the
     variable exists for, at the refusal rather than at the preflight that is
@@ -1800,7 +1800,7 @@ def test_the_workflow_ships_a_vertex_region_google_could_grant():
 
     assert region in {"us", "global"}, (
         f"{region} is not an endpoint Google grants Claude 5 lineage quota on; "
-        "see ADR-0032 and docs/OPERATIONS.md"
+        "see ADR-0033 and docs/OPERATIONS.md"
     )
 
 
@@ -1922,7 +1922,55 @@ def test_creating_both_langfuse_secrets_is_what_turns_tracing_on(tmp_path):
         ",LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest"
         ",LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest"
     )
-    assert env.endswith(",DOUG_TRACING=1,LANGFUSE_HOST=https://us.cloud.langfuse.com")
+    assert env.endswith(
+        ",DOUG_TRACING=1,LANGFUSE_HOST=https://us.cloud.langfuse.com"
+        ",LANGFUSE_TRACING_ENVIRONMENT=production"
+    )
+
+
+def test_production_traces_are_tagged_as_production(tmp_path):
+    """Untagged spans cannot be sorted out afterwards.
+
+    The SDK's default environment is `default`, and it applies to every span
+    that does not say otherwise. With the deploy untagged, a trace carrying a
+    tenant's private diff and one carrying a developer's own repository land
+    in the same view looking identical — and nothing on either says which it
+    was, so the mistake is not repairable later by filtering, only by deleting
+    the project and starting again.
+
+    Pinned to the flag rather than asserted on its own: the tag has to travel
+    with DOUG_TRACING, because a deploy that switched tracing on without it
+    would produce exactly the unsorted population this prevents.
+    """
+    lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "1"})
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    env = api_deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
+
+    assert "DOUG_TRACING=1" in env
+    assert "LANGFUSE_TRACING_ENVIRONMENT=production" in env, (
+        "the deploy switches tracing on without naming its environment, so "
+        "production spans are indistinguishable from local ones"
+    )
+
+
+def test_the_example_env_names_a_different_environment_than_the_deploy(tmp_path):
+    """The two populations must not be spelled the same way.
+
+    Separating them is the whole point, so a `.env.example` that copied
+    `production` would document the exact mistake this is here to prevent —
+    and it is the file a developer copies when setting tracing up for the
+    first time.
+    """
+    import re
+
+    example = (GCP_PATH.parents[2] / ".env.example").read_text()
+    local = re.search(r"^LANGFUSE_TRACING_ENVIRONMENT=(\S+)", example, re.M)
+    assert local, ".env.example no longer names a tracing environment"
+    assert local.group(1) != "production", (
+        ".env.example tells developers to tag their own traces `production`"
+    )
 
 
 def test_setup_binds_no_langfuse_secret_before_the_keys_exist(tmp_path):

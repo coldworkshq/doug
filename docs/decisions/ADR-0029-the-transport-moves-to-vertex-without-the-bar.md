@@ -4,17 +4,17 @@ status: superseded
 date: 2026-08-28
 amends: ADR-0012, ADR-0027, ADR-0028
 amended_by: ADR-0030
-superseded_by: ADR-0032
+superseded_by: ADR-0033
 ---
 
-> **SUPERSEDED BY ADR-0032, 2026-09-03. THE MOVE TO VERTEX IS ABANDONED.**
+> **SUPERSEDED BY ADR-0033, 2026-09-03. THE MOVE TO VERTEX IS ABANDONED.**
 > The instrument era this record authorized never began: quota was zero
 > throughout and `deploy.yml` pinned `anthropic` from the first deploy. This
 > record is history, and is no longer fed to the intent tier.
 >
 > **ADR-0030 is unaffected.** It amends this record, but its subject is the
 > CREDENTIAL on the first-party transport rather than the choice of transport,
-> and it stands in full — see ADR-0032 item 4.
+> and it stands in full — see ADR-0033 item 4.
 
 > **Amended by ADR-0030, 2026-08-30: `ANTHROPIC_API_KEY` is no longer
 > mounted. Item 4 below is superseded to that extent; the rollback it

@@ -1194,8 +1194,8 @@ def test_pyproject_declares_the_vertex_extra_the_kept_path_needs():
     """`anthropic[vertex]` stays declared in api/pyproject.toml, so the Vertex
     client's own dependencies cannot be lost to an unrelated dependency change.
 
-    The requirement came from ADR-0028 item 4, which ADR-0032 superseded when
-    it abandoned the move. It survives the supersede because ADR-0032 item 2
+    The requirement came from ADR-0028 item 4, which ADR-0033 superseded when
+    it abandoned the move. It survives the supersede because ADR-0033 item 2
     keeps the code path rather than deleting it, and a kept path that cannot
     import is worse than a deleted one: it would fail at client construction,
     which the reader turns into a soft fallback rather than an error. Both
