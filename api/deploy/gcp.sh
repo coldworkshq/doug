@@ -100,6 +100,14 @@ FEDERATION_WORKSPACE_ID=${FEDERATION_WORKSPACE_ID:-wrkspc_01AS2iPQV3Z6Z4ie76pn5Y
 # Tracing itself is NOT enabled by this variable. It turns on only when both
 # Langfuse secrets exist — see langfuse_configured below — so a deployment that
 # has never created them traces nothing and needs no flag to say so.
+#
+# LANGFUSE_TRACING_ENVIRONMENT rides alongside, pinned to `production` rather
+# than defaulted. It is not decoration: without it every span in the project
+# carries the SDK's `default`, so a trace holding a tenant's private diff is
+# indistinguishable from one holding a developer's own repository, and neither
+# can be filtered out of the other. That is unrecoverable after the fact —
+# nothing on an untagged span says which it was. `api/.env` sets `local` for
+# the same reason from the other side.
 LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}
 INSTANCE=doug-ledger
 SERVICE=doug-api
@@ -843,7 +851,7 @@ deploy() {
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
   local langfuse_env="" langfuse_secret=""
   if langfuse_configured; then
-    langfuse_env="DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST"
+    langfuse_env="DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST,LANGFUSE_TRACING_ENVIRONMENT=production"
     langfuse_secret="LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest,LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest"
     echo "tracing: ON — reads will send prompts and responses to $LANGFUSE_HOST"
   else

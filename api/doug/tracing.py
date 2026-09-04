@@ -55,6 +55,15 @@ from contextlib import contextmanager
 TRACING_ENV = "DOUG_TRACING"
 PUBLIC_KEY_ENV = "LANGFUSE_PUBLIC_KEY"
 SECRET_KEY_ENV = "LANGFUSE_SECRET_KEY"
+# Read by the SDK, never by this module, which is why it is named here rather
+# than used: `Langfuse()` picks up LANGFUSE_TRACING_ENVIRONMENT on its own and
+# stamps every span with it. It is documented in this file because the
+# consequence of leaving it unset belongs next to the code that emits spans —
+# the SDK's default is `default`, applied to everything, so a span carrying a
+# tenant's private diff and one carrying a developer's own repository become
+# indistinguishable, permanently. Nothing on an untagged span recovers which
+# it was. `deploy/gcp.sh` pins `production`; `api/.env` sets `local`.
+ENVIRONMENT_ENV = "LANGFUSE_TRACING_ENVIRONMENT"
 
 # Both keys, never either-or. A half-configured client is one that constructs
 # and then fails on every export, which spends a thread and a retry budget to
