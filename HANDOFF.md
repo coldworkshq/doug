@@ -1,12 +1,14 @@
 # HANDOFF — doug
 
-State:    building — branch `claude/issue-234-status-a71df9`, fixing #234:
-          `check_run._oneline` lets a raw `<` in model text open a real
-          `<details>` that swallows every finding after it. Reproduced on
-          main 6af8d60 through the real `render` (2 openers, 1 closer).
-Next:     Add `_TAG_OPEN_RE` to `_oneline`, fold `_COMMENT_OPEN_RE` into it,
-          pin with a render-level test, mutation-check it, ruff, full suite,
-          PR with `Closes #234`.
+State:    review — branch `claude/issue-234-status-a71df9`, fixing #234:
+          `check_run._oneline` let a raw `<` in model text open a real
+          `<details>` that swallowed every finding after it. Fixed with
+          `_TAG_OPEN_RE`; `_COMMENT_OPEN_RE` folded into it. api 1845 pass,
+          ruff clean, both guard tests red under mutation. GitHub's own
+          markdown API renders the defused label as `&lt;` and leaves the
+          module's own fold a real `<details>`.
+Next:     Andrew reviews and merges the PR, then checks main carries the
+          branch tip (squash merges have dropped the last commit before).
 Blockers: none.
 
 Decisions this session (2026-09-03):
