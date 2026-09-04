@@ -26,7 +26,65 @@ Pointers: api/doug/check_run.py `_oneline` · api/tests/test_check_run.py
           `test_oneline_neutralises_the_forms…`,
           `test_a_label_cannot_forge_a_fold_opener` · #234 · #233
 
---- prior stream (#290 Langfuse tracing) below, preserved ---
+--- prior stream (Vertex reversal #293, MERGED as 6b16591) below, preserved ---
+
+State:    review — PR for the Vertex reversal open off main 6af8d60, branch
+          `vertex-decision-reversed`. api 1845 pass, ruff clean. #290
+          (Langfuse tracing) MERGED as 6af8d60, and main carries the whole
+          branch — tracing.py, conftest.py, the Makefile env wiring and the
+          rewritten .env.example are all on main, so the squash did NOT drop
+          the tip this time.
+Next:     Andrew reviews the Vertex PR; #274 closes when it merges. Tracing
+          is still OFF in production and stays off until the two Langfuse
+          secrets exist, which is gated on #289.
+Blockers: none. FOUNDER (#289): Langfuse subprocessor listing, DPA,
+          residency and retention, before the secrets are created.
+
+Decisions this session (2026-09-03):
+- Vertex is abandoned. ADR-0032 supersedes ADR-0028 and ADR-0029; both flip
+  to `status: superseded`, which is the point — only `accepted` records reach
+  the intent tier, and two records asserting a destination the project had
+  abandoned would produce confident false deviation findings against any
+  transport change. ADR-0030 (federation) stands in full and got a banner
+  saying so, because it `amends: ADR-0029` and a reader would otherwise chase
+  a superseded record.
+  Scope asked and answered: reverse the decision only. The code deletion is
+  #291 — roughly 140 references across eight files, most of them tests
+  pinning real behaviour, and burying a four-line reversal in that diff makes
+  both harder to review.
+- gcp.sh defaults READER_TRANSPORT to `anthropic`. The workflow's pin was not
+  enough: a hand-run deploy is what happens during an incident, and the old
+  `vertex` default took the Vertex branch and died on the region refusal, for
+  a reason with nothing to do with the incident.
+- The workflow pin tightened from `in {anthropic, vertex}` to `== anthropic`.
+  There is no cutover left, so accepting either value accepts a regression.
+- Vertex-path tests now name `READER_TRANSPORT=vertex` explicitly instead of
+  inheriting it. Ten of them had been reaching the preflight on the default
+  alone and would have gone green while testing nothing.
+- Checked, not assumed: `provider` feeds `WholeInstrumentManifestV0` and
+  `instrument_id`, which example_pack_eval partitions the corpus by. It stays
+  `"anthropic"` on this path, so no stored pack's hash moves. That constraint
+  is written into #291 as something to verify.
+
+- Doug read #293 through the new tracing path (first real end-to-end use of
+  ADR-0031) and raised three findings; all three dispositioned in
+  docs/findings-log.jsonl. `reader:redundant-config-drift` was real and
+  changed the code: READER_TRANSPORT is stated in two files, which is right,
+  but each was pinned against the literal `anthropic` by its own test, so
+  changing one file and its own test left the other silently disagreeing.
+  Now a derived agreement pin (the two sources must match, whatever the value)
+  plus a separate decision pin (the value is `anthropic`). Mutation-checked
+  both drift directions and the both-flipped case, where agreement correctly
+  holds and only the decision pin goes red.
+
+Pointers: docs/decisions/ADR-0032 · ADR-0028/0029 frontmatter · ADR-0030
+          banner · api/deploy/gcp.sh READER_TRANSPORT · deploy.yml ·
+          docs/OPERATIONS.md "Vertex, and why the reader does not use it" ·
+          api/tests/test_deploy_gcp.py `_deploy_with_vertex_code` ·
+          api/tests/test_intent.py `test_selection_on_dougs_own_records` ·
+          #274 · #291 · #289
+
+--- prior stream (#290 Langfuse tracing, MERGED as 6af8d60) below, preserved ---
 
 State:    review — PR #290 OPEN, branch
           `claude/doug-langfuse-integration-0dd80f`, merged up to main
