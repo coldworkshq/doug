@@ -201,6 +201,93 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   https://aiplatform.us.rep.googleapis.com/v1/projects/doug-prod0/locations/us/publishers/anthropic/models/claude-opus-5:rawPredict
 ```
 
+## Langfuse tracing
+
+ADR-0031. Traces let you watch a review happen: one trace per review job, with
+the risk read, the intent read and any verify or attribution calls nested
+inside it. It is a viewing surface. The example pack is the record, and no
+finding or measurement may cite a trace.
+
+**Off in production today**, because the secrets do not exist. Creating both is
+what turns it on — there is no separate flag to set, and no flag to forget.
+
+### What leaves the boundary
+
+With tracing on, a span carries the exact bytes the model was sent — the system
+prompt and the diff slice — and the exact text it sent back. That is tenant
+source code from private repositories, held by Langfuse. Turn it on knowing
+that; ADR-0031 records the decision and the open subprocessor question.
+
+### Try it locally first
+
+Put the keys in `api/.env` and set `DOUG_TRACING=1` there. Nothing in `api/`
+reads a dotenv on its own — `uv run` ignores `.env` unless it is named — so
+`make api-dev` and `make dev` pass `--env-file .env` when that file exists.
+`make test` deliberately does not, and `api/tests/conftest.py` clears the
+switch as well, so a test run cannot put fixtures into a real project.
+
+Local tracing has none of the tenant exposure below, as long as you point it
+at your own repositories.
+
+### Turn it on
+
+Both secrets, or nothing happens. Create them by hand so neither sits in shell
+history, the same way `doug-anthropic-key` is handled:
+
+```
+gcloud secrets create doug-langfuse-public-key --data-file=/path/to/pk --project doug-prod0
+gcloud secrets create doug-langfuse-secret-key --data-file=/path/to/sk --project doug-prod0
+```
+
+Then re-run `deploy/gcp.sh setup` to bind read access to `doug-api-sa`, and
+deploy. The deploy prints which state it chose:
+
+```
+tracing: ON — reads will send prompts and responses to https://us.cloud.langfuse.com
+```
+
+If it prints `tracing: off`, one of the two secrets is missing or the setup run
+did not bind them. Both halves are required on purpose — a half-created pair
+resolves to off rather than failing the deploy on a `--set-secrets` entry that
+names a secret which does not exist.
+
+### Turn it off
+
+To stop tracing immediately, without a deploy:
+
+```
+gcloud run services update doug-api --project doug-prod0 --region us-central1 \
+  --update-env-vars DOUG_TRACING=0
+```
+
+That survives until the next deploy, which rebuilds the whole env block. To
+stop it for good, delete the two secrets; the next deploy then binds neither
+and adds no flag.
+
+### Where the data lands
+
+`https://us.cloud.langfuse.com`, staged as `LANGFUSE_HOST` in
+`.github/workflows/deploy.yml`. US rather than EU for the same reason
+`VERTEX_REGION: us` is: `doug-api`, its ledger and its evidence bucket are
+already in `us-central1`, and tracing should not be what introduces a second
+jurisdiction. `https://cloud.langfuse.com` is the EU host.
+
+### When a trace is missing
+
+Tracing fails soft everywhere, and every failure prints one `doug: tracing …`
+line to stderr. A read never fails because tracing did, so an empty dashboard
+is not an incident and must not be treated as one. Check in this order:
+
+1. `doug: tracing client construction failed` — the keys are wrong, or
+   Langfuse is unreachable from the service.
+2. No `doug: tracing` line and no spans — `DOUG_TRACING` is not `1`, or one of
+   the two keys is unset. `tracing.enabled()` requires all three.
+3. Spans for some passes only — expected on a review that took the
+   deterministic tier, or where grounding and attribution did not run.
+4. Spans that never arrive from a burst — the flush happens at the end of
+   `worker.drain`, not per read. A job that is still draining has not shipped
+   its spans yet.
+
 ## Hosted Example Pack cohort
 
 This lane reuses the IAM-gated `doug-console` and the existing review worker. It

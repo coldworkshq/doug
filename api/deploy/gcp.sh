@@ -88,6 +88,17 @@ FEDERATION_RULE_ID=${FEDERATION_RULE_ID:-fdrl_01C9roE2McZ4TRyAVyrBQ6oP}
 FEDERATION_ORG_ID=${FEDERATION_ORG_ID:-2f3e6be2-8390-4f32-a0bc-f2544ac86641}
 FEDERATION_SERVICE_ACCOUNT_ID=${FEDERATION_SERVICE_ACCOUNT_ID:-svac_01AsuQr8exnkCC8Tqv9KxQca}
 FEDERATION_WORKSPACE_ID=${FEDERATION_WORKSPACE_ID:-wrkspc_01AS2iPQV3Z6Z4ie76pn5YuW}
+# ADR-0031. Which Langfuse Cloud region receives traces. Defaulted to the US
+# host because the api service, its ledger and its evidence bucket are already
+# in us-central1: sending traces to the EU host would put tenant source code
+# under a jurisdiction nothing else in this deployment uses, which is a bigger
+# decision than a default should make. Set LANGFUSE_HOST to
+# https://cloud.langfuse.com to use the EU host instead.
+#
+# Tracing itself is NOT enabled by this variable. It turns on only when both
+# Langfuse secrets exist — see langfuse_configured below — so a deployment that
+# has never created them traces nothing and needs no flag to say so.
+LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}
 INSTANCE=doug-ledger
 SERVICE=doug-api
 WEB_SERVICE=doug-web
@@ -213,7 +224,8 @@ setup() {
   for s in doug-database-url doug-api-token doug-anthropic-key \
            doug-webhook-secret doug-github-app-key doug-token-pepper \
            doug-workos-api-key doug-workos-client-id \
-           doug-install-flow-secret; do
+           doug-install-flow-secret \
+           doug-langfuse-public-key doug-langfuse-secret-key; do
     if ! gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1; then
       echo "WARN: secret $s does not exist yet — create it and re-run setup to bind access." >&2
       continue
@@ -299,6 +311,13 @@ setup() {
 
   # ANTHROPIC key: create manually so it never sits in shell history:
   #   gcloud secrets create doug-anthropic-key --data-file=/path/to/keyfile
+  #
+  # LANGFUSE keys, same reasoning, and creating them is what turns tracing on:
+  #   gcloud secrets create doug-langfuse-public-key --data-file=/path/to/pk
+  #   gcloud secrets create doug-langfuse-secret-key --data-file=/path/to/sk
+  # Then re-run setup to bind access, and deploy. To turn tracing off without
+  # a deploy, set DOUG_TRACING=0 on the running service; to turn it off for
+  # good, delete the secrets so the next deploy stops binding them.
   echo "setup done (check SQL instance state before first deploy)"
 }
 
@@ -564,6 +583,23 @@ service_exists() {
   gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1
 }
 
+# Are both Langfuse secrets present? ADR-0031.
+#
+# Presence of the secrets IS the switch, deliberately, rather than a
+# TRACING=1 variable somebody has to remember alongside them. A flag and a
+# credential that can disagree gives two ways to be half-configured: a flag
+# with no keys deploys a service that constructs a client and fails every
+# export quietly, and keys with no flag looks configured and traces nothing.
+# One fact, checked in one place, cannot disagree with itself.
+#
+# Both, never either — the same all-of rule tracing.enabled() applies, for the
+# same reason. --set-secrets would fail the deploy on a missing secret, so a
+# half-created pair must resolve to off here rather than at deploy time.
+langfuse_configured() {
+  gcloud secrets describe doug-langfuse-public-key --project "$PROJECT" >/dev/null 2>&1 \
+    && gcloud secrets describe doug-langfuse-secret-key --project "$PROJECT" >/dev/null 2>&1
+}
+
 # Return only the purpose-scoped binding needed to keep stored cohorts readable
 # across an ordinary deployment. Capture admission settings are intentionally
 # excluded, so a normal deploy always closes writes while preserving review.
@@ -803,6 +839,14 @@ deploy() {
     vertex_preflight || exit 1
   fi
   local traffic_flags="" prereg_hash example_pack_env="" example_pack_secret=""
+  local langfuse_env="" langfuse_secret=""
+  if langfuse_configured; then
+    langfuse_env="DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST"
+    langfuse_secret="LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest,LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest"
+    echo "tracing: ON — reads will send prompts and responses to $LANGFUSE_HOST"
+  else
+    echo "tracing: off (doug-langfuse-public-key / doug-langfuse-secret-key not both present)"
+  fi
   if service_exists "$SERVICE"; then
     traffic_flags="--no-traffic --tag candidate"
     example_pack_env=$(existing_example_pack_binding "$SERVICE" read)
@@ -912,8 +956,8 @@ deploy() {
     --allow-unauthenticated \
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
-    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$web_base,DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}" \
+    --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}${langfuse_secret:+,$langfuse_secret}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$web_base,DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}${langfuse_env:+,$langfuse_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

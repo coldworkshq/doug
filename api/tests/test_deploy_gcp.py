@@ -900,6 +900,14 @@ fi
 if [ "$1 $2 $3" = "scheduler jobs describe" ]; then
   exit 1
 fi
+# ADR-0031. Absent unless a test opts in, matching production: creating these
+# two secrets is what turns tracing on, so the default posture of this fake
+# must be the default posture of the deployment.
+if [ "$1 $2" = "secrets describe" ] \
+    && { [ "$3" = "doug-langfuse-public-key" ] || [ "$3" = "doug-langfuse-secret-key" ]; }; then
+  [ "${GCLOUD_LANGFUSE:-}" = "1" ] || exit 1
+  exit 0
+fi
 if [ "$1 $2 $3" = "iam service-accounts describe" ] \
     && [ "$4" = "${GCLOUD_TRANSIENT_SA:-}" ] \
     && [ ! -f "$GCLOUD_STATE" ]; then
@@ -1762,3 +1770,120 @@ def test_the_preflight_probes_the_host_the_sdk_will_call(tmp_path, location, hos
     assert probes, "the preflight did not run"
     for line in probes:
         assert f"https://{host}/v1/projects/doug-prod0/locations/{location}/" in line, line
+
+
+def test_the_api_deploy_pairs_the_tracing_flag_with_both_langfuse_secrets():
+    """DOUG_TRACING and the two keys ride together or not at all. ADR-0031.
+
+    They are computed in one `if` and appended as one pair, so there is no
+    ordering of edits that ships the flag without the credentials. That
+    combination is the quiet failure: tracing.enabled() reads False, the
+    service looks configured to anyone reading the env block, and nothing
+    traces — the same shape as the stale-binding and unsafe-default defects
+    this file already guards.
+
+    Asserted on the deploy body rather than on the helper, because the helper
+    being correct is not the property that matters; what reaches
+    `gcloud run deploy` is.
+    """
+    body = _function_body("deploy")
+    assert "DOUG_TRACING=1,LANGFUSE_HOST=$LANGFUSE_HOST" in body
+    assert "LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest" in body
+    assert "LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest" in body
+    assert "${langfuse_env:+,$langfuse_env}" in body
+    assert "${langfuse_secret:+,$langfuse_secret}" in body
+
+
+def test_tracing_stays_off_until_both_langfuse_secrets_exist():
+    """One key present is off, not half on.
+
+    --set-secrets fails the whole deploy on a secret that does not exist, so a
+    half-created pair must resolve to off in the guard rather than at deploy
+    time: otherwise creating one key of two takes production down on the next
+    merge, and the cause would read as an unrelated deploy failure.
+    """
+    body = _function_body("langfuse_configured")
+    assert "doug-langfuse-public-key" in body
+    assert "doug-langfuse-secret-key" in body
+    assert "&&" in body, (
+        "langfuse_configured accepts one secret of two, so a half-created "
+        "pair would set --set-secrets to a secret that does not exist"
+    )
+
+
+def test_the_langfuse_host_is_defaulted_and_overridable():
+    """Never blank, and never hardcoded at the call site.
+
+    A blank host sends traces to the SDK's own default rather than to the
+    region this deployment chose, which is a data-residency change made by
+    omission. ADR-0031 records why the default is the US host.
+    """
+    assert (
+        "LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}"
+        in GCP_PATH.read_text()
+    )
+
+
+def test_a_deploy_without_the_langfuse_secrets_carries_no_tracing(tmp_path):
+    """The default posture, and the one production is in today.
+
+    Off must mean nothing added — not DOUG_TRACING=0, not a host, not a
+    mount. A --set-secrets entry naming a secret that does not exist fails the
+    whole deploy, so "off" and "absent" have to be the same state here or the
+    first deployment without keys takes the service down.
+    """
+    lines = _run_gcp(tmp_path, "deploy")
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    assert "DOUG_TRACING" not in api_deploy
+    assert "LANGFUSE" not in api_deploy
+
+
+def test_creating_both_langfuse_secrets_is_what_turns_tracing_on(tmp_path):
+    """Present keys mean the flag, the host and both mounts, in one step.
+
+    Pinned as an exact pair rather than as two independent assertions because
+    the failure worth preventing is the half-configured one: a flag with no
+    credentials reads False in tracing.enabled(), so the service looks
+    configured in its env block and traces nothing.
+    """
+    lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "1"})
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    secrets = api_deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
+    env = api_deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
+    assert secrets.endswith(
+        ",LANGFUSE_PUBLIC_KEY=doug-langfuse-public-key:latest"
+        ",LANGFUSE_SECRET_KEY=doug-langfuse-secret-key:latest"
+    )
+    assert env.endswith(",DOUG_TRACING=1,LANGFUSE_HOST=https://us.cloud.langfuse.com")
+
+
+def test_setup_binds_no_langfuse_secret_before_the_keys_exist(tmp_path):
+    """The loop skips with a WARN while a secret is missing, and must.
+
+    Binding a secret that does not exist fails setup, and setup is the
+    privileged path an operator runs by hand — a spurious failure there is
+    read as "the bootstrap is broken", not as "tracing is not set up".
+    """
+    lines = _run_gcp(tmp_path, "setup")
+    assert not [ln for ln in lines if "doug-langfuse" in ln and "add-iam-policy" in ln]
+
+
+def test_setup_binds_both_langfuse_secrets_once_the_keys_exist(tmp_path):
+    """A mount without a binding fails at container start, not at deploy.
+
+    The deploy mounts these two the moment they exist, so the accessor grant
+    has to exist by then. Without it the failure lands on the revision that
+    was about to take traffic, as a container that will not start.
+    """
+    lines = _run_gcp(tmp_path, "setup", extra_env={"GCLOUD_LANGFUSE": "1"})
+    bound = [
+        ln
+        for ln in lines
+        if ln.startswith("secrets add-iam-policy-binding doug-langfuse")
+        and "doug-api-sa@doug-prod0.iam.gserviceaccount.com" in ln
+    ]
+    assert len(bound) == 2

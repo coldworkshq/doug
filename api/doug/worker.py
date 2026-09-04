@@ -34,6 +34,7 @@ from . import (
     reader,
     review,
     store,
+    tracing,
 )
 from .example_pack import CaptureScopeV0, NameVersionV0, PackScopeV0
 from .models import Band, Reason, Verdict, is_bot_author
@@ -878,7 +879,19 @@ def drain(max_jobs: int = 20) -> int:
         seen.add(job["id"])
         attempted += 1
         try:
-            process_job(job)
+            # The trace root. Wrapped here rather than inside process_job so
+            # that the span opens after the job is claimed and closes when the
+            # attempt is over either way — the claim is what makes this pass
+            # the owner of these model calls, and a span opened before it
+            # would attribute another worker's reads to this one.
+            with tracing.job(
+                job_id=job["id"],
+                installation_id=job["installation_id"],
+                repo_full_name=job["repo_full_name"],
+                pr_number=job["pr_number"],
+                head_sha=job["head_sha"],
+            ):
+                process_job(job)
         except Exception as e:  # noqa: BLE001 — ingest.fail decides retry vs give up
             print(
                 f"doug: job {job['id']} failed ({type(e).__name__}: {e})",
@@ -901,6 +914,10 @@ def drain(max_jobs: int = 20) -> int:
             f"doug: comment retry sweep failed ({type(e).__name__}: {e})",
             file=sys.stderr,
         )
+    # Last, and after the sweep, because everything above can add spans. This
+    # is the only flush in the request path: see tracing.flush for why a
+    # per-read flush would be the wrong trade on Cloud Run.
+    tracing.flush()
     return attempted
 
 

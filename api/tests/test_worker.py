@@ -782,6 +782,62 @@ def test_drain_runs_the_queue_and_marks_each_job_done(tmp_path, monkeypatch):
     assert sorted(p["head_sha"] for p in posted) == ["a" * 40, "b" * 40]
 
 
+def test_a_drain_flushes_traces_once_for_the_whole_pass(tmp_path, monkeypatch):
+    """One flush per pass, never one per job. ADR-0031.
+
+    Flushing is the only blocking thing tracing does, and against an
+    unreachable Langfuse it costs single-digit seconds — measured at roughly
+    four seconds for one span and ten for a job's worth, bounded by the OTel
+    exporter's own retry budget rather than by anything configurable here.
+    Paid once at the end of a pass that already ran up to twenty jobs, that is
+    noise. Paid per job it would be twenty times that, on a background task
+    holding a Cloud Run instance, every drain for the length of a vendor
+    outage — which is how a viewing surface comes to cost throughput.
+    """
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    flushes: list[int] = []
+    monkeypatch.setattr(worker.tracing, "flush", lambda: flushes.append(1))
+
+    ingest.enqueue(**JOB)
+    ingest.enqueue(**{**JOB, "pr_number": 8, "head_sha": "b" * 40})
+    assert worker.drain() == 2
+
+    assert flushes == [1]
+
+
+def test_a_traced_job_is_wrapped_before_it_runs_and_survives_a_tracing_fault(
+    tmp_path, monkeypatch
+):
+    """The scope wraps process_job, and a broken scope still reviews the PR.
+
+    tracing.job yields on every path by construction, but the property that
+    matters is this one: a Langfuse fault must leave the queue working exactly
+    as it did before. If the scope could swallow its body, the job would be
+    claimed, marked done, and never read — with a green drain and no line
+    anywhere saying a review did not happen.
+    """
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+    seen: list[int] = []
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _broken_scope(**kwargs):
+        seen.append(kwargs["pr_number"])
+        yield  # what tracing.job does after it gives up on Langfuse
+
+    monkeypatch.setattr(worker.tracing, "job", _broken_scope)
+
+    ingest.enqueue(**JOB)
+    assert worker.drain() == 1
+
+    assert seen == [7]
+    assert {r["status"] for r in _rows(url, store.review_jobs)} == {"done"}
+    assert [p["head_sha"] for p in posted] == ["a" * 40]
+
+
 def test_a_failing_job_does_not_strand_the_queue(tmp_path, monkeypatch):
     """A poison job — a deleted PR, a revoked token — is claimed before
     every PR opened after it. If its exception escaped the loop, one bad
