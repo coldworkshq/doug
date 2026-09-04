@@ -1,7 +1,7 @@
 # HANDOFF — doug
 
 State:    review — PR for the Vertex reversal open off main 6af8d60, branch
-          `vertex-decision-reversed`. api 1844 pass, ruff clean. #290
+          `vertex-decision-reversed`. api 1845 pass, ruff clean. #290
           (Langfuse tracing) MERGED as 6af8d60, and main carries the whole
           branch — tracing.py, conftest.py, the Makefile env wiring and the
           rewritten .env.example are all on main, so the squash did NOT drop
@@ -37,6 +37,17 @@ Decisions this session (2026-09-03):
   `instrument_id`, which example_pack_eval partitions the corpus by. It stays
   `"anthropic"` on this path, so no stored pack's hash moves. That constraint
   is written into #291 as something to verify.
+
+- Doug read #293 through the new tracing path (first real end-to-end use of
+  ADR-0031) and raised three findings; all three dispositioned in
+  docs/findings-log.jsonl. `reader:redundant-config-drift` was real and
+  changed the code: READER_TRANSPORT is stated in two files, which is right,
+  but each was pinned against the literal `anthropic` by its own test, so
+  changing one file and its own test left the other silently disagreeing.
+  Now a derived agreement pin (the two sources must match, whatever the value)
+  plus a separate decision pin (the value is `anthropic`). Mutation-checked
+  both drift directions and the both-flipped case, where agreement correctly
+  holds and only the decision pin goes red.
 
 Pointers: docs/decisions/ADR-0032 · ADR-0028/0029 frontmatter · ADR-0030
           banner · api/deploy/gcp.sh READER_TRANSPORT · deploy.yml ·
