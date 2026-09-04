@@ -2740,6 +2740,21 @@ def _select_governing_verdict(
     # to the document is literal rather than argued. It is also what makes the
     # narrowing safe to remove if the publication query ever wants this
     # expression over the whole population.
+    #
+    # DEFERRED, DELIBERATELY (#250, ruling owed by #218): installation_id
+    # stays in this partition even though a repository transfer moves a repo
+    # between installations while github_repo_id does not. Widening it here
+    # changes a PUBLISHED quantity — §2.2 is LOCKED v8 — so it moves only as
+    # part of carrying out #218's ruling with the pre-registration amended in
+    # the same change, never as a convenience for a read path.
+    #
+    # What that costs today: a PR whose reader verdicts straddle its repo's
+    # transfer falls into two partitions, so §2.2 designates one governing
+    # verdict per installation for it while `receipt`'s
+    # `publication_governing` marks exactly one merge. On such a PR the two
+    # can disagree. Every PR that lived entirely under one installation — all
+    # 121 restored by #251 — is unaffected, which is why `receipt` could be
+    # fixed without waiting for the ruling.
     ranked = (
         select(
             verdicts,
@@ -2791,8 +2806,27 @@ def _obj_or_none(value: str | None) -> object | None:
     return json.loads(value) if value is not None else None
 
 
-def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict | None:
+def receipt(
+    installation_id: int | None,
+    github_repo_id: int,
+    pr_number: int,
+    *,
+    installation_ids: frozenset[int] | None = None,
+) -> dict | None:
     """Everything one PR's receipt states, assembled from the ledger.
+
+    `installation_ids` is the tenant filter widened to this repository's
+    installation lineage, and it is what lets a receipt survive a repository
+    transfer; see `installation_lineage`. Exactly one of it and
+    `installation_id` may be given, and neither is not an unscoped read — it
+    raises. A receipt is the one document that must never be assembled from
+    rows nobody checked against a caller's scope.
+
+    The pairing `_tenant_ids` requires is `github_repo_id` itself, which this
+    function already takes and every query below already pins. So widening
+    WHOSE rows may be read never widens WHICH repository: a row must be for
+    the repository the caller proved, written by an installation that
+    provably held that repository once.
 
     `merges` is a LIST, not a single record, because `uq_outcome_job`
     includes `merge_commit_sha`: the schema itself permits one PR to carry
@@ -2825,11 +2859,21 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
     mismatch between per-merge and per-PR resolution was found — see this
     task's brief for the history.)
 
+    That window keys on `installation_id`, which this function no longer
+    does. The two agree on every PR that lived entirely under one
+    installation, and can disagree on one whose reader verdicts straddle its
+    repository's transfer, because §2.2 gives such a PR one governing verdict
+    per installation. That gap is #218's ruling to close, not this function's;
+    `_select_governing_verdict`'s PARTITION BY carries the full reasoning.
+
     Returns None only when nothing at all exists for this PR — no verdict
     ever scored and no merge ever recorded — so a caller can tell "genuinely
     nothing happened here" apart from "happened, but Doug had nothing to say"
     (a real receipt with `latest_verdict: null` and/or an empty `merges`).
     """
+    tenants = _tenant_ids(installation_id, installation_ids, frozenset({github_repo_id}))
+    if tenants is None:
+        raise ValueError("receipt requires installation_id or installation_ids")
     engine = _get_engine()
     if engine is None:
         return None
@@ -2848,7 +2892,7 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
             conn.execute(
                 select(verdicts)
                 .where(
-                    verdicts.c.installation_id == installation_id,
+                    verdicts.c.installation_id.in_(tenants),
                     verdicts.c.github_repo_id == github_repo_id,
                     verdicts.c.pr_number == pr_number,
                     # Same exclusion as this query's five siblings, and the
@@ -2874,7 +2918,7 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
             conn.execute(
                 select(outcome_jobs)
                 .where(
-                    outcome_jobs.c.installation_id == installation_id,
+                    outcome_jobs.c.installation_id.in_(tenants),
                     outcome_jobs.c.github_repo_id == github_repo_id,
                     outcome_jobs.c.pr_number == pr_number,
                 )
@@ -2892,7 +2936,7 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
         outcome_rows = (
             conn.execute(
                 select(outcomes).where(
-                    outcomes.c.installation_id == installation_id,
+                    outcomes.c.installation_id.in_(tenants),
                     outcomes.c.github_repo_id == github_repo_id,
                     outcomes.c.pr_number == pr_number,
                 )
@@ -2920,8 +2964,22 @@ def receipt(installation_id: int, github_repo_id: int, pr_number: int) -> dict |
                     # governing_verdict's contract — not the PR-wide answer,
                     # which is why an earlier merge can carry a different
                     # governing_verdict than the one that got published.
+                    #
+                    # The installation is the MERGE ROW'S own, never the
+                    # caller's, and that is what lets this function read
+                    # across a repository transfer without touching a
+                    # published number. §2.2 partitions on installation_id,
+                    # so asking it for one installation at a time is the
+                    # document's own question asked once per merge; handing
+                    # it a lineage would be a different question, which is
+                    # #218's to answer and not this call site's (see
+                    # _select_governing_verdict's PARTITION BY note).
                     "governing_verdict": governing_verdict(
-                        installation_id, github_repo_id, pr_number, job["merged_at"], conn=conn
+                        job["installation_id"],
+                        github_repo_id,
+                        pr_number,
+                        job["merged_at"],
+                        conn=conn,
                     ),
                     "adjudication": [],
                 }

@@ -1391,3 +1391,193 @@ def test_missing_prereg_hash_env_var_renders_as_not_in_force(tmp_path, monkeypat
     _seed_full_pr(url)
     body = _get(OPERATOR).json()
     assert body["preregistration"] == {"hash": None, "in_force": False}
+
+
+# --- A receipt across its repository's transfer (#250) ----------------------
+#
+# A GitHub transfer moves a repository between installations while
+# `github_repo_id` stays put, so rows written before the move keep the old
+# installation forever. #251 widened the SESSION read paths and /v1/queue to
+# a repository's installation lineage and left this route pinned, which meant
+# every run scored before 2026-08-26 answered 404 here — on all three paths
+# into it, the operator's included.
+#
+# The property these pin is the one that makes the fix worth having AND safe:
+# widening WHOSE rows may be read never widens WHICH repository, because the
+# `github_repo_id` every query below already pins IS the pairing
+# `_tenant_ids` demands.
+
+_OLD_INSTALLATION_ID = 150424894
+_NEW_INSTALLATION_ID = 153075663
+_MOVED_REPO_ID = 1314318717
+_OLD_NAME = "drewjst/doug"
+_NEW_NAME = "coldworkshq/doug"
+_PR_BEFORE = 42
+_PR_AFTER = 99
+
+
+def _transferred_repo(tmp_path, monkeypatch) -> str:
+    """One repository, moved, with a merged PR on each side of the move.
+
+    The old registration is left at state='removed' rather than deleted,
+    which is the shape production is actually in (migration 17's note, and
+    #228's already-fired hazard): the junction row is history, and this is
+    the read that history exists for.
+    """
+    url = _http_db(tmp_path, monkeypatch)
+    _seed_full_pr(
+        url,
+        installation_id=_OLD_INSTALLATION_ID,
+        github_repo_id=_MOVED_REPO_ID,
+        full_name=_OLD_NAME,
+        pr_number=_PR_BEFORE,
+        merge_sha=MERGE_SHA,
+        outcome_kind="clean",
+    )
+    store.set_installation_repos(
+        _OLD_INSTALLATION_ID, [(_MOVED_REPO_ID, _OLD_NAME)], replace=False, state="removed"
+    )
+    _seed_full_pr(
+        url,
+        installation_id=_NEW_INSTALLATION_ID,
+        github_repo_id=_MOVED_REPO_ID,
+        full_name=_NEW_NAME,
+        pr_number=_PR_AFTER,
+        merged_at=NOW + timedelta(days=2),
+        merge_sha=SECOND_MERGE_SHA,
+        outcome_kind="clean",
+    )
+    return url
+
+
+def test_a_receipt_survives_its_repositorys_transfer(tmp_path, monkeypatch):
+    """The issue, stated as a test: a PR scored before its repo moved renders
+    the same document as one scored after, under a key on the new
+    installation. Both sides are asserted, because a route that simply served
+    every receipt to everybody would also pass the first assertion."""
+    url = _transferred_repo(tmp_path, monkeypatch)
+    token = _mint_for(url, _NEW_INSTALLATION_ID)
+
+    after = _get(token, pr_number=_PR_AFTER, repo=_NEW_NAME)
+    before = _get(token, pr_number=_PR_BEFORE, repo=_NEW_NAME)
+
+    assert after.status_code == 200
+    assert before.status_code == 200
+    assert before.json()["pr_number"] == _PR_BEFORE
+    assert before.json()["latest_verdict"]["band"] == "flagged"
+    assert before.json()["merges"][0]["merge_commit_sha"] == MERGE_SHA
+    assert before.json()["merges"][0]["adjudication"][0]["kind"] == "clean"
+
+
+def test_the_operator_reads_a_receipt_from_before_the_transfer(tmp_path, monkeypatch):
+    """The operator path pinned the same way and was not named in #250.
+    `repo_id_for` resolves the CURRENT registration, so the operator token —
+    the one credential with no scope at all — could not reach a historical
+    receipt either."""
+    _transferred_repo(tmp_path, monkeypatch)
+    r = _get(OPERATOR, pr_number=_PR_BEFORE, repo=_NEW_NAME)
+    assert r.status_code == 200
+    assert r.json()["merges"][0]["merge_commit_sha"] == MERGE_SHA
+
+
+def test_a_transferred_receipt_still_names_a_governing_verdict(tmp_path, monkeypatch):
+    """The half of the fix that a status code cannot see.
+
+    `receipt` resolves each merge's governing verdict from the MERGE ROW'S own
+    installation, not the caller's. Passing the caller's would leave this
+    field null on every pre-transfer merge — a receipt that renders, states
+    that a merge happened, and quietly claims Doug had said nothing about it,
+    which is worse than the 404 it replaced.
+    """
+    url = _transferred_repo(tmp_path, monkeypatch)
+    token = _mint_for(url, _NEW_INSTALLATION_ID)
+    merge = _get(token, pr_number=_PR_BEFORE, repo=_NEW_NAME).json()["merges"][0]
+    assert merge["governing_verdict"] is not None
+    assert merge["governing_verdict"]["band"] == "flagged"
+    assert merge["publication_governing"] is True
+
+
+def test_the_lineage_widens_installations_but_never_repositories(tmp_path, monkeypatch):
+    """`github_repo_id` is the tenancy boundary, and after this widening it is
+    the ONLY one left inside `receipt`.
+
+    Tested against `store.receipt` directly rather than through the route,
+    deliberately: the route refuses an out-of-scope repo by name before the
+    ledger is touched, so an HTTP test passes whether or not the queries
+    underneath still pin the repository. Dropping any of those three pins
+    would leak a sibling repository's rows into this document and no other
+    test in this file would notice — the sibling's verdict here is the NEWER
+    one, so it would win `latest_verdict` outright.
+
+    Two of the three pins are killed by this test: `verdicts` and
+    `outcome_jobs`. The `outcomes` pin is NOT, and cannot be from out here.
+    `by_outcome` keys on `(merge_commit_sha, window_days)`, so a sibling
+    repository's outcome can only reach the document by colliding with a real
+    merge sha, and which of the two then wins the dict is query order — a
+    test asserting that on sqlite would claim a guarantee Postgres does not
+    give. The pin stays because defence in depth is cheaper than the argument
+    that git makes the collision impossible; it is documented as unguarded
+    rather than guarded by a test that proves nothing.
+    """
+    url = _transferred_repo(tmp_path, monkeypatch)
+    # A second repository on the retired installation: in the lineage's
+    # installations, never in this repository's identity.
+    store.set_installation_repos(
+        _OLD_INSTALLATION_ID, [(_SIBLING_REPO_ID, "drewjst/private")], replace=False
+    )
+    _seed_verdict(
+        url,
+        tier="reader",
+        band="cleared",
+        scored_at=NOW + timedelta(days=30),
+        installation_id=_OLD_INSTALLATION_ID,
+        github_repo_id=_SIBLING_REPO_ID,
+        pr_number=_PR_BEFORE,
+        repo="drewjst/private",
+    )
+    _seed_outcome_job(
+        url,
+        merged_at=NOW + timedelta(days=30),
+        installation_id=_OLD_INSTALLATION_ID,
+        github_repo_id=_SIBLING_REPO_ID,
+        pr_number=_PR_BEFORE,
+        merge_sha="d" * 40,
+    )
+
+    lineage = frozenset({_OLD_INSTALLATION_ID, _NEW_INSTALLATION_ID})
+    doc = store.receipt(None, _MOVED_REPO_ID, _PR_BEFORE, installation_ids=lineage)
+
+    assert doc["latest_verdict"]["band"] == "flagged", "the sibling's verdict leaked in"
+    assert [m["merge_commit_sha"] for m in doc["merges"]] == [MERGE_SHA]
+
+
+def test_an_installation_that_never_held_the_repo_stays_unreadable(tmp_path, monkeypatch):
+    """The other direction: a matching `github_repo_id` is not on its own a
+    licence to read another installation's rows. Only installations that
+    provably registered THIS repository join the lineage, so a stranger's row
+    carrying the same repo id must not surface as a merge on this receipt."""
+    url = _transferred_repo(tmp_path, monkeypatch)
+    _seed_installation(url, _OTHER_INSTALLATION_ID)
+    _seed_outcome_job(
+        url,
+        merged_at=NOW + timedelta(days=5),
+        installation_id=_OTHER_INSTALLATION_ID,
+        github_repo_id=_MOVED_REPO_ID,
+        pr_number=_PR_BEFORE,
+        merge_sha="c" * 40,
+    )
+    token = _mint_for(url, _NEW_INSTALLATION_ID)
+
+    shas = [m["merge_commit_sha"] for m in
+            _get(token, pr_number=_PR_BEFORE, repo=_NEW_NAME).json()["merges"]]
+    assert shas == [MERGE_SHA]
+
+
+def test_a_scopeless_receipt_is_refused_rather_than_widened(tmp_path, monkeypatch):
+    """`_tenant_ids` returns None when neither spelling is given, and for
+    every other read path that means "no tenant filter". A receipt is the one
+    document that must never be assembled from rows nobody checked against a
+    caller's scope, so absence raises here instead of reading everything."""
+    _transferred_repo(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="installation_id or installation_ids"):
+        store.receipt(None, _MOVED_REPO_ID, _PR_BEFORE)
