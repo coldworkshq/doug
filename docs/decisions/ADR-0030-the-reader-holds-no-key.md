@@ -5,6 +5,13 @@ date: 2026-08-30
 amends: ADR-0029
 ---
 
+> **ADR-0029 was superseded by ADR-0032 on 2026-09-03, and THIS record still
+> stands in full.** ADR-0029 chose a transport; this one chooses the
+> CREDENTIAL on the first-party transport, and abandoning the Vertex move
+> makes federation the only way the reader authenticates rather than one of
+> two. Every reference to ADR-0029 below is a reference to history — follow it
+> for the reasoning, not for the destination. See ADR-0032 item 4.
+
 > **This record removes a mount ADR-0029 required, and preserves the property
 > that record was protecting.**
 >

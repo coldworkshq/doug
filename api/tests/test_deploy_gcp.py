@@ -317,11 +317,16 @@ def test_the_anthropic_key_secret_survives_as_the_rollback():
     assert "doug-anthropic-key" in setup
 
 
-def test_the_deployed_transport_defaults_to_vertex():
-    """`READER_TRANSPORT` is a variable so an urgent deploy has a way past the
-    Vertex preflight, not so the destination becomes optional. Unset, a deploy
-    still ships Vertex."""
-    assert 'READER_TRANSPORT=${READER_TRANSPORT:-vertex}' in GCP_PATH.read_text()
+def test_the_deployed_transport_defaults_to_the_first_party_api():
+    """ADR-0032. The default is the destination, not an escape hatch.
+
+    It was `vertex` while that was where the reader was going. A hand-run
+    deploy is what happens during an incident, and under that default it took
+    the Vertex branch and died on the region refusal — failing for a reason
+    with nothing to do with the incident. The workflow's pin did not help,
+    because the workflow is not the caller in that situation.
+    """
+    assert 'READER_TRANSPORT=${READER_TRANSPORT:-anthropic}' in GCP_PATH.read_text()
 
 
 def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
@@ -334,8 +339,14 @@ def test_a_deploy_without_a_vertex_region_is_refused(tmp_path):
     surfaces as a quality regression days later with nothing pointing at the
     deploy. So the deploy refuses instead, and no default is supplied that
     could make the refusal unreachable.
+
+    `READER_TRANSPORT=vertex` is named here rather than inherited. Under
+    ADR-0032 the default is `anthropic`, which skips the region check
+    entirely — so without this the test would pass while asserting nothing.
     """
-    result, lines = _invoke_gcp(tmp_path, "deploy", {"VERTEX_REGION": ""})
+    result, lines = _invoke_gcp(
+        tmp_path, "deploy", {"VERTEX_REGION": "", "READER_TRANSPORT": "vertex"}
+    )
 
     assert result.returncode != 0
     assert "VERTEX_REGION" in result.stderr
@@ -1517,6 +1528,12 @@ def _deploy_with_vertex_code(tmp_path, code: str, extra_env: dict | None = None)
     Only the rawPredict URL is rewritten; every other curl still answers 200 so
     the showcase smoke behaves normally and a refusal here can only come from
     the preflight.
+
+    `READER_TRANSPORT=vertex` is set explicitly. It used to be the script's
+    default, so these tests reached the preflight without naming the transport
+    they exercise; ADR-0032 made `anthropic` the default and they would
+    otherwise all pass by never running the code under test. A test of the
+    Vertex path should say it is testing the Vertex path.
     """
     fake_bin, log = _fake_gcloud(tmp_path)
     curl = fake_bin / "curl"
@@ -1540,6 +1557,7 @@ esac
         "PROJECT": "doug-prod0",
         "REGION": "us-central1",
         "VERTEX_REGION": "us-central1",
+        "READER_TRANSPORT": "vertex",
         **(extra_env or {}),
     }
     result = subprocess.run(
@@ -1709,34 +1727,34 @@ def test_the_workflow_supplies_every_variable_the_deploy_requires():
         )
 
 
-def test_the_workflow_ships_a_transport_the_project_can_actually_reach():
-    """The cutover is one word in deploy.yml, and it must not be flipped ahead
-    of the quota it depends on.
+def test_the_workflow_ships_the_transport_the_decision_settled_on():
+    """ADR-0032 settled this, so the pin is one value rather than either of two.
 
-    Vertex throughput quota for the Claude 5 lineage is zero (#274), so a
-    `vertex` pin here refuses every deploy — including one carrying an
-    unrelated hotfix, which R1 does not allow. This asserts the two halves stay
-    consistent: pinning Vertex requires a location, and the location has to be
-    one Google can actually grant capacity on for this lineage.
+    It used to accept `anthropic` or `vertex`, because the migration was live
+    and the cutover was a word somebody would flip. There is no cutover now:
+    the move to Vertex is abandoned, production never took a Vertex read, and
+    a `vertex` here would put the whole abandoned path back in the deploy —
+    where it would fail on quota that was never granted (#274), taking an
+    unrelated merge down with it.
 
-    That set is NOT the three single regions the first probe found. Google
-    Support (2026-08-29, on #274): Claude 5 quota is shared-lineage and is
-    served on the multi-region and global endpoints only, so `us-central1`
-    can resolve the model and still never be granted. `us` keeps tenant source
-    in the US; `global` is the other value. `eu` also resolves and is excluded
-    here for the same reason europe-west4 was — it moves tenant code to the EU
-    for no reason. Probed 2026-09-02: both `us` and `global` answer 429 on the
-    lineage quota for both models, which is "resolved, no capacity".
+    The region is still checked, and stays in the set Google can actually
+    grant this lineage on. That line is inert under ADR-0032 and is kept only
+    because gcp.sh refuses a Vertex deploy without it; an inert value is still
+    worth keeping honest, since a wrong one would strand exactly the hand-run
+    deploy the variable exists for.
     """
     workflow = DEPLOY_WORKFLOW.read_text()
     deploy_step = workflow.split("bash deploy/gcp.sh deploy", 1)[1]
     transport = re.search(r"READER_TRANSPORT:\s*(\S+)", deploy_step).group(1)
     region = re.search(r"VERTEX_REGION:\s*(\S+)", deploy_step).group(1)
 
-    assert transport in {"anthropic", "vertex"}, transport
+    assert transport == "anthropic", (
+        f"the workflow ships {transport!r}; ADR-0032 abandoned the Vertex move "
+        "and reopening it is a new decision, not a change to this line"
+    )
     assert region in {"us", "global"}, (
         f"{region} is not an endpoint Google grants Claude 5 lineage quota on; "
-        "see #274 and docs/OPERATIONS.md"
+        "see ADR-0032 and docs/OPERATIONS.md"
     )
 
 

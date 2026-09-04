@@ -49,18 +49,20 @@ REGION=${REGION:-us-central1}
 # default would degrade the product silently. Checked at `deploy` only — the
 # other subcommands do not construct a reader.
 VERTEX_REGION=${VERTEX_REGION:-}
-# ADR-0029. Which transport THIS deploy pins on the service. Vertex is the
-# destination, and it is a variable rather than a literal for one reason: the
-# preflight below hard-fails while Vertex quota is zero, which would make an
-# unrelated urgent deploy hostage to a founder-level quota grant. R1 says
-# production Doug wins every conflict, and a hotfix that cannot ship because a
-# transport migration is half-finished is that conflict.
+# ADR-0032. Which transport THIS deploy pins on the service, and the default
+# is the destination rather than a waypoint: the move to Vertex is abandoned
+# and the first-party API is where the reader stays. Matches
+# reader.DEFAULT_TRANSPORT, which has read `anthropic` throughout.
 #
-# `READER_TRANSPORT=anthropic ./deploy/gcp.sh deploy` ships the current
-# transport and skips the Vertex preflight entirely. Doug raised this
-# (`reader:deploy-blocking-precondition`) and it was a fair objection to a gate
-# that had no way out.
-READER_TRANSPORT=${READER_TRANSPORT:-vertex}
+# Defaulted here rather than left to the workflow's pin, because the workflow
+# is one caller. A hand-run deploy is what happens during an incident, and
+# under the old `vertex` default it took the Vertex branch and died on the
+# region refusal — failing for a reason with nothing to do with the incident.
+#
+# `READER_TRANSPORT=vertex ./deploy/gcp.sh deploy` still works and still runs
+# the preflight. Nothing selects it; see ADR-0032 item 2 for why the path is
+# kept rather than deleted in the same change that abandoned it.
+READER_TRANSPORT=${READER_TRANSPORT:-anthropic}
 # Workload Identity Federation. How the api service proves who it is on the
 # FIRST-PARTY transport, replacing the ANTHROPIC_API_KEY mount that used to sit
 # in --set-secrets below. None of these four is a secret — they name resources,

@@ -112,7 +112,10 @@ Read the error against the transport the service is actually on
 (`DOUG_READER_TRANSPORT` on the running revision):
 
 - **anthropic** — a billing error means the console balance hit zero; top it
-  up. The balance is a clock, not a fault (ADR-0029).
+  up. The balance is a clock, not a fault (ADR-0032; the point was first made
+  in ADR-0029, which that record superseded without retiring it). One
+  provider, one balance, and an exhausted one fails every read soft into the
+  deterministic score.
 
   An *authentication* error is a federation failure, not a dead key: under
   ADR-0030 this service holds no key and proves its identity with a
@@ -154,29 +157,34 @@ Read the error against the transport the service is actually on
 The same `(paid read)` stderr lines that sit beside these carry per-read token
 counts; they are the evidence the spend caps in `reader.py` are tuned from.
 
-## Vertex capacity for the reader (Claude 5)
+## Vertex, and why the reader does not use it (history)
 
-Recorded from #274 so nobody re-derives it. Model Garden access and throughput
-quota are separate grants: access makes a model resolve (404 → 429), quota
-makes it serve (429 → 200/400). Access is done for both `claude-opus-5` and
-`claude-sonnet-5`. Quota is not, and the rules for it are different from the
-4-family models. Google Support answered the quota case on 2026-08-29:
+ADR-0032 abandoned the move to Vertex on 2026-09-03. **There is nothing to do
+here.** The reader runs on the first-party Anthropic API, authenticating by
+Workload Identity Federation (ADR-0030), and production never took a Vertex
+read. This section is kept because the findings below cost real time to
+establish and would otherwise be re-derived by whoever next wonders why.
+
+What was learned on #274, recorded so nobody repeats the investigation:
 
 - **Claude 5 quota is per lineage, not per model.** The base-model dimension
   is `anthropic-claude-opus` and `anthropic-claude-sonnet`, unversioned. No
   quota bucket named `anthropic-claude-opus-5` exists or can exist, which is
   why scanning every `aiplatform` metric found none.
 - **Shared-lineage quota is served on the multi-region and global endpoints
-  only.** Single regions such as `us-central1` cannot be granted. The
-  location values that work are `us`, `eu`, and `global`. The service uses
-  `us`, which keeps tenant source in the US. The SDK maps `us` to
+  only.** Single regions such as `us-central1` cannot be granted. The working
+  location values are `us`, `eu`, and `global`. The SDK maps `us` to
   `aiplatform.us.rep.googleapis.com` and `global` to
   `aiplatform.googleapis.com`; `vertex_host` in `deploy/gcp.sh` mirrors that
-  table so the preflight probes the host the service calls.
+  table.
 - **The grant needs a Google account team.** Quota for Anthropic models is
   not issued to projects without an assigned sales representative. The
-  self-service preference path is closed; the sales contact form
-  (https://cloud.google.com/contact) is the route. Founder action under R11.
+  self-service preference path is closed. That open-ended dependency is a
+  large part of why the move was abandoned.
+- **Model Garden access and throughput quota are separate grants.** Access
+  makes a model resolve (404 becomes 429); quota makes it serve (429 becomes
+  200 or 400). Access was granted for both `claude-opus-5` and
+  `claude-sonnet-5`. Quota never was.
 
 Probed 2026-09-02 with an empty body, which fails validation before any
 generation and costs nothing:
@@ -187,12 +195,18 @@ generation and costs nothing:
 | `global` | `aiplatform.googleapis.com` | 429 `global_online_prediction_requests_per_base_model` | 429, same shape |
 | `us-central1` | `us-central1-aiplatform.googleapis.com` | 429 under the versioned name | 429 |
 
-429 on the lineage quota is the "access granted, capacity zero" state. When
-the account team grants capacity, re-run the probe: 400 means quota landed and
-the deploy gate passes. Then set `READER_TRANSPORT: vertex` in
-`.github/workflows/deploy.yml`; `VERTEX_REGION: us` is already staged.
+429 on the lineage quota is the "access granted, capacity zero" state.
 
-To probe by hand:
+### If Vertex is ever reconsidered
+
+Reopening it is a new decision record, not an edit to `deploy.yml`. The code
+path is still present and still tested — `READER_TRANSPORT=vertex
+./deploy/gcp.sh deploy` runs the preflight — but nothing selects it, and
+`test_the_workflow_ships_the_transport_the_decision_settled_on` pins the
+deployed value to `anthropic`. A bar declared against Vertex starts from #268,
+never from ADR-0028's table, which does not reproduce.
+
+To re-probe by hand:
 
 ```
 TOKEN=$(gcloud auth print-access-token --project doug-prod0)
