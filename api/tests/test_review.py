@@ -722,3 +722,196 @@ def test_ordering_is_a_noop_below_the_budget():
     assert cov.complete
     assert cov.files_unseen == []
     assert cov.files_sent == 3
+
+
+# ---------------------------------------------------------------------------
+# #307: settle against the gates that ran green at the reviewed head.
+
+
+def test_score_one_settles_against_a_green_check_at_head(monkeypatch):
+    """The third settlement rides the same seam as the other two: after the
+    read, before verify, with a weight-0 notice and risk_score untouched.
+    Evidence is fetched once, and only because a candidate finding exists."""
+    from doug import ci_evidence as ci
+
+    meta = _pr_with_deterministic_score_0_79()
+    meta = meta.model_copy(update={"head_sha": "a" * 40})
+    finding = reader.ReaderFinding(
+        category_slug="undefined-name",
+        description="`LIMIT` is never defined, so f() raises NameError",
+        file="api/doug/x.py",
+        severity="high",
+    )
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, [finding]))
+    evidence = ci.evidence(
+        [ci.Job("api", (ci.Step("uv run ruff check .", "api"),))],
+        [ci.CheckResult(name="api", conclusion="success", app="github-actions")],
+    )
+    calls: list[int] = []
+
+    def resolve_ci():
+        calls.append(1)
+        return evidence
+
+    files = {"api/doug/x.py": "LIMIT = 3\n\ndef f():\n    return LIMIT\n"}
+    tier, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE,
+        resolve_file=files.get, resolve_ci=resolve_ci,
+    )
+    assert tier == "reader"
+    assert rv.findings == [] and rv.risk_score == 70
+    assert calls == [1]
+    notice = next(r for r in v.reasons if r.rule == "settled-ci-green")
+    assert notice.weight == 0.0
+    assert "api/doug/x.py: undefined-name (['api'])" in notice.label
+    assert not any(r.rule == "reader:undefined-name" for r in v.reasons)
+
+    # No resolve_file: the file at head cannot be read, so nothing is
+    # settled and the evidence is never fetched.
+    calls.clear()
+    _, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_ci=resolve_ci
+    )
+    assert calls == [] and len(rv.findings) == 1
+    assert not any(r.rule == "settled-ci-green" for r in v.reasons)
+
+
+class _CiGH:
+    """get_content for a workflows directory and its files, checks for a
+    ref — every call records the ref it was asked for."""
+
+    def __init__(self, workflows: dict[str, str], check_runs, total_count=None, dir_error=None):
+        import base64
+
+        self.refs: list[str] = []
+        self.paths: list[str] = []
+
+        def get_content(owner, repo, path, ref=None):
+            self.refs.append(ref)
+            self.paths.append(path)
+            if path == ".github/workflows":
+                if dir_error is not None:
+                    raise dir_error
+                return SimpleNamespace(
+                    parsed_data=[
+                        SimpleNamespace(name=n, type="file", path=f".github/workflows/{n}")
+                        for n in workflows
+                    ]
+                    + [SimpleNamespace(name="scripts", type="dir", path="…/scripts")]
+                )
+            name = path.removeprefix(".github/workflows/")
+            if name not in workflows:
+                raise RuntimeError(f"no such file {path}")
+            return SimpleNamespace(
+                parsed_data=SimpleNamespace(
+                    content=base64.b64encode(workflows[name].encode()).decode(),
+                    encoding="base64",
+                )
+            )
+
+        def list_for_ref(owner, repo, ref, per_page):
+            self.refs.append(ref)
+            return SimpleNamespace(
+                parsed_data=SimpleNamespace(
+                    check_runs=check_runs,
+                    total_count=len(check_runs) if total_count is None else total_count,
+                )
+            )
+
+        self.rest = SimpleNamespace(
+            repos=SimpleNamespace(get_content=get_content),
+            checks=SimpleNamespace(list_for_ref=list_for_ref),
+        )
+
+
+def _run(name, conclusion="success", slug="github-actions"):
+    return SimpleNamespace(name=name, conclusion=conclusion, app=SimpleNamespace(slug=slug))
+
+
+CI_YML = """\
+jobs:
+  api:
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - run: uv run ruff check .
+"""
+
+
+def test_head_ci_evidence_reads_workflows_and_check_runs_at_the_reviewed_sha():
+    from doug import ci_evidence as ci
+
+    gh = _CiGH({"ci.yml": CI_YML, "notes.md": "ignored"}, [_run("api")])
+    ev = review.head_ci_evidence(gh, "o", "r", "b" * 40)
+    assert ev.settled_by == {ci.RUFF: ("api",)}
+    assert ev.covers(ci.RUFF, "api/doug/x.py")
+    # Everything was asked for at the reviewed head, never the PR tip.
+    assert set(gh.refs) == {"b" * 40}
+    # Only .yml/.yaml files were fetched; the .md and the subdirectory were not.
+    assert gh.paths == [".github/workflows", ".github/workflows/ci.yml"]
+
+
+def test_head_ci_evidence_is_none_wherever_it_cannot_say_all_green():
+    """No workflows, an unreadable listing, a check-run page it cannot
+    finish reading — each is None, and None settles nothing."""
+    not_found = RuntimeError("404")
+    not_found.response = SimpleNamespace(status_code=404)
+    assert review.head_ci_evidence(_CiGH({}, [], dir_error=not_found), "o", "r", "b" * 40) is None
+    assert review.head_ci_evidence(_CiGH({}, []), "o", "r", "b" * 40) is None
+    assert review.head_ci_evidence(
+        _CiGH({"ci.yml": CI_YML}, [_run("api")], total_count=101), "o", "r", "b" * 40
+    ) is None
+    # A red run reads fine; it is the evidence that says not-green.
+    ev = review.head_ci_evidence(
+        _CiGH({"ci.yml": CI_YML}, [_run("api", conclusion="failure")]), "o", "r", "b" * 40
+    )
+    assert ev is not None and ev.settled_by == {}
+
+
+def test_a_ci_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, capsys):
+    """Doug's second read of #314 (`reader:unhandled-exception-in-optional-path`):
+    a parser over tenant YAML and a config walk over tenant TOML must never
+    fail a review. The read stands, the finding publishes, stderr says why."""
+    meta = _pr_with_deterministic_score_0_79().model_copy(update={"head_sha": "a" * 40})
+    finding = reader.ReaderFinding(
+        category_slug="undefined-name",
+        description="`LIMIT` is never defined, so f() raises NameError",
+        file="api/doug/x.py",
+        severity="high",
+    )
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, [finding]))
+
+    def resolve_ci():
+        raise TypeError("odd nesting")
+
+    tier, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE,
+        resolve_file={"api/doug/x.py": "LIMIT = 3\n"}.get, resolve_ci=resolve_ci,
+    )
+    assert tier == "reader" and len(rv.findings) == 1
+    assert any(r.rule == "reader:undefined-name" for r in v.reasons)
+    assert not any(r.rule == "settled-ci-green" for r in v.reasons)
+    assert "ci settlement skipped (TypeError: odd nesting)" in capsys.readouterr().err
+
+
+def test_head_file_text_missing_ok_silences_only_a_404(capsys):
+    def _raise(status):
+        e = RuntimeError("nope")
+        e.response = SimpleNamespace(status_code=status)
+        raise e
+
+    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
+        get_content=lambda **kw: _raise(404)
+    )))
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
+    assert capsys.readouterr().err == ""
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml") is None
+    assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err
+    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
+        get_content=lambda **kw: _raise(403)
+    )))
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
+    assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err

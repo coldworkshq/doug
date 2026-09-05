@@ -175,6 +175,7 @@ def test_flagged_with_only_settlement_notices_does_not_read_as_a_remaining_defec
     assert SETTLED_REASON_CODES == {
         "settled-missing-import",
         "settled-schema-dependency",
+        "settled-ci-green",
     }
     for rule in sorted(SETTLED_REASON_CODES):
         settled = FLAGGED.model_copy(

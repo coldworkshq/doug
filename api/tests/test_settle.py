@@ -366,3 +366,236 @@ def test_score_one_applies_settlement_and_keeps_score(monkeypatch):
     assert verdict.band is Band.FLAGGED
     assert any(r.rule == "settled-missing-import" for r in verdict.reasons)
     assert all(r.rule != "reader:missing-import" for r in verdict.reasons)
+
+
+# ---------------------------------------------------------------------------
+# Third class (#307): the falsifier had already run.
+
+from doug import ci_evidence as ci  # noqa: E402
+from doug.ci_evidence import CheckResult, Job, Step  # noqa: E402
+
+
+def _ci(*jobs, red=()):
+    """Evidence from jobs whose check runs all concluded success, except `red`."""
+    checks = [
+        CheckResult(
+            name=j.check_name,
+            conclusion="failure" if j.check_name in red else "success",
+            app="github-actions",
+        )
+        for j in jobs
+    ]
+    return ci.evidence(list(jobs), checks)
+
+
+RUFF_AT_ROOT = Job("lint", (Step("uv run ruff check .", ""),))
+RUFF_IN_API = Job("api", (Step("uv run ruff check .", "api"),))
+WEB_LINT = Job("web-lint", (Step("npm run lint --workspace=web", ""),))
+WEB_BUILD = Job("web-build", (Step("npm run build --workspace=web", ""),))
+
+BOUND_BY_ASSIGNMENT = "LIMIT = 3\n\ndef f():\n    return LIMIT\n"
+
+
+def _undef(name="LIMIT", file="api/doug/x.py", slug="undefined-name", desc=None):
+    return ReaderFinding(
+        category_slug=slug,
+        description=desc or f"`{name}` is referenced but never defined, so f() raises NameError",
+        file=file,
+        severity="high",
+    )
+
+
+def _build_break(file="web/app/page.tsx"):
+    return ReaderFinding(
+        category_slug="unused-import-build-break",
+        description="`signOutAction` is imported but no longer used, so the build fails",
+        file=file,
+        severity="medium",
+    )
+
+
+def _settle_ci(findings, evidence, files):
+    rv = ReaderVerdict(risk_score=40, rationale="x", findings=list(findings))
+    calls = []
+
+    def resolve_ci():
+        calls.append(1)
+        return evidence
+
+    out, dropped = settle.drop_disproved_ci_findings(rv, resolve_ci, files.get)
+    return out.findings, dropped, len(calls)
+
+
+def test_a_green_ruff_run_over_the_file_settles_an_undefined_name_claim():
+    """PR 28 and #232: the NameError the finding predicts is ruff F821, and
+    F821 ran green at head over this very file."""
+    kept, dropped, calls = _settle_ci(
+        [_undef()], _ci(RUFF_IN_API), {"api/doug/x.py": BOUND_BY_ASSIGNMENT}
+    )
+    assert (kept, len(dropped), calls) == ([], 1, 1)
+
+
+def test_a_missing_import_bound_by_assignment_is_the_shape_only_ruff_can_settle():
+    """The import settlement keeps this one (LIMIT is not imported); ruff
+    green settles it (LIMIT is bound, and ruff checked)."""
+    f = _undef(slug="missing-import", desc="uses `LIMIT` with no import of it")
+    assert settle.settle_many([f], lambda p: BOUND_BY_ASSIGNMENT) == [f]
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_IN_API), {"api/doug/x.py": BOUND_BY_ASSIGNMENT})
+    assert (kept, len(dropped)) == ([], 1)
+
+
+def test_ruff_that_did_not_run_over_the_file_settles_nothing():
+    """ruff ran in api/; scripts/ was never checked. Same evidence, no reach."""
+    f = _undef(file="scripts/probe.py")
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_IN_API), {"scripts/probe.py": BOUND_BY_ASSIGNMENT})
+    assert (kept, dropped) == ([f], [])
+    # At the root it reaches everything.
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_AT_ROOT), {"scripts/probe.py": BOUND_BY_ASSIGNMENT})
+    assert (kept, len(dropped)) == ([], 1)
+
+
+def test_a_red_or_absent_ruff_keeps_the_finding():
+    f = _undef()
+    files = {"api/doug/x.py": BOUND_BY_ASSIGNMENT}
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_IN_API, red={"api"}), files)
+    assert (kept, dropped) == ([f], [])
+    kept, dropped, _ = _settle_ci([f], _ci(WEB_BUILD), files)
+    assert (kept, dropped) == ([f], [])
+    kept, dropped, calls = _settle_ci([f], None, files)
+    assert (kept, dropped, calls) == ([f], [], 1)
+
+
+def test_the_ruff_boundary_table_is_a_veto_each():
+    """REVIEWING.md: TYPE_CHECKING-only binding, a silenced line, and
+    use-before-assignment are where ruff stops — so green ruff says nothing."""
+    ev = _ci(RUFF_IN_API)
+    type_checking = (
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    LIMIT = 3\n"
+        "def f():\n    return LIMIT\n"
+    )
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": type_checking})
+    assert (len(kept), dropped) == (1, [])
+    silenced = "def f():\n    return LIMIT  # noqa\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": silenced})
+    assert (len(kept), dropped) == (1, [])
+    silenced = "def f():\n    return LIMIT  # noqa: F821\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": silenced})
+    assert (len(kept), dropped) == (1, [])
+    # An unrelated noqa on another rule is not a veto.
+    other = "LIMIT = 3\ndef f():\n    return LIMIT  # noqa: E501\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": other})
+    assert (kept, len(dropped)) == ([], 1)
+    before = _undef(desc="`LIMIT` is read before it is assigned on the retry path")
+    kept, dropped, _ = _settle_ci([before], ev, {"api/doug/x.py": BOUND_BY_ASSIGNMENT})
+    assert (len(kept), dropped) == (1, [])
+
+
+def test_a_name_the_file_never_reads_cannot_be_followed():
+    """A claim about `LIMIT` in a file that never loads `LIMIT` is a claim we
+    cannot map onto ruff's check, so it stays. And a finding with nothing in
+    backticks claims nothing."""
+    ev = _ci(RUFF_IN_API)
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": "x = 1\n"})
+    assert (len(kept), dropped) == (1, [])
+    bare = _undef(desc="LIMIT is never defined so this raises NameError")
+    kept, dropped, _ = _settle_ci([bare], ev, {"api/doug/x.py": BOUND_BY_ASSIGNMENT})
+    assert (len(kept), dropped) == (1, [])
+    kept, dropped, _ = _settle_ci([_undef()], ev, {})  # unreadable at head
+    assert (len(kept), dropped) == (1, [])
+
+
+def test_f821_must_be_selected_where_the_file_lives():
+    ev = _ci(RUFF_IN_API)
+    files = {
+        "api/doug/x.py": BOUND_BY_ASSIGNMENT,
+        "api/pyproject.toml": '[tool.ruff.lint]\nselect = ["E"]\n',
+    }
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (len(kept), dropped) == (1, [])
+    files["api/pyproject.toml"] = '[tool.ruff.lint]\nselect = ["E", "F"]\n'
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (kept, len(dropped)) == ([], 1)
+
+
+def test_a_build_break_claim_needs_lint_and_build_both_green_over_the_file():
+    """PRs 75 and 198: "unused import breaks the build" when lint and build
+    both passed at head. Either alone is not enough — the claim names one
+    gate loosely, and the settlement must never rest on a gate the repo
+    does not run."""
+    kept, dropped, _ = _settle_ci([_build_break()], _ci(WEB_LINT, WEB_BUILD), {})
+    assert (kept, len(dropped)) == ([], 1)
+    kept, dropped, _ = _settle_ci([_build_break()], _ci(WEB_BUILD), {})
+    assert (len(kept), dropped) == (1, [])
+    kept, dropped, _ = _settle_ci([_build_break()], _ci(WEB_LINT, WEB_BUILD, red={"web-lint"}), {})
+    assert (len(kept), dropped) == (1, [])
+    # console/ has no job of its own: web's green says nothing about it.
+    kept, dropped, _ = _settle_ci(
+        [_build_break(file="console/app/page.tsx")], _ci(WEB_LINT, WEB_BUILD), {}
+    )
+    assert (len(kept), dropped) == (1, [])
+
+
+def test_evidence_is_fetched_once_and_only_when_a_candidate_exists():
+    other = ReaderFinding(
+        category_slug="error-handling-gap", description="x", file="api/doug/x.py", severity="low"
+    )
+    kept, dropped, calls = _settle_ci([other], _ci(RUFF_IN_API), {})
+    assert (len(kept), dropped, calls) == (1, [], 0)
+    files = {"api/doug/x.py": BOUND_BY_ASSIGNMENT}
+    kept, dropped, calls = _settle_ci(
+        [_undef(), _undef(name="LIMIT"), other], _ci(RUFF_IN_API), files
+    )
+    assert (kept, len(dropped), calls) == ([other], 2, 1)
+
+
+def test_ci_notice_names_the_gate_that_answered():
+    ev = _ci(RUFF_IN_API, WEB_LINT, WEB_BUILD)
+    notice = settle.ci_settlement_notice([_undef(), _build_break()], ev)
+    assert notice.rule == "settled-ci-green"
+    assert notice.weight == 0.0
+    assert "api/doug/x.py: undefined-name (['api'])" in notice.label
+    assert "web/app/page.tsx: unused-import-build-break (['web-lint', 'web-build'])" in notice.label
+    assert settle.ci_settlement_notice([], ev) is None
+    assert "(['?'])" in settle.ci_settlement_notice([_undef()], None).label
+
+
+def test_ruffs_remaining_blind_spots_are_vetoes_too():
+    """Doug's reads of #314 (`reader:incorrect-static-analysis-assumption`,
+    `reader:false-settlement`): a star import turns F821 into F405, which
+    is the rule star-importing projects ignore; a `global` is bound for
+    all ruff knows; an ignored file was never checked."""
+    ev = _ci(RUFF_IN_API)
+    star = "from os import *\n\ndef f():\n    return LIMIT\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": star})
+    assert (len(kept), dropped) == (1, [])
+    declared_global = "def f():\n    global LIMIT\n    return LIMIT\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": declared_global})
+    assert (len(kept), dropped) == (1, [])
+    files = {"api/doug/x.py": BOUND_BY_ASSIGNMENT, ".gitignore": "# local\n*.log\napi/doug/x.py\n"}
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (len(kept), dropped) == (1, [])
+    files[".gitignore"] = "*.log\n!api/doug/x.py\nbuild/\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (kept, len(dropped)) == ([], 1)
+
+
+def test_the_claimed_name_is_the_one_written_next_to_the_claim():
+    """Doug's first read of #314 (`reader:name-extraction-imprecision`):
+    "`handler` reads LIMIT, which is undefined" names `handler` in code
+    and LIMIT in prose. Every backticked name being loaded must not settle
+    a claim about a name that was never written as code."""
+    f = _undef(desc="`handler` reads LIMIT on the retry path, and LIMIT is undefined")
+    assert settle.claimed_undefined_names(f) == []
+    src = "LIMIT = 3\ndef handler():\n    return LIMIT\nhandler()\n"
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_IN_API), {"api/doug/x.py": src})
+    assert (len(kept), dropped) == (1, [])
+    # Both orders of claim and name, and only the name next to the claim.
+    assert settle.claimed_undefined_names(
+        _undef(desc="`handler` calls `LIMIT`, which is not defined anywhere")
+    ) == ["LIMIT"]
+    assert settle.claimed_undefined_names(
+        _undef(desc="undefined name `LIMIT` inside `handler`")
+    ) == ["LIMIT"]
+    assert settle.claimed_undefined_names(
+        _undef(desc="raises NameError on `LIMIT` and `RETRIES`, neither defined")
+    ) == ["LIMIT", "RETRIES"]

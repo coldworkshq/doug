@@ -42,7 +42,12 @@ from .models import Band, Reason, Verdict, is_bot_author
 _EXAMPLE_PACK_VERIFIER_VERSIONS = (
     NameVersionV0(name="import-settlement", version="v0"),
     NameVersionV0(name="schema-settlement", version="v0"),
+    NameVersionV0(name="ci-settlement", version="v0"),
 )
+
+
+# Files the CI settlement probes for and usually does not find.
+_PROBED_CONFIG_FILES = ("pyproject.toml", "ruff.toml", ".ruff.toml", ".gitignore")
 
 
 def _tool_version(distribution: str) -> str:
@@ -503,8 +508,26 @@ def process_job(job: dict) -> int | None:
     deep_read = store.repo_deep_read(job["installation_id"], job["github_repo_id"])
     # Settle resolution findings against the reviewed head — not the PR tip
     # pulls.get might now show (we already refused a moved head above).
+    # One fetch per path per job: the settlements and the verify read ask
+    # for the same files, and the CI settlement's ruff-config walk asks for
+    # the same handful of candidates under every finding (Doug's reads of
+    # #314, `reader:excessive-api-calls`). The head is fixed, so a cached
+    # answer is the answer. A missing ruff config is the expected result of
+    # a probe, not a skipped fetch, so those misses are not logged.
+    fetched: dict[str, str | None] = {}
+
     def resolve(path: str) -> str | None:
-        return review.head_file_text(gh, owner, name, job["head_sha"], path)
+        if path not in fetched:
+            fetched[path] = review.head_file_text(
+                gh, owner, name, job["head_sha"], path,
+                missing_ok=path.endswith(_PROBED_CONFIG_FILES),
+            )
+        return fetched[path]
+
+    # Same head, same discipline: the gates that ran on the reviewed SHA,
+    # not whatever has run on the PR since (#307).
+    def resolve_ci():
+        return review.head_ci_evidence(gh, owner, name, job["head_sha"])
 
     pack_context = example_pack_capture.capture_scope_if_enabled(
         lambda: _example_pack_scope(job),
@@ -524,6 +547,7 @@ def process_job(job: dict) -> int | None:
             deep_read=deep_read,
             resolve_file=resolve,
             resolve_schema=store.columns_of,
+            resolve_ci=resolve_ci,
         )
         intent_result = review.read_intent(
             gh, owner, name, meta, diff, scope=scope, deep_read=deep_read

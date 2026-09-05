@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from . import features, intent, intent_providers, reader, settle
+from . import ci_evidence, features, intent, intent_providers, reader, settle
 from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict, is_bot_author
 from .scoring import score
@@ -270,22 +270,32 @@ def fetch_pr(gh, owner: str, repo: str, number: int) -> tuple[PRMetadata, str]:
     return meta, diff
 
 
-def head_file_text(gh, owner: str, repo: str, sha: str, path: str) -> str | None:
+def _is_not_found(e: BaseException) -> bool:
+    response = getattr(e, "response", None)
+    return getattr(response, "status_code", None) == 404
+
+
+def head_file_text(
+    gh, owner: str, repo: str, sha: str, path: str, *, missing_ok: bool = False
+) -> str | None:
     """File body at `sha`, or None when GitHub will not give us text.
 
     Used only to settle resolution findings against the repo (see settle.py).
     A missing/binary/unreadable file must not invent a settlement — returning
-    None keeps the finding.
+    None keeps the finding. `missing_ok` silences the log line for a plain
+    404: the CI settlement probes for ruff configuration files that mostly
+    do not exist, and each miss is the expected answer, not a skipped fetch.
     """
     try:
         content = gh.rest.repos.get_content(
             owner=owner, repo=repo, path=path, ref=sha
         ).parsed_data
     except Exception as e:  # noqa: BLE001 — settlement is advisory
-        print(
-            f"doug: settle fetch skipped for {path} ({type(e).__name__}: {e})",
-            file=sys.stderr,
-        )
+        if not (missing_ok and _is_not_found(e)):
+            print(
+                f"doug: settle fetch skipped for {path} ({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
         return None
     # githubkit returns a list for directories; those are not settle targets.
     if isinstance(content, list):
@@ -300,6 +310,67 @@ def head_file_text(gh, owner: str, repo: str, sha: str, path: str) -> str | None
         return None
 
 
+# One page of check runs. A head with more than this many is not read at
+# all rather than read partially: the check that failed could be the one
+# past the page, and "all green" must mean all.
+_CHECK_RUNS_PAGE = 100
+
+
+def head_ci_evidence(gh, owner: str, repo: str, sha: str) -> ci_evidence.CiEvidence | None:
+    """Which gates ran green at `sha`, or None when that cannot be said.
+
+    Reads `.github/workflows/*.yml` at the reviewed head and the check runs
+    at that same SHA (see ci_evidence.py). Every failure to read is None —
+    the settlement it feeds is advisory, and None settles nothing.
+    """
+    try:
+        listing = gh.rest.repos.get_content(
+            owner=owner, repo=repo, path=".github/workflows", ref=sha
+        ).parsed_data
+    except Exception as e:  # noqa: BLE001 — settlement is advisory
+        if not _is_not_found(e):
+            print(
+                f"doug: ci evidence skipped, workflows unread ({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+        return None
+    if not isinstance(listing, list):
+        return None
+    jobs: list[ci_evidence.Job] = []
+    for entry in listing:
+        name = getattr(entry, "name", "") or ""
+        if getattr(entry, "type", "") != "file" or not name.endswith((".yml", ".yaml")):
+            continue
+        path = getattr(entry, "path", None) or f".github/workflows/{name}"
+        text = head_file_text(gh, owner, repo, sha, path)
+        if text is not None:
+            jobs.extend(ci_evidence.parse_workflow(text))
+    if not jobs:
+        return None
+    try:
+        page = gh.rest.checks.list_for_ref(
+            owner=owner, repo=repo, ref=sha, per_page=_CHECK_RUNS_PAGE
+        ).parsed_data
+    except Exception as e:  # noqa: BLE001 — settlement is advisory
+        print(
+            f"doug: ci evidence skipped, check runs unread ({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+        return None
+    runs = list(getattr(page, "check_runs", None) or [])
+    if (getattr(page, "total_count", 0) or 0) > len(runs):
+        return None
+    checks = [
+        ci_evidence.CheckResult(
+            name=getattr(r, "name", "") or "",
+            conclusion=getattr(r, "conclusion", None),
+            app=getattr(getattr(r, "app", None), "slug", None),
+        )
+        for r in runs
+    ]
+    return ci_evidence.evidence(jobs, checks)
+
+
 def score_one(
     meta: PRMetadata,
     diff: str,
@@ -309,6 +380,7 @@ def score_one(
     deep_read: bool = True,
     resolve_file: settle.ResolveFile | None = None,
     resolve_schema: settle.ResolveSchema | None = None,
+    resolve_ci: settle.ResolveCI | None = None,
 ):
     """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
 
@@ -350,6 +422,11 @@ def score_one(
     disproved, see settle.py's module docstring). Independent of head_sha:
     schema is schema, not tied to a git commit, so this settles even when
     `resolve_file` is None.
+
+    `resolve_ci`, when given with `resolve_file`, settles findings that
+    predict a failure a green check at the reviewed head already rules out
+    (#307, settle.py's third class). Called lazily, at most once, and only
+    when a finding of that class is present.
     """
     reader_line = None if threshold is None else round(threshold * 100)
     if reader.enabled() and not deep_read:
@@ -398,6 +475,37 @@ def score_one(
                         f"finding(s) against the live schema ({rules})",
                         file=sys.stderr,
                     )
+            ci_dropped: list[reader.ReaderFinding] = []
+            ci_seen: list[ci_evidence.CiEvidence | None] = []
+            if resolve_ci is not None and resolve_file is not None:
+
+                def _resolve_ci_once() -> ci_evidence.CiEvidence | None:
+                    if not ci_seen:
+                        ci_seen.append(resolve_ci())
+                    return ci_seen[0]
+
+                try:
+                    rv, ci_dropped = settle.drop_disproved_ci_findings(
+                        rv, _resolve_ci_once, resolve_file
+                    )
+                except Exception as e:  # noqa: BLE001 — settlement is advisory
+                    # A hand-rolled parser over tenant-authored YAML and a
+                    # config walk over tenant-authored TOML must never be
+                    # able to fail a review (Doug's second read of #314,
+                    # `reader:unhandled-exception-in-optional-path`). The
+                    # read stands as the model returned it.
+                    ci_dropped = []
+                    print(
+                        f"doug: ci settlement skipped ({type(e).__name__}: {e})",
+                        file=sys.stderr,
+                    )
+                if ci_dropped:
+                    rules = ", ".join(f"reader:{d.category_slug}" for d in ci_dropped)
+                    print(
+                        f"doug: settled {len(ci_dropped)} finding(s) against a green "
+                        f"check at head ({rules})",
+                        file=sys.stderr,
+                    )
             # The installation is derived from `scope` rather than passed
             # separately, for the same reason intent.enabled_for does it: who
             # pays and who opted in must be the same party, and two arguments
@@ -425,6 +533,10 @@ def score_one(
                 verdict.reasons.append(settled)
             if schema_settled := settle.schema_settlement_notice(schema_dropped):
                 verdict.reasons.append(schema_settled)
+            if ci_settled := settle.ci_settlement_notice(
+                ci_dropped, ci_seen[0] if ci_seen else None
+            ):
+                verdict.reasons.append(ci_settled)
             cov = reader.coverage(
                 diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
             )

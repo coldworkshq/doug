@@ -39,16 +39,18 @@ import ast
 import re
 from collections.abc import Callable, Iterable
 
+from . import ci_evidence
 from .reader import ReaderFinding, ReaderVerdict
 
 # Weight-0 notices appended when a finding is disproved rather than the
-# author fixing it. The only two producers are settlement_notice and
-# schema_settlement_notice below. check_run.py and convergence.py import
-# this set rather than prefix-matching "settled-".
+# author fixing it. The only three producers are settlement_notice,
+# schema_settlement_notice and ci_settlement_notice below. check_run.py and
+# convergence.py import this set rather than prefix-matching "settled-".
 SETTLED_MISSING_IMPORT = "settled-missing-import"
 SETTLED_SCHEMA_DEPENDENCY = "settled-schema-dependency"
+SETTLED_CI_GREEN = "settled-ci-green"
 SETTLED_REASON_CODES = frozenset(
-    {SETTLED_MISSING_IMPORT, SETTLED_SCHEMA_DEPENDENCY}
+    {SETTLED_MISSING_IMPORT, SETTLED_SCHEMA_DEPENDENCY, SETTLED_CI_GREEN}
 )
 
 _IMPORT_SLUGS = frozenset(
@@ -347,5 +349,310 @@ def schema_settlement_notice(dropped: list[ReaderFinding]):
     return Reason(
         rule=SETTLED_SCHEMA_DEPENDENCY,
         label=f"Dropped {len(dropped)} finding(s) disproved by the live schema — {labels}",
+        weight=0.0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Third class (#307): the falsifier had already run.
+#
+# Same rule, third ground truth. A finding that predicts a failure the
+# repository's own CI gate reports cannot be true when that gate concluded
+# success at the reviewed head — and the reader cannot know that, because a
+# diff carries no evidence about which gates run. ci_evidence.py reads the
+# workflow files and the check runs at head; this section decides which
+# finding classes a green gate disproves, and how narrowly.
+#
+# Two classes, both measured in docs/findings-log.jsonl and #232:
+#
+#   * A JS/TS "unused import breaks the build / fails lint" claim (PRs 75,
+#     198). Settled when every lint job AND every build job at head is green
+#     and at least one of each ran over the finding's file. Both, not
+#     either: the claim names one gate or the other loosely, and requiring
+#     both means the settlement never rests on a gate the repo does not run.
+#
+#   * A Python undefined-name / NameError claim (PR 28, #232's PR 229).
+#     Ruff F821 is the gate, and REVIEWING.md's boundary table says exactly
+#     where it stops, so every one of those residuals is a veto here: the
+#     name must be read as a bare name at runtime in the file at head (a
+#     claim about a name the file never reads is a claim we cannot follow),
+#     must not be bound under `if TYPE_CHECKING:` (bound for ruff, absent at
+#     runtime), the file must carry no `noqa` that could have silenced F821,
+#     no star import (ruff then reports F405 instead of F821, and F405 is
+#     the rule projects with star imports ignore) and no `global` statement
+#     naming it, the file must not be matched by the root `.gitignore` (ruff
+#     skips ignored files), F821 must be selected by the ruff configuration
+#     nearest the file, and a green ruff job must have run over the file's
+#     directory. A claim phrased as use-before-assignment is out of scope
+#     entirely: ruff does not see those, so a green ruff says nothing about
+#     them. The claimed name is the one written as code NEXT TO the claim
+#     words, not every name in backticks: "`handler` reads LIMIT, which is
+#     undefined" claims LIMIT, which is not in code, so it claims nothing
+#     and stays published (Doug's first read of #314,
+#     `reader:name-extraction-imprecision`).
+
+_UNDEFINED_NAME_SLUGS = frozenset(
+    {
+        "undefined-name",
+        "undefined-variable",
+        "undefined-reference",
+        "unresolved-reference",
+        "undefined-function",
+        "name-error",
+    }
+)
+_BUILD_BREAK_SLUGS = frozenset(
+    {
+        "unused-import-build-break",
+        "unused-import",
+        "unused-import-lint-failure",
+        "lint-failure",
+        "build-break",
+    }
+)
+_JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
+
+# Any of these could have kept ruff quiet about the very name in question.
+_NOQA_RE = re.compile(
+    r"#\s*(?:ruff|flake8)\s*:\s*noqa"  # file-level
+    r"|#\s*noqa(?!\s*:)"  # bare, silences the whole line
+    r"|#\s*noqa\s*:[^\n]*\bF821\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_undefined_name_finding(f: ReaderFinding) -> bool:
+    slug = f.category_slug.lower().removeprefix("reader:")
+    desc = f.description.lower()
+    if "before" in desc or "before" in slug:
+        return False  # use-before-assignment: not ruff's to see
+    if slug in _UNDEFINED_NAME_SLUGS or looks_like_missing_import_finding(f):
+        return True
+    return "nameerror" in desc or "not defined" in desc or "undefined name" in desc
+
+
+def looks_like_build_break_finding(f: ReaderFinding) -> bool:
+    slug = f.category_slug.lower().removeprefix("reader:")
+    if slug in _BUILD_BREAK_SLUGS:
+        return True
+    desc = f.description.lower()
+    return "unused" in desc and any(
+        w in desc for w in ("build", "lint", "eslint", "compile", "ci ")
+    )
+
+
+# A name written as code beside the claim. Form A: the name, then at most
+# three words, then the claim ("`x` is referenced but never defined").
+# Form B: the claim, then the name ("undefined name `x`", "NameError on
+# `x`"). Anything looser let "`handler` reads LIMIT … LIMIT is undefined"
+# claim `handler` (Doug's first read of #314).
+_CLAIM_AFTER = (
+    r"undefined|not defined|never defined|neither defined|isn't defined|"
+    r"not imported|never imported|unbound|unresolved"
+)
+_CLAIM_BEFORE = (
+    r"undefined(?: name| variable| reference)?|nameerror(?: on| for)?|"
+    r"no import(?: of| for)?|missing import(?: of| for)?|never imports?|"
+    r"not import(?:ed)?|unresolved(?: name| reference)?"
+)
+_CLAIMED_NAME_RE = re.compile(
+    rf"`([A-Za-z_][A-Za-z0-9_]*)`[,:]?\s*(?:[A-Za-z]+\s+){{0,3}}(?:{_CLAIM_AFTER})\b"
+    rf"|\b(?:{_CLAIM_BEFORE})\s*:?\s*`([A-Za-z_][A-Za-z0-9_]*)`",
+    re.IGNORECASE,
+)
+
+
+def claimed_undefined_names(f: ReaderFinding) -> list[str]:
+    """Names the finding says are undefined: written as code, next to the
+    claim. Empty ⇒ nothing to settle."""
+    found = [a or b for a, b in _CLAIMED_NAME_RE.findall(f.description)]
+    return list(dict.fromkeys(found))
+
+
+def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
+    """(names loaded outside TYPE_CHECKING, names ruff saw bound that the
+    interpreter will not, or that ruff never checked), or None.
+
+    The second set is every veto ruff's boundary leaves: a name bound under
+    `if TYPE_CHECKING:`, a name declared `global` (bound dynamically for
+    all ruff knows), and — when the file holds a star import — every name,
+    because ruff then reports F405 rather than F821. Same TYPE_CHECKING
+    walk as runtime_imported_names, so the two settlements draw the
+    boundary in the same place.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    loaded: set[str] = set()
+    type_checking_bound: set[str] = set()
+    star_import = False
+
+    class Visitor(ast.NodeVisitor):
+        def visit_If(self, node: ast.If) -> None:
+            if _is_type_checking_test(node.test):
+                for child in node.body:
+                    for sub in ast.walk(child):
+                        if isinstance(sub, ast.Import | ast.ImportFrom):
+                            for alias in sub.names:
+                                if alias.name == "*":
+                                    continue
+                                type_checking_bound.add(
+                                    alias.asname or alias.name.split(".", 1)[0]
+                                )
+                        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                            type_checking_bound.add(sub.id)
+                for child in node.orelse:
+                    self.visit(child)
+                return
+            self.generic_visit(node)
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Load):
+                loaded.add(node.id)
+
+        def visit_Global(self, node: ast.Global) -> None:
+            type_checking_bound.update(node.names)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            nonlocal star_import
+            if any(alias.name == "*" for alias in node.names):
+                star_import = True
+
+    Visitor().visit(tree)
+    if star_import:
+        return loaded, set(loaded)
+    return loaded, type_checking_bound
+
+
+def _gitignored_at_root(path: str, resolve_file: ResolveFile) -> bool:
+    """Does the repository's root .gitignore match `path`? ruff skips
+    ignored files by default, so a committed-but-ignored file was never
+    checked. Only the root file is read; a nested .gitignore is a residual
+    this does not chase. Negations are skipped, which errs toward a match."""
+    text = resolve_file(".gitignore")
+    if not text:
+        return False
+    for line in text.splitlines():
+        pattern = line.strip()
+        if not pattern or pattern.startswith(("#", "!")):
+            continue
+        if ci_evidence._glob_matches(pattern.lstrip("/"), path, path):
+            return True
+    return False
+
+
+def _ruff_green_disproves(
+    f: ReaderFinding, evidence: ci_evidence.CiEvidence, resolve_file: ResolveFile
+) -> bool:
+    if not f.file.endswith(".py") or not evidence.covers(ci_evidence.RUFF, f.file):
+        return False
+    source = resolve_file(f.file)
+    if source is None or _NOQA_RE.search(source):
+        return False
+    read = names_read_at_runtime(source)
+    if read is None:
+        return False
+    loaded, type_checking_bound = read
+    if looks_like_missing_import_finding(f):
+        names = claimed_names(f, runtime_imported_names(source))
+    else:
+        names = claimed_undefined_names(f)
+    if not names:
+        return False
+    if any(n not in loaded or n in type_checking_bound for n in names):
+        return False
+    if _gitignored_at_root(f.file, resolve_file):
+        return False
+    return ci_evidence.f821_selected(f.file, resolve_file) is True
+
+
+def _build_green_disproves(f: ReaderFinding, evidence: ci_evidence.CiEvidence) -> bool:
+    if not f.file.endswith(_JS_SUFFIXES):
+        return False
+    return evidence.covers(ci_evidence.JS_LINT, f.file) and evidence.covers(
+        ci_evidence.JS_BUILD, f.file
+    )
+
+
+def ci_kind_for(f: ReaderFinding) -> str | None:
+    """Which falsifier kind would settle this finding, if any."""
+    if f.file.endswith(".py") and looks_like_undefined_name_finding(f):
+        return ci_evidence.RUFF
+    if f.file.endswith(_JS_SUFFIXES) and looks_like_build_break_finding(f):
+        return ci_evidence.JS_BUILD
+    return None
+
+
+ResolveCI = Callable[[], "ci_evidence.CiEvidence | None"]
+
+
+def drop_disproved_ci_findings(
+    rv: ReaderVerdict,
+    resolve_ci: ResolveCI,
+    resolve_file: ResolveFile,
+) -> tuple[ReaderVerdict, list[ReaderFinding]]:
+    """Same contract as the other two: (possibly filtered verdict, dropped).
+
+    `resolve_ci()` is called at most once, and only when some finding is of
+    a class a green gate could settle — most reads have none, and the
+    evidence costs a handful of GitHub calls. None from it (no workflows,
+    checks unreadable, more check runs than one page holds) settles
+    nothing. risk_score is left alone, as in the other two.
+    """
+    candidates = [f for f in rv.findings if ci_kind_for(f) is not None]
+    if not candidates:
+        return rv, []
+    evidence = resolve_ci()
+    if evidence is None:
+        return rv, []
+    kept: list[ReaderFinding] = []
+    dropped: list[ReaderFinding] = []
+    for f in rv.findings:
+        kind = ci_kind_for(f)
+        disproved = (
+            _ruff_green_disproves(f, evidence, resolve_file)
+            if kind == ci_evidence.RUFF
+            else _build_green_disproves(f, evidence)
+            if kind == ci_evidence.JS_BUILD
+            else False
+        )
+        (dropped if disproved else kept).append(f)
+    if not dropped:
+        return rv, []
+    return rv.model_copy(update={"findings": kept}), dropped
+
+
+def ci_settlement_notice(
+    dropped: list[ReaderFinding], evidence: ci_evidence.CiEvidence | None = None
+):
+    """Weight-0 reason naming the green job(s) that settled each finding.
+
+    Same label grammar as the other two notices — convergence._notice_segments
+    parses `file: slug (claim)` segments after the header — with the claim
+    slot carrying the check-run names, so a reader of the check run can go
+    and look at the gate that answered.
+    """
+    from .models import Reason
+
+    if not dropped:
+        return None
+
+    def jobs_for(f: ReaderFinding) -> list[str]:
+        if evidence is None:
+            return ["?"]
+        kind = ci_kind_for(f)
+        if kind == ci_evidence.JS_BUILD:
+            names = evidence.settled_by.get(ci_evidence.JS_LINT, ()) + evidence.settled_by.get(
+                ci_evidence.JS_BUILD, ()
+            )
+        else:
+            names = evidence.settled_by.get(kind or "", ())
+        return list(dict.fromkeys(names)) or ["?"]
+
+    labels = "; ".join(f"{d.file}: {d.category_slug} ({jobs_for(d)})" for d in dropped)
+    return Reason(
+        rule=SETTLED_CI_GREEN,
+        label=f"Dropped {len(dropped)} finding(s) disproved by a green check at head — {labels}",
         weight=0.0,
     )

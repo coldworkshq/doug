@@ -206,7 +206,35 @@ def test_settlement_notice_grammar_is_pinned_to_settle_py():
         )
     ]
     later_read, prior_read = _pair()
-    for notice in (settle.settlement_notice(dropped), settle.schema_settlement_notice(dropped)):
+    from doug import ci_evidence as ci
+
+    two_gates = ci.evidence(
+        [
+            ci.Job("web-lint", (ci.Step("npm run lint -w web", ""),)),
+            ci.Job("web-build", (ci.Step("npm run build -w web", ""),)),
+        ],
+        [
+            ci.CheckResult(name=n, conclusion="success", app="github-actions")
+            for n in ("web-lint", "web-build")
+        ],
+    )
+    js_dropped = [
+        dropped[0].model_copy(
+            update={"category_slug": "unused-import-build-break", "file": "web/app/page.tsx"}
+        )
+    ]
+    js_notice = settle.ci_settlement_notice(js_dropped, two_gates)
+    # The claim slot carries a list repr with quotes and commas; the
+    # segment grammar must survive it (Doug's second read of #314).
+    assert "(['web-lint', 'web-build'])" in js_notice.label
+    assert list(convergence._notice_segments(js_notice.label)) == [
+        ("web/app/page.tsx", "unused-import-build-break")
+    ]
+    for notice in (
+        settle.settlement_notice(dropped),
+        settle.schema_settlement_notice(dropped),
+        settle.ci_settlement_notice(dropped),
+    ):
         assert notice is not None
         row = _reason(notice.rule, notice.label, notice.weight, notice.severity)
         r = convergence.compare([_f()], [], [row], later_read, prior_read)

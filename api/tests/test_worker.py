@@ -183,6 +183,7 @@ def _wire(
         deep_read=True,
         resolve_file=None,
         resolve_schema=None,
+        resolve_ci=None,
     ):
         if scopes is not None:
             scopes.append(("risk", scope))
@@ -1432,6 +1433,7 @@ def test_worker_passes_the_repos_line_into_scoring_and_logs_its_source(
         deep_read=True,
         resolve_file=None,
         resolve_schema=None,
+        resolve_ci=None,
     ):
         seen.append(threshold)
         v = VERDICT.model_copy(deep=True)
