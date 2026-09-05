@@ -222,8 +222,9 @@ the risk read, the intent read and any verify or attribution calls nested
 inside it. It is a viewing surface. The example pack is the record, and no
 finding or measurement may cite a trace.
 
-**Off in production today**, because the secrets do not exist. Creating both is
-what turns it on — there is no separate flag to set, and no flag to forget.
+Creating both secrets is what turns it on — there is no separate flag to set,
+and no flag to forget. Both were created 2026-09-04; whether the serving
+revision traces is read from its env block, not from this file.
 
 ### What leaves the boundary
 
@@ -260,10 +261,18 @@ deploy. The deploy prints which state it chose:
 tracing: ON — reads will send prompts and responses to https://us.cloud.langfuse.com
 ```
 
-If it prints `tracing: off`, one of the two secrets is missing or the setup run
-did not bind them. Both halves are required on purpose — a half-created pair
-resolves to off rather than failing the deploy on a `--set-secrets` entry that
-names a secret which does not exist.
+If it prints `tracing: off`, one of the two secrets is missing. Both halves are
+required on purpose — a half-created pair resolves to off rather than failing
+the deploy on a `--set-secrets` entry that names a secret which does not exist.
+
+Only `NOT_FOUND` reads as off. The check runs as `doug-deployer` in CI, and
+that account holds no Secret Manager rights of its own, so `setup` grants it
+`roles/secretmanager.viewer` on the two Langfuse secrets alone: metadata, not
+the key. Without that grant the deploy fails with
+`ERROR: cannot tell whether secret … exists` rather than printing off. That is
+deliberate: on 2026-09-04 the same denial was read as "not both present", and
+every deploy went green with tracing off while both secrets sat there. If you
+see that error, re-run `deploy/gcp.sh setup` and redeploy.
 
 ### Turn it off
 
@@ -309,7 +318,10 @@ is not an incident and must not be treated as one. Check in this order:
 1. `doug: tracing client construction failed` — the keys are wrong, or
    Langfuse is unreachable from the service.
 2. No `doug: tracing` line and no spans — `DOUG_TRACING` is not `1`, or one of
-   the two keys is unset. `tracing.enabled()` requires all three.
+   the two keys is unset. `tracing.enabled()` requires all three. Read the
+   env block of the serving revision, then the deploy log's `tracing:` line:
+   a green deploy that printed `tracing: off` against secrets that exist means
+   the deployer could not see them (see "Turn it on").
 3. Spans for some passes only — expected on a review that took the
    deterministic tier, or where grounding and attribution did not run.
 4. Spans that never arrive from a burst — the flush happens at the end of

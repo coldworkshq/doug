@@ -247,6 +247,20 @@ setup() {
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
 
+  # The deploy decides whether to mount the Langfuse pair by asking whether
+  # both exist (`langfuse_configured`), and in CI it asks as doug-deployer,
+  # which setup-cicd.sh deliberately gives no secret rights at all. Viewer is
+  # metadata only: it answers "does this exist" and cannot read a key. It is
+  # granted on these two secrets, never on the project, so CI still cannot
+  # enumerate or read anything else. Without it every CI deploy read the pair
+  # as absent and printed "tracing: off" against secrets that existed.
+  for s in doug-langfuse-public-key doug-langfuse-secret-key; do
+    gcloud secrets describe "$s" --project "$PROJECT" >/dev/null 2>&1 || continue
+    gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
+      --member="serviceAccount:doug-deployer@$PROJECT.iam.gserviceaccount.com" \
+      --role=roles/secretmanager.viewer >/dev/null
+  done
+
   # doug-web gets its own identity too. It must not share the default
   # compute SA: that principal holds roles/editor on doug-prod0, and a
   # browser-facing service running as editor is the blast radius Task 10
@@ -605,9 +619,32 @@ service_exists() {
 # Both, never either — the same all-of rule tracing.enabled() applies, for the
 # same reason. --set-secrets would fail the deploy on a missing secret, so a
 # half-created pair must resolve to off here rather than at deploy time.
+#
+# NOT_FOUND is the only failure this reads as off. In CI the check runs as
+# doug-deployer, and a principal that cannot see a secret gets the same
+# non-zero exit as one that looked and found nothing. Collapsing the two is
+# what kept tracing off on 2026-09-04: both secrets existed, bound to the
+# runtime account and invisible to the deployer, and every deploy printed
+# "not both present" against them. So any other answer stops the deploy. A
+# deploy that ships less than the operator configured looks exactly like one
+# that worked, and the fix is one `setup` run away.
 langfuse_configured() {
-  gcloud secrets describe doug-langfuse-public-key --project "$PROJECT" >/dev/null 2>&1 \
-    && gcloud secrets describe doug-langfuse-secret-key --project "$PROJECT" >/dev/null 2>&1
+  local s out
+  for s in doug-langfuse-public-key doug-langfuse-secret-key; do
+    if out=$(gcloud secrets describe "$s" --project "$PROJECT" 2>&1 >/dev/null); then
+      continue
+    fi
+    if printf '%s' "$out" | grep -q NOT_FOUND; then
+      return 1
+    fi
+    echo "ERROR: cannot tell whether secret $s exists:" >&2
+    echo "$out" >&2
+    echo "A deployer that cannot see a secret is not a secret that is absent. Grant" >&2
+    echo "roles/secretmanager.viewer on both Langfuse secrets to the principal that" >&2
+    echo "deploys (gcp.sh setup does this for doug-deployer), then redeploy." >&2
+    exit 1
+  done
+  return 0
 }
 
 # Return only the purpose-scoped binding needed to keep stored cohorts readable

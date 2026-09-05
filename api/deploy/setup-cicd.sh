@@ -56,7 +56,10 @@ fi
 
 # Deploy-time rights only. Secret access belongs to the *runtime* service
 # account (granted in gcp.sh setup), not to this one — CI never reads a
-# secret, it only points Cloud Run at them.
+# secret, it only points Cloud Run at them. The one exception is metadata:
+# gcp.sh setup grants this account roles/secretmanager.viewer on the two
+# Langfuse secrets alone, because the deploy asks whether they exist to decide
+# whether tracing is on, and an account that cannot see them answers "no".
 for role in \
   roles/run.admin \
   roles/cloudbuild.builds.editor \

@@ -1,5 +1,52 @@
 # HANDOFF — doug
 
+State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
+          Langfuse traces: both secrets exist (created 2026-09-04 05:07),
+          bound to doug-api-sa, but every CI deploy since printed
+          `tracing: off (… not both present)` and the serving revision
+          (doug-api-00218-mob) carries no LANGFUSE_* or DOUG_TRACING at all.
+          `langfuse_configured` runs `gcloud secrets describe` as
+          doug-deployer, which holds no Secret Manager role, and the check
+          read PERMISSION_DENIED as "absent". Fixed: only NOT_FOUND is off,
+          anything else stops the deploy loudly; `setup` grants the deployer
+          roles/secretmanager.viewer on the two secrets only. api 1858 pass,
+          `ruff check` clean, denied guard red under mutation.
+Next:     Andrew (the classifier blocked both gcloud IAM writes from the
+          agent): grant viewer on the two secrets to doug-deployer, either
+          by `PROJECT=doug-prod0 bash api/deploy/gcp.sh setup` after merge or
+          by the two `gcloud secrets add-iam-policy-binding` lines in the PR
+          body; then redeploy (merge, or `gh workflow run deploy.yml`) and
+          confirm the deploy log prints `tracing: ON` and the new revision's
+          env carries DOUG_TRACING=1. If the log then shows
+          `doug: tracing client construction failed`, the key values are
+          wrong, not the wiring.
+Blockers: IAM grant is founder-run (see Next). #289 (subprocessor listing
+          and DPA) is still OPEN and says tracing is off; the secrets
+          existing is Andrew's own turn-on click, so #289 now describes a
+          live state, not a future one.
+
+Decisions this session (2026-09-04):
+- Denied is not absent. `gcloud secrets describe` exits 1 for both, and the
+  check collapsed them, so a green deploy silently shipped less than the
+  operator configured. Ruling: NOT_FOUND alone resolves to off; any other
+  failure exits the deploy with the grant it needs. Rejected: treat denied
+  as off with a WARN (that is exactly the state that lost a day); a repo
+  variable as the switch (two facts that can disagree, which ADR-0031
+  rejected already).
+- Viewer per secret, not project-wide. CI still cannot read a key or list
+  the rest. Rejected: roles/secretmanager.viewer on the project.
+- ADR-0031's "tracing is off in production until the secrets exist" left
+  as written: a record, and #289 owns the live state.
+
+Pointers: api/deploy/gcp.sh `langfuse_configured`, setup viewer loop ·
+          api/deploy/setup-cicd.sh comment · api/tests/test_deploy_gcp.py
+          `GCLOUD_LANGFUSE=half|denied`, `test_a_deployer_that_cannot_see…`,
+          `test_setup_lets_the_deployer_see…` · docs/OPERATIONS.md "Turn it
+          on", "When a trace is missing" · deploy run 33927066970 line
+          `tracing: off` · #289
+
+--- prior stream (#234 status, MERGED as a8e015f) below, preserved ---
+
 State:    review — branch `claude/issue-234-status-a71df9`, fixing #234:
           `check_run._oneline` let a raw `<` in model text open a real
           `<details>` that swallowed every finding after it. Fixed with

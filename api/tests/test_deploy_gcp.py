@@ -966,10 +966,20 @@ fi
 # ADR-0031. Absent unless a test opts in, matching production: creating these
 # two secrets is what turns tracing on, so the default posture of this fake
 # must be the default posture of the deployment.
+# The messages are gcloud's own, because the script tells the two apart by
+# text: NOT_FOUND is off, anything else stops the deploy.
 if [ "$1 $2" = "secrets describe" ] \
     && { [ "$3" = "doug-langfuse-public-key" ] || [ "$3" = "doug-langfuse-secret-key" ]; }; then
-  [ "${GCLOUD_LANGFUSE:-}" = "1" ] || exit 1
-  exit 0
+  case "${GCLOUD_LANGFUSE:-}" in
+    1) exit 0 ;;
+    half) [ "$3" = "doug-langfuse-public-key" ] && exit 0 ;;
+    denied)
+      printf '%s\\n' "ERROR: (gcloud.secrets.describe) PERMISSION_DENIED: Permission" \\
+        "'secretmanager.secrets.get' denied for resource '$3' (or it may not exist)." >&2
+      exit 1 ;;
+  esac
+  printf '%s\\n' "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [$3] not found." >&2
+  exit 1
 fi
 if [ "$1 $2 $3" = "iam service-accounts describe" ] \
     && [ "$4" = "${GCLOUD_TRANSIENT_SA:-}" ] \
@@ -1858,21 +1868,43 @@ def test_the_api_deploy_pairs_the_tracing_flag_with_both_langfuse_secrets():
     assert "${langfuse_secret:+,$langfuse_secret}" in body
 
 
-def test_tracing_stays_off_until_both_langfuse_secrets_exist():
+def test_tracing_stays_off_until_both_langfuse_secrets_exist(tmp_path):
     """One key present is off, not half on.
 
     --set-secrets fails the whole deploy on a secret that does not exist, so a
     half-created pair must resolve to off in the guard rather than at deploy
     time: otherwise creating one key of two takes production down on the next
     merge, and the cause would read as an unrelated deploy failure.
+
+    Run, not read: the fake answers the public key present and the secret key
+    NOT_FOUND, and the deploy must go out with nothing Langfuse in it.
     """
-    body = _function_body("langfuse_configured")
-    assert "doug-langfuse-public-key" in body
-    assert "doug-langfuse-secret-key" in body
-    assert "&&" in body, (
-        "langfuse_configured accepts one secret of two, so a half-created "
-        "pair would set --set-secrets to a secret that does not exist"
+    lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "half"})
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    assert "DOUG_TRACING" not in api_deploy
+    assert "LANGFUSE" not in api_deploy
+
+
+def test_a_deployer_that_cannot_see_the_langfuse_secrets_stops_the_deploy(tmp_path):
+    """Denied is not absent, and must not be read as off.
+
+    The check runs as doug-deployer in CI, which holds no secret rights, so a
+    describe there fails whether or not the secret exists. Reading that as
+    "not both present" is what kept tracing off for a day after both secrets
+    were created (2026-09-04): every deploy went green and printed off. A
+    deploy that silently ships less than the operator configured looks
+    exactly like one that worked, so this one refuses instead, before any
+    `gcloud run deploy` runs, and says which grant is missing.
+    """
+    result, lines = _invoke_gcp(
+        tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "denied"}
     )
+    assert result.returncode != 0
+    assert "PERMISSION_DENIED" in result.stderr
+    assert "roles/secretmanager.viewer" in result.stderr
+    assert not [line for line in lines if line.startswith("run deploy doug-api")]
 
 
 def test_the_langfuse_host_is_defaulted_and_overridable():
@@ -1999,3 +2031,38 @@ def test_setup_binds_both_langfuse_secrets_once_the_keys_exist(tmp_path):
         and "doug-api-sa@doug-prod0.iam.gserviceaccount.com" in ln
     ]
     assert len(bound) == 2
+
+
+def test_setup_lets_the_deployer_see_both_langfuse_secrets(tmp_path):
+    """Viewer, on the pair, to the deployer, and nothing wider.
+
+    `langfuse_configured` runs as doug-deployer in CI and decides tracing by
+    asking whether the secrets exist. setup-cicd.sh gives that account no
+    secret rights, so without this grant the answer is always "no" and the
+    keys never mount. Viewer is metadata only, and it is bound per secret
+    rather than on the project, so CI still cannot read a key or list the
+    rest.
+    """
+    lines = _run_gcp(tmp_path, "setup", extra_env={"GCLOUD_LANGFUSE": "1"})
+    viewer = [
+        ln
+        for ln in lines
+        if ln.startswith("secrets add-iam-policy-binding doug-langfuse")
+        and "doug-deployer@doug-prod0.iam.gserviceaccount.com" in ln
+    ]
+    assert len(viewer) == 2
+    assert all("--role=roles/secretmanager.viewer" in ln for ln in viewer)
+    assert not [
+        ln
+        for ln in lines
+        if ln.startswith("projects add-iam-policy-binding")
+        and "doug-deployer" in ln
+        and "secretmanager" in ln
+    ], "the deployer must not get a project-wide Secret Manager role"
+
+
+def test_setup_grants_the_deployer_nothing_before_the_langfuse_keys_exist(tmp_path):
+    """Binding a secret that does not exist fails setup, so the viewer loop
+    skips a missing secret the same way the accessor loop does."""
+    lines = _run_gcp(tmp_path, "setup")
+    assert not [ln for ln in lines if "doug-langfuse" in ln and "doug-deployer" in ln]
