@@ -528,6 +528,13 @@ def score_one(
                         f"doug: grounded {grounded} finding(s) against head",
                         file=sys.stderr,
                     )
+            # Coverage before the verdict, so each finding is tagged with
+            # what the read held of its file while it is still a finding
+            # (#308). Pure over the diff; the same object rides out below.
+            cov = reader.coverage(
+                diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
+            )
+            rv = reader.classify_by_coverage(rv, cov)
             verdict = reader.verdict_from_reader(rv, threshold=reader_line)
             if settled := settle.settlement_notice(dropped):
                 verdict.reasons.append(settled)
@@ -537,9 +544,6 @@ def score_one(
                 ci_dropped, ci_seen[0] if ci_seen else None
             ):
                 verdict.reasons.append(ci_settled)
-            cov = reader.coverage(
-                diff, changed_files=meta.changed_files, files_dropped=meta.files_dropped
-            )
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             if reader.attribution_enabled():

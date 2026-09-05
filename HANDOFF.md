@@ -1,43 +1,38 @@
 # HANDOFF — doug
 
-State:    review — PR #314 open off main a8e015f, branch
-          `claude/doug-deterministic-checks-d81757`, closing #307 and #232.
-          api 1887 pass, ruff clean, four guard mutations each red.
-Next:     Andrew reviews and merges #314, then checks main carries the
-          branch tip (squash merges have dropped the last commit before).
-          Remaining survey issues, in the order recommended: #308 (evidence
-          class at emit time), #303 (exclude generated content), #304
-          (same-hunks replay), then #306 + #199.
+State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
+          (#314 merged; main carries its tip, checked). #308: a finding is
+          tagged at emit time with what the read held of its file, and the
+          check run says so beside the finding.
+Next:     PR #316 open (closes #308); CI, then Andrew reviews. After merge,
+          check main carries the branch tip.
+          Then #303 (exclude generated content), #304 (same-hunks replay),
+          #306 + #199.
 Blockers: none.
 
-Decisions this session (2026-09-04):
-- Ten deterministic-check issues filed: #303–#312. #307 is this one;
-  #199 (verify candidates) and #203 (one client per drain) already existed.
-- Ground truth is `checks.list_for_ref` at head_sha plus the workflow YAML
-  at head (both under permissions Doug already holds) — rejected: the
-  Actions jobs API (needs `actions: read`, an R11 org click; would have
-  been cleaner because step names carry the command).
-- Stdlib-only YAML-subset parser in `ci_evidence.py`; any job it cannot
-  name is skipped, so a parse miss keeps findings — rejected: PyYAML
-  (shipped code stays on stdlib).
-- A falsifier kind is green only when EVERY job running it is green, and
-  it covers a file only through a root (working-directory / --workspace)
-  the command ran over — rejected: any-green (a green `web` build would
-  settle a finding in `console/`).
-- Ruff class vetoes, each from REVIEWING.md's boundary table: name read at
-  runtime, not TYPE_CHECKING-bound, no F821-silencing noqa, F821 selected
-  by nearest config (tomllib walk, ruff precedence), "before" claims out.
-- JS class needs lint AND build green over the file — rejected: either
-  (the claim names one gate loosely; both means never resting on a gate
-  the repo does not run).
-- Findings-log recount: earlier "22 of 91 disproved by a check that
-  already ran" was inflated; tool-shaped instances are PRs 28, 75, 198
-  plus #232's two. Stated honestly in #307.
+Decisions this session (2026-09-05):
+- Tag at emit time in score_one from the same Coverage the verdict ships
+  with (`reader.classify_by_coverage`), carried on Reason.evidence
+  off-wire like `file` — rejected: deriving it at render time only (the
+  receipt and the ledger would never see it; and the replay path has no
+  coverage to derive from).
+- Ordering: an outside-read finding sorts after in-read peers of the SAME
+  severity, never across a bucket — rejected: a one-grade discount (#232
+  option 3), because a file the budget dropped is where a real defect can
+  hide, and n=2 is not a measurement.
+- A path not in the diff at all is "unread" (that is the #175 shape);
+  suffix match both ways so a shortened spelling is not a stranger.
+- head-cited stays head-cited: the verify tier read the file at head.
+- Persisted only in verdicts.raw (save_review stores rv.findings whole,
+  evidence included); the findings table has no evidence column and the
+  web receipt does not show the chip (no wire change). Follow-up
+  candidates, not done here.
+- Mutation restores copy from scratchpad, never `git checkout --`.
 
-Pointers: api/doug/ci_evidence.py · api/doug/settle.py (third class) ·
-          api/doug/review.py head_ci_evidence / score_one(resolve_ci=) ·
-          api/doug/worker.py resolve_ci · tests/test_ci_evidence.py ·
-          tests/test_settle.py · tests/test_review.py · docs/REVIEWING.md
+Pointers: api/doug/reader.py Coverage.read_of / classify_by_coverage ·
+          api/doug/models.py Reason.evidence · api/doug/check_run.py
+          _EVIDENCE_CHIPS / _by_severity · api/doug/review.py score_one ·
+          tests/test_coverage.py · tests/test_check_run.py · docs/REVIEWING.md
 
 --- prior stream (#302 Langfuse secrets deploy check, MERGED as a7ddcc6) below, preserved ---
 
