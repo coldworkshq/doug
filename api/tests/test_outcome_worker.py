@@ -3,13 +3,14 @@
 import subprocess
 import weakref
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from githubkit.exception import RequestError
 from sqlalchemy import create_engine, delete, select, update
 
-from doug import app_auth, outcome_worker, store
+from doug import app_auth, outcome_queue, outcome_worker, store
 from doug.backtest import git_labels
 from doug.backtest.git_labels import Commit
 
@@ -248,6 +249,120 @@ def test_github_request_failure_is_a_repository_retry(tmp_path, monkeypatch):
     [job] = _rows(url, store.outcome_jobs)
     assert (job["status"], job["attempts"]) == ("pending", 1)
     assert job["error"] == "repository evidence failed (RequestError)"
+
+
+def test_a_failed_repository_names_itself_and_not_its_token(tmp_path, monkeypatch, capsys):
+    """`failed_repositories: 1` says a repository failed and never which one.
+
+    That is the whole defect: between 2026-08-21 and 2026-09-03 the daily
+    execution reported a non-zero count on every run, /healthz/queues answered
+    503 the whole time on the rows those failures left overdue (#261), and
+    naming the repository took reading the ledger. The line must carry the
+    key, the display name, how many rows moved and the redacted reason — and
+    it must not carry the installation token, for the same reason the ledger
+    column does not.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1314318717, "coldworkshq/coldworks", [3, 4])
+    token = "github_pat_secret-material"
+    _github_ready(monkeypatch, token=token)
+    monkeypatch.setattr(
+        git_labels,
+        "find_reverted_prs_evidenced",
+        lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(
+                128, ["git", "log", f"https://x-access-token:{token}@github.com/x"]
+            )
+        ),
+    )
+
+    outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    [line] = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if outcome_worker.REPOSITORY_FAILURE_LOG_TOKEN in line
+    ]
+    assert f"{INSTALLATION_ID}/1314318717" in line
+    assert "coldworkshq/coldworks" in line
+    assert "2 job(s)" in line
+    assert "repository evidence failed (CalledProcessError)" in line
+    assert token not in line
+
+
+def test_the_logged_attempt_is_the_attempt_the_ledger_stored(tmp_path, monkeypatch, capsys):
+    """The line reports distance to the cap, and the cap is a cliff: at
+    MAX_ATTEMPTS a row turns terminally `failed` and leaves the overdue set
+    /healthz/queues grades on, so the alert goes green because the work was
+    abandoned. `_fail_repository` derives the number from the batch it holds
+    rather than re-reading the row, so this pins it against what fail_batch
+    actually wrote. A line that misreports the distance is worse than none.
+    """
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1, "drewjst/doug", [7])
+    with create_engine(url).begin() as conn:
+        conn.execute(update(store.outcome_jobs).values(attempts=6))
+    _github_ready(monkeypatch)
+    monkeypatch.setattr(
+        git_labels,
+        "find_reverted_prs_evidenced",
+        lambda *a, **k: (_ for _ in ()).throw(subprocess.CalledProcessError(128, ["git"])),
+    )
+
+    outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    [job] = _rows(url, store.outcome_jobs)
+    [line] = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if outcome_worker.REPOSITORY_FAILURE_LOG_TOKEN in line
+    ]
+    assert job["attempts"] == 7
+    assert f"attempt {job['attempts']} of {outcome_queue.MAX_ATTEMPTS}" in line
+
+
+def test_a_repository_with_no_display_name_still_names_its_key(tmp_path, monkeypatch, capsys):
+    """The identity-unavailable branch is the one with no name to print, and
+    it is also the branch #261 found holding 15 rows. The key is the durable
+    identity, so the line has to be legible without a display name."""
+    url = _db(tmp_path, monkeypatch)
+    _seed_repo(url, 1, "drewjst/gone", [10])
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            update(store.installations)
+            .where(store.installations.c.installation_id == INSTALLATION_ID)
+            .values(state="deleted")
+        )
+        conn.execute(
+            delete(store.installation_repos).where(
+                store.installation_repos.c.github_repo_id == 1
+            )
+        )
+    _github_ready(monkeypatch)
+
+    outcome_worker.drain(prereg_hash=PREREG_HASH, clone_root=tmp_path / "clones")
+
+    [line] = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if outcome_worker.REPOSITORY_FAILURE_LOG_TOKEN in line
+    ]
+    assert f"{INSTALLATION_ID}/1" in line
+    assert "name unavailable" in line
+    assert "repository identity unavailable" in line
+
+
+def test_every_repository_failure_goes_through_the_helper_that_logs(tmp_path):
+    """A third fail_batch call site added straight to `drain` would restore the
+    silence this line closes, and every behavioural test above would still
+    pass. The helper is the only caller, so the line cannot be forgotten."""
+    source = (Path(outcome_worker.__file__)).read_text()
+    body = source.split("def drain(", 1)[1]
+    assert "fail_batch" not in body, (
+        "drain calls fail_batch directly; route it through _fail_repository so "
+        "the failed repository names itself"
+    )
+    assert source.count("outcome_queue.fail_batch(") == 1
 
 
 def test_one_repository_failure_does_not_block_the_next_repository(tmp_path, monkeypatch):
