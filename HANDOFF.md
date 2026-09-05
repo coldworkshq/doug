@@ -33,11 +33,16 @@ State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
           DONE 2026-09-05 04:18: Andrew stored real keys as version 2 of
           both secrets (42 bytes, Langfuse answers 200), dispatch run
           33944214230 redeployed, doug-api-00226-wuc serving since 04:23.
-Next:     Prove a trace: Doug's review of the next push to #302 runs on
-          00226; check doug-api logs for `doug: tracing` / `Failed to
-          export` (expect none) and the Langfuse public API for a trace
-          tagged `production` named `review coldworkshq/doug#302`.
-          Also, the project-level grant (agent is blocked from IAM):
+          PROVEN 2026-09-05 06:08: Doug's review of b9b05a7 (job 2333) is
+          Langfuse trace 4bb06610…, env production, session = head SHA,
+          tag repo:coldworkshq/doug, root span `review coldworkshq/doug#302`
+          with reader.risk, reader.verify x2, reader.intent nested under it,
+          token counts matching the `paid read` log lines. No `doug:
+          tracing` and no `Failed to export` line on 00226. Verified through
+          the public API (GET /api/public/traces/{id}) with the keys read
+          from Secret Manager into the shell, never printed.
+Next:     Andrew reviews and merges #302, then checks main carries the
+          branch tip. Then the project-level grant (agent is blocked from IAM):
             gcloud projects add-iam-policy-binding doug-prod0
               --member=serviceAccount:doug-deployer@doug-prod0.iam.gserviceaccount.com
               --role=roles/secretmanager.viewer --condition=None
