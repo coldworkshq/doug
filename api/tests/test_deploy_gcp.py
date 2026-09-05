@@ -973,6 +973,14 @@ if [ "$1 $2" = "secrets describe" ] \
   case "${GCLOUD_LANGFUSE:-}" in
     1) exit 0 ;;
     half) [ "$3" = "doug-langfuse-public-key" ] && exit 0 ;;
+    flaky)
+      # One UNAVAILABLE, then present: the shape of a throttled API.
+      if [ ! -f "$GCLOUD_STATE.langfuse" ]; then
+        : > "$GCLOUD_STATE.langfuse"
+        printf '%s\\n' "ERROR: (gcloud.secrets.describe) UNAVAILABLE: service unavailable." >&2
+        exit 1
+      fi
+      exit 0 ;;
     denied)
       printf '%s\\n' "ERROR: (gcloud.secrets.describe) PERMISSION_DENIED: Permission" \\
         "'secretmanager.secrets.get' denied for resource '$3' (or it may not exist)." >&2
@@ -1915,11 +1923,14 @@ def test_a_deployer_that_cannot_see_the_langfuse_secrets_deploys_off_and_says_so
     assert "DOUG_TRACING" not in api_deploy
     assert "LANGFUSE" not in api_deploy
     [annotation] = [
-        ln for ln in result.stdout.splitlines() if ln.startswith("::error::")
+        ln for ln in result.stderr.splitlines() if ln.startswith("::error::")
     ]
     assert "PERMISSION_DENIED" in annotation
     assert "roles/secretmanager.viewer" in annotation
     assert "tracing is OFF" in annotation
+    assert "::error::" not in result.stdout, (
+        "the annotation belongs on stderr, where a captured stdout cannot eat it"
+    )
 
 
 def test_an_absent_langfuse_secret_is_off_without_an_annotation(tmp_path):
@@ -1931,7 +1942,26 @@ def test_an_absent_langfuse_secret_is_off_without_an_annotation(tmp_path):
     """
     result, _ = _invoke_gcp(tmp_path, "deploy")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "::error::" not in result.stdout
+    assert "::error::" not in result.stdout + result.stderr
+
+
+def test_a_transient_secret_manager_failure_does_not_turn_tracing_off(tmp_path):
+    """The loud branch changes what the revision carries, so one failed call
+    must not reach it.
+
+    A throttled or briefly unreachable Secret Manager answers UNAVAILABLE
+    once and then the truth. Rolling out a revision without DOUG_TRACING on
+    the strength of that one call would let an unrelated flake change
+    production configuration. The probe asks again; NOT_FOUND is an answer
+    and is never retried.
+    """
+    result, lines = _invoke_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "flaky"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    [api_deploy] = [
+        line for line in lines if line.startswith("run deploy doug-api --source .")
+    ]
+    assert "DOUG_TRACING=1" in api_deploy
+    assert "::error::" not in result.stdout + result.stderr
 
 
 def test_the_langfuse_host_is_defaulted_and_overridable():

@@ -273,9 +273,9 @@ project: metadata, never a key. Without it, on 2026-09-04, that denial was
 read as "not both present" and every deploy went green with tracing off while
 both secrets sat there.
 
-Any other answer still deploys with tracing off, because a merge to main
-deploys and a dashboard must not hold up a fix, but the run carries a red
-error annotation:
+Any other answer, after three attempts, still deploys with tracing off,
+because a merge to main deploys and a dashboard must not hold up a fix, but
+the run carries a red error annotation:
 
 ```
 tracing: cannot tell whether secret … exists, so it is treated as absent and tracing is OFF.

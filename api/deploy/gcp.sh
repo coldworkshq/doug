@@ -635,16 +635,27 @@ service_exists() {
 # It is the gRPC status name, not a sentence, so a wording or locale change
 # does not move it; and a miss degrades into the loud branch, never into a
 # wrong answer.
+#
+# Three attempts before the loud branch, because that branch changes what the
+# revision carries: a throttled or briefly unreachable Secret Manager would
+# otherwise roll out a revision without tracing on the strength of one
+# failed call. NOT_FOUND is not retried; it is an answer.
 langfuse_configured() {
-  local s out
+  local s out attempt
   for s in doug-langfuse-public-key doug-langfuse-secret-key; do
-    if out=$(gcloud secrets describe "$s" --project "$PROJECT" 2>&1 >/dev/null); then
-      continue
-    fi
-    if printf '%s' "$out" | grep -q NOT_FOUND; then
-      return 1
-    fi
-    echo "::error::tracing: cannot tell whether secret $s exists, so it is treated as absent and tracing is OFF. $(printf '%s' "$out" | head -n1) Grant roles/secretmanager.viewer on $PROJECT to the deploying principal (setup-cicd.sh does), then redeploy."
+    for attempt in 1 2 3; do
+      if out=$(gcloud secrets describe "$s" --project "$PROJECT" 2>&1 >/dev/null); then
+        continue 2
+      fi
+      if printf '%s' "$out" | grep -q NOT_FOUND; then
+        return 1
+      fi
+      [ "$attempt" = 3 ] || sleep 2
+    done
+    # stderr, so that a caller that ever captures this function's stdout
+    # cannot swallow the one line that says what happened. Actions reads
+    # workflow commands from both streams.
+    echo "::error::tracing: cannot tell whether secret $s exists, so it is treated as absent and tracing is OFF. $(printf '%s' "$out" | head -n1) Grant roles/secretmanager.viewer on $PROJECT to the deploying principal (setup-cicd.sh does), then redeploy." >&2
     return 1
   done
   return 0

@@ -50,6 +50,13 @@ Decisions this session (2026-09-04):
 - Text match on NOT_FOUND stays: it is the gRPC status name, gcloud has no
   other channel, and a miss degrades into the loud branch, not a wrong
   answer.
+- Third cut, after Doug's second pass: the probe asks three times (2s apart)
+  before the loud branch, because that branch changes what the revision
+  carries and one throttled call must not do that; NOT_FOUND is never
+  retried. Annotation moved to stderr so a captured stdout cannot eat it.
+  ADR-0031 item 4 carries a dated amendment naming the third state and the
+  project-level grant. Rejected: an env knob to shorten the sleep for tests
+  (4s of test time is cheaper than a test-only switch in the deploy script).
 - ADR-0031's "tracing is off in production until the secrets exist" left
   as written: a record, and #289 owns the live state.
 

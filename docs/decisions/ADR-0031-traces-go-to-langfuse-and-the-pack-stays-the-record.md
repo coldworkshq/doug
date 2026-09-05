@@ -75,6 +75,18 @@ question is the one worth a subprocessor for.
    client that fails every export at a log level nobody reads, and keys with
    no flag look configured and trace nothing.
 
+   *Amended 2026-09-05 (#302).* The switch is read by the principal that
+   deploys, and GCP tells that principal `NOT_FOUND` for a secret that is not
+   there only when it holds project-level `secretmanager.secrets.get`;
+   otherwise it says `PERMISSION_DENIED` for present and absent alike, which
+   is how tracing stayed off for a day after both secrets existed.
+   `setup-cicd.sh` therefore grants the deployer `roles/secretmanager.viewer`
+   on the project: metadata, never a payload. An answer that is neither
+   present nor `NOT_FOUND`, after three attempts, resolves to off and marks
+   the run with an error annotation. It does not stop the deploy: ADR-0025
+   says a merge deploys, and a viewing surface is not what keeps a fix from
+   shipping.
+
 5. **The trace root is the review job, and the session is the head SHA.**
    `worker.drain` wraps `process_job`, so one review is one trace and its two
    to five model calls nest inside it. A second push to the same PR opens a
