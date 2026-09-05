@@ -7,43 +7,59 @@ State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
           (doug-api-00218-mob) carries no LANGFUSE_* or DOUG_TRACING at all.
           `langfuse_configured` runs `gcloud secrets describe` as
           doug-deployer, which holds no Secret Manager role, and the check
-          read PERMISSION_DENIED as "absent". Fixed: only NOT_FOUND is off,
-          anything else stops the deploy loudly; `setup` grants the deployer
-          roles/secretmanager.viewer on the two secrets only. api 1858 pass,
-          `ruff check` clean, denied guard red under mutation.
-Next:     Andrew (the classifier blocked both gcloud IAM writes from the
-          agent): grant viewer on the two secrets to doug-deployer, either
-          by `PROJECT=doug-prod0 bash api/deploy/gcp.sh setup` after merge or
-          by the two `gcloud secrets add-iam-policy-binding` lines in the PR
-          body; then redeploy (merge, or `gh workflow run deploy.yml`) and
-          confirm the deploy log prints `tracing: ON` and the new revision's
-          env carries DOUG_TRACING=1. If the log then shows
-          `doug: tracing client construction failed`, the key values are
-          wrong, not the wiring.
-Blockers: IAM grant is founder-run (see Next). #289 (subprocessor listing
-          and DPA) is still OPEN and says tracing is off; the secrets
-          existing is Andrew's own turn-on click, so #289 now describes a
-          live state, not a future one.
+          read PERMISSION_DENIED as "absent". TRACING IS NOW ON: Andrew
+          bound viewer on the two secrets by hand, dispatch run 33941891276
+          printed `tracing: ON`, and doug-api-00222-rez carries
+          DOUG_TRACING=1, both mounts, host, environment=production.
+          PR #302 open. Doug's review found the first cut wrong (it aborted
+          the deploy on PERMISSION_DENIED, which GCP also returns for an
+          absent secret to a principal without project-level get, so a
+          fresh project or the delete-to-turn-off path would never deploy
+          again). Second cut: the guard is loud but non-blocking (`::error::`
+          annotation, tracing off), and the grant is project-level
+          roles/secretmanager.viewer in setup-cicd.sh. api 1858 pass,
+          `ruff check` clean, both halves red under mutation.
+Next:     Andrew runs the project-level grant (agent is blocked from IAM):
+            gcloud projects add-iam-policy-binding doug-prod0
+              --member=serviceAccount:doug-deployer@doug-prod0.iam.gserviceaccount.com
+              --role=roles/secretmanager.viewer --condition=None
+          The two per-secret viewer bindings he already made are redundant
+          after that and can stay. Then review and merge #302; check main
+          carries the branch tip. First traced review: Doug's re-review of
+          #302 itself. Look for `doug: tracing client construction failed`
+          in doug-api logs; its absence plus a trace in Langfuse tagged
+          `production` closes this.
+Blockers: project-level grant is founder-run (see Next). #289
+          (subprocessor listing and DPA) is still OPEN and says tracing is
+          off; it now describes a live state.
 
 Decisions this session (2026-09-04):
 - Denied is not absent. `gcloud secrets describe` exits 1 for both, and the
   check collapsed them, so a green deploy silently shipped less than the
-  operator configured. Ruling: NOT_FOUND alone resolves to off; any other
-  failure exits the deploy with the grant it needs. Rejected: treat denied
-  as off with a WARN (that is exactly the state that lost a day); a repo
-  variable as the switch (two facts that can disagree, which ADR-0031
-  rejected already).
-- Viewer per secret, not project-wide. CI still cannot read a key or list
-  the rest. Rejected: roles/secretmanager.viewer on the project.
+  operator configured. Ruling: NOT_FOUND alone resolves to off quietly; any
+  other answer deploys with tracing off AND emits a red Actions annotation
+  naming the grant. Rejected: abort the deploy (first cut — Doug showed it
+  strands bootstrap and the delete path, and ADR-0025 says a merge deploys;
+  R1 says production wins over a dashboard); a WARN line in stdout only
+  (the state that lost a day); a repo variable as the switch (two facts
+  that can disagree, rejected in ADR-0031).
+- Viewer is project-level, in setup-cicd.sh with the deployer's other
+  roles. Per-secret viewer cannot answer NOT_FOUND for a secret that is not
+  there, and it vanishes with the secret. Rejected: per-secret grants in
+  gcp.sh setup (first cut).
+- Text match on NOT_FOUND stays: it is the gRPC status name, gcloud has no
+  other channel, and a miss degrades into the loud branch, not a wrong
+  answer.
 - ADR-0031's "tracing is off in production until the secrets exist" left
   as written: a record, and #289 owns the live state.
 
-Pointers: api/deploy/gcp.sh `langfuse_configured`, setup viewer loop ·
-          api/deploy/setup-cicd.sh comment · api/tests/test_deploy_gcp.py
-          `GCLOUD_LANGFUSE=half|denied`, `test_a_deployer_that_cannot_see…`,
-          `test_setup_lets_the_deployer_see…` · docs/OPERATIONS.md "Turn it
-          on", "When a trace is missing" · deploy run 33927066970 line
-          `tracing: off` · #289
+Pointers: api/deploy/gcp.sh `langfuse_configured` · api/deploy/setup-cicd.sh
+          roles loop · api/tests/test_deploy_gcp.py `GCLOUD_LANGFUSE=
+          half|denied`, `test_a_deployer_that_cannot_see…deploys_off…`,
+          `test_an_absent_langfuse_secret_is_off_without_an_annotation`,
+          `test_the_deployer_can_see_whether_a_secret_exists…` ·
+          docs/OPERATIONS.md "Turn it on", "When a trace is missing" ·
+          deploy runs 33927066970 (off) and 33941891276 (ON) · #302 · #289
 
 --- prior stream (#234 status, MERGED as a8e015f) below, preserved ---
 

@@ -265,14 +265,24 @@ If it prints `tracing: off`, one of the two secrets is missing. Both halves are
 required on purpose — a half-created pair resolves to off rather than failing
 the deploy on a `--set-secrets` entry that names a secret which does not exist.
 
-Only `NOT_FOUND` reads as off. The check runs as `doug-deployer` in CI, and
-that account holds no Secret Manager rights of its own, so `setup` grants it
-`roles/secretmanager.viewer` on the two Langfuse secrets alone: metadata, not
-the key. Without that grant the deploy fails with
-`ERROR: cannot tell whether secret … exists` rather than printing off. That is
-deliberate: on 2026-09-04 the same denial was read as "not both present", and
-every deploy went green with tracing off while both secrets sat there. If you
-see that error, re-run `deploy/gcp.sh setup` and redeploy.
+Only `NOT_FOUND` reads as off quietly. The check runs as `doug-deployer` in
+CI, and GCP answers `PERMISSION_DENIED` to a principal without project-level
+`secretmanager.secrets.get` whether the secret exists or not, so
+`setup-cicd.sh` grants the deployer `roles/secretmanager.viewer` on the
+project: metadata, never a key. Without it, on 2026-09-04, that denial was
+read as "not both present" and every deploy went green with tracing off while
+both secrets sat there.
+
+Any other answer still deploys with tracing off, because a merge to main
+deploys and a dashboard must not hold up a fix, but the run carries a red
+error annotation:
+
+```
+tracing: cannot tell whether secret … exists, so it is treated as absent and tracing is OFF.
+```
+
+If you see it, the viewer grant is missing or Secret Manager was unreachable.
+Re-run `deploy/setup-cicd.sh`, or bind the role by hand, and redeploy.
 
 ### Turn it off
 
