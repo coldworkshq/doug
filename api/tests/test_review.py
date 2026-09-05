@@ -868,3 +868,50 @@ def test_head_ci_evidence_is_none_wherever_it_cannot_say_all_green():
         _CiGH({"ci.yml": CI_YML}, [_run("api", conclusion="failure")]), "o", "r", "b" * 40
     )
     assert ev is not None and ev.settled_by == {}
+
+
+def test_a_ci_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, capsys):
+    """Doug's second read of #314 (`reader:unhandled-exception-in-optional-path`):
+    a parser over tenant YAML and a config walk over tenant TOML must never
+    fail a review. The read stands, the finding publishes, stderr says why."""
+    meta = _pr_with_deterministic_score_0_79().model_copy(update={"head_sha": "a" * 40})
+    finding = reader.ReaderFinding(
+        category_slug="undefined-name",
+        description="`LIMIT` is never defined, so f() raises NameError",
+        file="api/doug/x.py",
+        severity="high",
+    )
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, [finding]))
+
+    def resolve_ci():
+        raise TypeError("odd nesting")
+
+    tier, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE,
+        resolve_file={"api/doug/x.py": "LIMIT = 3\n"}.get, resolve_ci=resolve_ci,
+    )
+    assert tier == "reader" and len(rv.findings) == 1
+    assert any(r.rule == "reader:undefined-name" for r in v.reasons)
+    assert not any(r.rule == "settled-ci-green" for r in v.reasons)
+    assert "ci settlement skipped (TypeError: odd nesting)" in capsys.readouterr().err
+
+
+def test_head_file_text_missing_ok_silences_only_a_404(capsys):
+    def _raise(status):
+        e = RuntimeError("nope")
+        e.response = SimpleNamespace(status_code=status)
+        raise e
+
+    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
+        get_content=lambda **kw: _raise(404)
+    )))
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
+    assert capsys.readouterr().err == ""
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml") is None
+    assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err
+    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
+        get_content=lambda **kw: _raise(403)
+    )))
+    assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
+    assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err

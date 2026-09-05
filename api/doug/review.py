@@ -484,9 +484,21 @@ def score_one(
                         ci_seen.append(resolve_ci())
                     return ci_seen[0]
 
-                rv, ci_dropped = settle.drop_disproved_ci_findings(
-                    rv, _resolve_ci_once, resolve_file
-                )
+                try:
+                    rv, ci_dropped = settle.drop_disproved_ci_findings(
+                        rv, _resolve_ci_once, resolve_file
+                    )
+                except Exception as e:  # noqa: BLE001 — settlement is advisory
+                    # A hand-rolled parser over tenant-authored YAML and a
+                    # config walk over tenant-authored TOML must never be
+                    # able to fail a review (Doug's second read of #314,
+                    # `reader:unhandled-exception-in-optional-path`). The
+                    # read stands as the model returned it.
+                    ci_dropped = []
+                    print(
+                        f"doug: ci settlement skipped ({type(e).__name__}: {e})",
+                        file=sys.stderr,
+                    )
                 if ci_dropped:
                     rules = ", ".join(f"reader:{d.category_slug}" for d in ci_dropped)
                     print(

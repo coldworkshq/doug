@@ -49,6 +49,14 @@ _KEY_RE = re.compile(r"^([A-Za-z0-9_.\-]+)\s*:(?:\s+(.*)|$)")
 _SEQ_RE = re.compile(r"^-(?:\s+(.*)|$)")
 
 
+class Unparseable(Exception):
+    """A line the subset does not read. The whole document is then unread:
+    a mapping truncated at a merge key (`<<: *defaults`) would have kept
+    every key before it and lost the working-directory after it, which is
+    a mis-parse that settles wrongly rather than one that settles nothing
+    (Doug's first read of #314, `reader:fragile-parser`)."""
+
+
 def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
@@ -81,6 +89,9 @@ def _scalar(value: str) -> str:
     v = _uncomment(value)
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         return v[1:-1]
+    # Anchors, aliases and tags carry meaning the subset does not model.
+    if v[:1] in ("&", "*", "!"):
+        raise Unparseable(v)
     return v
 
 
@@ -91,8 +102,11 @@ def _next_content(lines: list[str], i: int) -> int:
 
 
 def _parse(lines: list[str], i: int, indent: int):
-    if _SEQ_RE.match(lines[i].strip()):
+    s = lines[i].strip()
+    if _SEQ_RE.match(s):
         return _parse_seq(lines, i, indent)
+    if not _KEY_RE.match(s):
+        raise Unparseable(lines[i])
     return _parse_map(lines, i, indent)
 
 
@@ -104,7 +118,7 @@ def _parse_map(lines: list[str], i: int, indent: int) -> tuple[dict, int]:
             return node, i
         m = _KEY_RE.match(lines[i].strip())
         if not m:
-            return node, i
+            raise Unparseable(lines[i])
         key, rest = m.group(1), m.group(2)
         i += 1
         if rest is None or _uncomment(rest) == "":
@@ -135,7 +149,7 @@ def _parse_seq(lines: list[str], i: int, indent: int) -> tuple[list, int]:
         s = lines[i].strip()
         m = _SEQ_RE.match(s)
         if not m:
-            return items, i
+            raise Unparseable(lines[i])
         rest = m.group(1)
         if rest is None or _uncomment(rest) == "":
             i += 1
@@ -235,10 +249,15 @@ def parse_workflow(text: str) -> list[Job]:
     expression (`${{ … }}`) cannot be matched to a check run or a path
     without evaluating it, so it is skipped too — skipped is the safe
     direction, because a skipped job settles nothing.
+
+    A step carrying `if:` may not have run, and one carrying
+    `continue-on-error` may have failed, inside a job that still concluded
+    success; neither is evidence, so both are dropped. A job carrying
+    `continue-on-error` is dropped whole for the same reason.
     """
     try:
         doc = parse_yaml_subset(text)
-    except RecursionError:
+    except (Unparseable, RecursionError):
         return []
     jobs = doc.get("jobs") if isinstance(doc, dict) else None
     if not isinstance(jobs, dict):
@@ -246,7 +265,7 @@ def parse_workflow(text: str) -> list[Job]:
     workflow_wd = _run_default(doc)
     out: list[Job] = []
     for key, job in jobs.items():
-        if not isinstance(job, dict) or "uses" in job:
+        if not isinstance(job, dict) or "uses" in job or "continue-on-error" in job:
             continue
         name = job.get("name", key)
         if not isinstance(name, str) or not name or "${{" in name:
@@ -258,6 +277,8 @@ def parse_workflow(text: str) -> list[Job]:
                 continue
             run = step.get("run")
             if not isinstance(run, str) or not run.strip():
+                continue
+            if "if" in step or "continue-on-error" in step:
                 continue
             step_wd = step.get("working-directory")
             wd = step_wd if isinstance(step_wd, str) and step_wd else job_wd
@@ -298,23 +319,88 @@ _FALSIFIERS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # carrying it has no root this module can state.
 _WORKSPACE_RE = re.compile(r"(?:--workspace[= ]|(?<!\S)-w\s+)([^\s]+)")
 _FILTER_RE = re.compile(r"(?<!\S)--filter(?:[= ]|\b)")
+# One step can run several commands; each is read on its own.
+_COMMAND_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+# Flags a `ruff check` may carry without changing which rules it reports or
+# how it exits. Anything else — `--select`, `--ignore`, `--config`,
+# `--exclude`, `--exit-zero`, `--extend-select`, … — means the command's
+# verdict is not the configuration's, and the step states no root.
+_RUFF_HARMLESS_FLAGS = frozenset(
+    {"--no-cache", "-n", "--quiet", "-q", "--fix", "--no-fix", "--show-fixes",
+     "--statistics", "--preview", "--no-preview", "--diff", "--watch",
+     "--unsafe-fixes", "--no-unsafe-fixes", "--exit-non-zero-on-fix"}
+)  # fmt: skip
+_TOOL_TOKEN = {RUFF: "ruff", JS_LINT: "eslint"}
 
 
 def kinds_of(command: str) -> frozenset[str]:
     return frozenset(kind for kind, rx in _FALSIFIERS if rx.search(command))
 
 
-def _step_roots(step: Step) -> list[str] | None:
-    """Directories the step's command ran over; None when that cannot be said."""
-    if _FILTER_RE.search(step.command):
+def _tool_index(tokens: list[str], kind: str) -> int | None:
+    """Where the tool itself is invoked, or None when the command only
+    names it through a script (`npm run lint`)."""
+    tool = _TOOL_TOKEN.get(kind)
+    if tool is None:
         return None
-    workspaces = _WORKSPACE_RE.findall(step.command)
-    if not workspaces:
-        return [step.working_directory]
-    return [
-        _norm_dir(posixpath.join(step.working_directory, w) if step.working_directory else w)
-        for w in workspaces
-    ]
+    for i, t in enumerate(tokens):
+        if t == tool or t.endswith("/" + tool):
+            return i
+    return None
+
+
+def _explicit_paths(tokens: list[str], kind: str) -> list[str] | None:
+    """Positional path arguments after the tool, or None when a flag could
+    have changed what the tool reported.
+
+    `ruff check api/doug` at the repository root checked api/doug and
+    nothing else (Doug's first read of #314). A flag with a separate value
+    (`--select E`) cannot be told from a flag followed by a path without
+    knowing the tool's option table, so for ruff only the harmless no-value
+    flags are read and every other flag makes the root unknowable; for
+    eslint any flag without `=` does the same.
+    """
+    start = _tool_index(tokens, kind)
+    if start is None:
+        return None
+    rest = tokens[start + 1 :]
+    if kind == RUFF:
+        if not rest or rest[0] != "check":
+            return None
+        rest = rest[1:]
+    paths: list[str] = []
+    for tok in rest:
+        if tok.startswith("-"):
+            if "=" in tok or (kind == RUFF and tok in _RUFF_HARMLESS_FLAGS):
+                continue
+            return None
+        paths.append(tok)
+    return paths
+
+
+def _step_roots(step: Step, kind: str) -> list[str] | None:
+    """Directories the step's `kind` commands ran over; None when unknowable."""
+    roots: list[str] = []
+    for command in _COMMAND_SPLIT_RE.split(step.command):
+        if kind not in kinds_of(command):
+            continue
+        if _FILTER_RE.search(command):
+            return None
+        wd = step.working_directory
+        tokens = command.split()
+        if _tool_index(tokens, kind) is not None:
+            paths = _explicit_paths(tokens, kind)
+            if paths is None:
+                return None
+            roots.extend(_norm_dir(posixpath.join(wd, p)) if wd else _norm_dir(p) for p in paths)
+            if not paths:
+                roots.append(wd)
+            continue
+        workspaces = _WORKSPACE_RE.findall(command)
+        if not workspaces:
+            roots.append(wd)
+        roots.extend(_norm_dir(posixpath.join(wd, w)) if wd else _norm_dir(w) for w in workspaces)
+    return roots
 
 
 @dataclass(frozen=True)
@@ -341,7 +427,8 @@ class CiEvidence:
         if kind not in self.settled_by:
             return False
         return any(
-            root == "" or path.startswith(root + "/") for root in self.roots.get(kind, ())
+            root == "" or path == root or path.startswith(root + "/")
+            for root in self.roots.get(kind, ())
         )
 
 
@@ -384,7 +471,7 @@ def evidence(jobs: list[Job], checks: list[CheckResult]) -> CiEvidence:
             for step in job.steps:
                 if kind not in kinds_of(step.command):
                     continue
-                step_roots = _step_roots(step)
+                step_roots = _step_roots(step, kind)
                 if step_roots is not None:
                     found.extend(step_roots)
         roots[kind] = tuple(dict.fromkeys(found))

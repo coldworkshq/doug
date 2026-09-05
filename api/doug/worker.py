@@ -46,6 +46,10 @@ _EXAMPLE_PACK_VERIFIER_VERSIONS = (
 )
 
 
+# Files the CI settlement probes for and usually does not find.
+_PROBED_CONFIG_FILES = ("pyproject.toml", "ruff.toml", ".ruff.toml", ".gitignore")
+
+
 def _tool_version(distribution: str) -> str:
     try:
         return version(distribution)
@@ -504,8 +508,21 @@ def process_job(job: dict) -> int | None:
     deep_read = store.repo_deep_read(job["installation_id"], job["github_repo_id"])
     # Settle resolution findings against the reviewed head — not the PR tip
     # pulls.get might now show (we already refused a moved head above).
+    # One fetch per path per job: the settlements and the verify read ask
+    # for the same files, and the CI settlement's ruff-config walk asks for
+    # the same handful of candidates under every finding (Doug's reads of
+    # #314, `reader:excessive-api-calls`). The head is fixed, so a cached
+    # answer is the answer. A missing ruff config is the expected result of
+    # a probe, not a skipped fetch, so those misses are not logged.
+    fetched: dict[str, str | None] = {}
+
     def resolve(path: str) -> str | None:
-        return review.head_file_text(gh, owner, name, job["head_sha"], path)
+        if path not in fetched:
+            fetched[path] = review.head_file_text(
+                gh, owner, name, job["head_sha"], path,
+                missing_ok=path.endswith(_PROBED_CONFIG_FILES),
+            )
+        return fetched[path]
 
     # Same head, same discipline: the gates that ran on the reviewed SHA,
     # not whatever has run on the PR since (#307).

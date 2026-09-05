@@ -307,3 +307,128 @@ def test_exclude_and_per_file_ignores_keep_the_finding():
 def test_an_extending_or_unparseable_config_cannot_tell():
     assert ci.f821_selected("x.py", _fs({"ruff.toml": 'extend = "../base.toml"\n'})) is None
     assert ci.f821_selected("x.py", _fs({"ruff.toml": "select = [\n"})) is None
+
+
+# ---------------------------------------------------------------------------
+# Doug's own reads of #314, each turned into a pin.
+
+
+def test_a_line_the_subset_cannot_read_unreads_the_whole_document():
+    """First read, `reader:fragile-parser`: a merge key used to truncate the
+    job's mapping silently, keeping the steps before it and losing the
+    working-directory after it — a mis-parse that settles wrongly. Now the
+    workflow yields nothing."""
+    merge_key = """\
+jobs:
+  api:
+    steps:
+      - run: ruff check .
+    <<: *defaults
+    defaults:
+      run:
+        working-directory: api
+"""
+    assert ci.parse_workflow(merge_key) == []
+    for text in (
+        "jobs:\n  api: &shared\n    steps:\n      - run: ruff check .\n",
+        "jobs:\n  api:\n    steps: *steps\n",
+        "jobs:\n  api:\n    steps:\n      - run: ruff check .\n    tagged: !!str x\n",
+        "jobs:\n  api:\n    steps:\n      - run: ruff check .\n      bare scalar line\n",
+    ):
+        assert ci.parse_workflow(text) == [], text
+
+
+def test_the_parser_terminates_and_never_raises_on_mangled_input():
+    """Second read, `reader:parser-infinite-loop` and
+    `reader:unhandled-exception-in-optional-path`: every loop either
+    advances or returns, and every exception the subset can raise is
+    caught. Pinned by mangling the real workflow a few hundred ways."""
+    import random
+
+    rng = random.Random(314)
+    lines = DOUG_CI.splitlines()
+    junk = [
+        "- ", ":", "  - run:", "jobs:", "<<: *x", "&a", "*a", "  |", "  >", "\t",
+        "- - -", "key: [", "{",
+    ]  # fmt: skip
+    for _ in range(400):
+        mangled = list(lines)
+        for _ in range(rng.randint(1, 6)):
+            op = rng.randrange(4)
+            at = rng.randrange(len(mangled))
+            if op == 0:
+                mangled[at] = " " * rng.randint(0, 12) + mangled[at].lstrip()
+            elif op == 1:
+                mangled.insert(at, " " * rng.randint(0, 10) + rng.choice(junk))
+            elif op == 2:
+                del mangled[at]
+            else:
+                other = -1 - at % len(mangled)
+                mangled[at], mangled[other] = mangled[other], mangled[at]
+        result = ci.parse_workflow("\n".join(mangled))
+        assert isinstance(result, list)
+
+
+def test_conditional_and_tolerated_steps_are_not_evidence():
+    """Second read, `reader:false-settlement`: a job concludes success with
+    an `if:` step skipped or a `continue-on-error` step failed."""
+    text = """\
+jobs:
+  api:
+    steps:
+      - run: ruff check .
+        if: github.event_name == 'push'
+      - run: npm run lint
+        continue-on-error: true
+      - run: npm run build
+  tolerated:
+    continue-on-error: true
+    steps:
+      - run: ruff check .
+"""
+    jobs = ci.parse_workflow(text)
+    assert [(j.check_name, [s.command for s in j.steps]) for j in jobs] == [
+        ("api", ["npm run build"])
+    ]
+
+
+def test_explicit_paths_narrow_the_root_and_unknown_flags_remove_it():
+    """First read, both `reader:over-broad-heuristic` findings: `ruff check
+    api/doug` at the root checked api/doug and nothing else; `ruff check
+    --select E .` reports something other than the configuration says."""
+
+    def roots(command, wd=""):
+        ev = ci.evidence([Job("j", (Step(command, wd),))], [_check("j")])
+        return ev.roots
+
+    assert roots("uv run ruff check api/doug scripts/x.py") == {
+        ci.RUFF: ("api/doug", "scripts/x.py")
+    }
+    assert roots("uv run ruff check .", wd="api") == {ci.RUFF: ("api",)}
+    assert roots("uv run ruff check doug", wd="api") == {ci.RUFF: ("api/doug",)}
+    assert roots("ruff check --no-cache -q --output-format=github .") == {ci.RUFF: ("",)}
+    for flagged in (
+        "ruff check --select E .",
+        "ruff check --ignore F821 .",
+        "ruff check --config ruff.toml .",
+        "ruff check --exit-zero .",
+        "ruff check --extend-select B .",
+        "ruff format .",  # not a check at all
+    ):
+        assert roots(flagged) in ({ci.RUFF: ()}, {}), flagged
+    # eslint reads the same way; a scripted lint keeps the workspace rule.
+    assert roots("npx eslint web/src") == {ci.JS_LINT: ("web/src",)}
+    assert roots("npx eslint --max-warnings=0 .") == {ci.JS_LINT: ("",)}
+    assert roots("npx eslint --ext .ts .") == {ci.JS_LINT: ()}
+    assert roots("npm run lint --workspace=web") == {ci.JS_LINT: ("web",)}
+    # Several commands in one step are read one at a time.
+    assert roots("uv sync && uv run ruff check api/doug\nnpm run build -w web") == {
+        ci.RUFF: ("api/doug",),
+        ci.JS_BUILD: ("web",),
+    }
+    ev = ci.evidence([Job("j", (Step("ruff check api/doug", ""),))], [_check("j")])
+    assert ev.covers(ci.RUFF, "api/doug/x.py")
+    assert not ev.covers(ci.RUFF, "api/tests/test_x.py")
+    ev = ci.evidence([Job("j", (Step("ruff check scripts/x.py", ""),))], [_check("j")])
+    assert ev.covers(ci.RUFF, "scripts/x.py")
+    assert not ev.covers(ci.RUFF, "scripts/y.py")

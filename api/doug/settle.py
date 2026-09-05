@@ -378,10 +378,18 @@ def schema_settlement_notice(dropped: list[ReaderFinding]):
 #     claim about a name the file never reads is a claim we cannot follow),
 #     must not be bound under `if TYPE_CHECKING:` (bound for ruff, absent at
 #     runtime), the file must carry no `noqa` that could have silenced F821,
-#     F821 must be selected by the ruff configuration nearest the file, and
-#     a green ruff job must have run over the file's directory. A claim
-#     phrased as use-before-assignment is out of scope entirely: ruff does
-#     not see those, so a green ruff says nothing about them.
+#     no star import (ruff then reports F405 instead of F821, and F405 is
+#     the rule projects with star imports ignore) and no `global` statement
+#     naming it, the file must not be matched by the root `.gitignore` (ruff
+#     skips ignored files), F821 must be selected by the ruff configuration
+#     nearest the file, and a green ruff job must have run over the file's
+#     directory. A claim phrased as use-before-assignment is out of scope
+#     entirely: ruff does not see those, so a green ruff says nothing about
+#     them. The claimed name is the one written as code NEXT TO the claim
+#     words, not every name in backticks: "`handler` reads LIMIT, which is
+#     undefined" claims LIMIT, which is not in code, so it claims nothing
+#     and stays published (Doug's first read of #314,
+#     `reader:name-extraction-imprecision`).
 
 _UNDEFINED_NAME_SLUGS = frozenset(
     {
@@ -433,11 +441,42 @@ def looks_like_build_break_finding(f: ReaderFinding) -> bool:
     )
 
 
-def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
-    """(names loaded outside TYPE_CHECKING, names bound inside it), or None.
+# A name written as code beside the claim. Form A: the name, then at most
+# three words, then the claim ("`x` is referenced but never defined").
+# Form B: the claim, then the name ("undefined name `x`", "NameError on
+# `x`"). Anything looser let "`handler` reads LIMIT … LIMIT is undefined"
+# claim `handler` (Doug's first read of #314).
+_CLAIM_AFTER = (
+    r"undefined|not defined|never defined|neither defined|isn't defined|"
+    r"not imported|never imported|unbound|unresolved"
+)
+_CLAIM_BEFORE = (
+    r"undefined(?: name| variable| reference)?|nameerror(?: on| for)?|"
+    r"no import(?: of| for)?|missing import(?: of| for)?|never imports?|"
+    r"not import(?:ed)?|unresolved(?: name| reference)?"
+)
+_CLAIMED_NAME_RE = re.compile(
+    rf"`([A-Za-z_][A-Za-z0-9_]*)`[,:]?\s*(?:[A-Za-z]+\s+){{0,3}}(?:{_CLAIM_AFTER})\b"
+    rf"|\b(?:{_CLAIM_BEFORE})\s*:?\s*`([A-Za-z_][A-Za-z0-9_]*)`",
+    re.IGNORECASE,
+)
 
-    A name in the first set is one ruff F821 checked; a name in the second
-    is one ruff saw bound that the interpreter will not. Same TYPE_CHECKING
+
+def claimed_undefined_names(f: ReaderFinding) -> list[str]:
+    """Names the finding says are undefined: written as code, next to the
+    claim. Empty ⇒ nothing to settle."""
+    found = [a or b for a, b in _CLAIMED_NAME_RE.findall(f.description)]
+    return list(dict.fromkeys(found))
+
+
+def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
+    """(names loaded outside TYPE_CHECKING, names ruff saw bound that the
+    interpreter will not, or that ruff never checked), or None.
+
+    The second set is every veto ruff's boundary leaves: a name bound under
+    `if TYPE_CHECKING:`, a name declared `global` (bound dynamically for
+    all ruff knows), and — when the file holds a star import — every name,
+    because ruff then reports F405 rather than F821. Same TYPE_CHECKING
     walk as runtime_imported_names, so the two settlements draw the
     boundary in the same place.
     """
@@ -447,6 +486,7 @@ def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
         return None
     loaded: set[str] = set()
     type_checking_bound: set[str] = set()
+    star_import = False
 
     class Visitor(ast.NodeVisitor):
         def visit_If(self, node: ast.If) -> None:
@@ -471,8 +511,35 @@ def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
             if isinstance(node.ctx, ast.Load):
                 loaded.add(node.id)
 
+        def visit_Global(self, node: ast.Global) -> None:
+            type_checking_bound.update(node.names)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            nonlocal star_import
+            if any(alias.name == "*" for alias in node.names):
+                star_import = True
+
     Visitor().visit(tree)
+    if star_import:
+        return loaded, set(loaded)
     return loaded, type_checking_bound
+
+
+def _gitignored_at_root(path: str, resolve_file: ResolveFile) -> bool:
+    """Does the repository's root .gitignore match `path`? ruff skips
+    ignored files by default, so a committed-but-ignored file was never
+    checked. Only the root file is read; a nested .gitignore is a residual
+    this does not chase. Negations are skipped, which errs toward a match."""
+    text = resolve_file(".gitignore")
+    if not text:
+        return False
+    for line in text.splitlines():
+        pattern = line.strip()
+        if not pattern or pattern.startswith(("#", "!")):
+            continue
+        if ci_evidence._glob_matches(pattern.lstrip("/"), path, path):
+            return True
+    return False
 
 
 def _ruff_green_disproves(
@@ -490,10 +557,12 @@ def _ruff_green_disproves(
     if looks_like_missing_import_finding(f):
         names = claimed_names(f, runtime_imported_names(source))
     else:
-        names = list(dict.fromkeys(_NAME_IN_BACKTICKS.findall(f.description)))
+        names = claimed_undefined_names(f)
     if not names:
         return False
     if any(n not in loaded or n in type_checking_bound for n in names):
+        return False
+    if _gitignored_at_root(f.file, resolve_file):
         return False
     return ci_evidence.f821_selected(f.file, resolve_file) is True
 

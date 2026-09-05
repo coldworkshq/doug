@@ -557,3 +557,45 @@ def test_ci_notice_names_the_gate_that_answered():
     assert "web/app/page.tsx: unused-import-build-break (['web-lint', 'web-build'])" in notice.label
     assert settle.ci_settlement_notice([], ev) is None
     assert "(['?'])" in settle.ci_settlement_notice([_undef()], None).label
+
+
+def test_ruffs_remaining_blind_spots_are_vetoes_too():
+    """Doug's reads of #314 (`reader:incorrect-static-analysis-assumption`,
+    `reader:false-settlement`): a star import turns F821 into F405, which
+    is the rule star-importing projects ignore; a `global` is bound for
+    all ruff knows; an ignored file was never checked."""
+    ev = _ci(RUFF_IN_API)
+    star = "from os import *\n\ndef f():\n    return LIMIT\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": star})
+    assert (len(kept), dropped) == (1, [])
+    declared_global = "def f():\n    global LIMIT\n    return LIMIT\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, {"api/doug/x.py": declared_global})
+    assert (len(kept), dropped) == (1, [])
+    files = {"api/doug/x.py": BOUND_BY_ASSIGNMENT, ".gitignore": "# local\n*.log\napi/doug/x.py\n"}
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (len(kept), dropped) == (1, [])
+    files[".gitignore"] = "*.log\n!api/doug/x.py\nbuild/\n"
+    kept, dropped, _ = _settle_ci([_undef()], ev, files)
+    assert (kept, len(dropped)) == ([], 1)
+
+
+def test_the_claimed_name_is_the_one_written_next_to_the_claim():
+    """Doug's first read of #314 (`reader:name-extraction-imprecision`):
+    "`handler` reads LIMIT, which is undefined" names `handler` in code
+    and LIMIT in prose. Every backticked name being loaded must not settle
+    a claim about a name that was never written as code."""
+    f = _undef(desc="`handler` reads LIMIT on the retry path, and LIMIT is undefined")
+    assert settle.claimed_undefined_names(f) == []
+    src = "LIMIT = 3\ndef handler():\n    return LIMIT\nhandler()\n"
+    kept, dropped, _ = _settle_ci([f], _ci(RUFF_IN_API), {"api/doug/x.py": src})
+    assert (len(kept), dropped) == (1, [])
+    # Both orders of claim and name, and only the name next to the claim.
+    assert settle.claimed_undefined_names(
+        _undef(desc="`handler` calls `LIMIT`, which is not defined anywhere")
+    ) == ["LIMIT"]
+    assert settle.claimed_undefined_names(
+        _undef(desc="undefined name `LIMIT` inside `handler`")
+    ) == ["LIMIT"]
+    assert settle.claimed_undefined_names(
+        _undef(desc="raises NameError on `LIMIT` and `RETRIES`, neither defined")
+    ) == ["LIMIT", "RETRIES"]
