@@ -104,6 +104,14 @@ class Reason(BaseModel):
     # predate this field, and the lock says no wire, API, or web change —
     # store.save_review reads the attribute directly.
     hunks: list[str] | None = Field(default=None, exclude=True)
+    # What the read held of the file this finding names — the finding's own
+    # `evidence` class (reader.ReaderFinding.evidence), copied where the
+    # finding is still in hand so the check run can say "cites code Doug
+    # did not read" beside the finding rather than leaving a reader to
+    # cross-check the coverage line (#308). Off the wire for the same
+    # reasons as `file` below; None on every deterministic reason, on the
+    # weight-0 notices, and on reasons rebuilt from the ledger.
+    evidence: str | None = Field(default=None, exclude=True)
     # The file a reader finding names, set where the finding is still in
     # hand (reader.verdict_from_reader) rather than recovered later. It used
     # to be rebuilt in store.save_review by matching this Reason's label

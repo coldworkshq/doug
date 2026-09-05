@@ -332,3 +332,60 @@ def test_a_mismatched_changed_files_count_alone_does_not_mark_a_read_incomplete(
     produces a diff header at all."""
     cov = reader.coverage(_diff([("a.py", 400)]), changed_files=5, files_dropped=[])
     assert cov.complete
+
+
+# ---------------------------------------------------------------------------
+# #308: what the read held of the file a finding names.
+
+
+def _finding(path, evidence="diff"):
+    return reader.ReaderFinding(
+        category_slug="missing-import", description="d", file=path, severity="high",
+        evidence=evidence,
+    )
+
+
+def test_read_of_names_whole_partial_and_unread_from_one_coverage():
+    """One truncated read, every class: files that arrived whole, the file
+    the budget landed inside, files past the cut, a file GitHub never gave
+    a patch for, and a file the diff never contained at all — the #175
+    shape, `import sys` cited from a worker.py the PR did not touch."""
+    cov = reader.coverage(_diff(), budget=30_000, files_dropped=["assets/logo.png"])
+    assert cov.read_of("apps/api/cmd/lema-api/main.go") == "whole"
+    assert cov.read_of(cov.file_cut) == "partial"
+    assert cov.read_of(cov.files_unseen[0]) == "unread"
+    assert cov.read_of("assets/logo.png") == "unread"
+    assert cov.read_of("api/doug/worker.py") == "unread"
+    # A shortened spelling of a sent file is that file, not a stranger.
+    assert cov.read_of("lema-api/main.go") == "whole"
+    # Before the hunk index existed, nothing can be said.
+    assert reader.Coverage(diff_chars=1, sent_chars=1, files_sent=1, files_unseen=[]).read_of(
+        "x.py"
+    ) is None
+
+
+def test_classify_by_coverage_tags_at_emit_time_and_keeps_head_cited():
+    cov = reader.coverage(_diff(), budget=30_000)
+    rv = reader.ReaderVerdict(
+        risk_score=50,
+        rationale="r",
+        findings=[
+            _finding("apps/api/cmd/lema-api/main.go"),
+            _finding(cov.file_cut),
+            _finding(cov.files_unseen[0]),
+            _finding("api/doug/worker.py"),
+            # The verify tier read this file at head; that is the stronger
+            # claim and it stands.
+            _finding("api/doug/worker.py", evidence="head-cited"),
+        ],
+    )
+    tagged = reader.classify_by_coverage(rv, cov)
+    assert [f.evidence for f in tagged.findings] == [
+        "diff", "partial-read", "outside-read", "outside-read", "head-cited",
+    ]
+    # Additive and total, and the tag rides onto the verdict's reasons.
+    assert [f.file for f in tagged.findings] == [f.file for f in rv.findings]
+    verdict = reader.verdict_from_reader(tagged, threshold=30)
+    assert [r.evidence for r in verdict.reasons] == [f.evidence for f in tagged.findings]
+    # Off the wire, like `file`.
+    assert "evidence" not in verdict.reasons[1].model_dump()

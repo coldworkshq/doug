@@ -915,3 +915,29 @@ def test_head_file_text_missing_ok_silences_only_a_404(capsys):
     )))
     assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
     assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err
+
+
+def test_score_one_tags_a_finding_outside_the_read_before_the_verdict(monkeypatch):
+    """#308: the tag is set where the finding is emitted, from the same
+    coverage the verdict ships with, so the check run can say it beside the
+    finding and the coverage line cannot disagree with the tag."""
+    meta = _pr_with_deterministic_score_0_79()
+    diff = reader.diff_chunk("auth/session.go", "modified", 3, 1, "+ guard()")
+    findings = [
+        reader.ReaderFinding(
+            category_slug="missing-import", description="no sys",
+            file="api/doug/worker.py", severity="high",
+        ),
+        reader.ReaderFinding(
+            category_slug="race", description="in the diff",
+            file="auth/session.go", severity="medium",
+        ),
+    ]
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, findings))
+    tier, v, rv, cov = review.score_one(meta, diff, scope=reader.SENTINEL_SCOPE)
+    assert tier == "reader" and cov.complete
+    assert [f.evidence for f in rv.findings] == ["outside-read", "diff"]
+    by_rule = {r.rule: r.evidence for r in v.reasons}
+    assert by_rule["reader:missing-import"] == "outside-read"
+    assert by_rule["reader:race"] == "diff"

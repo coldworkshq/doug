@@ -1635,3 +1635,60 @@ def test_an_unrecognised_severity_is_capped_and_not_bolded():
     bullet = next(ln for ln in summary.splitlines() if ln.startswith("- q"))
     assert bullet == f"- {'q' * check_run._SEVERITY_LABEL_LIMIT} · `reader:x` — l"
     assert "**" not in bullet
+
+
+def _graded_with_evidence(*findings) -> object:
+    return reader.verdict_from_reader(
+        reader.ReaderVerdict(
+            risk_score=62,
+            rationale="r",
+            findings=[
+                reader.ReaderFinding(
+                    category_slug=slug, description=desc, file=path, severity=sev,
+                    evidence=evidence,
+                )
+                for slug, desc, path, sev, evidence in findings
+            ],
+        ),
+        threshold=30,
+    )
+
+
+def test_a_finding_outside_the_read_says_so_beside_the_finding():
+    """#308, #232: the `high` that led #229's list was about a file the read
+    never held. The severity is still the model's claim; the chip says how
+    much of the cited code the claim was made from, on the bullet itself
+    rather than in a coverage line a reader must cross-check."""
+    verdict = _graded_with_evidence(
+        ("missing-import", "no sys", "api/doug/worker.py", "high", "outside-read"),
+        ("null-deref", "cut", "api/doug/store.py", "medium", "partial-read"),
+        ("race", "in", "api/doug/api.py", "medium", "diff"),
+        ("grounded", "seen at head", "api/doug/reader.py", "low", "head-cited"),
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    assert (
+        "- **high** · [`api/doug/worker.py`](https://github.com/coldworkshq/doug/blob/"
+        "cccccccccccc/api/doug/worker.py) · `reader:missing-import` · "
+        "_cites code Doug did not read_ — no sys"
+    ) in summary
+    assert "· _cites a file Doug read only in part_ — cut" in summary
+    # In-read and head-cited findings carry no chip.
+    assert "`reader:race` — in" in summary
+    assert "`reader:grounded` — seen at head" in summary
+
+
+def test_an_outside_read_finding_sorts_after_its_in_read_peers_of_the_same_severity():
+    """A demotion within the severity bucket, not across one: a file the
+    budget dropped is also where a real defect can hide, so an outside-read
+    high still outranks an in-read medium (#232 leaves the full discount
+    open)."""
+    verdict = _graded_with_evidence(
+        ("out-high", "oh", "a.py", "high", "outside-read"),
+        ("in-high", "ih", "b.py", "high", "diff"),
+        ("in-medium", "im", "c.py", "medium", "diff"),
+        ("part-medium", "pm", "d.py", "medium", "partial-read"),
+    )
+    _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
+    findings = summary[summary.index("### Findings"):]
+    order = [findings.index(x) for x in ("— ih", "— oh", "— im", "— pm")]
+    assert order == sorted(order)

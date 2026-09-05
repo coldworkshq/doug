@@ -97,6 +97,19 @@ Every verdict carries what was actually read: `Partial read: 83% of the diff (10
 120,481 chars). Cut inside api/tests/test_ingest.py. Never sent: ROADMAP.md.` A clear on a
 partial read is not evidence about the unread part, and Doug says so itself.
 
+Since #308 the finding says it too. Every reader finding is tagged at emit
+time with what the read held of the file it names (`reader.classify_by_coverage`,
+from the same `Coverage` the verdict ships with): a file sent whole carries
+nothing, the file the budget landed inside renders with _cites a file Doug
+read only in part_, and a file never sent, never fetched, or never in the
+diff at all renders with _cites code Doug did not read_ — the #175 shape,
+`import sys` cited from a `worker.py` the PR never touched. The severity is
+still the model's claim about consequence-if-true; the chip says how much of
+the cited code that claim was made from. Such a finding sorts after its
+in-read peers of the same severity and no lower, because a file the budget
+dropped is also where a real defect can hide; the full discount by coverage
+(#232, option 3) stays open until it is measured.
+
 This is also a PR-size signal pointing the same way as one-PR-per-task: a diff small enough
 to be read whole produces a verdict worth something. A 121k-char diff does not.
 
