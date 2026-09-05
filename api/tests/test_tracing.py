@@ -456,3 +456,88 @@ def test_the_suite_guard_clears_every_variable_tracing_reads(monkeypatch):
     assert not tracing.enabled()
     for name in conftest._TRACING_ENV:
         assert name not in os.environ
+
+
+# --- the keys are checked once, at construction --------------------------
+
+
+class _Status(Exception):
+    """What the SDK raises from auth_check when the API answered: an
+    exception carrying `status_code`, the shape of `langfuse.api.ApiError`."""
+
+    def __init__(self, code: int):
+        super().__init__(f"status {code}")
+        self.status_code = code
+
+
+def _langfuse_whose_auth_check(monkeypatch, outcome):
+    """Install a stand-in `langfuse.Langfuse` whose auth_check does `outcome`."""
+    import langfuse
+
+    built: list = []
+
+    class _Stub:
+        def __init__(self):
+            built.append(self)
+
+        def auth_check(self):
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(langfuse, "Langfuse", _Stub)
+    return built
+
+
+def test_rejected_keys_turn_tracing_off_with_the_line_the_runbook_names(
+    monkeypatch, capsys
+):
+    """A 401 is a verdict on the keys, and it is reported once, as `doug:`.
+
+    Construction does not fail on a wrong key. Left alone, the SDK reports it
+    on the export thread as "Failed to export span batch code: 401", with no
+    `doug:` prefix and on every batch for the life of the process — which is
+    how a placeholder value in both production secrets traced nothing for a
+    day (2026-09-05) while every deploy printed `tracing: ON`, and while the
+    runbook told the reader to look for a construction-failed line that never
+    came. Memoized as `False` so the process pays for one auth check, not one
+    per read.
+    """
+    built = _langfuse_whose_auth_check(monkeypatch, _Status(401))
+
+    assert tracing._client() is None
+    assert tracing._client() is None
+
+    assert len(built) == 1, "the verdict is memoized; a wrong key costs one check"
+    err = capsys.readouterr().err
+    assert err.count("doug: tracing client construction failed: Langfuse rejected the keys") == 1
+
+
+def test_an_unanswered_auth_check_keeps_tracing_on(monkeypatch, capsys):
+    """No answer is not a verdict.
+
+    A timeout, a DNS failure or a 5xx says nothing about the keys. Turning
+    tracing off on it would make a flaky network into a silent configuration
+    change that lasts until the next deploy, the same defect the deploy-side
+    probe retries to avoid. The client is kept; the exporter's own retries
+    take it from there.
+    """
+    built = _langfuse_whose_auth_check(monkeypatch, ConnectionError("no route"))
+
+    assert tracing._client() is built[0]
+    assert "doug: tracing auth check inconclusive" in capsys.readouterr().err
+
+
+def test_a_5xx_from_the_auth_check_is_not_a_verdict_either(monkeypatch, capsys):
+    """Only 401 and 403 speak about the keys. A 503 is Langfuse being down."""
+    built = _langfuse_whose_auth_check(monkeypatch, _Status(503))
+
+    assert tracing._client() is built[0]
+    assert "rejected the keys" not in capsys.readouterr().err
+
+
+def test_accepted_keys_produce_the_client_and_no_diagnostic(monkeypatch, capsys):
+    built = _langfuse_whose_auth_check(monkeypatch, True)
+
+    assert tracing._client() is built[0]
+    assert "doug: tracing" not in capsys.readouterr().err
