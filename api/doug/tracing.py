@@ -113,12 +113,50 @@ def _client():
     try:
         from langfuse import Langfuse
 
-        _CLIENT = Langfuse()
+        client = Langfuse()
     except Exception as exc:  # noqa: BLE001 - tracing may not break a read
         _diagnostic(f"client construction failed: {type(exc).__name__}")
         _CLIENT = False
         return None
+    # Wrong keys do not fail construction. The SDK builds the client, and the
+    # 401 lands later on the export thread as "Failed to export span batch
+    # code: 401" — no `doug:` prefix, nothing naming which variable, and
+    # repeated on every batch for the life of the process. That is how a
+    # placeholder value in both secrets traced nothing for a day
+    # (2026-09-05) while every deploy said `tracing: ON`. One blocking call
+    # here, once per process, turns it into the line the runbook promises.
+    accepted = _keys_accepted(client)
+    if accepted is False:
+        _diagnostic(
+            "client construction failed: Langfuse rejected the keys; "
+            "tracing is off for this process"
+        )
+        _CLIENT = False
+        return None
+    if accepted is None:
+        _diagnostic("auth check inconclusive; tracing stays on")
+    _CLIENT = client
     return _CLIENT
+
+
+def _keys_accepted(client) -> bool | None:
+    """Did Langfuse accept the keys? True, False, or None for "did not answer".
+
+    `auth_check` raises rather than returning False when the API refuses the
+    credentials, and it raises the same way when the network is down. Only
+    the first is a verdict on the keys: a 401 or 403 means tracing cannot
+    work in this process, and every span it would open is a thread and a
+    retry budget spent to produce a log line. Anything else — a timeout, a
+    DNS failure, a 5xx — says nothing about the keys, and turning tracing off
+    on it would make a flaky network into a silent config change. Those keep
+    the client; the SDK's own export retries take it from there.
+    """
+    try:
+        return bool(client.auth_check())
+    except Exception as exc:  # noqa: BLE001 - only a status is a verdict
+        if getattr(exc, "status_code", None) in (401, 403):
+            return False
+        return None
 
 
 def _diagnostic(message: str) -> None:

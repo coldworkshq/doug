@@ -246,6 +246,13 @@ setup() {
       --member="serviceAccount:$SA" \
       --role=roles/secretmanager.secretAccessor >/dev/null
   done
+  # Nothing here binds doug-deployer. The deploy asks whether the Langfuse
+  # pair exists (`langfuse_configured`), and the right to ask is
+  # project-level metadata read, granted once in setup-cicd.sh with the
+  # deployer's other roles. A per-secret grant cannot do that job: it
+  # vanishes with the secret, and GCP answers PERMISSION_DENIED rather than
+  # NOT_FOUND for a secret the caller cannot see, so the "turn it off by
+  # deleting the secrets" path would read as broken forever.
 
   # doug-web gets its own identity too. It must not share the default
   # compute SA: that principal holds roles/editor on doug-prod0, and a
@@ -605,9 +612,53 @@ service_exists() {
 # Both, never either — the same all-of rule tracing.enabled() applies, for the
 # same reason. --set-secrets would fail the deploy on a missing secret, so a
 # half-created pair must resolve to off here rather than at deploy time.
+#
+# NOT_FOUND is the only failure this reads as off quietly. In CI the check
+# runs as doug-deployer, and GCP answers PERMISSION_DENIED both for a secret
+# the caller may not see and for one that does not exist ("or it may not
+# exist" is in the message), so a principal without project-level
+# secretmanager.secrets.get cannot tell the two apart. Collapsing every
+# failure into "absent" is what kept tracing off on 2026-09-04: both secrets
+# existed, bound to the runtime account and invisible to the deployer, and
+# every deploy printed "not both present" against them.
+#
+# An answer that is neither "present" nor NOT_FOUND still resolves to off —
+# a merge to main deploys (ADR-0025), and a viewing surface must not be what
+# keeps a fix from shipping — but it says so where a deploy is read: as a
+# GitHub Actions error annotation, which the run summary shows in red without
+# failing the job, and which is plain text anywhere else. setup-cicd.sh gives
+# the deployer project-level roles/secretmanager.viewer so that this branch
+# is never the expected one; if it fires, that grant is missing or the API
+# is unwell, and either way the deploy went out with tracing off.
+#
+# NOT_FOUND is matched as text because gcloud has no other channel for it.
+# It is the gRPC status name, not a sentence, so a wording or locale change
+# does not move it; and a miss degrades into the loud branch, never into a
+# wrong answer.
+#
+# Three attempts before the loud branch, because that branch changes what the
+# revision carries: a throttled or briefly unreachable Secret Manager would
+# otherwise roll out a revision without tracing on the strength of one
+# failed call. NOT_FOUND is not retried; it is an answer.
 langfuse_configured() {
-  gcloud secrets describe doug-langfuse-public-key --project "$PROJECT" >/dev/null 2>&1 \
-    && gcloud secrets describe doug-langfuse-secret-key --project "$PROJECT" >/dev/null 2>&1
+  local s out attempt
+  for s in doug-langfuse-public-key doug-langfuse-secret-key; do
+    for attempt in 1 2 3; do
+      if out=$(gcloud secrets describe "$s" --project "$PROJECT" 2>&1 >/dev/null); then
+        continue 2
+      fi
+      if printf '%s' "$out" | grep -q NOT_FOUND; then
+        return 1
+      fi
+      [ "$attempt" = 3 ] || sleep 2
+    done
+    # stderr, so that a caller that ever captures this function's stdout
+    # cannot swallow the one line that says what happened. Actions reads
+    # workflow commands from both streams.
+    echo "::error::tracing: cannot tell whether secret $s exists, so it is treated as absent and tracing is OFF. $(printf '%s' "$out" | head -n1) Grant roles/secretmanager.viewer on $PROJECT to the deploying principal (setup-cicd.sh does), then redeploy." >&2
+    return 1
+  done
+  return 0
 }
 
 # Return only the purpose-scoped binding needed to keep stored cohorts readable

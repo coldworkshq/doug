@@ -1,5 +1,98 @@
 # HANDOFF — doug
 
+State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
+          Langfuse traces: both secrets exist (created 2026-09-04 05:07),
+          bound to doug-api-sa, but every CI deploy since printed
+          `tracing: off (… not both present)` and the serving revision
+          (doug-api-00218-mob) carries no LANGFUSE_* or DOUG_TRACING at all.
+          `langfuse_configured` runs `gcloud secrets describe` as
+          doug-deployer, which holds no Secret Manager role, and the check
+          read PERMISSION_DENIED as "absent". TRACING IS NOW ON: Andrew
+          bound viewer on the two secrets by hand, dispatch run 33941891276
+          printed `tracing: ON`, and doug-api-00222-rez carries
+          DOUG_TRACING=1, both mounts, host, environment=production.
+          PR #302 open. Doug's review found the first cut wrong (it aborted
+          the deploy on PERMISSION_DENIED, which GCP also returns for an
+          absent secret to a principal without project-level get, so a
+          fresh project or the delete-to-turn-off path would never deploy
+          again). Second cut: the guard is loud but non-blocking (`::error::`
+          annotation, tracing off), and the grant is project-level
+          roles/secretmanager.viewer in setup-cicd.sh. api 1858 pass,
+          `ruff check` clean, both halves red under mutation.
+          THEN: still one trace in Langfuse. doug-api logs show every
+          export since 03:42 failing `401 Unauthorized`. Both secrets are 9
+          bytes: the literal placeholder `pk-lf-...` / `sk-lf-...`, not
+          keys (verified: 401 against US and EU hosts, stripped and
+          swapped). Nothing from production has ever reached Langfuse; the
+          one trace is local. Fourth cut: `tracing._client` runs
+          `auth_check` once per process and turns tracing off with a
+          `doug: tracing client construction failed: Langfuse rejected the
+          keys` line on 401/403; a non-answer keeps it on. Runbook now says
+          to curl the pair before storing it and to write the file with
+          printf, no trailing newline.
+          DONE 2026-09-05 04:18: Andrew stored real keys as version 2 of
+          both secrets (42 bytes, Langfuse answers 200), dispatch run
+          33944214230 redeployed, doug-api-00226-wuc serving since 04:23.
+          PROVEN 2026-09-05 06:08: Doug's review of b9b05a7 (job 2333) is
+          Langfuse trace 4bb06610…, env production, session = head SHA,
+          tag repo:coldworkshq/doug, root span `review coldworkshq/doug#302`
+          with reader.risk, reader.verify x2, reader.intent nested under it,
+          token counts matching the `paid read` log lines. No `doug:
+          tracing` and no `Failed to export` line on 00226. Verified through
+          the public API (GET /api/public/traces/{id}) with the keys read
+          from Secret Manager into the shell, never printed.
+Next:     Andrew reviews and merges #302, then checks main carries the
+          branch tip. Then the project-level grant (agent is blocked from IAM):
+            gcloud projects add-iam-policy-binding doug-prod0
+              --member=serviceAccount:doug-deployer@doug-prod0.iam.gserviceaccount.com
+              --role=roles/secretmanager.viewer --condition=None
+          The two per-secret viewer bindings he already made are redundant
+          after that and can stay. Then review and merge #302; check main
+          carries the branch tip. First traced review: Doug's re-review of
+          #302 itself. Look for `doug: tracing client construction failed`
+          in doug-api logs; its absence plus a trace in Langfuse tagged
+          `production` closes this.
+Blockers: project-level grant is founder-run (see Next). #289
+          (subprocessor listing and DPA) is still OPEN and says tracing is
+          off; it now describes a live state.
+
+Decisions this session (2026-09-04):
+- Denied is not absent. `gcloud secrets describe` exits 1 for both, and the
+  check collapsed them, so a green deploy silently shipped less than the
+  operator configured. Ruling: NOT_FOUND alone resolves to off quietly; any
+  other answer deploys with tracing off AND emits a red Actions annotation
+  naming the grant. Rejected: abort the deploy (first cut — Doug showed it
+  strands bootstrap and the delete path, and ADR-0025 says a merge deploys;
+  R1 says production wins over a dashboard); a WARN line in stdout only
+  (the state that lost a day); a repo variable as the switch (two facts
+  that can disagree, rejected in ADR-0031).
+- Viewer is project-level, in setup-cicd.sh with the deployer's other
+  roles. Per-secret viewer cannot answer NOT_FOUND for a secret that is not
+  there, and it vanishes with the secret. Rejected: per-secret grants in
+  gcp.sh setup (first cut).
+- Text match on NOT_FOUND stays: it is the gRPC status name, gcloud has no
+  other channel, and a miss degrades into the loud branch, not a wrong
+  answer.
+- Third cut, after Doug's second pass: the probe asks three times (2s apart)
+  before the loud branch, because that branch changes what the revision
+  carries and one throttled call must not do that; NOT_FOUND is never
+  retried. Annotation moved to stderr so a captured stdout cannot eat it.
+  ADR-0031 item 4 carries a dated amendment naming the third state and the
+  project-level grant. Rejected: an env knob to shorten the sleep for tests
+  (4s of test time is cheaper than a test-only switch in the deploy script).
+- ADR-0031's "tracing is off in production until the secrets exist" left
+  as written: a record, and #289 owns the live state.
+
+Pointers: api/deploy/gcp.sh `langfuse_configured` · api/deploy/setup-cicd.sh
+          roles loop · api/tests/test_deploy_gcp.py `GCLOUD_LANGFUSE=
+          half|denied`, `test_a_deployer_that_cannot_see…deploys_off…`,
+          `test_an_absent_langfuse_secret_is_off_without_an_annotation`,
+          `test_the_deployer_can_see_whether_a_secret_exists…` ·
+          docs/OPERATIONS.md "Turn it on", "When a trace is missing" ·
+          deploy runs 33927066970 (off) and 33941891276 (ON) · #302 · #289
+
+--- prior stream (#301 queue liveness, MERGED as 37c61b5) below, preserved ---
+
 State:    review — branch `claude/queue-liveness-uptime-alerts-1a658e`,
           PR #301 open, merged up to main a8e015f. api 1859 pass, ruff
           clean, four mutation checks red.

@@ -57,12 +57,23 @@ fi
 # Deploy-time rights only. Secret access belongs to the *runtime* service
 # account (granted in gcp.sh setup), not to this one — CI never reads a
 # secret, it only points Cloud Run at them.
+#
+# roles/secretmanager.viewer is metadata, not payloads: it can list secrets
+# and describe one, and it cannot access a version. It is here because
+# gcp.sh decides whether tracing is on by asking whether the two Langfuse
+# secrets exist (ADR-0031), and GCP answers PERMISSION_DENIED rather than
+# NOT_FOUND to a principal without project-level get, for secrets that exist
+# and for secrets that do not alike. Without this, every CI deploy read the
+# pair as absent (2026-09-04); with a per-secret grant instead, deleting the
+# pair to turn tracing off would read as "cannot tell" forever, because the
+# grant goes with the secret.
 for role in \
   roles/run.admin \
   roles/cloudbuild.builds.editor \
   roles/artifactregistry.writer \
   roles/storage.admin \
-  roles/iam.serviceAccountUser
+  roles/iam.serviceAccountUser \
+  roles/secretmanager.viewer
 do
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role="$role" \
