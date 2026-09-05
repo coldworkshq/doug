@@ -1,12 +1,13 @@
 # HANDOFF — doug
 
-State:    review — branch `claude/doug-deterministic-checks-d81757`, #307:
-          settle findings a green check at head already disproves. Code,
-          tests and REVIEWING.md written; running the full suite before
-          the PR.
-Next:     Full api suite + ruff green → commit → push → PR closing #307
-          and #232 → Andrew reviews; after merge, check main carries the
+State:    review — PR #314 open off main a8e015f, branch
+          `claude/doug-deterministic-checks-d81757`, closing #307 and #232.
+          api 1887 pass, ruff clean, four guard mutations each red.
+Next:     Andrew reviews and merges #314, then checks main carries the
           branch tip (squash merges have dropped the last commit before).
+          Remaining survey issues, in the order recommended: #308 (evidence
+          class at emit time), #303 (exclude generated content), #304
+          (same-hunks replay), then #306 + #199.
 Blockers: none.
 
 Decisions this session (2026-09-04):
