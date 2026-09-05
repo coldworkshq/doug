@@ -95,11 +95,53 @@ test("coverageLabel renders a dash for the non-known results", () => {
   assert.equal(coverageLabel({ kind: "unknown-denominator" }), "—");
 });
 
+test("relativeAge renders minutes for durations under 1 hour", () => {
+  const now = new Date("2026-08-06T12:00:00Z");
+  assert.equal(relativeAge("2026-08-06T12:00:00Z", now), "0m");
+  assert.equal(relativeAge("2026-08-06T11:55:00Z", now), "5m");
+  assert.equal(relativeAge("2026-08-06T11:01:00Z", now), "59m");
+});
+
 test("relativeAge renders hours, days and weeks distinctly", () => {
   const now = new Date("2026-08-06T12:00:00Z");
   assert.equal(relativeAge("2026-08-06T10:00:00Z", now), "2h");
   assert.equal(relativeAge("2026-08-04T12:00:00Z", now), "2d");
   assert.equal(relativeAge("2026-07-16T12:00:00Z", now), "3w");
+});
+
+test("relativeAge clamps future timestamps to 0m", () => {
+  const now = new Date("2026-08-06T12:00:00Z");
+  assert.equal(relativeAge("2026-08-06T13:00:00Z", now), "0m");
+  assert.equal(relativeAge("2026-08-10T12:00:00Z", now), "0m");
+});
+
+test("relativeAge boundary thresholds transition correctly across time units", () => {
+  const now = new Date("2026-08-06T12:00:00Z");
+  // 3599 seconds ago: < 3600 seconds, so rendered in minutes (Math.round(3599/60) = 60m)
+  assert.equal(relativeAge("2026-08-06T11:00:01Z", now), "60m");
+  // Exactly 3600 seconds (1 hour): >= 3600 seconds, rendered in hours
+  assert.equal(relativeAge("2026-08-06T11:00:00Z", now), "1h");
+  // 86399 seconds ago: < 86400 seconds, so rendered in hours (Math.round(86399/3600) = 24h)
+  assert.equal(relativeAge("2026-08-05T12:00:01Z", now), "24h");
+  // Exactly 86400 seconds (1 day): >= 86400 seconds, rendered in days
+  assert.equal(relativeAge("2026-08-05T12:00:00Z", now), "1d");
+  // 604799 seconds ago: < 604800 seconds, rendered in days (Math.round(604799/86400) = 7d)
+  assert.equal(relativeAge("2026-07-30T12:00:01Z", now), "7d");
+  // Exactly 604800 seconds (1 week): >= 604800 seconds, rendered in weeks
+  assert.equal(relativeAge("2026-07-30T12:00:00Z", now), "1w");
+});
+
+test("relativeAge handles ISO strings with explicit time zone offsets", () => {
+  const now = new Date("2026-08-06T12:00:00Z");
+  // 2026-08-06T14:00:00+02:00 is 2026-08-06T12:00:00Z (0m difference)
+  assert.equal(relativeAge("2026-08-06T14:00:00+02:00", now), "0m");
+  // 2026-08-06T05:00:00-05:00 is 2026-08-06T10:00:00Z (2h ago)
+  assert.equal(relativeAge("2026-08-06T05:00:00-05:00", now), "2h");
+});
+
+test("relativeAge defaults to current time when now parameter is omitted", () => {
+  const fiveMinsAgoIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  assert.equal(relativeAge(fiveMinsAgoIso), "5m");
 });
 
 test("relativeAge treats a zoneless timestamp as UTC, never as the server's local time", () => {
