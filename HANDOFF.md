@@ -1,10 +1,11 @@
 # HANDOFF — doug
 
-State:    review — branch `claude/issue-308-outside-read` off main f1c4731
+State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is
           tagged at emit time with what the read held of its file, and the
           check run says so beside the finding.
-Next:     Full suite → commit → push → PR closing #308 → Andrew reviews.
+Next:     PR #316 open (closes #308); CI, then Andrew reviews. After merge,
+          check main carries the branch tip.
           Then #303 (exclude generated content), #304 (same-hunks replay),
           #306 + #199.
 Blockers: none.
