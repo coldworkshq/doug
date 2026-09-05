@@ -247,11 +247,31 @@ at your own repositories.
 ### Turn it on
 
 Both secrets, or nothing happens. Create them by hand so neither sits in shell
-history, the same way `doug-anthropic-key` is handled:
+history, the same way `doug-anthropic-key` is handled. Write each file
+without a trailing newline (`printf '%s'`, not `echo`), because the secret is
+stored byte for byte and sent byte for byte:
 
 ```
 gcloud secrets create doug-langfuse-public-key --data-file=/path/to/pk --project doug-prod0
 gcloud secrets create doug-langfuse-secret-key --data-file=/path/to/sk --project doug-prod0
+```
+
+Prove the pair before you store it. A wrong value does not fail the deploy,
+and it does not fail the service either; it fails every export with a `401`
+the runbook step later has to go looking for. This returns `200` for a real
+pair and `401` for anything else, including the literal `pk-lf-...` the
+Langfuse UI shows before you click reveal:
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' -u "$(cat /path/to/pk):$(cat /path/to/sk)" https://us.cloud.langfuse.com/api/public/projects
+```
+
+To replace a value that was stored wrong, add a version rather than
+recreating the secret (the bindings stay), then redeploy so the service
+starts against `latest`:
+
+```
+gcloud secrets versions add doug-langfuse-public-key --data-file=/path/to/pk --project doug-prod0
 ```
 
 Then re-run `deploy/gcp.sh setup` to bind read access to `doug-api-sa`, and
@@ -325,8 +345,15 @@ Tracing fails soft everywhere, and every failure prints one `doug: tracing …`
 line to stderr. A read never fails because tracing did, so an empty dashboard
 is not an incident and must not be treated as one. Check in this order:
 
-1. `doug: tracing client construction failed` — the keys are wrong, or
-   Langfuse is unreachable from the service.
+1. `doug: tracing client construction failed: Langfuse rejected the keys` —
+   the stored values are not this project's keys. Langfuse answered `401` to
+   the auth check the client runs once per process, and tracing is off for
+   that process. Fix the secret (see "Turn it on") and redeploy. On a
+   revision older than 2026-09-05 the same fault shows only as
+   `Failed to export span batch code: 401, reason: Unauthorized`, repeated
+   on every batch, with no `doug:` prefix. `doug: tracing auth check
+   inconclusive` means Langfuse did not answer at all; tracing stays on and
+   the exporter retries.
 2. No `doug: tracing` line and no spans — `DOUG_TRACING` is not `1`, or one of
    the two keys is unset. `tracing.enabled()` requires all three. Read the
    env block of the serving revision, then the deploy log's `tracing:` line:

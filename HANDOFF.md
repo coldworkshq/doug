@@ -19,7 +19,24 @@ State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
           annotation, tracing off), and the grant is project-level
           roles/secretmanager.viewer in setup-cicd.sh. api 1858 pass,
           `ruff check` clean, both halves red under mutation.
-Next:     Andrew runs the project-level grant (agent is blocked from IAM):
+          THEN: still one trace in Langfuse. doug-api logs show every
+          export since 03:42 failing `401 Unauthorized`. Both secrets are 9
+          bytes: the literal placeholder `pk-lf-...` / `sk-lf-...`, not
+          keys (verified: 401 against US and EU hosts, stripped and
+          swapped). Nothing from production has ever reached Langfuse; the
+          one trace is local. Fourth cut: `tracing._client` runs
+          `auth_check` once per process and turns tracing off with a
+          `doug: tracing client construction failed: Langfuse rejected the
+          keys` line on 401/403; a non-answer keeps it on. Runbook now says
+          to curl the pair before storing it and to write the file with
+          printf, no trailing newline.
+Next:     Andrew stores the real keys (R11 — an agent must not touch these
+          secrets), as new versions, files written with printf '%s':
+            gcloud secrets versions add doug-langfuse-public-key --data-file=/path/pk --project doug-prod0
+            gcloud secrets versions add doug-langfuse-secret-key --data-file=/path/sk --project doug-prod0
+          then redeploys (`gh workflow run deploy.yml -f target=api`), then
+          any Doug review should produce a trace tagged `production`.
+          Also, the project-level grant (agent is blocked from IAM):
             gcloud projects add-iam-policy-binding doug-prod0
               --member=serviceAccount:doug-deployer@doug-prod0.iam.gserviceaccount.com
               --role=roles/secretmanager.viewer --condition=None
