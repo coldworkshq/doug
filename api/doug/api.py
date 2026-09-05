@@ -1167,7 +1167,22 @@ def pr_receipt(
             raise _not_found()
         installation_id, repo_id = resolved
 
-    data = store.receipt(installation_id, repo_id, pr_number)
+    # Every token class reads the repository's whole installation lineage,
+    # operator included. A transfer keeps github_repo_id and changes
+    # installation, so a receipt scoped to one installation reports "no such
+    # PR" for every run scored before its repo moved — which is what #250
+    # found in production, on all three paths into this route at once.
+    #
+    # The pairing `_readable_installations` requires is `repo_id`, and it is
+    # the same id `store.receipt` pins every query on below. A caller
+    # therefore still reads exactly one repository: the one it just proved,
+    # by active_repos for a dispensed key or by repo_id_for for the operator.
+    data = store.receipt(
+        None,
+        repo_id,
+        pr_number,
+        installation_ids=_readable_installations(installation_id, frozenset({repo_id})),
+    )
     if data is None:
         raise _not_found()
     return _receipt_response(repo, pr_number, data)
