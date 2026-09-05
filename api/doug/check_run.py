@@ -22,8 +22,8 @@ Four things this surface must never smooth over:
     did not pass (2026-07-31). The instrument is not validated, so they
     render in their own labelled section and never touch band or score
     (ADR-0007).
-  * SUMMARY_LIMIT is the third place a finding can disappear, after
-    settle.py's two settlement rules. Those two name what they dropped and
+  * SUMMARY_LIMIT is the fourth place a finding can disappear, after
+    settle.py's three settlement rules. Those name what they dropped and
     why; so does this one — the cut states its shortfall against the count
     in the table above it, so the emitted and displayed numbers reconcile
     from the surface alone (#181).

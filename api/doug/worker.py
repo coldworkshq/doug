@@ -42,6 +42,7 @@ from .models import Band, Reason, Verdict, is_bot_author
 _EXAMPLE_PACK_VERIFIER_VERSIONS = (
     NameVersionV0(name="import-settlement", version="v0"),
     NameVersionV0(name="schema-settlement", version="v0"),
+    NameVersionV0(name="ci-settlement", version="v0"),
 )
 
 
@@ -506,6 +507,11 @@ def process_job(job: dict) -> int | None:
     def resolve(path: str) -> str | None:
         return review.head_file_text(gh, owner, name, job["head_sha"], path)
 
+    # Same head, same discipline: the gates that ran on the reviewed SHA,
+    # not whatever has run on the PR since (#307).
+    def resolve_ci():
+        return review.head_ci_evidence(gh, owner, name, job["head_sha"])
+
     pack_context = example_pack_capture.capture_scope_if_enabled(
         lambda: _example_pack_scope(job),
         run_id_prefix=(
@@ -524,6 +530,7 @@ def process_job(job: dict) -> int | None:
             deep_read=deep_read,
             resolve_file=resolve,
             resolve_schema=store.columns_of,
+            resolve_ci=resolve_ci,
         )
         intent_result = review.read_intent(
             gh, owner, name, meta, diff, scope=scope, deep_read=deep_read

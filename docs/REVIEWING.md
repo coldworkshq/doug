@@ -274,6 +274,26 @@ absent from the live schema, and its disproof is migrations.py's own
 convention (new tables arrive via `create_all()`, never a migration), not a
 schema lookup.
 
+The third class is the one this section opened with: **the falsifier had
+already run** (#307, measured in #232 and on PRs 28, 75 and 198 in the
+findings log). `doug/settle.py`'s `drop_disproved_ci_findings` reads the
+workflow files and the check runs at the reviewed head
+(`doug/ci_evidence.py`, `review.head_ci_evidence`) and settles two claim
+shapes against a gate that concluded `success` on that SHA: a JS/TS "unused
+import breaks the build / fails lint" claim, when every lint job and every
+build job that ran over the file is green; and a Python undefined-name or
+NameError claim, when every ruff job that ran over the file is green. The
+ruff boundary table above is applied as a veto each — the name must be read
+at runtime in the file at head, must not be bound under `if TYPE_CHECKING:`,
+the file must carry no `noqa` that could have silenced F821, F821 must be
+selected by the nearest ruff configuration, and use-before-assignment claims
+are out of scope. A kind is green only when *every* job running it is green:
+a green `web` build says nothing about `console/`. Same weight-0 notice
+pattern, rule `settled-ci-green`, naming the job that answered. What the
+parser cannot name (a job whose `name:` holds an expression, a reusable
+workflow, a command form it does not read) contributes nothing, and nothing
+keeps the finding.
+
 **Doug's own review of PR #49** — the branch that added this filter — found
 three real gaps in it before merge, all verified by reproduction rather than
 taken on faith (REVIEWING.md's own rule):

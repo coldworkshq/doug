@@ -206,7 +206,11 @@ def test_settlement_notice_grammar_is_pinned_to_settle_py():
         )
     ]
     later_read, prior_read = _pair()
-    for notice in (settle.settlement_notice(dropped), settle.schema_settlement_notice(dropped)):
+    for notice in (
+        settle.settlement_notice(dropped),
+        settle.schema_settlement_notice(dropped),
+        settle.ci_settlement_notice(dropped),
+    ):
         assert notice is not None
         row = _reason(notice.rule, notice.label, notice.weight, notice.severity)
         r = convergence.compare([_f()], [], [row], later_read, prior_read)
