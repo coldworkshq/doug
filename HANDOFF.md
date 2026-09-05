@@ -85,9 +85,56 @@ Pointers: api/deploy/gcp.sh `langfuse_configured` · api/deploy/setup-cicd.sh
           docs/OPERATIONS.md "Turn it on", "When a trace is missing" ·
           deploy runs 33927066970 (off) and 33941891276 (ON) · #302 · #289
 
---- prior stream (#234 status, MERGED as a8e015f) below, preserved ---
+--- prior stream (#301 queue liveness, MERGED as 37c61b5) below, preserved ---
 
-State:    review — branch `claude/issue-234-status-a71df9`, fixing #234:
+State:    review — branch `claude/queue-liveness-uptime-alerts-1a658e`,
+          PR #301 open, merged up to main a8e015f. api 1859 pass, ruff
+          clean, four mutation checks red.
+Next:     Andrew reviews the PR. Then #261 needs one `/v1/health` read to say
+          whether any rows reached the attempts cap during the six days —
+          that is what decides whether the recovery was real or the queue
+          gave up (#299).
+Blockers: none for code. FOUNDER: #294, #289 (both from the prior stream).
+
+Decisions this session (2026-09-04):
+- The 6-day queue-liveness alert (2026-08-28T22:09:52Z to 2026-09-04T03:03:21Z)
+  was a true positive on the outcome lane, not API death. The service answered
+  every poll. Root cause is #270, fixed by f6ea059 and shipped 2026-09-03;
+  the first adjudicator run carrying it (2026-09-04T03:00) reported
+  `failed_repositories 0` and the next uptime poll was 200, 41 s later.
+- `outcome_worker.drain` now prints one stderr line per failed repository,
+  carrying REPOSITORY_FAILURE_LOG_TOKEN, the installation/repo key, the
+  display name, the rows moved, the attempt against MAX_ATTEMPTS, and the
+  redacted error. `failed_repositories` sat at 1 or 2 on every run from
+  2026-08-21 and named nothing, which is why the cause took 13 days to find.
+  Rejected: adding the log-based metric and policy too — that is the alarm
+  question, and it is deferred with the give-up cliff it belongs to.
+- Both fail_batch call sites route through `_fail_repository`, pinned by a
+  source-level test, because a third site added later would restore the
+  silence and every behavioural test would still pass.
+
+Not fixed here, both filed:
+- #299 — at MAX_ATTEMPTS a row turns terminally `failed` and leaves the
+  overdue set /healthz/queues grades on, so a repository that never recovers
+  ends by turning the alert green. #190 is this shape in the review lane.
+  Carries the unbuilt alarm on REPOSITORY_FAILURE_LOG_TOKEN.
+- #300 — Google's frontend answers the literal path /healthz on run.app with
+  its own 404 before the request reaches the container. /Healthz and
+  /nope-xyz reach the app. api/README.md:16 documents it as the liveness
+  route.
+
+Open question needing the ledger: whether any outcome rows reached the
+attempts cap during the six days and were written off rather than settled.
+`curl -s -H "X-Doug-Token: $DOUG_OPERATOR_TOKEN" https://<host>/v1/health`.
+
+Pointers: api/doug/outcome_worker.py · api/tests/test_outcome_worker.py ·
+          api/doug/outcome_queue.py `_fail_job` · api/doug/api.py
+          `healthz_queues` · #261 · #299 · #300 · #272 · #267 · #190 · f6ea059
+
+--- prior stream (#234 fold opener, MERGED as a8e015f) below, preserved ---
+
+State:    MERGED as a8e015f (#292). Was: branch
+          `claude/issue-234-status-a71df9`, fixing #234:
           `check_run._oneline` let a raw `<` in model text open a real
           `<details>` that swallowed every finding after it. Fixed with
           `_TAG_OPEN_RE`; `_COMMENT_OPEN_RE` folded into it. api 1845 pass,

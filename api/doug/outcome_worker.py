@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,17 @@ from .adjudicate import adjudicate
 from .backtest import git_labels
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+
+# One stderr line per repository this execution visited and could not settle,
+# carrying this token. `failed_repositories` in the summary counts them and
+# names none, which is how a repository can fail every run without anyone
+# being able to say which one: from 2026-08-21 to 2026-09-03 that count sat at
+# 1 or 2 on every daily execution, the rows those failures left overdue held
+# /healthz/queues at 503 for six days (#261), and the only record of the cause
+# was the `error` column of rows nobody was reading. The cause was #270 —
+# private repositories failing their evidence read — and a named repository in
+# this log would have said so on day one.
+REPOSITORY_FAILURE_LOG_TOKEN = "adjudicator repository failed"
 
 
 @dataclass(frozen=True)
@@ -81,6 +93,38 @@ def _safe_repository_error(exc: Exception) -> str:
     return f"repository evidence failed ({type(exc).__name__})"
 
 
+def _fail_repository(batch, error: str) -> int:
+    """Spend one attempt for a repository batch, and say so on stderr.
+
+    Returns the rows moved, so the caller's `retried` counter and this line
+    cannot disagree about how many the failure touched.
+
+    `error` is the string that goes to the ledger, never `str(exc)`: a clone
+    exception renders argv, which carries the installation token.
+
+    The attempt is on the line because the cap is a cliff, not a plateau. At
+    `MAX_ATTEMPTS` a row turns terminally `failed`, which drops it out of the
+    overdue set `/healthz/queues` grades on — so a repository that never
+    recovers ends by turning the alert green, and the only warning that is
+    coming is this count climbing.
+    """
+    moved = outcome_queue.fail_batch(batch, error)
+    # fail_batch spends exactly one attempt per row, so the highest attempt it
+    # just stored is one past the highest this batch was claimed with.
+    # test_the_logged_attempt_is_the_attempt_the_ledger_stored pins the two
+    # together, because a line that misreports the distance to the cliff is
+    # worse than no line.
+    attempt = max(int(job["attempts"]) for job in batch.jobs) + 1
+    name = batch.repo_full_name or "name unavailable"
+    print(
+        f"doug: {REPOSITORY_FAILURE_LOG_TOKEN} "
+        f"{batch.key.installation_id}/{batch.key.github_repo_id} ({name}) "
+        f"{moved} job(s), attempt {attempt} of {outcome_queue.MAX_ATTEMPTS}: {error}",
+        file=sys.stderr,
+    )
+    return moved
+
+
 def drain(*, prereg_hash: str | None, clone_root: Path) -> DrainSummary:
     """Process each repository with due work at most once this invocation."""
     reclaimed = outcome_queue.reclaim_stalled()
@@ -105,8 +149,7 @@ def drain(*, prereg_hash: str | None, clone_root: Path) -> DrainSummary:
             # invent a display identity. Even a deleted installation cannot
             # produce an auditable censoring row without one, but it also must
             # not block the rest of today's repository snapshot.
-            outcome_queue.fail_batch(batch, "repository identity unavailable")
-            retried += len(batch.jobs)
+            retried += _fail_repository(batch, "repository identity unavailable")
             failed_repositories += 1
             continue
         if batch.permanently_unreachable:
@@ -119,8 +162,7 @@ def drain(*, prereg_hash: str | None, clone_root: Path) -> DrainSummary:
                 subprocess.CalledProcessError,
                 subprocess.TimeoutExpired,
             ) as exc:
-                outcome_queue.fail_batch(batch, _safe_repository_error(exc))
-                retried += len(batch.jobs)
+                retried += _fail_repository(batch, _safe_repository_error(exc))
                 failed_repositories += 1
                 continue
         # Pure-classifier and ledger defects are systemic. They escape so the
