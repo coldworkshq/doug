@@ -30,12 +30,13 @@ State:    review — branch `claude/langfuse-traces-doug-70831b`. Why no
           keys` line on 401/403; a non-answer keeps it on. Runbook now says
           to curl the pair before storing it and to write the file with
           printf, no trailing newline.
-Next:     Andrew stores the real keys (R11 — an agent must not touch these
-          secrets), as new versions, files written with printf '%s':
-            gcloud secrets versions add doug-langfuse-public-key --data-file=/path/pk --project doug-prod0
-            gcloud secrets versions add doug-langfuse-secret-key --data-file=/path/sk --project doug-prod0
-          then redeploys (`gh workflow run deploy.yml -f target=api`), then
-          any Doug review should produce a trace tagged `production`.
+          DONE 2026-09-05 04:18: Andrew stored real keys as version 2 of
+          both secrets (42 bytes, Langfuse answers 200), dispatch run
+          33944214230 redeployed, doug-api-00226-wuc serving since 04:23.
+Next:     Prove a trace: Doug's review of the next push to #302 runs on
+          00226; check doug-api logs for `doug: tracing` / `Failed to
+          export` (expect none) and the Langfuse public API for a trace
+          tagged `production` named `review coldworkshq/doug#302`.
           Also, the project-level grant (agent is blocked from IAM):
             gcloud projects add-iam-policy-binding doug-prod0
               --member=serviceAccount:doug-deployer@doug-prod0.iam.gserviceaccount.com
