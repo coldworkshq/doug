@@ -440,7 +440,26 @@ def _by_severity(risks: list) -> list:
     list that then contradicts it, on exactly the shape that carries both.
     """
     order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
-    return sorted(risks, key=lambda r: order.get(_grade(r), len(order)))
+    return sorted(
+        risks, key=lambda r: (order.get(_grade(r), len(order)), _outside(r) is not None)
+    )
+
+
+# The chip beside a finding whose file the read did not hold (#308): what
+# `reader.classify_by_coverage` tagged, in fixed words. The severity is
+# still the model's claim about consequence-if-true; this says how much of
+# the cited code that claim was made from. A finding so tagged sorts after
+# its in-read peers of the same severity — a demotion within the bucket,
+# not across one, because a file the budget dropped is also where a real
+# defect can hide (#232 leaves the full discount open).
+_EVIDENCE_CHIPS = {
+    "outside-read": "_cites code Doug did not read_",
+    "partial-read": "_cites a file Doug read only in part_",
+}
+
+
+def _outside(reason) -> str | None:
+    return _EVIDENCE_CHIPS.get(getattr(reason, "evidence", None) or "")
 
 
 def _triage(risks: list) -> tuple[list, list]:
@@ -532,6 +551,8 @@ def _bullet(reason, source: Source | None) -> str:
     elif reason.file:
         parts.append(f"`{_path_span(reason.file)}`")
     parts.append(f"`{_rule_span(reason.rule)}`")
+    if chip := _outside(reason):
+        parts.append(chip)
     return f"- {' · '.join(parts)} — {_oneline(reason.label)}"
 
 

@@ -714,7 +714,7 @@ class ReaderFinding(BaseModel):
     # `evidence` is what makes REVIEWING.md's "a finding that depends on code outside
     # the diff must say so" enforceable rather than a convention — the two claim
     # classes have to be machine-separable before they can be governed differently.
-    evidence: Literal["diff", "head-cited"] = "diff"
+    evidence: Literal["diff", "head-cited", "partial-read", "outside-read"] = "diff"
     citations: list[Citation] = Field(default_factory=list)
 
 
@@ -1179,6 +1179,37 @@ class Coverage(BaseModel):
     # (rows from before migration 12).
     hunks: dict[str, list[str]] | None = None
 
+    def read_of(self, path: str) -> Literal["whole", "partial", "unread"] | None:
+        """How much of `path` this read held, or None when that cannot be said.
+
+        `hunks` lists exactly the files whose whole chunk arrived, so a path
+        there was read whole; `file_cut` was read in part; anything else —
+        never sent, never fetched, or never in the diff at all — was not
+        read. A finding that names a file the diff never contained is the
+        #175 shape (worker.py:23's `import sys`, cited from a diff that did
+        not touch worker.py), and it lands in "unread" like the rest.
+
+        The model writes the path; the diff header wrote the known ones. An
+        exact match is tried first, then a suffix match either way
+        (`doug/x.py` against `api/doug/x.py`), so a shortened spelling is
+        not mistaken for a file outside the read. None when this coverage
+        predates the hunk index (rows before migration 12).
+        """
+        if self.hunks is None:
+            return None
+        whole = set(self.hunks)
+        known = whole | set(self.files_unseen) | set(self.files_dropped)
+        if self.file_cut:
+            known.add(self.file_cut)
+        match = path if path in known else next(
+            (k for k in known if k.endswith("/" + path) or path.endswith("/" + k)), None
+        )
+        if match is None:
+            return "unread"
+        if match in whole:
+            return "whole"
+        return "partial" if match == self.file_cut else "unread"
+
     @property
     def complete(self) -> bool:
         # files_dropped, not changed_files == files_sent: a genuinely
@@ -1290,6 +1321,38 @@ def hunk_index(diff: str, *, budget: int | None = None) -> dict[str, list[str]]:
     cov = coverage(diff, budget=budget)
     assert cov.hunks is not None
     return cov.hunks
+
+
+def classify_by_coverage(rv: ReaderVerdict, cov: Coverage) -> ReaderVerdict:
+    """Tag every finding with what the read held of the file it names (#308).
+
+    REVIEWING.md's rule is that a finding depending on code outside the diff
+    must say so, and `evidence` is what makes that enforceable — but until
+    now only the verify tier could set it, and only upward, to head-cited.
+    The read itself knows the other direction: `coverage()` records which
+    files were sent whole, which was cut, and which never arrived, so a
+    finding naming a file outside that set is tagged where it is emitted,
+    not recovered later by a reader of the check run (#175 class 1, #232's
+    option 3 in its cheapest form).
+
+    Additive and total, like ground_findings: nothing is removed, and a
+    finding already grounded against head keeps head-cited — the verify
+    tier read the file the diff did not, which is the stronger claim.
+    """
+    out = []
+    for f in rv.findings:
+        if f.evidence != "diff":
+            out.append(f)
+            continue
+        held = cov.read_of(f.file)
+        if held == "partial":
+            out.append(f.model_copy(update={"evidence": "partial-read"}))
+        elif held == "unread":
+            out.append(f.model_copy(update={"evidence": "outside-read"}))
+        else:
+            out.append(f)
+    assert len(out) == len(rv.findings)
+    return rv.model_copy(update={"findings": out})
 
 
 def truncation_reason(cov: Coverage) -> Reason | None:
@@ -1747,6 +1810,7 @@ def verdict_from_reader(rv: ReaderVerdict, threshold: float | None = None) -> Ve
             weight=0.0,
             severity=f.severity,
             file=f.file,
+            evidence=f.evidence,
         )
         for f in rv.findings
     ]

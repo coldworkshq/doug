@@ -52,6 +52,9 @@ VERDICT = Verdict(
             weight=0.0,
             severity="high",
             file="cache.py",
+            # What the read held of cache.py; "diff" is the default every
+            # finding the frozen SCHEMA produces starts with (#308).
+            evidence="diff",
         )
     ],
 )
