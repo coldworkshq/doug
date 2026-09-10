@@ -139,7 +139,7 @@ export function DashboardRail({
   userEmail: string;
   /** Which entry is marked current. `settings` is a route rather than a view,
    *  so it is a third value here and not a third `?view=`. */
-  section: "runs" | "repositories" | "settings";
+  section: "runs" | "repositories" | "memory" | "settings";
   runsHref: string;
   repositoriesHref: string;
   filter?: React.ReactNode;
@@ -186,6 +186,14 @@ export function DashboardRail({
               aria-current={section === "repositories" ? "page" : undefined}
               className={RAIL_ITEM}
             >Repositories</Link>
+            {/* The decisions in a repository, as written (ADR-0034's design
+                set, Memory v1). A real destination since D2; it carries no
+                filters across because it has its own. */}
+            <Link
+              href="/dashboard/memory"
+              aria-current={section === "memory" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Memory</Link>
             {/* Still not built, and still said so. A nav entry that navigates
                 nowhere is a lie about the product; one that names itself as
                 unbuilt is a roadmap. */}

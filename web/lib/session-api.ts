@@ -626,3 +626,94 @@ export async function getReceipt(
   if (!isReceiptResponse(body)) throw new SessionApiError(message);
   return body;
 }
+
+/** One decision record, as written in the repository at the default branch's
+ *  HEAD. The same read the intent tier makes before a review (ADR-0006), served
+ *  to the Memory screen. */
+export type DecisionRecord = {
+  id: string;
+  title: string;
+  status: string;
+  date: string | null;
+  ref: string;
+  body: string;
+};
+
+/** Whether Doug reads this repository's records before it reads a diff. Three
+ *  terms, because `review.py` conjoins three; the list on the screen is never
+ *  gated by this, only the sentence is. */
+export type ReadsBeforeDiff = {
+  value: boolean;
+  deep_read: boolean;
+  allowlisted: boolean;
+  reader_enabled: boolean;
+};
+
+export type RepositoryDecisions = {
+  github_repo_id: number;
+  full_name: string;
+  items: DecisionRecord[];
+  count_accepted: number;
+  /** True when the walk found no record at all: no candidate directory, an
+   *  empty one, or one whose files all lack parseable frontmatter. A zero
+   *  that says which zero, so the screen never renders a bare 0. */
+  matched_nothing: boolean;
+  directory: string | null;
+  directories_searched: string[];
+  files_seen: number;
+  files_skipped: number;
+  reads_before_diff: ReadsBeforeDiff;
+  fetched_at: string;
+  cached: boolean;
+};
+
+const DECISION_RECORD_KEYS = ["id", "title", "status", "date", "ref", "body"] as const;
+const READS_BEFORE_DIFF_KEYS = ["value", "deep_read", "allowlisted", "reader_enabled"] as const;
+const REPOSITORY_DECISIONS_KEYS = [
+  "github_repo_id", "full_name", "items", "count_accepted", "matched_nothing", "directory",
+  "directories_searched", "files_seen", "files_skipped", "reads_before_diff", "fetched_at", "cached",
+] as const;
+
+function decisionRecord(value: unknown): value is DecisionRecord {
+  return (
+    record(value) && exact(value, DECISION_RECORD_KEYS) && typeof value.id === "string" &&
+    typeof value.title === "string" && typeof value.status === "string" &&
+    nullableString(value.date) && typeof value.ref === "string" && typeof value.body === "string"
+  );
+}
+
+function readsBeforeDiff(value: unknown): value is ReadsBeforeDiff {
+  return (
+    record(value) && exact(value, READS_BEFORE_DIFF_KEYS) &&
+    READS_BEFORE_DIFF_KEYS.every((key) => typeof value[key] === "boolean")
+  );
+}
+
+export function isRepositoryDecisions(value: unknown): value is RepositoryDecisions {
+  return (
+    record(value) && exact(value, REPOSITORY_DECISIONS_KEYS) &&
+    Number.isInteger(value.github_repo_id) && typeof value.full_name === "string" &&
+    Array.isArray(value.items) && value.items.every(decisionRecord) &&
+    Number.isInteger(value.count_accepted) && typeof value.matched_nothing === "boolean" &&
+    nullableString(value.directory) && Array.isArray(value.directories_searched) &&
+    value.directories_searched.every((item) => typeof item === "string") &&
+    Number.isInteger(value.files_seen) && Number.isInteger(value.files_skipped) &&
+    readsBeforeDiff(value.reads_before_diff) && typeof value.fetched_at === "string" &&
+    typeof value.cached === "boolean"
+  );
+}
+
+export async function getRepositoryDecisions(
+  accessToken: string,
+  githubRepoId: number,
+): Promise<RepositoryDecisions> {
+  const message = "Doug could not read this repository's decision records.";
+  if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
+  const body = await sessionJson(
+    `/v1/sessions/repositories/${githubRepoId}/decisions`,
+    accessToken,
+    message,
+  );
+  if (!isRepositoryDecisions(body)) throw new SessionApiError(message);
+  return body;
+}

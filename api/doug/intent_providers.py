@@ -15,6 +15,7 @@ one question this module exists to answer correctly.
 import os
 import re
 import sys
+from dataclasses import dataclass
 
 from githubkit.exception import RequestFailed
 
@@ -79,15 +80,42 @@ def parse_record(path: str, text: str) -> IntentDoc | None:
     )
 
 
-def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
-    """Every parseable decision record in the repo. [] when there are none.
+@dataclass(frozen=True)
+class FetchReport:
+    """What a fetch found, and where it looked, so a zero can say which zero.
 
-    A repo without an ADR directory is the common case, not an error: the
-    intent read simply does not happen. Auth, rate-limit, and transport
-    failures are re-raised so the caller can log-and-skip — collapsing
-    them to [] would make a broken credential look like "no ADRs".
+    `fetch()` returns `[]` for three different facts: no candidate directory
+    exists, one exists and is empty, or one exists and every file in it lacks
+    parseable frontmatter. The review path does not need to tell them apart;
+    the Memory screen does, because a bare zero beside a real count reads as
+    "Doug found nothing worth remembering" when the truth may be "the records
+    live somewhere Doug did not look" (ADR-0034's design set, O3).
     """
+
+    docs: list[IntentDoc]
+    directory: str | None
+    searched: tuple[str, ...]
+    files_seen: int
+    files_skipped: int
+
+    @property
+    def matched_nothing(self) -> bool:
+        return not self.docs
+
+
+def fetch_report(gh, owner: str, repo: str, ref: str | None = None) -> FetchReport:
+    """Every parseable decision record in the repo, with the search's shape.
+
+    The same walk `fetch()` has always done: candidate directories in order,
+    the first that yields records wins. Auth, rate-limit, and transport
+    failures are re-raised so the caller can log-and-skip — collapsing them
+    to an empty report would make a broken credential look like "no ADRs".
+    """
+    searched: list[str] = []
+    seen = 0
+    skipped = 0
     for directory in adr_paths():
+        searched.append(directory)
         try:
             listing = gh.rest.repos.get_content(
                 owner=owner, repo=repo, path=directory,
@@ -105,6 +133,7 @@ def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
             name = getattr(entry, "name", "")
             if getattr(entry, "type", "") != "file" or not name.endswith(".md"):
                 continue
+            seen += 1
             path = getattr(entry, "path", f"{directory}/{name}")
             try:
                 text = _read_file(gh, owner, repo, path, ref)
@@ -113,13 +142,26 @@ def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
                     f"doug: decision record unread ({path}: {type(e).__name__}: {e})",
                     file=sys.stderr,
                 )
+                skipped += 1
                 continue
             doc = parse_record(path, text)
-            if doc is not None:
-                docs.append(doc)
+            if doc is None:
+                skipped += 1
+                continue
+            docs.append(doc)
         if docs:
-            return docs
-    return []
+            return FetchReport(docs, directory, tuple(searched), seen, skipped)
+    return FetchReport([], None, tuple(searched), seen, skipped)
+
+
+def fetch(gh, owner: str, repo: str, ref: str | None = None) -> list[IntentDoc]:
+    """Every parseable decision record in the repo. [] when there are none.
+
+    A repo without an ADR directory is the common case, not an error: the
+    intent read simply does not happen. The review path reads only the
+    records; `fetch_report` is the same walk with the search's shape kept.
+    """
+    return fetch_report(gh, owner, repo, ref).docs
 
 
 def _read_file(gh, owner: str, repo: str, path: str, ref: str | None) -> str:

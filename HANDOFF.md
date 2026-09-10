@@ -1,28 +1,27 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-10): the one shell, doug D1 (ADR-0034) ---
+--- shell lane (2026-09-10): the one shell, doug D2 (Memory over the intent tier) ---
 
-State:    building — branch `shell/registry-contract` off main dcf531a.
-          ADR-0034 claimed on #323 and drafted `proposed`. The read
-          contract's consumer half: `web/lib/registry-contract/` (byte
-          copies of the registry's schema and fixture, coldworks#76),
-          `web/lib/registry-shape.ts` (the tables, tested key for key and
-          null for null against the schema; pinned hashes),
-          `web/lib/registry-api.ts` (the one reader: snapshot or unknown
-          with a reason, no fixture fallback, unused bearer slot),
-          `web/lib/guards-mapping.ts` (DOUG_GUARDS_INSTALLATIONS, unset
-          maps nobody, malformed refuses), `links.ts` amended, and the
-          CI path guard (`.github/scripts/shell_guard.py`, job
-          `shell-guard` on shell/* PRs). Design set: hq
-          `docs/cross-repo/one-shell/` (build-plan.md Phase 1).
-Next:     D1 PR open; the guard shown red once on `shell/guard-probe`
-          (link in the PR). Then D2 (`shell: Memory over the intent
-          tier`) and D3 (the door, the rail, Overview, Guards). Nothing
-          renders from the contract until D3.
-Blockers: R11 item 1: the founder flips ADR-0034 to `accepted` (the
-          contract's signature; the registry deploys the route after).
-          R11 items 2 and 3 (the apex move; the mapping value) gate D3's
-          Phase 0 and the cutover, not D1 or D2.
+State:    building — branch `shell/memory-intent-tier` off main 8cdecd5
+          (D1 merged as #325; ADR-0034 `proposed`, claimed on #323).
+          API: `intent_providers.fetch_report` (the same walk as `fetch`,
+          with where it looked and what it skipped; `fetch` is its
+          `docs`), `GET /v1/sessions/repositories/{id}/decisions` beside
+          `session_runs` (session-scoped, uniform 404, 502 on a broken
+          read never `[]`, TTL cache `DOUG_DECISIONS_TTL_SECONDS` default
+          300, `reads_before_diff` with THREE terms). Web:
+          `getRepositoryDecisions` (exact-key guard), `lib/memory-model.ts`,
+          `lib/state-chip.ts` + `components/state-chip.tsx` (the closed
+          vocabulary, brought forward from D3 because Memory needs the
+          `unknown` and `off` chips), `app/dashboard/memory/page.tsx`, the
+          rail's Memory entry. Tests: 12 API (two files), web suite.
+Next:     D2 PR open, then D3 (`shell: the door, the rail, Overview,
+          Guards`): landing at /, Doug's page to /doug, Overview slots,
+          Guards page over the contract, the re-pins, DOUG_WEB_DOMAIN in
+          deploy.yml, the O1/O2/A2/scoreboard-depth/landing-text tests.
+Blockers: R11 item 1 (ADR-0034 → accepted) gates the registry's deploy,
+          not D2 or D3's code. R11 items 2 and 3 gate D3's Phase 0 and
+          the cutover.
 
 State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is
