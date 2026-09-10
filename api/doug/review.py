@@ -711,3 +711,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# shell-guard probe: this comment must turn the job red (ADR-0034)
