@@ -42,6 +42,21 @@ jobs:
       - run: npm test --workspace=web
       - run: npm run build --workspace=web
 
+  # The review lane is provably untouched by a shell pull request
+  # (ADR-0034): the job fails when the diff names review.py, worker.py, or
+  # check_run.py, or when any hunk of api.py overlaps the webhook handler.
+  # Only on shell/* branches, so the review lane's own PRs are not gated by
+  # a rule written for someone else. Shown red once on a probe branch
+  # before ADR-0034 was opened for signature.
+  shell-guard:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'shell/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: python3 .github/scripts/shell_guard.py origin/${{ github.base_ref }} ${{ github.event.pull_request.head.sha }}
+
   # doug-console is a separate app (console/) from doug-web, with its own
   # lib tests — nothing above exercises it. It is deliberately not wired
   # into deploy.yml (api/deploy/gcp.sh explains why: it's IAM-gated, so a

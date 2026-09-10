@@ -1,5 +1,29 @@
 # HANDOFF — doug
 
+--- shell lane (2026-09-10): the one shell, doug D1 (ADR-0034) ---
+
+State:    building — branch `shell/registry-contract` off main dcf531a.
+          ADR-0034 claimed on #323 and drafted `proposed`. The read
+          contract's consumer half: `web/lib/registry-contract/` (byte
+          copies of the registry's schema and fixture, coldworks#76),
+          `web/lib/registry-shape.ts` (the tables, tested key for key and
+          null for null against the schema; pinned hashes),
+          `web/lib/registry-api.ts` (the one reader: snapshot or unknown
+          with a reason, no fixture fallback, unused bearer slot),
+          `web/lib/guards-mapping.ts` (DOUG_GUARDS_INSTALLATIONS, unset
+          maps nobody, malformed refuses), `links.ts` amended, and the
+          CI path guard (`.github/scripts/shell_guard.py`, job
+          `shell-guard` on shell/* PRs). Design set: hq
+          `docs/cross-repo/one-shell/` (build-plan.md Phase 1).
+Next:     D1 PR open; the guard shown red once on `shell/guard-probe`
+          (link in the PR). Then D2 (`shell: Memory over the intent
+          tier`) and D3 (the door, the rail, Overview, Guards). Nothing
+          renders from the contract until D3.
+Blockers: R11 item 1: the founder flips ADR-0034 to `accepted` (the
+          contract's signature; the registry deploys the route after).
+          R11 items 2 and 3 (the apex move; the mapping value) gate D3's
+          Phase 0 and the cutover, not D1 or D2.
+
 State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is
           tagged at emit time with what the read held of its file, and the

@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "generated_at": "2026-09-10T08:00:00.000Z",
+  "served_at": "2026-09-10T08:02:00.000Z",
+  "stale": false,
+  "stale_after_seconds": 900,
+  "reason": null,
+  "provenance": "Coldworks wind tunnel corpus — synthetic tasks, not a production workload",
+  "synthetic": true,
+  "snapshot": {
+    "id": "0f2c1b5e-6a7d-4c3a-9e2f-1a2b3c4d5e6f",
+    "tenantName": "wind-tunnel",
+    "capturedAt": "2026-09-10T08:00:00.000Z",
+    "ageSeconds": 120,
+    "stale": false,
+    "staleAfterSeconds": 900,
+    "producerVersion": "cw 0.6.0",
+    "streamTasks": 1200,
+    "windowTasks": 400,
+    "subtractionConstraintConvalidated": true
+  },
+  "packs": [
+    {
+      "pack": "docs",
+      "guardsActive": 2,
+      "guardsTotal": 4,
+      "clustersTotal": 9,
+      "decisionsWindow": 400
+    }
+  ],
+  "metrics": [
+    {
+      "key": "t",
+      "pack": null,
+      "status": "measured",
+      "value": 0.62,
+      "denominator": 400,
+      "note": null
+    },
+    {
+      "key": "coverage",
+      "pack": "docs",
+      "status": "measured",
+      "value": 0.38,
+      "denominator": 400,
+      "note": null
+    },
+    {
+      "key": "charter_subtracted",
+      "pack": "docs",
+      "status": "not_recorded",
+      "value": null,
+      "denominator": null,
+      "note": null
+    },
+    {
+      "key": "audit_agreement",
+      "pack": "docs",
+      "status": "unproven",
+      "value": null,
+      "denominator": 12,
+      "note": "too few attributable audits"
+    }
+  ],
+  "series": [
+    {
+      "pack": "docs",
+      "key": "t",
+      "position": 0,
+      "value": 1
+    },
+    {
+      "pack": "docs",
+      "key": "t",
+      "position": 1,
+      "value": 0.62
+    }
+  ],
+  "guards": [
+    {
+      "guardId": "g-0412",
+      "guardVersion": 3,
+      "pack": "docs",
+      "clusterId": "c-0412",
+      "subjectType": "document",
+      "target": "code",
+      "state": "active",
+      "artifactDigestAlgo": "sha256",
+      "artifactDigestValue": "9b2f3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+      "eligibilityCel": "input.kind == 'retry_policy'",
+      "abstainBehavior": "deopt",
+      "auditRate": 0.05,
+      "owner": "maya",
+      "promotedBy": "maya",
+      "rollback": "cw guard demote g-0412",
+      "createdAt": "2026-08-04T10:00:00.000Z",
+      "enforces": [
+        {
+          "name": "retry_bounded",
+          "version": 1
+        }
+      ],
+      "subtracts": {
+        "mode": "full",
+        "population": [
+          {
+            "name": "retry_policy_review",
+            "version": 2
+          }
+        ]
+      },
+      "subtractsStatus": "recorded",
+      "replayVerdict": "pass",
+      "replayReasons": null,
+      "shadowRecorded": true,
+      "auditAttributable": true,
+      "auditAgreed": 40,
+      "auditDisagreed": 0,
+      "auditInconclusive": 2,
+      "decisionsWindow": 212,
+      "lane": "ci",
+      "ageDays": 37
+    },
+    {
+      "guardId": "g-0418",
+      "guardVersion": 1,
+      "pack": "docs",
+      "clusterId": "c-0418",
+      "subjectType": "document",
+      "target": "schema",
+      "state": "draft",
+      "artifactDigestAlgo": "sha256",
+      "artifactDigestValue": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+      "eligibilityCel": "input.kind == 'migration'",
+      "abstainBehavior": "deopt",
+      "auditRate": 0.1,
+      "owner": "maya",
+      "promotedBy": null,
+      "rollback": "n/a",
+      "createdAt": "2026-09-01T10:00:00.000Z",
+      "enforces": null,
+      "subtracts": null,
+      "subtractsStatus": "none",
+      "replayVerdict": null,
+      "replayReasons": [
+        "61 sealed cases, 0 disagreements"
+      ],
+      "shadowRecorded": false,
+      "auditAttributable": false,
+      "auditAgreed": 0,
+      "auditDisagreed": 0,
+      "auditInconclusive": 0,
+      "decisionsWindow": 0,
+      "lane": "unassigned",
+      "ageDays": null
+    }
+  ],
+  "clusters": [
+    {
+      "clusterId": "c-0402",
+      "clusterVersion": 2,
+      "pack": "docs",
+      "state": "unproven",
+      "shapePredicate": "tenant_id_not_null",
+      "shapeSubjectType": "document",
+      "memberCount": 14,
+      "unprovenReason": "nearby_safe_indistinguishable",
+      "ageDays": 12
+    },
+    {
+      "clusterId": "c-0420",
+      "clusterVersion": 1,
+      "pack": "docs",
+      "state": "forming",
+      "shapePredicate": "export_path_shape",
+      "shapeSubjectType": "document",
+      "memberCount": 3,
+      "unprovenReason": null,
+      "ageDays": null
+    }
+  ],
+  "landings": [
+    {
+      "pack": "docs",
+      "subjectType": "document",
+      "guardId": "g-0412",
+      "guardVersion": 3,
+      "compiledDecisions": 212,
+      "agentDecisions": 40,
+      "humanDecisions": 2,
+      "runsOn": "github-actions",
+      "lane": "ci"
+    },
+    {
+      "pack": "docs",
+      "subjectType": "document",
+      "guardId": null,
+      "guardVersion": null,
+      "compiledDecisions": 0,
+      "agentDecisions": 148,
+      "humanDecisions": 0,
+      "runsOn": "none",
+      "lane": "unassigned"
+    }
+  ],
+  "deopts": [
+    {
+      "pack": "docs",
+      "guardId": "g-0412",
+      "reason": "eligibility predicate false",
+      "occurredAt": "2026-09-09T15:30:00.000Z",
+      "position": 0
+    }
+  ],
+  "counts": {
+    "signatures_owed": 1,
+    "unproven": 1,
+    "in_flight": 2
+  }
+}
