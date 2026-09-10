@@ -13,11 +13,11 @@ Intents pinned here:
 
 import pytest
 from fastapi.testclient import TestClient
+from test_api import _session_scope
 
 from doug import api, intent, intent_providers, reader, store
 from doug.api import app
 from doug.intent import IntentDoc
-from test_api import _session_scope
 
 ACCEPTED = IntentDoc(
     id="ADR-0001", title="Cache the thing", body="Because.", status="accepted",
@@ -54,10 +54,11 @@ def _get(headers, repo_id=11):
 
 def test_lists_the_records_as_written_and_counts_the_accepted_ones(scoped, monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        intent_providers, "fetch_report",
-        lambda gh, owner, repo, ref=None: calls.append((owner, repo, ref)) or _report([ACCEPTED, SUPERSEDED]),
-    )
+    def fetch_report(gh, owner, repo, ref=None):
+        calls.append((owner, repo, ref))
+        return _report([ACCEPTED, SUPERSEDED])
+
+    monkeypatch.setattr(intent_providers, "fetch_report", fetch_report)
     response = _get(scoped)
     assert response.status_code == 200
     body = response.json()
