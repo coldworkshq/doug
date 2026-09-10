@@ -3225,16 +3225,27 @@ def latest_reviews(
     query = select(verdicts).where(verdicts.c.id.in_(latest))
     if repo:
         query = query.where(verdicts.c.repo == repo)
-    out = []
+    query = query.order_by(desc(verdicts.c.score)).limit(limit)
+
     with engine.connect() as conn:
-        for v in conn.execute(query.order_by(desc(verdicts.c.score))).mappings():
-            fs = conn.execute(
-                select(findings).where(findings.c.verdict_id == v["id"])
-            ).mappings().all()
-            out.append({**v, "findings": [dict(f) for f in fs]})
-            if len(out) >= limit:
-                break
-    return out
+        v_rows = [dict(v) for v in conn.execute(query).mappings()]
+        if not v_rows:
+            return []
+        verdict_ids = [v["id"] for v in v_rows]
+        f_rows = conn.execute(
+            select(findings)
+            .where(findings.c.verdict_id.in_(verdict_ids))
+            .order_by(findings.c.id)
+        ).mappings().all()
+
+        findings_by_verdict: dict[int, list[dict]] = {}
+        for f in f_rows:
+            findings_by_verdict.setdefault(f["verdict_id"], []).append(dict(f))
+
+        return [
+            {**v, "findings": findings_by_verdict.get(v["id"], [])}
+            for v in v_rows
+        ]
 
 
 def run_history(
