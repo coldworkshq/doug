@@ -5,21 +5,17 @@
 export const GITHUB_REPO_SLUG = "coldworkshq/doug";
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_SLUG}`;
 
-/** The company Doug is a product of. Doug ships independently and its
- *  records stay Doug-native (docs/repos.md), so this is an attribution and
- *  a link, never a dependency — nothing in `web/` imports from Coldworks.
+/** The company Doug is a product of, and the origin this app is ruled to
+ *  serve (ADR-0034). Doug still ships independently and its records stay
+ *  Doug-native (docs/repos.md). The one runtime dependency on Coldworks is
+ *  `registry-api.ts`, a fetch of a public JSON document under a pinned
+ *  contract, and it degrades to a chip with a reason when the document is
+ *  missing; nothing in `web/` imports code from Coldworks.
  *
- *  THE APEX HAS TO BE MAPPED BEFORE THIS MERGES. `coldworks.dev` was
- *  registered 2026-08-20 and had no DNS records at all when this was
- *  written; the Coldworks landing page runs on the registry service's bare
- *  origin. Merging this while the apex is unmapped puts a dead link in the
- *  footer of the two most-read public pages.
- *
- *  THE SCRIPT THAT MAPS IT IS NOT IN THIS REPO. `coldworks.dev` fronts the
- *  `coldworks-registry` service in the `coldworks` GCP project, so it is
- *  mapped by `scripts/map_apex_domain.sh` in `coldworkshq/coldworks`.
- *  `api/deploy/domains.sh` here maps `doug.coldworks.dev` onto `doug-web`,
- *  which is a different service in a different project and does not make
- *  this link resolve. The two are independent; neither one blocks the other.
+ *  The apex is live. `coldworks.dev` fronts the `coldworks-registry` service
+ *  in the `coldworks` GCP project today; ADR-0034 moves it onto `doug-web`
+ *  as a second domain mapping through `api/deploy/domains.sh`, with
+ *  `doug.coldworks.dev` kept and redirecting. Until that cutover this link
+ *  resolves to the registry's landing page, which is the same door.
  */
 export const COLDWORKS_URL = "https://coldworks.dev";
