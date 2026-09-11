@@ -34,6 +34,34 @@ const nextConfig: NextConfig = {
       { source: "/docs/audit/:page", destination: "/docs/audit/:page.html" },
     ];
   },
+  // The subdomain redirects to the apex, path-preserving (ADR-0034,
+  // decision 1). `doug.coldworks.dev` keeps its Cloud Run mapping so every
+  // link already written into a pull request keeps resolving; each one is
+  // answered with a 308 to the same path on `coldworks.dev`. Keyed on that
+  // one host, never a catch-all: the deploy smokes the run.app host and
+  // expects 200 (`api/deploy/gcp.sh` promote_if_healthy and
+  // `web/scripts/smoke-auth-entry.sh`), and the apex itself must serve, not
+  // loop. Next matches `has: host` against the Host header the container
+  // receives, which is the mapped domain on Cloud Run; `x-forwarded-host` is
+  // not consulted here. Config redirects run before `proxy.ts`, so
+  // `/dashboard/*` and `/sign-in` on the subdomain take this 308 instead of
+  // the proxy's and the route handler's 307 to the configured origin.
+  //
+  // Not keyed on `DOUG_WEB_DOMAIN`: deploy.yml already sets it, so an
+  // env-keyed redirect would fire on merge. This merges only after the apex
+  // is mapped onto doug-web and cut over; until then the redirect would
+  // send tenants to the registry. Pinned by the single-host suite in
+  // `lib/auth-entry.integration.test.mjs`.
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "doug.coldworks.dev" }],
+        destination: "https://coldworks.dev/:path*",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       // The door and the audit docs are static documents served by rewrite.
