@@ -60,6 +60,19 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     ],
   },
   {
+    // The audit CLI's own docs: static pages under /docs/audit (next.config
+    // rewrites), the shape they had on the engine's site, listed here so the
+    // sidebar reaches them. They describe a tool that is not installable yet
+    // and say so on every page.
+    name: "The audit",
+    pages: [
+      { href: "/docs/audit", title: "The Coldworks audit", status: "preview" },
+      { href: "/docs/audit/quickstart", title: "Audit · Quickstart", status: "preview" },
+      { href: "/docs/audit/connect", title: "Audit · Connect", status: "preview" },
+      { href: "/docs/audit/cli", title: "Audit · CLI contract", status: "preview" },
+    ],
+  },
+  {
     name: "Meta",
     pages: [{ href: "/docs/changelog", title: "Changelog" }],
   },

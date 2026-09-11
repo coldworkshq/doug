@@ -73,15 +73,16 @@ test("the gear is not also called Settings", () => {
   );
 });
 
-test("the marketing header links to the dashboard, without reading the session", () => {
-  // The root cause. Nothing on /, /docs/*, /queue, /scoreboard or /about
-  // linked to /dashboard, and the header's only signed-in affordance was a
-  // Sign in button that says Sign in whether or not you are signed in.
-  assert.match(header, /\{ href: "\/dashboard", label: "Dashboard" \}/);
-  // And it stays a PLAIN link. `withAuth` here would make /about and every
-  // /docs page render per request to choose between two words — the cost is
-  // real and the link is not a dead end without it, because proxy.ts hands an
-  // unauthenticated /dashboard request to AuthKit and returns to it after.
+test("the marketing header reaches the workspace through Sign in, without reading the session", () => {
+  // The root cause this pin was written for: nothing on the public pages
+  // reached the settings that turn Doug down. Since ADR-0034 the way in is
+  // the Sign in button, which returns a live session straight to the
+  // workspace (app/sign-in/route.ts, returnTo /dashboard/overview), so a
+  // separate Dashboard link bought nothing.
+  assert.match(header, /href="\/sign-in"/);
+  assert.equal(header.includes('href: "/dashboard"'), false, "the Dashboard link is retired");
+  // And the header stays session-free. `withAuth` here would make /about and
+  // every /docs page render per request to choose between two words.
   assert.equal(
     header.includes("withAuth"),
     false,

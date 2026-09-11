@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quickstart — Coldworks docs</title>
+<meta name="description" content="Run your first Coldworks audit in under a minute: what to download, how to start, and what you get back.">
+<link rel="stylesheet" href="/docs/audit/docs.css">
+</head>
+<body>
+<div class="rail" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="wm" href="/">COLDWORKS</a>
+  <span class="crumb">/ docs / quickstart</span>
+  <span class="previewchip">DESIGN PREVIEW · COLDWORKS-AUDIT HAS NOT SHIPPED</span>
+  <a class="toplink" href="/dashboard/guards">Guards</a>
+</header>
+
+<div class="shell">
+  <aside class="side">
+    <nav>
+      <div class="sec">Getting started</div>
+      <a href="/docs/audit">Overview</a>
+      <a href="/docs/audit/quickstart" class="on">Quickstart</a>
+      <a href="/docs/audit/connect">Connect your traces</a>
+      <div class="sec">Reference</div>
+      <a href="/docs/audit/cli">The audit CLI</a>
+      <span class="dead">The audit report <span class="soon">SOON</span></span>
+      <span class="dead">Guards &amp; subtraction <span class="soon">SOON</span></span>
+      <div class="sec">Project</div>
+      <a href="/dashboard/guards">Guards</a>
+      <a href="/#audit">Receipts</a>
+    </nav>
+  </aside>
+
+  <main class="doc">
+    <div class="eyebrow">GETTING STARTED</div>
+    <h1>Quickstart</h1>
+    <p class="lede">First audit in under a minute. There is <b>nothing to install and no account
+    to make</b> — the only prerequisite is <a href="https://docs.astral.sh/uv/">uv</a>, which most
+    Python developers already carry.</p>
+
+    <h2>What to download</h2>
+    <p>Nothing, in the usual sense. <code>uvx</code> fetches and runs the audit in one step, in an
+    isolated environment it cleans up itself. If you prefer a persistent install:</p>
+    <div class="code">
+      <div class="codebar">EITHER WORKS</div>
+      <pre><span class="p">$</span> <span class="c">uvx coldworks-audit</span> --help          <span class="dim"># run without installing</span>
+<span class="p">$</span> <span class="c">uv tool install coldworks-audit</span>     <span class="dim"># or keep it on your PATH</span></pre>
+    </div>
+    <div class="note"><b>No API key, no signup, no Docker, no database.</b> The audit is a
+    program that reads a file on your disk and writes a report next to it.</div>
+
+    <h2>See it work before you export anything</h2>
+    <p>Empty-handed? The package bundles a sample trace export and matching documents, so the
+    first report costs you nothing but the command:</p>
+    <div class="code">
+      <div class="codebar">SAMPLE RUN</div>
+      <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> --sample --open</pre>
+    </div>
+    <p class="dim">This renders the full report — headline, repeat groups, anchored decisions,
+    loss populations — on data we wrote, labeled as such on every screen.</p>
+
+    <h2>Your first real audit</h2>
+    <ol>
+      <li><b>Export traces</b> from wherever they live — takes about 30 seconds.
+      See <a href="/docs/audit/connect">Connect your traces</a> for the Langfuse, LangSmith, and
+      OpenTelemetry paths.</li>
+      <li><b>Run the audit</b> on the file:</li>
+    </ol>
+    <div class="code">
+      <div class="codebar">FIRST REAL RUN</div>
+      <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> ~/Downloads/traces.jsonl --open</pre>
+    </div>
+    <ol start="3">
+      <li><b>Read the headline.</b> The fraction of your agent's tool calls that were exact
+      repeats of a judgment it already made — in your own tool vocabulary. Repeats count as
+      cache candidates only when their results agree; disagreeing repeats are reported
+      separately as nondeterminism findings.</li>
+    </ol>
+
+    <h2>If the audit can't read your export</h2>
+    <p>It doesn't report a silent zero. It prints a field census — <em>"your spans carry tool
+    names but not structured arguments"</em> — so even a failed audit hands you a concrete,
+    forwardable finding about your own telemetry.</p>
+
+    <h2>Where to go next</h2>
+    <ul>
+      <li><a href="/docs/audit/connect">Connect your traces</a> — the per-source paths, and how to
+      make the audit standing instead of one-off.</li>
+      <li><a href="/docs/audit/cli">The audit CLI</a> — every flag, and the exact list of what never
+      leaves your machine.</li>
+    </ul>
+
+    <div class="pn">
+      <a href="/docs/audit"><em>PREVIOUS</em><b>Overview</b></a>
+      <a class="next" href="/docs/audit/connect"><em>NEXT</em><b>Connect your traces</b></a>
+    </div>
+  </main>
+</div>
+</body>
+</html>

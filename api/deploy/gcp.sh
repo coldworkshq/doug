@@ -1226,7 +1226,7 @@ web() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
-    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review" \
+    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review,COLDWORKS_REGISTRY_URL=${COLDWORKS_REGISTRY_URL:-https://coldworks.dev},DOUG_GUARDS_INSTALLATIONS=${DOUG_GUARDS_INSTALLATIONS:-}" \
     --set-secrets "WORKOS_CLIENT_ID=doug-workos-client-id:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
     $traffic_flags

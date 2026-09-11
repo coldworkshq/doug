@@ -1,27 +1,31 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-10): the one shell, doug D2 (Memory over the intent tier) ---
+--- shell lane (2026-09-10): the one shell, doug D3 (the door, the rail, Overview, Guards) ---
 
-State:    building — branch `shell/memory-intent-tier` off main 8cdecd5
-          (D1 merged as #325; ADR-0034 `proposed`, claimed on #323).
-          API: `intent_providers.fetch_report` (the same walk as `fetch`,
-          with where it looked and what it skipped; `fetch` is its
-          `docs`), `GET /v1/sessions/repositories/{id}/decisions` beside
-          `session_runs` (session-scoped, uniform 404, 502 on a broken
-          read never `[]`, TTL cache `DOUG_DECISIONS_TTL_SECONDS` default
-          300, `reads_before_diff` with THREE terms). Web:
-          `getRepositoryDecisions` (exact-key guard), `lib/memory-model.ts`,
-          `lib/state-chip.ts` + `components/state-chip.tsx` (the closed
-          vocabulary, brought forward from D3 because Memory needs the
-          `unknown` and `off` chips), `app/dashboard/memory/page.tsx`, the
-          rail's Memory entry. Tests: 12 API (two files), web suite.
-Next:     D2 PR open, then D3 (`shell: the door, the rail, Overview,
-          Guards`): landing at /, Doug's page to /doug, Overview slots,
-          Guards page over the contract, the re-pins, DOUG_WEB_DOMAIN in
-          deploy.yml, the O1/O2/A2/scoreboard-depth/landing-text tests.
-Blockers: R11 item 1 (ADR-0034 → accepted) gates the registry's deploy,
-          not D2 or D3's code. R11 items 2 and 3 gate D3's Phase 0 and
-          the cutover.
+State:    building — branch `shell/the-door` off main a033990 (D2 merged as
+          #326 with its review fixes). The door: `public/landing.html` is the
+          Coldworks landing with the day-one copy edits, served by a rewrite
+          of `/`; Doug's page moved to `app/doug/page.tsx` with its own
+          metadata; the audit CLI's docs at `public/docs/audit/*` (rewrites)
+          and in `docs-nav.ts`; the header wears the door's nav under the
+          Coldworks wordmark; sign-in returns to `/dashboard/overview`. The
+          rail: Overview, Reviews (scoreboard beside), Repositories, Memory,
+          Guards, Evidence (later), Docs, Settings. Overview:
+          `lib/overview-slots.ts` (four slots, each a figure with its
+          sentence or a chip), `components/overview-slots.tsx` (O1: one
+          SLOT_TYPE for figure and sentence, siblings, no tooltip),
+          `app/dashboard/overview/page.tsx`. Guards:
+          `app/dashboard/guards/page.tsx` over `getRegistrySnapshot`,
+          mapping-gated, tenant-checked, the later chip with the A2 gloss
+          otherwise. Deploy: `DOUG_WEB_DOMAIN: coldworks.dev` in deploy.yml
+          (inert until the apex is mapped), `COLDWORKS_REGISTRY_URL` and an
+          empty `DOUG_GUARDS_INSTALLATIONS` slot in gcp.sh's web env.
+Next:     D3 PR, then Phase 0 items 2-7 on doug.coldworks.dev once deployed
+          (R11 item 3 sets the mapping value; item 1 gates the registry's
+          route, so the T slot and Guards show `unknown: answered 404`
+          until then). Then D4 (the subdomain redirect) after the founder's
+          apex step, and coldworks S2.
+Blockers: R11 items 1-3. Nothing in D3's code needs a signature.
 
 State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is

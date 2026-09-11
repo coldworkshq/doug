@@ -18,6 +18,22 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Trace from the monorepo root so workspace-hoisted deps are included.
   outputFileTracingRoot: path.join(appDir, ".."),
+  // The door is the Coldworks landing page, served verbatim out of public/
+  // as the self-contained document it has always been (its fonts, styles and
+  // lattice are inlined), rewritten onto the bare origin so the address that
+  // gets pasted into an email is the origin itself. ADR-0034. Doug's own
+  // page lives one link in, at /doug. The audit CLI's docs are the same
+  // shape under /docs/audit, beside Doug's docs rather than inside them.
+  //
+  // Rewrites, not redirects, and after the app's own routes: `/` has no
+  // page, so the rewrite fires; `/docs/audit/*` has no route either.
+  async rewrites() {
+    return [
+      { source: "/", destination: "/landing.html" },
+      { source: "/docs/audit", destination: "/docs/audit/index.html" },
+      { source: "/docs/audit/:page", destination: "/docs/audit/:page.html" },
+    ];
+  },
   async headers() {
     return [
       {
