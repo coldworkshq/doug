@@ -11,8 +11,14 @@ Intents pinned here:
 - one read per repository per TTL, so a demo burst cannot starve a review.
 """
 
+import threading
+import time
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from githubkit.exception import RequestFailed
+from githubkit.response import Response
 from test_api import _session_scope
 
 from doug import api, intent, intent_providers, reader, store
@@ -29,18 +35,24 @@ SUPERSEDED = IntentDoc(
 )
 
 
-def _report(docs, *, directory="docs/decisions", seen=None, skipped=0):
+def _report(docs, *, directory="docs/decisions", seen=None, unparseable=0, unread=0):
     return intent_providers.FetchReport(
         list(docs), directory if docs else None,
         ("docs/decisions",) if docs else intent_providers.CANDIDATE_PATHS,
-        len(docs) if seen is None else seen, skipped,
+        len(docs) if seen is None else seen, unparseable, unread,
     )
+
+
+def _github_failure(status=500):
+    raw = httpx.Response(status, request=httpx.Request("GET", "https://api.github.com/x"))
+    return RequestFailed(Response(raw, dict))
 
 
 @pytest.fixture
 def scoped(tmp_path, monkeypatch):
     headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
     api._decisions_cache_clear()
+    monkeypatch.setattr(api.app_auth, "enabled", lambda: True)
     monkeypatch.setattr(api.app_auth, "installation_client", lambda installation_id: object())
     monkeypatch.delenv("DOUG_READER", raising=False)
     monkeypatch.delenv(intent.ALLOWLIST_ENV, raising=False)
@@ -120,16 +132,109 @@ def test_a_zero_says_which_zero(scoped, monkeypatch):
     assert body["directory"] is None
     assert body["directories_searched"] == list(intent_providers.CANDIDATE_PATHS)
     assert body["count_accepted"] == 0
+    assert body["binding_status"] == intent.BINDING
 
 
-def test_a_broken_read_is_a_502_never_an_empty_list(scoped, monkeypatch):
+def test_a_broken_read_is_a_502_that_still_carries_the_sentence(scoped, monkeypatch):
     def boom(*a, **k):
-        raise RuntimeError("rate limited")
+        raise _github_failure(500)
 
     monkeypatch.setattr(intent_providers, "fetch_report", boom)
+    monkeypatch.setenv("DOUG_READER", "1")
     response = _get(scoped)
     assert response.status_code == 502
-    assert "RuntimeError" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "RequestFailed" in detail["message"]
+    # The three flags need no GitHub call, so an outage does not take the
+    # sentence with it (the mutation this pins: computing them after the read).
+    assert detail["reads_before_diff"] == {
+        "value": False, "deep_read": True, "allowlisted": False, "reader_enabled": True,
+    }
+
+
+def test_a_transport_error_is_a_502_too(scoped, monkeypatch):
+    def boom(*a, **k):
+        raise httpx.ConnectTimeout("slow")
+
+    monkeypatch.setattr(intent_providers, "fetch_report", boom)
+    assert _get(scoped).status_code == 502
+
+
+def test_a_programming_error_is_not_dressed_as_a_read_failure(scoped, monkeypatch):
+    """Fail loud: a bug wearing "could not be read" is a bug nobody finds."""
+
+    def boom(*a, **k):
+        raise AttributeError("no such attribute")
+
+    monkeypatch.setattr(intent_providers, "fetch_report", boom)
+    with pytest.raises(AttributeError):
+        _get(scoped)
+
+
+def test_an_unconfigured_github_app_is_a_503_before_any_read(scoped, monkeypatch):
+    monkeypatch.setattr(api.app_auth, "enabled", lambda: False)
+    calls = []
+    monkeypatch.setattr(intent_providers, "fetch_report", lambda *a, **k: calls.append(1))
+    response = _get(scoped)
+    assert response.status_code == 503
+    assert calls == []
+
+
+def test_a_failure_is_held_so_an_outage_is_not_retried_on_every_navigation(scoped, monkeypatch):
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise _github_failure(503)
+
+    monkeypatch.setattr(intent_providers, "fetch_report", boom)
+    assert _get(scoped).status_code == 502
+    assert _get(scoped).status_code == 502
+    assert len(calls) == 1, "the held failure answers the second navigation"
+    # The mutation this pins: a hold longer than the TTL. With TTL 0 the
+    # hold is min(0, 30) = 0, so the next call reads again.
+    monkeypatch.setenv("DOUG_DECISIONS_TTL_SECONDS", "0")
+    assert _get(scoped).status_code == 502
+    assert len(calls) == 2
+
+
+def test_concurrent_misses_make_one_read(scoped, monkeypatch):
+    calls = []
+    release = threading.Event()
+
+    def slow(*a, **k):
+        calls.append(1)
+        release.wait(2)
+        return _report([ACCEPTED])
+
+    monkeypatch.setattr(intent_providers, "fetch_report", slow)
+    results = []
+
+    def go():
+        results.append(_get(scoped).status_code)
+
+    threads = [threading.Thread(target=go) for _ in range(4)]
+    for t in threads:
+        t.start()
+    time.sleep(0.2)
+    release.set()
+    for t in threads:
+        t.join(5)
+    assert results == [200, 200, 200, 200]
+    assert len(calls) == 1, "four racing navigations made more than one GitHub read"
+
+
+def test_the_cache_is_bounded(scoped, monkeypatch):
+    for i in range(api._DECISIONS_CACHE_MAX + 5):
+        api._decisions_entry((1, i), ttl=300.0)
+    assert len(api._decisions_cache) <= api._DECISIONS_CACHE_MAX
+
+
+def test_a_malformed_ttl_fails_loud(scoped, monkeypatch):
+    monkeypatch.setattr(intent_providers, "fetch_report", lambda *a, **k: _report([ACCEPTED]))
+    monkeypatch.setenv("DOUG_DECISIONS_TTL_SECONDS", "3o0")
+    with pytest.raises(ValueError):
+        _get(scoped)
 
 
 def test_scoped_like_every_session_read_with_the_uniform_404(scoped, monkeypatch):

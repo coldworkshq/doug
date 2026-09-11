@@ -81,7 +81,7 @@ def test_the_first_directory_that_yields_records_wins_and_the_report_says_which(
     assert [d.id for d in report.docs] == ["ADR-0001"]
     assert report.directory == "docs/adr"
     assert report.searched == ("docs/decisions", "docs/adr")
-    assert (report.files_seen, report.files_skipped) == (2, 1)
+    assert (report.files_seen, report.files_unparseable, report.files_unread) == (2, 1, 0)
     assert report.matched_nothing is False
     # The review path reads exactly the report's records.
     assert [d.id for d in intent_providers.fetch(gh, "o", "r")] == ["ADR-0001"]
@@ -94,7 +94,7 @@ def test_no_candidate_directory_is_a_zero_that_names_where_it_looked(monkeypatch
     assert report.matched_nothing is True
     assert report.directory is None
     assert report.searched == intent_providers.CANDIDATE_PATHS
-    assert (report.files_seen, report.files_skipped) == (0, 0)
+    assert (report.files_seen, report.files_unparseable, report.files_unread) == (0, 0, 0)
     assert intent_providers.fetch(gh, "o", "r") == []
 
 
@@ -106,7 +106,39 @@ def test_a_directory_of_unparseable_files_is_a_different_zero(monkeypatch):
     report = intent_providers.fetch_report(gh, "o", "r")
     assert report.matched_nothing is True
     assert report.directory is None
-    assert (report.files_seen, report.files_skipped) == (2, 2)
+    assert (report.files_seen, report.files_unparseable, report.files_unread) == (2, 2, 0)
+
+
+def test_the_counts_describe_the_winning_directory_only(monkeypatch):
+    """A README without frontmatter in docs/decisions must not be reported as
+    a skipped file in docs/adr, the directory that actually yielded."""
+    monkeypatch.delenv("DOUG_ADR_PATH", raising=False)
+    gh, _ = _gh(
+        {
+            "docs/decisions": {"README.md": NOT_A_RECORD},
+            "docs/adr": {"ADR-0003-x.md": RECORD, "ADR-0004-y.md": RECORD},
+        }
+    )
+    report = intent_providers.fetch_report(gh, "o", "r")
+    assert report.directory == "docs/adr"
+    assert (report.files_seen, report.files_unparseable, report.files_unread) == (2, 0, 0)
+
+
+def test_an_unreadable_file_is_unread_not_unparseable(monkeypatch):
+    """The screen must never say "no frontmatter" about a file it never read."""
+    monkeypatch.delenv("DOUG_ADR_PATH", raising=False)
+    gh, contents = _gh({"docs/decisions": {"ADR-0001-a.md": RECORD, "broken.md": "x"}})
+    real = contents.get_content
+
+    def get_content(*, owner, repo, path, **kw):
+        if path.endswith("broken.md"):
+            raise RuntimeError("500 from GitHub")
+        return real(owner=owner, repo=repo, path=path, **kw)
+
+    contents.get_content = get_content
+    report = intent_providers.fetch_report(gh, "o", "r")
+    assert [d.id for d in report.docs] == ["ADR-0001"]
+    assert (report.files_seen, report.files_unparseable, report.files_unread) == (2, 0, 1)
 
 
 def test_a_superseded_record_is_listed_and_left_to_the_caller_to_filter(monkeypatch):

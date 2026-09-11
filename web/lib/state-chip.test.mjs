@@ -5,13 +5,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { CHIP_KINDS, CHIP_WORD, chipGloss } from "./state-chip.ts";
+import { CHIP_KINDS, chipGloss } from "./state-chip.ts";
 
 const component = await readFile(new URL("../components/state-chip.tsx", import.meta.url), "utf8");
 
-test("the set is closed at four and every kind has a word", () => {
+test("the set is closed at four", () => {
   assert.deepEqual([...CHIP_KINDS], ["later", "synthetic", "unknown", "off"]);
-  for (const kind of CHIP_KINDS) assert.equal(typeof CHIP_WORD[kind], "string");
 });
 
 test("every kind has a gloss, with or without a detail", () => {
@@ -36,7 +35,7 @@ test("unknown and off carry the source's own words", () => {
 
 test("the component renders the word and the sentence together, and no tooltip", () => {
   assert.match(component, /chipGloss\(kind, subject, detail\)/);
-  assert.match(component, /\{CHIP_WORD\[kind\]\}/);
+  assert.match(component, /\{kind\}/);
   assert.match(component, /\{gloss\}/);
   assert.equal(component.includes("title="), false, "a gloss in a tooltip can be cropped out of a screenshot");
   assert.equal(/data-\w+-color|\.data-/.test(component), false, "chips are chrome, not data");

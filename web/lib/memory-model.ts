@@ -20,13 +20,19 @@ import type { DecisionRecord, ReadsBeforeDiff, RepositoryDecisions } from "./ses
 
 export type StatusFilter = "accepted" | "all";
 
-export function parseStatusFilter(raw: string | string[] | undefined): StatusFilter {
-  return raw === "all" ? "all" : "accepted";
+/** The first value of a search param, whether Next handed a string or an array. */
+export function firstParam(raw: string | string[] | undefined): string | undefined {
+  return Array.isArray(raw) ? raw[0] : raw;
 }
 
-export function normalizeQuery(raw: string | string[] | undefined): string {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return (value ?? "").trim().toLowerCase();
+export function parseStatusFilter(raw: string | string[] | undefined): StatusFilter {
+  return firstParam(raw) === "all" ? "all" : "accepted";
+}
+
+/** The query from the URL, normalized. Not `search.ts`'s `normalizeQuery`:
+ *  that one is lockstep-pinned to the console and takes a bare string. */
+export function queryFromParams(raw: string | string[] | undefined): string {
+  return (firstParam(raw) ?? "").trim().toLowerCase();
 }
 
 export function matchesQuery(record: DecisionRecord, query: string): boolean {
@@ -39,21 +45,48 @@ export function selectRecords(
   records: DecisionRecord[],
   status: StatusFilter,
   query: string,
+  binding: string,
 ): DecisionRecord[] {
+  const bound = binding.toLowerCase();
   return records
-    .filter((r) => status === "all" || r.status.toLowerCase() === "accepted")
+    .filter((r) => status === "all" || r.status.toLowerCase() === bound)
     .filter((r) => matchesQuery(r, query))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-/** The honest-zero gloss: where Doug looked, in the API's own order. */
+/** The honest-zero gloss: where Doug looked, and what it found there, in
+ *  the API's own accounting. Unread files are named as unread, never as
+ *  files without frontmatter. */
 export function matchedNothingGloss(decisions: RepositoryDecisions): string {
   const where = decisions.directories_searched.join(", ");
-  const skipped =
-    decisions.files_seen > 0
-      ? ` ${decisions.files_seen} markdown file${decisions.files_seen === 1 ? "" : "s"} were there and none carried a title and a status in frontmatter.`
-      : "";
-  return `no decision records were found in the usual locations (${where}).${skipped}`;
+  const parts: string[] = [];
+  if (decisions.files_unparseable > 0) {
+    parts.push(
+      `${decisions.files_unparseable} markdown ${plural(decisions.files_unparseable, "file")} ` +
+        "carried no title and status in frontmatter",
+    );
+  }
+  if (decisions.files_unread > 0) {
+    parts.push(`${decisions.files_unread} could not be read`);
+  }
+  const found = parts.length > 0 ? ` ${parts.join("; ")}.` : "";
+  return `no decision records were found in the usual locations (${where}).${found}`;
+}
+
+/** The count line under a non-empty list, scoped to the directory that yielded. */
+export function fileAccounting(decisions: RepositoryDecisions): string {
+  const parts: string[] = [];
+  if (decisions.files_unparseable > 0) {
+    parts.push(`${decisions.files_unparseable} ${plural(decisions.files_unparseable, "file")} without frontmatter`);
+  }
+  if (decisions.files_unread > 0) {
+    parts.push(`${decisions.files_unread} unread`);
+  }
+  return parts.length > 0 ? `; ${parts.join(", ")}` : "";
+}
+
+function plural(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`;
 }
 
 /** The line, with the flag that turns it off named in the API's terms. */

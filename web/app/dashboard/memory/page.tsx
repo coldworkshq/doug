@@ -6,14 +6,16 @@ import { DashboardRail, SUBMIT_BUTTON, SWITCH_LABEL, SWITCH_SELECT } from "@/com
 import { StateChip } from "@/components/state-chip";
 import { frontDoor } from "@/lib/dashboard-model";
 import {
+  fileAccounting,
+  firstParam,
   matchedNothingGloss,
-  normalizeQuery,
   parseStatusFilter,
+  queryFromParams,
   readsBeforeDiffLine,
   recordHref,
   selectRecords,
 } from "@/lib/memory-model";
-import { getConnections, getRepositoryDecisions, SessionApiError } from "@/lib/session-api";
+import { getConnections, getRepositoryDecisions } from "@/lib/session-api";
 
 /** The route chip, matching the ledger's; declared here for the reason the
  *  settings page gives. */
@@ -52,6 +54,11 @@ export default async function MemoryPage({
   try {
     connections = await getConnections(accessToken);
   } catch {
+    // Swallowed on purpose, for the reason the settings page gives: /dashboard
+    // owns the three arms a failed connections read can land on, each worded
+    // once and pinned in lib/dashboard-contract.test.mjs, and it renders them
+    // inline rather than redirecting, so this cannot loop. The redirect is
+    // outside the catch because `redirect` works by throwing.
     connections = null;
   }
   if (connections === null) redirect("/dashboard");
@@ -64,26 +71,33 @@ export default async function MemoryPage({
   const repositories = [...connection.repositories].sort((a, b) =>
     a.full_name.localeCompare(b.full_name),
   );
-  const requested = Number(Array.isArray(params.repo) ? params.repo[0] : params.repo);
-  const repository = repositories.find((r) => r.id === requested) ?? repositories[0] ?? null;
+  // A bookmarked repository that is not in this space is said so, never
+  // silently swapped for the first one under the bookmarked URL.
+  const requestedRaw = firstParam(params.repo);
+  const requested = requestedRaw === undefined ? null : Number(requestedRaw);
+  const repository =
+    requested === null
+      ? (repositories[0] ?? null)
+      : (repositories.find((r) => r.id === requested) ?? null);
+  const repoNotFound = requested !== null && repository === null && repositories.length > 0;
   const status = parseStatusFilter(params.status);
-  const query = normalizeQuery(params.q);
+  const query = queryFromParams(params.q);
 
   let decisions: Awaited<ReturnType<typeof getRepositoryDecisions>> | null = null;
-  let readFailure: string | null = null;
   if (repository) {
     try {
       decisions = await getRepositoryDecisions(accessToken, repository.id);
-    } catch (error) {
-      readFailure =
-        error instanceof SessionApiError && error.status !== null
-          ? `the read answered ${error.status}`
-          : "the read did not answer";
+    } catch {
+      decisions = { ok: false, failure: { status: null, reason: "the read did not answer", reads_before_diff: null } };
     }
   }
-
-  const shown = decisions ? selectRecords(decisions.items, status, query) : [];
-  const line = decisions ? readsBeforeDiffLine(decisions.reads_before_diff) : null;
+  const loaded = decisions?.ok ? decisions.decisions : null;
+  const readFailure = decisions && !decisions.ok ? decisions.failure.reason : null;
+  // THE LINE. Rendered from the three flags and nothing else; the list below
+  // never consults them. A broken read still carries the flags on its 502.
+  const flags = decisions?.ok ? decisions.decisions.reads_before_diff : (decisions?.failure.reads_before_diff ?? null);
+  const line = flags ? readsBeforeDiffLine(flags) : null;
+  const shown = loaded ? selectRecords(loaded.items, status, query, loaded.binding_status) : [];
 
   return (
     <div className="dashboard-surface">
@@ -125,7 +139,7 @@ export default async function MemoryPage({
               <form method="GET" action="/dashboard/memory" className="mt-8 flex flex-wrap items-end gap-3">
                 <label className="flex flex-col gap-1">
                   <span className={SWITCH_LABEL}>Repository</span>
-                  <select name="repo" defaultValue={repository?.id} className={SWITCH_SELECT}>
+                  <select name="repo" defaultValue={repository?.id ?? repositories[0]?.id} className={SWITCH_SELECT}>
                     {repositories.map((r) => (
                       <option key={r.id} value={r.id}>{r.full_name}</option>
                     ))}
@@ -151,8 +165,12 @@ export default async function MemoryPage({
                 <button type="submit" className={`${SUBMIT_BUTTON} h-[32px]`}>show</button>
               </form>
 
-              {/* THE LINE. Rendered from the three flags and nothing else; the
-                  list below never consults them. */}
+              {repoNotFound && (
+                <p className="mt-6 text-sm">
+                  <StateChip kind="unknown" subject="repository" detail={`repository ${requestedRaw} is not in this space; pick one above`} />
+                </p>
+              )}
+
               {line && (
                 <p className="mt-6 text-sm text-muted-foreground">
                   {line.on ? (
@@ -169,18 +187,18 @@ export default async function MemoryPage({
                 </p>
               )}
 
-              {decisions && decisions.matched_nothing && (
+              {loaded && loaded.matched_nothing && (
                 <p className="mt-6 text-sm">
-                  <StateChip kind="unknown" subject="decisions" detail={matchedNothingGloss(decisions)} />
+                  <StateChip kind="unknown" subject="decisions" detail={matchedNothingGloss(loaded)} />
                 </p>
               )}
 
-              {decisions && !decisions.matched_nothing && (
+              {loaded && !loaded.matched_nothing && (
                 <>
                   <p className="mono mt-6 text-[11px] uppercase tracking-[.12em] text-[var(--dim)]">
-                    {decisions.count_accepted} accepted of {decisions.items.length} on record
-                    {decisions.directory ? ` in ${decisions.directory}` : ""}
-                    {decisions.files_skipped > 0 ? `; ${decisions.files_skipped} file${decisions.files_skipped === 1 ? "" : "s"} skipped without frontmatter` : ""}
+                    {loaded.count_accepted} {loaded.binding_status} of {loaded.items.length} on record
+                    {loaded.directory ? ` in ${loaded.directory}` : ""}
+                    {fileAccounting(loaded)}
                   </p>
                   {shown.length === 0 ? (
                     <p className="mt-4 text-sm text-muted-foreground">
@@ -205,7 +223,7 @@ export default async function MemoryPage({
                               {record.body}
                             </pre>
                             <a
-                              href={recordHref(decisions.full_name, record.ref)}
+                              href={recordHref(loaded.full_name, record.ref)}
                               className="mono mt-2 inline-block text-[11px] text-foreground underline underline-offset-[3px]"
                             >
                               Open on GitHub at HEAD

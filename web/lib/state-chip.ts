@@ -18,13 +18,6 @@ export type ChipKind = "later" | "synthetic" | "unknown" | "off";
 
 export const CHIP_KINDS: readonly ChipKind[] = ["later", "synthetic", "unknown", "off"];
 
-export const CHIP_WORD: Record<ChipKind, string> = {
-  later: "later",
-  synthetic: "synthetic",
-  unknown: "unknown",
-  off: "off",
-};
-
 /** The sentence beside the word. `detail` is the reason, the provenance, or
  *  the flag, in the source's own words where it gave them. */
 export function chipGloss(kind: ChipKind, subject: string, detail?: string): string {
@@ -36,7 +29,7 @@ export function chipGloss(kind: ChipKind, subject: string, detail?: string): str
         // missing feature.
         return "Guards remove reviewer work when proven; none proven yet for this repository.";
       }
-      return `${capitalize(subject)} is not built yet.`;
+      return `${subject} is not built yet.`;
     case "synthetic":
       return detail
         ? `Measured on ${detail}, not this repository's pull requests.`
@@ -48,8 +41,4 @@ export function chipGloss(kind: ChipKind, subject: string, detail?: string): str
         ? `Off for this installation: ${detail}`
         : "Off for this installation.";
   }
-}
-
-function capitalize(s: string): string {
-  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }

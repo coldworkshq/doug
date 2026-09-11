@@ -653,15 +653,22 @@ export type RepositoryDecisions = {
   github_repo_id: number;
   full_name: string;
   items: DecisionRecord[];
+  /** The status the reader is fed. The screen filters by this word, so the
+   *  count and the list are one definition. */
+  binding_status: string;
   count_accepted: number;
   /** True when the walk found no record at all: no candidate directory, an
-   *  empty one, or one whose files all lack parseable frontmatter. A zero
-   *  that says which zero, so the screen never renders a bare 0. */
+   *  empty one, or one whose files could not be used. A zero that says which
+   *  zero, so the screen never renders a bare 0. */
   matched_nothing: boolean;
   directory: string | null;
   directories_searched: string[];
+  /** The file counts describe the directory that yielded, or every candidate
+   *  that existed when none did. Unparseable means read and lacking a title
+   *  and status; unread means the read itself failed. */
   files_seen: number;
-  files_skipped: number;
+  files_unparseable: number;
+  files_unread: number;
   reads_before_diff: ReadsBeforeDiff;
   fetched_at: string;
   cached: boolean;
@@ -670,8 +677,9 @@ export type RepositoryDecisions = {
 const DECISION_RECORD_KEYS = ["id", "title", "status", "date", "ref", "body"] as const;
 const READS_BEFORE_DIFF_KEYS = ["value", "deep_read", "allowlisted", "reader_enabled"] as const;
 const REPOSITORY_DECISIONS_KEYS = [
-  "github_repo_id", "full_name", "items", "count_accepted", "matched_nothing", "directory",
-  "directories_searched", "files_seen", "files_skipped", "reads_before_diff", "fetched_at", "cached",
+  "github_repo_id", "full_name", "items", "binding_status", "count_accepted", "matched_nothing",
+  "directory", "directories_searched", "files_seen", "files_unparseable", "files_unread",
+  "reads_before_diff", "fetched_at", "cached",
 ] as const;
 
 function decisionRecord(value: unknown): value is DecisionRecord {
@@ -694,26 +702,61 @@ export function isRepositoryDecisions(value: unknown): value is RepositoryDecisi
     record(value) && exact(value, REPOSITORY_DECISIONS_KEYS) &&
     Number.isInteger(value.github_repo_id) && typeof value.full_name === "string" &&
     Array.isArray(value.items) && value.items.every(decisionRecord) &&
+    typeof value.binding_status === "string" &&
     Number.isInteger(value.count_accepted) && typeof value.matched_nothing === "boolean" &&
     nullableString(value.directory) && Array.isArray(value.directories_searched) &&
     value.directories_searched.every((item) => typeof item === "string") &&
-    Number.isInteger(value.files_seen) && Number.isInteger(value.files_skipped) &&
+    Number.isInteger(value.files_seen) && Number.isInteger(value.files_unparseable) &&
+    Number.isInteger(value.files_unread) &&
     readsBeforeDiff(value.reads_before_diff) && typeof value.fetched_at === "string" &&
     typeof value.cached === "boolean"
   );
 }
 
+/** A broken read: the registry of records could not be read, but the three
+ *  flags need no GitHub call, so the API carries the sentence on its 502 and
+ *  the screen keeps it. */
+export type RepositoryDecisionsFailure = {
+  status: number | null;
+  reason: string;
+  reads_before_diff: ReadsBeforeDiff | null;
+};
+
+export type RepositoryDecisionsResult =
+  | { ok: true; decisions: RepositoryDecisions }
+  | { ok: false; failure: RepositoryDecisionsFailure };
+
 export async function getRepositoryDecisions(
   accessToken: string,
   githubRepoId: number,
-): Promise<RepositoryDecisions> {
+): Promise<RepositoryDecisionsResult> {
   const message = "Doug could not read this repository's decision records.";
   if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
-  const body = await sessionJson(
-    `/v1/sessions/repositories/${githubRepoId}/decisions`,
-    accessToken,
-    message,
-  );
+  let response: Response;
+  try {
+    response = await fetch(`${SESSION_API_URL}/v1/sessions/repositories/${githubRepoId}/decisions`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, failure: { status: null, reason: "the read did not answer", reads_before_diff: null } };
+  }
+  const body: unknown = await response.json().catch(() => null);
+  if (response.status === 502 && record(body) && record(body.detail)) {
+    const detail = body.detail;
+    return {
+      ok: false,
+      failure: {
+        status: 502,
+        reason: typeof detail.message === "string" ? detail.message : "the read answered 502",
+        reads_before_diff: readsBeforeDiff(detail.reads_before_diff) ? detail.reads_before_diff : null,
+      },
+    };
+  }
+  if (!response.ok) {
+    return { ok: false, failure: { status: response.status, reason: `the read answered ${response.status}`, reads_before_diff: null } };
+  }
   if (!isRepositoryDecisions(body)) throw new SessionApiError(message);
-  return body;
+  return { ok: true, decisions: body };
 }
