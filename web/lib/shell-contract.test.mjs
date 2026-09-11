@@ -8,7 +8,7 @@
 //   Guards is one code path decided by the mapping and the tenant (T2).
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const [landing, config, rail, slots, overview, guards, dougPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp] = await Promise.all([
@@ -191,4 +191,33 @@ test("the public header wears the door's nav and the Coldworks wordmark", () => 
   assert.match(header, /label: "Doug reviews"/);
   assert.match(header, /Coldworks\s*<\/Link>/);
   assert.equal(header.includes("DougLogo"), false);
+});
+
+test("every nav target is distinct and exists on the door", () => {
+  const hrefs = [...header.matchAll(/\{ href: "([^"]+)", label: "[^"]+" \}/g)].map((m) => m[1]);
+  assert.ok(hrefs.length >= 6, "the nav list was not read");
+  assert.equal(new Set(hrefs).size, hrefs.length, `two labels on one target: ${hrefs.join(" ")}`);
+  for (const href of hrefs.filter((h) => h.startsWith("/#"))) {
+    assert.match(landing, new RegExp(`id="${href.slice(2)}"`), `${href} names no element on the door`);
+  }
+  assert.match(header, /key=\{l\.href\}/, "the key is the target, so a duplicate fails loud in development");
+});
+
+test("the door is the rewrite: no root page may shadow it", async () => {
+  // Next checks pages before an array-form rewrite, so a future app/page.tsx
+  // would silently take the apex from landing.html. Fail here instead.
+  assert.match(config, /\{ source: "\/", destination: "\/landing\.html" \}/);
+  await assert.rejects(access(new URL("../app/page.tsx", import.meta.url)), "app/page.tsx exists and shadows the door");
+});
+
+test("the ledger is the terminus of every non-runs state; it never bounces back to the workspace", async () => {
+  // loadWorkspace sends a failed connections read and every front-door state
+  // but `runs` to /dashboard, which renders those states in place. A redirect
+  // from /dashboard into the workspace would be a loop for those users.
+  const ledger = await readFile(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8");
+  const targets = [...ledger.matchAll(/redirect\(\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(targets.length > 0, "the ledger's redirects were not read");
+  assert.deepEqual([...new Set(targets)], ["/sign-in"]);
+  assert.match(workspace, /if \(connections === null\) redirect\("\/dashboard"\)/);
+  assert.match(workspace, /if \(door\.state !== "runs"\) redirect\("\/dashboard"\)/);
 });

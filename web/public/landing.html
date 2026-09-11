@@ -381,9 +381,9 @@ footer canvas{width:44px;height:44px}
     <h2>One record of what your team decides, read at three moments.</h2>
     <p class="lede">Before an agent starts, at the pull request, and every week after. The same decision answers all three, so a settled question stays settled and the model is asked less each time. Coldworks is not a check your agents call. What is decided is read before they start, what is compiled runs instead of them, and what is left goes to the model, with a receipt.</p>
     <div class="moments">
-      <div class="moment m1"><small>Before the agent starts <span class="tag designed">designed</span></small><b>Memory</b><p>Agents ask over MCP whether a question is already decided and get a cited answer, or "no recorded ruling," which means unknown, not approved.</p></div>
+      <div class="moment m1" id="memory"><small>Before the agent starts <span class="tag designed">designed</span></small><b>Memory</b><p>Agents ask over MCP whether a question is already decided and get a cited answer, or "no recorded ruling," which means unknown, not approved.</p></div>
       <div class="moment m2"><small>At the pull request <span class="tag built">shipping</span></small><b>Doug reviews</b><p>Every pull request gets a verdict: cleared, or needs a reader. Doug reads the record before it reads the diff, routes attention, and never blocks. He works alone, too.</p></div>
-      <div class="moment m3"><small>Every week after <span class="tag gated">built in the engine, not yet at the pull request</span></small><b>Guards</b><p>Judgments that come back the same every time become guarded, tested checks. A maintainer signs each one, it runs first in your CI, and Doug stops asking the model about it.</p></div>
+      <div class="moment m3" id="guards"><small>Every week after <span class="tag gated">built in the engine, not yet at the pull request</span></small><b>Guards</b><p>Judgments that come back the same every time become guarded, tested checks. A maintainer signs each one, it runs first in your CI, and Doug stops asking the model about it.</p></div>
     </div>
 
     <div class="bands">

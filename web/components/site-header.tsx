@@ -5,12 +5,13 @@ import { GITHUB_REPO_URL } from "@/lib/links";
 
 /** The door's own nav, in its order (public/landing.html): the three
  *  moments, the audit, the docs. Doug reviews is a real page; Memory and
- *  Guards are sections of the door until their workspace screens are the
- *  thing a stranger should see first. ADR-0034. */
+ *  Guards are their own cards on the door (#memory, #guards) until their
+ *  workspace screens are the thing a stranger should see first. Every
+ *  target is distinct: two labels on one anchor is one dead label. ADR-0034. */
 const NAV_LINKS = [
   { href: "/doug", label: "Doug reviews" },
-  { href: "/#moments", label: "Memory" },
-  { href: "/#moments", label: "Guards" },
+  { href: "/#memory", label: "Memory" },
+  { href: "/#guards", label: "Guards" },
   { href: "/#audit", label: "The audit" },
   // The published miss rate is the trust instrument (Doug's third rule); it
   // stays one click from every public page, not only from the ledger.
@@ -90,7 +91,7 @@ export function SiteHeader({
           <nav className="hidden items-center gap-0.5 font-mono text-xs text-muted-foreground sm:flex">
             {NAV_LINKS.map((l) => (
               <Link
-                key={l.label}
+                key={l.href}
                 href={l.href}
                 className="rounded-full px-3 py-1.5 transition-colors hover:bg-accent hover:text-accent-foreground"
               >
@@ -125,7 +126,7 @@ export function SiteHeader({
             >
               {NAV_LINKS.map((l) => (
                 <Link
-                  key={l.label}
+                  key={l.href}
                   href={l.href}
                   className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 >
