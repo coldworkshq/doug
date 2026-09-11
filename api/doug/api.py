@@ -13,11 +13,13 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from githubkit.exception import RequestError as GitHubRequestError
 from githubkit.webhooks import verify as verify_webhook
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -29,6 +31,8 @@ from . import (
     example_pack_service,
     ingest,
     install_flow,
+    intent,
+    intent_providers,
     merge_sha,
     outcome_queue,
     precision,
@@ -1476,6 +1480,233 @@ def set_repository_flag_line(
         )
     return RepositorySettings(
         needs_you_threshold=threshold, pr_comment=pr_comment, deep_read=deep_read
+    )
+
+
+class DecisionRecord(BaseModel):
+    """One decision record as written in the repository, at HEAD."""
+
+    id: str
+    title: str
+    status: str
+    date: str | None
+    ref: str
+    body: str
+
+
+class ReadsBeforeDiff(BaseModel):
+    """Whether Doug reads this repository's records before it reads a diff.
+
+    Three terms, because `review.py` conjoins three: the repository's
+    deep-read setting, the intent allowlist for this installation, and the
+    service's reader switch. A line that followed only two would say "on"
+    under DOUG_READER=0. The list on the Memory screen is never gated by
+    this; only the sentence is.
+    """
+
+    value: bool
+    deep_read: bool
+    allowlisted: bool
+    reader_enabled: bool
+
+
+class RepositoryDecisions(BaseModel):
+    github_repo_id: int
+    full_name: str
+    items: list[DecisionRecord]
+    # The status the reader is fed, so the screen filters by the same word
+    # the count uses and the two cannot drift apart.
+    binding_status: str
+    count_accepted: int
+    matched_nothing: bool
+    directory: str | None
+    directories_searched: list[str]
+    files_seen: int
+    files_unparseable: int
+    files_unread: int
+    reads_before_diff: ReadsBeforeDiff
+    fetched_at: str
+    cached: bool
+
+
+# One report per (installation, repository) for the TTL. `fetch` makes one
+# listing call plus one content read per record, and the review path calls
+# it once per pull request event, which developer activity throttles; a page
+# calls it on every navigation, which nothing throttles, against the same
+# 5,000-an-hour budget that funds real reviews. Three rules keep the cache
+# honest about that job:
+#
+# 1. CONCURRENT MISSES COALESCE. A per-key lock is held across the fetch, so
+#    two tabs racing after expiry make one GitHub read, not two.
+# 2. A FAILURE IS HELD TOO, briefly. During an outage every navigation would
+#    otherwise retry the full read; the held failure answers 502 for up to
+#    _DECISIONS_FAILURE_HOLD_SECONDS instead.
+# 3. IT IS BOUNDED. Entries older than twice the TTL are dropped on every
+#    write, and the map never holds more than _DECISIONS_CACHE_MAX keys. The
+#    showcase cache above chose a single slot for the same reason; this one
+#    is keyed on authorised repositories, so a bound suffices.
+_DECISIONS_TTL_ENV = "DOUG_DECISIONS_TTL_SECONDS"
+_DECISIONS_FAILURE_HOLD_SECONDS = 30.0
+_DECISIONS_CACHE_MAX = 256
+
+
+class _DecisionsEntry:
+    __slots__ = ("at", "report", "failure", "lock")
+
+    def __init__(self) -> None:
+        self.at = 0.0
+        self.report: intent_providers.FetchReport | None = None
+        self.failure: str | None = None
+        self.lock = threading.Lock()
+
+
+_decisions_cache: dict[tuple[int, int], _DecisionsEntry] = {}
+_decisions_lock = threading.Lock()
+
+
+def _decisions_ttl() -> float:
+    # A malformed value raises, as every other numeric env in this service
+    # does (DOUG_THRESHOLD, DOUG_READ_TIMEOUT_S): a typo that quietly became
+    # the default would be undiagnosable from the logs.
+    return max(0.0, float(os.environ.get(_DECISIONS_TTL_ENV, "300")))
+
+
+def _decisions_cache_clear() -> None:
+    with _decisions_lock:
+        _decisions_cache.clear()
+
+
+def _decisions_entry(key: tuple[int, int], ttl: float) -> _DecisionsEntry:
+    """The entry for this key, creating it and pruning the map under the lock."""
+    with _decisions_lock:
+        entry = _decisions_cache.get(key)
+        if entry is None:
+            now = time.time()
+            stale = [k for k, e in _decisions_cache.items() if now - e.at > 2 * ttl]
+            for k in stale:
+                del _decisions_cache[k]
+            while len(_decisions_cache) >= _DECISIONS_CACHE_MAX:
+                oldest = min(_decisions_cache, key=lambda k: _decisions_cache[k].at)
+                del _decisions_cache[oldest]
+            entry = _DecisionsEntry()
+            _decisions_cache[key] = entry
+        return entry
+
+
+def _decisions_report(
+    installation_id: int, github_repo_id: int, owner: str, repo: str
+) -> tuple[intent_providers.FetchReport, float, bool]:
+    """The report, its fetch time, and whether it came from the cache.
+
+    Raises the 502 for a broken read, from the held failure when one is
+    fresh. Only a GitHub or transport failure is a 502; an unconfigured App
+    credential is a 503 before any read, and a programming error propagates,
+    because a bug wearing "could not be read" is a bug nobody finds.
+    """
+    ttl = _decisions_ttl()
+    key = (installation_id, github_repo_id)
+    entry = _decisions_entry(key, ttl)
+    with entry.lock:
+        now = time.time()
+        if entry.report is not None and now - entry.at < ttl:
+            return entry.report, entry.at, True
+        if entry.failure is not None and now - entry.at < min(ttl, _DECISIONS_FAILURE_HOLD_SECONDS):
+            raise HTTPException(status_code=502, detail=entry.failure)
+        try:
+            gh = app_auth.installation_client(installation_id)
+            report = intent_providers.fetch_report(gh, owner, repo)
+        except (GitHubRequestError, httpx.HTTPError) as e:
+            print(
+                f"doug: decision records unread installation={installation_id} "
+                f"repo={github_repo_id} ({type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+            entry.at = time.time()
+            entry.report = None
+            entry.failure = f"decision records could not be read ({type(e).__name__})"
+            raise HTTPException(status_code=502, detail=entry.failure) from e
+        entry.at = time.time()
+        entry.report = report
+        entry.failure = None
+        return report, entry.at, False
+
+
+@app.get("/v1/sessions/repositories/{github_repo_id}/decisions")
+def session_repository_decisions(
+    github_repo_id: int, authorization: str = Header("")
+) -> RepositoryDecisions:
+    """The decision records in one connected repository, as written, at the
+    default branch's HEAD: the same read the intent tier makes before a review
+    (`intent_providers.fetch`, ADR-0006), served to the Memory screen.
+
+    Display is not gated by the intent allowlist or the deep-read setting;
+    those gate the model READ at review time, and this is a listing of the
+    record, not a derived record (ADR-0022's derivation gate is not engaged).
+    The sentence that says whether Doug reads these before the diff follows
+    all three flags, so it can be "off" while the list is full, and it is
+    computed before the read so a broken read still answers it: the 502
+    carries `reads_before_diff` in its body.
+
+    Scoped like every session read: the repository must be in this session's
+    explicit set, and a repository outside it is 404 like one that never
+    existed.
+    """
+    if not store.enabled():
+        raise HTTPException(status_code=503, detail="no ledger configured")
+    if not app_auth.enabled():
+        raise HTTPException(status_code=503, detail="github app not configured")
+    ctx = _session_read_context(authorization, "queue:read")
+    if github_repo_id not in ctx.repo_ids:
+        raise _not_found()
+    live = {
+        repo_id: full_name
+        for repo_id, full_name in store.active_repos(ctx.installation_id)
+    }
+    full_name = live.get(github_repo_id)
+    if full_name is None:
+        raise _not_found()
+    owner, _, repo = full_name.partition("/")
+
+    deep_read = store.repo_deep_read(ctx.installation_id, github_repo_id)
+    allowlisted = intent.enabled_for(ctx.installation_id)
+    reader_enabled = reader.enabled()
+    reads_before_diff = ReadsBeforeDiff(
+        value=bool(deep_read and allowlisted and reader_enabled),
+        deep_read=deep_read,
+        allowlisted=allowlisted,
+        reader_enabled=reader_enabled,
+    )
+    try:
+        report, fetched_at, cached = _decisions_report(
+            ctx.installation_id, github_repo_id, owner, repo
+        )
+    except HTTPException as exc:
+        if exc.status_code != 502:
+            raise
+        raise HTTPException(
+            status_code=502,
+            detail={"message": exc.detail, "reads_before_diff": reads_before_diff.model_dump()},
+        ) from exc
+    return RepositoryDecisions(
+        github_repo_id=github_repo_id,
+        full_name=full_name,
+        items=[
+            DecisionRecord(
+                id=d.id, title=d.title, status=d.status, date=d.date, ref=d.ref, body=d.body
+            )
+            for d in report.docs
+        ],
+        binding_status=intent.BINDING,
+        count_accepted=sum(1 for d in report.docs if d.status.lower() == intent.BINDING),
+        matched_nothing=report.matched_nothing,
+        directory=report.directory,
+        directories_searched=list(report.searched),
+        files_seen=report.files_seen,
+        files_unparseable=report.files_unparseable,
+        files_unread=report.files_unread,
+        reads_before_diff=reads_before_diff,
+        fetched_at=datetime.fromtimestamp(fetched_at, tz=UTC).isoformat(),
+        cached=cached,
     )
 
 

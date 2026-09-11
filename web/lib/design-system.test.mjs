@@ -216,6 +216,7 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
   assert.deepEqual(
     users.sort(),
     [
+      "app/dashboard/memory/page.tsx",
       "app/dashboard/page.tsx",
       "app/dashboard/pr/[number]/page.tsx",
       "app/dashboard/settings/page.tsx",
@@ -237,6 +238,12 @@ test("the surface-scoped tokens are used only where the surface is mounted", asy
   // row) and earns it by mounting its own .dashboard-surface. It is a
   // /dashboard route rendering the dashboard's own surface, not a component
   // lifted out of one.
+  //
+  // The memory page is the fourth, for the same reason (the /memory
+  // breadcrumb row and the record counts). The state chip it renders is NOT
+  // on this list on purpose: components/state-chip.tsx uses only :root
+  // tokens, because the same chip renders on the Overview and, later, beside
+  // figures that are not inside the dashboard surface.
   //
   // THE RAIL IS THE FOURTH AND IS THE CASE THE COMMENT ABOVE WARNED ABOUT — a
   // piece of the dashboard extracted into components/. The decision it forces
