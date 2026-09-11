@@ -18,7 +18,10 @@ State:    review — branch `shell/the-subdomain-redirects` off main e32ca47
           low finding's Host-header assumption has a live tripwire,
           `web/scripts/smoke-subdomain-redirect.sh` after every web
           promotion in deploy.yml, red against production today.
-Next:     #328 is a DRAFT: CI green, Doug's read answered. HOLD THE MERGE
+Next:     #328 is a DRAFT: CI green on 1d8d834; Doug's read of 0deb75e
+          answered, and Doug reads no draft (api.py:2583), so its read of
+          the final head comes on `gh pr ready`; adjudicate it before the
+          squash. HOLD THE MERGE
           until FQ-28 (the apex mapped onto doug-web, cutover observed) is
           done; the founder marks it ready then. A merged D4 redirects
           tenants to whatever serves the apex, which is the registry until
