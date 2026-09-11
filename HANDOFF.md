@@ -1,31 +1,29 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-10): the one shell, doug D3 (the door, the rail, Overview, Guards) ---
+--- shell lane (2026-09-11): the one shell, doug D4 (the subdomain redirects to the apex) ---
 
-State:    building — branch `shell/the-door` off main a033990 (D2 merged as
-          #326 with its review fixes). The door: `public/landing.html` is the
-          Coldworks landing with the day-one copy edits, served by a rewrite
-          of `/`; Doug's page moved to `app/doug/page.tsx` with its own
-          metadata; the audit CLI's docs at `public/docs/audit/*` (rewrites)
-          and in `docs-nav.ts`; the header wears the door's nav under the
-          Coldworks wordmark; sign-in returns to `/dashboard/overview`. The
-          rail: Overview, Reviews (scoreboard beside), Repositories, Memory,
-          Guards, Evidence (later), Docs, Settings. Overview:
-          `lib/overview-slots.ts` (four slots, each a figure with its
-          sentence or a chip), `components/overview-slots.tsx` (O1: one
-          SLOT_TYPE for figure and sentence, siblings, no tooltip),
-          `app/dashboard/overview/page.tsx`. Guards:
-          `app/dashboard/guards/page.tsx` over `getRegistrySnapshot`,
-          mapping-gated, tenant-checked, the later chip with the A2 gloss
-          otherwise. Deploy: `DOUG_WEB_DOMAIN: coldworks.dev` in deploy.yml
-          (inert until the apex is mapped), `COLDWORKS_REGISTRY_URL` and an
-          empty `DOUG_GUARDS_INSTALLATIONS` slot in gcp.sh's web env.
-Next:     D3 PR, then Phase 0 items 2-7 on doug.coldworks.dev once deployed
-          (R11 item 3 sets the mapping value; item 1 gates the registry's
-          route, so the T slot and Guards show `unknown: answered 404`
-          until then). Then D4 (the subdomain redirect) after the founder's
-          apex step, and coldworks S2.
-Blockers: R11 items 1-3. Nothing in D3's code needs a signature.
+State:    review — branch `shell/the-subdomain-redirects` off main e32ca47
+          (D3 merged as #327; main carries its tip, checked). D4 is
+          `redirects()` in `web/next.config.ts`: every path on
+          `doug.coldworks.dev` answers 308 to the same path and query on
+          `coldworks.dev`, keyed on that one Host, never a catch-all, so the
+          run.app host the deploy smokes keeps answering 200. The single-host
+          suite in `web/lib/auth-entry.integration.test.mjs` starts a second
+          `next start` with the redirect URI on the apex and sends Host
+          through node:http (fetch drops it; `has: host` reads it). Both
+          mutations red: `has.value` = apex fails the three subdomain cases
+          and the apex sign-in; no `has` fails every case including run.app.
+Next:     The D4 PR: CI green, Doug's read adjudicated, then HOLD THE MERGE
+          until FQ-28 (the apex mapped onto doug-web, cutover observed) is
+          done. A merged D4 redirects tenants to whatever serves the apex,
+          which is the registry until then (R1). After the merge: Phase 0
+          item 8 re-observed (one receipt link on doug.coldworks.dev
+          followed through the 308) and recorded on frontdoor-12.8; then
+          coldworks S2. Phase 0 items 3, 4, 7 are observable on
+          doug.coldworks.dev now; 2 (T) and 5 wait on FQ-27 and FQ-29; 6 on
+          the registry deploy in FQ-27; 1 and 8 on FQ-28.
+Blockers: FQ-28 gates the merge. FQ-27 and FQ-29 gate the T slot, Guards,
+          and item 6. Nothing in D4's code needs a signature.
 
 State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is
