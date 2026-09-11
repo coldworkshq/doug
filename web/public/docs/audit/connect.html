@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect your traces — Coldworks docs</title>
+<meta name="description" content="How to connect Langfuse, LangSmith, or OpenTelemetry traces to the Coldworks audit — and what never leaves your machine.">
+<link rel="stylesheet" href="/docs/audit/docs.css">
+</head>
+<body>
+<div class="rail" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="wm" href="/">COLDWORKS</a>
+  <span class="crumb">/ docs / connect</span>
+  <span class="previewchip">DESIGN PREVIEW · COLDWORKS-AUDIT HAS NOT SHIPPED</span>
+  <a class="toplink" href="/dashboard/guards">Guards</a>
+</header>
+
+<div class="shell">
+  <aside class="side">
+    <nav>
+      <div class="sec">Getting started</div>
+      <a href="/docs/audit">Overview</a>
+      <a href="/docs/audit/quickstart">Quickstart</a>
+      <a href="/docs/audit/connect" class="on">Connect your traces</a>
+      <div class="sec">Reference</div>
+      <a href="/docs/audit/cli">The audit CLI</a>
+      <span class="dead">The audit report <span class="soon">SOON</span></span>
+      <span class="dead">Guards &amp; subtraction <span class="soon">SOON</span></span>
+      <div class="sec">Doug</div>
+      <a href="/docs">Doug&#39;s docs</a>
+      <div class="sec">Project</div>
+      <a href="/dashboard/guards">Guards</a>
+      <a href="/#audit">Receipts</a>
+    </nav>
+  </aside>
+
+  <main class="doc">
+    <div class="eyebrow">GETTING STARTED</div>
+    <h1>Connect your traces</h1>
+    <p class="lede">You already have the traces — your trace store has been writing your agent's
+    judgments down the whole time. Coldworks reads them <b>where they live: on your machine</b>.
+    A batch trace export is a file transfer, not an integration.</p>
+
+    <h2>The three steps</h2>
+    <ol>
+      <li><b>Export</b> your traces from your store (about 30 seconds — every store already
+      has this).</li>
+      <li><b>Run</b> <code>uvx coldworks-audit run traces.jsonl</code> locally.</li>
+      <li><b>Read</b> the report it writes next to the file.</li>
+    </ol>
+    <div class="code">
+      <div class="codebar">ILLUSTRATIVE — NO REAL STORE BEHIND THIS PAGE</div>
+      <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> traces.jsonl
+
+read <b>41,218</b> spans · <b>9,406</b> tool calls · <span class="dim">your tool names, kept</span>
+<b>2,871</b> exact repeats across <b>214</b> groups
+
+  <span class="c">→ 1,704 tier-0 cache candidates</span>   <span class="dim">results agree on every repeat</span>
+  <span class="e">→ 1,167 repeats, results disagree</span>  <span class="dim">nondeterminism findings</span>
+
+not counted as findings, not hidden:
+  <span class="m">322</span> judgments stated only in prose · <span class="m">118</span> unanchorable
+
+report: <span class="c">./coldworks-audit.html</span></pre>
+    </div>
+    <p class="small">Candidates, never savings — a repeated judgment is a candidate for
+    compilation, not a booked dollar. The report prints what it could not read in the same
+    breath as what it could.</p>
+
+    <h2>From Langfuse</h2>
+    <p>Langfuse observations carry name, input, output, and token usage — everything the audit
+    needs. Three rungs, all running with your credentials on your compute:</p>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>Rung</th><th>How it works</th><th>Status</th></tr>
+      <tr>
+        <td><b>File</b></td>
+        <td>Traces → Export in the Langfuse UI, then <code>coldworks-audit run</code> on the
+        downloaded file.</td>
+        <td><span class="chip design">DESIGNED</span></td>
+      </tr>
+      <tr>
+        <td><b>Standing file</b></td>
+        <td>Langfuse's scheduled export writes fresh traces to <em>your</em> S3 / GCS bucket on
+        its own timer; your cron line re-audits whatever lands. Two schedulers, both yours —
+        there is no Coldworks daemon.</td>
+        <td><span class="chip design">DESIGNED</span></td>
+      </tr>
+      <tr>
+        <td><b>Direct pull</b></td>
+        <td><code>coldworks-audit run --from langfuse</code> reads
+        <code>LANGFUSE_PUBLIC_KEY</code> / <code>LANGFUSE_SECRET_KEY</code> from your
+        environment and pages the observations API itself — incremental via
+        <code>--since</code>.</td>
+        <td><span class="chip planned">PLANNED · AFTER FILE PATH</span></td>
+      </tr>
+    </table></div>
+
+    <h2>From LangSmith</h2>
+    <p>Open the project, export runs, audit the file. Where the export carries token usage the
+    report weights the headline by tokens rather than span count.</p>
+
+    <h2>From OpenTelemetry</h2>
+    <p>Point your collector's file exporter at a directory and audit what lands there. For
+    OTel-shaped exports without usage fields, the headline stays in span counts and says so.</p>
+
+    <h2>What leaves your machine: nothing</h2>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>Thing</th><th>Where it goes</th><th></th></tr>
+      <tr><td><b>Your traces</b></td><td>Read from your disk, never transmitted.</td><td><span class="chip never">NEVER LEAVES</span></td></tr>
+      <tr><td><b>Your documents</b> (<code>--docs</code>)</td><td>Hashed and matched locally, never transmitted.</td><td><span class="chip never">NEVER LEAVES</span></td></tr>
+      <tr><td><b>The audit report</b></td><td>An HTML file on your disk. Forward it yourself, or don't.</td><td><span class="chip never">STAYS LOCAL</span></td></tr>
+      <tr><td><b>Derived figures</b></td><td>A future opt-in <code>--push</code> could publish headline
+      figures to a hosted registry page. It does not exist, and ships only under an explicitly
+      signed exception.</td><td><span class="chip open">DOES NOT EXIST</span></td></tr>
+    </table></div>
+    <p class="dim">This is doctrine, not a feature flag: Coldworks compiles judgments into code
+    you own and you run. Auditing starts on the same side of the boundary the guards live on —
+    yours.</p>
+
+    <h2>Day 2: make it standing</h2>
+    <p>The report footer prints one line for your scheduler — cron, GitHub Actions, or GitLab
+    CI. A shell command in your infrastructure; never an app you install or a marketplace
+    listing.</p>
+    <div class="code">
+      <div class="codebar">REPORT FOOTER · ILLUSTRATIVE</div>
+      <pre><span class="dim"># re-audit whatever lands in ./exports, every night at 02:10</span>
+10 2 * * *  <span class="c">uvx coldworks-audit run</span> ./exports --diff >> audit.log</pre>
+    </div>
+    <p>Each run appends to a local append-only ledger, and <code>--diff</code> reports what
+    changed: <b>new repeated judgments since the last run</b>. That number rising is your agent
+    re-buying the same decision with fresh tokens.</p>
+    <div class="note"><b>Honest limit:</b> the cron line monitors only if fresh exports keep
+    landing in that directory. Langfuse's scheduled bucket export closes the loop today; the
+    direct <code>--from langfuse</code> pull is the planned successor. There is no Coldworks
+    daemon, resident process, or phone-home in any rung.</div>
+
+    <div class="pn">
+      <a href="/docs/audit/quickstart"><em>PREVIOUS</em><b>Quickstart</b></a>
+      <a class="next" href="/docs/audit/cli"><em>NEXT</em><b>The audit CLI</b></a>
+    </div>
+  </main>
+</div>
+</body>
+</html>

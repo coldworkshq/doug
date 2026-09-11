@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coldworks docs</title>
+<meta name="description" content="Documentation for Coldworks: how to connect your traces, run the local audit, and read what it finds.">
+<link rel="stylesheet" href="/docs/audit/docs.css">
+</head>
+<body>
+<div class="rail" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="wm" href="/">COLDWORKS</a>
+  <span class="crumb">/ docs</span>
+  <span class="previewchip">DESIGN PREVIEW · COLDWORKS-AUDIT HAS NOT SHIPPED</span>
+  <a class="toplink" href="/dashboard/guards">Guards</a>
+</header>
+
+<div class="shell">
+  <aside class="side">
+    <nav>
+      <div class="sec">Getting started</div>
+      <a href="/docs/audit" class="on">Overview</a>
+      <a href="/docs/audit/quickstart">Quickstart</a>
+      <a href="/docs/audit/connect">Connect your traces</a>
+      <div class="sec">Reference</div>
+      <a href="/docs/audit/cli">The audit CLI</a>
+      <span class="dead">The audit report <span class="soon">SOON</span></span>
+      <span class="dead">Guards &amp; subtraction <span class="soon">SOON</span></span>
+      <div class="sec">Doug</div>
+      <a href="/docs">Doug&#39;s docs</a>
+      <div class="sec">Project</div>
+      <a href="/dashboard/guards">Guards</a>
+      <a href="/#audit">Receipts</a>
+    </nav>
+  </aside>
+
+  <main class="doc">
+    <div class="eyebrow">DOCUMENTATION</div>
+    <h1>Use AI to need less AI.</h1>
+    <p class="lede">Coldworks reads the traces your agents already produce, finds the judgments
+    they keep re-buying, and compiles the repeats into deterministic code <b>you own and you
+    run</b>. These docs cover the part you touch: getting your traces in, running the audit,
+    and reading what it finds.</p>
+
+    <div class="cards">
+      <a class="card" href="/docs/audit/quickstart">
+        <b>Quickstart</b>
+        <span>One command, no signup, no install step. See a full audit on sample data in
+        under a minute.</span>
+        <em>START HERE →</em>
+      </a>
+      <a class="card" href="/docs/audit/connect">
+        <b>Connect your traces</b>
+        <span>Langfuse, LangSmith, or OpenTelemetry. A batch export is a file transfer, not
+        an integration.</span>
+        <em>THREE STEPS →</em>
+      </a>
+      <a class="card" href="/docs/audit/cli">
+        <b>The audit CLI</b>
+        <span>Every command, flag, and file the audit reads or writes — and what never leaves
+        your machine.</span>
+        <em>REFERENCE →</em>
+      </a>
+    </div>
+
+    <h2>The shape of it</h2>
+    <p>Everything below runs on <b>your</b> machine. Coldworks hosts one thing: a read-only
+    registry page for figures you choose to publish. It cannot receive your traces, your
+    documents, or your code — by architecture, not by policy.</p>
+    <div class="code">
+      <div class="codebar">THE WHOLE PIPELINE</div>
+      <pre><span class="dim">your trace store</span>  <span class="p">──export──▶</span>  <span class="dim">a file on your disk</span>  <span class="p">──</span><span class="c">coldworks-audit</span><span class="p">──▶</span>  <span class="dim">a report on your disk</span>
+
+<span class="p">nothing crosses the boundary. the report is yours to forward, or not.</span></pre>
+    </div>
+
+    <h2>What is real right now</h2>
+    <p class="dim">These docs hold themselves to the same rule as the audit: states are answers.</p>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>Claim</th><th>State</th></tr>
+      <tr><td>The connection flow in these docs is the front-door design under review.</td><td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td>The recovery engine behind the audit exists and is deterministic.</td><td><span class="chip planned">BUILT · UNRELEASED</span></td></tr>
+      <tr><td><code>coldworks-audit</code> is installable.</td><td><span class="chip never">NOT YET</span></td></tr>
+      <tr><td>Validated against a real Langfuse / LangSmith export.</td><td><span class="chip open">GATED · NEXT STEP</span></td></tr>
+      <tr><td>Anything in these docs uploads your data.</td><td><span class="chip never">NO — BY DESIGN</span></td></tr>
+    </table></div>
+
+    <div class="pn">
+      <a class="next" href="/docs/audit/quickstart"><em>NEXT</em><b>Quickstart</b></a>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,7 +1,16 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { SiteHeader } from "@/components/site-header";
 import { getScoreboard } from "@/lib/api";
+
+/** Named as Doug's: the root metadata is the product's (ADR-0034); the
+ *  queue and the scoreboard are the reviewer's own surfaces. */
+export const metadata: Metadata = {
+  title: "Scoreboard — Doug reviews",
+  description:
+    "Doug's published miss rate: what it cleared that later came back, counted and dated on the locked cadence. Part of Coldworks.",
+};
 
 function day(iso: string | null): string {
   if (!iso) return "—";

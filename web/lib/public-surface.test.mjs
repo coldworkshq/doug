@@ -32,7 +32,7 @@ const [
   links,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
-  readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
@@ -130,21 +130,21 @@ test("the header's public routes survive below the sm breakpoint", () => {
   );
 });
 
-test("nav order puts the live product surfaces before reference material, About last", () => {
-  // Dashboard is first and is the only entry addressed to someone who already
-  // has Doug: every setting — the flag line, the PR comment — is behind it,
-  // and until it existed the only route back from the marketing site was the
-  // URL bar. Scoreboard and Queue are the live public surfaces, Docs is
-  // reference material — those four are NAV_LINKS entries. GitHub and About
-  // are each hardcoded separately after the NAV_LINKS.map, in that order, so
-  // they're matched by their literal JSX (not the `href: "…"` object-literal
-  // shape NAV_LINKS entries use). Regressing this ordering is exactly the kind
-  // of silent reshuffle a diff review wouldn't catch without a pin.
+test("nav order is the door's: the three moments, the audit, the docs; GitHub and About last", () => {
+  // ADR-0034: the header wears the landing page's own nav, in its order.
+  // Doug reviews is a real page (/doug); Memory and Guards are sections of
+  // the door until their workspace screens are what a stranger should see
+  // first. GitHub and About are hardcoded after the NAV_LINKS.map, in that
+  // order. The Dashboard link that used to lead is gone: Sign in returns a
+  // live session straight to /dashboard/overview, so a plain link bought
+  // nothing a static page could afford.
   const order = [
-    'href: "/dashboard"',
-    'href: "/scoreboard"',
-    'href: "/queue"',
-    'href: "/docs"',
+    'label: "Doug reviews"',
+    'label: "Memory"',
+    'label: "Guards"',
+    'label: "The audit"',
+    'label: "Scoreboard"',
+    'label: "Docs"',
     "href={GITHUB_REPO_URL}",
     'href="/about"',
   ];
@@ -159,6 +159,8 @@ test("nav order puts the live product surfaces before reference material, About 
       `${order[i]} must come after ${order[i - 1]} in the header`,
     );
   }
+  assert.equal(header.includes('href: "/dashboard"'), false, "the Dashboard link is retired");
+  assert.match(header, /\{ href: "\/doug", label: "Doug reviews" \}/);
 });
 
 test("the links NOT carried by NAV_LINKS still exist in BOTH navs", () => {

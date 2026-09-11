@@ -96,6 +96,19 @@ export function DocsSidebar() {
                   const active = pathname === p.href;
                   return (
                     <li key={p.href}>
+                      {/* An external page (docs-nav.ts) is a plain anchor:
+                          a full navigation out of the shell, nothing
+                          prefetched for a route that does not exist. */}
+                      {p.external ? (
+                        <a
+                          href={p.href}
+                          className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                        >
+                          <StatusDot status={p.status} />
+                          <span className="truncate">{p.title}</span>
+                          <span aria-hidden className="ml-auto text-[10px] text-muted-foreground">↗</span>
+                        </a>
+                      ) : (
                       <Link
                         href={p.href}
                         aria-current={active ? "page" : undefined}
@@ -109,6 +122,7 @@ export function DocsSidebar() {
                         <StatusDot status={p.status} />
                         <span className="truncate">{p.title}</span>
                       </Link>
+                      )}
                     </li>
                   );
                 })}

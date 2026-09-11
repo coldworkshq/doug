@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+// Doug's page lives at /doug since ADR-0034; the door at / is public/landing.html.
+const page = await readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8");
 
 test("landing copy does not imply a cross-repo result we have not measured", () => {
   assert.equal(page.includes("repos like yours"), false);

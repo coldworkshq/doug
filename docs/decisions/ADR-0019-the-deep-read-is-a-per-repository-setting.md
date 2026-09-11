@@ -3,8 +3,15 @@ title: The deep read is a per-repository setting that narrows only, and the sett
 status: accepted
 date: 2026-08-23
 amends: ADR-0013
-amended_by: ADR-0020
+amended_by: ADR-0020, ADR-0034
 ---
+
+> **Amended by ADR-0034 (proposed 2026-09-10): the marketing header's plain
+> `Dashboard` link is retired.** The header stays session-free, and its
+> **Sign in** returns a live session straight to `/dashboard/overview`, which
+> is what the link existed to reach. The settings page and the shared rail
+> ruled here are untouched. The amendment takes effect when ADR-0034 is
+> accepted.
 
 ## Context
 

@@ -2,7 +2,7 @@
 title: The web app serves coldworks.dev and reads the registry over a versioned public contract
 status: proposed
 date: 2026-09-10
-amends: ADR-0006
+amends: ADR-0006, ADR-0019
 ---
 
 > **Proposed, not accepted.** The founder's flip of this record to `accepted`
@@ -85,7 +85,19 @@ Doug renders a chip with a reason when the document is missing.
    malformed entry refuses loudly. An unmapped installation renders the
    chip on the same code path a mapped one renders the figure on.
 
-5. **The review lane is untouched, and a CI job proves it.** Any pull
+5. **The marketing header's plain `Dashboard` link is retired, amending
+   ADR-0019.** ADR-0019 put that link first in `NAV_LINKS` because nothing on
+   the public pages reached the settings that turn Doug down, and it ruled
+   out a session-aware header. Both reasons stand and both are met another
+   way: the header stays session-free, and its **Sign in** returns a live
+   session straight to `/dashboard/overview` (a signed-in visitor is not
+   asked to sign in again; AuthKit returns at once), so the link bought
+   nothing a static page could afford. The header wears the door's nav
+   instead: Doug reviews, Memory, Guards, The audit, the Scoreboard, Docs,
+   then GitHub and About. ADR-0019's settings page and rail rulings are
+   untouched.
+
+6. **The review lane is untouched, and a CI job proves it.** Any pull
    request from a `shell/` branch fails if its diff names
    `api/doug/review.py`, `api/doug/worker.py`, or `api/doug/check_run.py`, or
    if any hunk of `api/doug/api.py` overlaps the GitHub webhook handler.

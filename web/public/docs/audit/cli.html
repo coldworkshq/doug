@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The audit CLI — Coldworks docs</title>
+<meta name="description" content="Reference for the coldworks-audit command: every flag, every file it reads and writes, and what never leaves your machine.">
+<link rel="stylesheet" href="/docs/audit/docs.css">
+</head>
+<body>
+<div class="rail" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="wm" href="/">COLDWORKS</a>
+  <span class="crumb">/ docs / cli</span>
+  <span class="previewchip">DESIGN PREVIEW · COLDWORKS-AUDIT HAS NOT SHIPPED</span>
+  <a class="toplink" href="/dashboard/guards">Guards</a>
+</header>
+
+<div class="shell">
+  <aside class="side">
+    <nav>
+      <div class="sec">Getting started</div>
+      <a href="/docs/audit">Overview</a>
+      <a href="/docs/audit/quickstart">Quickstart</a>
+      <a href="/docs/audit/connect">Connect your traces</a>
+      <div class="sec">Reference</div>
+      <a href="/docs/audit/cli" class="on">The audit CLI</a>
+      <span class="dead">The audit report <span class="soon">SOON</span></span>
+      <span class="dead">Guards &amp; subtraction <span class="soon">SOON</span></span>
+      <div class="sec">Doug</div>
+      <a href="/docs">Doug&#39;s docs</a>
+      <div class="sec">Project</div>
+      <a href="/dashboard/guards">Guards</a>
+      <a href="/#audit">Receipts</a>
+    </nav>
+  </aside>
+
+  <main class="doc">
+    <div class="eyebrow hot">REFERENCE · DESIGN PREVIEW</div>
+    <h1>The audit CLI</h1>
+    <p class="lede">One command with one job: read a trace export on your disk, write an audit
+    report next to it. <b>This page documents the designed interface</b> — it is the contract
+    the build is held to, published before the build so you can hold it to the contract too.</p>
+
+    <h2>coldworks-audit run</h2>
+    <div class="code">
+      <div class="codebar">SIGNATURE</div>
+      <pre><span class="c">coldworks-audit run</span> &lt;PATH&gt; [--docs DIR] [--diff] [--sample] [--open] [--format NAME]</pre>
+    </div>
+    <p>Audits the export at <code>PATH</code> — a file, or a directory whose newest exports are
+    audited together with span-level dedup across overlapping files.</p>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>Argument</th><th>What it does</th><th>Status</th></tr>
+      <tr><td><code>PATH</code></td><td>The export file or directory. Format is detected
+      (Langfuse, LangSmith, OTel GenAI); override with <code>--format</code>.</td>
+      <td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td><code>--docs DIR</code></td><td>Anchor recovered judgments to lines in your own
+      documents. Files are hashed and matched locally; anchors carry the provenance line
+      "matched by trial, not by export-carried reference." Multi-document traces are counted
+      unanchorable with their own reason code.</td>
+      <td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td><code>--diff</code></td><td>Report what changed since the last run: new repeated
+      judgments, from the local ledger.</td>
+      <td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td><code>--sample</code></td><td>Run on the bundled sample export and documents —
+      a full report with nothing of yours involved, labeled as sample data on every screen.</td>
+      <td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td><code>--open</code></td><td>Open the HTML report when the run finishes.</td>
+      <td><span class="chip design">DESIGNED</span></td></tr>
+      <tr><td><code>--from langfuse</code></td><td>Skip the manual export: page the Langfuse
+      observations API with <code>LANGFUSE_PUBLIC_KEY</code> / <code>LANGFUSE_SECRET_KEY</code>
+      from your environment, incremental via <code>--since</code>. Your credential, your
+      machine.</td>
+      <td><span class="chip planned">PLANNED · AFTER FILE PATH</span></td></tr>
+    </table></div>
+
+    <h2>What the headline counts</h2>
+    <ul>
+      <li>Tool calls are grouped by <b>(tool name, arguments digest)</b> — exact repetition,
+      not similarity.</li>
+      <li>A repeat group is a <b>tier-0 cache candidate</b> only when its results agree across
+      every occurrence. Disagreeing groups are reported separately as nondeterminism
+      findings.</li>
+      <li>The headline is the share of <b>context</b> &mdash; the bytes fed back to the model
+      &mdash; that sits in agreeing repeat groups. It is said as a share of context, never as a
+      share of calls: on the one benchmark corpus measured so far it reads &ldquo;about 23 percent
+      of context,&rdquo; and most of that is cross-run &mdash; the same call repeated in a later
+      run, which a session cache cannot see.</li>
+      <li>It is not token-weighted. No export measured so far pairs a character count with a
+      token count of the same bytes, so a chars-per-token ratio is not computable; where the
+      export carries token totals they are printed as totals, and the report says which unit
+      it is in.</li>
+      <li>The <b>process share</b> and the <b>navigation share</b> are reported separately and
+      never folded into the headline. The process share is refused, with the tool list it would
+      have used printed in its place, when more than 20% of shell calls chain commands. The
+      navigation share is a bracket under declared rules, not a point figure.</li>
+      <li>What the audit could not read is printed, not dropped: judgments stated only in
+      prose, and unanchorable spans, each with a count and a reason.</li>
+    </ul>
+
+    <h2>Files it reads and writes</h2>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>File</th><th>Direction</th><th>What it is</th></tr>
+      <tr><td><code>&lt;PATH&gt;</code></td><td>reads</td><td>Your export. Never modified, never transmitted.</td></tr>
+      <tr><td><code>--docs</code> directory</td><td>reads</td><td>Your documents. Hashed locally for anchoring.</td></tr>
+      <tr><td><code>./coldworks-audit.html</code></td><td>writes</td><td>The report. Self-contained, built to be forwarded — by you.</td></tr>
+      <tr><td><code>./.coldworks/audit/ledger.jsonl</code></td><td>appends</td><td>Derived figures per run, append-only. What <code>--diff</code> reads. Delete it any time; you lose history, nothing else.</td></tr>
+    </table></div>
+    <div class="note cold"><b>Network calls made by <code>run</code>: zero.</b> The one planned
+    exception is <code>--from langfuse</code>, which calls Langfuse — your trace store — with
+    your key, from your machine. Nothing calls Coldworks.</div>
+
+    <h2>Exit codes</h2>
+    <div class="tblwrap"><table class="tbl">
+      <tr><th>Code</th><th>Meaning</th></tr>
+      <tr><td><code>0</code></td><td>Audit completed — including an honest zero with a field census.</td></tr>
+      <tr><td><code>1</code></td><td>The export could not be parsed at all; the error names the first unreadable record.</td></tr>
+      <tr><td><code>2</code></td><td>Usage error; help printed.</td></tr>
+    </table></div>
+
+    <div class="pn">
+      <a href="/docs/audit/connect"><em>PREVIOUS</em><b>Connect your traces</b></a>
+    </div>
+  </main>
+</div>
+</body>
+</html>

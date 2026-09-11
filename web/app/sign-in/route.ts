@@ -23,7 +23,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const authorizationUrl = await getSignInUrl({
     redirectUri: redirectUri.toString(),
-    returnTo: "/dashboard",
+    returnTo: "/dashboard/overview",
   });
   return NextResponse.redirect(authorizationUrl);
 }

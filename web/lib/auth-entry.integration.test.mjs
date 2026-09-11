@@ -126,8 +126,19 @@ after(async () => {
   await once(serverProcess, "exit");
 });
 
-test("the public landing page exposes provider-neutral account entry", async () => {
+test("the door is the Coldworks landing, and its Log in is provider-neutral account entry", async () => {
+  // ADR-0034: / is public/landing.html through a rewrite; Doug's page is /doug.
   const response = await fetch(`${origin}/`);
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /Use AI to/);
+  assert.match(html, /href="\/sign-in">Log in</);
+  assert.match(html, /href="\/dashboard\/overview"/);
+});
+
+test("Doug's own page keeps its account entry, one link in", async () => {
+  const response = await fetch(`${origin}/doug`);
   const html = await response.text();
 
   assert.equal(response.status, 200);

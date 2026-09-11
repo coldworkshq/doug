@@ -45,6 +45,11 @@ concurrency:
 env:
   PROJECT: doug-prod0
   REGION: us-central1
+  # The apex, once it is mapped onto doug-web (ADR-0034). web_url() in
+  # gcp.sh uses this only when the named domain is among the service's
+  # mappings, so before the cutover it changes nothing; after it, it is what
+  # keeps a deploy from refusing to choose between two mappings.
+  DOUG_WEB_DOMAIN: coldworks.dev
 
 jobs:
   changes:

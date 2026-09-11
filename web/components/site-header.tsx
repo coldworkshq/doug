@@ -1,13 +1,21 @@
 import Link from "next/link";
 
-import { DougLogo } from "@/components/doug-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { GITHUB_REPO_URL } from "@/lib/links";
 
+/** The door's own nav, in its order (public/landing.html): the three
+ *  moments, the audit, the docs. Doug reviews is a real page; Memory and
+ *  Guards are their own cards on the door (#memory, #guards) until their
+ *  workspace screens are the thing a stranger should see first. Every
+ *  target is distinct: two labels on one anchor is one dead label. ADR-0034. */
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard" },
+  { href: "/doug", label: "Doug reviews" },
+  { href: "/#memory", label: "Memory" },
+  { href: "/#guards", label: "Guards" },
+  { href: "/#audit", label: "The audit" },
+  // The published miss rate is the trust instrument (Doug's third rule); it
+  // stays one click from every public page, not only from the ledger.
   { href: "/scoreboard", label: "Scoreboard" },
-  { href: "/queue", label: "Queue" },
   { href: "/docs", label: "Docs" },
 ] as const;
 
@@ -51,21 +59,13 @@ const NAV_LINKS = [
  *  onto a near-white bar and vanished. This line re-substitutes the token
  *  where the scope can reach it.
  *
- *  Order is deliberate: Dashboard first, then the two live public surfaces
- *  (Scoreboard, Queue), Docs next as reference material, GitHub after that as
- *  the escape hatch to source, About last.
- *
- *  DASHBOARD IS A PLAIN LINK, not a signed-in state. This bar renders on
- *  /docs/* and /about, which are static; reading the session here to choose
- *  between "Dashboard" and "Sign in" would make every one of those pages
- *  render per request, which is a real cost for one word. It is not a dead end
- *  for a signed-out visitor either — proxy.ts matches /dashboard/:path* and
- *  hands an unauthenticated request to AuthKit, which returns to /dashboard
- *  after sign-in. It is first because it is the only entry here addressed to
- *  someone who already has Doug, and because it being hard to find is the
- *  reason it was added: everything Doug can be told to do — the flag line and
- *  the PR comment — is set behind it, and until this link existed the only
- *  route back to that page from the marketing site was the URL bar.
+ *  Order is the door's: Doug reviews, Memory, Guards, The audit, then the
+ *  Scoreboard (the published miss rate, one click from everywhere), Docs; then
+ *  GitHub as the escape hatch to source and About last. The Dashboard link
+ *  that used to lead this bar is gone because Sign in now does its job: a
+ *  session that already exists returns straight to /dashboard/overview, and
+ *  reading the session here to choose a word would make every static page
+ *  render per request.
  *
  *  Changing this bar's padding/height changes how much of the page it can
  *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
@@ -84,7 +84,7 @@ export function SiteHeader({
           href="/"
           className="font-heading flex shrink-0 items-center gap-2 text-base font-semibold tracking-tight"
         >
-          <DougLogo size={20} /> doug
+          Coldworks
         </Link>
 
         <div className="flex items-center gap-1">

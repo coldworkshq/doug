@@ -1,5 +1,8 @@
 # Doug — risk-routed code review
 
+> This host serves Coldworks at `/` (the product: Doug reviews, Memory,
+> Guards, and the local audit); Doug's own page is `/doug`. ADR-0034.
+>
 > Doug scores every pull request, clears the majority, and routes the risky
 > few to a human with evidence attached. Never blocks a merge. Status: EARLY
 > PREVIEW — public surfaces: /queue, /scoreboard, hosted /docs, GitHub App

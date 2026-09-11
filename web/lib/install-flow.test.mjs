@@ -319,7 +319,7 @@ test("GitHub-first callback stores installation state, signs in, and resumes wit
       await nextRequest("https://doug.example/install/callback", pendingToken),
     );
     assert.equal(resumed.status, 307);
-    assert.equal(resumed.headers.get("location"), "https://doug.example/dashboard");
+    assert.equal(resumed.headers.get("location"), "https://doug.example/dashboard/overview");
     assert.equal(requests.length, 1);
     const [request] = requests;
     assert.equal(request.url, "https://api.doug.test/v1/installations/bind/complete");
@@ -545,7 +545,7 @@ test("a stale ?reauth=github bookmark retries the bind instead of re-signing in"
       ),
     );
     assert.equal(response.status, 307);
-    assert.equal(response.headers.get("location"), "https://doug.example/dashboard");
+    assert.equal(response.headers.get("location"), "https://doug.example/dashboard/overview");
     assert.deepEqual(globalThis.__workosSignInCalls, []);
     assert.equal(requests.length, 1);
     const sent = verifyInstallFlow(JSON.parse(requests[0].options.body).flow_token, {

@@ -1,10 +1,7 @@
-import { withAuth } from "@workos-inc/authkit-nextjs";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
-import { DashboardRail, SUBMIT_BUTTON, SWITCH_LABEL, SWITCH_SELECT } from "@/components/dashboard-rail";
+import { DashboardRail, ROUTE_CHIP, SUBMIT_BUTTON, SWITCH_LABEL, SWITCH_SELECT } from "@/components/dashboard-rail";
 import { StateChip } from "@/components/state-chip";
-import { frontDoor } from "@/lib/dashboard-model";
 import {
   fileAccounting,
   firstParam,
@@ -15,11 +12,8 @@ import {
   recordHref,
   selectRecords,
 } from "@/lib/memory-model";
-import { getConnections, getRepositoryDecisions } from "@/lib/session-api";
-
-/** The route chip, matching the ledger's; declared here for the reason the
- *  settings page gives. */
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+import { getRepositoryDecisions } from "@/lib/session-api";
+import { loadWorkspace, sortedRepositories } from "@/lib/workspace";
 
 /** The decisions in one connected repository, as written, at HEAD.
  *
@@ -47,30 +41,10 @@ export default async function MemoryPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { user, accessToken, organizationId } = await withAuth();
-  if (!user || !accessToken) redirect("/sign-in");
-
-  let connections: Awaited<ReturnType<typeof getConnections>> | null = null;
-  try {
-    connections = await getConnections(accessToken);
-  } catch {
-    // Swallowed on purpose, for the reason the settings page gives: /dashboard
-    // owns the three arms a failed connections read can land on, each worded
-    // once and pinned in lib/dashboard-contract.test.mjs, and it renders them
-    // inline rather than redirecting, so this cannot loop. The redirect is
-    // outside the catch because `redirect` works by throwing.
-    connections = null;
-  }
-  if (connections === null) redirect("/dashboard");
-
-  const door = frontDoor(connections.connections, organizationId);
-  if (door.state !== "runs") redirect("/dashboard");
-  const connection = door.current;
+  const { user, accessToken, connections, connection } = await loadWorkspace();
 
   const params = await searchParams;
-  const repositories = [...connection.repositories].sort((a, b) =>
-    a.full_name.localeCompare(b.full_name),
-  );
+  const repositories = sortedRepositories(connection);
   // A bookmarked repository that is not in this space is said so, never
   // silently swapped for the first one under the bookmarked URL.
   const requestedRaw = firstParam(params.repo);
@@ -113,7 +87,7 @@ export default async function MemoryPage({
 
         <main className="mx-auto w-full max-w-[820px] px-6 py-10">
           <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
-            <span className={ROUTE}>/memory</span>
+            <span className={ROUTE_CHIP}>/memory</span>
             <span className="truncate normal-case tracking-normal text-muted-foreground">
               {connection.account_login}
             </span>

@@ -28,9 +28,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Doug — most pull requests don't need you",
+  title: "Coldworks — use AI to need less AI",
   description:
-    "Risk-routed code review. Doug reads the diff, routes the handful that need human eyes, and will publish its miss rate.",
+    "Coldworks reviews your pull requests, remembers what your team decided, and turns the judgments it keeps repeating into checks you own. One product, free to start.",
 };
 
 export default function RootLayout({

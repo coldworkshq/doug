@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { CheckRunCard } from "@/components/landing/check-run-card";
@@ -7,6 +8,15 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { getQueue, getScoreboard } from "@/lib/api";
 import { GITHUB_REPO_URL } from "@/lib/links";
+
+/** Doug's own page, one link in from the door (ADR-0034): the reviewer that
+ *  keeps its name inside Coldworks. The root layout's metadata is the
+ *  product's; this page says what Doug is. */
+export const metadata: Metadata = {
+  title: "Doug — most pull requests don't need you",
+  description:
+    "Risk-routed code review. Doug reads the diff, routes the handful that need human eyes, and will publish its miss rate.",
+};
 
 // The three rules, verbatim from the README. Not numbered on the page: they
 // are commitments, not steps, and a 01/02/03 would claim an order that does

@@ -3,7 +3,6 @@ import Link from "next/link";
 import { signOutAction } from "@/app/auth/actions";
 import { switchConnectionAction } from "@/app/dashboard/actions";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
-import { DougLogo } from "@/components/doug-logo";
 import { ThemeMenuItem } from "@/components/theme-menu-item";
 import { NoJsSubmit } from "@/components/no-js-submit";
 import type { RepositoryConnection } from "@/lib/session-api";
@@ -27,6 +26,11 @@ export const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--d
 
 export const SWITCH_SELECT =
   "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
+
+/** The breadcrumb's route chip, shared by every workspace screen that
+ *  wears the rail. The ledger and the receipt keep their own copies for the
+ *  reason those files give; the shell's screens import this one. */
+export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
 
 export const SUBMIT_BUTTON =
   "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
@@ -139,7 +143,7 @@ export function DashboardRail({
   userEmail: string;
   /** Which entry is marked current. `settings` is a route rather than a view,
    *  so it is a third value here and not a third `?view=`. */
-  section: "runs" | "repositories" | "memory" | "settings";
+  section: "overview" | "runs" | "repositories" | "memory" | "guards" | "settings";
   runsHref: string;
   repositoriesHref: string;
   filter?: React.ReactNode;
@@ -152,8 +156,8 @@ export function DashboardRail({
         >
           <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
             <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
-              <DougLogo size={19} /> doug
-              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">dashboard</span>
+              Coldworks
+              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">workspace</span>
             </Link>
           </div>
 
@@ -176,11 +180,28 @@ export function DashboardRail({
             {/* Both entries carry the current filters across, and both drop
                 `page`: a page number is a position in one list and means
                 nothing in the other. */}
+            {/* The one screen (ADR-0034): four slots, each a figure with its
+                sentence or a chip with its reason. */}
             <Link
-              href={runsHref}
-              aria-current={section === "runs" ? "page" : undefined}
+              href="/dashboard/overview"
+              aria-current={section === "overview" ? "page" : undefined}
               className={RAIL_ITEM}
-            >Runs</Link>
+            >Overview</Link>
+            {/* The ledger, relabelled: every verdict with its evidence. The
+                published miss rate is one click from here, on purpose: the
+                scoreboard is the trust instrument, and a rail that hid it
+                would be a rail that buried Doug's third rule. */}
+            <div className="flex items-stretch">
+              <Link
+                href={runsHref}
+                aria-current={section === "runs" ? "page" : undefined}
+                className={`${RAIL_ITEM} flex-1`}
+              >Reviews</Link>
+              <Link
+                href="/scoreboard"
+                className="mono flex items-center pr-3 text-[8px] uppercase tracking-[.12em] text-[var(--dim)] no-underline hover:text-foreground"
+              >scoreboard</Link>
+            </div>
             <Link
               href={repositoriesHref}
               aria-current={section === "repositories" ? "page" : undefined}
@@ -194,6 +215,14 @@ export function DashboardRail({
               aria-current={section === "memory" ? "page" : undefined}
               className={RAIL_ITEM}
             >Memory</Link>
+            {/* The guard registry, over the engine's read contract, for the
+                installation the founder has mapped; the chip and its sentence
+                for everyone else. One code path; data decides. */}
+            <Link
+              href="/dashboard/guards"
+              aria-current={section === "guards" ? "page" : undefined}
+              className={RAIL_ITEM}
+            >Guards</Link>
             {/* Still not built, and still said so. A nav entry that navigates
                 nowhere is a lie about the product; one that names itself as
                 unbuilt is a roadmap. */}

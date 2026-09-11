@@ -580,7 +580,7 @@ export async function setRepositoryPrComment(
 /** The API's accepted maximum: `/v1/sessions/runs` rejects anything outside
  *  1..500 with a 422 (api.py). Sending no limit at all takes the route's
  *  default of 100, which the page then printed as if it were the total. */
-const SESSION_RUNS_LIMIT = 500;
+export const SESSION_RUNS_LIMIT = 500;
 
 export async function getSessionRuns(
   accessToken: string,

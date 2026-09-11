@@ -72,7 +72,7 @@ test("organization switching and sign-out are POST server actions", async () => 
   assert.equal(actions.includes("ensureSignedIn"), false);
   assert.match(
     actions,
-    /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/,
+    /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard\/overview" \}\)/,
   );
   const rail = await readFile(railUrl, "utf8");
   assert.match(rail, /action=\{switchConnectionAction\}/);
@@ -474,7 +474,7 @@ test("finish setup is a POST-only exact pre-bind and post-bind server action", a
   assert.match(finish, /isFinishableSetupConnection/);
   assert.match(finish, /bindInstallation\(auth\.accessToken, installationId\)/);
   assert.match(finish, /readyOrganizationAfterSetup/);
-  assert.match(finish, /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard" \}\)/);
+  assert.match(finish, /switchToOrganization\(organizationId, \{ returnTo: "\/dashboard\/overview" \}\)/);
   assert.ok(finish.indexOf("isFinishableSetupConnection") < finish.indexOf("bindInstallation"));
   assert.ok(finish.lastIndexOf("getConnections") > finish.indexOf("bindInstallation"));
   assert.ok(finish.indexOf("readyOrganizationAfterSetup") > finish.indexOf("bindInstallation"));
