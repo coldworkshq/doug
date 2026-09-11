@@ -253,3 +253,15 @@ jobs:
             --project "$PROJECT" --region "$REGION" --format='value(status.url)')
           bash web/scripts/smoke-auth-entry.sh "$url"
           echo "web deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+      # ADR-0034 decision 1. The apex is this service's front door, with
+      # sign-in on the apex and nowhere else, and doug.coldworks.dev keeps its
+      # mapping only to answer every path with a 308 to the same path on the
+      # apex. next.config.ts keys that redirect on the Host header the
+      # container receives; this is the live assertion, after every web
+      # promotion, that the front of the service hands it the mapped domain
+      # and that the apex it points at is this app. Red here is a signal
+      # after promotion, not a rollback, the same as the smoke above.
+      - name: Confirm the apex is the front door and the subdomain redirects to it
+        run: |
+          bash web/scripts/smoke-auth-entry.sh "https://$DOUG_WEB_DOMAIN"
+          bash web/scripts/smoke-subdomain-redirect.sh https://doug.coldworks.dev "https://$DOUG_WEB_DOMAIN"

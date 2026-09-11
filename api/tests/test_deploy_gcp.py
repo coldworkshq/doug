@@ -1526,6 +1526,26 @@ def test_web_deploy_runs_the_auth_entry_smoke_after_promotion():
     assert 'bash web/scripts/smoke-auth-entry.sh "$url"' in web_confirmation
 
 
+def test_web_deploy_confirms_the_apex_and_the_subdomain_redirect_after_promotion():
+    """ADR-0034 decision 1: one sign-in host, the apex, with the subdomain
+    answering every path with a 308 there. The redirect in next.config.ts is
+    keyed on the Host header the container receives, an assumption about the
+    front of the service that no unit test can check, so the deploy asserts
+    it live after every web promotion, and asserts on the apex itself that
+    what the subdomain points at is this app's front door. A merge of that
+    redirect before the apex cutover would send tenants to whatever serves
+    the apex; this is the step that goes red when that happens."""
+    workflow = DEPLOY_WORKFLOW.read_text()
+    step = workflow.split(
+        "- name: Confirm the apex is the front door and the subdomain redirects to it", 1
+    )[1]
+    assert 'bash web/scripts/smoke-auth-entry.sh "https://$DOUG_WEB_DOMAIN"' in step
+    assert (
+        'bash web/scripts/smoke-subdomain-redirect.sh https://doug.coldworks.dev "https://$DOUG_WEB_DOMAIN"'
+        in step
+    )
+
+
 def test_setup_owns_scheduler_and_adjudicator_identities():
     setup = _function_body("setup")
     assert "adjudicator_setup" in setup

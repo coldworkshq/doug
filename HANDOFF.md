@@ -13,10 +13,16 @@ State:    review — branch `shell/the-subdomain-redirects` off main e32ca47
           through node:http (fetch drops it; `has: host` reads it). Both
           mutations red: `has.value` = apex fails the three subdomain cases
           and the apex sign-in; no `has` fails every case including run.app.
-Next:     The D4 PR: CI green, Doug's read adjudicated, then HOLD THE MERGE
+          Doug's read (1 high, 2 medium, 1 low) adjudicated on the PR: the
+          hold is now GitHub-enforced (#328 is a draft until FQ-28); the
+          low finding's Host-header assumption has a live tripwire,
+          `web/scripts/smoke-subdomain-redirect.sh` after every web
+          promotion in deploy.yml, red against production today.
+Next:     #328 is a DRAFT: CI green, Doug's read answered. HOLD THE MERGE
           until FQ-28 (the apex mapped onto doug-web, cutover observed) is
-          done. A merged D4 redirects tenants to whatever serves the apex,
-          which is the registry until then (R1). After the merge: Phase 0
+          done; the founder marks it ready then. A merged D4 redirects
+          tenants to whatever serves the apex, which is the registry until
+          then (R1). After the merge: Phase 0
           item 8 re-observed (one receipt link on doug.coldworks.dev
           followed through the 308) and recorded on frontdoor-12.8; then
           coldworks S2. Phase 0 items 3, 4, 7 are observable on
