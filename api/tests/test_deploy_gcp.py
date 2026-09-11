@@ -101,11 +101,47 @@ def test_web_deploy_carries_only_its_front_door_secrets_and_plain_slug(tmp_path)
     )
     secret_argument = deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
     assert secret_argument == expected_secrets
-    assert (
-        "--set-env-vars "
-        "DOUG_API_URL=,WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review"
-        in deploy
+    env_argument = deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
+    assert env_argument == (
+        "^;^DOUG_API_URL=;WORKOS_COOKIE_MAX_AGE=28800;DOUG_GITHUB_APP_SLUG=dougs-review;"
+        "COLDWORKS_REGISTRY_URL=;DOUG_GUARDS_INSTALLATIONS="
     )
+
+
+def _web_env(lines: list[str]) -> dict[str, str]:
+    [deploy] = [line for line in lines if line.startswith("run deploy doug-web")]
+    env_argument = deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
+    assert env_argument.startswith("^;^"), env_argument
+    return dict(pair.split("=", 1) for pair in env_argument[3:].split(";"))
+
+
+def test_web_deploy_env_survives_a_mapping_with_several_installations(tmp_path):
+    """gcloud splits --set-env-vars on commas. DOUG_GUARDS_INSTALLATIONS is
+    itself a comma-separated list of <installation>:<engine tenant> pairs, so
+    the web deploy switches the delimiter; with the default one the second
+    pair becomes a bare token and gcloud refuses the deploy. The registry URL
+    has no default: after the ADR-0034 cutover the apex is this service, and
+    a default of the apex would point the read at ourselves and render the
+    unknown chip on every mapped installation forever."""
+    mapped_run, unset_run = tmp_path / "mapped", tmp_path / "unset"
+    mapped_run.mkdir()
+    unset_run.mkdir()
+    env = _web_env(
+        _run_gcp(
+            mapped_run,
+            "web",
+            {
+                "DOUG_GUARDS_INSTALLATIONS": "150424894:tenant-a,7:tenant-b",
+                "COLDWORKS_REGISTRY_URL": "https://registry.example",
+            },
+        )
+    )
+    assert env["DOUG_GUARDS_INSTALLATIONS"] == "150424894:tenant-a,7:tenant-b"
+    assert env["COLDWORKS_REGISTRY_URL"] == "https://registry.example"
+
+    unset = _web_env(_run_gcp(unset_run, "web"))
+    assert unset["DOUG_GUARDS_INSTALLATIONS"] == "", "unset maps nobody; it is not invented"
+    assert unset["COLDWORKS_REGISTRY_URL"] == "", "no default URL; the chip names the variable"
 
 
 def test_setup_generates_the_install_flow_secret_and_binds_exact_api_allowlist(tmp_path):
