@@ -2,7 +2,7 @@
 title: Doug does not depend on lema
 status: accepted
 date: 2026-07-30
-amended_by: ADR-0022
+amended_by: ADR-0022, ADR-0034
 ---
 
 > **Amended by ADR-0022 (accepted 2026-08-27): the empty provider slot is

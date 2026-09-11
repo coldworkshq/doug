@@ -31,7 +31,20 @@ export function DocsPager({ currentHref }: { currentHref: string }) {
       ) : (
         <span />
       )}
-      {next ? (
+      {next && next.external ? (
+        // Out of the shell as a plain anchor (docs-nav.ts `external`).
+        <a
+          href={next.href}
+          className="group flex flex-col items-end gap-1 rounded-xl px-4 py-3 text-right transition-colors hover:bg-accent"
+        >
+          <span className="flex items-center gap-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+            Next <ChevronRight className="size-3" />
+          </span>
+          <span className="font-heading font-medium text-foreground group-hover:text-accent-foreground">
+            {next.title} ↗
+          </span>
+        </a>
+      ) : next ? (
         <Link
           href={next.href}
           className="group flex flex-col items-end gap-1 rounded-xl px-4 py-3 text-right transition-colors hover:bg-accent"

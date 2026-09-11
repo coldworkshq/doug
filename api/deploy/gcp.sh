@@ -1226,7 +1226,15 @@ web() {
     --project "$PROJECT" --region "$REGION" \
     --allow-unauthenticated \
     --service-account "doug-web-sa@$PROJECT.iam.gserviceaccount.com" \
-    --set-env-vars "DOUG_API_URL=$(api_url),WORKOS_COOKIE_MAX_AGE=28800,DOUG_GITHUB_APP_SLUG=dougs-review,COLDWORKS_REGISTRY_URL=${COLDWORKS_REGISTRY_URL:-https://coldworks.dev},DOUG_GUARDS_INSTALLATIONS=${DOUG_GUARDS_INSTALLATIONS:-}" \
+    # `^;^` makes the list semicolon-delimited: DOUG_GUARDS_INSTALLATIONS is
+    # itself a comma-separated list of <installation>:<engine tenant> pairs,
+    # and gcloud's default comma delimiter would split the second pair into a
+    # bare token and refuse the deploy. COLDWORKS_REGISTRY_URL has NO default
+    # on purpose: the apex is the registry today and becomes this service
+    # after the ADR-0034 cutover, so a default of https://coldworks.dev would
+    # silently point the read at ourselves; unset renders the chip that names
+    # the variable. Set both at deploy time (founder, R11 items 2 and 3).
+    --set-env-vars "^;^DOUG_API_URL=$(api_url);WORKOS_COOKIE_MAX_AGE=28800;DOUG_GITHUB_APP_SLUG=dougs-review;COLDWORKS_REGISTRY_URL=${COLDWORKS_REGISTRY_URL:-};DOUG_GUARDS_INSTALLATIONS=${DOUG_GUARDS_INSTALLATIONS:-}" \
     --set-secrets "WORKOS_CLIENT_ID=doug-workos-client-id:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_COOKIE_PASSWORD=doug-workos-cookie-password:latest,NEXT_PUBLIC_WORKOS_REDIRECT_URI=doug-workos-redirect-uri:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest" \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 60 \
     $traffic_flags

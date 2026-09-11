@@ -17,6 +17,11 @@ export interface DocsPage {
   /** Absent on pages that never carried a status badge upstream either
    *  (Introduction, Changelog) — not every doc is a claim about the product. */
   status?: DocsStatus;
+  /** A page outside the docs shell: a static document served by rewrite
+   *  with its own chrome. The sidebar and the pager render it as a plain
+   *  anchor, never a `Link`, so nothing prefetches a route that does not
+   *  exist and the hand-off out of the shell is a full navigation. */
+  external?: true;
 }
 
 export interface DocsGroup {
@@ -60,21 +65,23 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     ],
   },
   {
+    name: "Meta",
+    pages: [{ href: "/docs/changelog", title: "Changelog" }],
+  },
+  {
     // The audit CLI's own docs: static pages under /docs/audit (next.config
     // rewrites), the shape they had on the engine's site, listed here so the
     // sidebar reaches them. They describe a tool that is not installable yet
-    // and say so on every page.
+    // and say so on every page. Last in reading order, so only the
+    // changelog's "next" crosses out of the shell, and marked external so it
+    // crosses as a plain anchor.
     name: "The audit",
     pages: [
-      { href: "/docs/audit", title: "The Coldworks audit", status: "preview" },
-      { href: "/docs/audit/quickstart", title: "Audit · Quickstart", status: "preview" },
-      { href: "/docs/audit/connect", title: "Audit · Connect", status: "preview" },
-      { href: "/docs/audit/cli", title: "Audit · CLI contract", status: "preview" },
+      { href: "/docs/audit", title: "The Coldworks audit", status: "preview", external: true },
+      { href: "/docs/audit/quickstart", title: "Audit · Quickstart", status: "preview", external: true },
+      { href: "/docs/audit/connect", title: "Audit · Connect", status: "preview", external: true },
+      { href: "/docs/audit/cli", title: "Audit · CLI contract", status: "preview", external: true },
     ],
-  },
-  {
-    name: "Meta",
-    pages: [{ href: "/docs/changelog", title: "Changelog" }],
   },
 ] as const;
 

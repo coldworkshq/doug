@@ -76,7 +76,7 @@ export async function finishSetupAction(formData: FormData): Promise<void> {
     throw new Error(SETUP_ERROR);
   }
 
-  await switchToOrganization(organizationId, { returnTo: "/dashboard" });
+  await switchToOrganization(organizationId, { returnTo: "/dashboard/overview" });
 }
 
 export async function switchConnectionAction(formData: FormData): Promise<void> {
@@ -96,7 +96,7 @@ export async function switchConnectionAction(formData: FormData): Promise<void> 
   );
   if (!allowed) throw new Error("That connected space is not available.");
 
-  await switchToOrganization(organizationId, { returnTo: "/dashboard" });
+  await switchToOrganization(organizationId, { returnTo: "/dashboard/overview" });
 }
 
 /** Write one repository's flag line — the line Doug scores its FUTURE reviews

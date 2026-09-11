@@ -168,7 +168,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   if (response.status === 204) {
     return clearFlow(
-      NextResponse.redirect(new URL("/dashboard", request.url)),
+      NextResponse.redirect(new URL("/dashboard/overview", request.url)),
     );
   }
   if (response.status === 404) {

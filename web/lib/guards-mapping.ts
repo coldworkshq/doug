@@ -47,3 +47,21 @@ export function engineTenantFor(
   if (installationId === null || installationId === undefined) return null;
   return parseGuardsMapping(raw).get(installationId) ?? null;
 }
+
+/** The mapping for one installation, with a malformed env reported rather
+ *  than thrown into a page render. The parser still throws, so a test can
+ *  pin the refusal; a screen renders the error on the two engine slots and
+ *  says so in the logs, for every installation, which is the loud failure
+ *  a 500 on the default screen would only hide. */
+export function resolveGuardsMapping(
+  installationId: number | null | undefined,
+  raw: string | undefined = process.env.DOUG_GUARDS_INSTALLATIONS,
+): { tenant: string | null; error: string | null } {
+  try {
+    return { tenant: engineTenantFor(installationId, raw), error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("doug: DOUG_GUARDS_INSTALLATIONS is malformed", message);
+    return { tenant: null, error: message };
+  }
+}

@@ -33,6 +33,10 @@ export interface RegistryClientOptions {
   fetchImpl?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
+  /** The engine tenant the caller is mapped to. A document for any other
+   *  tenant is `unknown`, decided here once, so no screen carries its own
+   *  copy of the check. */
+  expectTenant?: string;
 }
 
 /** Reads one document and decides what it is. Exported for the tests; pages use `getRegistrySnapshot`. */
@@ -101,19 +105,37 @@ export async function readRegistrySnapshot(opts: RegistryClientOptions): Promise
         `${body.stale_after_seconds}s; no figure from it is asserted`,
     };
   }
-  return { kind: "snapshot", snapshot: body };
+  return forTenant({ kind: "snapshot", snapshot: body }, opts.expectTenant);
+}
+
+function forTenant(result: RegistryResult, expectTenant: string | undefined): RegistryResult {
+  if (result.kind !== "snapshot" || expectTenant === undefined) return result;
+  if (result.snapshot.tenant_id === expectTenant) return result;
+  return {
+    kind: "unknown",
+    reason:
+      `the registry serves tenant ${result.snapshot.tenant_id ?? "unknown"}; ` +
+      `this installation is mapped to ${expectTenant}`,
+  };
 }
 
 // Per-instance micro-cache with one shared in-flight read, the shape
 // `api.ts` uses for the same reason: a burst of page views should cost the
 // registry a couple of reads a minute, not one per visitor, and two panels on
-// one page should never disagree about which snapshot they show.
+// one page should never disagree about which snapshot they show. The default
+// age is a minute, well inside the document's own stale window; a caller
+// that needs a strictly fresh read passes 0. The cache holds the raw read;
+// the tenant check applies after it, so one cached document serves every
+// mapped caller and answers each with its own tenant.
+const DEFAULT_MAX_AGE_MS = 60_000;
 let inflight: Promise<RegistryResult> | null = null;
 let last: { at: number; value: RegistryResult } | null = null;
 
-export async function getRegistrySnapshot(opts: { maxAgeMs?: number } = {}): Promise<RegistryResult> {
-  const maxAge = opts.maxAgeMs ?? 0;
-  if (last && Date.now() - last.at < maxAge) return last.value;
+export async function getRegistrySnapshot(
+  opts: { maxAgeMs?: number; expectTenant?: string } = {},
+): Promise<RegistryResult> {
+  const maxAge = opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+  if (last && Date.now() - last.at < maxAge) return forTenant(last.value, opts.expectTenant);
   if (!inflight) {
     inflight = readRegistrySnapshot({
       baseUrl: process.env.COLDWORKS_REGISTRY_URL,
@@ -124,5 +146,5 @@ export async function getRegistrySnapshot(opts: { maxAgeMs?: number } = {}): Pro
       return value;
     });
   }
-  return inflight;
+  return forTenant(await inflight, opts.expectTenant);
 }

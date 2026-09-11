@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GuardsMappingError, engineTenantFor, parseGuardsMapping } from "./guards-mapping.ts";
+import { GuardsMappingError, engineTenantFor, parseGuardsMapping, resolveGuardsMapping } from "./guards-mapping.ts";
 
 test("unset or blank maps nobody", () => {
   assert.equal(engineTenantFor(150424894, undefined), null);
@@ -22,6 +22,22 @@ test("a mapped installation gets its engine tenant; every other one gets null", 
 test("mutation: a malformed entry throws instead of quietly mapping nobody", () => {
   for (const raw of ["150424894", "abc:tenant", "150424894:", ":tenant"]) {
     assert.throws(() => parseGuardsMapping(raw), GuardsMappingError, raw);
+  }
+});
+
+test("the resolver reports a malformed env as an error string and logs it, never a throw into a render", () => {
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args);
+  try {
+    assert.deepEqual(resolveGuardsMapping(150424894, "150424894:t"), { tenant: "t", error: null });
+    assert.deepEqual(resolveGuardsMapping(7, "150424894:t"), { tenant: null, error: null });
+    const bad = resolveGuardsMapping(150424894, "150424894");
+    assert.equal(bad.tenant, null);
+    assert.match(bad.error, /refusing to guess/);
+    assert.equal(errors.length, 1, "the malformed env is said in the logs");
+  } finally {
+    console.error = original;
   }
 });
 

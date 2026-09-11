@@ -36,6 +36,19 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      // The door and the audit docs are static documents served by rewrite.
+      // Next gives public files no caching of its own; a short shared max-age
+      // lets the address that gets pasted into an email serve from a cache
+      // for a few minutes and revalidate after, while a deploy still lands
+      // within the hour.
+      {
+        source: "/",
+        headers: [{ key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" }],
+      },
+      {
+        source: "/docs/audit/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" }],
+      },
       {
         source: "/:path*",
         headers: [

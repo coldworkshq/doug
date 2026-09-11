@@ -47,6 +47,16 @@ test("a fresh document is a snapshot, read from the contract path with no creden
   assert.equal(calls[0].init.cache, "no-store");
 });
 
+test("the reader owns the tenant check: a document for another tenant is unknown with the reason", async () => {
+  const doc = fixture();
+  const { impl } = fakeFetch(200, doc);
+  const mine = await readRegistrySnapshot({ baseUrl: "https://r", fetchImpl: impl, now: fresh, expectTenant: doc.tenant_id });
+  assert.equal(mine.kind, "snapshot");
+  const theirs = await readRegistrySnapshot({ baseUrl: "https://r", fetchImpl: impl, now: fresh, expectTenant: "some-other-tenant" });
+  assert.equal(theirs.kind, "unknown");
+  assert.match(theirs.reason, /mapped to some-other-tenant/);
+});
+
 test("the bearer slot is sent only when set", async () => {
   const { impl, calls } = fakeFetch(200, fixture());
   await readRegistrySnapshot({ baseUrl: "https://registry.example", bearer: "t", fetchImpl: impl, now: fresh });

@@ -3,7 +3,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { signOutAction } from "@/app/auth/actions";
-import { DougLogo } from "@/components/doug-logo";
 import { dashboardFilters } from "@/lib/dashboard-model";
 import {
   governingLine,
@@ -94,11 +93,13 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
       <header
         className={`${CANVAS} sticky top-0 z-20 flex min-h-[52px] items-center gap-[18px] border-b border-border bg-background/[.88] px-5 py-2 backdrop-blur-[10px] max-[900px]:static max-[900px]:flex-wrap max-[900px]:items-start`}
       >
+        {/* The deepest screen in the workspace returns into it (ADR-0034):
+            the wordmark goes to the Overview, not the marketing page. */}
         <Link
-          href="/"
+          href="/dashboard/overview"
           className="font-heading flex items-center gap-2 text-base font-bold text-inherit no-underline"
         >
-          <DougLogo size={20} /> doug{" "}
+          Coldworks{" "}
           <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">
             receipt
           </span>
@@ -107,7 +108,7 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
           href="/dashboard"
           className="mono text-[11.5px] text-muted-foreground no-underline hover:text-foreground"
         >
-          ← runs
+          ← reviews
         </Link>
         <div className="mono ml-auto flex items-center gap-2.5 text-[11.5px] text-muted-foreground max-[900px]:ml-0 max-[900px]:w-full max-[900px]:justify-end">
           <span>{email}</span>

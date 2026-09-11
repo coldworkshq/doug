@@ -27,6 +27,11 @@ export const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--d
 export const SWITCH_SELECT =
   "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
 
+/** The breadcrumb's route chip, shared by every workspace screen that
+ *  wears the rail. The ledger and the receipt keep their own copies for the
+ *  reason those files give; the shell's screens import this one. */
+export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+
 export const SUBMIT_BUTTON =
   "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
   "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +

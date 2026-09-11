@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [landing, config, rail, slots, overview, guards, dougPage, signIn, header] = await Promise.all([
+const [landing, config, rail, slots, overview, guards, dougPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp] = await Promise.all([
   readFile(new URL("../public/landing.html", import.meta.url), "utf8"),
   readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
   readFile(new URL("../components/dashboard-rail.tsx", import.meta.url), "utf8"),
@@ -21,6 +21,18 @@ const [landing, config, rail, slots, overview, guards, dougPage, signIn, header]
   readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/sign-in/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/dashboard/memory/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./workspace.ts", import.meta.url), "utf8"),
+  readFile(new URL("../components/docs/docs-sidebar.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../components/docs/docs-pager.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./docs-nav.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/dashboard/pr/[number]/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/scoreboard/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../../docs/decisions/ADR-0034-the-web-app-serves-coldworks-dev-and-reads-the-registry-over-a-versioned-public-contract.md", import.meta.url), "utf8"),
+  readFile(new URL("../../docs/decisions/ADR-0019-the-deep-read-is-a-per-repository-setting.md", import.meta.url), "utf8"),
+  readFile(new URL("../../docs/decisions/ADR-0006-doug-does-not-depend-on-lema.md", import.meta.url), "utf8"),
+  readFile(new URL("../../api/deploy/gcp.sh", import.meta.url), "utf8"),
 ]);
 
 test("the door is the Coldworks landing, served by a rewrite, with Doug's page one link in", () => {
@@ -76,11 +88,13 @@ test("the rail is Overview, Reviews, Repositories, Memory, Guards, in that order
 });
 
 test("the published miss rate is one click from Reviews and from Doug's page", () => {
-  // The scoreboard link sits in the Reviews row, a sibling of the Reviews
-  // link, never nested inside it.
-  const reviews = rail.indexOf("Reviews</Link>");
-  const scoreboard = rail.indexOf('href="/scoreboard"');
-  assert.ok(reviews > 0 && scoreboard > reviews && scoreboard - reviews < 400, "scoreboard is beside Reviews");
+  // The scoreboard link sits in the Reviews row: the same wrapper element
+  // holds both links, as siblings, never one nested in the other.
+  const rowStart = rail.lastIndexOf("<div", rail.indexOf("Reviews</Link>"));
+  const rowEnd = rail.indexOf("</div>", rowStart);
+  const row = rail.slice(rowStart, rowEnd);
+  assert.match(row, /Reviews<\/Link>/);
+  assert.match(row, /href="\/scoreboard"/);
   assert.equal(/<Link[^>]*>[^<]*<Link/.test(rail), false, "a link nested in a link");
   assert.match(dougPage, /href="\/scoreboard"/);
   // And from the door's own Doug section.
@@ -102,15 +116,75 @@ test("O1: a figure and its sentence share one type size, are siblings in one slo
   assert.equal([...overview.matchAll(/<OverviewSlots/g)].length, 1, "one component renders every installation");
 });
 
-test("Guards is one code path: the mapping decides the read, the tenant decides the render", () => {
-  assert.match(guards, /const mapping = engineTenantFor\(connection\.installation_id\)/);
-  assert.match(guards, /if \(mapping\) \{\s*registry = await getRegistrySnapshot\(\)/);
-  assert.match(guards, /registry\.snapshot\.tenant_id === mapping \? registry\.snapshot : null/);
+test("Guards is one code path: the mapping decides the read, the reader decides the tenant, one state drives the render", () => {
+  assert.match(guards, /const mapping = resolveGuardsMapping\(installationId\)/);
+  assert.match(guards, /getRegistrySnapshot\(\{ expectTenant: mapping\.tenant \}\)/);
+  assert.equal(guards.includes("tenant_id ==="), false, "the tenant check has one owner, the reader");
+  assert.match(guards, /state\.kind === "unmapped"/);
+  assert.match(guards, /state\.kind === "unknown"/);
+  assert.match(guards, /state\.kind === "snapshot"/);
   assert.match(guards, /<StateChip kind="later" subject="guards" \/>/);
   assert.match(guards, /href="\/docs\/audit"/);
   assert.match(guards, /section="guards"/);
   assert.equal(guards.includes("Promote"), false, "no promotion affordance");
   assert.equal(/have not run/.test(guards), false, "the chip states the subtraction claim, not a bare have-not-run line");
+  // A malformed mapping env is a chip and a log line, never a throw into the render.
+  assert.equal(guards.includes("engineTenantFor("), false);
+  assert.equal(overview.includes("engineTenantFor("), false);
+  assert.match(overview, /resolveGuardsMapping\(connection\.installation_id\)/);
+  assert.match(overview, /getRegistrySnapshot\(\{ expectTenant: mapping\.tenant \}\)/);
+});
+
+test("the shell's screens share one prelude and one route chip", () => {
+  for (const [name, source] of [["overview", overview], ["guards", guards], ["memory", memory]]) {
+    assert.match(source, /await loadWorkspace\(\)/, `${name} carries its own prelude`);
+    assert.match(source, /ROUTE_CHIP/, `${name} carries its own route chip`);
+    assert.equal(source.includes("withAuth("), false, `${name} reads the session itself`);
+  }
+  assert.match(workspace, /console\.error\("doug: connections read failed/);
+  assert.match(overview, /console\.error\(`doug: overview \$\{what\} read failed`/);
+});
+
+test("the Overview says 500+ over a full page, never a total", () => {
+  assert.match(overview, /reviewedSlot\(runs, SESSION_RUNS_LIMIT\)/);
+});
+
+test("every workspace entry lands on the Overview, and the receipt returns into the workspace", () => {
+  assert.match(signIn, /returnTo: "\/dashboard\/overview"/);
+  assert.match(receipt, /href="\/dashboard\/overview"/);
+  assert.match(receipt, /← reviews/);
+  assert.equal(receipt.includes("← runs"), false);
+  assert.equal(receipt.includes("DougLogo"), false);
+});
+
+test("Doug's public surfaces carry their own names under the product's root metadata", () => {
+  assert.match(queue, /title: "Queue — Doug reviews"/);
+  assert.match(scoreboard, /title: "Scoreboard — Doug reviews"/);
+});
+
+test("the audit docs are external to the docs shell: last in order, plain anchors, never a Link", () => {
+  assert.match(docsNav, /external\?: true;/);
+  const groups = [...docsNav.matchAll(/name: "([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(groups.at(-1), "The audit");
+  assert.match(sidebar, /p\.external \? \(\s*<a/);
+  assert.match(pager, /next && next\.external \? \(/);
+  assert.match(pager, /<a\s+href=\{next\.href\}/);
+});
+
+test("the door and the audit docs carry a short shared cache; the deploy env survives a second mapping", () => {
+  assert.match(config, /source: "\/",\s*headers: \[\{ key: "Cache-Control"/);
+  assert.match(config, /source: "\/docs\/audit\/:path\*",\s*headers: \[\{ key: "Cache-Control"/);
+  assert.match(gcp, /--set-env-vars "\^;\^DOUG_API_URL=/);
+  assert.match(gcp, /COLDWORKS_REGISTRY_URL=\$\{COLDWORKS_REGISTRY_URL:-\};/);
+  assert.equal(gcp.includes("COLDWORKS_REGISTRY_URL:-https://coldworks.dev"), false, "the default would point the read at ourselves after the cutover");
+});
+
+test("ADR-0034 amends ADR-0019 and ADR-0006, and both are marked on both sides", () => {
+  assert.match(adr34, /^amends: ADR-0006, ADR-0019$/m);
+  assert.match(adr34, /The marketing header's plain `Dashboard` link is retired, amending\s+ADR-0019/);
+  assert.match(adr19, /^amended_by: ADR-0020, ADR-0034$/m);
+  assert.match(adr19, /Amended by ADR-0034/);
+  assert.match(adr06, /^amended_by: ADR-0022, ADR-0034$/m);
 });
 
 test("the public header wears the door's nav and the Coldworks wordmark", () => {
