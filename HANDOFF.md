@@ -3,13 +3,14 @@
 --- shell lane (2026-09-11): the one shell, doug D4 (the subdomain redirects to the apex) ---
 
 State:    review — doug#328, branch `shell/the-subdomain-redirects` off main
-          e32ca47, marked ready for review by the founder on 2026-09-11 while
+          e32ca47, head f821797, marked ready by the founder on 2026-09-11 while
           the apex still serves the registry (FQ-28 not done). `redirects()`
           in `web/next.config.ts`: every path on `doug.coldworks.dev` answers
           308 to the same path and query on `coldworks.dev`, keyed on that
           one Host (regex-escaped), never a catch-all. Two code controls hold
           it: `gcp.sh web()` refuses the deploy while the apex is not among
-          doug-web's mappings, and `auth-origin.ts` refuses a redirect URI
+          doug-web's mappings and promotes a candidate only when its
+          /sign-in answers 307, and `auth-origin.ts` refuses a redirect URI
           on the retired host so the 307 and the 308 cannot loop. The
           single-host suite in `auth-entry.integration.test.mjs` (13 cases
           over one build, main and apex servers started together); the
@@ -36,8 +37,14 @@ Decisions this session (2026-09-11):
   draft flag alone (the founder lifted it before FQ-28) and a post-promotion
   smoke alone (reports after tenants are already redirected).
 - `auth-origin.ts` refuses a redirect URI on the retired host (503, loud) —
-  rejected: a secret-reading gate in gcp.sh (the deploy SA may lack access,
-  and a failed lookup would block every deploy, R1).
+  rejected: a secret-reading gate in gcp.sh (the deployer holds
+  secretmanager.viewer only, and a failed lookup would block every deploy,
+  R1).
+- The candidate revision proves the secret: `web()` promotes only when the
+  candidate's /sign-in answers 307, so a merge between `map` and `cutover`
+  stops before traffic instead of taking sign-in down — rejected: keying
+  the gate on doug-api's DOUG_WEB_URL (cutover flips it after the rebuild,
+  so cutover's own rebuild would be refused).
 - Doug's reads answered on the PR: read 1 (2 fixed, 2 refuted), read 2 of
   54361c2 (see the adjudication comment); the ready click also means Doug
   reads every further push.
