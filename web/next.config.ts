@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { COLDWORKS_URL } from "./lib/links";
+
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
@@ -32,6 +34,38 @@ const nextConfig: NextConfig = {
       { source: "/", destination: "/landing.html" },
       { source: "/docs/audit", destination: "/docs/audit/index.html" },
       { source: "/docs/audit/:page", destination: "/docs/audit/:page.html" },
+    ];
+  },
+  // The subdomain redirects to the apex, path-preserving (ADR-0034,
+  // decision 1). `doug.coldworks.dev` keeps its Cloud Run mapping so every
+  // link already written into a pull request keeps resolving; each page
+  // path on it is answered with a 308 to the same path and query on the
+  // apex (Next exempts `/_next/*` from custom redirects). Keyed on that one
+  // host, never a catch-all: the deploy smokes the run.app host and expects
+  // 200 (`api/deploy/gcp.sh` promote_if_healthy and
+  // `web/scripts/smoke-auth-entry.sh`), and the apex itself must serve, not
+  // loop. Next compiles `has[].value` into `new RegExp(`^${value}$`)` and
+  // matches it against the Host header the container receives (the mapped
+  // domain on Cloud Run; `x-forwarded-host` is not consulted), so the dots
+  // are escaped: unescaped, `doug-coldworks.dev` would match too. Config
+  // redirects run before `proxy.ts`, so `/dashboard/*` and `/sign-in` on the
+  // subdomain take this 308 instead of the 307 to the configured origin.
+  //
+  // Not keyed on `DOUG_WEB_DOMAIN`: deploy.yml already sets it, so an
+  // env-keyed redirect would fire on merge. Two controls hold it until the
+  // apex is mapped onto doug-web: `api/deploy/gcp.sh` refuses the web deploy
+  // while the apex is not among the service's mappings, and
+  // `web/lib/auth-origin.ts` refuses a redirect URI on the retired host so
+  // this 308 and the proxy's 307 can never chase each other. Pinned by the
+  // single-host suite in `lib/auth-entry.integration.test.mjs`.
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "doug\\.coldworks\\.dev" }],
+        destination: `${COLDWORKS_URL}/:path*`,
+        permanent: true,
+      },
     ];
   },
   async headers() {

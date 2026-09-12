@@ -1210,8 +1210,81 @@ build_node_image() {
   printf '%s\n' "$image"
 }
 
+require_apex_mapped() {
+  # ADR-0034 decision 1 ships, inside the web image and with no runtime
+  # switch, a 308 from doug.coldworks.dev to the apex. Deploying that image
+  # while another service still holds the apex would send every subdomain
+  # link there. So when DOUG_WEB_DOMAIN names the apex, the apex has to be
+  # among this service's mappings before a candidate revision exists; the
+  # previous revision keeps serving and the remedy is named. A lookup that
+  # fails is not a missing mapping (the same R1 reading as web_url()): it
+  # warns and the deploy proceeds.
+  [ -n "${DOUG_WEB_DOMAIN:-}" ] || return 0
+  local mapped
+  if ! mapped=$(gcloud beta run domain-mappings list \
+      --project "$PROJECT" --region "$REGION" \
+      --filter="spec.routeName=$WEB_SERVICE" \
+      --format="value(metadata.name)" 2>/dev/null); then
+    echo "warning: could not list $WEB_SERVICE domain mappings; not checking that $DOUG_WEB_DOMAIN is mapped" >&2
+    return 0
+  fi
+  if printf '%s\n' "$mapped" | grep -qx "$DOUG_WEB_DOMAIN"; then
+    return 0
+  fi
+  # doug-web has held doug.coldworks.dev since the first cutover, so an
+  # empty list is the lookup misreading the service (a filter or surface
+  # change, a principal that lists nothing), not a service with no mapping.
+  # Refuse only on positive evidence: mappings were listed and the apex is
+  # not among them.
+  if [ -z "$mapped" ]; then
+    echo "warning: $WEB_SERVICE lists no domain mappings at all; not checking that $DOUG_WEB_DOMAIN is mapped" >&2
+    return 0
+  fi
+  echo "ERROR: DOUG_WEB_DOMAIN=$DOUG_WEB_DOMAIN is not mapped onto $WEB_SERVICE." >&2
+  echo "The web image redirects doug.coldworks.dev to https://$DOUG_WEB_DOMAIN (ADR-0034)," >&2
+  echo "so deploying it now would send every subdomain link to whatever serves the apex." >&2
+  echo "Map the apex first: DOUG_WEB_DOMAIN=$DOUG_WEB_DOMAIN ./deploy/domains.sh map," >&2
+  echo "then status until READY, then cutover. The previous revision keeps serving." >&2
+  return 1
+}
+
+# $1 url of a candidate revision. /sign-in there must answer 307, the
+# canonicalization or the hop to WorkOS, and never 503: the image refuses a
+# redirect URI it cannot serve (web/lib/auth-origin.ts: malformed, or on
+# doug.coldworks.dev, which ADR-0034 retired and next.config.ts redirects),
+# and a secret that still names the retired host would take sign-in down on
+# every host the moment this image took traffic. The mapping gate cannot see
+# the secret and the deployer cannot read it, but the candidate has it
+# mounted, so ask the candidate. domains.sh cutover rotates the secret
+# before it rebuilds, so its own rebuild passes; a merge that lands between
+# `map` and `cutover` stops here with the previous revision still serving.
+sign_in_configured() {
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --header 'Accept: text/html' \
+    --max-time 30 "$1/sign-in" || echo 000)
+  echo "sign-in: $1/sign-in -> $code"
+  case "$code" in
+    307)
+      return 0 ;;
+    503)
+      # The one answer auth-origin.ts gives for a URI it will not serve.
+      echo "ERROR: the candidate refuses its configured redirect URI (503)." >&2
+      echo "doug-workos-redirect-uri is malformed or names a retired host (ADR-0034)." >&2
+      echo "Rotate it first: DOUG_WEB_DOMAIN=<the apex> ./deploy/domains.sh cutover" >&2
+      ;;
+    *)
+      echo "ERROR: the candidate answered $code at /sign-in, not the 307 a healthy" >&2
+      echo "revision gives. A 000 or 5xx is a build that does not serve, or a" >&2
+      echo "transient failure; inspect $1 and re-run." >&2
+      ;;
+  esac
+  echo "Traffic stays on the previous revision." >&2
+  return 1
+}
+
 web() {
-  local traffic_flags="" image
+  local traffic_flags="" image candidate
+  require_apex_mapped || return 1
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # DOUG_API_URL is read at request time by the public pages' server
   # components. AuthKit gets its four secrets plus the purpose-scoped install
@@ -1243,6 +1316,10 @@ web() {
   # only proves the Next server binds its port, so a build that 500'd on
   # every real route shipped green. The homepage is the real route here.
   if [ -n "$traffic_flags" ]; then
+    candidate=$(candidate_url "$WEB_SERVICE")
+    if [ -n "$candidate" ]; then
+      sign_in_configured "$candidate" || return 1
+    fi
     promote_if_healthy "$WEB_SERVICE" /
   else
     smoke "$(web_url)/"

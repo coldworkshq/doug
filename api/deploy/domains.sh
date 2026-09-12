@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Doug's public address: map doug-web onto doug.coldworks.dev.
+# Doug's public address: map doug-web onto a domain and move sign-in there.
 #
-#   PROJECT=doug-prod0 ./deploy/domains.sh map      # create the mapping, print DNS
-#   PROJECT=doug-prod0 ./deploy/domains.sh status   # mapping + certificate state
-#   PROJECT=doug-prod0 ./deploy/domains.sh cutover  # move sign-in and receipt links
+#   PROJECT=doug-prod0 DOUG_WEB_DOMAIN=coldworks.dev ./deploy/domains.sh map      # create the mapping, print DNS
+#   PROJECT=doug-prod0 DOUG_WEB_DOMAIN=coldworks.dev ./deploy/domains.sh status   # mapping + certificate state
+#   PROJECT=doug-prod0 DOUG_WEB_DOMAIN=coldworks.dev ./deploy/domains.sh cutover  # move sign-in and receipt links
+#
+# The domain is always named. doug.coldworks.dev was the default until
+# ADR-0034 retired it as a sign-in host: web/next.config.ts answers every
+# path on it with a 308 to the apex, and a default that quietly pointed a
+# cutover back at it would put sign-in behind a 503 on every host.
 #
 # WHY THIS IS THREE SUBCOMMANDS AND NOT ONE. A Cloud Run domain mapping is
 # the small half. Doug's web host is written into two other places that break
@@ -33,7 +38,8 @@ PROJECT=${PROJECT:?set PROJECT}
 REGION=${REGION:-us-central1}
 WEB_SERVICE=${WEB_SERVICE:-doug-web}
 API_SERVICE=${API_SERVICE:-doug-api}
-DOMAIN=${DOUG_WEB_DOMAIN:-doug.coldworks.dev}
+DOMAIN=${DOUG_WEB_DOMAIN:?set DOUG_WEB_DOMAIN to the domain to map (the apex, coldworks.dev)}
+RETIRED_DOMAIN=doug.coldworks.dev
 
 # Domain mappings are a `beta` surface and are not offered in every Cloud Run
 # region. us-central1 offers them; a region that does not fails here with an
@@ -105,6 +111,14 @@ cutover() {
   # already in use and replace ONLY the host. Whatever path the app
   # requires today is the path this carries, without this script knowing
   # what it is.
+  # ADR-0034 decision 1 retired this host as a sign-in origin, and
+  # web/lib/auth-origin.ts refuses a redirect URI on it (503, not a loop).
+  # A cutover onto it can only take sign-in down.
+  if [ "$DOMAIN" = "$RETIRED_DOMAIN" ]; then
+    echo "cutover: $DOMAIN is retired as a sign-in host (ADR-0034). Refusing." >&2
+    exit 1
+  fi
+
   local current path new_redirect
   current=$(gcloud secrets versions access latest \
     --secret doug-workos-redirect-uri --project "$PROJECT") || {
@@ -152,12 +166,16 @@ cutover() {
   # DNS resolves, the certificate is issued and valid, and Cloud Run is
   # routing the name to a service that renders — the four things that have to
   # be true before a link to this host may be published into someone's repo.
-  echo "Checking $DOMAIN serves over HTTPS..."
+  # The route is /scoreboard, not /: the registry that held the apex before
+  # ADR-0034 answers 200 at / as well, and this check exists to prove the
+  # name routes to THIS service. The registry answers 404 there.
+  echo "Checking $DOMAIN serves doug-web over HTTPS..."
   local code
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/") || {
-    echo "cutover: https://$DOMAIN/ did not answer. Run 'status'." >&2; exit 1; }
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/scoreboard") || {
+    echo "cutover: https://$DOMAIN/scoreboard did not answer. Run 'status'." >&2; exit 1; }
   if [ "$code" != "200" ]; then
-    echo "cutover: https://$DOMAIN/ returned $code, not 200. Refusing." >&2
+    echo "cutover: https://$DOMAIN/scoreboard returned $code, not 200. Refusing:" >&2
+    echo "  a 404 means the name still routes to the registry, not to $WEB_SERVICE." >&2
     exit 1
   fi
 
@@ -267,7 +285,9 @@ cutover() {
   echo -n "Checking the gh-pages redirect stub... "
   local stub
   stub=$(curl -sS --max-time 20 "https://coldworkshq.github.io/doug/" 2>/dev/null || true)
-  if printf '%s' "$stub" | grep -q "$DOMAIN"; then
+  # Anchored: a bare "$DOMAIN" would let the apex match a stub that still
+  # names the subdomain.
+  if printf '%s' "$stub" | grep -q "https://$DOMAIN/"; then
     echo "already names $DOMAIN."
   else
     echo "STILL NAMES THE OLD HOST."
