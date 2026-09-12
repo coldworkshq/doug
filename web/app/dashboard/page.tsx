@@ -42,7 +42,7 @@ import {
   thresholdChanges,
   withSelectedOptions,
 } from "@/lib/dashboard-view";
-import { type Facet, type FacetKey, type FacetSelection, buildFacets } from "@/lib/facets";
+import { type Facet, type FacetSelection, buildFacets } from "@/lib/facets";
 import { type PrGroup, groupRunsByPr, runCountLabel } from "@/lib/grouping";
 import {
   bandCensus,
@@ -348,7 +348,7 @@ function CoverageCell({ run }: { run: RunSummary }) {
  *  says so in as many words, and it is under a character-identical lockstep
  *  with the console's copy, so nothing here may reach into it for a number.
  *  A facet that is not an outcome is absent, not zero: `band` has no window. */
-const OUTCOME_FACET_WINDOWS: Partial<Record<FacetKey, number>> = {
+const OUTCOME_FACET_WINDOWS: Partial<Record<Facet["key"], number>> = {
   outcome: 14,
   outcome_60: 60,
 };
