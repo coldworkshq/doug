@@ -206,8 +206,16 @@ app = FastAPI(title="Doug", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("DOUG_CORS_ORIGINS", "http://localhost:3000").split(","),
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Doug-Token",
+        "X-Doug-Example-Pack-Token",
+        "X-GitHub-Token",
+        "X-GitHub-Event",
+        "X-Hub-Signature-256",
+    ],
 )
 
 

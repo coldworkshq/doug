@@ -6166,3 +6166,44 @@ def test_an_installation_that_never_registered_the_repo_stays_unreadable(
 
     assert [row["verdict_id"] for row in listed.json()["items"]] == []
     assert refused.status_code == 404
+
+
+def test_cors_preflight_allowed_and_restricted():
+    """Verify CORS middleware explicitly restricts allowed methods and headers."""
+    client = TestClient(app)
+    # Preflight for allowed method and headers
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization, x-doug-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    allowed_methods = [
+        m.strip()
+        for m in response.headers.get("access-control-allow-methods", "").split(",")
+        if m.strip()
+    ]
+    assert set(allowed_methods) == {"GET", "POST", "PATCH", "DELETE"}
+    allowed_headers = [
+        h.strip().lower()
+        for h in response.headers.get("access-control-allow-headers", "").split(",")
+        if h.strip()
+    ]
+    assert "authorization" in allowed_headers
+    assert "x-doug-token" in allowed_headers
+    assert "x-unallowed-header" not in allowed_headers
+
+    # Preflight for unallowed method
+    response_unallowed = client.options(
+        "/healthz",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "PUT",
+        },
+    )
+    unallowed_methods = response_unallowed.headers.get("access-control-allow-methods", "")
+    assert "PUT" not in unallowed_methods
