@@ -1047,6 +1047,9 @@ case "$*" in
   # actually answers. The fake says so rather than 200, which no live route
   # returns for that request and which would make the allowlist untested.
   *rawPredict*) printf '%s' '400' ;;
+  # /sign-in never answers 200 on a healthy revision: it is a 307, to the
+  # configured origin or to WorkOS. web() promotes only on that 307.
+  */sign-in*) printf '%s' '307' ;;
   *) printf '%s' '200' ;;
 esac
 """
@@ -1564,14 +1567,82 @@ def test_web_refuses_to_deploy_the_subdomain_redirect_before_the_apex_is_mapped(
     itself succeeded: a failed gcloud call must not stop the api's deploy
     partner from shipping (R1), so it warns and proceeds."""
     body = _function_body("web")
-    assert "require_apex_mapped" in body
+    assert "require_apex_mapped || return 1" in body
     assert body.index("require_apex_mapped") < body.index("build_node_image")
     gate = _function_body("require_apex_mapped")
     assert '[ -n "${DOUG_WEB_DOMAIN:-}" ] || return 0' in gate
     assert 'grep -qx "$DOUG_WEB_DOMAIN"' in gate
     assert "domains.sh map" in gate
     assert "return 1" in gate
+    # Refuse only on positive evidence: a failed or empty listing warns.
     assert "warning: could not list" in gate
+    assert "lists no domain mappings at all" in gate
+    assert gate.index('if [ -z "$mapped" ]') < gate.index("return 1")
+
+
+def test_web_candidate_refusing_its_redirect_uri_blocks_promotion(tmp_path):
+    """The fake curl answers 503 ONLY on /sign-in, which is what a candidate
+    whose mounted redirect-URI secret still names the retired host answers
+    (auth-origin.ts). The deploy must fail and update-traffic must never
+    run: a check after traffic moved would protect nothing, and the previous
+    revision is the one that still signs people in."""
+    fake_bin, log = _fake_gcloud(tmp_path)
+    curl = fake_bin / "curl"
+    curl.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+case "$*" in
+  */sign-in*) printf '%s' '503' ;;
+  *) printf '%s' '200' ;;
+esac
+"""
+    )
+    curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GCLOUD_LOG": str(log),
+        "GCLOUD_CWD_LOG": str(tmp_path / "gcloud.cwd.log"),
+        "CURL_LOG": str(tmp_path / "curl.log"),
+        "GCLOUD_STATE": str(tmp_path / "gcloud.state"),
+        "PROJECT": "doug-prod0",
+        "REGION": "us-central1",
+        "VERTEX_REGION": "us-east5",
+    }
+    result = subprocess.run(
+        ["bash", str(GCP_PATH), "web"],
+        cwd=GCP_PATH.parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    lines = log.read_text().splitlines()
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "/sign-in" in (tmp_path / "curl.log").read_text()
+    assert "refuses its configured redirect URI" in result.stderr
+    assert not [
+        line for line in lines if line.startswith("run services update-traffic doug-web")
+    ]
+
+
+def test_web_refuses_to_promote_a_candidate_that_refuses_its_redirect_uri():
+    """The apex mapping exists before `domains.sh cutover` rotates the
+    redirect-URI secret, and the image refuses a URI on the retired host
+    (auth-origin.ts), so a merge between `map` and `cutover` would promote a
+    revision whose /sign-in answers 503 on every host. The deployer cannot
+    read the secret, but the candidate revision has it mounted: web() asks
+    the candidate for /sign-in and promotes only on the 307, before any
+    traffic moves."""
+    body = _function_body("web")
+    assert 'candidate=$(candidate_url "$WEB_SERVICE")' in body
+    assert 'sign_in_configured "$candidate" || return 1' in body
+    assert body.index("sign_in_configured") < body.index('promote_if_healthy "$WEB_SERVICE" /')
+    check = _function_body("sign_in_configured")
+    assert '"$1/sign-in"' in check
+    assert '[ "$code" = "307" ]' in check
+    assert "domains.sh cutover" in check
+    assert "return 1" in check
 
 
 def test_setup_owns_scheduler_and_adjudicator_identities():
