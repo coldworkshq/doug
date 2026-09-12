@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, func, or_, select, tuple_, update
 
 from . import store
 from .adjudicate import Adjudication
@@ -349,12 +349,13 @@ def settle_batch(
         if not _claims_are_current(conn, batch):
             raise LostClaim("one or more outcome claims were reclaimed")
         now = _db_now(conn)
+        outcome_rows = []
+        job_claims = []
         for identity, outcome in classified.items():
             job = jobs[identity]
             detail = outcome.detail.model_dump(mode="json")
             detail["prereg_hash"] = prereg_hash
-            conn.execute(
-                store.outcomes.insert(),
+            outcome_rows.append(
                 {
                     "repo": repo_full_name,
                     "pr_number": outcome.pr_number,
@@ -366,19 +367,25 @@ def settle_batch(
                     "window_days": outcome.window_days,
                     "merge_commit_sha": outcome.merge_commit_sha,
                     "detail": json.dumps(detail, sort_keys=True),
-                },
+                }
             )
+            job_claims.append((job["id"], job["claim_generation"]))
+
+        if outcome_rows:
+            conn.execute(store.outcomes.insert(), outcome_rows)
             result = conn.execute(
                 update(store.outcome_jobs)
                 .where(
-                    store.outcome_jobs.c.id == job["id"],
+                    tuple_(
+                        store.outcome_jobs.c.id,
+                        store.outcome_jobs.c.claim_generation,
+                    ).in_(job_claims),
                     store.outcome_jobs.c.status == "running",
-                    store.outcome_jobs.c.claim_generation == job["claim_generation"],
                 )
                 .values(status="done", finished_at=now, error=None)
             )
-            if result.rowcount != 1:
-                raise LostClaim(f"outcome job {job['id']} is no longer held")
+            if result.rowcount != len(job_claims):
+                raise LostClaim("one or more outcome jobs are no longer held")
         for identity, item in refused.items():
             _fail_job(conn, jobs[identity], item.reason, now, MAX_ATTEMPTS)
     return len(classified), len(refused)
