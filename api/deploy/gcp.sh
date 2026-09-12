@@ -1210,8 +1210,38 @@ build_node_image() {
   printf '%s\n' "$image"
 }
 
+require_apex_mapped() {
+  # ADR-0034 decision 1 ships, inside the web image and with no runtime
+  # switch, a 308 from doug.coldworks.dev to the apex. Deploying that image
+  # while another service still holds the apex would send every subdomain
+  # link there. So when DOUG_WEB_DOMAIN names the apex, the apex has to be
+  # among this service's mappings before a candidate revision exists; the
+  # previous revision keeps serving and the remedy is named. A lookup that
+  # fails is not a missing mapping (the same R1 reading as web_url()): it
+  # warns and the deploy proceeds.
+  [ -n "${DOUG_WEB_DOMAIN:-}" ] || return 0
+  local mapped
+  if ! mapped=$(gcloud beta run domain-mappings list \
+      --project "$PROJECT" --region "$REGION" \
+      --filter="spec.routeName=$WEB_SERVICE" \
+      --format="value(metadata.name)" 2>/dev/null); then
+    echo "warning: could not list $WEB_SERVICE domain mappings; not checking that $DOUG_WEB_DOMAIN is mapped" >&2
+    return 0
+  fi
+  if printf '%s\n' "$mapped" | grep -qx "$DOUG_WEB_DOMAIN"; then
+    return 0
+  fi
+  echo "ERROR: DOUG_WEB_DOMAIN=$DOUG_WEB_DOMAIN is not mapped onto $WEB_SERVICE." >&2
+  echo "The web image redirects doug.coldworks.dev to https://$DOUG_WEB_DOMAIN (ADR-0034)," >&2
+  echo "so deploying it now would send every subdomain link to whatever serves the apex." >&2
+  echo "Map the apex first: DOUG_WEB_DOMAIN=$DOUG_WEB_DOMAIN ./deploy/domains.sh map," >&2
+  echo "then status until READY, then cutover. The previous revision keeps serving." >&2
+  return 1
+}
+
 web() {
   local traffic_flags="" image
+  require_apex_mapped
   service_exists "$WEB_SERVICE" && traffic_flags="--no-traffic --tag candidate"
   # DOUG_API_URL is read at request time by the public pages' server
   # components. AuthKit gets its four secrets plus the purpose-scoped install

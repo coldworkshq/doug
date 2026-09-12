@@ -2,37 +2,55 @@
 
 --- shell lane (2026-09-11): the one shell, doug D4 (the subdomain redirects to the apex) ---
 
-State:    review — branch `shell/the-subdomain-redirects` off main e32ca47
-          (D3 merged as #327; main carries its tip, checked). D4 is
-          `redirects()` in `web/next.config.ts`: every path on
-          `doug.coldworks.dev` answers 308 to the same path and query on
-          `coldworks.dev`, keyed on that one Host, never a catch-all, so the
-          run.app host the deploy smokes keeps answering 200. The single-host
-          suite in `web/lib/auth-entry.integration.test.mjs` starts a second
-          `next start` with the redirect URI on the apex and sends Host
-          through node:http (fetch drops it; `has: host` reads it). Both
-          mutations red: `has.value` = apex fails the three subdomain cases
-          and the apex sign-in; no `has` fails every case including run.app.
-          Doug's read (1 high, 2 medium, 1 low) adjudicated on the PR: the
-          hold is now GitHub-enforced (#328 is a draft until FQ-28); the
-          low finding's Host-header assumption has a live tripwire,
-          `web/scripts/smoke-subdomain-redirect.sh` after every web
-          promotion in deploy.yml, red against production today.
-Next:     #328 is a DRAFT: CI green on 1d8d834; Doug's read of 0deb75e
-          answered, and Doug reads no draft (api.py:2583), so its read of
-          the final head comes on `gh pr ready`; adjudicate it before the
-          squash. HOLD THE MERGE
-          until FQ-28 (the apex mapped onto doug-web, cutover observed) is
-          done; the founder marks it ready then. A merged D4 redirects
-          tenants to whatever serves the apex, which is the registry until
-          then (R1). After the merge: Phase 0
-          item 8 re-observed (one receipt link on doug.coldworks.dev
-          followed through the 308) and recorded on frontdoor-12.8; then
-          coldworks S2. Phase 0 items 3, 4, 7 are observable on
-          doug.coldworks.dev now; 2 (T) and 5 wait on FQ-27 and FQ-29; 6 on
-          the registry deploy in FQ-27; 1 and 8 on FQ-28.
-Blockers: FQ-28 gates the merge. FQ-27 and FQ-29 gate the T slot, Guards,
-          and item 6. Nothing in D4's code needs a signature.
+State:    review — doug#328, branch `shell/the-subdomain-redirects` off main
+          e32ca47, marked ready for review by the founder on 2026-09-11 while
+          the apex still serves the registry (FQ-28 not done). `redirects()`
+          in `web/next.config.ts`: every path on `doug.coldworks.dev` answers
+          308 to the same path and query on `coldworks.dev`, keyed on that
+          one Host (regex-escaped), never a catch-all. Two code controls hold
+          it: `gcp.sh web()` refuses the deploy while the apex is not among
+          doug-web's mappings, and `auth-origin.ts` refuses a redirect URI
+          on the retired host so the 307 and the 308 cannot loop. The
+          single-host suite in `auth-entry.integration.test.mjs` (13 cases
+          over one build, main and apex servers started together); the
+          deploy-time probe `smoke-subdomain-redirect.sh` after every web
+          promotion; `domains.sh` requires DOUG_WEB_DOMAIN, refuses a cutover
+          onto the retired host, and proves the apex routes to doug-web by
+          /scoreboard (the registry answers 404 there).
+Next:     Founder: FQ-28 (map, status, cutover), then squash #328 and check
+          main carries the tip; the agent then re-observes Phase 0 item 8
+          onto hq frontdoor-12.8 and starts coldworks S2.
+Blockers: FQ-28 gates the merge in practice; a premature squash is refused
+          at deploy by gcp.sh (the previous revision keeps serving). FQ-27
+          and FQ-29 gate the T slot, Guards, and Phase 0 item 6. Nothing in
+          D4's code needs a signature.
+Decisions this session (2026-09-11):
+- The redirect is a build-time `redirects()` keyed on the literal retired
+  host — Next reads Host and the design forbids env-keying (deploy.yml
+  already sets DOUG_WEB_DOMAIN, so it would fire on merge); rejected: an
+  env-keyed or proxy-based runtime redirect.
+- `permanent: true` (308) — ADR-0034 decision 1 rules a permanent redirect;
+  rejected: a 307 to ease rollback, which contradicts the signed ADR.
+- The merge hold is code, not prose: `gcp.sh` refuses the web deploy while
+  the apex is unmapped, before a candidate revision exists — rejected: the
+  draft flag alone (the founder lifted it before FQ-28) and a post-promotion
+  smoke alone (reports after tenants are already redirected).
+- `auth-origin.ts` refuses a redirect URI on the retired host (503, loud) —
+  rejected: a secret-reading gate in gcp.sh (the deploy SA may lack access,
+  and a failed lookup would block every deploy, R1).
+- Doug's reads answered on the PR: read 1 (2 fixed, 2 refuted), read 2 of
+  54361c2 (see the adjudication comment); the ready click also means Doug
+  reads every further push.
+Pointers: doug#328 · web/next.config.ts redirects() · web/lib/auth-origin.ts
+          RETIRED_HOSTS · web/lib/auth-entry.integration.test.mjs (single-host
+          suite) · web/scripts/smoke-subdomain-redirect.sh + its test ·
+          .github/workflows/deploy.yml "Confirm the subdomain redirects" ·
+          api/deploy/gcp.sh require_apex_mapped · api/deploy/domains.sh ·
+          api/tests/test_deploy_gcp.py (both pins) · hq design/one-shell
+          (hq#24): docs/cross-repo/one-shell/handoff-d4.md, founder-commands.md,
+          roadmap frontdoor-12 (FQ-27/28/29 live there, not on hq main) ·
+          env slots at deploy: COLDWORKS_REGISTRY_URL, DOUG_GUARDS_INSTALLATIONS
+          (gcp.sh web env), DOUG_WEB_DOMAIN (deploy.yml).
 
 State:    review — PR #316, branch `claude/issue-308-outside-read` off main f1c4731
           (#314 merged; main carries its tip, checked). #308: a finding is

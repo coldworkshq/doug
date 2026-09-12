@@ -1,37 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 
+import { runScript, withServer } from "./smoke-harness.mjs";
+
 const WEB_DIR = fileURLToPath(new URL("..", import.meta.url));
 const SCRIPT = path.join(WEB_DIR, "scripts/smoke-auth-entry.sh");
 
-function runSmoke(baseUrl) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("bash", [SCRIPT, baseUrl], { cwd: WEB_DIR });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
-  });
-}
-
-async function withServer(handler, run) {
-  const server = createServer(handler);
-  server.listen(0, "127.0.0.1");
-  await new Promise((resolve) => server.once("listening", resolve));
-  const address = server.address();
-  assert.equal(typeof address, "object");
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-}
+const runSmoke = (baseUrl) => runScript(SCRIPT, [baseUrl], WEB_DIR);
 
 test("the deploy smoke proves root, dashboard protection, and WorkOS entry without printing PKCE state", async () => {
   await withServer((request, response) => {

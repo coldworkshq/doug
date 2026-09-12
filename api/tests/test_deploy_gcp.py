@@ -1526,24 +1526,52 @@ def test_web_deploy_runs_the_auth_entry_smoke_after_promotion():
     assert 'bash web/scripts/smoke-auth-entry.sh "$url"' in web_confirmation
 
 
-def test_web_deploy_confirms_the_apex_and_the_subdomain_redirect_after_promotion():
+def test_web_deploy_confirms_the_subdomain_redirect_after_promotion():
     """ADR-0034 decision 1: one sign-in host, the apex, with the subdomain
     answering every path with a 308 there. The redirect in next.config.ts is
     keyed on the Host header the container receives, an assumption about the
     front of the service that no unit test can check, so the deploy asserts
-    it live after every web promotion, and asserts on the apex itself that
-    what the subdomain points at is this app's front door. A merge of that
-    redirect before the apex cutover would send tenants to whatever serves
-    the apex; this is the step that goes red when that happens."""
+    it live after every web promotion. The step has to sit in the web job,
+    after the promotion it checks, and it has to be able to go red: moving
+    it above the deploy would probe the previous revision, and a
+    continue-on-error would keep the tripwire's colour out of the run."""
     workflow = DEPLOY_WORKFLOW.read_text()
-    step = workflow.split(
-        "- name: Confirm the apex is the front door and the subdomain redirects to it", 1
-    )[1]
-    assert 'bash web/scripts/smoke-auth-entry.sh "https://$DOUG_WEB_DOMAIN"' in step
+    marker = "- name: Confirm the subdomain redirects to the apex"
+    assert workflow.count(marker) == 1, "the subdomain step is missing or duplicated"
+    web_job = workflow.split("\n  web:\n", 1)[1]
+    assert marker in web_job, "the subdomain step is not in the web job"
+    deploy_at = web_job.index("- name: Deploy")
+    smoke_at = web_job.index("- name: Confirm the live URL after promotion")
+    step_at = web_job.index(marker)
+    assert deploy_at < smoke_at < step_at, "the subdomain step must follow the promotion"
+    step = web_job[step_at:]
+    next_step = step.find("- name:", len(marker))
+    step = step if next_step == -1 else step[:next_step]
+    assert "continue-on-error" not in step
+    assert ': "${DOUG_WEB_DOMAIN:?' in step
     assert (
         'bash web/scripts/smoke-subdomain-redirect.sh https://doug.coldworks.dev "https://$DOUG_WEB_DOMAIN"'
         in step
     )
+
+
+def test_web_refuses_to_deploy_the_subdomain_redirect_before_the_apex_is_mapped():
+    """The web image carries the doug.coldworks.dev -> apex redirect with no
+    runtime switch (ADR-0034). Merging it before the apex is mapped onto
+    doug-web would send every subdomain link to whatever serves the apex,
+    and a post-promotion smoke only reports that after the fact. web() has
+    to refuse before a candidate revision exists, and only when the lookup
+    itself succeeded: a failed gcloud call must not stop the api's deploy
+    partner from shipping (R1), so it warns and proceeds."""
+    body = _function_body("web")
+    assert "require_apex_mapped" in body
+    assert body.index("require_apex_mapped") < body.index("build_node_image")
+    gate = _function_body("require_apex_mapped")
+    assert '[ -n "${DOUG_WEB_DOMAIN:-}" ] || return 0' in gate
+    assert 'grep -qx "$DOUG_WEB_DOMAIN"' in gate
+    assert "domains.sh map" in gate
+    assert "return 1" in gate
+    assert "warning: could not list" in gate
 
 
 def test_setup_owns_scheduler_and_adjudicator_identities():
