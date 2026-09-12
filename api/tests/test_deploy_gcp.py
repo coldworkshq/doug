@@ -1640,8 +1640,12 @@ def test_web_refuses_to_promote_a_candidate_that_refuses_its_redirect_uri():
     assert body.index("sign_in_configured") < body.index('promote_if_healthy "$WEB_SERVICE" /')
     check = _function_body("sign_in_configured")
     assert '"$1/sign-in"' in check
-    assert '[ "$code" = "307" ]' in check
+    assert "307)" in check
+    # A refused URI and a transient failure are told apart in the message,
+    # so an operator never reads a timeout as a misconfigured secret.
+    assert "503)" in check
     assert "domains.sh cutover" in check
+    assert "transient failure" in check
     assert "return 1" in check
 
 

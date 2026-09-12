@@ -1263,12 +1263,21 @@ sign_in_configured() {
   code=$(curl -sS -o /dev/null -w '%{http_code}' --header 'Accept: text/html' \
     --max-time 30 "$1/sign-in" || echo 000)
   echo "sign-in: $1/sign-in -> $code"
-  if [ "$code" = "307" ]; then
-    return 0
-  fi
-  echo "ERROR: the candidate refuses its configured redirect URI ($code, not 307)." >&2
-  echo "doug-workos-redirect-uri is malformed or names a retired host (ADR-0034)." >&2
-  echo "Rotate it first: DOUG_WEB_DOMAIN=<the apex> ./deploy/domains.sh cutover" >&2
+  case "$code" in
+    307)
+      return 0 ;;
+    503)
+      # The one answer auth-origin.ts gives for a URI it will not serve.
+      echo "ERROR: the candidate refuses its configured redirect URI (503)." >&2
+      echo "doug-workos-redirect-uri is malformed or names a retired host (ADR-0034)." >&2
+      echo "Rotate it first: DOUG_WEB_DOMAIN=<the apex> ./deploy/domains.sh cutover" >&2
+      ;;
+    *)
+      echo "ERROR: the candidate answered $code at /sign-in, not the 307 a healthy" >&2
+      echo "revision gives. A 000 or 5xx is a build that does not serve, or a" >&2
+      echo "transient failure; inspect $1 and re-run." >&2
+      ;;
+  esac
   echo "Traffic stays on the previous revision." >&2
   return 1
 }
