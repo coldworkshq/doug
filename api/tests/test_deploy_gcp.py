@@ -1558,6 +1558,33 @@ def test_web_deploy_confirms_the_subdomain_redirect_after_promotion():
     )
 
 
+def test_deploy_runner_installs_the_gcloud_beta_component():
+    """gcp.sh lists domain mappings through `gcloud beta`, in web_url() for
+    every deploy and in require_apex_mapped for the web gate. setup-gcloud
+    installs no components by default; without beta the listing fails, both
+    fall open, and on 2026-09-12 the gate promoted a redirect into another
+    service's apex with a warning nobody read (doug#334). Both jobs run
+    gcp.sh, so both steps install it."""
+    workflow = DEPLOY_WORKFLOW.read_text()
+    steps = workflow.split("- uses: google-github-actions/setup-gcloud@v2")[1:]
+    assert len(steps) == 2
+    for step in steps:
+        head = step.split("- ", 1)[0]
+        assert "install_components: beta" in head
+
+
+def test_apex_gate_fail_open_is_an_actions_error_annotation():
+    """The gate falls open on a failed or empty listing on purpose (R1), but
+    silently is how 2026-09-12 happened. Each fall-open branch has to write
+    an `::error::` annotation naming that the apex was NOT checked, and the
+    failed-listing branch carries gcloud's own first line."""
+    gate = _function_body("require_apex_mapped")
+    assert gate.count("::error::require_apex_mapped:") == 2
+    assert "was NOT checked" in gate
+    assert 'head -n1 "$err"' in gate
+    assert "2>/dev/null" not in gate
+
+
 def test_web_refuses_to_deploy_the_subdomain_redirect_before_the_apex_is_mapped():
     """The web image carries the doug.coldworks.dev -> apex redirect with no
     runtime switch (ADR-0034). Merging it before the apex is mapped onto
@@ -1574,8 +1601,8 @@ def test_web_refuses_to_deploy_the_subdomain_redirect_before_the_apex_is_mapped(
     assert 'grep -qx "$DOUG_WEB_DOMAIN"' in gate
     assert "domains.sh map" in gate
     assert "return 1" in gate
-    # Refuse only on positive evidence: a failed or empty listing warns.
-    assert "warning: could not list" in gate
+    # Refuse only on positive evidence: a failed or empty listing annotates.
+    assert "could not list" in gate
     assert "lists no domain mappings at all" in gate
     assert gate.index('if [ -z "$mapped" ]') < gate.index("return 1")
 

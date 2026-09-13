@@ -1220,14 +1220,20 @@ require_apex_mapped() {
   # fails is not a missing mapping (the same R1 reading as web_url()): it
   # warns and the deploy proceeds.
   [ -n "${DOUG_WEB_DOMAIN:-}" ] || return 0
-  local mapped
+  local mapped err
+  err=$(mktemp)
   if ! mapped=$(gcloud beta run domain-mappings list \
       --project "$PROJECT" --region "$REGION" \
       --filter="spec.routeName=$WEB_SERVICE" \
-      --format="value(metadata.name)" 2>/dev/null); then
-    echo "warning: could not list $WEB_SERVICE domain mappings; not checking that $DOUG_WEB_DOMAIN is mapped" >&2
+      --format="value(metadata.name)" 2>"$err"); then
+    # Loud, the way the tracing probe is loud: an Actions error annotation
+    # on the run summary, with gcloud's own first line. On 2026-09-12 this
+    # branch fired as a plain warning in a green log and the deploy went out.
+    echo "::error::require_apex_mapped: could not list $WEB_SERVICE domain mappings, so $DOUG_WEB_DOMAIN was NOT checked. $(head -n1 "$err") The runner needs the gcloud beta component (deploy.yml installs it) and the deploying principal needs run.domainmappings.list." >&2
+    rm -f "$err"
     return 0
   fi
+  rm -f "$err"
   if printf '%s\n' "$mapped" | grep -qx "$DOUG_WEB_DOMAIN"; then
     return 0
   fi
@@ -1237,7 +1243,7 @@ require_apex_mapped() {
   # Refuse only on positive evidence: mappings were listed and the apex is
   # not among them.
   if [ -z "$mapped" ]; then
-    echo "warning: $WEB_SERVICE lists no domain mappings at all; not checking that $DOUG_WEB_DOMAIN is mapped" >&2
+    echo "::error::require_apex_mapped: $WEB_SERVICE lists no domain mappings at all, so $DOUG_WEB_DOMAIN was NOT checked; the listing is misreading the service." >&2
     return 0
   fi
   echo "ERROR: DOUG_WEB_DOMAIN=$DOUG_WEB_DOMAIN is not mapped onto $WEB_SERVICE." >&2
