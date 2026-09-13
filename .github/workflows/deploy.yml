@@ -143,6 +143,13 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+        with:
+          # `gcloud beta run domain-mappings list` is how gcp.sh learns which
+          # domains doug-web serves (web_url(), require_apex_mapped). With
+          # no beta component the call fails, both fall open, and the
+          # 2026-09-12 deploy promoted a redirect into another service's
+          # apex with only a warning in the log (doug#334).
+          install_components: beta
       # gcp.sh stages the revision with no traffic, smoke-tests its tagged
       # URL, promotes only on a 200, then refreshes doug-adjudicator from the
       # promoted revision's exact image. A failed candidate never serves,
@@ -235,6 +242,13 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+        with:
+          # `gcloud beta run domain-mappings list` is how gcp.sh learns which
+          # domains doug-web serves (web_url(), require_apex_mapped). With
+          # no beta component the call fails, both fall open, and the
+          # 2026-09-12 deploy promoted a redirect into another service's
+          # apex with only a warning in the log (doug#334).
+          install_components: beta
       # Same staged flow as the api: candidate revision, smoke test on the
       # homepage (the readiness probe only proves the server binds its
       # port), promote on 200. A web build that 500s every route now goes
