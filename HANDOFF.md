@@ -1,44 +1,55 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-14): doug D5, the Guards mapping reaches the deploy ---
+--- shell lane (2026-09-14): D5 and the www half merged; FQ-29 landed ---
 
-State:    review — branch `shell/guards-mapping-reaches-the-deploy` off main
-          507f8b0. The web Deploy step in deploy.yml sets
-          COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS from
-          repository variables (`vars.`), never literals. gcp.sh web()
-          already forwarded both to --set-env-vars declaratively, which is
-          why a value set on doug-web by hand vanished at the next merge
-          deploy and both were empty there after every merge (checked
-          2026-09-14). Pinned by
-          test_the_merge_deploy_carries_the_mapping_from_repository_variables,
-          derived from the script's own --set-env-vars line; red on a deleted
-          line and on a literal. On this branch: api 1941 pass, web 462
-          pass, shell guard clean.
-Next:     Founder: squash this PR (#340), then FQ-29 (the two `gh variable
-          set` commands in hq docs/cross-repo/one-shell/handoff-close.md,
-          then one web deploy), then Phase 0 items 2 and 5 in a browser;
-          squash #341 (www redirects to the apex, the code half of #333),
-          then `domains.sh map` for www, `status` until READY, never
-          `cutover`, and delete the registry's www mapping last. Phase 0
-          item 7 is dated: on main 507f8b0, api 1940 pass and web 462 pass,
-          both rc 0 (2026-09-14; hq#28 records it on frontdoor-12.8).
-Blockers: FQ-29 waits on this merge (R11 item 3; the value never enters this
-          public repo). www waits on the founder's `domains.sh map` after
-          the doug#333 PR merges; the registry's www mapping goes last.
+State:    done in code and deployed. #340 (D5) squash-merged as 242db1a and
+          #341 (www redirects to the apex, the code half of #333) as 94cd0a5;
+          main carries both tips (checked). FQ-29 is landed: both repository
+          variables are set on this repo (values never enter it) and the
+          founder's dispatched web deploy (run 34811345583) promoted
+          doug-web-00160-lay with COLDWORKS_REGISTRY_URL and
+          DOUG_GUARDS_INSTALLATIONS non-empty. The 94cd0a5 push deploy that
+          carries the www rule follows it in the queue; the rule is inert
+          until www is mapped onto doug-web.
+Next:     Founder: after the 94cd0a5 web deploy, `domains.sh map` for www,
+          `status` until READY, never `cutover` (the script refuses it);
+          delete the registry's www mapping last, or first if the
+          certificate will not issue while the registry serves the domain,
+          the FQ-28 path. In a browser at coldworks.dev: Phase 0 items 2 to
+          5, said aloud to the agent, who dates them on hq frontdoor-12.8.
+          Agent, after www serves doug-web: the coldworks PR that removes
+          the registry's www forwards and criterion 10's local www block.
+Blockers: none in code. The registry snapshot reads stale from 2026-09-26
+          about 04:28Z; items 2 and 5 observed after that need a mirror
+          push first.
 Decisions this session (2026-09-14):
 - Repository variables, not secrets and not literals — neither value is a
   credential, and the mapping names an engine tenant that stays the
   founder's setting outside a public file — rejected: a literal in
   deploy.yml; a Secret Manager entry.
-- The two lines live on the web Deploy step, not the workflow env — only
-  `gcp.sh web` reads them, and the pin reads that step — rejected:
-  workflow-level env beside DOUG_WEB_DOMAIN.
-- The pin derives the forwarded names from gcp.sh rather than restating
-  them — a third forwarded variable is caught the day it is added —
-  rejected: two literal asserts.
+- The pin derives the forwarded names from gcp.sh's --set-env-vars line —
+  a third forwarded variable is caught the day it is added — rejected: two
+  literal asserts.
+- www's docs URLs forward to /docs/audit, mirroring the registry, ahead of
+  the path-preserving catch-all — on the apex /docs/cli.html and
+  /docs/docs.css are 404 and /docs/cli is Doug's own page (probed
+  2026-09-14) — rejected: one path-preserving rule.
+- 308 for the www rules — the alias is settled, and a later move of the
+  audit docs is the apex's own redirect to add — rejected: the registry's
+  temporary forwards, which were interim on a host that was leaving.
+- www joins RETIRED_HOSTS in auth-origin.ts and the cutover refusal in
+  domains.sh — a 308 host holding the redirect URI loops with the proxy's
+  307, the case ADR-0034 closed for the subdomain — rejected: the
+  issue's prose "never cutover" alone.
+- Doug's reads adjudicated on both PRs: #340 two low refuted; #341 one
+  medium (a stale RETIRED_DOMAIN reference: none exists, map and status
+  reach gcloud under set -u behind a shim) and two low refuted.
 Pointers: .github/workflows/deploy.yml (web Deploy env) · api/deploy/gcp.sh
           web() --set-env-vars · api/tests/test_deploy_gcp.py
-          _web_passthrough_env · doug#333 · hq
+          _web_passthrough_env · web/next.config.ts redirects() ·
+          web/lib/auth-origin.ts RETIRED_HOSTS · api/deploy/domains.sh
+          RETIRED_DOMAINS · web/lib/auth-entry.integration.test.mjs
+          (single-host suite) · #333 · hq
           docs/cross-repo/one-shell/handoff-close.md · roadmap frontdoor-12.8
 
 --- shell lane (2026-09-14): ADR-0034 accepted, merged as #336 (507f8b0) ---
