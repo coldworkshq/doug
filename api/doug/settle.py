@@ -36,21 +36,27 @@ and settling that would need a different check than this one.
 from __future__ import annotations
 
 import ast
+import posixpath
 import re
+import sys
+import tomllib
+import warnings
 from collections.abc import Callable, Iterable
 
 from . import ci_evidence
 from .reader import ReaderFinding, ReaderVerdict
 
 # Weight-0 notices appended when a finding is disproved rather than the
-# author fixing it. The only three producers are settlement_notice,
-# schema_settlement_notice and ci_settlement_notice below. check_run.py and
-# convergence.py import this set rather than prefix-matching "settled-".
+# author fixing it. The only four producers are settlement_notice,
+# schema_settlement_notice, ci_settlement_notice and syntax_settlement_notice
+# below. check_run.py and convergence.py import this set rather than
+# prefix-matching "settled-".
 SETTLED_MISSING_IMPORT = "settled-missing-import"
 SETTLED_SCHEMA_DEPENDENCY = "settled-schema-dependency"
 SETTLED_CI_GREEN = "settled-ci-green"
+SETTLED_SYNTAX_ERROR = "settled-syntax-error"
 SETTLED_REASON_CODES = frozenset(
-    {SETTLED_MISSING_IMPORT, SETTLED_SCHEMA_DEPENDENCY, SETTLED_CI_GREEN}
+    {SETTLED_MISSING_IMPORT, SETTLED_SCHEMA_DEPENDENCY, SETTLED_CI_GREEN, SETTLED_SYNTAX_ERROR}
 )
 
 _IMPORT_SLUGS = frozenset(
@@ -654,5 +660,202 @@ def ci_settlement_notice(
     return Reason(
         rule=SETTLED_CI_GREEN,
         label=f"Dropped {len(dropped)} finding(s) disproved by a green check at head — {labels}",
+        weight=0.0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fourth class (#342): the parser had the answer.
+#
+# A finding that says a Python file has a syntax error is a claim a parser
+# settles exactly, with no model in the loop. The reader judges syntax from
+# memory, and its memory lags the language: on PR #339 it filed five high
+# findings that `except A, B:` is invalid Python 3 syntax, a form Python 3.14
+# accepts (PEP 758) and `ruff format` writes for any project requiring 3.14.
+#
+# The disproof is the declared version's grammar, not the running one's.
+# Doug runs one interpreter; `ast.parse(feature_version=...)` gives it an
+# older grammar, and the version is the OLDEST the repository declares
+# support for, because a file that parses only on newer versions is broken
+# for a supported one, and that finding must publish. `compile` follows the
+# parse: the parser alone accepts `return` outside a function and a
+# duplicate argument, which the compiler rejects.
+#
+# Only the slug makes a candidate, never the description alone: "literal_eval
+# raises SyntaxError on this input" and "invalid SQL syntax in the query" are
+# real runtime claims about a file that parses. A syntax slug whose
+# description names another grammar is kept for the same reason. Every other
+# uncertainty keeps the finding too: no declaration, a specifier with no
+# readable lower bound, a minimum this interpreter cannot vouch for, a file
+# that cannot be fetched, a source the compiler refuses.
+
+_SYNTAX_SLUGS = frozenset(
+    {
+        "syntax-error",
+        "invalid-syntax",
+        "python-syntax-error",
+        "parse-error",
+    }
+)
+_OTHER_GRAMMAR_RE = re.compile(
+    r"\b(?:sql|regex|regexp|regular expression|json|yaml|toml|jinja|template|"
+    r"literal_eval|html|graphql)\b",
+    re.IGNORECASE,
+)
+# `continue` inside `finally` was a compile error before 3.8, and
+# feature_version models the grammar, not the compiler, so an older
+# declaration is one this interpreter cannot vouch for.
+_OLDEST_SETTLED_MINOR = 8
+_SPECIFIER_RE = re.compile(r"\s*(===|==|~=|>=|<=|!=|>|<)\s*([0-9][0-9.*]*)\s*")
+_PINNED_MINOR_RE = re.compile(r"(?<![0-9.])3\.([0-9]+)")
+
+
+def looks_like_syntax_error_finding(f: ReaderFinding) -> bool:
+    slug = f.category_slug.lower().removeprefix("reader:")
+    return slug in _SYNTAX_SLUGS and not _OTHER_GRAMMAR_RE.search(f.description)
+
+
+def minimum_minor(requires_python: str) -> int | None:
+    """Oldest Python 3 minor a `requires-python` specifier admits, or None.
+
+    Lower bounds decide it (`>=3.10`, `>3.10`, `~=3.10`, `==3.10.*`); upper
+    bounds and exclusions are read and ignored. A clause this cannot read, a
+    bound on another major version, or no lower bound at all is None.
+    """
+    lows: list[int] = []
+    for clause in requires_python.split(","):
+        match = _SPECIFIER_RE.fullmatch(clause)
+        if match is None:
+            return None
+        operator, version = match.groups()
+        if operator in {"<", "<=", "!="}:
+            continue
+        parts = version.split(".")
+        if parts[0] != "3" or len(parts) < 2 or not parts[1].isdigit():
+            return None
+        lows.append(int(parts[1]))
+    return max(lows) if lows else None
+
+
+def pinned_minor(python_version: str) -> int | None:
+    """Oldest Python 3 minor a `.python-version` file names, or None.
+
+    pyenv allows one version per line and runs the project on each, so the
+    oldest decides. `3.14`, `3.14.7`, `cpython-3.14.7` and `pypy3.10` all name
+    a minor; a line that names none (`system`) is None.
+    """
+    minors: list[int] = []
+    for raw in python_version.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = _PINNED_MINOR_RE.search(line)
+        if match is None:
+            return None
+        minors.append(int(match.group(1)))
+    return min(minors) if minors else None
+
+
+def declared_python_minor(path: str, resolve_file: ResolveFile) -> int | None:
+    """The oldest Python 3 minor the repository declares for `path`, or None.
+
+    Walks up from the file's directory. At each level `requires-python` in
+    `pyproject.toml` wins over `.python-version`: the first is the range the
+    project supports, the second a pin for one environment inside it. The
+    nearest declaration decides, and one that does not parse or cannot be
+    read is None rather than a reason to keep walking to a farther one.
+    """
+    directory = posixpath.dirname(path)
+    while True:
+        text = resolve_file(posixpath.join(directory, "pyproject.toml"))
+        if text is not None:
+            try:
+                data = tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                return None
+            project = data.get("project")
+            spec = project.get("requires-python") if isinstance(project, dict) else None
+            if spec is not None:
+                return minimum_minor(spec) if isinstance(spec, str) else None
+        text = resolve_file(posixpath.join(directory, ".python-version"))
+        if text is not None:
+            return pinned_minor(text)
+        if not directory:
+            return None
+        directory = posixpath.dirname(directory)
+
+
+def compiles_as(source: str, minor: int) -> bool:
+    """True when `source` parses under Python 3.`minor`'s grammar and compiles.
+
+    False for a minor this interpreter cannot vouch for (older than 3.8, or
+    newer than itself) and for any refusal: a SyntaxError, a null byte
+    (ValueError), nesting deep enough to exhaust the parser.
+    """
+    if sys.version_info.major != 3 or not _OLDEST_SETTLED_MINOR <= minor <= sys.version_info.minor:
+        return False
+    try:
+        with warnings.catch_warnings():
+            # A SyntaxWarning in tenant source (an invalid escape) is not ours
+            # to print once per review.
+            warnings.simplefilter("ignore")
+            ast.parse(source, feature_version=(3, minor))
+            compile(source, "<head>", "exec", dont_inherit=True)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return False
+    return True
+
+
+def drop_disproved_syntax_findings(
+    rv: ReaderVerdict,
+    resolve_file: ResolveFile,
+) -> tuple[ReaderVerdict, list[ReaderFinding]]:
+    """Same contract as the other three: (possibly filtered verdict, dropped).
+
+    A finding is dropped only when it claims a Python syntax error, the
+    repository's declaration and the file are both readable at head, and the
+    file compiles under the oldest Python that declaration admits.
+    risk_score is left alone, as in the other three.
+    """
+    kept: list[ReaderFinding] = []
+    dropped: list[ReaderFinding] = []
+    for f in rv.findings:
+        if not f.file.endswith(".py") or not looks_like_syntax_error_finding(f):
+            kept.append(f)
+            continue
+        minor = declared_python_minor(f.file, resolve_file)
+        source = resolve_file(f.file) if minor is not None else None
+        if minor is not None and source is not None and compiles_as(source, minor):
+            dropped.append(f)
+        else:
+            kept.append(f)
+    if not dropped:
+        return rv, []
+    return rv.model_copy(update={"findings": kept}), dropped
+
+
+def syntax_settlement_notice(dropped: list[ReaderFinding], resolve_file: ResolveFile):
+    """Weight-0 reason naming the Python version each file parsed as.
+
+    Same label grammar as the other three, with the claim slot carrying the
+    version. It is read again through `resolve_file`, which the worker caches
+    per job, so naming it costs no second fetch.
+    """
+    from .models import Reason
+
+    if not dropped:
+        return None
+
+    def parsed_as(f: ReaderFinding) -> list[str]:
+        minor = declared_python_minor(f.file, resolve_file)
+        return [f"Python 3.{minor}"] if minor is not None else ["?"]
+
+    labels = "; ".join(f"{d.file}: {d.category_slug} ({parsed_as(d)})" for d in dropped)
+    return Reason(
+        rule=SETTLED_SYNTAX_ERROR,
+        label=(
+            f"Dropped {len(dropped)} finding(s) disproved by parsing the file at head"
+            f" — {labels}"
+        ),
         weight=0.0,
     )

@@ -777,6 +777,67 @@ def test_score_one_settles_against_a_green_check_at_head(monkeypatch):
     assert not any(r.rule == "settled-ci-green" for r in v.reasons)
 
 
+def test_score_one_settles_a_syntax_error_the_declared_python_parses(monkeypatch):
+    """The fourth settlement rides the same seam (#342). The file at head
+    parses under the Python the repository declares, so a claim that it has
+    a syntax error is dropped with a weight-0 notice naming that version.
+    The same file in a repository that still supports 3.13 is broken for
+    3.13, and the finding publishes."""
+    meta = _pr_with_deterministic_score_0_79().model_copy(update={"head_sha": "a" * 40})
+    finding = reader.ReaderFinding(
+        category_slug="syntax-error",
+        description="`except ValueError, TypeError:` is invalid Python 3 syntax",
+        file="api/doug/x.py",
+        severity="high",
+    )
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, [finding]))
+    files = {
+        "api/doug/x.py": "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n",
+        "api/pyproject.toml": '[project]\nrequires-python = ">=3.14"\n',
+    }
+    tier, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get
+    )
+    assert tier == "reader"
+    assert rv.findings == [] and rv.risk_score == 70
+    notice = next(r for r in v.reasons if r.rule == "settled-syntax-error")
+    assert notice.weight == 0.0
+    assert "api/doug/x.py: syntax-error (['Python 3.14'])" in notice.label
+
+    files["api/pyproject.toml"] = '[project]\nrequires-python = ">=3.13"\n'
+    _, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get
+    )
+    assert len(rv.findings) == 1
+    assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
+
+
+def test_a_syntax_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, capsys):
+    """Tenant-authored TOML and a compile of tenant source reach the syntax
+    settlement, and nothing in it may fail a review. The read stands."""
+    meta = _pr_with_deterministic_score_0_79().model_copy(update={"head_sha": "a" * 40})
+    finding = reader.ReaderFinding(
+        category_slug="syntax-error",
+        description="invalid syntax on line 3",
+        file="api/doug/x.py",
+        severity="high",
+    )
+    monkeypatch.setattr(reader, "enabled", lambda: True)
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv(70, [finding]))
+
+    def raises(rv, resolve_file):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(review.settle, "drop_disproved_syntax_findings", raises)
+    tier, v, rv, _ = review.score_one(
+        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file={}.get
+    )
+    assert tier == "reader" and len(rv.findings) == 1
+    assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
+    assert "syntax settlement skipped (RecursionError" in capsys.readouterr().err
+
+
 class _CiGH:
     """get_content for a workflows directory and its files, checks for a
     ref — every call records the ref it was asked for."""

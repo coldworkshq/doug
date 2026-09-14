@@ -427,6 +427,11 @@ def score_one(
     predict a failure a green check at the reviewed head already rules out
     (#307, settle.py's third class). Called lazily, at most once, and only
     when a finding of that class is present.
+
+    `resolve_file` also settles syntax-error findings on Python files that
+    parse and compile under the oldest Python the repository declares
+    (#342, settle.py's fourth class). A declaration or a file it cannot read
+    keeps the finding.
     """
     reader_line = None if threshold is None else round(threshold * 100)
     if reader.enabled() and not deep_read:
@@ -459,6 +464,28 @@ def score_one(
                     print(
                         f"doug: settled {len(dropped)} missing-import finding(s) "
                         f"against head file ({rules})",
+                        file=sys.stderr,
+                    )
+            syntax_dropped: list[reader.ReaderFinding] = []
+            if resolve_file is not None:
+                try:
+                    rv, syntax_dropped = settle.drop_disproved_syntax_findings(
+                        rv, resolve_file
+                    )
+                except Exception as e:  # noqa: BLE001 — settlement is advisory
+                    # Tenant-authored TOML and a compile of tenant source must
+                    # never be able to fail a review. The read stands as the
+                    # model returned it.
+                    syntax_dropped = []
+                    print(
+                        f"doug: syntax settlement skipped ({type(e).__name__}: {e})",
+                        file=sys.stderr,
+                    )
+                if syntax_dropped:
+                    rules = ", ".join(f"reader:{d.category_slug}" for d in syntax_dropped)
+                    print(
+                        f"doug: settled {len(syntax_dropped)} syntax-error finding(s) "
+                        f"by parsing the file at head ({rules})",
                         file=sys.stderr,
                     )
             schema_dropped: list[reader.ReaderFinding] = []
@@ -544,6 +571,10 @@ def score_one(
                 ci_dropped, ci_seen[0] if ci_seen else None
             ):
                 verdict.reasons.append(ci_settled)
+            if resolve_file is not None and (
+                syntax_settled := settle.syntax_settlement_notice(syntax_dropped, resolve_file)
+            ):
+                verdict.reasons.append(syntax_settled)
             if notice := reader.truncation_reason(cov):
                 verdict.reasons.append(notice)
             if reader.attribution_enabled():
