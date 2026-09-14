@@ -56,9 +56,7 @@ def hash_hunk(hunk: str) -> str:
         for line in hunk.splitlines()
         if (line.startswith("+") or line.startswith("-")) and not line.startswith("@@")
     ]
-    return hashlib.sha256(
-        "\n".join(changed).encode("utf-8", "surrogateescape")
-    ).hexdigest()
+    return hashlib.sha256("\n".join(changed).encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def index_from_patches(patches: dict[str, str]) -> dict[str, list[str]]:
@@ -69,7 +67,4 @@ def index_from_patches(patches: dict[str, str]) -> dict[str, list[str]]:
     index is byte-stable for replay. An empty patch yields a PRESENT key
     with `[]` — absence means "never sent", and only the caller knows that.
     """
-    return {
-        path: [hash_hunk(h) for h in split_hunks(patch)]
-        for path, patch in patches.items()
-    }
+    return {path: [hash_hunk(h) for h in split_hunks(patch)] for path, patch in patches.items()}

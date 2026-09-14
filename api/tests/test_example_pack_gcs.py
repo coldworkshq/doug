@@ -68,9 +68,7 @@ class FakeClient:
         prefix = str(kwargs["prefix"])
         maximum = int(kwargs["max_results"])
         matching = [
-            FakeBlob(name, self.objects)
-            for name in sorted(self.objects)
-            if name.startswith(prefix)
+            FakeBlob(name, self.objects) for name in sorted(self.objects) if name.startswith(prefix)
         ]
         return matching[:maximum]
 

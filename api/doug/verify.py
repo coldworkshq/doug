@@ -61,7 +61,7 @@ def _is_single_constant_binding(text: str, line_start: int, line_end: int) -> bo
     """
     try:
         tree = ast.parse(text)
-    except (SyntaxError, ValueError):
+    except SyntaxError, ValueError:
         return False
 
     spanning = [

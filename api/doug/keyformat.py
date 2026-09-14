@@ -18,9 +18,9 @@ PREFIX = "doug_live_"
 TEST_PREFIX = "doug_test_"
 
 _ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-LOOKUP_LEN = 8   # plaintext key id: btree point-lookup, safe in logs and UI
+LOOKUP_LEN = 8  # plaintext key id: btree point-lookup, safe in logs and UI
 SECRET_LEN = 43  # 43 base62 chars ≈ 256 bits of entropy
-CRC_LEN = 6      # CRC32 max fits in 6 base62 chars (62^6 > 2^32)
+CRC_LEN = 6  # CRC32 max fits in 6 base62 chars (62^6 > 2^32)
 
 
 class Minted(NamedTuple):
@@ -68,7 +68,7 @@ def parse(token: str) -> Parsed | None:
         return None
     if not token.startswith(PREFIX):
         return None
-    rest = token[len(PREFIX):]
+    rest = token[len(PREFIX) :]
     lookup, sep, tail = rest.partition("_")
     if sep != "_" or len(lookup) != LOOKUP_LEN or len(tail) != SECRET_LEN + CRC_LEN:
         return None

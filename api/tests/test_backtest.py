@@ -304,10 +304,7 @@ def test_concurrent_checkpoints_land_whole(tmp_path):
         lock = asyncio.Lock()
         payloads = [{"number": i, "pad": "x" * 2000} for i in range(50)]
         await asyncio.gather(
-            *(
-                harvest_mod._checkpoint(lock, path, json.dumps(p) + "\n")
-                for p in payloads
-            )
+            *(harvest_mod._checkpoint(lock, path, json.dumps(p) + "\n") for p in payloads)
         )
 
     asyncio.run(hammer())

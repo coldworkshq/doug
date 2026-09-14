@@ -20,6 +20,7 @@ BASE_SHA = "0" * 40
 def _enqueue(*args, base_sha=BASE_SHA, **kwargs):
     return ingest.enqueue(*args, base_sha=base_sha, **kwargs)
 
+
 RV = reader.ReaderVerdict.model_validate(
     {
         "risk_score": 62,
@@ -152,9 +153,7 @@ def test_example_pack_completed_jobs_use_terminal_start_and_membership_not_mutab
     assert _utc(rows[0]["enqueued_at"]) == started + timedelta(days=30)
 
 
-def test_example_pack_adjudication_lock_serializes_one_finding_on_sqlite(
-    tmp_path, monkeypatch
-):
+def test_example_pack_adjudication_lock_serializes_one_finding_on_sqlite(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     first_entered = Event()
     release_first = Event()
@@ -225,9 +224,7 @@ def test_columns_of_reads_the_connected_database_not_the_current_table_object(
     url = f"sqlite:///{tmp_path}/older.db"
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200))"
-        )
+        conn.exec_driver_sql("CREATE TABLE verdicts (id INTEGER PRIMARY KEY, repo VARCHAR(200))")
     monkeypatch.setattr(store, "_get_engine", lambda: engine)
     assert store.columns_of("verdicts") == {"id", "repo"}
     assert "prompt_hash" not in store.columns_of("verdicts")
@@ -387,11 +384,7 @@ def test_save_review_keeps_each_findings_own_file_when_two_share_a_description(
 
     engine = create_engine(url)
     with engine.connect() as conn:
-        rows = (
-            conn.execute(select(store.findings).order_by(store.findings.c.id))
-            .mappings()
-            .all()
-        )
+        rows = conn.execute(select(store.findings).order_by(store.findings.c.id)).mappings().all()
     assert [r["file"] for r in rows] == ["a.py", "b.py"]
     assert [r["severity"] for r in rows] == ["high", "low"]
 
@@ -434,8 +427,13 @@ def _pr() -> PRMetadata:
 def test_queue_serves_ledger_when_enabled(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
     )
     r = TestClient(app).get("/v1/queue", headers=AUTH)
     assert r.status_code == 200
@@ -459,22 +457,30 @@ def _outcome(url, repo, pr_number, kind, source="git-labels"):
 
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(store.outcomes.insert(), {
-            "repo": repo, "pr_number": pr_number, "kind": kind,
-            "observed_at": datetime.now(UTC), "source": source,
-        })
+        conn.execute(
+            store.outcomes.insert(),
+            {
+                "repo": repo,
+                "pr_number": pr_number,
+                "kind": kind,
+                "observed_at": datetime.now(UTC),
+                "source": source,
+            },
+        )
 
 
 def _v(slugs, score=0.62):
     """A verdict carrying one finding per slug."""
-    rv = reader.ReaderVerdict.model_validate({
-        "risk_score": int(score * 100),
-        "rationale": "x",
-        "findings": [
-            {"category_slug": s, "description": f"d-{i}", "file": "a.py", "severity": "high"}
-            for i, s in enumerate(slugs)
-        ],
-    })
+    rv = reader.ReaderVerdict.model_validate(
+        {
+            "risk_score": int(score * 100),
+            "rationale": "x",
+            "findings": [
+                {"category_slug": s, "description": f"d-{i}", "file": "a.py", "severity": "high"}
+                for i, s in enumerate(slugs)
+            ],
+        }
+    )
     return reader.verdict_from_reader(rv, threshold=30), rv
 
 
@@ -487,7 +493,8 @@ def test_pattern_join_pairs_findings_with_outcomes(tmp_path, monkeypatch):
     join = store.pattern_join()
     assert join["prs"] == [{"repo": "o/r", "pr_number": 1, "kind": "revert"}]
     assert sorted(h["rule"] for h in join["hits"]) == [
-        "reader:race-condition", "reader:unsafe-migration",
+        "reader:race-condition",
+        "reader:unsafe-migration",
     ]
 
 
@@ -581,8 +588,13 @@ def test_queue_reports_the_threshold_rows_were_banded_at(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     monkeypatch.delenv("DOUG_THRESHOLD", raising=False)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
     )
     body = TestClient(app).get("/v1/queue", headers=AUTH).json()
     assert body["summary"]["threshold"] == VERDICT.threshold == 0.30
@@ -604,15 +616,20 @@ def test_explicit_threshold_rebands_the_rows(tmp_path, monkeypatch):
     response."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
     )
     body = TestClient(app).get("/v1/queue", params={"threshold": 0.9}, headers=AUTH).json()
     assert body["summary"]["threshold"] == 0.9
     assert body["summary"]["flagged"] == 0
     item = body["items"][0]
-    assert item["verdict"]["band"] == "cleared"       # 0.62 < 0.9
-    assert item["verdict"]["threshold"] == 0.9        # and it says so
+    assert item["verdict"]["band"] == "cleared"  # 0.62 < 0.9
+    assert item["verdict"]["threshold"] == 0.9  # and it says so
 
 
 def test_queue_links_rows_written_before_url_was_captured(tmp_path, monkeypatch):
@@ -622,8 +639,13 @@ def test_queue_links_rows_written_before_url_was_captured(tmp_path, monkeypatch)
     rows."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
     )
     item = TestClient(app).get("/v1/queue", headers=AUTH).json()["items"][0]
     assert item["pr"]["url"] == "https://github.com/o/r/pull/7"
@@ -635,8 +657,13 @@ def test_queue_carries_finding_severity(tmp_path, monkeypatch):
     varies."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        model=reader.MODEL, pr_meta=_pr().model_dump(mode="json"),
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        pr_meta=_pr().model_dump(mode="json"),
     )
     body = TestClient(app).get("/v1/queue", headers=AUTH).json()
     reasons = body["items"][0]["verdict"]["reasons"]
@@ -715,7 +742,11 @@ def _pr_with_sha(sha="a" * 40) -> PRMetadata:
 def test_deviation_none_marker_is_storage_only_never_replayed(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
         pr_meta=_pr_with_sha().model_dump(mode="json"),
     )
     store.save_deviations(vid, [], ["ADR-3"], 95)
@@ -736,7 +767,11 @@ def test_find_review_matches_the_head_sha_column_without_pr_meta(tmp_path, monke
     migrated column dead weight and block a future unique index."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
         head_sha="a" * 40,
         pr_meta={"title": "no head here"},
     )
@@ -753,17 +788,26 @@ def test_replay_keeps_the_partial_read_hedge_on_deviations(tmp_path, monkeypatch
     """
     _db(tmp_path, monkeypatch)
     cov = reader.Coverage(
-        diff_chars=100_000, sent_chars=30_000, files_sent=3,
-        files_unseen=["big_migration.sql"], file_cut="server.py",
+        diff_chars=100_000,
+        sent_chars=30_000,
+        files_sent=3,
+        files_unseen=["big_migration.sql"],
+        file_cut="server.py",
     )
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
-        pr_meta=_pr_with_sha().model_dump(mode="json"), coverage=cov,
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        pr_meta=_pr_with_sha().model_dump(mode="json"),
+        coverage=cov,
     )
     store.save_deviations(
         vid,
         [reader.DeviationFinding(type="beyond-ticket", description="adds a flag", severity="low")],
-        ["ADR-3"], 72,
+        ["ADR-3"],
+        72,
     )
     prior = store.find_review("o/r", 7, "a" * 40)
     assert prior["coverage"]["sent_chars"] == 30_000
@@ -784,7 +828,11 @@ def test_save_review_records_app_identity(tmp_path, monkeypatch):
     columns are the only answer that does."""
     url = _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, RV,
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
         model=reader.MODEL,
         github_repo_id=REPO_ID,
         installation_id=INSTALL,
@@ -854,9 +902,7 @@ def test_save_review_returns_existing_id_on_duplicate_app_identity(tmp_path, mon
     assert rows[0]["tier"] == "reader"
 
 
-def test_app_and_external_verdicts_share_a_sha_under_the_unique_index(
-    tmp_path, monkeypatch
-):
+def test_app_and_external_verdicts_share_a_sha_under_the_unique_index(tmp_path, monkeypatch):
     """The unique index must not treat an external row as Doug's scored
     commit. Same four identity columns, different tier — both stay.
     """
@@ -886,10 +932,7 @@ def test_app_and_external_verdicts_share_a_sha_under_the_unique_index(
     )
     assert doug is not None and external is not None and doug != external
     with create_engine(url).connect() as conn:
-        tiers = {
-            r["tier"]
-            for r in conn.execute(select(store.verdicts)).mappings().all()
-        }
+        tiers = {r["tier"] for r in conn.execute(select(store.verdicts)).mappings().all()}
     assert tiers == {"reader", store.EXTERNAL_TIER}
 
 
@@ -1080,9 +1123,7 @@ def test_install_flow_lock_checkout_timeout_becomes_the_named_store_error(
         def connect(self):
             raise SQLAlchemyTimeoutError("purpose pool exhausted")
 
-    monkeypatch.setattr(
-        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
-    )
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine())
 
     with pytest.raises(
         store.InstallFlowLockUnavailable,
@@ -1157,9 +1198,7 @@ def test_direct_installation_bind_lock_checkout_timeout_is_named(monkeypatch):
         def connect(self):
             raise SQLAlchemyTimeoutError("purpose pool exhausted with a secret")
 
-    monkeypatch.setattr(
-        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
-    )
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine())
 
     with pytest.raises(
         store.InstallationBindLockUnavailable,
@@ -1234,9 +1273,7 @@ def test_combined_install_flow_lock_uses_only_lock_pool_and_releases_in_reverse(
     assert nonce_key < 0
 
 
-def test_install_flow_consumption_is_inserted_before_the_authority_write(
-    tmp_path, monkeypatch
-):
+def test_install_flow_consumption_is_inserted_before_the_authority_write(tmp_path, monkeypatch):
     """If the authority write happened first, a crash in between would bind
     an installation while leaving its replay credential reusable. Both writes
     belong to one transaction, with consumption first."""
@@ -1299,18 +1336,14 @@ def test_install_flow_bind_conflict_rolls_back_the_consumption(tmp_path, monkeyp
     digest = hashlib.sha256(b"conflicting-flow").hexdigest()
 
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_01ABC", INSTALL, "org_taken"
-        )
+        store.consume_install_flow_and_bind(digest, "user_01ABC", INSTALL, "org_taken")
         == "conflict"
     )
     assert store.install_flow_consumption(digest) is None
     assert store.installation_bind_row(INSTALL)["workos_org_id"] is None
 
 
-def test_same_flow_replay_returns_success_without_a_second_authority_write(
-    tmp_path, monkeypatch
-):
+def test_same_flow_replay_returns_success_without_a_second_authority_write(tmp_path, monkeypatch):
     """A network retry after a successful response was lost is safe, but it
     must stop at the consumed record rather than repeat the bind side effect."""
     from sqlalchemy.engine import Connection
@@ -1319,10 +1352,7 @@ def test_same_flow_replay_returns_success_without_a_second_authority_write(
     store.upsert_installation(INSTALL, "drewjst", "User", "active")
     digest = hashlib.sha256(b"one-flow").hexdigest()
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_01ABC", INSTALL, "org_01ABC"
-        )
-        == "bound"
+        store.consume_install_flow_and_bind(digest, "user_01ABC", INSTALL, "org_01ABC") == "bound"
     )
     statements = []
     real_execute = Connection.execute
@@ -1333,15 +1363,11 @@ def test_same_flow_replay_returns_success_without_a_second_authority_write(
 
     monkeypatch.setattr(Connection, "execute", record_execute)
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_01ABC", INSTALL, "org_01ABC"
-        )
-        == "replay"
+        store.consume_install_flow_and_bind(digest, "user_01ABC", INSTALL, "org_01ABC") == "replay"
     )
     assert not any(statement.startswith("UPDATE installations") for statement in statements)
     assert not any(
-        statement.startswith("INSERT INTO consumed_install_flows")
-        for statement in statements
+        statement.startswith("INSERT INTO consumed_install_flows") for statement in statements
     )
 
 
@@ -1355,22 +1381,15 @@ def test_consumed_nonce_cannot_be_replayed_for_another_subject_or_installation(
     store.upsert_installation(INSTALL + 1, "other", "Organization", "active")
     digest = hashlib.sha256(b"identity-bound-flow").hexdigest()
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_01ABC", INSTALL, "org_01ABC"
-        )
-        == "bound"
+        store.consume_install_flow_and_bind(digest, "user_01ABC", INSTALL, "org_01ABC") == "bound"
     )
 
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_attacker", INSTALL, "org_01ABC"
-        )
+        store.consume_install_flow_and_bind(digest, "user_attacker", INSTALL, "org_01ABC")
         == "mismatch"
     )
     assert (
-        store.consume_install_flow_and_bind(
-            digest, "user_01ABC", INSTALL + 1, "org_other"
-        )
+        store.consume_install_flow_and_bind(digest, "user_01ABC", INSTALL + 1, "org_other")
         == "mismatch"
     )
     assert store.installation_bind_row(INSTALL + 1)["workos_org_id"] is None
@@ -1378,9 +1397,7 @@ def test_consumed_nonce_cannot_be_replayed_for_another_subject_or_installation(
 
 def test_upsert_installation_records_the_installer_on_first_insert(tmp_path, monkeypatch):
     url = _db(tmp_path, monkeypatch)
-    store.upsert_installation(
-        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
-    )
+    store.upsert_installation(INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42)
     with create_engine(url).connect() as conn:
         rows = conn.execute(select(store.installations)).mappings().all()
     assert rows[0]["installed_by_github_user_id"] == 42
@@ -1396,17 +1413,13 @@ def test_upsert_installation_default_omits_the_installer(tmp_path, monkeypatch):
     assert rows[0]["installed_by_github_user_id"] is None
 
 
-def test_upsert_installation_leaves_the_installer_untouched_when_not_given(
-    tmp_path, monkeypatch
-):
+def test_upsert_installation_leaves_the_installer_untouched_when_not_given(tmp_path, monkeypatch):
     """Suspend/unsuspend/deleted deliveries call upsert_installation with no
     installer to report; that must not blank out the one recorded at install
     time — the bind endpoint (Task 5) needs it to survive every state change
     in between."""
     url = _db(tmp_path, monkeypatch)
-    store.upsert_installation(
-        INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42
-    )
+    store.upsert_installation(INSTALL, "drewjst", "User", "active", installed_by_github_user_id=42)
     store.upsert_installation(INSTALL, "drewjst", "User", "suspended")
     with create_engine(url).connect() as conn:
         rows = conn.execute(select(store.installations)).mappings().all()
@@ -1416,9 +1429,7 @@ def test_upsert_installation_leaves_the_installer_untouched_when_not_given(
 
 def test_session_entitlement_lookup_uses_both_user_and_installation(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
-    store.replace_session_entitlements(
-        "user_selected", [(INSTALL, [11]), (INSTALL + 1, [22])]
-    )
+    store.replace_session_entitlements("user_selected", [(INSTALL, [11]), (INSTALL + 1, [22])])
     store.replace_session_entitlements("user_other", [(INSTALL, [12])])
 
     selected = store.session_entitlement_for("user_selected", INSTALL)
@@ -1429,14 +1440,10 @@ def test_session_entitlement_lookup_uses_both_user_and_installation(tmp_path, mo
     assert store.session_entitlement_for("user_missing", INSTALL) is None
 
 
-def test_session_connection_projection_intersects_claims_with_live_rows(
-    tmp_path, monkeypatch
-):
+def test_session_connection_projection_intersects_claims_with_live_rows(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.upsert_installation(INSTALL, "acme", "Organization", "active")
-    store.set_installation_repos(
-        INSTALL, [(11, "acme/one"), (12, "acme/two")], replace=True
-    )
+    store.set_installation_repos(INSTALL, [(11, "acme/one"), (12, "acme/two")], replace=True)
     store.replace_session_entitlements("user_selected", [(INSTALL, [11, 999])])
     with store._get_engine().begin() as conn:
         conn.execute(
@@ -1528,8 +1535,9 @@ def test_a_new_repo_row_gets_pr_comment_true_from_the_server_default(tmp_path, m
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)
     with store._get_engine().connect() as conn:
         value = conn.execute(
-            select(store.installation_repos.c.pr_comment)
-            .where(store.installation_repos.c.github_repo_id == 11)
+            select(store.installation_repos.c.pr_comment).where(
+                store.installation_repos.c.github_repo_id == 11
+            )
         ).scalar_one()
     assert value is True or value == 1
 
@@ -1643,9 +1651,11 @@ def test_enqueue_outcome_job_honours_a_per_row_window(tmp_path, monkeypatch):
     assert _enqueue_outcome(window_days=30) is not None
     assert _enqueue_outcome() is not None
     with create_engine(url).connect() as conn:
-        rows = conn.execute(
-            select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days)
-        ).mappings().all()
+        rows = (
+            conn.execute(select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days))
+            .mappings()
+            .all()
+        )
     assert [r["window_days"] for r in rows] == [14, 30]
     assert [_utc(r["due_at"]) for r in rows] == [
         datetime(2020, 3, 15, 12, 0, tzinfo=UTC),
@@ -1673,21 +1683,19 @@ def test_enqueue_outcome_jobs_heals_a_legacy_one_window_gap(tmp_path, monkeypatc
     url = _db(tmp_path, monkeypatch)
     assert _enqueue_outcome() is not None
 
-    inserted = store.enqueue_outcome_jobs(
-        INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main"
-    )
+    inserted = store.enqueue_outcome_jobs(INSTALL, REPO_ID, 42, "a" * 40, MERGED, "main")
 
     assert set(inserted) == {60}
     with create_engine(url).connect() as conn:
-        rows = conn.execute(
-            select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days)
-        ).mappings().all()
+        rows = (
+            conn.execute(select(store.outcome_jobs).order_by(store.outcome_jobs.c.window_days))
+            .mappings()
+            .all()
+        )
     assert [row["window_days"] for row in rows] == [14, 60]
 
 
-def test_enqueue_outcome_jobs_rolls_back_both_windows_when_one_insert_fails(
-    tmp_path, monkeypatch
-):
+def test_enqueue_outcome_jobs_rolls_back_both_windows_when_one_insert_fails(tmp_path, monkeypatch):
     """A 60-day failure must roll back the 14-day insert too; independently
     committed single-row helpers would leave a half-cohort in the ledger."""
     url = _db(tmp_path, monkeypatch)
@@ -1712,9 +1720,7 @@ def test_enqueue_outcome_jobs_rolls_back_both_windows_when_one_insert_fails(
         assert conn.execute(select(store.outcome_jobs)).all() == []
 
 
-def test_enqueue_outcome_job_re_raises_an_integrity_error_it_did_not_cause(
-    tmp_path, monkeypatch
-):
+def test_enqueue_outcome_job_re_raises_an_integrity_error_it_did_not_cause(tmp_path, monkeypatch):
     """Only the dedup collision is read as "already queued". Any other
     IntegrityError is a real integrity problem this function did not cause,
     and swallowing it would drop a merge out of the denominator silently —
@@ -1737,6 +1743,7 @@ def test_enqueue_outcome_job_is_a_noop_without_a_ledger(monkeypatch):
 
 
 # --- Deep-read spend cap -------------------------------------------------
+
 
 def test_record_deep_read_allows_reads_under_the_cap(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
@@ -1812,7 +1819,13 @@ def test_save_review_records_the_prompt_hash(tmp_path, monkeypatch):
     that nothing else on it can reconstruct."""
     url = _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, RV, model=reader.MODEL, prompt_hash=reader.PROMPT_HASH,
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        RV,
+        model=reader.MODEL,
+        prompt_hash=reader.PROMPT_HASH,
     )
     engine = create_engine(url)
     with engine.connect() as conn:
@@ -1867,9 +1880,7 @@ def _external(**overrides) -> int | None:
     return store.save_external_review(**kwargs)
 
 
-def test_an_external_review_is_recorded_without_anything_being_scored(
-    tmp_path, monkeypatch
-):
+def test_an_external_review_is_recorded_without_anything_being_scored(tmp_path, monkeypatch):
     """A third-party stance enters the same ledger as Doug's own verdicts so
     the two are adjudicable side by side — but nothing was read and nothing
     was spent, so score and threshold are 0.0 and the tier says so.
@@ -1907,9 +1918,7 @@ def test_a_redelivered_review_is_not_recorded_twice(tmp_path, monkeypatch):
         assert len(conn.execute(select(store.verdicts)).mappings().all()) == 1
 
 
-def test_a_duplicate_left_by_the_tolerated_race_does_not_poison_that_review(
-    tmp_path, monkeypatch
-):
+def test_a_duplicate_left_by_the_tolerated_race_does_not_poison_that_review(tmp_path, monkeypatch):
     """The dedup read is an existence check, not a uniqueness assertion.
 
     The race this function tolerates — two concurrent deliveries of one
@@ -1943,9 +1952,7 @@ def test_save_external_review_is_a_noop_without_a_ledger(monkeypatch):
     assert _external() is None
 
 
-def test_a_reviewer_changing_their_mind_appends_rather_than_replacing(
-    tmp_path, monkeypatch
-):
+def test_a_reviewer_changing_their_mind_appends_rather_than_replacing(tmp_path, monkeypatch):
     """approve then changes_requested on the same commit is two real stances
     at two times, not a correction of one. The ledger is append-only dated
     claims, so both rows stay — which is also what makes the dedup above
@@ -1989,9 +1996,7 @@ def _doug_verdict(**overrides) -> int | None:
     return store.save_review(**kwargs)
 
 
-def test_an_external_review_never_answers_the_workers_idempotency_read(
-    tmp_path, monkeypatch
-):
+def test_an_external_review_never_answers_the_workers_idempotency_read(tmp_path, monkeypatch):
     """find_verdict_by_identity keys on exactly the four columns an external
     row also carries — head_sha included, because a review names the commit
     it was left on. Without the tier filter, a human approving PR #7 at SHA
@@ -2010,9 +2015,7 @@ def test_an_external_review_never_answers_the_workers_idempotency_read(
     assert found["score"] == VERDICT.score
 
 
-def test_an_external_review_arriving_first_does_not_suppress_dougs_review(
-    tmp_path, monkeypatch
-):
+def test_an_external_review_arriving_first_does_not_suppress_dougs_review(tmp_path, monkeypatch):
     """The other direction: a reviewer who approves before Doug's job runs
     must not make that job think its work is already done. The job would be
     completed against a verdict nobody scored."""
@@ -2040,8 +2043,16 @@ def test_find_verdict_by_id_returns_the_bundle_for_a_known_id(tmp_path, monkeypa
     provenance run_detail exists to add back."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     found = store.find_verdict_by_id(vid)
     assert found["tier"] == "reader"
@@ -2083,9 +2094,7 @@ def test_find_review_ignores_external_rows(tmp_path, monkeypatch):
     assert prior is not None and prior["tier"] == "reader"
 
 
-def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
-    tmp_path, monkeypatch
-):
+def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(tmp_path, monkeypatch):
     """The test above cannot fail if find_review's tier filter is deleted —
     external rows write no pr_meta, so its JSON predicate is NULL for them
     and never matches either way. That makes the filter's value invisible to
@@ -2119,9 +2128,7 @@ def test_find_review_still_ignores_an_external_row_that_carries_pr_meta(
     assert prior is not None and prior["tier"] == "reader"
 
 
-def test_an_external_review_does_not_erase_a_prs_findings_from_precision(
-    tmp_path, monkeypatch
-):
+def test_an_external_review_does_not_erase_a_prs_findings_from_precision(tmp_path, monkeypatch):
     """pattern_join takes the same max(id) per (repo, pr) that latest_reviews
     does, and feeds the published per-pattern precision. An external row
     winning that max leaves the PR in the denominator while contributing no
@@ -2230,8 +2237,14 @@ def test_run_history_returns_every_run_for_a_pr_not_just_the_latest(tmp_path, mo
     _db(tmp_path, monkeypatch)
     for sha in ("a" * 40, "b" * 40, "c" * 40):
         store.save_review(
-            "o/r", 7, "reader", VERDICT,
-            github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+            "o/r",
+            7,
+            "reader",
+            VERDICT,
+            github_repo_id=1,
+            installation_id=99,
+            head_sha=sha,
+            source="app",
         )
     rows = store.run_history()
     assert len(rows) == 3
@@ -2244,8 +2257,14 @@ def test_run_history_carries_repo_and_installation(tmp_path, monkeypatch):
     per repo, which is the reported gap."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     row = store.run_history()[0]
     assert row["repo"] == "o/r"
@@ -2261,8 +2280,14 @@ def test_run_history_excludes_untenanted_rows_by_default(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review("o/r", 1, "reader", VERDICT)  # no installation — CLI/backfill
     store.save_review(
-        "o/r", 2, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        2,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     assert [r["pr_number"] for r in store.run_history()] == [2]
     assert {r["pr_number"] for r in store.run_history(include_untenanted=True)} == {1, 2}
@@ -2272,8 +2297,13 @@ def test_run_history_excludes_external_tier(tmp_path, monkeypatch):
     """External rows are other reviewers' verdicts, not Doug's runs."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 1, store.EXTERNAL_TIER, VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40,
+        "o/r",
+        1,
+        store.EXTERNAL_TIER,
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
     )
     assert store.run_history() == []
 
@@ -2281,12 +2311,24 @@ def test_run_history_excludes_external_tier(tmp_path, monkeypatch):
 def test_run_history_scopes_by_repo_and_installation(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/one", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=11, head_sha="a" * 40, source="app",
+        "o/one",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=11,
+        head_sha="a" * 40,
+        source="app",
     )
     store.save_review(
-        "o/two", 2, "reader", VERDICT,
-        github_repo_id=2, installation_id=22, head_sha="b" * 40, source="app",
+        "o/two",
+        2,
+        "reader",
+        VERDICT,
+        github_repo_id=2,
+        installation_id=22,
+        head_sha="b" * 40,
+        source="app",
     )
     assert [r["repo"] for r in store.run_history(repo="o/one")] == ["o/one"]
     assert [r["installation_id"] for r in store.run_history(installation_id=22)] == [22]
@@ -2297,8 +2339,14 @@ def test_run_history_paginates_newest_first(tmp_path, monkeypatch):
     base = datetime(2026, 8, 1, tzinfo=UTC)
     for n in range(5):
         vid = store.save_review(
-            "o/r", n, "reader", VERDICT,
-            github_repo_id=1, installation_id=99, head_sha=str(n) * 40, source="app",
+            "o/r",
+            n,
+            "reader",
+            VERDICT,
+            github_repo_id=1,
+            installation_id=99,
+            head_sha=str(n) * 40,
+            source="app",
         )
         engine = store._get_engine()
         with engine.begin() as conn:
@@ -2316,17 +2364,32 @@ def test_run_history_attaches_coverage_without_duplicating_runs(tmp_path, monkey
     fans out here, and a duplicated run reads as a real second review."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=1000, sent_chars=170, files_sent=4,
-            files_unseen=["tenancy.py"], file_cut="api.py",
+            diff_chars=1000,
+            sent_chars=170,
+            files_sent=4,
+            files_unseen=["tenancy.py"],
+            file_cut="api.py",
         ),
     )
-    store.save_read(vid, store.Coverage(
-        diff_chars=1200, sent_chars=900, files_sent=20,
-        files_unseen=[], file_cut=None,
-    ))
+    store.save_read(
+        vid,
+        store.Coverage(
+            diff_chars=1200,
+            sent_chars=900,
+            files_sent=20,
+            files_unseen=[],
+            file_cut=None,
+        ),
+    )
     rows = store.run_history()
     assert len(rows) == 1
     assert rows[0]["coverage"]["files_sent"] == 20
@@ -2338,8 +2401,14 @@ def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monke
     render as "no read" — never as 0%, which would read as a total miss."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 1, "deterministic", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "deterministic",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     assert store.run_history()[0]["coverage"] is None
 
@@ -2347,7 +2416,9 @@ def test_run_history_coverage_is_none_for_the_deterministic_tier(tmp_path, monke
 def test_run_history_counts_findings_by_severity(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     verdict = Verdict(
-        score=0.8, band=Band.FLAGGED, threshold=0.62,
+        score=0.8,
+        band=Band.FLAGGED,
+        threshold=0.62,
         reasons=[
             Reason(rule="reader:a", label="a", weight=0.0, severity="high"),
             Reason(rule="reader:b", label="b", weight=0.0, severity="low"),
@@ -2355,8 +2426,14 @@ def test_run_history_counts_findings_by_severity(tmp_path, monkeypatch):
         ],
     )
     store.save_review(
-        "o/r", 1, "reader", verdict,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        verdict,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     counts = store.run_history()[0]["finding_counts"]
     assert counts == {"total": 3, "high": 1, "medium": 0, "low": 2}
@@ -2367,42 +2444,66 @@ def test_run_history_attaches_the_review_job(tmp_path, monkeypatch):
     the only place a failed run explains itself."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(store.review_jobs.insert().values(
-            installation_id=99, github_repo_id=1, repo_full_name="o/r",
-            pr_number=1, head_sha="a" * 40, status="done", attempts=2,
-            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
-            finished_at=datetime(2026, 8, 1, 0, 0, 41, tzinfo=UTC),
-            verdict_id=vid,
-        ))
+        conn.execute(
+            store.review_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                repo_full_name="o/r",
+                pr_number=1,
+                head_sha="a" * 40,
+                status="done",
+                attempts=2,
+                enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 1, 0, 0, 41, tzinfo=UTC),
+                verdict_id=vid,
+            )
+        )
     job = store.run_history()[0]["job"]
     assert job["status"] == "done"
     assert job["attempts"] == 2
 
 
-def test_run_history_reports_outcome_60_beside_outcome_14_on_one_row(
-    tmp_path, monkeypatch
-):
+def test_run_history_reports_outcome_60_beside_outcome_14_on_one_row(tmp_path, monkeypatch):
     """Both windows exist for a merged PR and both are joined in, each as
     its own scalar column on the same row — never a list column, which
     would fan the one run out into two rows."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
         for window, kind in ((14, "clean"), (60, "revert")):
-            conn.execute(store.outcomes.insert().values(
-                repo="o/r", pr_number=1, kind=kind, window_days=window,
-                observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
-                github_repo_id=1, installation_id=99,
-            ))
+            conn.execute(
+                store.outcomes.insert().values(
+                    repo="o/r",
+                    pr_number=1,
+                    kind=kind,
+                    window_days=window,
+                    observed_at=datetime(2026, 8, 15, tzinfo=UTC),
+                    source="git-labels",
+                    github_repo_id=1,
+                    installation_id=99,
+                )
+            )
     rows = store.run_history()
     assert len(rows) == 1, "two windows fanned one run out into two rows"
     assert rows[0]["outcome_14"] == "clean"
@@ -2413,8 +2514,14 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
     """Ungraded is not clean. The console must render these differently."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     row = store.run_history()[0]
     assert row["outcome_14"] is None
@@ -2426,15 +2533,19 @@ def test_run_history_outcome_is_none_before_the_window_closes(tmp_path, monkeypa
     assert row["outcome_60"] is None
 
 
-def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(
-    tmp_path, monkeypatch
-):
+def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(tmp_path, monkeypatch):
     """Same display repo/PR is not identity. A session row must not borrow the
     newest outcome from another installation or a sibling repository id."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "shared/repo", 7, "reader", VERDICT,
-        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+        "shared/repo",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=11,
+        installation_id=101,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
@@ -2443,15 +2554,20 @@ def test_run_history_scoped_row_uses_only_its_installation_and_repo_outcome(
             (202, 11, "revert"),
             (101, 12, "hotfix"),
         ):
-            conn.execute(store.outcomes.insert().values(
-                repo="shared/repo", pr_number=7, kind=kind, window_days=14,
-                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
-                github_repo_id=github_repo_id, installation_id=installation_id,
-            ))
+            conn.execute(
+                store.outcomes.insert().values(
+                    repo="shared/repo",
+                    pr_number=7,
+                    kind=kind,
+                    window_days=14,
+                    observed_at=datetime(2026, 8, 17, tzinfo=UTC),
+                    source="manual",
+                    github_repo_id=github_repo_id,
+                    installation_id=installation_id,
+                )
+            )
 
-    rows = store.run_history(
-        installation_id=101, repo_ids=frozenset({11})
-    )
+    rows = store.run_history(installation_id=101, repo_ids=frozenset({11}))
 
     assert len(rows) == 1
     assert rows[0]["outcome_14"] == "clean"
@@ -2466,8 +2582,16 @@ def test_run_detail_carries_the_fields_the_check_run_bundle_drops(tmp_path, monk
     ARE the answer to "what did Doug do"."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
         prompt_hash="a3f9e2c1",
     )
     detail = store.run_detail(vid)
@@ -2492,17 +2616,32 @@ def test_run_detail_attaches_the_job_including_its_error(tmp_path, monkeypatch):
     """A failed run explains itself nowhere else."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(store.review_jobs.insert().values(
-            installation_id=99, github_repo_id=1, repo_full_name="o/r",
-            pr_number=7, head_sha="a" * 40, status="failed", attempts=3,
-            claim_generation=3, error="reader timeout after 60s",
-            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC), verdict_id=vid,
-        ))
+        conn.execute(
+            store.review_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                repo_full_name="o/r",
+                pr_number=7,
+                head_sha="a" * 40,
+                status="failed",
+                attempts=3,
+                claim_generation=3,
+                error="reader timeout after 60s",
+                enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+                verdict_id=vid,
+            )
+        )
     job = store.run_detail(vid)["job"]
     assert job["status"] == "failed"
     assert job["attempts"] == 3
@@ -2516,23 +2655,43 @@ def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatc
     story."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(store.outcomes.insert().values(
-            repo="o/r", pr_number=7, kind="clean", window_days=14,
-            observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="git-labels",
-            github_repo_id=1, installation_id=99,
-        ))
-        conn.execute(store.outcome_jobs.insert().values(
-            installation_id=99, github_repo_id=1, pr_number=7,
-            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 3, tzinfo=UTC),
-            base_ref="main", window_days=60,
-            due_at=datetime(2026, 10, 2, tzinfo=UTC), status="pending",
-            created_at=datetime(2026, 8, 3, tzinfo=UTC),
-        ))
+        conn.execute(
+            store.outcomes.insert().values(
+                repo="o/r",
+                pr_number=7,
+                kind="clean",
+                window_days=14,
+                observed_at=datetime(2026, 8, 17, tzinfo=UTC),
+                source="git-labels",
+                github_repo_id=1,
+                installation_id=99,
+            )
+        )
+        conn.execute(
+            store.outcome_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                pr_number=7,
+                merge_commit_sha="b" * 40,
+                merged_at=datetime(2026, 8, 3, tzinfo=UTC),
+                base_ref="main",
+                window_days=60,
+                due_at=datetime(2026, 10, 2, tzinfo=UTC),
+                status="pending",
+                created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            )
+        )
     detail = store.run_detail(vid)
     assert [o["window_days"] for o in detail["outcomes"]] == [14]
     assert detail["outcomes"][0]["kind"] == "clean"
@@ -2540,16 +2699,20 @@ def test_run_detail_returns_both_outcome_windows_separately(tmp_path, monkeypatc
     assert detail["outcome_jobs"][0]["status"] == "pending"
 
 
-def test_run_detail_scopes_outcomes_and_jobs_to_the_verdict_identity(
-    tmp_path, monkeypatch
-):
+def test_run_detail_scopes_outcomes_and_jobs_to_the_verdict_identity(tmp_path, monkeypatch):
     """Same display repo/PR and even the same numeric repo id can exist under
     another installation. Child evidence must use the verdict's full identity
     before any row is assembled."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "shared/repo", 7, "reader", VERDICT,
-        github_repo_id=11, installation_id=101, head_sha="a" * 40, source="app",
+        "shared/repo",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=11,
+        installation_id=101,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
@@ -2558,27 +2721,37 @@ def test_run_detail_scopes_outcomes_and_jobs_to_the_verdict_identity(
             (202, 11, "revert", 60),
             (101, 12, "hotfix", 30),
         ):
-            conn.execute(store.outcomes.insert().values(
-                repo="shared/repo", pr_number=7, kind=kind, window_days=window,
-                observed_at=datetime(2026, 8, 17, tzinfo=UTC), source="manual",
-                github_repo_id=github_repo_id, installation_id=installation_id,
-            ))
-            conn.execute(store.outcome_jobs.insert().values(
-                installation_id=installation_id, github_repo_id=github_repo_id,
-                pr_number=7, merge_commit_sha=str(window) * 20,
-                merged_at=datetime(2026, 8, 3, tzinfo=UTC), base_ref="main",
-                window_days=window, due_at=datetime(2026, 10, 2, tzinfo=UTC),
-                status="pending", created_at=datetime(2026, 8, 3, tzinfo=UTC),
-            ))
+            conn.execute(
+                store.outcomes.insert().values(
+                    repo="shared/repo",
+                    pr_number=7,
+                    kind=kind,
+                    window_days=window,
+                    observed_at=datetime(2026, 8, 17, tzinfo=UTC),
+                    source="manual",
+                    github_repo_id=github_repo_id,
+                    installation_id=installation_id,
+                )
+            )
+            conn.execute(
+                store.outcome_jobs.insert().values(
+                    installation_id=installation_id,
+                    github_repo_id=github_repo_id,
+                    pr_number=7,
+                    merge_commit_sha=str(window) * 20,
+                    merged_at=datetime(2026, 8, 3, tzinfo=UTC),
+                    base_ref="main",
+                    window_days=window,
+                    due_at=datetime(2026, 10, 2, tzinfo=UTC),
+                    status="pending",
+                    created_at=datetime(2026, 8, 3, tzinfo=UTC),
+                )
+            )
 
-    detail = store.run_detail(
-        vid, installation_id=101, repo_ids=frozenset({11})
-    )
+    detail = store.run_detail(vid, installation_id=101, repo_ids=frozenset({11}))
 
     assert detail is not None
-    assert [(row["kind"], row["window_days"]) for row in detail["outcomes"]] == [
-        ("clean", 14)
-    ]
+    assert [(row["kind"], row["window_days"]) for row in detail["outcomes"]] == [("clean", 14)]
     assert [row["window_days"] for row in detail["outcome_jobs"]] == [14]
 
 
@@ -2589,8 +2762,14 @@ def test_run_detail_never_surfaces_the_no_deviations_marker(tmp_path, monkeypatc
     problem it explicitly did not find."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     # signature: (verdict_id, findings, intent_refs, intent_alignment)
     store.save_deviations(vid, [], intent_refs=[], intent_alignment=100)
@@ -2607,21 +2786,30 @@ def test_run_detail_exposes_pr_meta_for_the_coverage_denominator(tmp_path, monke
     len(files_unseen) + files_sent, which is not the true file count."""
     _db(tmp_path, monkeypatch)
     meta = PRMetadata(
-        number=7, title="t", author="a", files=["one.py"], changed_files=23,
+        number=7,
+        title="t",
+        author="a",
+        files=["one.py"],
+        changed_files=23,
         files_dropped=["uv.lock"],
     )
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, pr_meta=meta.model_dump(),
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        pr_meta=meta.model_dump(),
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     detail = store.run_detail(vid)
     assert detail["pr_meta"]["changed_files"] == 23
     assert detail["pr_meta"]["files_dropped"] == ["uv.lock"]
 
 
-def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(
-    tmp_path, monkeypatch
-):
+def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(tmp_path, monkeypatch):
     """A run with no review_jobs row and no outcomes/outcome_jobs rows is the
     common case (most PRs are still open, most jobs are pre-Task-6 CI rows).
     "no job" must stay None and "no outcomes yet" must stay [] — 'empty is
@@ -2630,8 +2818,14 @@ def test_run_detail_reports_no_job_and_no_outcomes_as_empty_not_missing(
     assertion that only checks truthiness."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     detail = store.run_detail(vid)
     assert detail["job"] is None
@@ -2647,8 +2841,14 @@ def test_run_detail_carries_scored_at_and_app_identity(tmp_path, monkeypatch):
     not touch these three."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     detail = store.run_detail(vid)
     assert detail["scored_at"] is not None
@@ -2662,8 +2862,14 @@ def test_run_detail_tolerates_a_null_pr_meta(tmp_path, monkeypatch):
     run_detail must pass it through as None, not assume it can be indexed."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     assert store.run_detail(vid)["pr_meta"] is None
 
@@ -2730,8 +2936,13 @@ def test_second_token_does_not_disturb_the_first(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _seed_install()
     kw = dict(
-        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
-        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label=None,
+        repo_selection="all",
+        scopes=["queue:read"],
+        minted_by="drewjst",
         expires_at=None,
     )
     a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
@@ -2746,8 +2957,13 @@ def test_mint_count_since_counts_only_this_installation(tmp_path, monkeypatch):
     _seed_install(150424894)
     _seed_install(999999999)
     kw = dict(
-        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
-        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label=None,
+        repo_selection="all",
+        scopes=["queue:read"],
+        minted_by="drewjst",
         expires_at=None,
     )
     store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
@@ -2792,8 +3008,13 @@ def test_list_tokens_masks_the_hash_and_orders_newest_first(tmp_path, monkeypatc
     _db(tmp_path, monkeypatch)
     _seed_install()
     kw = dict(
-        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
-        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label=None,
+        repo_selection="all",
+        scopes=["queue:read"],
+        minted_by="drewjst",
         expires_at=None,
     )
     a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
@@ -2808,8 +3029,13 @@ def test_revoke_is_ownership_scoped_and_idempotent(tmp_path, monkeypatch):
     _seed_install(150424894)
     _seed_install(999999999)
     kw = dict(
-        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
-        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label=None,
+        repo_selection="all",
+        scopes=["queue:read"],
+        minted_by="drewjst",
         expires_at=None,
     )
     token_id = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
@@ -2826,8 +3052,13 @@ def test_revoke_all_stamps_only_live_keys(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _seed_install()
     kw = dict(
-        token_hash="ab" * 32, hash_version=1, last4="wxyz", label=None,
-        repo_selection="all", scopes=["queue:read"], minted_by="drewjst",
+        token_hash="ab" * 32,
+        hash_version=1,
+        last4="wxyz",
+        label=None,
+        repo_selection="all",
+        scopes=["queue:read"],
+        minted_by="drewjst",
         expires_at=None,
     )
     a = store.insert_installation_token(150424894, token_lookup="AAAAAAAA", **kw)
@@ -2881,9 +3112,7 @@ def test_missing_from_ledger_treats_a_removed_row_as_covered(tmp_path, monkeypat
     recorded by a delivery that DID arrive — the opposite of the MT0-class
     drift this helper exists to catch. Only a row's total absence counts."""
     _db(tmp_path, monkeypatch)
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a")], replace=False, state="removed"
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False, state="removed")
     _scored("drewjst/a", 1, 150424894, github_repo_id=111)
     assert store.count_verdict_repos_missing_from_ledger() == 0
 
@@ -2921,9 +3150,7 @@ def test_job_health_excludes_superseded_from_every_count(tmp_path, monkeypatch):
     assert health["review"]["retrying"] == 0
 
 
-def test_job_health_does_not_report_a_retried_job_as_freshly_pending(
-    tmp_path, monkeypatch
-):
+def test_job_health_does_not_report_a_retried_job_as_freshly_pending(tmp_path, monkeypatch):
     """ingest.fail() below the cap sets enqueued_at = now, deliberately, so
     the retry goes to the BACK of the queue instead of burning every attempt
     in one pass. A naive MIN(enqueued_at) over all pending rows therefore
@@ -2945,9 +3172,7 @@ def test_job_health_does_not_report_a_retried_job_as_freshly_pending(
     assert health["review"]["oldest_retry_at"] is not None
 
 
-def test_job_health_measures_each_lane_against_its_own_lease(
-    tmp_path, monkeypatch
-):
+def test_job_health_measures_each_lane_against_its_own_lease(tmp_path, monkeypatch):
     """ingest's lease is 900s; outcome_queue's is 7200s. A claim 20 minutes
     old is stalled in the review lane and perfectly healthy in the outcome
     lane. One shared lease constant would alarm on the healthy one."""
@@ -2969,9 +3194,7 @@ def test_job_health_measures_each_lane_against_its_own_lease(
     assert health["outcome"]["stalled"] == 0
 
 
-def test_job_health_reports_the_lane_constants_it_measured_with(
-    tmp_path, monkeypatch
-):
+def test_job_health_reports_the_lane_constants_it_measured_with(tmp_path, monkeypatch):
     """The console renders 'attempts 4/10' and computes nothing against a
     lease it holds locally. If a constant moves, the UI must follow rather
     than silently disagree with the sweep that enforces it."""
@@ -2993,9 +3216,7 @@ def test_job_health_separates_overdue_from_next_due(tmp_path, monkeypatch):
     now = _dt.datetime.now(_dt.UTC)
     # Merged 20 days ago: its 14-day clock is 6 days overdue, its 60-day
     # clock is still 40 days out.
-    store.enqueue_outcome_jobs(
-        99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main"
-    )
+    store.enqueue_outcome_jobs(99, 1, 7, "c" * 40, now - _dt.timedelta(days=20), "main")
 
     health = _health(None)
 
@@ -3168,9 +3389,7 @@ def test_job_rows_never_returns_superseded_as_unhealthy(tmp_path, monkeypatch):
     assert rows == []
 
 
-def test_job_rows_shows_everything_when_unhealthy_only_is_off(
-    tmp_path, monkeypatch
-):
+def test_job_rows_shows_everything_when_unhealthy_only_is_off(tmp_path, monkeypatch):
     """'The job I expected does not exist at all' is a real diagnosis, and
     only a complete list reaches it."""
     _db(tmp_path, monkeypatch)
@@ -3187,9 +3406,7 @@ def test_job_rows_shows_everything_when_unhealthy_only_is_off(
     assert [r["status"] for r in rows] == ["superseded"]
 
 
-def test_job_rows_carries_the_derived_flag_it_was_selected_by(
-    tmp_path, monkeypatch
-):
+def test_job_rows_carries_the_derived_flag_it_was_selected_by(tmp_path, monkeypatch):
     """The page renders the REASON a row is unhealthy without recomputing it
     against a lease constant it would have to hold locally — which is how the
     list and the strip drift apart."""
@@ -3208,9 +3425,7 @@ def test_job_rows_carries_the_derived_flag_it_was_selected_by(
     assert rows[0]["retrying"] is False
 
 
-def test_job_rows_renders_no_repo_name_when_the_ledger_has_none(
-    tmp_path, monkeypatch
-):
+def test_job_rows_renders_no_repo_name_when_the_ledger_has_none(tmp_path, monkeypatch):
     """outcome_jobs carries only github_repo_id. The display name comes from
     installation_repos, which worker.py documents as able to go stale and
     which count_verdict_repos_missing_from_ledger proves can be absent. A
@@ -3219,42 +3434,44 @@ def test_job_rows_renders_no_repo_name_when_the_ledger_has_none(
     _db(tmp_path, monkeypatch)
     now = _dt.datetime.now(_dt.UTC)
     store.enqueue_outcome_jobs(
-        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        99,
+        4242,
+        7,
+        "c" * 40,
+        now - _dt.timedelta(days=20),
+        "main",
         window_days=(14,),
     )
 
-    rows = store.job_rows(
-        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
-    )
+    rows = store.job_rows(lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS)
 
     assert rows[0]["repo"] is None
     assert rows[0]["github_repo_id"] == 4242
     assert rows[0]["overdue"] is True
 
 
-def test_job_rows_resolves_the_outcome_repo_name_when_the_ledger_has_it(
-    tmp_path, monkeypatch
-):
+def test_job_rows_resolves_the_outcome_repo_name_when_the_ledger_has_it(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     now = _dt.datetime.now(_dt.UTC)
     # set_installation_repos takes (github_repo_id, full_name) tuples — the
     # same call the installation_repositories webhook tests already use.
     store.set_installation_repos(99, [(4242, "o/r")], replace=True)
     store.enqueue_outcome_jobs(
-        99, 4242, 7, "c" * 40, now - _dt.timedelta(days=20), "main",
+        99,
+        4242,
+        7,
+        "c" * 40,
+        now - _dt.timedelta(days=20),
+        "main",
         window_days=(14,),
     )
 
-    rows = store.job_rows(
-        lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS
-    )
+    rows = store.job_rows(lane="outcome", lease_seconds=outcome_queue.STALL_LEASE_SECONDS)
 
     assert rows[0]["repo"] == "o/r"
 
 
-def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(
-    tmp_path, monkeypatch
-):
+def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(tmp_path, monkeypatch):
     """ingest.complete() takes verdict_id: int | None — 'a skipped PR is
     finished, not failed'. A healthy done job can carry a NULL verdict, so
     unlinkable does not mean unhealthy. Surfacing it as a failure would
@@ -3264,9 +3481,7 @@ def test_job_rows_does_not_treat_a_skipped_done_job_as_unhealthy(
     claimed = ingest.claim()
     ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
 
-    unhealthy = store.job_rows(
-        lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS
-    )
+    unhealthy = store.job_rows(lane="review", lease_seconds=ingest.STALL_LEASE_SECONDS)
     everything = store.job_rows(
         lane="review",
         lease_seconds=ingest.STALL_LEASE_SECONDS,
@@ -3286,9 +3501,7 @@ def _force_started_at(table, job_id, when):
 
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(
-            _update(table).where(table.c.id == job_id).values(started_at=when)
-        )
+        conn.execute(_update(table).where(table.c.id == job_id).values(started_at=when))
 
 
 def _force_running(table, job_id, when):
@@ -3297,9 +3510,7 @@ def _force_running(table, job_id, when):
     engine = store._get_engine()
     with engine.begin() as conn:
         conn.execute(
-            _update(table)
-            .where(table.c.id == job_id)
-            .values(status="running", started_at=when)
+            _update(table).where(table.c.id == job_id).values(status="running", started_at=when)
         )
 
 
@@ -3357,19 +3568,21 @@ def test_webhook_resync_preserves_the_line_and_the_patch_never_bumps_updated_at(
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)
     with store._get_engine().connect() as conn:
         before = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.github_repo_id == 11)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.github_repo_id == 11
+            )
         ).scalar_one()
 
     store.set_repo_threshold(101, 11, 0.9)
     with store._get_engine().connect() as conn:
         after = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.github_repo_id == 11)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.github_repo_id == 11
+            )
         ).scalar_one()
     assert after == before
 
-    store.set_installation_repos(101, [], replace=True)          # removed
+    store.set_installation_repos(101, [], replace=True)  # removed
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)  # re-added
     assert store.repo_threshold(101, 11) == 0.9
 
@@ -3441,15 +3654,17 @@ def test_set_repo_pr_comment_keys_on_the_installation_row_and_leaves_updated_at(
         store.set_installation_repos(inst, [(11, f"{login}/one")], replace=False)
     with store._get_engine().connect() as conn:
         before = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.installation_id == 101)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.installation_id == 101
+            )
         ).scalar_one()
     assert store.set_repo_pr_comment(101, 11, False) is True
     assert store.repo_pr_comment(202, 11) is True
     with store._get_engine().connect() as conn:
         after = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.installation_id == 101)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.installation_id == 101
+            )
         ).scalar_one()
     assert after == before
     # webhook re-add preserves an explicit False
@@ -3472,12 +3687,12 @@ def test_repo_deep_read_defaults_to_on_and_survives_a_removed_row(tmp_path, monk
     _db(tmp_path, monkeypatch)
     store.upsert_installation(101, "acme", "Organization", "active")
 
-    assert store.repo_deep_read(101, 11) is True          # no row at all
+    assert store.repo_deep_read(101, 11) is True  # no row at all
     store.set_installation_repos(101, [(11, "acme/one")], replace=False)
-    assert store.repo_deep_read(101, 11) is True          # server default
+    assert store.repo_deep_read(101, 11) is True  # server default
     assert store.set_repo_deep_read(101, 11, False) is True
     assert store.repo_deep_read(101, 11) is False
-    assert store.repo_deep_read(101, 999) is True         # unknown repo
+    assert store.repo_deep_read(101, 999) is True  # unknown repo
 
     # Removed mid-flight: still READABLE and unchanged, like repo_threshold
     # and unlike repo_pr_comment — a job already running against this repo
@@ -3502,8 +3717,9 @@ def test_set_repo_deep_read_keys_on_the_installation_row_and_leaves_updated_at(
         store.set_installation_repos(inst, [(11, f"{login}/one")], replace=False)
     with store._get_engine().connect() as conn:
         before = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.installation_id == 101)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.installation_id == 101
+            )
         ).scalar_one()
 
     assert store.set_repo_deep_read(101, 11, False) is True
@@ -3511,8 +3727,9 @@ def test_set_repo_deep_read_keys_on_the_installation_row_and_leaves_updated_at(
 
     with store._get_engine().connect() as conn:
         after = conn.execute(
-            select(store.installation_repos.c.updated_at)
-            .where(store.installation_repos.c.installation_id == 101)
+            select(store.installation_repos.c.updated_at).where(
+                store.installation_repos.c.installation_id == 101
+            )
         ).scalar_one()
     assert after == before
 
@@ -3558,9 +3775,7 @@ def _last_seq(installation_id: int, github_repo_id: int, pr_number: int):
         ).scalar_one_or_none()
 
 
-def test_pr_comment_seq_claim_lets_the_newer_job_through_and_stops_the_older(
-    tmp_path, monkeypatch
-):
+def test_pr_comment_seq_claim_lets_the_newer_job_through_and_stops_the_older(tmp_path, monkeypatch):
     """Issue #142. Without this, a write through a stored comment_id has
     nothing to compare against, and an older drainer finishing last replaces
     a newer verdict with a stale one."""
@@ -3607,9 +3822,7 @@ def test_pr_comment_seq_claim_allows_a_write_when_there_is_no_row(tmp_path, monk
     assert store.claim_pr_comment_seq(101, 11, 7, 5) is True
 
 
-def test_pr_comment_id_records_the_high_water_seq_and_never_lowers_it(
-    tmp_path, monkeypatch
-):
+def test_pr_comment_id_records_the_high_water_seq_and_never_lowers_it(tmp_path, monkeypatch):
     """Both callers can hold a stale view of the slot — the discovery path
     passes the seq it read out of a listed comment's marker, which another
     drainer may already have overwritten."""
@@ -3641,24 +3854,41 @@ def test_save_review_persists_the_hunk_index_on_the_reads_row(tmp_path, monkeypa
     _db(tmp_path, monkeypatch)
     index = {"api.py": ["a" * 64, "b" * 64], "empty.py": []}
     vid = store.save_review(
-        "o/r", 1, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=10, sent_chars=10, files_sent=2,
-            files_unseen=[], file_cut=None, hunks=index,
+            diff_chars=10,
+            sent_chars=10,
+            files_sent=2,
+            files_unseen=[],
+            file_cut=None,
+            hunks=index,
         ),
     )
     with store._get_engine().connect() as conn:
-        row = conn.execute(
-            select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid)
-        ).one()
+        row = conn.execute(select(store.reads.c.hunks).where(store.reads.c.verdict_id == vid)).one()
     assert row.hunks == index
 
     vid2 = store.save_review(
-        "o/r", 2, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="b" * 40, source="app",
+        "o/r",
+        2,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="b" * 40,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=10, sent_chars=10, files_sent=0, files_unseen=[],
+            diff_chars=10,
+            sent_chars=10,
+            files_sent=0,
+            files_unseen=[],
         ),
     )
     with store._get_engine().connect() as conn:
@@ -3675,18 +3905,36 @@ _H1, _H2 = "1" * 64, "2" * 64
 
 def _reader_verdict_with_finding(file="cache.py"):
     return Verdict(
-        score=0.62, band=Band.FLAGGED, threshold=0.30,
-        reasons=[Reason(rule="reader:race-condition", label="Cache write is not guarded",
-                        weight=0.0, severity="high", file=file)],
+        score=0.62,
+        band=Band.FLAGGED,
+        threshold=0.30,
+        reasons=[
+            Reason(
+                rule="reader:race-condition",
+                label="Cache write is not guarded",
+                weight=0.0,
+                severity="high",
+                file=file,
+            )
+        ],
     )
 
 
 def _save_reader(pr=7, sha="a" * 40, hunks=None):
     return store.save_review(
-        "o/r", pr, "reader", _reader_verdict_with_finding(),
-        github_repo_id=1, installation_id=99, head_sha=sha, source="app",
+        "o/r",
+        pr,
+        "reader",
+        _reader_verdict_with_finding(),
+        github_repo_id=1,
+        installation_id=99,
+        head_sha=sha,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=10, sent_chars=10, files_sent=1, files_unseen=[],
+            diff_chars=10,
+            sent_chars=10,
+            files_sent=1,
+            files_unseen=[],
             hunks=hunks,
         ),
     )
@@ -3705,9 +3953,7 @@ def test_convergence_for_pairs_by_scored_at_then_id_and_classifies(tmp_path, mon
     assert out["prior_head_sha"] == "a" * 40
     prior_side = [c for c in out["classifications"] if c["side"] == "prior"]
     # rule 1 fires (the finding is re-reported by the identical later verdict)
-    assert [(c["state"], c["rule"]) for c in prior_side] == [
-        ("persisted", "reader:race-condition")
-    ]
+    assert [(c["state"], c["rule"]) for c in prior_side] == [("persisted", "reader:race-condition")]
 
 
 def test_convergence_for_reads_the_stored_hunk_indexes(tmp_path, monkeypatch):
@@ -3717,10 +3963,19 @@ def test_convergence_for_reads_the_stored_hunk_indexes(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _save_reader(sha="a" * 40, hunks={"cache.py": [_H1]})
     silent_later = store.save_review(
-        "o/r", 7, "reader", Verdict(score=0.1, band=Band.CLEARED, threshold=0.30, reasons=[]),
-        github_repo_id=1, installation_id=99, head_sha="b" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        Verdict(score=0.1, band=Band.CLEARED, threshold=0.30, reasons=[]),
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="b" * 40,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=10, sent_chars=10, files_sent=1, files_unseen=[],
+            diff_chars=10,
+            sent_chars=10,
+            files_sent=1,
+            files_unseen=[],
             hunks={"cache.py": [_H2]},
         ),
     )
@@ -3732,15 +3987,21 @@ def test_convergence_for_reads_the_stored_hunk_indexes(tmp_path, monkeypatch):
 def test_convergence_for_none_without_a_prior_or_identity_or_reader_tier(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     only = _save_reader()
-    assert store.convergence_for(only) is None            # no prior
+    assert store.convergence_for(only) is None  # no prior
     det = store.save_review(
-        "o/r", 7, "deterministic", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="c" * 40, source="app",
+        "o/r",
+        7,
+        "deterministic",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="c" * 40,
+        source="app",
     )
-    assert store.convergence_for(det) is None             # not reader tier
+    assert store.convergence_for(det) is None  # not reader tier
     cli = store.save_review("o/r", 7, "reader", VERDICT)  # no identity kwargs
     assert store.convergence_for(cli) is None
-    assert store.convergence_for(10**9) is None           # missing row
+    assert store.convergence_for(10**9) is None  # missing row
 
 
 def test_convergence_for_degrades_a_db_failure_to_an_error_value(tmp_path, monkeypatch):
@@ -3763,17 +4024,32 @@ def test_save_review_persists_the_attribution_on_the_findings_row(tmp_path, monk
     not-attributed, never empty."""
     _db(tmp_path, monkeypatch)
     attributed = Verdict(
-        score=0.62, band=Band.FLAGGED, threshold=0.30,
+        score=0.62,
+        band=Band.FLAGGED,
+        threshold=0.30,
         reasons=[
-            Reason(rule="reader:race-condition", label="a", weight=0.0,
-                   severity="high", file="cache.py", hunks=["3" * 64]),
-            Reason(rule="reader:logic-error", label="b", weight=0.0,
-                   severity="low", file="cache.py"),
+            Reason(
+                rule="reader:race-condition",
+                label="a",
+                weight=0.0,
+                severity="high",
+                file="cache.py",
+                hunks=["3" * 64],
+            ),
+            Reason(
+                rule="reader:logic-error", label="b", weight=0.0, severity="low", file="cache.py"
+            ),
         ],
     )
     vid = store.save_review(
-        "o/r", 1, "reader", attributed,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        1,
+        "reader",
+        attributed,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     with store._get_engine().connect() as conn:
         rows = conn.execute(
@@ -3784,9 +4060,7 @@ def test_save_review_persists_the_attribution_on_the_findings_row(tmp_path, monk
     assert [(r.label, r.hunks) for r in rows] == [("a", ["3" * 64]), ("b", None)]
 
 
-def test_installation_lineage_reads_removed_registrations_and_fails_closed(
-    tmp_path, monkeypatch
-):
+def test_installation_lineage_reads_removed_registrations_and_fails_closed(tmp_path, monkeypatch):
     """The registration this read exists for is the INACTIVE one — a
     transferred repo's old installation is exactly the row `active_repos`
     filters out. An empty claim must still return an empty set: a session
@@ -3807,9 +4081,7 @@ def test_tenant_ids_refuses_both_spellings_rather_than_unioning_them():
     """Silently unioning would mean whichever filter the reader assumed, and
     the two disagree exactly where it matters — a transferred repo."""
     assert store._tenant_ids(101, None) == frozenset({101})
-    assert store._tenant_ids(None, frozenset({101, 303}), frozenset({11})) == frozenset(
-        {101, 303}
-    )
+    assert store._tenant_ids(None, frozenset({101, 303}), frozenset({11})) == frozenset({101, 303})
     assert store._tenant_ids(None, None) is None
     with pytest.raises(ValueError, match="never both"):
         store._tenant_ids(101, frozenset({303}), frozenset({11}))

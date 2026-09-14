@@ -90,9 +90,7 @@ def from_merge_commit(client, *, owner: str, repo: str, number: int, column) -> 
     into a raised exception.
     """
     try:
-        data = client.graphql(
-            _QUERY, variables={"owner": owner, "name": repo, "number": number}
-        )
+        data = client.graphql(_QUERY, variables={"owner": owner, "name": repo, "number": number})
     except Exception as e:  # noqa: BLE001 — one unreadable PR is not fatal
         print(
             f"doug: merge-commit lookup failed for {owner}/{repo}#{number} "

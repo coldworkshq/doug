@@ -150,9 +150,15 @@ def read_order(files: list) -> list:
 # the same commit as any change to how the diff is ordered — a receipt that
 # says "tiered" about a linear read is worse than one that says nothing.
 READ_ORDER = "tiered"
+
+
 def fetch_open_prs(gh, owner: str, repo: str, limit: int) -> list[tuple[PRMetadata, str]]:
     pulls = gh.rest.pulls.list(
-        owner=owner, repo=repo, state="open", sort="created", direction="desc",
+        owner=owner,
+        repo=repo,
+        state="open",
+        sort="created",
+        direction="desc",
         per_page=min(limit, 100),
     ).parsed_data[:limit]
     out = []
@@ -287,9 +293,7 @@ def head_file_text(
     do not exist, and each miss is the expected answer, not a skipped fetch.
     """
     try:
-        content = gh.rest.repos.get_content(
-            owner=owner, repo=repo, path=path, ref=sha
-        ).parsed_data
+        content = gh.rest.repos.get_content(owner=owner, repo=repo, path=path, ref=sha).parsed_data
     except Exception as e:  # noqa: BLE001 — settlement is advisory
         if not (missing_ok and _is_not_found(e)):
             print(
@@ -306,7 +310,7 @@ def head_file_text(
         return None
     try:
         return base64.b64decode(raw).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return None
 
 
@@ -463,13 +467,9 @@ def score_one(
                     )
             schema_dropped: list[reader.ReaderFinding] = []
             if resolve_schema is not None:
-                rv, schema_dropped = settle.drop_disproved_schema_findings(
-                    rv, resolve_schema
-                )
+                rv, schema_dropped = settle.drop_disproved_schema_findings(rv, resolve_schema)
                 if schema_dropped:
-                    rules = ", ".join(
-                        f"reader:{d.category_slug}" for d in schema_dropped
-                    )
+                    rules = ", ".join(f"reader:{d.category_slug}" for d in schema_dropped)
                     print(
                         f"doug: settled {len(schema_dropped)} schema-dependency "
                         f"finding(s) against the live schema ({rules})",
@@ -578,9 +578,7 @@ def score_one(
                 file=sys.stderr,
             )
             verdict = score(meta, threshold=threshold)
-            verdict.reasons.append(
-                Reason(rule="reader-unavailable", label=str(e), weight=0.0)
-            )
+            verdict.reasons.append(Reason(rule="reader-unavailable", label=str(e), weight=0.0))
             return "deterministic", verdict, None, None
     return "deterministic", score(meta, threshold=threshold), None, None
 
@@ -635,9 +633,7 @@ def read_intent(
     surface on the risk verdict (ADR-0007).
     """
     if not (
-        deep_read
-        and intent.enabled_for(reader.installation_from_scope(scope))
-        and reader.enabled()
+        deep_read and intent.enabled_for(reader.installation_from_scope(scope)) and reader.enabled()
     ):
         return None
     try:

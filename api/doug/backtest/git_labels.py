@@ -146,7 +146,11 @@ def _log_records(clone: Path, token: str | None = None) -> list[Commit]:
     """
     out = subprocess.run(
         [
-            "git", "-C", str(clone), "log", "--all",
+            "git",
+            "-C",
+            str(clone),
+            "log",
+            "--all",
             f"--format=%H{_LOG_SEP}%cI{_LOG_SEP}%s{_LOG_SEP}%b{_LOG_REC}",
         ],
         check=True,
@@ -349,9 +353,7 @@ def parse_revert_targets_dated(
     """
     return {
         number: c.date
-        for number, c in _attribute_reverts(
-            commits, titles, earlier=_earlier_by_string
-        ).items()
+        for number, c in _attribute_reverts(commits, titles, earlier=_earlier_by_string).items()
     }
 
 
@@ -385,9 +387,7 @@ def parse_revert_targets_evidenced(
     return _attribute_reverts(commits, titles, earlier=_earlier_by_instant)
 
 
-def parse_revert_targets(
-    subjects: list[str], titles: dict[str, int] | None = None
-) -> set[int]:
+def parse_revert_targets(subjects: list[str], titles: dict[str, int] | None = None) -> set[int]:
     """Undated, subject-only view of `parse_revert_targets_dated`."""
     return set(parse_revert_targets_dated([Commit(subject=s) for s in subjects], titles))
 

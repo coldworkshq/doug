@@ -105,9 +105,7 @@ class CohortMembershipV0(FrozenModel):
     captured_at: datetime
 
     @classmethod
-    def build(
-        cls, *, cohort_id: str, pack: ExamplePackV0, review_job_id: int
-    ) -> Self:
+    def build(cls, *, cohort_id: str, pack: ExamplePackV0, review_job_id: int) -> Self:
         identity = EvaluationIdentityV0.from_pack(pack)
         return cls(
             cohort_id=cohort_id,
@@ -186,9 +184,7 @@ class HostedExamplePackRepository:
         self._validate_ref(ref)
         return self.objects.read(self._key("blobs", ref.sha256))
 
-    def put_membership(
-        self, pack: ExamplePackV0, *, review_job_id: int
-    ) -> MembershipClaimV0:
+    def put_membership(self, pack: ExamplePackV0, *, review_job_id: int) -> MembershipClaimV0:
         desired = CohortMembershipV0.build(
             cohort_id=self.cohort_id, pack=pack, review_job_id=review_job_id
         )
@@ -286,9 +282,7 @@ class HostedExamplePackRepository:
         adjudications: list[ExampleAdjudicationV0] = []
         for key in self._listed("adjudications"):
             adjudication = self._load_model(key, ExampleAdjudicationV0)
-            if key != self._key(
-                "adjudications", f"{adjudication.adjudication_id}.json"
-            ):
+            if key != self._key("adjudications", f"{adjudication.adjudication_id}.json"):
                 raise ExamplePackError("adjudication object name does not match hash")
             pack = packs.get(adjudication.pack_hash)
             if pack is None:
@@ -307,14 +301,10 @@ class HostedExamplePackRepository:
             manifest=manifest,
             blobs=len(self._listed("blobs")),
             packs=tuple(
-                sorted(
-                    packs.values(), key=lambda pack: (pack.captured_at, pack.pack_hash)
-                )
+                sorted(packs.values(), key=lambda pack: (pack.captured_at, pack.pack_hash))
             ),
             memberships=tuple(
                 sorted(memberships, key=lambda membership: membership.eligibility_hash)
             ),
-            adjudications=tuple(
-                sorted(adjudications, key=lambda item: item.adjudication_id)
-            ),
+            adjudications=tuple(sorted(adjudications, key=lambda item: item.adjudication_id)),
         )

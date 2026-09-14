@@ -125,11 +125,7 @@ def _parse_map(lines: list[str], i: int, indent: int) -> tuple[dict, int]:
             j = _next_content(lines, i)
             if j < len(lines) and _indent(lines[j]) > indent:
                 node[key], i = _parse(lines, j, _indent(lines[j]))
-            elif (
-                j < len(lines)
-                and _indent(lines[j]) == indent
-                and _SEQ_RE.match(lines[j].strip())
-            ):
+            elif j < len(lines) and _indent(lines[j]) == indent and _SEQ_RE.match(lines[j].strip()):
                 # YAML lets a sequence sit at its key's own indent.
                 node[key], i = _parse_seq(lines, j, indent)
             else:
@@ -257,7 +253,7 @@ def parse_workflow(text: str) -> list[Job]:
     """
     try:
         doc = parse_yaml_subset(text)
-    except (Unparseable, RecursionError):
+    except Unparseable, RecursionError:
         return []
     jobs = doc.get("jobs") if isinstance(doc, dict) else None
     if not isinstance(jobs, dict):
@@ -437,10 +433,7 @@ def _concluded_success(job: Job, checks: list[CheckResult]) -> bool:
         c
         for c in checks
         if c.app == "github-actions"
-        and (
-            c.name == job.check_name
-            or (job.matrix and c.name.startswith(job.check_name + " ("))
-        )
+        and (c.name == job.check_name or (job.matrix and c.name.startswith(job.check_name + " (")))
     ]
     return bool(matching) and all(c.conclusion == "success" for c in matching)
 

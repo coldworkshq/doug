@@ -51,9 +51,7 @@ def measure():
     engine = store._get_engine()
     query_count = 0
 
-    def before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
-    ):
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
         nonlocal query_count
         query_count += 1
 
@@ -80,9 +78,7 @@ def measure():
 
     print(f"Results fetched: {len(results)}")
     print(f"SQL Queries per call: {measured_queries}")
-    print(
-        f"Average execution time: {avg_time_ms:.3f} ms over {iterations} iterations"
-    )
+    print(f"Average execution time: {avg_time_ms:.3f} ms over {iterations} iterations")
 
     # Cleanup DB
     os.remove(db_path)

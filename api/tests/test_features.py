@@ -31,9 +31,7 @@ def test_sensitive_accesscontrol_and_rbac():
 
 def test_sensitive_filename_substring():
     # grafana#123834 — secrets in the filename, not as a directory segment.
-    assert extract_features(
-        _pr(files=["pkg/setting/setting_secrets_manager.go"])
-    ).sensitive_path
+    assert extract_features(_pr(files=["pkg/setting/setting_secrets_manager.go"])).sensitive_path
 
 
 def test_sensitive_requires_whole_segment():
@@ -103,16 +101,28 @@ def test_pure_modification_requires_known_statuses():
 
 def test_pure_modification_all_files_modified():
     pr = PRMetadata(
-        number=1, title="t", author="d", files=["a.py", "b.py"],
-        additions=25, deletions=5, files_added=0, files_modified=2,
+        number=1,
+        title="t",
+        author="d",
+        files=["a.py", "b.py"],
+        additions=25,
+        deletions=5,
+        files_added=0,
+        files_modified=2,
     )
     assert extract_features(pr).pure_modification
 
 
 def test_new_file_breaks_pure_modification():
     pr = PRMetadata(
-        number=1, title="t", author="d", files=["a.py", "b.py"],
-        additions=25, deletions=5, files_added=1, files_modified=1,
+        number=1,
+        title="t",
+        author="d",
+        files=["a.py", "b.py"],
+        additions=25,
+        deletions=5,
+        files_added=1,
+        files_modified=1,
     )
     assert not extract_features(pr).pure_modification
 
@@ -164,7 +174,7 @@ def test_committed_data_under_docs_routes_as_prose_but_real_config_does_not(monk
     # The first draft of this rule reasoned only from THIS repo's layout, which
     # Doug flagged on b767f2e. These stay tier 0 wherever they live.
     assert not features._is_prose("docs/openapi.json")
-    assert not features._is_prose("docs/api/openapi.v2.json")   # versioned stem
+    assert not features._is_prose("docs/api/openapi.v2.json")  # versioned stem
     assert not features._is_prose("docs/reference/swagger.json")
     assert not features._is_prose("docs/schema.yaml")
     assert not features._is_prose("docs/graphql.json")

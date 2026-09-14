@@ -191,9 +191,7 @@ def test_dated_targets_report_when_the_label_became_knowable():
         Commit(date="2026-01-02T00:00:00+00:00", subject="Add rate limiter (#40)"),
     ]
     titles = pr_titles_from_subjects([c.subject for c in entries])
-    assert parse_revert_targets_dated(entries, titles) == {
-        40: "2026-05-01T00:00:00+00:00"
-    }
+    assert parse_revert_targets_dated(entries, titles) == {40: "2026-05-01T00:00:00+00:00"}
 
 
 def test_dated_targets_keep_the_earliest_revert():
@@ -239,8 +237,12 @@ def test_sha_resolves_revert_whose_subject_has_no_number():
 def test_abbreviated_sha_resolves():
     full = "c" * 40
     commits = [
-        Commit(sha="d" * 40, date="2026-05-01T00:00:00+00:00",
-               subject='Revert "Thing"', body=f"This reverts commit {full[:8]}."),
+        Commit(
+            sha="d" * 40,
+            date="2026-05-01T00:00:00+00:00",
+            subject='Revert "Thing"',
+            body=f"This reverts commit {full[:8]}.",
+        ),
         Commit(sha=full, date="2026-01-01T00:00:00+00:00", subject="Thing (#5)"),
     ]
     assert parse_revert_targets_dated(commits, {}) == {5: "2026-05-01T00:00:00+00:00"}
@@ -249,8 +251,12 @@ def test_abbreviated_sha_resolves():
 def test_ambiguous_sha_prefix_is_not_guessed():
     # Two commits share a 7-char prefix; resolving either would be a coin flip.
     commits = [
-        Commit(sha="e" * 40, date="2026-05-01T00:00:00+00:00",
-               subject='Revert "Thing"', body="This reverts commit " + "f" * 7 + "."),
+        Commit(
+            sha="e" * 40,
+            date="2026-05-01T00:00:00+00:00",
+            subject='Revert "Thing"',
+            body="This reverts commit " + "f" * 7 + ".",
+        ),
         Commit(sha="f" * 7 + "1" * 33, date="2026-01-01T00:00:00+00:00", subject="A (#1)"),
         Commit(sha="f" * 7 + "2" * 33, date="2026-01-01T00:00:00+00:00", subject="B (#2)"),
     ]
@@ -259,8 +265,12 @@ def test_ambiguous_sha_prefix_is_not_guessed():
 
 def test_sha_of_a_commit_with_no_pr_number_resolves_nothing():
     commits = [
-        Commit(sha="1" * 40, date="2026-05-01T00:00:00+00:00",
-               subject='Revert "Direct push"', body="This reverts commit " + "2" * 40 + "."),
+        Commit(
+            sha="1" * 40,
+            date="2026-05-01T00:00:00+00:00",
+            subject='Revert "Direct push"',
+            body="This reverts commit " + "2" * 40 + ".",
+        ),
         Commit(sha="2" * 40, date="2026-01-01T00:00:00+00:00", subject="Direct push, no PR"),
     ]
     assert parse_revert_targets_dated(commits, {}) == {}
@@ -269,8 +279,12 @@ def test_sha_of_a_commit_with_no_pr_number_resolves_nothing():
 def test_body_marker_alone_is_not_treated_as_a_revert():
     # "Reland X" carries the marker but is the opposite of a revert.
     commits = [
-        Commit(sha="3" * 40, date="2026-05-01T00:00:00+00:00",
-               subject="Reland: Add caching", body="This reverts commit " + "4" * 40 + "."),
+        Commit(
+            sha="3" * 40,
+            date="2026-05-01T00:00:00+00:00",
+            subject="Reland: Add caching",
+            body="This reverts commit " + "4" * 40 + ".",
+        ),
         Commit(sha="4" * 40, date="2026-01-01T00:00:00+00:00", subject="Revert caching (#9)"),
     ]
     assert parse_revert_targets_dated(commits, {}) == {}
@@ -281,11 +295,18 @@ def test_the_evidenced_variant_keeps_the_reverting_commit_the_dated_one_drops():
     # parse_revert_targets_dated returns only a date. Live-≡-backtest
     # equivalence for this variant, and the instant/tie-break amendments it
     # carries, are pinned in test_adjudicate.py.
-    revert = Commit(sha="7" * 40, date="2026-05-01T00:00:00+00:00",
-                    subject='Revert "Wire up config metrics correctly"',
-                    body="This reverts commit " + "8" * 40 + ".")
-    commits = [revert, Commit(sha="8" * 40, date="2026-01-02T00:00:00+00:00",
-                              subject="Wire up config metrics (#77)")]
+    revert = Commit(
+        sha="7" * 40,
+        date="2026-05-01T00:00:00+00:00",
+        subject='Revert "Wire up config metrics correctly"',
+        body="This reverts commit " + "8" * 40 + ".",
+    )
+    commits = [
+        revert,
+        Commit(
+            sha="8" * 40, date="2026-01-02T00:00:00+00:00", subject="Wire up config metrics (#77)"
+        ),
+    ]
     assert parse_revert_targets_evidenced(commits, {}) == {77: revert}
 
 

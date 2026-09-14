@@ -115,8 +115,7 @@ def _enable_capture(monkeypatch, root):
 def _captured_packs(root) -> list[ExamplePackV0]:
     directory = root / "packs/sha256"
     return [
-        ExamplePackV0.model_validate_json(path.read_bytes())
-        for path in sorted(directory.iterdir())
+        ExamplePackV0.model_validate_json(path.read_bytes()) for path in sorted(directory.iterdir())
     ]
 
 
@@ -131,9 +130,7 @@ def _pr(**kw) -> PRMetadata:
 
 
 def _rv(risk_score: int, findings: list | None = None) -> reader.ReaderVerdict:
-    return reader.ReaderVerdict(
-        risk_score=risk_score, rationale="test", findings=findings or []
-    )
+    return reader.ReaderVerdict(risk_score=risk_score, rationale="test", findings=findings or [])
 
 
 def test_disabled_without_env(monkeypatch):
@@ -173,9 +170,7 @@ def test_read_diff_raises_on_refusal():
     [PAYLOAD, {**PAYLOAD, "risk_score": 5, "findings": []}],
     ids=["findings", "zero-findings"],
 )
-def test_read_diff_captures_exact_request_output_and_success(
-    tmp_path, monkeypatch, payload
-):
+def test_read_diff_captures_exact_request_output_and_success(tmp_path, monkeypatch, payload):
     _enable_capture(monkeypatch, tmp_path)
     client = FakeClient(payload=payload, usage=(321, 45))
     diff = "+ authorization is source text, not a request header"
@@ -199,9 +194,7 @@ def test_read_diff_captures_exact_request_output_and_success(
 
 def test_read_diff_captures_partial_status_and_exact_coverage(tmp_path, monkeypatch):
     _enable_capture(monkeypatch, tmp_path)
-    diff = reader.diff_chunk(
-        "large.py", "modified", 1, 0, "+" + "x" * reader.DIFF_BUDGET
-    )
+    diff = reader.diff_chunk("large.py", "modified", 1, 0, "+" + "x" * reader.DIFF_BUDGET)
     pr = _pr(changed_files=2, files_dropped=["binary.dat"])
 
     with example_pack_capture.capture_scope(_capture_scope()):
@@ -215,9 +208,7 @@ def test_read_diff_captures_partial_status_and_exact_coverage(tmp_path, monkeypa
     assert pack.coverage == reader._capture_coverage(pr, diff)
 
 
-def test_read_diff_captures_transport_stop_parse_and_spend_failures(
-    tmp_path, monkeypatch
-):
+def test_read_diff_captures_transport_stop_parse_and_spend_failures(tmp_path, monkeypatch):
     terminals = tmp_path / "terminals"
     terminals.mkdir()
 
@@ -239,9 +230,7 @@ def test_read_diff_captures_transport_stop_parse_and_spend_failures(
     _enable_capture(monkeypatch, stop_root)
     with example_pack_capture.capture_scope(_capture_scope()):
         with pytest.raises(reader.ReaderError, match="read stopped with refusal"):
-            reader.read_diff(
-                _pr(), "+ x", scope=SCOPE, client=FakeClient(stop_reason="refusal")
-            )
+            reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(stop_reason="refusal"))
     (stopped,) = _captured_packs(stop_root)
     assert stopped.failure.phase == "stop_reason"
     assert stopped.raw_output is not None
@@ -308,8 +297,7 @@ def test_transport_failure_capture_never_persists_exception_headers_or_secrets(
 ):
     _enable_capture(monkeypatch, tmp_path)
     unsafe = RuntimeError(
-        "response headers={'authorization': 'Bearer secret-token', "
-        "'cookie': 'session-secret'}"
+        "response headers={'authorization': 'Bearer secret-token', 'cookie': 'session-secret'}"
     )
 
     with example_pack_capture.capture_scope(_capture_scope()):
@@ -353,9 +341,7 @@ def test_risk_and_intent_captures_have_distinct_instruments(tmp_path, monkeypatc
     )
 
 
-def test_disabled_capture_writes_nothing_and_preserves_exact_sdk_kwargs(
-    tmp_path, monkeypatch
-):
+def test_disabled_capture_writes_nothing_and_preserves_exact_sdk_kwargs(tmp_path, monkeypatch):
     sentinel = tmp_path / "disabled"
     monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
     monkeypatch.setenv("DOUG_EXAMPLE_PACK_DIR", str(sentinel))
@@ -379,9 +365,7 @@ def test_disabled_capture_writes_nothing_and_preserves_exact_sdk_kwargs(
 
 
 @pytest.mark.parametrize("attempt_kind", ["risk", "intent"])
-def test_disabled_capture_never_canonicalizes_the_full_request(
-    monkeypatch, attempt_kind
-):
+def test_disabled_capture_never_canonicalizes_the_full_request(monkeypatch, attempt_kind):
     """Default-off instrumentation must not inspect or serialize the prompt."""
     monkeypatch.delenv("DOUG_EXAMPLE_PACK_CAPTURE", raising=False)
     monkeypatch.delenv("DOUG_EXAMPLE_PACK_DIR", raising=False)
@@ -392,17 +376,13 @@ def test_disabled_capture_never_canonicalizes_the_full_request(
         canonicalized.append(value)
         return real_canonical(value)
 
-    monkeypatch.setattr(
-        example_pack_capture, "canonical_json_bytes", observe_canonicalization
-    )
+    monkeypatch.setattr(example_pack_capture, "canonical_json_bytes", observe_canonicalization)
     client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
 
     if attempt_kind == "risk":
         returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
     else:
-        returned = reader.read_with_decisions(
-            _pr(), "+ x", DOCS, scope=SCOPE, client=client
-        )
+        returned = reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE, client=client)
 
     assert returned.risk_score == 62
     assert client.messages.calls == 1
@@ -460,25 +440,19 @@ def test_request_capture_serialization_failure_cannot_change_the_live_read(
     def fail_canonicalization(_value):
         raise RuntimeError("request capture unavailable")
 
-    monkeypatch.setattr(
-        example_pack_capture, "canonical_json_bytes", fail_canonicalization
-    )
+    monkeypatch.setattr(example_pack_capture, "canonical_json_bytes", fail_canonicalization)
     client = FakeClient(payload=PAYLOAD if attempt_kind == "risk" else INTENT_PAYLOAD)
 
     with example_pack_capture.capture_scope(_capture_scope()):
         if attempt_kind == "risk":
             returned = reader.read_diff(_pr(), "+ x", scope=SCOPE, client=client)
         else:
-            returned = reader.read_with_decisions(
-                _pr(), "+ x", DOCS, scope=SCOPE, client=client
-            )
+            returned = reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE, client=client)
 
     assert returned.risk_score == 62
     assert client.messages.calls == 1
     expected_schema = reader.SCHEMA if attempt_kind == "risk" else reader.INTENT_SCHEMA
-    expected_system = (
-        reader.SYSTEM if attempt_kind == "risk" else reader.DECISION_INTENT_SYSTEM
-    )
+    expected_system = reader.SYSTEM if attempt_kind == "risk" else reader.DECISION_INTENT_SYSTEM
     expected_content = (
         reader._user_text(_pr(), "+ x")
         if attempt_kind == "risk"
@@ -495,11 +469,7 @@ def test_request_capture_serialization_failure_cannot_change_the_live_read(
         "messages": [{"role": "user", "content": expected_content}],
     }
     assert not (tmp_path / "packs").exists()
-    diagnostics = [
-        line
-        for line in capsys.readouterr().err.splitlines()
-        if "example-pack" in line
-    ]
+    diagnostics = [line for line in capsys.readouterr().err.splitlines() if "example-pack" in line]
     assert len(diagnostics) == 1
     assert "example-pack capture failed" in diagnostics[0]
     assert "RuntimeError" in diagnostics[0]
@@ -665,9 +635,7 @@ def test_a_read_with_no_decisions_to_judge_against_charges_nothing(monkeypatch):
     anything, so that refusal must not burn a unit of a tenant's monthly
     budget for a read nobody ever made."""
     charged: list[str] = []
-    monkeypatch.setattr(
-        store, "record_deep_read", lambda scope, cap: charged.append(scope) or True
-    )
+    monkeypatch.setattr(store, "record_deep_read", lambda scope, cap: charged.append(scope) or True)
 
     with pytest.raises(reader.ReaderError):
         reader.read_with_decisions(_pr(), "+ x", [], scope=SCOPE, client=FakeClient())
@@ -924,7 +892,8 @@ def test_score_one_degrades_to_deterministic_when_the_api_is_down(monkeypatch):
     monkeypatch.setenv("DOUG_READER", "1")
     real = reader.read_diff  # bind before patching, or the lambda calls itself
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda pr, diff, *, scope: real(
             pr, diff, scope=scope, client=RaisingClient(RuntimeError("boom"))
         ),
@@ -1002,7 +971,9 @@ def test_the_two_reads_of_one_pr_report_their_costs_separately(capsys):
     """
     reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient(usage=(8000, 500)))
     reader.read_with_decisions(
-        _pr(), "+ x", DOCS,
+        _pr(),
+        "+ x",
+        DOCS,
         scope=SCOPE,
         client=FakeClient(payload=INTENT_PAYLOAD, usage=(9500, 700)),
     )
@@ -1059,19 +1030,14 @@ def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
     reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=attr_client)
 
     assert verify_client.messages.last_kwargs["model"] == reader.MECHANICAL_MODEL
-    assert (
-        verify_client.messages.last_kwargs["output_config"]["effort"]
-        == reader.MECHANICAL_EFFORT
-    )
+    assert verify_client.messages.last_kwargs["output_config"]["effort"] == reader.MECHANICAL_EFFORT
     assert attr_client.requests[0]["model"] == reader.MECHANICAL_MODEL
     assert attr_client.requests[0]["output_config"]["effort"] == reader.MECHANICAL_EFFORT
 
     verify_line, attribution_line = _read_lines(capsys)
     assert "kind=verify" in verify_line
     assert "kind=attribution" in attribution_line
-    assert all(
-        "model=claude-sonnet-5" in line for line in (verify_line, attribution_line)
-    )
+    assert all("model=claude-sonnet-5" in line for line in (verify_line, attribution_line))
 
 
 # --- ADR-0029: the transport moved to Vertex, by direction, unmeasured ---
@@ -1170,12 +1136,8 @@ def test_the_capture_records_the_transport_that_actually_ran(monkeypatch):
     """
     recorded: list[str] = []
 
-    monkeypatch.setattr(
-        reader.example_pack_capture, "capture_requested", lambda *a, **k: True
-    )
-    monkeypatch.setattr(
-        reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False
-    )
+    monkeypatch.setattr(reader.example_pack_capture, "capture_requested", lambda *a, **k: True)
+    monkeypatch.setattr(reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False)
     monkeypatch.setattr(
         reader.example_pack_capture,
         "record_attempt",
@@ -1350,6 +1312,7 @@ def test_a_read_whose_usage_the_sdk_withheld_says_unknown_not_zero(capsys):
 
 # --- ADR-0002: the reader's frozen prompt is the probe's, verbatim -------
 
+
 def test_both_clients_bound_the_whole_read_not_just_one_attempt(monkeypatch):
     """Constructing the client is where the bound is applied, and it is the
     half a constants-only test cannot see.
@@ -1518,9 +1481,10 @@ def test_prompt_hash_is_stable_and_changes_with_the_frozen_bytes(monkeypatch):
     edit would keep stamping old verdicts' hash on new-instrument reads."""
     import hashlib
 
-    assert reader.PROMPT_HASH == hashlib.sha256(
-        (reader.SYSTEM + repr(reader.SCHEMA)).encode()
-    ).hexdigest()
+    assert (
+        reader.PROMPT_HASH
+        == hashlib.sha256((reader.SYSTEM + repr(reader.SCHEMA)).encode()).hexdigest()
+    )
 
     monkeypatch.setattr(reader, "SYSTEM", reader.SYSTEM + " ")
     assert reader._compute_prompt_hash() != reader.PROMPT_HASH
@@ -1533,9 +1497,11 @@ def _git_show(ref_path: str) -> str | None:
     try:
         out = subprocess.run(
             ["git", "show", ref_path],
-            cwd=_REPO_ROOT, capture_output=True, check=True,
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            check=True,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except OSError, subprocess.CalledProcessError:
         return None
     return out.stdout.decode("utf-8")
 
@@ -1554,9 +1520,7 @@ def test_a_citation_is_re_derivable_by_a_third_party_with_git_and_sed():
     Citation carries head_sha: `git show <path>` alone has nothing to resolve.
     """
     rel = "api/doug/models.py"
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True
-    )
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True)
     if sha.returncode != 0:
         pytest.skip("not a git checkout")
     head_sha = sha.stdout.decode().strip()
@@ -1572,7 +1536,10 @@ def test_a_citation_is_re_derivable_by_a_third_party_with_git_and_sed():
     # The third party's route: same blob, different tool, no shared code.
     piped = subprocess.run(
         f"git show {head_sha}:{rel} | sed -n '10,14p'",
-        cwd=_REPO_ROOT, shell=True, capture_output=True, check=True,
+        cwd=_REPO_ROOT,
+        shell=True,
+        capture_output=True,
+        check=True,
     ).stdout
     assert c.sha256 == hashlib.sha256(piped).hexdigest()
 
@@ -1627,15 +1594,26 @@ def test_the_verify_schema_cannot_express_a_conclusion():
     item = reader.VERIFY_SCHEMA["properties"]["checks"]["items"]
     assert item["additionalProperties"] is False
     assert set(item["properties"]) == {
-        "file", "line_start", "line_end", "quoted_text", "predicate",
+        "file",
+        "line_start",
+        "line_end",
+        "quoted_text",
+        "predicate",
     }
     with pytest.raises(ValidationError):
         reader.VerifyResponse.model_validate(
-            {"checks": [{
-                "file": "f.py", "line_start": 1, "line_end": 1,
-                "quoted_text": "X = 1", "predicate": "constant_value_is",
-                "refuted": True,
-            }]}
+            {
+                "checks": [
+                    {
+                        "file": "f.py",
+                        "line_start": 1,
+                        "line_end": 1,
+                        "quoted_text": "X = 1",
+                        "predicate": "constant_value_is",
+                        "refuted": True,
+                    }
+                ]
+            }
         )
 
 
@@ -1664,10 +1642,15 @@ def test_the_predicate_vocabulary_is_one_member_and_permanent():
     enum = reader.VERIFY_SCHEMA["properties"]["checks"]["items"]["properties"]["predicate"]["enum"]
     assert enum == ["constant_value_is"]
     with pytest.raises(ValidationError):
-        reader.VerifyCheck.model_validate({
-            "file": "f.py", "line_start": 1, "line_end": 1,
-            "quoted_text": "x", "predicate": "path_does_not_exist",
-        })
+        reader.VerifyCheck.model_validate(
+            {
+                "file": "f.py",
+                "line_start": 1,
+                "line_end": 1,
+                "quoted_text": "x",
+                "predicate": "path_does_not_exist",
+            }
+        )
 
 
 def test_the_verify_tier_does_not_move_the_shipped_prompt_hash():
@@ -1680,9 +1663,10 @@ def test_the_verify_tier_does_not_move_the_shipped_prompt_hash():
     verdicts written before and after this tier landed stay comparable on
     prompt identity.
     """
-    assert reader.PROMPT_HASH == hashlib.sha256(
-        (reader.SYSTEM + repr(reader.SCHEMA)).encode()
-    ).hexdigest()
+    assert (
+        reader.PROMPT_HASH
+        == hashlib.sha256((reader.SYSTEM + repr(reader.SCHEMA)).encode()).hexdigest()
+    )
     assert reader.VERIFY_SYSTEM not in reader.SYSTEM
     assert "checks" not in repr(reader.SCHEMA)
 
@@ -1748,16 +1732,24 @@ def _attr_fixture():
 
     patch_a = "@@ -1,2 +1,2 @@\n-x\n+y\n"
     patch_b = "@@ -9,2 +9,2 @@\n-p\n+q\n@@ -20,2 +20,2 @@\n-r\n+s\n"
-    diff = reader.CHUNK_SEPARATOR.join([
-        reader.diff_chunk("a.py", "modified", 1, 1, patch_a),
-        reader.diff_chunk("b.py", "modified", 2, 2, patch_b),
-    ])
+    diff = reader.CHUNK_SEPARATOR.join(
+        [
+            reader.diff_chunk("a.py", "modified", 1, 1, patch_a),
+            reader.diff_chunk("b.py", "modified", 2, 2, patch_b),
+        ]
+    )
     cov = reader.coverage(diff)
     reasons = [
-        Reason(rule="reader:race-condition", label="finding on a", weight=0.0,
-               severity="high", file="a.py"),
-        Reason(rule="reader:logic-error", label="finding on b", weight=0.0,
-               severity="low", file="b.py"),
+        Reason(
+            rule="reader:race-condition",
+            label="finding on a",
+            weight=0.0,
+            severity="high",
+            file="a.py",
+        ),
+        Reason(
+            rule="reader:logic-error", label="finding on b", weight=0.0, severity="low", file="b.py"
+        ),
         Reason(rule="size-large", label="not a reader finding", weight=0.4),
     ]
     return diff, cov, reasons
@@ -1768,10 +1760,14 @@ def test_attribute_findings_converts_valid_picks_to_stored_hashes():
     conversion to content hashes — the exact task shape the pre-registered
     span-verification pass validated."""
     diff, cov, reasons = _attr_fixture()
-    client = _AttrClient({"attributions": [
-        {"finding": 0, "hunks": [1]},
-        {"finding": 1, "hunks": [2]},
-    ]})
+    client = _AttrClient(
+        {
+            "attributions": [
+                {"finding": 0, "hunks": [1]},
+                {"finding": 1, "hunks": [2]},
+            ]
+        }
+    )
     n = reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=client)
     assert n == 2
     assert reasons[0].hunks == [cov.hunks["a.py"][0]]
@@ -1787,10 +1783,14 @@ def test_attribute_findings_abstention_and_bad_picks_store_nothing():
     is a failed validation contract. Both leave hunks=None — the classifier
     reads that as an abstention, never a guess."""
     diff, cov, reasons = _attr_fixture()
-    client = _AttrClient({"attributions": [
-        {"finding": 0, "hunks": []},
-        {"finding": 1, "hunks": [9]},
-    ]})
+    client = _AttrClient(
+        {
+            "attributions": [
+                {"finding": 0, "hunks": []},
+                {"finding": 1, "hunks": [9]},
+            ]
+        }
+    )
     n = reader.attribute_findings(reasons, diff, cov, scope="attribution:1", client=client)
     assert n == 0
     assert reasons[0].hunks is None
@@ -1819,8 +1819,11 @@ def test_attribute_findings_no_call_without_candidates():
     diff, cov, _ = _attr_fixture()
     client = _AttrClient({"attributions": []})
     n = reader.attribute_findings(
-        [Reason(rule="size-large", label="x", weight=0.4)], diff, cov,
-        scope="attribution:1", client=client,
+        [Reason(rule="size-large", label="x", weight=0.4)],
+        diff,
+        cov,
+        scope="attribution:1",
+        client=client,
     )
     assert n == 0
     assert client.requests == []
@@ -1832,9 +1835,12 @@ def test_attribution_prompt_pair_is_frozen_separately():
     assert reader.ATTRIBUTION_PROMPT_HASH != reader.PROMPT_HASH
     import hashlib as _h
 
-    assert reader.ATTRIBUTION_PROMPT_HASH == _h.sha256(
-        (reader.ATTRIBUTION_SYSTEM + repr(reader.ATTRIBUTION_SCHEMA)).encode()
-    ).hexdigest()
+    assert (
+        reader.ATTRIBUTION_PROMPT_HASH
+        == _h.sha256(
+            (reader.ATTRIBUTION_SYSTEM + repr(reader.ATTRIBUTION_SCHEMA)).encode()
+        ).hexdigest()
+    )
 
 
 # --- Workload Identity Federation ------------------------------------------
@@ -1955,9 +1961,7 @@ def test_the_first_party_client_uses_a_key_when_federation_is_absent(monkeypatch
         ("us-east5", "us-east5-aiplatform.googleapis.com"),
     ],
 )
-def test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes(
-    location, host
-):
+def test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes(location, host):
     """CLOUD_ML_REGION=us has to mean the same thing to the SDK and to the
     deploy gate, or the gate proves a route the service never calls.
 
@@ -2073,9 +2077,7 @@ def test_a_mounted_key_wins_so_the_rollback_actually_rolls_back(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     captured.clear()
     reader._build_client(90.0)
-    assert isinstance(
-        captured.get("credentials"), anthropic.WorkloadIdentityCredentials
-    )
+    assert isinstance(captured.get("credentials"), anthropic.WorkloadIdentityCredentials)
 
 
 def test_the_federation_call_matches_the_installed_sdk(monkeypatch):
@@ -2124,15 +2126,9 @@ def test_the_federation_call_matches_the_installed_sdk(monkeypatch):
 def _captured_manifest_kwargs(monkeypatch) -> dict:
     """Run one risk read with capture on and return record_attempt's kwargs."""
     seen: dict = {}
-    monkeypatch.setattr(
-        reader.example_pack_capture, "capture_requested", lambda *a, **k: True
-    )
-    monkeypatch.setattr(
-        reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False
-    )
-    monkeypatch.setattr(
-        reader.example_pack_capture, "record_attempt", lambda **kw: seen.update(kw)
-    )
+    monkeypatch.setattr(reader.example_pack_capture, "capture_requested", lambda *a, **k: True)
+    monkeypatch.setattr(reader.example_pack_capture, "capture_suppressed", lambda *a, **k: False)
+    monkeypatch.setattr(reader.example_pack_capture, "record_attempt", lambda **kw: seen.update(kw))
     reader.read_diff(_pr(), "+ x", scope=SCOPE, client=FakeClient())
     return seen
 

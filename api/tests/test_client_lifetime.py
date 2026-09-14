@@ -42,8 +42,7 @@ def _unbound_client_chains() -> list[str]:
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             if name in CLIENT_FACTORIES:
                 found.append(
-                    f"{path.relative_to(SOURCE_ROOT)}:{node.value.lineno} "
-                    f"— {name}(...).{node.attr}"
+                    f"{path.relative_to(SOURCE_ROOT)}:{node.value.lineno} — {name}(...).{node.attr}"
                 )
     return found
 

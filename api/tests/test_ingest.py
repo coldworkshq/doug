@@ -79,9 +79,7 @@ def test_enqueue_persists_the_event_time_base_and_claim_exposes_it(tmp_path, mon
     to reconstruct after the target branch moves."""
     url = _db(tmp_path, monkeypatch)
 
-    job_id = _enqueue(
-        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=BASE_SHA
-    )
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=BASE_SHA)
 
     assert _jobs(url)[0]["base_sha"] == BASE_SHA
     claimed = ingest.claim()
@@ -97,27 +95,19 @@ def test_enqueue_rejects_an_unknown_base_for_new_work(tmp_path, monkeypatch, bas
     assert store.enabled()
 
     with pytest.raises(ValueError, match="base_sha"):
-        ingest.enqueue(
-            INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=base_sha
-        )
+        ingest.enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha=base_sha)
 
     assert _jobs(url) == []
 
 
-def test_same_head_with_a_different_base_keeps_head_only_deduplication(
-    tmp_path, monkeypatch
-):
+def test_same_head_with_a_different_base_keeps_head_only_deduplication(tmp_path, monkeypatch):
     """Capture-only does not quietly redefine paid-work identity. Until
     verdicts, diffs, receipts, and outcomes move together, a base change at
     the same head remains one job and retains the first admitted base."""
     url = _db(tmp_path, monkeypatch)
-    first = _enqueue(
-        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40
-    )
+    first = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40)
 
-    duplicate = _enqueue(
-        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40
-    )
+    duplicate = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40)
 
     assert duplicate is None
     assert [(j["id"], j["base_sha"]) for j in _jobs(url)] == [(first, "1" * 40)]
@@ -127,15 +117,11 @@ def test_revive_replaces_the_base_with_the_new_admission_observation(tmp_path, m
     """A revived row represents work admitted again, not an immutable record
     of the failed attempt. Its base must describe the work now pending."""
     url = _db(tmp_path, monkeypatch)
-    job_id = _enqueue(
-        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40
-    )
+    job_id = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="1" * 40)
     claimed = ingest.claim()
     assert ingest.supersede(job_id, claim_generation=claimed["claim_generation"])
 
-    revived = _enqueue(
-        INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40
-    )
+    revived = _enqueue(INSTALL, REPO_ID, REPO, 7, "a" * 40, base_sha="2" * 40)
 
     assert revived == job_id
     assert _jobs(url)[0]["base_sha"] == "2" * 40
@@ -491,9 +477,7 @@ def test_complete_clears_a_stale_error_from_earlier_failed_attempts(tmp_path, mo
     assert row["status"] == "done" and row["error"] is None
 
 
-def test_a_late_complete_after_reclaim_cannot_finish_under_a_second_claim(
-    tmp_path, monkeypatch
-):
+def test_a_late_complete_after_reclaim_cannot_finish_under_a_second_claim(tmp_path, monkeypatch):
     """The lease reclaim path only prevents double-spend if terminal updates
     refuse to write when the claim is no longer held. Without the fence, a
     slow worker A's complete() after reclaim+reclaim by B marks B's in-flight
@@ -556,9 +540,7 @@ def test_terminals_are_no_ops_unless_the_job_is_running(tmp_path, monkeypatch):
     assert {j["id"]: j for j in _jobs(url)}[job_id]["attempts"] == 0
 
 
-def test_reclaim_stalled_revives_a_running_row_with_null_started_at(
-    tmp_path, monkeypatch
-):
+def test_reclaim_stalled_revives_a_running_row_with_null_started_at(tmp_path, monkeypatch):
     """started_at < cutoff is unknown for NULL, so a running row with a
     missing lease timestamp would otherwise sit immortal — the silent
     never-reviewed SHA reclaim was added to prevent."""
@@ -617,9 +599,7 @@ def test_the_dedupe_marker_still_matches_the_real_constraint_name():
     assert any("uq_review_job" in marker for marker in ingest._DEDUPE_COLLISION)
 
 
-def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(
-    tmp_path, monkeypatch
-):
+def test_a_live_event_revives_a_failed_job_without_waiting_out_the_cooloff(tmp_path, monkeypatch):
     """The cooloff belongs to the caller, not to the row. A reopen, a
     force-push back to the SHA whose review failed during an outage, or the
     drain catching up to a head that moved — each is something that happened
@@ -667,9 +647,7 @@ def test_a_reconcile_sweep_does_not_re_arm_a_job_that_just_burned_its_attempts(
     assert row["status"] == "failed" and row["attempts"] == 3
 
 
-def test_a_reconcile_sweep_revives_a_failed_job_once_its_cooloff_has_passed(
-    tmp_path, monkeypatch
-):
+def test_a_reconcile_sweep_revives_a_failed_job_once_its_cooloff_has_passed(tmp_path, monkeypatch):
     """The cooloff bounds the retry rate; it must not strand the PR. A genuine
     outage — wiped credentials, a provider down — has to heal on a later
     restart, which is the whole reason revive exists."""
@@ -691,9 +669,7 @@ def test_a_reconcile_sweep_revives_a_failed_job_once_its_cooloff_has_passed(
     assert row["status"] == "pending" and row["attempts"] == 0
 
 
-def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(
-    tmp_path, monkeypatch
-):
+def test_a_failed_job_with_no_finish_time_is_healed_rather_than_stranded(tmp_path, monkeypatch):
     """A 'failed' row with no finished_at should not exist — fail() writes
     finished_at in the same UPDATE that sets 'failed' at the cap — and that is
     precisely why the reconcile branch has to answer for the state anyway. The
@@ -751,9 +727,7 @@ def test_a_superseded_job_revives_immediately_on_either_path(tmp_path, monkeypat
     assert {j["id"]: j for j in _jobs(url)}[job_id]["status"] == "pending"
 
 
-def test_the_cooloff_hold_is_reportable_and_only_for_a_row_actually_holding(
-    tmp_path, monkeypatch
-):
+def test_the_cooloff_hold_is_reportable_and_only_for_a_row_actually_holding(tmp_path, monkeypatch):
     """enqueue answers "already queued" and "held back by the cooloff" with the
     same None, and reconcile has no other way to tell them apart — which is why
     the cooloff was the one reconcile skip with no log line, while draft/fork

@@ -67,9 +67,7 @@ def test_historical_probe_coverage_does_not_change_concurrent_live_coverage(monk
     import backfill_ledger
     import llm_probe
 
-    diff = backfill_ledger.reader.diff_chunk(
-        "historical.py", "modified", 1, 0, "x" * 68_000
-    )
+    diff = backfill_ledger.reader.diff_chunk("historical.py", "modified", 1, 0, "x" * 68_000)
     live_budget = backfill_ledger.reader.DIFF_BUDGET
     entered = Event()
     release = Event()

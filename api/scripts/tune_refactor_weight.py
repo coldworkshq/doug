@@ -138,9 +138,7 @@ def main() -> int:
         "2. no loss at @30% or @10% vs w=0": (
             b[0.30] >= baseline[0.30] and b[0.10] >= baseline[0.10]
         ),
-        "3. plateau: an adjacent weight also beats w=0": any(
-            gains[n] > 0 for n in neighbours
-        ),
+        "3. plateau: an adjacent weight also beats w=0": any(gains[n] > 0 for n in neighbours),
     }
     print()
     for name, ok in gates.items():

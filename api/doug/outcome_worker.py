@@ -76,9 +76,7 @@ def _repository_evidence(batch, clone_root: Path):
     # directory still keys on the JOB's installation, so two installations
     # adjudicating the same repo id in one invocation cannot collide in a
     # half-written clone.
-    token, default_branch = _github_context(
-        batch.reader_installation_id, batch.repo_full_name
-    )
+    token, default_branch = _github_context(batch.reader_installation_id, batch.repo_full_name)
     revert_map = git_labels.find_reverted_prs_evidenced(
         owner,
         repo,

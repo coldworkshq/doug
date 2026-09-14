@@ -221,9 +221,7 @@ def _wire_pr_comment(monkeypatch, *, outcomes=("created",)) -> list[dict]:
     calls: list[dict] = []
     queued = list(outcomes)
 
-    def _upsert(
-        gh, owner, repo, pr_number, body, *, installation_id, github_repo_id, seq
-    ):
+    def _upsert(gh, owner, repo, pr_number, body, *, installation_id, github_repo_id, seq):
         calls.append(
             dict(
                 owner=owner,
@@ -302,8 +300,7 @@ def _captured_packs(root) -> list[ExamplePackV0]:
     if not directory.is_dir():
         return []
     return [
-        ExamplePackV0.model_validate_json(path.read_bytes())
-        for path in sorted(directory.iterdir())
+        ExamplePackV0.model_validate_json(path.read_bytes()) for path in sorted(directory.iterdir())
     ]
 
 
@@ -404,9 +401,10 @@ def test_capture_revision_identity_uses_only_explicit_runtime_inputs(monkeypatch
 
 
 def test_capture_scope_never_fabricates_a_missing_admitted_base():
-    assert worker._example_pack_scope(
-        {**JOB, "id": 9, "claim_generation": 1, "base_sha": None}
-    ) is None
+    assert (
+        worker._example_pack_scope({**JOB, "id": 9, "claim_generation": 1, "base_sha": None})
+        is None
+    )
 
 
 def test_retry_claim_generation_creates_distinct_stable_run_ids(tmp_path, monkeypatch):
@@ -426,9 +424,7 @@ def test_retry_claim_generation_creates_distinct_stable_run_ids(tmp_path, monkey
 
     with pytest.raises(RuntimeError, match="after read"):
         worker.process_job(first_claim)
-    assert ingest.fail(
-        job_id, "after read", claim_generation=first_claim["claim_generation"]
-    )
+    assert ingest.fail(job_id, "after read", claim_generation=first_claim["claim_generation"])
 
     monkeypatch.setattr(store, "save_review", real_save)
     second_claim = ingest.claim()
@@ -477,9 +473,7 @@ class _FailingPackStore(FileExamplePackStore):
         raise RuntimeError("capture storage unavailable")
 
 
-def test_capture_failure_cannot_fail_the_worker_delivery(
-    tmp_path, monkeypatch, capsys
-):
+def test_capture_failure_cannot_fail_the_worker_delivery(tmp_path, monkeypatch, capsys):
     url = _db(tmp_path, monkeypatch)
     posted, client = _wire_real_reader(monkeypatch)
     sink = _FailingPackStore(tmp_path / "failing-packs")
@@ -522,9 +516,7 @@ def test_disabled_capture_does_not_build_a_worker_scope(tmp_path, monkeypatch):
     assert len(posted) == 1
 
 
-def test_worker_scope_construction_failure_cannot_fail_delivery(
-    tmp_path, monkeypatch, capsys
-):
+def test_worker_scope_construction_failure_cannot_fail_delivery(tmp_path, monkeypatch, capsys):
     """An enabled optional sink cannot turn malformed capture metadata into job loss."""
     url = _db(tmp_path, monkeypatch)
     posted, client = _wire_real_reader(monkeypatch)
@@ -555,11 +547,7 @@ def test_worker_scope_construction_failure_cannot_fail_delivery(
     assert len(posted) == 1
     assert _captured_packs(capture_root) == []
     assert capture_metadata_calls == 0
-    diagnostics = [
-        line
-        for line in capsys.readouterr().err.splitlines()
-        if "example-pack" in line
-    ]
+    diagnostics = [line for line in capsys.readouterr().err.splitlines() if "example-pack" in line]
     assert len(diagnostics) == 1
     assert "example-pack capture failed" in diagnostics[0]
     assert "ValueError" in diagnostics[0]
@@ -724,7 +712,7 @@ def test_a_failed_deviation_write_does_not_cost_the_verdict(tmp_path, monkeypatc
 
 
 def test_no_intent_read_writes_no_deviation_row(tmp_path, monkeypatch):
-    """"No read happened" and "read happened, found nothing" are different
+    """ "No read happened" and "read happened, found nothing" are different
     facts and store.save_deviations already encodes the second as a
     kind='none' row. The worker must not blur them by calling it anyway."""
     url = _db(tmp_path, monkeypatch)
@@ -807,9 +795,7 @@ def test_a_drain_flushes_traces_once_for_the_whole_pass(tmp_path, monkeypatch):
     assert flushes == [1]
 
 
-def test_a_traced_job_is_wrapped_before_it_runs_and_survives_a_tracing_fault(
-    tmp_path, monkeypatch
-):
+def test_a_traced_job_is_wrapped_before_it_runs_and_survives_a_tracing_fault(tmp_path, monkeypatch):
     """The scope wraps process_job, and a broken scope still reviews the PR.
 
     tracing.job yields on every path by construction, but the property that
@@ -980,10 +966,8 @@ def test_a_pr_whose_base_repo_is_not_this_job_s_repo_is_retired_unread(
         ),
     ],
 )
-def test_an_unreadable_base_repo_id_raises_instead_of_retiring_the_job(
-    tmp_path, monkeypatch, base
-):
-    """"I could not read the repo id" is not "this is the wrong repo".
+def test_an_unreadable_base_repo_id_raises_instead_of_retiring_the_job(tmp_path, monkeypatch, base):
+    """ "I could not read the repo id" is not "this is the wrong repo".
 
     The mismatch branch below retires the job unread, which is right when the
     response NAMES another repo — the next webhook carries a current name and
@@ -1046,9 +1030,7 @@ def test_the_fresh_path_buys_exactly_one_pulls_get(tmp_path, monkeypatch):
     assert calls == [JOB["pr_number"]]
 
 
-def test_stale_head_without_a_replacement_base_is_retried_before_supersede(
-    tmp_path, monkeypatch
-):
+def test_stale_head_without_a_replacement_base_is_retried_before_supersede(tmp_path, monkeypatch):
     """An incomplete GitHub response must not retire the only durable job
     before Doug can describe its replacement. The ordinary drain failure path
     keeps the original claim retryable and creates no partial-identity row."""
@@ -1118,9 +1100,7 @@ def test_a_force_push_ping_pong_cannot_spin_the_drain(tmp_path, monkeypatch):
         return SimpleNamespace(
             parsed_data=SimpleNamespace(
                 head=SimpleNamespace(sha=next(flip)),
-                base=SimpleNamespace(
-                    sha="2" * 40, repo=SimpleNamespace(id=JOB["github_repo_id"])
-                ),
+                base=SimpleNamespace(sha="2" * 40, repo=SimpleNamespace(id=JOB["github_repo_id"])),
             )
         )
 
@@ -1169,9 +1149,7 @@ def test_the_seen_set_catches_a_failed_row_the_catch_up_revived_mid_pass(tmp_pat
     for _ in range(2):
         claimed = ingest.claim()
         assert claimed["id"] == a_id
-        assert ingest.fail(
-            a_id, "reader exploded", claim_generation=claimed["claim_generation"]
-        )
+        assert ingest.fail(a_id, "reader exploded", claim_generation=claimed["claim_generation"])
     claimed = ingest.claim()  # 'running', so the delivery below cannot supersede it
     assert claimed["id"] == a_id
     ingest.enqueue(**{**JOB, "head_sha": "b" * 40})
@@ -1266,16 +1244,14 @@ def test_a_reclaimed_job_with_an_already_saved_verdict_replays_without_a_second_
     monkeypatch.setattr(
         review,
         "score_one",
-        lambda meta, diff, *, scope, threshold=None, deep_read=True, **_: calls.append(
-            "score_one"
-        )
-        or ("reader", VERDICT.model_copy(deep=True), RV, COV),
+        lambda meta, diff, *, scope, threshold=None, deep_read=True, **_: (
+            calls.append("score_one") or ("reader", VERDICT.model_copy(deep=True), RV, COV)
+        ),
     )
     monkeypatch.setattr(
         review,
         "read_intent",
-        lambda gh, o, r, m, d, *, scope, deep_read=True: calls.append("read_intent")
-        or None,
+        lambda gh, o, r, m, d, *, scope, deep_read=True: calls.append("read_intent") or None,
     )
 
     ingest.enqueue(**JOB)
@@ -1533,7 +1509,8 @@ def test_reconcile_skips_fork_prs(tmp_path, monkeypatch):
     during the window when Doug is restarting and reconciling."""
     _installed(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(head_repo_id=99)]),
     )
     assert worker.reconcile_installation(1) == 0
@@ -1547,7 +1524,8 @@ def test_reconcile_skips_bot_authored_prs(tmp_path, monkeypatch):
     _installed(tmp_path, monkeypatch)
     bot = SimpleNamespace(login="dependabot[bot]", type="Bot")
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(user=bot)]),
     )
     assert worker.reconcile_installation(1) == 0
@@ -1564,7 +1542,8 @@ def test_reconcile_does_not_requeue_a_reviewed_head_sha(tmp_path, monkeypatch):
     assert claimed["id"] == job_id
     assert ingest.complete(job_id, None, claim_generation=claimed["claim_generation"])
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
     )
     assert worker.reconcile_installation(1) == 0
@@ -1639,7 +1618,8 @@ def test_reconcile_all_heals_a_crash_stranded_claim_end_to_end(tmp_path, monkeyp
     _age_started_at(url, stuck["id"], seconds=ingest.STALL_LEASE_SECONDS + 1)
 
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
     )
 
@@ -1671,7 +1651,8 @@ def test_reconcile_all_supersedes_a_stranded_claim_whose_pr_moved_on(tmp_path, m
 
     # The PR moved on while the claim was stranded: it now reports "b" * 40.
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="b" * 40)]),
     )
 
@@ -1705,7 +1686,8 @@ def test_reconcile_all_calls_reclaim_stalled_before_the_enqueue_sweep(tmp_path, 
     )
     _installed(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1)]),
     )
 
@@ -1881,9 +1863,7 @@ def test_reconcile_outcomes_enqueues_a_missed_merge(tmp_path, monkeypatch):
     assert worker.reconcile_outcomes(1) == 2  # 14- and 60-day windows
 
     url = f"sqlite:///{tmp_path}/doug.db"
-    (row_14, row_60) = sorted(
-        _rows(url, store.outcome_jobs), key=lambda r: r["window_days"]
-    )
+    (row_14, row_60) = sorted(_rows(url, store.outcome_jobs), key=lambda r: r["window_days"])
     assert row_14["window_days"] == 14 and row_60["window_days"] == 60
     assert row_14["pr_number"] == 5 and row_14["github_repo_id"] == 42
     assert row_14["merge_commit_sha"] == "c" * 40
@@ -1992,16 +1972,12 @@ def test_the_lookup_reads_either_graphql_response_shape():
 
     for name, body in (("unwrapped", inner), ("data-enveloped", {"data": inner})):
         gh = _Gh(body)
-        got = merge_sha.from_merge_commit(
-            gh, owner="o", repo="r", number=7, column=column
-        )
+        got = merge_sha.from_merge_commit(gh, owner="o", repo="r", number=7, column=column)
         assert got == "e" * 40, f"{name} response was not read"
         assert gh.seen == {"owner": "o", "name": "r", "number": 7}
 
 
-def test_reconcile_outcomes_skips_a_pr_the_graph_says_was_never_merged(
-    tmp_path, monkeypatch
-):
+def test_reconcile_outcomes_skips_a_pr_the_graph_says_was_never_merged(tmp_path, monkeypatch):
     """`mergeCommit: null` is a correct answer, not an error.
 
     Two earlier drafts of this helper read the issue-events API and had to page
@@ -2021,9 +1997,7 @@ def test_reconcile_outcomes_skips_a_pr_the_graph_says_was_never_merged(
     assert gh.graphql_calls == [5]
 
 
-def test_the_merged_event_sha_is_length_checked_like_the_payload_field(
-    tmp_path, monkeypatch
-):
+def test_the_merged_event_sha_is_length_checked_like_the_payload_field(tmp_path, monkeypatch):
     """The column guard belongs to the column, not to one source of the value.
 
     merge_commit_sha is a VARCHAR and Postgres answers an over-long INSERT with
@@ -2069,9 +2043,7 @@ def test_reconcile_outcomes_is_a_no_op_against_a_merge_the_webhook_already_recor
     assert len(rows) == 2  # still exactly the 14/60-day pair, not four
 
 
-def test_reconcile_outcomes_ignores_a_merge_outside_the_lookback_window(
-    tmp_path, monkeypatch
-):
+def test_reconcile_outcomes_ignores_a_merge_outside_the_lookback_window(tmp_path, monkeypatch):
     _installed(tmp_path, monkeypatch)
     stale = _closed_pull(
         number=7, merged_at=NOW - timedelta(days=40), updated_at=NOW - timedelta(days=40)
@@ -2083,18 +2055,14 @@ def test_reconcile_outcomes_ignores_a_merge_outside_the_lookback_window(
     assert _rows(f"sqlite:///{tmp_path}/doug.db", store.outcome_jobs) == []
 
 
-def test_reconcile_outcomes_ignores_an_old_merge_that_was_touched_recently(
-    tmp_path, monkeypatch
-):
+def test_reconcile_outcomes_ignores_an_old_merge_that_was_touched_recently(tmp_path, monkeypatch):
     """updated_at bounds pagination; the lookback window is about the MERGE.
     A comment or label on a years-old merged PR bumps updated_at back inside
     the listing window, and enqueueing it would hand the adjudicator a row
     whose due_at is already long past — an instant verdict on a merge Doug
     never reviewed."""
     _installed(tmp_path, monkeypatch)
-    touched = _closed_pull(
-        number=9, merged_at=NOW - timedelta(days=400), updated_at=NOW
-    )
+    touched = _closed_pull(number=9, merged_at=NOW - timedelta(days=400), updated_at=NOW)
     gh = FakeReconcileGH([touched], {9: "9" * 40})
     monkeypatch.setattr(worker.app_auth, "installation_client", lambda i: gh)
 
@@ -2294,7 +2262,8 @@ def test_reconcile_all_revives_a_pr_that_burned_all_its_attempts(tmp_path, monke
     assert failed["id"] == job_id and failed["status"] == "failed" and failed["attempts"] == 3
 
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
     )
     # A restart inside the cooloff re-arms nothing, however many times it happens.
@@ -2358,7 +2327,8 @@ def test_reconcile_installation_takes_live_terms_unless_the_sweep_asks_otherwise
     assert failed["status"] == "failed" and failed["finished_at"] is not None
 
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=1, head_sha="a" * 40)]),
     )
 
@@ -2380,7 +2350,8 @@ def test_reconcile_logs_why_a_pr_was_skipped(tmp_path, monkeypatch, capsys):
     to check after the fact is exactly why a given PR was not reviewed."""
     _installed(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(number=9, draft=True)]),
     )
     assert worker.reconcile_installation(1) == 0
@@ -2411,23 +2382,25 @@ def test_reconcile_logs_a_pr_the_cooloff_held_back_but_not_an_ordinary_dedupe(
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == held
-        assert ingest.fail(
-            held, "reader exploded", claim_generation=claimed["claim_generation"]
-        )
+        assert ingest.fail(held, "reader exploded", claim_generation=claimed["claim_generation"])
     reviewed = ingest.enqueue(1, 42, "o/r", 2, "b" * 40, base_sha="0" * 40)
     claimed = ingest.claim()
     assert claimed["id"] == reviewed
     assert ingest.complete(reviewed, None, claim_generation=claimed["claim_generation"])
     assert {j["id"]: j["status"] for j in _rows(url, store.review_jobs)} == {
-        held: "failed", reviewed: "done",
+        held: "failed",
+        reviewed: "done",
     }
 
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
-        lambda i: FakeListGH([
-            _pull(number=1, head_sha="a" * 40),
-            _pull(number=2, head_sha="b" * 40),
-        ]),
+        worker.app_auth,
+        "installation_client",
+        lambda i: FakeListGH(
+            [
+                _pull(number=1, head_sha="a" * 40),
+                _pull(number=2, head_sha="b" * 40),
+            ]
+        ),
     )
     assert worker.reconcile_all() == 0  # neither is new work
 
@@ -2528,7 +2501,8 @@ def test_reconcile_skips_a_pr_whose_base_repo_id_disagrees_with_the_store(tmp_pa
     fork check firing for the wrong reason."""
     _installed(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        worker.app_auth, "installation_client",
+        worker.app_auth,
+        "installation_client",
         lambda i: FakeListGH([_pull(head_repo_id=999, base_repo_id=999)]),
     )
     assert worker.reconcile_installation(1) == 0
@@ -2744,17 +2718,13 @@ def test_a_race_loser_replays_the_peer_and_does_not_attach_local_deviations(
     assert f"verdict={peer_id}" in line
     with create_engine(url).connect() as conn:
         assert (
-            conn.execute(
-                select(store.verdicts).where(store.verdicts.c.id == peer_id)
-            )
+            conn.execute(select(store.verdicts).where(store.verdicts.c.id == peer_id))
             .mappings()
             .one()["tier"]
             == "deterministic"
         )
         assert (
-            conn.execute(
-                select(store.deviations).where(store.deviations.c.verdict_id == peer_id)
-            )
+            conn.execute(select(store.deviations).where(store.deviations.c.verdict_id == peer_id))
             .mappings()
             .all()
             == []
@@ -2814,9 +2784,7 @@ def test_a_replay_never_reads_like_the_fresh_review_it_replays(tmp_path, monkeyp
         if armed["boom"]:
             armed["boom"] = False
             raise RuntimeError("db hiccup")
-        return real_complete(
-            job_id, verdict_id, claim_generation=claim_generation
-        )
+        return real_complete(job_id, verdict_id, claim_generation=claim_generation)
 
     monkeypatch.setattr(ingest, "complete", _flaky_complete)
     ingest.enqueue(**JOB)
@@ -2937,9 +2905,7 @@ def test_no_comment_when_the_repo_setting_is_off_or_the_row_is_missing(
     assert line == f"doug: comment {token} drewjst/doug#7@" + "a" * 12
 
 
-def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(
-    tmp_path, monkeypatch
-):
+def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(tmp_path, monkeypatch):
     """A 403 is the tenant-visible state — permission not re-accepted, the
     conversation locked, the repo archived — so it is recorded on the
     installation for the Repositories banner rather than only logged. And it
@@ -2960,9 +2926,7 @@ def test_a_denied_comment_marks_the_installation_and_a_success_clears_it(
     assert store.pr_comment_denied_at(JOB["installation_id"]) is None
 
 
-def test_the_replay_path_posts_the_same_body_and_verifies_the_target(
-    tmp_path, monkeypatch, capsys
-):
+def test_the_replay_path_posts_the_same_body_and_verifies_the_target(tmp_path, monkeypatch, capsys):
     """A replay is a full second delivery of the verdict, not a half one: the
     comment is written from the replayed summary exactly as the fresh path
     writes it from its own.
@@ -2989,9 +2953,7 @@ def test_the_replay_path_posts_the_same_body_and_verifies_the_target(
     assert line == "doug: comment updated drewjst/doug#7@" + "a" * 12
 
 
-def test_a_replay_onto_a_pr_belonging_to_another_repo_writes_nothing(
-    tmp_path, monkeypatch, capsys
-):
+def test_a_replay_onto_a_pr_belonging_to_another_repo_writes_nothing(tmp_path, monkeypatch, capsys):
     """The other half of the target check: pulls.get says PR #7's base repo
     is not the repo id this job is scoped to, so the comment is skipped
     entirely rather than written to whatever PR #7 happens to be there."""
@@ -3092,9 +3054,7 @@ def test_fresh_path_renders_the_since_section(tmp_path, monkeypatch):
     assert "the reader's silence is not evidence" in posted[0]["summary"]
 
 
-def test_replay_renders_the_same_since_section_as_the_rows_dictate(
-    tmp_path, monkeypatch
-):
+def test_replay_renders_the_same_since_section_as_the_rows_dictate(tmp_path, monkeypatch):
     """Commit 5's gate: the section is a pure function of ledger rows, so the
     replay path must render exactly what convergence_for's rows dictate —
     byte for byte — not a re-derivation and not nothing."""
@@ -3227,9 +3187,7 @@ def test_a_comment_lost_after_the_job_completed_is_retried_without_a_new_sha(
     assert len(posted) == 1
 
 
-def test_the_repaired_comment_carries_the_same_body_the_first_attempt_did(
-    tmp_path, monkeypatch
-):
+def test_the_repaired_comment_carries_the_same_body_the_first_attempt_did(tmp_path, monkeypatch):
     """ADR-0014's central claim has to survive the repair path: the comment's
     middle is the check run's summary byte for byte. A retry that rendered
     its own summary would leave a PR whose comment and check run disagree
@@ -3282,12 +3240,17 @@ def test_a_comment_the_worker_never_reached_is_retried(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "outcome",
-    ["created", "updated", "skipped:off", "skipped:no-active-row", "skipped-target",
-     "skipped-stale", "denied:403"],
+    [
+        "created",
+        "updated",
+        "skipped:off",
+        "skipped:no-active-row",
+        "skipped-target",
+        "skipped-stale",
+        "denied:403",
+    ],
 )
-def test_a_landed_or_decided_comment_is_never_retried(
-    tmp_path, monkeypatch, outcome
-):
+def test_a_landed_or_decided_comment_is_never_retried(tmp_path, monkeypatch, outcome):
     """Only NULL and `failed:*` are owed a retry, and the exclusions carry
     the argument. `created`/`updated` are the write landing. Every `skipped*`
     is a DECISION — the tenant's toggle, a repo the dashboard cannot show, a
@@ -3374,9 +3337,7 @@ def test_the_retry_gives_up_after_the_retry_cap(tmp_path, monkeypatch):
     assert _job(url)["pr_comment_attempts"] == 2
 
 
-def test_two_sweepers_racing_one_row_produce_exactly_one_comment(
-    tmp_path, monkeypatch
-):
+def test_two_sweepers_racing_one_row_produce_exactly_one_comment(tmp_path, monkeypatch):
     """`--max-instances 2` means both instances run drain, and the sweep's
     SELECT is unlocked — so unlike two drainers meeting on one PR by
     coincidence, both pick the SAME settled rows on EVERY pass. Without a
@@ -3413,9 +3374,7 @@ def test_two_sweepers_racing_one_row_produce_exactly_one_comment(
     assert _job(url)["pr_comment_attempts"] == 1
 
 
-def test_a_swallowed_outcome_write_does_not_buy_an_unbounded_retry(
-    tmp_path, monkeypatch
-):
+def test_a_swallowed_outcome_write_does_not_buy_an_unbounded_retry(tmp_path, monkeypatch):
     """The attempt is spent by the claim, before the GitHub call, not by the
     outcome write after it. `_post_pr_comment` swallows a ledger failure on
     purpose — the verdict is durable and the job is done, so nothing there
@@ -3482,9 +3441,7 @@ def test_a_raise_after_the_post_does_not_put_a_landed_comment_back_in_the_set(
     assert len(upserts) == 2
 
 
-def test_a_raise_before_the_post_still_records_a_retriable_outcome(
-    tmp_path, monkeypatch
-):
+def test_a_raise_before_the_post_still_records_a_retriable_outcome(tmp_path, monkeypatch):
     """The other side of the fence. Nothing was written to GitHub, so the
     repair has to leave something the next pass can find — and it has to be
     retriable, because whatever broke may not be broken next time. The claim
@@ -3534,9 +3491,7 @@ PR_COMMENT_TOKENS = {
 
 
 @pytest.mark.parametrize(("token", "retried"), sorted(PR_COMMENT_TOKENS.items()))
-def test_every_outcome_token_is_classified_on_purpose(
-    tmp_path, monkeypatch, token, retried
-):
+def test_every_outcome_token_is_classified_on_purpose(tmp_path, monkeypatch, token, retried):
     """The retry set is a prefix rule — `failed:*` and nothing else — so a new
     token that fails without saying `failed:` would inherit "terminal" with
     nobody deciding it. This pins the whole vocabulary against the rule, and
@@ -3559,9 +3514,7 @@ def test_every_outcome_token_is_classified_on_purpose(
     assert bool(worker.retry_unposted_comments()) is retried
 
 
-def test_a_completion_that_does_not_owe_a_comment_is_never_swept(
-    tmp_path, monkeypatch
-):
+def test_a_completion_that_does_not_owe_a_comment_is_never_swept(tmp_path, monkeypatch):
     """`ingest.complete` stamps the owed marker only when its caller says the
     job owes a comment, and the default is that it does not.
 
@@ -3643,9 +3596,7 @@ def test_a_completion_with_no_verdict_promises_no_repair(tmp_path, monkeypatch):
     assert len(upserts) == 1  # the fresh write still happened; only repair is off
 
 
-def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(
-    tmp_path, monkeypatch
-):
+def test_a_row_from_before_the_marker_is_invisible_to_the_sweep(tmp_path, monkeypatch):
     """Rows completed by a revision that does not stamp `owed` — everything
     the migration finds, and everything an older instance finishes during a
     rollout — must stay out of the sweep. Nothing knows whether they
@@ -3738,9 +3689,7 @@ def test_a_done_job_whose_verdict_went_away_stops_rather_than_looping(
     assert "doug: comment skipped:no-verdict drewjst/doug#7@" in capsys.readouterr().err
 
 
-def test_drain_retries_unposted_comments_after_working_the_queue(
-    tmp_path, monkeypatch, capsys
-):
+def test_drain_retries_unposted_comments_after_working_the_queue(tmp_path, monkeypatch, capsys):
     """The cadence. A delivery kicks drain on every push, so a comment lost
     at 10:00 comes back on the next PR's delivery rather than at the next
     cold start. After the claim loop, not before: the reviews are what the
@@ -3762,9 +3711,7 @@ def test_drain_retries_unposted_comments_after_working_the_queue(
     assert "doug: retried 1 unposted comment(s)" in capsys.readouterr().err
 
 
-def test_a_broken_comment_sweep_cannot_stop_the_queue_being_worked(
-    tmp_path, monkeypatch, capsys
-):
+def test_a_broken_comment_sweep_cannot_stop_the_queue_being_worked(tmp_path, monkeypatch, capsys):
     """The sweep is how a lost comment comes back; a fault inside it must not
     become how every REVIEW stops. drain's own contract, applied to the
     repair: one job's failure must not strand the queue behind it."""

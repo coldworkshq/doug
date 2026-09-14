@@ -102,10 +102,7 @@ def _seed_population(url: str) -> tuple[int, int]:
 
 def _rows(conn) -> list[dict]:
     statement = select(store.outcome_jobs).order_by(store.outcome_jobs.c.id)
-    return [
-        dict(row)
-        for row in conn.execute(statement).mappings()
-    ]
+    return [dict(row) for row in conn.execute(statement).mappings()]
 
 
 def _manifest_rows(path: Path) -> list[dict]:
@@ -200,9 +197,7 @@ def test_apply_inserts_only_missing_siblings_and_is_idempotent(tmp_path, monkeyp
 
     with engine.connect() as conn:
         before = _rows(conn)
-    result = outcome_backfill.apply(
-        engine, expected_missing=3, manifest_path=manifest, now=NOW
-    )
+    result = outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
     with engine.connect() as conn:
         after = _rows(conn)
 
@@ -256,9 +251,7 @@ def test_apply_inserts_only_missing_siblings_and_is_idempotent(tmp_path, monkeyp
     assert repeated == after
 
 
-def test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary(
-    tmp_path, monkeypatch
-):
+def test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary(tmp_path, monkeypatch):
     """SQLite must add calendar days without truncating the source instant."""
     merged_at = datetime(2024, 1, 31, 23, 59, 58, 123456, tzinfo=UTC)
     expected_due_at = datetime(2024, 3, 31, 23, 59, 58, 123456, tzinfo=UTC)
@@ -281,9 +274,7 @@ def test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary(
         )
     manifest = tmp_path / "microseconds.json"
 
-    result = outcome_backfill.apply(
-        engine, expected_missing=1, manifest_path=manifest, now=NOW
-    )
+    result = outcome_backfill.apply(engine, expected_missing=1, manifest_path=manifest, now=NOW)
 
     with engine.connect() as conn:
         rows = _rows(conn)
@@ -305,9 +296,7 @@ def test_apply_preserves_sqlite_microseconds_across_a_leap_year_boundary(
             "window_days": 60,
         }
     ]
-    assert outcome_backfill.verify_manifest(
-        engine, manifest_path=manifest, expected_count=1
-    ) == 1
+    assert outcome_backfill.verify_manifest(engine, manifest_path=manifest, expected_count=1) == 1
 
 
 def test_apply_refuses_a_stale_count_without_creating_a_manifest(tmp_path, monkeypatch):
@@ -321,9 +310,7 @@ def test_apply_refuses_a_stale_count_without_creating_a_manifest(tmp_path, monke
         outcome_backfill.BackfillInvariantError,
         match="expected 2 missing 60-day jobs; found 3",
     ):
-        outcome_backfill.apply(
-            engine, expected_missing=2, manifest_path=manifest, now=NOW
-        )
+        outcome_backfill.apply(engine, expected_missing=2, manifest_path=manifest, now=NOW)
 
     assert not manifest.exists()
     with engine.connect() as conn:
@@ -423,9 +410,7 @@ def test_manifest_creation_failures_roll_back_the_insert(tmp_path, monkeypatch):
 
     monkeypatch.setattr(outcome_backfill, "_write_manifest_new", fail_manifest)
     with pytest.raises(OSError, match="disk full"):
-        outcome_backfill.apply(
-            engine, expected_missing=1, manifest_path=manifest, now=NOW
-        )
+        outcome_backfill.apply(engine, expected_missing=1, manifest_path=manifest, now=NOW)
     with engine.connect() as conn:
         after = _rows(conn)
     assert after == before
@@ -484,18 +469,14 @@ def test_apply_refuses_an_existing_manifest_before_mutation(tmp_path, monkeypatc
     manifest.write_text("preserve me")
 
     with pytest.raises(FileExistsError):
-        outcome_backfill.apply(
-            engine, expected_missing=3, manifest_path=manifest, now=NOW
-        )
+        outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
 
     assert manifest.read_text() == "preserve me"
     with engine.connect() as conn:
         assert len(_rows(conn)) == 6
 
 
-def test_verify_manifest_independently_requires_exact_untouched_rows(
-    tmp_path, monkeypatch
-):
+def test_verify_manifest_independently_requires_exact_untouched_rows(tmp_path, monkeypatch):
     """An identity list is not verified while a row is missing, started, or extra."""
     url = _db(tmp_path, monkeypatch)
     _seed_population(url)
@@ -503,13 +484,9 @@ def test_verify_manifest_independently_requires_exact_untouched_rows(
     manifest = tmp_path / "verify.json"
     outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
 
-    assert outcome_backfill.verify_manifest(
-        engine, manifest_path=manifest, expected_count=3
-    ) == 3
+    assert outcome_backfill.verify_manifest(engine, manifest_path=manifest, expected_count=3) == 3
     with pytest.raises(outcome_backfill.BackfillInvariantError, match="expected 2"):
-        outcome_backfill.verify_manifest(
-            engine, manifest_path=manifest, expected_count=2
-        )
+        outcome_backfill.verify_manifest(engine, manifest_path=manifest, expected_count=2)
 
     changed_id = _manifest_rows(manifest)[0]["id"]
     with engine.begin() as conn:
@@ -519,13 +496,14 @@ def test_verify_manifest_independently_requires_exact_untouched_rows(
             .values(status="running", claim_generation=1, started_at=NOW)
         )
     with pytest.raises(outcome_backfill.BackfillInvariantError, match="untouched"):
-        outcome_backfill.verify_manifest(
-            engine, manifest_path=manifest, expected_count=3
-        )
+        outcome_backfill.verify_manifest(engine, manifest_path=manifest, expected_count=3)
     with engine.connect() as conn:
-        assert conn.execute(
-            select(store.outcome_jobs.c.status).where(store.outcome_jobs.c.id == changed_id)
-        ).scalar_one() == "running"
+        assert (
+            conn.execute(
+                select(store.outcome_jobs.c.status).where(store.outcome_jobs.c.id == changed_id)
+            ).scalar_one()
+            == "running"
+        )
 
 
 def test_rollback_deletes_every_exact_manifest_row_or_none(tmp_path, monkeypatch):
@@ -537,9 +515,7 @@ def test_rollback_deletes_every_exact_manifest_row_or_none(tmp_path, monkeypatch
     outcome_backfill.apply(engine, expected_missing=3, manifest_path=manifest, now=NOW)
     manifest_ids = {row["id"] for row in _manifest_rows(manifest)}
 
-    assert outcome_backfill.rollback(
-        engine, manifest_path=manifest, expected_count=3
-    ) == 3
+    assert outcome_backfill.rollback(engine, manifest_path=manifest, expected_count=3) == 3
     with engine.connect() as conn:
         remaining = _rows(conn)
     assert not manifest_ids & {row["id"] for row in remaining}
@@ -578,9 +554,7 @@ def test_rollback_refuses_wrong_counts_or_touched_rows(tmp_path, monkeypatch, ch
 def test_postgresql_insert_select_uses_exact_interval_and_conflict_target():
     """PostgreSQL must dedupe only the published identity and derive from merge time."""
     sql = str(
-        outcome_backfill._insert_statement("postgresql").compile(
-            dialect=postgresql.dialect()
-        )
+        outcome_backfill._insert_statement("postgresql").compile(dialect=postgresql.dialect())
     )
 
     assert "INTERVAL '60 days'" in sql

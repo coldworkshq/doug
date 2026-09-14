@@ -188,13 +188,21 @@ def build() -> int:
     sample = defect_prs + clean
     requests = [_request(p, "pr") for p in sample]
     DIR.mkdir(parents=True, exist_ok=True)
-    (DIR / "sample.json").write_text(json.dumps({
-        "defects": [p.number for p in defect_prs],
-        "clean": [p.number for p in clean],
-        "newer_half": sorted(newer_nums & {p.number for p in sample}),
-        "model": MODEL, "effort": EFFORT, "max_tokens": MAX_TOKENS,
-        "diff_budget": DIFF_BUDGET, "seed": SEED,
-    }, indent=2))
+    (DIR / "sample.json").write_text(
+        json.dumps(
+            {
+                "defects": [p.number for p in defect_prs],
+                "clean": [p.number for p in clean],
+                "newer_half": sorted(newer_nums & {p.number for p in sample}),
+                "model": MODEL,
+                "effort": EFFORT,
+                "max_tokens": MAX_TOKENS,
+                "diff_budget": DIFF_BUDGET,
+                "seed": SEED,
+            },
+            indent=2,
+        )
+    )
     (DIR / "requests-main.json").write_text(json.dumps(requests))
 
     bodies = [r["params"]["messages"][0]["content"] for r in requests]
@@ -220,8 +228,7 @@ def counterfactual() -> int:
     by = {p.number: p for p in prs}
     findings = json.loads((DIR / "findings-main.json").read_text())
     with_findings = sorted(
-        int(n) for n, r in findings.items()
-        if int(n) in defects and r.get("findings")
+        int(n) for n, r in findings.items() if int(n) in defects and r.get("findings")
     )
     rng = np.random.default_rng(SEED)
     take = min(N_COUNTERFACTUAL, len(with_findings))
@@ -363,7 +370,8 @@ def analyze() -> int:
     coverage = sum(c for _, c in top10) / len(slug_findings) if slug_findings else 0.0
     big = [s for s, ps in slug_prs.items() if len(ps) >= 5]
     both_halves = [
-        s for s, ps in slug_prs.items()
+        s
+        for s, ps in slug_prs.items()
         if any(n in older_nums for n in ps) and any(n not in older_nums for n in ps)
     ]
     # Precision context on the newer-half probe rows: of rows carrying the
@@ -404,8 +412,11 @@ def analyze() -> int:
                 overlaps.append(len(orig & new) / len(orig))
         mean = float(np.mean(overlaps)) if overlaps else 0.0
         print(f"\n(iii) COUNTERFACTUAL — {len(overlaps)} PRs, mean finding overlap {mean:.0%}")
-        verdict = "FAIL (ReDef reproduced — STOP)" if mean >= 0.50 else (
-            "PASS" if mean <= 0.30 else "AMBIGUOUS — extend to 60 PRs")
+        verdict = (
+            "FAIL (ReDef reproduced — STOP)"
+            if mean >= 0.50
+            else ("PASS" if mean <= 0.30 else "AMBIGUOUS — extend to 60 PRs")
+        )
         print(f"  BAR: >=50% fail / <=30% pass -> {verdict}")
     else:
         print("\n(iii) counterfactual not run yet")

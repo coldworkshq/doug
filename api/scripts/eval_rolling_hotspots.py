@@ -89,11 +89,7 @@ def evaluate(train, labels, learn_for):
 
 def churn(sets):
     """Mean Jaccard distance between consecutive learned sets."""
-    pairs = [
-        1 - len(a & b) / len(a | b)
-        for a, b in zip(sets, sets[1:], strict=False)
-        if a or b
-    ]
+    pairs = [1 - len(a & b) / len(a | b) for a, b in zip(sets, sets[1:], strict=False) if a or b]
     return sum(pairs) / len(pairs) if pairs else 0.0
 
 
@@ -147,12 +143,15 @@ def main() -> int:
     print(header)
     print(row("static", static_res, n, frozen_res))
     print(row("frozen (today)", frozen_res, n))
-    print(row("expanding *post-hoc*", expanding_res, n, frozen_res)
-          + f"   churn {churn(exp_sets):.2f}")
+    print(
+        row("expanding *post-hoc*", expanding_res, n, frozen_res)
+        + f"   churn {churn(exp_sets):.2f}"
+    )
 
     results = {}
     for k in K_GRID:
         for d in D_GRID:
+
             def learn_for(as_of, k=k, d=d):
                 w, defs = rolling_window(train, labels, as_of, min_defects=k, max_days=d)
                 return learn_hotspot_segments(w, defs)
@@ -164,9 +163,9 @@ def main() -> int:
             )
 
     # Pre-registered: max @20%, ties → @30%, @10%, then larger K.
-    best = max(results, key=lambda kd: (
-        results[kd][0.20], results[kd][0.30], results[kd][0.10], kd[0]
-    ))
+    best = max(
+        results, key=lambda kd: (results[kd][0.20], results[kd][0.30], results[kd][0.10], kd[0])
+    )
     gain = (results[best][0.20] - frozen_res[0.20]) * n
     print(f"\nselected: K={best[0]} D={best[1]}  ({gain:+.2f} defects @20% vs frozen)")
     if gain >= 1.0:

@@ -497,9 +497,7 @@ def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
                             for alias in sub.names:
                                 if alias.name == "*":
                                     continue
-                                type_checking_bound.add(
-                                    alias.asname or alias.name.split(".", 1)[0]
-                                )
+                                type_checking_bound.add(alias.asname or alias.name.split(".", 1)[0])
                         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
                             type_checking_bound.add(sub.id)
                 for child in node.orelse:

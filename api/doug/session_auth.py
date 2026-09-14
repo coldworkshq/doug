@@ -130,8 +130,7 @@ def verify_session_claims(bearer: str) -> dict | None:
         raise
     except Exception as e:  # noqa: BLE001 — any failure here is "no usable key"
         print(
-            f"doug: session auth denied at the JWKS lookup "
-            f"({type(e).__name__}: {str(e)[:200]})",
+            f"doug: session auth denied at the JWKS lookup ({type(e).__name__}: {str(e)[:200]})",
             file=sys.stderr,
         )
         return None
@@ -154,8 +153,7 @@ def verify_session_claims(bearer: str) -> dict | None:
         return claims
     except Exception as e:  # noqa: BLE001 — any failure here is "not a valid token"
         print(
-            f"doug: session auth denied at token verification "
-            f"({type(e).__name__}: {str(e)[:200]})",
+            f"doug: session auth denied at token verification ({type(e).__name__}: {str(e)[:200]})",
             file=sys.stderr,
         )
         return None

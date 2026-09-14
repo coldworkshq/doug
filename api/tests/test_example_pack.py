@@ -148,13 +148,17 @@ def test_request_or_evidence_byte_changes_pack_hash():
         # findings.hunks — which ADR-0015 makes part of convergence identity.
         # Both halves are varied because ADR-0027 item 3 allows a vendor fork
         # to change the parameters as well as the model.
-        {"mechanical_parameters": (
-            NameVersionV0(name="verify_finding.model", version="some-other-model"),
-        )},
-        {"mechanical_parameters": (
-            NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
-            NameVersionV0(name="verify_finding.effort", version="high"),
-        )},
+        {
+            "mechanical_parameters": (
+                NameVersionV0(name="verify_finding.model", version="some-other-model"),
+            )
+        },
+        {
+            "mechanical_parameters": (
+                NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
+                NameVersionV0(name="verify_finding.effort", version="high"),
+            )
+        },
     ],
 )
 def test_every_whole_instrument_component_changes_instrument_id(change):

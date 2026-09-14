@@ -181,9 +181,7 @@ def _system_text(request: dict) -> str:
     if isinstance(system, str):
         return system
     if isinstance(system, list):
-        return "\n".join(
-            block.get("text", "") for block in system if isinstance(block, dict)
-        )
+        return "\n".join(block.get("text", "") for block in system if isinstance(block, dict))
     return ""
 
 
@@ -292,9 +290,7 @@ def create(client, request: dict, *, kind: str, scope: str, pr=None):
         output=_response_text(response),
         usage_details=_usage_details(response),
         level=None if stop_reason == "end_turn" else "WARNING",
-        status_message=(
-            None if stop_reason == "end_turn" else f"stopped with {stop_reason}"
-        ),
+        status_message=(None if stop_reason == "end_turn" else f"stopped with {stop_reason}"),
         metadata={
             **metadata,
             "doug.stop_reason": stop_reason,
@@ -388,9 +384,7 @@ def job(*, job_id, installation_id, repo_full_name: str, pr_number, head_sha: st
             "doug.installation_id": installation_id,
         },
     )
-    attributes = _open_attributes(
-        session_id=str(head_sha), tags=[f"repo:{repo_full_name}"]
-    )
+    attributes = _open_attributes(session_id=str(head_sha), tags=[f"repo:{repo_full_name}"])
     try:
         yield
     except BaseException as exc:

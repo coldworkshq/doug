@@ -86,8 +86,7 @@ class _Issues:
             raise self._list_error
         if self._full_pages:
             batch = [
-                _comment(page * 1000 + i, "a human said hi", app_id=None)
-                for i in range(per_page)
+                _comment(page * 1000 + i, "a human said hi", app_id=None) for i in range(per_page)
             ]
         else:
             batch = self._pages[page - 1] if page - 1 < len(self._pages) else []
@@ -199,9 +198,7 @@ def test_the_frame_of_a_worst_case_url_stays_inside_frame_max(monkeypatch):
     assert len(frame) <= pr_comment.FRAME_MAX
 
 
-def test_a_pathological_base_url_drops_the_links_rather_than_bursting_the_cap(
-    monkeypatch, capsys
-):
+def test_a_pathological_base_url_drops_the_links_rather_than_bursting_the_cap(monkeypatch, capsys):
     """DOUG_WEB_URL is operator-controlled and unbounded, so the frame is the
     only unbounded half of `SUMMARY_LIMIT + FRAME_MAX <= 65_536` (the summary
     half is capped in check_run.render). Unchecked, a long enough base pushes
@@ -278,9 +275,7 @@ def test_upsert_by_stored_id_writes_for_an_equal_or_newer_seq(tmp_path, monkeypa
     assert _upsert(_gh(issues), seq=6) == "updated"
 
 
-def test_upsert_records_the_seq_it_wrote_so_the_next_drainer_can_compare(
-    tmp_path, monkeypatch
-):
+def test_upsert_records_the_seq_it_wrote_so_the_next_drainer_can_compare(tmp_path, monkeypatch):
     """A created comment and a discovered one both leave the mark behind:
     the guard on the stored-id path is only as good as what the write before
     it recorded."""
@@ -293,9 +288,7 @@ def test_upsert_records_the_seq_it_wrote_so_the_next_drainer_can_compare(
     assert issues.calls == []
 
 
-def test_upsert_discovery_records_the_found_comments_seq_not_its_own(
-    tmp_path, monkeypatch
-):
+def test_upsert_discovery_records_the_found_comments_seq_not_its_own(tmp_path, monkeypatch):
     """The marker is the truth about what GitHub is showing. Recording our
     own seq on discovery would let a stale listing lower the mark and unblock
     the very overwrite it exists to stop."""
@@ -366,9 +359,7 @@ def test_upsert_never_matches_a_human_authored_marked_comment_and_creates_its_ow
     assert ("create", BODY) in issues.calls
 
 
-def test_upsert_never_matches_anything_when_this_deployment_has_no_app_id(
-    tmp_path, monkeypatch
-):
+def test_upsert_never_matches_anything_when_this_deployment_has_no_app_id(tmp_path, monkeypatch):
     """No app id means no way to prove authorship, so nothing matches — the
     open failure is a duplicate, not an overwrite of someone else's text."""
     _db(tmp_path, monkeypatch)

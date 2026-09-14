@@ -75,8 +75,12 @@ def collect(gh, owner: str, repo: str, limit: int) -> list[dict]:
         return []
 
     pulls = gh.rest.pulls.list(
-        owner=owner, repo=repo, state="closed", sort="created",
-        direction="desc", per_page=min(limit, 100),
+        owner=owner,
+        repo=repo,
+        state="closed",
+        sort="created",
+        direction="desc",
+        per_page=min(limit, 100),
     ).parsed_data[:limit]
 
     rows = []
@@ -117,13 +121,15 @@ def run(rows: list[dict]) -> dict:
             except reader.ReaderError as e:
                 print(f"  #{row['meta'].number} {arm}: read failed ({e})")
                 continue
-            out[arm].append({
-                "pr": row["meta"].number,
-                "alignment": rv.intent_alignment,
-                "high": _high(rv.deviation_findings),
-                "deviations": [d.model_dump() for d in rv.deviation_findings],
-                "refs": [d.id for d in docs],
-            })
+            out[arm].append(
+                {
+                    "pr": row["meta"].number,
+                    "alignment": rv.intent_alignment,
+                    "high": _high(rv.deviation_findings),
+                    "deviations": [d.model_dump() for d in rv.deviation_findings],
+                    "refs": [d.id for d in docs],
+                }
+            )
             print(
                 f"  #{row['meta'].number} {arm}: alignment {rv.intent_alignment}"
                 f" · {len(rv.deviation_findings)} deviations ({_high(rv.deviation_findings)} high)"

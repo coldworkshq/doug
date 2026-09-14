@@ -382,8 +382,7 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # REVIVABLE excludes 'done', and nothing retries until a new head
             # SHA makes a new job.
             "ALTER TABLE review_jobs ADD COLUMN pr_comment_outcome VARCHAR(32)",
-            "ALTER TABLE review_jobs ADD COLUMN pr_comment_attempts "
-            "INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE review_jobs ADD COLUMN pr_comment_attempts INTEGER NOT NULL DEFAULT 0",
             # NO BACKFILL, deliberately, and the absence is the design. An
             # earlier draft stamped every existing 'done' row so that NULL
             # could mean "never posted" — which needed one UPDATE over the
@@ -452,10 +451,8 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             # note below). Old-name receipt links in historical PR comments
             # resolve through the junction, not these columns — their decay
             # when the old row leaves 'active' is issue #228.
-            "UPDATE verdicts SET repo='coldworkshq/doug' "
-            "WHERE repo='drewjst/doug'",
-            "UPDATE outcomes SET repo='coldworkshq/doug' "
-            "WHERE repo='drewjst/doug'",
+            "UPDATE verdicts SET repo='coldworkshq/doug' WHERE repo='drewjst/doug'",
+            "UPDATE outcomes SET repo='coldworkshq/doug' WHERE repo='drewjst/doug'",
             "UPDATE review_jobs SET repo_full_name='coldworkshq/doug' "
             "WHERE repo_full_name='drewjst/doug'",
         ),

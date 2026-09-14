@@ -180,9 +180,7 @@ def test_apply_deletes_the_outcome_and_repends_its_job(tmp_path, monkeypatch):
     _job(url, pr_number=40)
     manifest = tmp_path / "manifest.json"
 
-    report = transfer_repair.apply(
-        create_engine(url), expect_outcomes=1, manifest_path=manifest
-    )
+    report = transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
 
     assert (report.outcomes, report.jobs) == (1, 1)
     assert _outcome_ids(url) == [kept]
@@ -196,9 +194,7 @@ def test_apply_deletes_the_outcome_and_repends_its_job(tmp_path, monkeypatch):
     assert by_pr[40]["status"] == "done"
 
 
-def test_apply_aborts_when_the_population_is_not_what_the_operator_asserted(
-    tmp_path, monkeypatch
-):
+def test_apply_aborts_when_the_population_is_not_what_the_operator_asserted(tmp_path, monkeypatch):
     """The count comes from a prior --dry-run. If the set moved in between,
     the operator is repairing a population nobody looked at."""
     url = _db(tmp_path, monkeypatch)
@@ -209,9 +205,7 @@ def test_apply_aborts_when_the_population_is_not_what_the_operator_asserted(
     manifest = tmp_path / "manifest.json"
 
     with pytest.raises(transfer_repair.RepairInvariantError, match="expected 1"):
-        transfer_repair.apply(
-            create_engine(url), expect_outcomes=1, manifest_path=manifest
-        )
+        transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
 
     assert len(_outcome_ids(url)) == 2
     assert not manifest.exists(), "an aborted apply must leave no manifest"
@@ -227,9 +221,7 @@ def test_apply_refuses_to_overwrite_an_existing_manifest(tmp_path, monkeypatch):
     manifest.write_text("[]\n")
 
     with pytest.raises(transfer_repair.RepairInvariantError, match="already exists"):
-        transfer_repair.apply(
-            create_engine(url), expect_outcomes=1, manifest_path=manifest
-        )
+        transfer_repair.apply(create_engine(url), expect_outcomes=1, manifest_path=manifest)
 
 
 def test_rollback_restores_the_row_and_re_settles_its_job(tmp_path, monkeypatch):
@@ -259,9 +251,7 @@ def test_rollback_checks_the_manifest_against_the_asserted_count(tmp_path, monke
     manifest.write_text("[]\n")
 
     with pytest.raises(transfer_repair.RepairInvariantError, match="holds 0 rows"):
-        transfer_repair.rollback(
-            create_engine(url), manifest_path=manifest, expect_outcomes=15
-        )
+        transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=15)
 
 
 def test_rollback_is_idempotent_over_rows_that_are_already_back(tmp_path, monkeypatch):
@@ -276,10 +266,7 @@ def test_rollback_is_idempotent_over_rows_that_are_already_back(tmp_path, monkey
     transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1)
 
     assert (
-        transfer_repair.rollback(
-            create_engine(url), manifest_path=manifest, expect_outcomes=1
-        )
-        == 0
+        transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1) == 0
     )
     assert len(_outcome_ids(url)) == 1
 
@@ -398,9 +385,7 @@ def test_rollback_coerces_every_timestamp_column_the_table_declares(tmp_path, mo
     raw string during an incident rollback."""
     from sqlalchemy import DateTime
 
-    declared = {
-        c.name for c in store.outcomes.columns if isinstance(c.type, DateTime)
-    }
+    declared = {c.name for c in store.outcomes.columns if isinstance(c.type, DateTime)}
     assert declared, "the guard is vacuous if outcomes declares no timestamp"
 
     url = _db(tmp_path, monkeypatch)
@@ -414,9 +399,7 @@ def test_rollback_coerces_every_timestamp_column_the_table_declares(tmp_path, mo
     # coercion below is doing work rather than passing through.
     written = json.loads(manifest.read_text())[0]
     assert {k for k in declared if written.get(k) is not None}, "nothing to coerce"
-    assert all(
-        isinstance(written[k], str) for k in declared if written.get(k) is not None
-    )
+    assert all(isinstance(written[k], str) for k in declared if written.get(k) is not None)
 
     transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1)
 
@@ -441,7 +424,8 @@ def test_rollback_coerces_date_and_time_columns_not_only_datetime(tmp_path, monk
     # Carries the four key columns rollback's job re-settle joins on, so
     # this drives the real function rather than a fragment of it.
     probe = Table(
-        "probe", MetaData(),
+        "probe",
+        MetaData(),
         Column("id", Integer, primary_key=True),
         Column("installation_id", Integer),
         Column("github_repo_id", Integer),
@@ -502,7 +486,8 @@ def test_a_column_whose_python_type_explodes_is_skipped_not_fatal(tmp_path, monk
 
     url = _db(tmp_path, monkeypatch)
     probe = Table(
-        "probe", MetaData(),
+        "probe",
+        MetaData(),
         Column("id", Integer, primary_key=True),
         Column("installation_id", Integer),
         Column("github_repo_id", Integer),
@@ -515,22 +500,29 @@ def test_a_column_whose_python_type_explodes_is_skipped_not_fatal(tmp_path, monk
     probe.create(engine)
 
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps([{
-        "id": 1, "installation_id": OLD, "github_repo_id": REPO_ID,
-        "pr_number": 93, "window_days": 14, "odd": "not-a-timestamp",
-    }]) + "\n")
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "id": 1,
+                    "installation_id": OLD,
+                    "github_repo_id": REPO_ID,
+                    "pr_number": 93,
+                    "window_days": 14,
+                    "odd": "not-a-timestamp",
+                }
+            ]
+        )
+        + "\n"
+    )
 
-    assert transfer_repair.rollback(
-        engine, manifest_path=manifest, expect_outcomes=1
-    ) == 1
+    assert transfer_repair.rollback(engine, manifest_path=manifest, expect_outcomes=1) == 1
 
     with create_engine(url).connect() as conn:
         assert conn.execute(select(probe.c.odd)).scalar_one() == "not-a-timestamp"
 
 
-def test_an_unparseable_timestamp_aborts_and_names_what_it_could_not_read(
-    tmp_path, monkeypatch
-):
+def test_an_unparseable_timestamp_aborts_and_names_what_it_could_not_read(tmp_path, monkeypatch):
     """Deliberately NOT a fallback to inserting the raw value: writing text
     into a timestamp column and calling the ledger restored is worse than
     stopping. What was missing is the diagnosis — a bare ValueError from
@@ -547,9 +539,7 @@ def test_an_unparseable_timestamp_aborts_and_names_what_it_could_not_read(
     manifest.write_text(json.dumps(rows) + "\n")
 
     with pytest.raises(transfer_repair.RepairInvariantError) as caught:
-        transfer_repair.rollback(
-            create_engine(url), manifest_path=manifest, expect_outcomes=1
-        )
+        transfer_repair.rollback(create_engine(url), manifest_path=manifest, expect_outcomes=1)
 
     message = str(caught.value)
     assert "observed_at" in message, "must name the column"

@@ -108,15 +108,11 @@ def test_first_due_is_the_earliest_pending_due_at(tmp_path, monkeypatch):
     assert snap.first_due == earlier
 
 
-def test_deep_reads_come_from_the_installation_meter_for_this_month(
-    tmp_path, monkeypatch
-):
+def test_deep_reads_come_from_the_installation_meter_for_this_month(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.record_deep_read(reader.installation_scope(INSTALLATION_ID), 200, now=NOW)
     store.record_deep_read(reader.installation_scope(INSTALLATION_ID), 200, now=NOW)
-    store.record_deep_read(
-        reader.installation_scope(OTHER_INSTALL), 200, now=NOW
-    )
+    store.record_deep_read(reader.installation_scope(OTHER_INSTALL), 200, now=NOW)
     # A read in another month must not appear on this cycle's meter.
     store.record_deep_read(
         reader.installation_scope(INSTALLATION_ID),
@@ -203,7 +199,6 @@ def test_snapshot_for_an_unknown_repo_is_the_empty_instrument(tmp_path, monkeypa
     assert snap.adjudicated == 0
     assert snap.pending == 0
     assert snap.deep_reads == 0
-
 
 
 def test_verify_reads_never_move_the_customers_published_meter(tmp_path, monkeypatch):

@@ -68,7 +68,8 @@ def _enable(monkeypatch, docs=(DOC,)):
     monkeypatch.setattr(intent_providers, "fetch", lambda *a, **k: list(docs))
     client = FakeClient(INTENT_PAYLOAD)
     monkeypatch.setattr(
-        reader, "read_with_decisions",
+        reader,
+        "read_with_decisions",
         lambda pr, diff, chosen, *, scope: reader.IntentReaderVerdict.model_validate(
             {**INTENT_PAYLOAD}
         ),
@@ -192,7 +193,7 @@ def test_save_deviations_leaves_the_verdict_untouched(tmp_path, monkeypatch):
 
 
 def test_a_clean_intent_read_is_recorded_distinctly_from_no_read(tmp_path, monkeypatch):
-    """"Read happened, nothing found" and "no read happened" must not look
+    """ "Read happened, nothing found" and "no read happened" must not look
     the same, or deviation precision will be computed over the wrong
     denominator."""
     url = _db(tmp_path, monkeypatch)
@@ -220,10 +221,16 @@ def test_intent_schema_matches_the_probe_shape():
     assert props["intent_alignment"]["type"] == "integer"
     item = props["deviation_findings"]["items"]
     assert item["properties"]["type"]["enum"] == [
-        "missing-from-pr", "beyond-ticket", "contradicts-ticket",
+        "missing-from-pr",
+        "beyond-ticket",
+        "contradicts-ticket",
     ]
     assert set(reader.INTENT_SCHEMA["required"]) == {
-        "risk_score", "rationale", "findings", "intent_alignment", "deviation_findings",
+        "risk_score",
+        "rationale",
+        "findings",
+        "intent_alignment",
+        "deviation_findings",
     }
     # The diff-reader's own schema must be untouched by the intent tier.
     assert "intent_alignment" not in reader.SCHEMA["properties"]
@@ -305,9 +312,10 @@ def test_intent_is_off_when_no_allowlist_is_configured(monkeypatch):
     monkeypatch.delenv("DOUG_INTENT_INSTALLATIONS", raising=False)
     _no_read_may_happen(monkeypatch)
 
-    assert review.read_intent(
-        None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD)
-    ) is None
+    assert (
+        review.read_intent(None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD))
+        is None
+    )
 
 
 def test_untenanted_callers_never_buy_an_intent_read(monkeypatch):
@@ -318,9 +326,7 @@ def test_untenanted_callers_never_buy_an_intent_read(monkeypatch):
     monkeypatch.setenv("DOUG_INTENT_INSTALLATIONS", str(DOGFOOD))
     _no_read_may_happen(monkeypatch)
 
-    assert review.read_intent(
-        None, "o", "r", _pr(), "+ x", scope=reader.SENTINEL_SCOPE
-    ) is None
+    assert review.read_intent(None, "o", "r", _pr(), "+ x", scope=reader.SENTINEL_SCOPE) is None
 
 
 def test_the_old_global_env_var_cannot_enable_intent_by_itself(monkeypatch):
@@ -335,9 +341,10 @@ def test_the_old_global_env_var_cannot_enable_intent_by_itself(monkeypatch):
     monkeypatch.delenv("DOUG_INTENT_INSTALLATIONS", raising=False)
     _no_read_may_happen(monkeypatch)
 
-    assert review.read_intent(
-        None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD)
-    ) is None
+    assert (
+        review.read_intent(None, "o", "r", _pr(), "+ x", scope=reader.installation_scope(DOGFOOD))
+        is None
+    )
 
 
 def test_installation_id_round_trips_through_the_scope_string(monkeypatch):
@@ -371,8 +378,7 @@ def test_the_deployed_config_opts_the_dogfood_installation_in_and_nobody_else():
     # Adding a service, reflowing a continuation or changing the quoting
     # must not fail this; deploying the wrong thing must.
     deployed = "\n".join(
-        ln for ln in gcp.splitlines()
-        if "--set-env-vars" in ln and not ln.lstrip().startswith("#")
+        ln for ln in gcp.splitlines() if "--set-env-vars" in ln and not ln.lstrip().startswith("#")
     )
 
     opted_in = re.findall(rf"{intent.ALLOWLIST_ENV}=([^,\"'\s]*)", deployed)
@@ -380,9 +386,7 @@ def test_the_deployed_config_opts_the_dogfood_installation_in_and_nobody_else():
     # "and nobody else" is half the property and the half a substring check
     # would have missed: this reads the VALUE, so adding a second id fails.
     assert opted_in == [str(DOGFOOD)]
-    assert "DOUG_INTENT=1" not in deployed, (
-        "the retired process-wide switch is still deployed"
-    )
+    assert "DOUG_INTENT=1" not in deployed, "the retired process-wide switch is still deployed"
 
 
 def test_only_a_canonical_scope_string_names_an_installation():

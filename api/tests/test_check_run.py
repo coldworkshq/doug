@@ -306,8 +306,7 @@ def test_the_summary_is_truncated_below_githubs_cap():
     noisy = FLAGGED.model_copy(
         update={
             "reasons": [
-                Reason(rule=f"reader:pattern-{i}", label="x" * 300, weight=0.0)
-                for i in range(500)
+                Reason(rule=f"reader:pattern-{i}", label="x" * 300, weight=0.0) for i in range(500)
             ]
         }
     )
@@ -324,14 +323,11 @@ def test_truncation_keeps_the_instrument_footer():
     noisy = FLAGGED.model_copy(
         update={
             "reasons": [
-                Reason(rule=f"reader:pattern-{i}", label="x" * 300, weight=0.0)
-                for i in range(500)
+                Reason(rule=f"reader:pattern-{i}", label="x" * 300, weight=0.0) for i in range(500)
             ]
         }
     )
-    _, summary = check_run.render(
-        "reader", noisy, None, WHOLE, instrument=_snap()
-    )
+    _, summary = check_run.render("reader", noisy, None, WHOLE, instrument=_snap())
     assert len(summary) <= check_run.SUMMARY_LIMIT
     assert check_run.TRUNCATION_LEAD in summary
     assert summary.endswith("deep reads 0/200 this cycle")
@@ -430,8 +426,13 @@ def test_severity_not_position_decides_what_survives_the_cut():
     `_by_severity`'s, not the read's. A high finding the model happened to
     emit last must still be on the page when 300 low ones are not."""
     reasons = [
-        Reason(rule=f"reader:pattern-{i}", label=f"{i} " + "x" * 400, weight=0.0,
-               severity="low", file=f"api/doug/module_{i}.py")
+        Reason(
+            rule=f"reader:pattern-{i}",
+            label=f"{i} " + "x" * 400,
+            weight=0.0,
+            severity="low",
+            file=f"api/doug/module_{i}.py",
+        )
         for i in range(400)
     ]
     reasons[-1] = reasons[-1].model_copy(update={"severity": "high"})
@@ -440,8 +441,8 @@ def test_severity_not_position_decides_what_survives_the_cut():
 
     assert _shortfall(summary)[0] > 0
     # Emitted last, rendered first: the one high finding leads the list.
-    assert summary.split("### Findings")[1].lstrip().startswith(
-        check_run._bullet(reasons[-1], None)
+    assert (
+        summary.split("### Findings")[1].lstrip().startswith(check_run._bullet(reasons[-1], None))
     )
     # Emitted second-to-last, rendered last, and cut: a low finding is what
     # the overrun costs, whatever position the read gave it.
@@ -500,9 +501,7 @@ def test_an_indented_fold_body_is_not_read_as_an_empty_fold():
     A `_fold` that ever wrapped its body would have stripped an opener
     above surviving findings and dropped them with no notice at all — this
     module's own defect, committed by the code that fixes it."""
-    indented = (
-        "### Findings\n\n<details>\n<summary>2 low findings</summary>\n\n  * one\n  * two"
-    )
+    indented = "### Findings\n\n<details>\n<summary>2 low findings</summary>\n\n  * one\n  * two"
     assert check_run._trim_empty_fold(indented) == indented
     empty = "### Findings\n\n<details>\n<summary>2 low findings</summary>\n"
     assert check_run._trim_empty_fold(empty) == "### Findings"
@@ -527,9 +526,7 @@ def test_the_reserve_does_not_waste_the_budget():
         ("leading and fold", _cut_inside_the_fold()),
     ):
         for footer in (None, _snap()):
-            _, summary = check_run.render(
-                "reader", verdict, None, WHOLE, instrument=footer
-            )
+            _, summary = check_run.render("reader", verdict, None, WHOLE, instrument=footer)
             headroom = check_run.SUMMARY_LIMIT - len(summary)
             assert 0 <= headroom < 512, (name, headroom)
 
@@ -549,8 +546,11 @@ def test_a_label_cannot_forge_a_fold_opener():
         file="a.py",
     )
     victim = Reason(
-        rule="reader:victim", label="the finding below it", weight=0.9,
-        severity="high", file="b.py",
+        rule="reader:victim",
+        label="the finding below it",
+        weight=0.9,
+        severity="high",
+        file="b.py",
     )
     verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
     _, summary = check_run.render("reader", verdict, None, WHOLE)
@@ -572,8 +572,11 @@ def test_a_label_cannot_open_a_fold_of_its_own():
         file="a.py",
     )
     victim = Reason(
-        rule="reader:y", label="the finding below it", weight=0.9,
-        severity="high", file="b.py",
+        rule="reader:y",
+        label="the finding below it",
+        weight=0.9,
+        severity="high",
+        file="b.py",
     )
     verdict = FLAGGED.model_copy(update={"reasons": [forger, victim]})
     _, summary = check_run.render("reader", verdict, None, WHOLE)
@@ -596,9 +599,7 @@ def test_no_shape_renders_a_summary_over_the_cap():
         for code in sorted(SETTLED_REASON_CODES)
     ]
     ungraded = _oversized()
-    ungraded.reasons[0] = ungraded.reasons[0].model_copy(
-        update={"severity": "catastrophic" * 40}
-    )
+    ungraded.reasons[0] = ungraded.reasons[0].model_copy(update={"severity": "catastrophic" * 40})
     forged = _oversized()
     forged.reasons[0] = forged.reasons[0].model_copy(
         update={"label": "<details><summary>x</summary>" * 20}
@@ -651,12 +652,22 @@ def _cut_inside_the_fold():
     """A verdict whose leading findings fit and whose low ones do not, so
     the cut lands inside the collapsed disclosure."""
     reasons = [
-        Reason(rule=f"reader:pattern-h{i}", label=f"h{i} " + "x" * 400, weight=0.0,
-               severity="high", file=f"api/doug/high_{i}.py")
+        Reason(
+            rule=f"reader:pattern-h{i}",
+            label=f"h{i} " + "x" * 400,
+            weight=0.0,
+            severity="high",
+            file=f"api/doug/high_{i}.py",
+        )
         for i in range(10)
     ] + [
-        Reason(rule=f"reader:pattern-l{i}", label=f"l{i} " + "x" * 400, weight=0.0,
-               severity="low", file=f"api/doug/low_{i}.py")
+        Reason(
+            rule=f"reader:pattern-l{i}",
+            label=f"l{i} " + "x" * 400,
+            weight=0.0,
+            severity="low",
+            file=f"api/doug/low_{i}.py",
+        )
         for i in range(300)
     ]
     return FLAGGED.model_copy(update={"reasons": reasons})
@@ -667,9 +678,7 @@ def test_a_cut_inside_the_fold_closes_it():
     truncation notice and the instrument footer would both render inside a
     collapsed block, so the one line saying findings are missing would
     itself be hidden behind a triangle — #181's defect, one level out."""
-    _, summary = check_run.render(
-        "reader", _cut_inside_the_fold(), None, WHOLE, instrument=_snap()
-    )
+    _, summary = check_run.render("reader", _cut_inside_the_fold(), None, WHOLE, instrument=_snap())
     assert summary.count("<details>") == summary.count("</details>") == 1
     assert len(summary) <= check_run.SUMMARY_LIMIT
     tail = summary.split("</details>", 1)[1]
@@ -946,9 +955,7 @@ def test_a_nonzero_snapshot_does_not_promise_a_first_due():
 
 
 def test_a_missing_meter_omits_the_deep_read_line():
-    _, summary = check_run.render(
-        "reader", FLAGGED, None, WHOLE, instrument=_snap(deep_reads=None)
-    )
+    _, summary = check_run.render("reader", FLAGGED, None, WHOLE, instrument=_snap(deep_reads=None))
     assert "adjudicated 0" in summary
     assert "deep reads" not in summary
 
@@ -1006,7 +1013,6 @@ def test_render_carries_the_cleared_note_only_when_cleared():
     assert check_run.CLEARED_NOTE not in flagged
 
 
-
 def test_oneline_neutralises_a_mention_after_a_dot():
     """The lookbehind used to exclude a preceding '.' as well as a word char,
     on the theory that it kept "a@b.c" readable as an email. The word-char
@@ -1046,18 +1052,14 @@ def test_the_rendered_rule_is_neutralised_like_the_label_beside_it():
     verdict = FLAGGED.model_copy(
         update={
             "reasons": [
-                Reason(
-                    rule="reader:x` @octocat #12 <!-- ](http://e", label="l", weight=0.0
-                )
+                Reason(rule="reader:x` @octocat #12 <!-- ](http://e", label="l", weight=0.0)
             ]
         }
     )
     _, summary = check_run.render("reader", verdict, None, WHOLE)
     # The backtick is dropped rather than ZWSP'd — it carries no meaning in a
     # slug, and a split code span still hands the rest to the renderer.
-    assert (
-        f"- `reader:x @{z}octocat #{z}12 <{z}!-- ]{z}(http:{z}//e` — l" in summary
-    )
+    assert f"- `reader:x @{z}octocat #{z}12 <{z}!-- ]{z}(http:{z}//e` — l" in summary
 
 
 def test_every_spliced_span_in_the_deviation_section_is_neutralised():
@@ -1276,27 +1278,49 @@ _SHA = "f" * 40
 
 
 def _conv(classifications, sha=_SHA):
-    return {"prior_verdict_id": 1, "prior_head_sha": sha, "prior_scored_at": None,
-            "classifications": classifications}
+    return {
+        "prior_verdict_id": 1,
+        "prior_head_sha": sha,
+        "prior_scored_at": None,
+        "classifications": classifications,
+    }
 
 
-def _c(side="prior", state="persisted", reason=None, basis="by-construction",
-       pair_delta="unchanged", code_changed=None, rule="reader:race-condition",
-       file="cache.py"):
-    return {"side": side, "state": state, "unknown_reason": reason, "basis": basis,
-            "pair_delta": pair_delta, "code_changed": code_changed, "rule": rule,
-            "label": "x", "file": file, "severity": "high"}
+def _c(
+    side="prior",
+    state="persisted",
+    reason=None,
+    basis="by-construction",
+    pair_delta="unchanged",
+    code_changed=None,
+    rule="reader:race-condition",
+    file="cache.py",
+):
+    return {
+        "side": side,
+        "state": state,
+        "unknown_reason": reason,
+        "basis": basis,
+        "pair_delta": pair_delta,
+        "code_changed": code_changed,
+        "rule": rule,
+        "label": "x",
+        "file": file,
+        "severity": "high",
+    }
 
 
 def test_since_section_headline_counts_silence_over_unchanged_files():
     """The per-PR fact Andrew ruled ships in v1: denominator = earlier
     findings on unchanged files (carried + re-reported-unchanged), numerator
     = the silent ones. Never a rate, never a ratio."""
-    conv = _conv([
-        _c(),  # silent, carried by construction
-        _c(basis=None, pair_delta=None, code_changed=False),   # re-reported, unchanged file
-        _c(basis=None, pair_delta=None, code_changed=True),    # re-reported, changed file
-    ])
+    conv = _conv(
+        [
+            _c(),  # silent, carried by construction
+            _c(basis=None, pair_delta=None, code_changed=False),  # re-reported, unchanged file
+            _c(basis=None, pair_delta=None, code_changed=True),  # re-reported, changed file
+        ]
+    )
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
     assert f"### Since `{_SHA[:12]}`" in summary
     assert (
@@ -1310,13 +1334,15 @@ def test_since_section_headline_counts_silence_over_unchanged_files():
 def test_since_section_never_says_resolved_or_fixed():
     """v1 has no resolved state (2026-08-20 ruling); the section must not
     manufacture one in prose either."""
-    conv = _conv([
-        _c(),
-        _c(state="unknown", reason="edited-not-verified", basis=None, pair_delta=None),
-        _c(state="unknown", reason="left-diff", basis=None, pair_delta=None),
-    ])
+    conv = _conv(
+        [
+            _c(),
+            _c(state="unknown", reason="edited-not-verified", basis=None, pair_delta=None),
+            _c(state="unknown", reason="left-diff", basis=None, pair_delta=None),
+        ]
+    )
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
-    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_SUMMARY)]
+    section = summary[summary.index("### Since") : summary.index(check_run.HOW_TO_READ_SUMMARY)]
     assert "resolved" not in section.lower()
     assert "fixed" not in section.lower()
     assert "Doug has not verified a fix, so it stays listed." in section
@@ -1330,8 +1356,7 @@ def test_since_section_changed_elsewhere_asks_for_a_human():
 
 def test_since_section_lists_new_findings_on_unchanged_files():
     """The reader's noise runs both ways; both directions are printed."""
-    conv = _conv([_c(side="later", state="new", basis=None, pair_delta=None,
-                     code_changed=False)])
+    conv = _conv([_c(side="later", state="new", basis=None, pair_delta=None, code_changed=False)])
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
     assert f"New on files unchanged since `{_SHA[:12]}` (1)" in summary
 
@@ -1367,10 +1392,9 @@ def test_since_section_degrades_a_storage_error_to_one_line():
 
 
 def test_since_section_carries_no_ratio_or_rate():
-    conv = _conv([_c(), _c(state="unknown", reason="not-reconfirmed", basis=None,
-                           pair_delta=None)])
+    conv = _conv([_c(), _c(state="unknown", reason="not-reconfirmed", basis=None, pair_delta=None)])
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, convergence=conv)
-    section = summary[summary.index("### Since"):summary.index(check_run.HOW_TO_READ_SUMMARY)]
+    section = summary[summary.index("### Since") : summary.index(check_run.HOW_TO_READ_SUMMARY)]
     assert "%" not in section
     assert "miss rate" not in section.lower()
 
@@ -1390,9 +1414,7 @@ def _graded(*findings) -> object:
             risk_score=62,
             rationale="r",
             findings=[
-                reader.ReaderFinding(
-                    category_slug=slug, description=desc, file=path, severity=sev
-                )
+                reader.ReaderFinding(category_slug=slug, description=desc, file=path, severity=sev)
                 for slug, desc, path, sev in findings
             ],
         ),
@@ -1406,10 +1428,7 @@ def test_a_findings_file_links_to_the_commit_that_was_read():
     and would quietly show a reader different code from the code the
     finding is about — worse than no link, because it looks authoritative."""
     _, summary = check_run.render("reader", FLAGGED, None, WHOLE, source=SOURCE)
-    assert (
-        "[`cache.py`](https://github.com/coldworkshq/doug/blob/"
-        f"{'c' * 12}/cache.py)" in summary
-    )
+    assert f"[`cache.py`](https://github.com/coldworkshq/doug/blob/{'c' * 12}/cache.py)" in summary
 
 
 def test_without_a_source_the_file_is_still_named():
@@ -1440,7 +1459,7 @@ def test_a_paths_punctuation_cannot_end_the_url():
     spliced into markdown."""
     verdict = _graded(("slug", "d", "src/a) (click x) b.py", "high"))
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
-    href = summary[summary.index("(https://github.com"):summary.index(") · `reader:")]
+    href = summary[summary.index("(https://github.com") : summary.index(") · `reader:")]
     assert href.endswith("/src/a%29%20%28click%20x%29%20b.py")
     assert f"/blob/{'c' * 12}/" in href
     # The visible half keeps the path verbatim. A path that could NOT be
@@ -1460,7 +1479,7 @@ def test_findings_lead_with_severity_and_are_ordered_by_it():
         ("medium-one", "m", "c.py", "medium"),
     )
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
-    findings = summary[summary.index("### Findings"):]
+    findings = summary[summary.index("### Findings") :]
     assert findings.index("**high**") < findings.index("**medium**")
     assert findings.index("**medium**") < findings.index("**low**")
     assert "- **high** · [`b.py`]" in summary
@@ -1512,7 +1531,7 @@ def test_an_ungraded_reason_never_folds_and_never_leads_the_graded_ones():
     verdict = _graded(("high-one", "h", "b.py", "high"), ("low-one", "l", "a.py", "low"))
     verdict.reasons.append(Reason(rule="settled-missing-import", label="s", weight=0.0))
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
-    findings = summary[summary.index("### Findings"):]
+    findings = summary[summary.index("### Findings") :]
     assert findings.index("**high**") < findings.index("settled-missing-import")
     assert findings.index("settled-missing-import") < findings.index("<details>")
 
@@ -1589,7 +1608,7 @@ def test_an_all_low_list_does_not_fold_itself_into_an_empty_section():
     finding folds"."""
     verdict = _graded(("one", "a", "a.py", "low"), ("two", "b", "b.py", "low"))
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
-    findings = summary[summary.index("### Findings"):summary.index("<details>")]
+    findings = summary[summary.index("### Findings") : summary.index("<details>")]
     assert "- **low** · [`a.py`]" in findings
     assert "- **low** · [`b.py`]" in findings
     # The only fold left in the summary is the standing notes'.
@@ -1602,11 +1621,7 @@ def test_a_recognised_severity_is_emitted_from_this_modules_own_vocabulary():
     the bucket; echoing the raw string would put the model's casing and
     whitespace into the most load-bearing span in the list for nothing."""
     verdict = FLAGGED.model_copy(
-        update={
-            "reasons": [
-                Reason(rule="reader:x", label="l", weight=0.0, severity="  HiGh  ")
-            ]
-        }
+        update={"reasons": [Reason(rule="reader:x", label="l", weight=0.0, severity="  HiGh  ")]}
     )
     _, summary = check_run.render("reader", verdict, None, WHOLE)
     assert "- **high** · `reader:x` — l" in summary
@@ -1625,11 +1640,7 @@ def test_an_unrecognised_severity_is_capped_and_not_bolded():
     count on exactly this input, and promises the raw severity still reaches
     the reader here."""
     verdict = FLAGGED.model_copy(
-        update={
-            "reasons": [
-                Reason(rule="reader:x", label="l", weight=0.0, severity="q" * 400)
-            ]
-        }
+        update={"reasons": [Reason(rule="reader:x", label="l", weight=0.0, severity="q" * 400)]}
     )
     _, summary = check_run.render("reader", verdict, None, WHOLE)
     bullet = next(ln for ln in summary.splitlines() if ln.startswith("- q"))
@@ -1644,7 +1655,10 @@ def _graded_with_evidence(*findings) -> object:
             rationale="r",
             findings=[
                 reader.ReaderFinding(
-                    category_slug=slug, description=desc, file=path, severity=sev,
+                    category_slug=slug,
+                    description=desc,
+                    file=path,
+                    severity=sev,
                     evidence=evidence,
                 )
                 for slug, desc, path, sev, evidence in findings
@@ -1689,6 +1703,6 @@ def test_an_outside_read_finding_sorts_after_its_in_read_peers_of_the_same_sever
         ("part-medium", "pm", "d.py", "medium", "partial-read"),
     )
     _, summary = check_run.render("reader", verdict, None, WHOLE, source=SOURCE)
-    findings = summary[summary.index("### Findings"):]
+    findings = summary[summary.index("### Findings") :]
     order = [findings.index(x) for x in ("— ih", "— oh", "— im", "— pm")]
     assert order == sorted(order)

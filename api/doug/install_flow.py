@@ -104,9 +104,7 @@ def seal_install_flow(
     }
     _valid_payload(payload)
     segment = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
-    signature = _b64encode(
-        hmac.new(signing_secret, segment.encode(), hashlib.sha256).digest()
-    )
+    signature = _b64encode(hmac.new(signing_secret, segment.encode(), hashlib.sha256).digest())
     return f"{segment}.{signature}"
 
 
@@ -127,9 +125,7 @@ def verify_install_flow(
             raise InstallFlowError
         segment, supplied_signature = parts
         signature = _b64decode(supplied_signature)
-        expected_signature = hmac.new(
-            signing_secret, segment.encode(), hashlib.sha256
-        ).digest()
+        expected_signature = hmac.new(signing_secret, segment.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(signature, expected_signature):
             raise InstallFlowError
         payload = json.loads(_b64decode(segment))
@@ -139,10 +135,7 @@ def verify_install_flow(
             raise InstallFlowError
         if expected_subject is not None and subject != expected_subject:
             raise InstallFlowError
-        if (
-            expected_installation_id is not None
-            and installation_id != expected_installation_id
-        ):
+        if expected_installation_id is not None and installation_id != expected_installation_id:
             raise InstallFlowError
         return InstallFlow(
             nonce=nonce,

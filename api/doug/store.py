@@ -510,6 +510,7 @@ def completed_example_pack_jobs(
             for row in conn.execute(query).mappings()
         ]
 
+
 # Merged PRs waiting out their outcome-observation window before the M3
 # adjudicator scores them. Written when a pull_request 'closed' event is a
 # merge (Task 6's amendment); drained by the adjudicator once due_at
@@ -639,9 +640,7 @@ def _install_flow_advisory_key(nonce_digest: str) -> int:
     return -(positive + 1)
 
 
-def _example_pack_advisory_key(
-    cohort_id: str, pack_hash: str, finding_id: str
-) -> int:
+def _example_pack_advisory_key(cohort_id: str, pack_hash: str, finding_id: str) -> int:
     payload = json.dumps(
         [cohort_id, pack_hash, finding_id],
         ensure_ascii=True,
@@ -651,9 +650,7 @@ def _example_pack_advisory_key(
 
 
 @contextmanager
-def example_pack_adjudication_lock(
-    cohort_id: str, pack_hash: str, finding_id: str
-):
+def example_pack_adjudication_lock(cohort_id: str, pack_hash: str, finding_id: str):
     """Serialize read-current then create-correction across API instances."""
 
     engine = _get_install_flow_lock_engine()
@@ -669,9 +666,7 @@ def example_pack_adjudication_lock(
     try:
         connection = engine.connect()
     except SQLAlchemyTimeoutError as exc:
-        raise ExamplePackLockUnavailable(
-            "adjudication lock temporarily unavailable"
-        ) from exc
+        raise ExamplePackLockUnavailable("adjudication lock temporarily unavailable") from exc
     with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
         parameters = {"key": key}
         conn.execute(text("SELECT pg_advisory_lock(:key)"), parameters)
@@ -700,10 +695,7 @@ def _get_install_flow_lock_engine():
             _install_flow_lock_engine = None
             _install_flow_lock_engine_url = None
             return None
-        if (
-            _install_flow_lock_engine is None
-            or _install_flow_lock_engine_url != url
-        ):
+        if _install_flow_lock_engine is None or _install_flow_lock_engine_url != url:
             engine = create_engine(
                 url,
                 pool_pre_ping=True,
@@ -990,9 +982,7 @@ def save_review(
             raise
         if installation_id is None or github_repo_id is None or head_sha is None:
             raise
-        existing = find_verdict_by_identity(
-            installation_id, github_repo_id, pr_number, head_sha
-        )
+        existing = find_verdict_by_identity(installation_id, github_repo_id, pr_number, head_sha)
         if existing is None:
             raise
         _mark(False)
@@ -1126,9 +1116,7 @@ def upsert_installation(
     if row is None:
         try:
             with engine.begin() as conn:
-                conn.execute(
-                    installations.insert(), {"installation_id": installation_id, **values}
-                )
+                conn.execute(installations.insert(), {"installation_id": installation_id, **values})
             return
         except IntegrityError:
             # Two concurrent deliveries for a new installation (redelivery,
@@ -1236,9 +1224,7 @@ def repo_threshold(installation_id: int, github_repo_id: int) -> float | None:
     return None if value is None else float(value)
 
 
-def set_repo_threshold(
-    installation_id: int, github_repo_id: int, value: float | None
-) -> bool:
+def set_repo_threshold(installation_id: int, github_repo_id: int, value: float | None) -> bool:
     """Write the line on the ACTIVE row for (installation_id, github_repo_id).
 
     Returns False when no such active row exists — the API turns that into
@@ -1503,9 +1489,7 @@ def set_pr_comment_id(
             )
             .values(
                 comment_id=comment_id,
-                last_seq=case(
-                    (pr_comments.c.last_seq > seq, pr_comments.c.last_seq), else_=seq
-                ),
+                last_seq=case((pr_comments.c.last_seq > seq, pr_comments.c.last_seq), else_=seq),
                 updated_at=datetime.now(UTC),
             )
         )
@@ -2045,9 +2029,7 @@ def instrument_snapshot(
             select(
                 func.count().filter(outcome_jobs.c.status == "done"),
                 func.count().filter(outcome_jobs.c.status != "done"),
-                func.min(outcome_jobs.c.due_at).filter(
-                    outcome_jobs.c.status != "done"
-                ),
+                func.min(outcome_jobs.c.due_at).filter(outcome_jobs.c.status != "done"),
             )
             .select_from(outcome_jobs)
             .where(scoped)
@@ -2274,9 +2256,7 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
             return None
         reason_rows = (
             conn.execute(
-                select(findings)
-                .where(findings.c.verdict_id == v["id"])
-                .order_by(findings.c.id)
+                select(findings).where(findings.c.verdict_id == v["id"]).order_by(findings.c.id)
             )
             .mappings()
             .all()
@@ -2301,8 +2281,7 @@ def find_review(repo: str, pr_number: int, head_sha: str) -> dict | None:
         "band": v["band"],
         "threshold": v["threshold"],
         "reasons": [
-            {"rule": r["rule"], "label": r["label"], "weight": r["weight"]}
-            for r in reason_rows
+            {"rule": r["rule"], "label": r["label"], "weight": r["weight"]} for r in reason_rows
         ],
         # kind="none" is the "read happened, found nothing" storage marker
         # (see save_deviations) — it was never a response finding.
@@ -2344,17 +2323,13 @@ def _verdict_bundle(conn, v) -> dict:
     )
     dev_rows = (
         conn.execute(
-            select(deviations)
-            .where(deviations.c.verdict_id == v["id"])
-            .order_by(deviations.c.id)
+            select(deviations).where(deviations.c.verdict_id == v["id"]).order_by(deviations.c.id)
         )
         .mappings()
         .all()
     )
     read_row = (
-        conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1))
-        .mappings()
-        .first()
+        conn.execute(select(reads).where(reads.c.verdict_id == v["id"]).limit(1)).mappings().first()
     )
     return {
         "id": v["id"],
@@ -2527,11 +2502,7 @@ def convergence_for(verdict_id: int) -> dict | None:
         if engine is None:
             return None
         with engine.connect() as conn:
-            v = (
-                conn.execute(select(verdicts).where(verdicts.c.id == verdict_id))
-                .mappings()
-                .first()
-            )
+            v = conn.execute(select(verdicts).where(verdicts.c.id == verdict_id)).mappings().first()
             if v is None or v["tier"] != "reader":
                 return None
             if (
@@ -2573,9 +2544,7 @@ def convergence_for(verdict_id: int) -> dict | None:
             def _finding_rows(vid: int) -> list[dict]:
                 rows = (
                     conn.execute(
-                        select(findings)
-                        .where(findings.c.verdict_id == vid)
-                        .order_by(findings.c.id)
+                        select(findings).where(findings.c.verdict_id == vid).order_by(findings.c.id)
                     )
                     .mappings()
                     .all()
@@ -2584,9 +2553,7 @@ def convergence_for(verdict_id: int) -> dict | None:
 
             def _read_row(vid: int) -> dict | None:
                 row = (
-                    conn.execute(
-                        select(reads).where(reads.c.verdict_id == vid).limit(1)
-                    )
+                    conn.execute(select(reads).where(reads.c.verdict_id == vid).limit(1))
                     .mappings()
                     .first()
                 )
@@ -3056,9 +3023,11 @@ def run_detail(
                 "pr_meta": v["pr_meta"],
             }
         )
-        job = conn.execute(
-            select(review_jobs).where(review_jobs.c.verdict_id == verdict_id).limit(1)
-        ).mappings().first()
+        job = (
+            conn.execute(select(review_jobs).where(review_jobs.c.verdict_id == verdict_id).limit(1))
+            .mappings()
+            .first()
+        )
         detail["job"] = (
             {
                 "status": job["status"],
@@ -3156,9 +3125,7 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
         scored = scored.where(verdicts.c.repo == repo)
     scored = scored.subquery()
 
-    on_outcome = (outcomes.c.repo == scored.c.repo) & (
-        outcomes.c.pr_number == scored.c.pr_number
-    )
+    on_outcome = (outcomes.c.repo == scored.c.repo) & (outcomes.c.pr_number == scored.c.pr_number)
     # A PR with several outcome rows yields several rows here; the caller
     # decides how to reduce them (any non-clean outcome makes it a defect).
     pr_q = (
@@ -3169,9 +3136,7 @@ def pattern_join(repo: str | None = None) -> dict[str, list[dict]]:
     hit_q = (
         select(scored.c.repo, scored.c.pr_number, findings.c.rule)
         .select_from(
-            scored.join(findings, findings.c.verdict_id == scored.c.id).join(
-                outcomes, on_outcome
-            )
+            scored.join(findings, findings.c.verdict_id == scored.c.id).join(outcomes, on_outcome)
         )
         .distinct()
     )
@@ -3232,20 +3197,21 @@ def latest_reviews(
         if not v_rows:
             return []
         verdict_ids = [v["id"] for v in v_rows]
-        f_rows = conn.execute(
-            select(findings)
-            .where(findings.c.verdict_id.in_(verdict_ids))
-            .order_by(findings.c.id)
-        ).mappings().all()
+        f_rows = (
+            conn.execute(
+                select(findings)
+                .where(findings.c.verdict_id.in_(verdict_ids))
+                .order_by(findings.c.id)
+            )
+            .mappings()
+            .all()
+        )
 
         findings_by_verdict: dict[int, list[dict]] = {}
         for f in f_rows:
             findings_by_verdict.setdefault(f["verdict_id"], []).append(dict(f))
 
-        return [
-            {**v, "findings": findings_by_verdict.get(v["id"], [])}
-            for v in v_rows
-        ]
+        return [{**v, "findings": findings_by_verdict.get(v["id"], [])} for v in v_rows]
 
 
 def run_history(
@@ -3297,9 +3263,7 @@ def run_history(
     if repo_ids is not None:
         query = query.where(verdicts.c.github_repo_id.in_(repo_ids))
     query = (
-        query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id))
-        .limit(limit)
-        .offset(offset)
+        query.order_by(desc(verdicts.c.scored_at), desc(verdicts.c.id)).limit(limit).offset(offset)
     )
 
     with engine.connect() as conn:
@@ -3341,9 +3305,7 @@ def run_history(
                     findings.c.verdict_id,
                     func.count().label("total"),
                     func.sum(case((findings.c.severity == "high", 1), else_=0)).label("high"),
-                    func.sum(case((findings.c.severity == "medium", 1), else_=0)).label(
-                        "medium"
-                    ),
+                    func.sum(case((findings.c.severity == "medium", 1), else_=0)).label("medium"),
                     func.sum(case((findings.c.severity == "low", 1), else_=0)).label("low"),
                 )
                 .where(findings.c.verdict_id.in_(ids))
@@ -3399,16 +3361,12 @@ def run_history(
             .where(outcomes.c.pr_number.in_({k[1] for k in keys}))
         )
         if tenants is not None:
-            outcome_query = outcome_query.where(
-                outcomes.c.installation_id.in_(tenants)
-            )
+            outcome_query = outcome_query.where(outcomes.c.installation_id.in_(tenants))
         if repo_ids is not None:
             outcome_query = outcome_query.where(outcomes.c.github_repo_id.in_(repo_ids))
         outcome_by_pr = {
             (row["repo"], row["pr_number"], row["window_days"]): row["kind"]
-            for row in conn.execute(
-                outcome_query.order_by(outcomes.c.id)
-            ).mappings()
+            for row in conn.execute(outcome_query.order_by(outcomes.c.id)).mappings()
         }
 
     zero = {"total": 0, "high": 0, "medium": 0, "low": 0}
@@ -3532,13 +3490,9 @@ def job_health(
                 )
             ),
             "running": _count_review(rj.c.status == "running"),
-            "stalled": _count_review(
-                rj.c.status == "running", rj.c.started_at < review_cutoff
-            ),
+            "stalled": _count_review(rj.c.status == "running", rj.c.started_at < review_cutoff),
             "failed": _count_review(rj.c.status == "failed"),
-            "failed_24h": _count_review(
-                rj.c.status == "failed", rj.c.finished_at >= day_ago
-            ),
+            "failed_24h": _count_review(rj.c.status == "failed", rj.c.finished_at >= day_ago),
             "stall_lease_seconds": review_lease_seconds,
             "max_attempts": review_max_attempts,
         }
@@ -3558,15 +3512,11 @@ def job_health(
             ),
             "oldest_overdue_due_at": _ts(
                 _scope_outcome(
-                    select(func.min(oj.c.due_at)).where(
-                        oj.c.status == "pending", oj.c.due_at < now
-                    )
+                    select(func.min(oj.c.due_at)).where(oj.c.status == "pending", oj.c.due_at < now)
                 )
             ),
             "running": _count_outcome(oj.c.status == "running"),
-            "stalled": _count_outcome(
-                oj.c.status == "running", oj.c.started_at < outcome_cutoff
-            ),
+            "stalled": _count_outcome(oj.c.status == "running", oj.c.started_at < outcome_cutoff),
             "failed": _count_outcome(oj.c.status == "failed"),
             "stall_lease_seconds": outcome_lease_seconds,
             "max_attempts": outcome_max_attempts,
@@ -3699,9 +3649,7 @@ def active_installations() -> list[int]:
         return [
             int(r.installation_id)
             for r in conn.execute(
-                select(installations.c.installation_id).where(
-                    installations.c.state == "active"
-                )
+                select(installations.c.installation_id).where(installations.c.state == "active")
             )
         ]
 
@@ -3717,9 +3665,7 @@ def installation_state(installation_id: int) -> str | None:
         return None
     with engine.connect() as conn:
         return conn.execute(
-            select(installations.c.state).where(
-                installations.c.installation_id == installation_id
-            )
+            select(installations.c.state).where(installations.c.installation_id == installation_id)
         ).scalar_one_or_none()
 
 
@@ -3736,9 +3682,7 @@ def installation_id_for_workos_org(org_id: str) -> int | None:
         return None
     with engine.connect() as conn:
         result = conn.execute(
-            select(installations.c.installation_id).where(
-                installations.c.workos_org_id == org_id
-            )
+            select(installations.c.installation_id).where(installations.c.workos_org_id == org_id)
         ).scalar_one_or_none()
     return int(result) if result is not None else None
 
@@ -3805,9 +3749,7 @@ def installation_bind_lock(installation_id: int):
     try:
         connection = engine.connect()
     except SQLAlchemyTimeoutError as exc:
-        raise InstallationBindLockUnavailable(
-            "installation bind temporarily unavailable"
-        ) from exc
+        raise InstallationBindLockUnavailable("installation bind temporarily unavailable") from exc
     with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
         if conn.dialect.name != "postgresql":
             yield
@@ -3837,9 +3779,7 @@ def install_flow_bind_lock(nonce_digest: str, installation_id: int):
     try:
         connection = engine.connect()
     except SQLAlchemyTimeoutError as exc:
-        raise InstallFlowLockUnavailable(
-            "install flow temporarily unavailable"
-        ) from exc
+        raise InstallFlowLockUnavailable("install flow temporarily unavailable") from exc
     with connection.execution_options(isolation_level="AUTOCOMMIT") as conn:
         if conn.dialect.name != "postgresql":
             yield
@@ -3852,9 +3792,7 @@ def install_flow_bind_lock(nonce_digest: str, installation_id: int):
             try:
                 yield
             finally:
-                conn.execute(
-                    text("SELECT pg_advisory_unlock(:key)"), installation_key
-                )
+                conn.execute(text("SELECT pg_advisory_unlock(:key)"), installation_key)
         finally:
             conn.execute(text("SELECT pg_advisory_unlock(:key)"), nonce_key)
 
@@ -3997,7 +3935,7 @@ def consume_install_flow_and_bind(
                 ).scalar_one_or_none()
             if current != org_id:
                 raise _InstallFlowBindConflict
-    except (IntegrityError, _InstallFlowBindConflict):
+    except IntegrityError, _InstallFlowBindConflict:
         return "conflict"
     return "bound"
 
@@ -4127,9 +4065,7 @@ def session_entitlements_for(workos_user_id: str) -> list[dict]:
     ]
 
 
-def session_entitlement_for(
-    workos_user_id: str, installation_id: int
-) -> dict | None:
+def session_entitlement_for(workos_user_id: str, installation_id: int) -> dict | None:
     """One user's claim for one selected installation.
 
     The two-column predicate is the authority boundary.  Reading all rows and
@@ -4236,7 +4172,8 @@ def session_connections_for(workos_user_id: str) -> list[dict]:
                     "id": int(repo_id),
                     "full_name": row["full_name"],
                     "needs_you_threshold": (
-                        None if row["needs_you_threshold"] is None
+                        None
+                        if row["needs_you_threshold"] is None
                         else float(row["needs_you_threshold"])
                     ),
                     "pr_comment": bool(row["pr_comment"]),
@@ -4338,8 +4275,10 @@ def _tenant_ids(
         if installation_id is not None:
             raise ValueError("pass installation_id or installation_ids, never both")
         if repo_ids is None:
-            raise ValueError("installation_ids requires repo_ids — a lineage is only "
-                             "safe paired with the proven repo set it was derived from")
+            raise ValueError(
+                "installation_ids requires repo_ids — a lineage is only "
+                "safe paired with the proven repo set it was derived from"
+            )
         return frozenset(installation_ids)
     return None if installation_id is None else frozenset({installation_id})
 
@@ -4518,9 +4457,7 @@ def insert_installation_token(
         return None
     with engine.begin() as conn:
         known = conn.execute(
-            select(installations.c.id).where(
-                installations.c.installation_id == installation_id
-            )
+            select(installations.c.id).where(installations.c.installation_id == installation_id)
         ).scalar_one_or_none()
         if known is None:
             return None
@@ -4569,8 +4506,7 @@ def installation_token_by_lookup(token_lookup: str) -> dict | None:
                 )
                 .join(
                     installations,
-                    installations.c.installation_id
-                    == installation_tokens.c.installation_id,
+                    installations.c.installation_id == installation_tokens.c.installation_id,
                 )
                 .where(installation_tokens.c.token_lookup == token_lookup)
             )
@@ -4601,9 +4537,7 @@ def installation_token_repo_ids(token_id: int) -> set[int]:
         }
 
 
-def count_installation_tokens_minted_since(
-    installation_id: int, since: datetime
-) -> int | None:
+def count_installation_tokens_minted_since(installation_id: int, since: datetime) -> int | None:
     """None on ANY failure, including storage-off. The caller fails closed
     on None: a counting error must not mint."""
     engine = _get_engine()
@@ -4662,11 +4596,15 @@ def list_installation_tokens(installation_id: int) -> list[dict]:
         return []
     cols = [c for c in installation_tokens.c if c.name != "token_hash"]
     with engine.connect() as conn:
-        rows = conn.execute(
-            select(*cols)
-            .where(installation_tokens.c.installation_id == installation_id)
-            .order_by(installation_tokens.c.id.desc())
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                select(*cols)
+                .where(installation_tokens.c.installation_id == installation_id)
+                .order_by(installation_tokens.c.id.desc())
+            )
+            .mappings()
+            .all()
+        )
     out = []
     for row in rows:
         d = dict(row)

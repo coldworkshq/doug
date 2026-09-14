@@ -34,9 +34,7 @@ def label_defects(
     by_title = {p.title.strip(): p.number for p in prs}
     defects: set[int] = set()
 
-    candidates: list[tuple[str, str, int | None]] = [
-        (p.title, p.body, p.number) for p in prs
-    ]
+    candidates: list[tuple[str, str, int | None]] = [(p.title, p.body, p.number) for p in prs]
     candidates += [(t, b, None) for t, b in extra_reverts or []]
 
     for title, body, own_number in candidates:

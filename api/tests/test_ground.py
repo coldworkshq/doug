@@ -142,6 +142,7 @@ def test_a_spend_cap_stops_verifying_without_losing_the_tail():
     an early exit that forgets to re-attach the remainder. The assertion inside
     ground_findings catches it; this proves the assertion is reachable.
     """
+
     class Capped:
         class messages:
             @staticmethod
@@ -217,18 +218,20 @@ def test_score_one_charges_verify_to_a_scope_the_customer_meter_cannot_see(monke
     # grounding on for THIS tenant", so the flag and the scope have to agree.
     monkeypatch.setenv(reader.VERIFY_ALLOWLIST_ENV, "99")
     monkeypatch.setattr(reader, "_charge", lambda scope: charged.append(scope))
-    monkeypatch.setattr(
-        reader, "read_diff", lambda *a, **k: _rv()
-    )
+    monkeypatch.setattr(reader, "read_diff", lambda *a, **k: _rv())
     monkeypatch.setattr(reader, "_verify_client", lambda: Fake([{"checks": [_check()]}]))
 
     meta = PRMetadata(
-        number=1, title="t", author="a", author_type=AuthorType.HUMAN,
-        additions=1, deletions=0, files=["api/doug/check_run.py"], head_sha=HEAD,
+        number=1,
+        title="t",
+        author="a",
+        author_type=AuthorType.HUMAN,
+        additions=1,
+        deletions=0,
+        files=["api/doug/check_run.py"],
+        head_sha=HEAD,
     )
-    review.score_one(
-        meta, "+ x", scope=reader.installation_scope(99), resolve_file=lambda p: FILE
-    )
+    review.score_one(meta, "+ x", scope=reader.installation_scope(99), resolve_file=lambda p: FILE)
     assert charged == ["verify:99"]
     assert reader.installation_scope(99) not in charged
 

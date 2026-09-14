@@ -576,16 +576,13 @@ def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilitie
         for line in lines
     )
     assert any(
-        line.startswith("storage buckets describe gs://doug-private-evidence")
-        and "--raw" in line
+        line.startswith("storage buckets describe gs://doug-private-evidence") and "--raw" in line
         for line in lines
     )
     bucket_bindings = [
         line
         for line in lines
-        if line.startswith(
-            "storage buckets add-iam-policy-binding gs://doug-private-evidence"
-        )
+        if line.startswith("storage buckets add-iam-policy-binding gs://doug-private-evidence")
     ]
     assert bucket_bindings == [
         "storage buckets add-iam-policy-binding gs://doug-private-evidence "
@@ -601,9 +598,7 @@ def test_example_pack_setup_creates_private_bucket_and_exact_runtime_capabilitie
     secret_bindings = [
         line
         for line in lines
-        if line.startswith(
-            "secrets add-iam-policy-binding doug-example-pack-token"
-        )
+        if line.startswith("secrets add-iam-policy-binding doug-example-pack-token")
     ]
     assert len(secret_bindings) == 2
     assert any("doug-api-sa@" in line for line in secret_bindings)
@@ -623,8 +618,7 @@ def test_example_pack_setup_rejects_an_existing_bucket_with_unsafe_posture(tmp_p
 
     assert result.returncode != 0
     assert any(
-        line.startswith("storage buckets describe gs://doug-private-evidence")
-        for line in lines
+        line.startswith("storage buckets describe gs://doug-private-evidence") for line in lines
     )
     assert not any("storage buckets add-iam-policy-binding" in line for line in lines)
 
@@ -745,9 +739,7 @@ def test_api_deploy_preserves_closed_cohort_reads_without_reenabling_capture(tmp
         "deploy",
         {"GCLOUD_EXAMPLE_PACK_CONFIG": "1"},
     )
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
 
     assert "DOUG_EXAMPLE_PACK_BUCKET=doug-private-evidence" in api_deploy
     assert "DOUG_EXAMPLE_PACK_COHORT=doug-dogfood-2026-08" in api_deploy
@@ -762,9 +754,7 @@ def test_console_deploy_preserves_existing_example_pack_purpose_token(tmp_path):
         "console",
         {"GCLOUD_EXAMPLE_PACK_CONFIG": "1"},
     )
-    [console_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-console")
-    ]
+    [console_deploy] = [line for line in lines if line.startswith("run deploy doug-console")]
 
     assert "DOUG_EXAMPLE_PACK_TOKEN=doug-example-pack-token:latest" in console_deploy
     assert "DOUG_EXAMPLE_PACK_BUCKET" not in console_deploy
@@ -796,8 +786,8 @@ def test_node_deploys_build_images_from_the_monorepo_root():
     assert "build_node_image console/Dockerfile doug-console" in console
     assert "--source ../web" not in web
     assert "--source ../console" not in console
-    assert "--image \"$image\"" in web
-    assert "--image \"$image\"" in console
+    assert '--image "$image"' in web
+    assert '--image "$image"' in console
     build = _function_body("build_node_image")
     assert "cloudbuild-node.yaml" in build
     assert 'gcloud builds submit "$REPO_ROOT"' in build
@@ -817,6 +807,7 @@ def test_root_gcloudignore_tracks_dockerignore_for_node_builds():
     root = Path(__file__).resolve().parents[2]
     dockerignore = (root / ".dockerignore").read_text()
     gcloudignore = (root / ".gcloudignore").read_text()
+
     # Strip comment lines — the gcloud file carries an extra why-header.
     def body(text: str) -> list[str]:
         return [line for line in text.splitlines() if line and not line.startswith("#")]
@@ -854,13 +845,17 @@ def test_gcloudignore_keeps_every_tracked_web_source_file_in_the_upload():
     # is meant to cover instead of failing.
     tracked = subprocess.run(
         ["git", "ls-files", "-z", "web", "console"],
-        cwd=root, capture_output=True, text=True, check=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
     compiled = [p for p in tracked if p and not p.endswith(".md")]
     # Guard the guard: an empty list would make every assertion below vacuous.
     assert len(compiled) > 100, f"expected a real source tree, got {len(compiled)}"
-    assert any(p.startswith("web/app/docs/") for p in compiled), \
+    assert any(p.startswith("web/app/docs/") for p in compiled), (
         "web/app/docs/ is not tracked — this pin can no longer see the regression"
+    )
 
     # Use git as the gitignore oracle: same engine gcloud's .gcloudignore
     # follows, so this cannot drift from real matching semantics the way a
@@ -885,8 +880,10 @@ def test_gcloudignore_keeps_every_tracked_web_source_file_in_the_upload():
         # cannot-fail mode this pin exists to prevent.
         proc = subprocess.run(
             ["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "-z", "--stdin"],
-            cwd=scratch, input="\0".join(compiled),
-            capture_output=True, text=True,
+            cwd=scratch,
+            input="\0".join(compiled),
+            capture_output=True,
+            text=True,
         )
         assert proc.returncode in (0, 1), (
             f"git check-ignore failed ({proc.returncode}), so this pin proved "
@@ -911,7 +908,7 @@ def test_api_deploy_source_is_api_dir_not_repo_root():
     assert "--source ../api" not in deploy
     # The script cds to API_DIR before the case dispatch; pin that the
     # deploy body never rebinds CWD to the repo root.
-    assert "cd \"$REPO_ROOT\"" not in deploy
+    assert 'cd "$REPO_ROOT"' not in deploy
 
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path]:
@@ -1093,9 +1090,7 @@ def _invoke_gcp(
     return result, log.read_text().splitlines()
 
 
-def _run_gcp(
-    tmp_path: Path, command: str, extra_env: dict[str, str] | None = None
-) -> list[str]:
+def _run_gcp(tmp_path: Path, command: str, extra_env: dict[str, str] | None = None) -> list[str]:
     result, lines = _invoke_gcp(tmp_path, command, extra_env)
     assert result.returncode == 0, result.stdout + result.stderr
     return lines
@@ -1113,9 +1108,7 @@ def test_api_deploy_carries_the_prereg_hash_env_var(tmp_path):
     Receipts (Task 8) need the api service to report the hash currently in
     force too, so it must see the same env var."""
     lines = _run_gcp(tmp_path, "deploy")
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert f"DOUG_PREREG_HASH={expected_hash}" in api_deploy
@@ -1167,9 +1160,7 @@ esac
 
     assert result.returncode != 0, result.stdout + result.stderr
     assert "v1/showcase/queue" in (tmp_path / "curl.log").read_text()
-    assert not [
-        line for line in lines if line.startswith("run services update-traffic doug-api")
-    ]
+    assert not [line for line in lines if line.startswith("run services update-traffic doug-api")]
 
 
 def test_adjudicator_deploys_the_live_api_image_with_the_bounded_job_contract(tmp_path):
@@ -1230,8 +1221,7 @@ def test_reconcile_job_deploys_the_live_api_image_under_the_adjudicator_sa_with_
     assert "--service-account doug-adjudicator-sa@doug-prod0.iam.gserviceaccount.com" in deploy
 
     expected_secrets = (
-        "DATABASE_URL=doug-database-url:latest,"
-        "GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest"
+        "DATABASE_URL=doug-database-url:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest"
     )
     actual_secrets = deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
     assert actual_secrets == expected_secrets
@@ -1257,9 +1247,7 @@ def test_adjudicator_resolves_the_locked_preregistration_from_its_own_location(t
         result, lines = _invoke_gcp(case, "adjudicator", cwd=caller_cwd)
 
         assert result.returncode == 0, result.stdout + result.stderr
-        [deploy] = [
-            line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
-        ]
+        [deploy] = [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
         assert f"DOUG_PREREG_HASH={expected_hash}" in deploy
 
 
@@ -1293,16 +1281,12 @@ def test_relative_script_symlink_resolves_the_lock_and_api_working_directory(tmp
     case = tmp_path / "symlink-case"
     case.mkdir()
 
-    result, lines = _invoke_gcp(
-        case, "deploy", gcp_path=script_link, cwd=caller_cwd
-    )
+    result, lines = _invoke_gcp(case, "deploy", gcp_path=script_link, cwd=caller_cwd)
 
     prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     expected_hash = hashlib.sha256(prereg.read_bytes()).hexdigest()
     assert result.returncode == 0, result.stdout + result.stderr
-    [adjudicator] = [
-        line for line in lines if line.startswith("run jobs deploy doug-adjudicator")
-    ]
+    [adjudicator] = [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
     assert f"DOUG_PREREG_HASH={expected_hash}" in adjudicator
     assert any(line.startswith("run deploy doug-api --source .") for line in lines)
     assert set((case / "gcloud.cwd.log").read_text().splitlines()) == {
@@ -1316,10 +1300,7 @@ def test_full_deploy_hashes_the_lock_from_an_apostrophe_checkout_path(tmp_path):
     gcp_path = checkout / "api/deploy/gcp.sh"
     gcp_path.parent.mkdir(parents=True)
     shutil.copy2(GCP_PATH, gcp_path)
-    source_prereg = (
-        GCP_PATH.parents[2]
-        / "docs/design/outcome-loop/publication-preregistration.md"
-    )
+    source_prereg = GCP_PATH.parents[2] / "docs/design/outcome-loop/publication-preregistration.md"
     prereg = checkout / "docs/design/outcome-loop/publication-preregistration.md"
     prereg.parent.mkdir(parents=True)
     shutil.copy2(source_prereg, prereg)
@@ -1328,9 +1309,7 @@ def test_full_deploy_hashes_the_lock_from_an_apostrophe_checkout_path(tmp_path):
     case = tmp_path / "apostrophe-case"
     case.mkdir()
 
-    result, lines = _invoke_gcp(
-        case, "deploy", gcp_path=gcp_path, cwd=caller_cwd
-    )
+    result, lines = _invoke_gcp(case, "deploy", gcp_path=gcp_path, cwd=caller_cwd)
 
     assert result.returncode == 0, result.stdout + result.stderr
     api_deploy = next(
@@ -1379,16 +1358,14 @@ def test_unlocked_preregistration_refuses_adjudicator_deploy(tmp_path):
     prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
     prereg.parent.mkdir(parents=True)
     prereg.write_text(
-        "# Publication pre-registration — the outcome loop\n\n"
-        "**Status:** DRAFT test fixture\n"
+        "# Publication pre-registration — the outcome loop\n\n**Status:** DRAFT test fixture\n"
     )
 
     result, lines = _invoke_gcp(tmp_path, "adjudicator", gcp_path=gcp_path)
 
     assert result.returncode != 0
     assert result.stderr == (
-        "ERROR: publication pre-registration is not LOCKED; "
-        "refusing adjudicator deploy.\n"
+        "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy.\n"
     )
     assert not [line for line in lines if line.startswith("run jobs deploy doug-adjudicator")]
 
@@ -1401,16 +1378,14 @@ def test_unlocked_preregistration_refuses_full_deploy_before_any_external_call(t
     prereg = tmp_path / "docs/design/outcome-loop/publication-preregistration.md"
     prereg.parent.mkdir(parents=True)
     prereg.write_text(
-        "# Publication pre-registration — the outcome loop\n\n"
-        "**Status:** DRAFT test fixture\n"
+        "# Publication pre-registration — the outcome loop\n\n**Status:** DRAFT test fixture\n"
     )
 
     result, lines = _invoke_gcp(tmp_path, "deploy", gcp_path=gcp_path)
 
     assert result.returncode != 0
     assert result.stderr == (
-        "ERROR: publication pre-registration is not LOCKED; "
-        "refusing adjudicator deploy.\n"
+        "ERROR: publication pre-registration is not LOCKED; refusing adjudicator deploy.\n"
     )
     assert lines == []
     assert (tmp_path / "curl.log").read_text() == ""
@@ -1470,7 +1445,7 @@ def test_preregistration_change_refreshes_the_adjudicator_hash():
     """The Job receives the document hash at deploy time. A docs-only change
     must therefore enter the API deploy path even when no Python changed."""
     workflow = DEPLOY_WORKFLOW.read_text()
-    change_filter = workflow.split('files=$(git diff --name-only', 1)[1].split(
+    change_filter = workflow.split("files=$(git diff --name-only", 1)[1].split(
         'echo "api=$api"', 1
     )[0]
     assert "docs/design/outcome-loop/publication-preregistration.md" in change_filter
@@ -1489,9 +1464,7 @@ def test_setup_cicd_pins_both_the_repository_and_the_ref():
     gone there is no second thing to catch it.
     """
     setup = SETUP_CICD.read_text()
-    [condition] = [
-        ln for ln in setup.splitlines() if ln.startswith("CONDITION=")
-    ]
+    [condition] = [ln for ln in setup.splitlines() if ln.startswith("CONDITION=")]
     assert "assertion.repository=='$REPO'" in condition
     assert "assertion.ref=='refs/heads/main'" in condition
 
@@ -1648,9 +1621,7 @@ esac
     assert result.returncode != 0, result.stdout + result.stderr
     assert "/sign-in" in (tmp_path / "curl.log").read_text()
     assert "refuses its configured redirect URI" in result.stderr
-    assert not [
-        line for line in lines if line.startswith("run services update-traffic doug-web")
-    ]
+    assert not [line for line in lines if line.startswith("run services update-traffic doug-web")]
 
 
 def test_web_refuses_to_promote_a_candidate_that_refuses_its_redirect_uri():
@@ -1718,9 +1689,7 @@ def test_adjudicator_setup_waits_for_new_service_account_visibility(tmp_path):
     )
 
     describes = [
-        line
-        for line in lines
-        if line.startswith(f"iam service-accounts describe {scheduler}")
+        line for line in lines if line.startswith(f"iam service-accounts describe {scheduler}")
     ]
     assert len(describes) == 2
 
@@ -1736,9 +1705,7 @@ def test_api_deploy_carries_exact_secret_allowlist_including_flow_signer(tmp_pat
     drifts back in silently outranks federation instead of conflicting with it.
     """
     lines = _run_gcp(tmp_path, "deploy")
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     expected = (
         "DATABASE_URL=doug-database-url:latest,"
         "DOUG_API_TOKEN=doug-api-token:latest,"
@@ -2029,9 +1996,7 @@ def test_the_preflight_probes_the_host_the_sdk_will_call(tmp_path, location, hos
     test_the_installed_sdk_addresses_the_multi_region_hosts_the_preflight_probes
     holds the two together.
     """
-    result, _, curl_log = _deploy_with_vertex_code(
-        tmp_path, "400", {"VERTEX_REGION": location}
-    )
+    result, _, curl_log = _deploy_with_vertex_code(tmp_path, "400", {"VERTEX_REGION": location})
 
     assert result.returncode == 0, result.stdout + result.stderr
     probes = [line for line in curl_log.splitlines() if "rawPredict" in line]
@@ -2074,9 +2039,7 @@ def test_tracing_stays_off_until_both_langfuse_secrets_exist(tmp_path):
     NOT_FOUND, and the deploy must go out with nothing Langfuse in it.
     """
     lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "half"})
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     assert "DOUG_TRACING" not in api_deploy
     assert "LANGFUSE" not in api_deploy
 
@@ -2099,18 +2062,12 @@ def test_a_deployer_that_cannot_see_the_langfuse_secrets_deploys_off_and_says_so
     annotation names the grant. Both halves pinned, because either alone is
     the failure this replaces.
     """
-    result, lines = _invoke_gcp(
-        tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "denied"}
-    )
+    result, lines = _invoke_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "denied"})
     assert result.returncode == 0, result.stdout + result.stderr
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     assert "DOUG_TRACING" not in api_deploy
     assert "LANGFUSE" not in api_deploy
-    [annotation] = [
-        ln for ln in result.stderr.splitlines() if ln.startswith("::error::")
-    ]
+    [annotation] = [ln for ln in result.stderr.splitlines() if ln.startswith("::error::")]
     assert "PERMISSION_DENIED" in annotation
     assert "roles/secretmanager.viewer" in annotation
     assert "tracing is OFF" in annotation
@@ -2143,9 +2100,7 @@ def test_a_transient_secret_manager_failure_does_not_turn_tracing_off(tmp_path):
     """
     result, lines = _invoke_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "flaky"})
     assert result.returncode == 0, result.stdout + result.stderr
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     assert "DOUG_TRACING=1" in api_deploy
     assert "::error::" not in result.stdout + result.stderr
 
@@ -2157,10 +2112,7 @@ def test_the_langfuse_host_is_defaulted_and_overridable():
     region this deployment chose, which is a data-residency change made by
     omission. ADR-0031 records why the default is the US host.
     """
-    assert (
-        "LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}"
-        in GCP_PATH.read_text()
-    )
+    assert "LANGFUSE_HOST=${LANGFUSE_HOST:-https://us.cloud.langfuse.com}" in GCP_PATH.read_text()
 
 
 def test_a_deploy_without_the_langfuse_secrets_carries_no_tracing(tmp_path):
@@ -2172,9 +2124,7 @@ def test_a_deploy_without_the_langfuse_secrets_carries_no_tracing(tmp_path):
     first deployment without keys takes the service down.
     """
     lines = _run_gcp(tmp_path, "deploy")
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     assert "DOUG_TRACING" not in api_deploy
     assert "LANGFUSE" not in api_deploy
 
@@ -2188,9 +2138,7 @@ def test_creating_both_langfuse_secrets_is_what_turns_tracing_on(tmp_path):
     configured in its env block and traces nothing.
     """
     lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "1"})
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     secrets = api_deploy.split("--set-secrets ", 1)[1].split(" --", 1)[0]
     env = api_deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
     assert secrets.endswith(
@@ -2218,9 +2166,7 @@ def test_production_traces_are_tagged_as_production(tmp_path):
     would produce exactly the unsorted population this prevents.
     """
     lines = _run_gcp(tmp_path, "deploy", extra_env={"GCLOUD_LANGFUSE": "1"})
-    [api_deploy] = [
-        line for line in lines if line.startswith("run deploy doug-api --source .")
-    ]
+    [api_deploy] = [line for line in lines if line.startswith("run deploy doug-api --source .")]
     env = api_deploy.split("--set-env-vars ", 1)[1].split(" --", 1)[0]
 
     assert "DOUG_TRACING=1" in env

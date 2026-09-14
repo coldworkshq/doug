@@ -304,10 +304,16 @@ def _tmp_repo(tmp_path):
     def git(*args):
         subprocess.run(
             ["git", "-C", str(tmp_path), *args],
-            check=True, capture_output=True, text=True,
-            env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-                 "PATH": "/usr/bin:/bin"},
+            check=True,
+            capture_output=True,
+            text=True,
+            env={
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@t",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@t",
+                "PATH": "/usr/bin:/bin",
+            },
         )
 
     git("init", "-q", "-b", "main")
@@ -316,7 +322,8 @@ def _tmp_repo(tmp_path):
     git("commit", "-qm", "base")
     base = subprocess.run(
         ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     # The emulation resolves merge-base against origin/main; a local clone
     # under test provides the ref directly.
@@ -326,7 +333,8 @@ def _tmp_repo(tmp_path):
     git("commit", "-qm", "head")
     head = subprocess.run(
         ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     return base, head
 
@@ -345,12 +353,25 @@ def test_index_from_git_hashes_with_the_products_own_function(tmp_path):
     assert set(index) == {"a.py"}
     base = subprocess.run(
         ["git", "-C", str(tmp_path), "merge-base", "origin/main", head],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     patch = subprocess.run(
-        ["git", "-C", str(tmp_path), "diff", "--unified=3", "--no-color",
-         "--no-ext-diff", base, head, "--", "a.py"],
-        capture_output=True, text=True,
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "diff",
+            "--unified=3",
+            "--no-color",
+            "--no-ext-diff",
+            base,
+            head,
+            "--",
+            "a.py",
+        ],
+        capture_output=True,
+        text=True,
     ).stdout
     assert index["a.py"] == [hunks_mod.hash_hunk(h) for h in hunks_mod.split_hunks(patch)]
     assert convergence_eval.index_from_git(str(tmp_path), "0" * 40) is None
@@ -373,13 +394,18 @@ def test_emulated_pairs_carry_the_label_and_stored_pairs_do_not():
     assert stored["report"]["persisted"] == 1  # by construction, carried
 
     emulated = convergence_eval.pair_payload(
-        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []}, reads,
+        _v(1),
+        _v(2, scored_at="2026-08-02T00:00:00"),
+        {1: [_f(1)], 2: []},
+        reads,
         emulated_ids={2},
     )
     assert emulated["index_label"] == "hunk-emulated"
 
     bare = convergence_eval.pair_payload(
-        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []},
+        _v(1),
+        _v(2, scored_at="2026-08-02T00:00:00"),
+        {1: [_f(1)], 2: []},
         {1: _read(1), 2: _read(2)},
     )
     assert bare["index_label"] is None
@@ -394,7 +420,10 @@ def test_file_grain_proxy_reported_beside_never_in_place():
     reads[1]["hunks"] = {FILE: ["a" * 64]}
     reads[2]["hunks"] = {FILE: ["b" * 64]}
     payload = convergence_eval.pair_payload(
-        _v(1), _v(2, scored_at="2026-08-02T00:00:00"), {1: [_f(1)], 2: []}, reads,
+        _v(1),
+        _v(2, scored_at="2026-08-02T00:00:00"),
+        {1: [_f(1)], 2: []},
+        reads,
         grain_fn=lambda prior, later: ["x.py"],
     )
     assert payload["file_grain_touched"] == ["x.py"]

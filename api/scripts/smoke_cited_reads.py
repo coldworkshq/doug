@@ -128,8 +128,9 @@ def _dry_run(ref: str) -> int:
     print(f"SMOKE TEST dry run at {ref} — no model calls, no spend.")
     print(f"  files with patches : {len(with_patch)}/{len(files)}")
     print(f"  assembled diff     : {len(diff)} chars")
-    print(f"  resolver on a file NOT in the diff (api/doug/reader.py): "
-          f"{'ok' if target else 'FAILED'}")
+    print(
+        f"  resolver on a file NOT in the diff (api/doug/reader.py): {'ok' if target else 'FAILED'}"
+    )
     print(f"  finding #2's constant is at reader.py:{line_no}")
     print(f"  resolver on a missing file returns None: {resolve('api/doug/nope.py') is None}")
     return 0 if (target and line_no) else 1

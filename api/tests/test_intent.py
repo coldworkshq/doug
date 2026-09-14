@@ -119,10 +119,10 @@ def test_parse_record_extracts_the_contract():
 @pytest.mark.parametrize(
     "text",
     [
-        "# Decision records\n\nA README, not a record.",       # no frontmatter
-        "---\ntitle: No status\n---\nbody",                     # missing status
-        "---\nstatus: accepted\n---\nbody",                     # missing title
-        "---\ntitle: unterminated\nstatus: accepted\nbody",     # no closing fence
+        "# Decision records\n\nA README, not a record.",  # no frontmatter
+        "---\ntitle: No status\n---\nbody",  # missing status
+        "---\nstatus: accepted\n---\nbody",  # missing title
+        "---\ntitle: unterminated\nstatus: accepted\nbody",  # no closing fence
     ],
 )
 def test_parse_record_skips_non_records(text):
@@ -205,9 +205,7 @@ def test_no_two_decision_records_claim_the_same_number():
     from pathlib import Path
 
     directory = Path(__file__).resolve().parents[2] / "docs" / "decisions"
-    numbers = Counter(
-        f.name.split("-")[1] for f in directory.glob("ADR-*.md") if "-" in f.name
-    )
+    numbers = Counter(f.name.split("-")[1] for f in directory.glob("ADR-*.md") if "-" in f.name)
     duplicates = {n: c for n, c in numbers.items() if c > 1}
     assert not duplicates, (
         f"two or more records claim the same ADR number: {sorted(duplicates)}. "
@@ -458,10 +456,12 @@ def _probe():
 def test_probe_report_fails_closed_without_deranged_arm(capsys):
     """Empty deranged + quiet matched used to print PASS (inf ratio)."""
     probe = _probe()
-    code = probe.report({
-        "matched": [{"pr": 1, "alignment": 90, "high": 0, "deviations": [], "refs": []}],
-        "deranged": [],
-    })
+    code = probe.report(
+        {
+            "matched": [{"pr": 1, "alignment": 90, "high": 0, "deviations": [], "refs": []}],
+            "deranged": [],
+        }
+    )
     assert code == 1
     assert "cannot evaluate" in capsys.readouterr().out
 
@@ -476,9 +476,11 @@ def test_probe_report_exits_nonzero_when_bar_fails(capsys):
 
 def test_probe_report_exits_zero_when_bar_passes(capsys):
     probe = _probe()
-    code = probe.report({
-        "matched": [{"pr": 1, "alignment": 80, "high": 0, "deviations": [], "refs": []}],
-        "deranged": [{"pr": 2, "alignment": 10, "high": 1, "deviations": [], "refs": []}],
-    })
+    code = probe.report(
+        {
+            "matched": [{"pr": 1, "alignment": 80, "high": 0, "deviations": [], "refs": []}],
+            "deranged": [{"pr": 2, "alignment": 10, "high": 1, "deviations": [], "refs": []}],
+        }
+    )
     assert code == 0
     assert "BAR: PASS" in capsys.readouterr().out

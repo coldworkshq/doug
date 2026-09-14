@@ -128,8 +128,13 @@ def test_null_files_dropped_column_is_not_coverage_evidence():
     "Not tracked" must not abstain as rule 3 by itself, and must not crash —
     the row still reaches rule 5, where its missing hunk index abstains as
     no-hunk-index (the honest reason: an old row, not an unseen file)."""
-    read = {"files_unseen": [], "file_cut": None, "files_dropped": None,
-            "changed_files": None, "hunks": None}
+    read = {
+        "files_unseen": [],
+        "file_cut": None,
+        "files_dropped": None,
+        "changed_files": None,
+        "hunks": None,
+    }
     r = convergence.compare([_f()], [], [], read, read)
     assert (r.resolved, r.unknown) == (0, {"no-hunk-index": 1})
 
@@ -269,9 +274,7 @@ def test_no_hunk_index_on_either_side_abstains():
     """Pre-migration rows and deploy-overlap rows have hunks=NULL; the
     classifier must read that as cannot-compare, never as unchanged."""
     for later_hunks, prior_hunks in (({FILE: [H1]}, None), (None, {FILE: [H1]})):
-        r = convergence.compare(
-            [_f()], [], [], _read(hunks=later_hunks), _read(hunks=prior_hunks)
-        )
+        r = convergence.compare([_f()], [], [], _read(hunks=later_hunks), _read(hunks=prior_hunks))
         assert r.unknown == {"no-hunk-index": 1}, (later_hunks, prior_hunks)
 
 
@@ -314,9 +317,7 @@ def test_by_construction_requires_strict_multiset_equality():
 
 
 def test_partial_survival_without_attribution_abstains():
-    later_read, prior_read = _pair(
-        prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]}
-    )
+    later_read, prior_read = _pair(prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]})
     r = convergence.compare([_f()], [], [], later_read, prior_read)
     assert r.unknown == {"not-reconfirmed": 1}
 
@@ -331,7 +332,9 @@ def test_pair_delta_names_movement_elsewhere():
     )
     (row,) = convergence.classify([_f()], [], [], later_read, prior_read)
     assert (row.state, row.basis, row.pair_delta) == (
-        "persisted", "by-construction", "changed-elsewhere",
+        "persisted",
+        "by-construction",
+        "changed-elsewhere",
     )
 
 
@@ -343,21 +346,15 @@ def test_attributed_surviving_carries_forward():
     byte-unchanged: carried forward at hunk grain. This is the branch that
     turned the killer case (#50 input-validation, defect verbatim at the
     later head) from a false resolved into a correct carry."""
-    later_read, prior_read = _pair(
-        prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]}
-    )
-    (row,) = convergence.classify(
-        [_f(hunks=[H1])], [], [], later_read, prior_read
-    )
+    later_read, prior_read = _pair(prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]})
+    (row,) = convergence.classify([_f(hunks=[H1])], [], [], later_read, prior_read)
     assert (row.state, row.basis) == ("persisted", "attributed-surviving")
 
 
 def test_attributed_edited_is_still_not_fix_evidence():
     """Every attributed hunk was edited — Phase 0 falsified this as
     fix-evidence too (2/5 false). Demoted with the same ruling."""
-    later_read, prior_read = _pair(
-        prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H2, H3]}
-    )
+    later_read, prior_read = _pair(prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H2, H3]})
     r = convergence.compare([_f(hunks=[H1])], [], [], later_read, prior_read)
     assert r.unknown == {"edited-not-verified": 1}
 
@@ -365,9 +362,7 @@ def test_attributed_edited_is_still_not_fix_evidence():
 def test_attribution_that_mismatches_the_stored_index_abstains():
     """An attribution naming a hash the prior index never had cannot refine
     anything — it is model output that failed its validation contract."""
-    later_read, prior_read = _pair(
-        prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]}
-    )
+    later_read, prior_read = _pair(prior_hunks={FILE: [H1, H2]}, later_hunks={FILE: [H1, H3]})
     r = convergence.compare([_f(hunks=[H3])], [], [], later_read, prior_read)
     assert r.unknown == {"not-reconfirmed": 1}
 
@@ -403,8 +398,11 @@ def test_no_input_yields_a_resolved_state_in_v1():
         for later_hunks in indexes:
             for attribution in attributions:
                 r = convergence.compare(
-                    [_f(hunks=attribution)], [], [],
-                    _read(hunks=later_hunks), _read(hunks=prior_hunks),
+                    [_f(hunks=attribution)],
+                    [],
+                    [],
+                    _read(hunks=later_hunks),
+                    _read(hunks=prior_hunks),
                 )
                 assert r.resolved == 0, (prior_hunks, later_hunks, attribution)
 
@@ -452,9 +450,7 @@ def test_new_findings_counted_and_graded_against_the_indexes():
         prior_hunks={FILE: [H1], OTHER: [H2]},
         later_hunks={FILE: [H1], OTHER: [H3]},
     )
-    rows = convergence.classify(
-        [], [_f(), _f(file=OTHER)], [], later_read, prior_read
-    )
+    rows = convergence.classify([], [_f(), _f(file=OTHER)], [], later_read, prior_read)
     assert [(c.state, c.code_changed) for c in rows] == [("new", False), ("new", True)]
     rows = convergence.classify([], [_f()], [], _read(hunks=None), _read(hunks=None))
     assert [(c.state, c.code_changed) for c in rows] == [("new", None)]
@@ -553,7 +549,11 @@ def test_classify_and_compare_are_one_classification():
         "api/doug/worker.py: error-handling-gap (['threading'])",
     )
     prior = [
-        _f(), _f(), _f(file="api/doug/worker.py"), _f(file=None), _f(rule="size-large"),
+        _f(),
+        _f(),
+        _f(file="api/doug/worker.py"),
+        _f(file=None),
+        _f(rule="size-large"),
         _f(file="api/doug/reader.py"),
     ]
     later = [_f(), _f(file=OTHER)]
@@ -561,9 +561,7 @@ def test_classify_and_compare_are_one_classification():
         files_unseen=["api/doug/settle.py"],
         hunks={FILE: [H2], OTHER: [H3], "api/doug/worker.py": [H1]},
     )
-    prior_read = _read(
-        hunks={FILE: [H1], "api/doug/worker.py": [H1], "api/doug/reader.py": [H2]}
-    )
+    prior_read = _read(hunks={FILE: [H1], "api/doug/worker.py": [H1], "api/doug/reader.py": [H2]})
     rows = convergence.classify(prior, later, [notice], later_read, prior_read)
     report = convergence.compare(prior, later, [notice], later_read, prior_read)
 

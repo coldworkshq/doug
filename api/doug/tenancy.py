@@ -50,7 +50,7 @@ def _pepper(version: int) -> bytes | None:
         return None
     try:
         decoded = base64.b64decode(raw, validate=True)
-    except (ValueError, binascii.Error):
+    except ValueError, binascii.Error:
         return None
     return decoded if len(decoded) == 32 else None
 
@@ -281,8 +281,7 @@ def caller_login(pat: str) -> str | None:
         me = caller.rest.users.get_authenticated()
     except Exception as e:  # noqa: BLE001 — an unusable PAT proves nothing
         print(
-            f"doug: dispense denied at the identity check "
-            f"({type(e).__name__}: {str(e)[:200]})",
+            f"doug: dispense denied at the identity check ({type(e).__name__}: {str(e)[:200]})",
             file=sys.stderr,
         )
         return None
@@ -376,9 +375,7 @@ def mint_key(
         raise KeysNotConfigured()
     version = _current_hash_version()
     minted = keyformat.generate()
-    expires_at = (
-        datetime.now(UTC) + timedelta(days=expires_in_days) if expires_in_days else None
-    )
+    expires_at = datetime.now(UTC) + timedelta(days=expires_in_days) if expires_in_days else None
     token_id = store.insert_installation_token(
         installation_id,
         token_lookup=minted.lookup,
