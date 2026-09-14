@@ -261,6 +261,16 @@ jobs:
         env:
           PROJECT: ${{ env.PROJECT }}
           REGION: ${{ env.REGION }}
+          # The registry URL and the Guards mapping (ADR-0034 decision 3; R11
+          # item 3). gcp.sh passes both to --set-env-vars declaratively, so a
+          # value set on doug-web by hand is removed by the next merge deploy:
+          # the value has to arrive here. Repository variables, never
+          # literals, because the mapping names an engine tenant and stays
+          # the founder's setting, out of this public file. An unset variable
+          # renders as the empty string, which maps nobody and renders the
+          # chip that names it, the same as before this step carried them.
+          COLDWORKS_REGISTRY_URL: ${{ vars.COLDWORKS_REGISTRY_URL }}
+          DOUG_GUARDS_INSTALLATIONS: ${{ vars.DOUG_GUARDS_INSTALLATIONS }}
       - name: Confirm the live URL after promotion
         run: |
           url=$(gcloud run services describe doug-web \
