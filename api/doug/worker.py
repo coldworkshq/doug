@@ -43,11 +43,18 @@ _EXAMPLE_PACK_VERIFIER_VERSIONS = (
     NameVersionV0(name="import-settlement", version="v0"),
     NameVersionV0(name="schema-settlement", version="v0"),
     NameVersionV0(name="ci-settlement", version="v0"),
+    NameVersionV0(name="syntax-settlement", version="v0"),
 )
 
 
-# Files the CI settlement probes for and usually does not find.
-_PROBED_CONFIG_FILES = ("pyproject.toml", "ruff.toml", ".ruff.toml", ".gitignore")
+# Files the CI and syntax settlements probe for and usually do not find.
+_PROBED_CONFIG_FILES = (
+    "pyproject.toml",
+    "ruff.toml",
+    ".ruff.toml",
+    ".gitignore",
+    ".python-version",
+)
 
 
 def _tool_version(distribution: str) -> str:

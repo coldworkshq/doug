@@ -144,6 +144,58 @@ def test_web_deploy_env_survives_a_mapping_with_several_installations(tmp_path):
     assert unset["COLDWORKS_REGISTRY_URL"] == "", "no default URL; the chip names the variable"
 
 
+def _web_passthrough_env() -> set[str]:
+    """The names web() forwards from its own environment into the service.
+
+    Read off the --set-env-vars argument in deploy/gcp.sh: every `NAME=${NAME:-}`
+    there is a value the script does not know and expects the caller to hand
+    it, defaulted to empty so that a caller who has nothing to say maps nobody.
+    """
+    body = _function_body("web")
+    line = next(ln for ln in body.splitlines() if "--set-env-vars" in ln)
+    return set(re.findall(r"(\w+)=\$\{\1:-\}", line))
+
+
+def test_the_merge_deploy_carries_the_mapping_from_repository_variables():
+    """A value set on doug-web by hand does not survive a merge deploy.
+
+    web() passes COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS to
+    --set-env-vars declaratively, so the next `bash deploy/gcp.sh web` from
+    deploy.yml overwrites whatever the service held with what the workflow
+    handed the script, and until this pin the web Deploy step handed it only
+    PROJECT and REGION. Both were empty on doug-web after every merge
+    (checked 2026-09-14), and the mapping the founder sets for the dogfood
+    installation (R11 item 3) had nowhere to land that a deploy would keep.
+
+    Derived from the script rather than restated: every name web() forwards
+    from its environment must be set on the web Deploy step, and set from a
+    repository variable, never a literal. The mapping names an engine tenant,
+    and doug is public; the workflow file may name the variable but never
+    hold its value. An unset repository variable renders as the empty string,
+    which is exactly what the script's own default sends today.
+    """
+    forwarded = _web_passthrough_env()
+    assert {"COLDWORKS_REGISTRY_URL", "DOUG_GUARDS_INSTALLATIONS"} <= forwarded, (
+        "the regression this test was written for is no longer detectable: "
+        f"web() forwards {sorted(forwarded)}"
+    )
+
+    workflow = DEPLOY_WORKFLOW.read_text()
+    web_step = workflow.split("bash deploy/gcp.sh web", 1)[1].split("- name:", 1)[0]
+    for name in sorted(forwarded):
+        match = re.search(rf"^\s+{name}:[ \t]*(.*?)[ \t]*$", web_step, re.M)
+        assert match, (
+            f"deploy/gcp.sh web forwards {name} from its environment, but the web "
+            "Deploy step in deploy.yml never sets it; a merge deploy empties it "
+            "on the service"
+        )
+        assert match.group(1) == f"${{{{ vars.{name} }}}}", (
+            f"the web Deploy step sets {name} to {match.group(1)!r}; it must be "
+            f"`${{{{ vars.{name} }}}}`, a repository variable, so the value stays "
+            "the founder's setting and out of this public file"
+        )
+
+
 def test_setup_generates_the_install_flow_secret_and_binds_exact_api_allowlist(tmp_path):
     """Both services must share one dedicated signer; no operator or provider
     credential may be substituted for it, and setup must bind it to the API

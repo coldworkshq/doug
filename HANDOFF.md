@@ -11,8 +11,14 @@ State:    review — **doug#339**, branch tooling/static-gate off origin/main
           Stop hook run it. Each gate shown red on a planted input and green
           after restore, including debt and baseline growth in a clone whose
           origin/main carried both. Full suite 1,966 passed.
+          2026-09-14: merged origin/main e7d65f3 (#340, #341, #343, #344).
+          HANDOFF.md was the only conflict. The merge formats #344's five
+          files and drops one stale debt entry (ERA001 in convergence.py,
+          194 pairs left); `make check` green on the merged tree.
 Next:     watch CI on #339; the merge is the founder's click. #331 and #332
-          rebase with `ruff format` on their branches.
+          rebase with `ruff format` on their branches. Once deep read is on
+          for this repository, Doug's next read of #339 is the first live
+          test of #344's `settled-syntax-error` on the eight PEP 758 clauses.
 Blockers: none.
 Decisions this session:
 - Measured 2026-09-13 at 507f8b0: ruff format would rewrite 98 of 130
@@ -41,22 +47,101 @@ Decisions this session:
 Pointers: api/pyproject.toml · Makefile `check` · .github/scripts/check_ratchets.py ·
           .claude/{settings.json,hooks/} · api/tests/test_{check_ratchets,claude_hooks}.py
 
---- shell lane (2026-09-14): ADR-0034 accepted, the read contract signed (FQ-27) ---
+--- reader lane (2026-09-14): syntax-error findings the declared Python parses, doug#342 ---
 
-State:    review — branch `shell/sign-adr-0034` off main 0ce0f34: ADR-0034
-          `proposed` to `accepted` on the founder's instruction in session
-          (2026-09-14); the squash is the signature. D3 (#327, e32ca47) and D4
-          (#328, 081f03f) are merged, FQ-28 is done (2026-09-13), and
-          coldworks S2 merged as coldworks#77 (76e6e9b). The founder started
-          the registry deploy that ships the snapshot route on 2026-09-14.
-Next:     Founder: squash this PR (closes #323). Agent: check the deployed
-          snapshot route from outside and record Phase 0 item 6 on hq
-          frontdoor-12.8; Phase 0 items 2 and 5 after FQ-29.
-Blockers: FQ-29: COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS are
-          both empty on doug-web (checked 2026-09-14), so Guards and the T
-          slot render the chip until the founder sets them. doug#333 (www).
+State:    review — **doug#344** (closes #342), branch reader/syntax-claims-parse
+          off origin/main 8ffb734, worktree .claude/worktrees/doug-reader-syntax.
+          settle.py's fourth class, `settled-syntax-error`: a finding whose slug
+          names a Python syntax error on a .py file is dropped when the file at
+          head passes `ast.parse(feature_version=<oldest declared 3.x>)` and
+          `compile`. The declaration is the nearest requires-python, else the
+          nearest .python-version. Full suite 1,953 passed at dfa7341; ruff
+          clean; 13 of 13 mutants killed; the added lines carry 0 violations
+          under #339's rules and 0 basedpyright standard errors.
+Next:     watch CI and Doug's read on #344 and answer its findings; the merge
+          is the founder's click.
+Blockers: none. Independent of #339; if #339 merges first, this branch
+          rebases with `ruff format` over api/.
+Decisions this session:
+- A post-read settlement, not a prompt change — ADR-0002 freezes the reader
+  prompt, and the three existing classes use the same seam — rejected:
+  telling the reader the repository's Python version.
+- The oldest declared version decides, and a minimum below 3.8 or above the
+  running interpreter abstains — a file that parses only on newer Pythons is
+  broken for a supported one, and feature_version models the grammar, not
+  compiler rules (`continue` in `finally` before 3.8) — rejected: parsing
+  with the running interpreter, which settles a true claim for a 3.10 repo.
+- Candidates come from the slug alone, with a veto on descriptions naming
+  another grammar — "literal_eval raises SyntaxError" and invalid SQL are
+  real runtime claims about files that parse — rejected: matching
+  "SyntaxError" in descriptions.
+- Dockerfile base images are not read, narrower than #342's text — a base
+  image names a runtime, not the range a project supports.
+- #339's five disproved rows are logged in docs/findings-log.jsonl.
+Pointers: api/doug/settle.py (fourth class) · api/doug/review.py score_one ·
+          api/tests/test_settle.py · docs/REVIEWING.md · #342 · #339
+
+--- shell lane (2026-09-14): D5 and the www half merged; FQ-29 landed ---
+
+State:    done in code and deployed. #340 (D5) squash-merged as 242db1a and
+          #341 (www redirects to the apex, the code half of #333) as 94cd0a5;
+          main carries both tips (checked). FQ-29 is landed: both repository
+          variables are set on this repo (values never enter it) and the
+          founder's dispatched web deploy (run 34811345583) promoted
+          doug-web-00160-lay with COLDWORKS_REGISTRY_URL and
+          DOUG_GUARDS_INSTALLATIONS non-empty. The 94cd0a5 push deploy that
+          carries the www rule follows it in the queue; the rule is inert
+          until www is mapped onto doug-web.
+Next:     Founder: after the 94cd0a5 web deploy, `domains.sh map` for www,
+          `status` until READY, never `cutover` (the script refuses it);
+          delete the registry's www mapping last, or first if the
+          certificate will not issue while the registry serves the domain,
+          the FQ-28 path. In a browser at coldworks.dev: Phase 0 items 2 to
+          5, said aloud to the agent, who dates them on hq frontdoor-12.8.
+          Agent, after www serves doug-web: the coldworks PR that removes
+          the registry's www forwards and criterion 10's local www block.
+Blockers: none in code. The registry snapshot reads stale from 2026-09-26
+          about 04:28Z; items 2 and 5 observed after that need a mirror
+          push first.
+Decisions this session (2026-09-14):
+- Repository variables, not secrets and not literals — neither value is a
+  credential, and the mapping names an engine tenant that stays the
+  founder's setting outside a public file — rejected: a literal in
+  deploy.yml; a Secret Manager entry.
+- The pin derives the forwarded names from gcp.sh's --set-env-vars line —
+  a third forwarded variable is caught the day it is added — rejected: two
+  literal asserts.
+- www's docs URLs forward to /docs/audit, mirroring the registry, ahead of
+  the path-preserving catch-all — on the apex /docs/cli.html and
+  /docs/docs.css are 404 and /docs/cli is Doug's own page (probed
+  2026-09-14) — rejected: one path-preserving rule.
+- 308 for the www rules — the alias is settled, and a later move of the
+  audit docs is the apex's own redirect to add — rejected: the registry's
+  temporary forwards, which were interim on a host that was leaving.
+- www joins RETIRED_HOSTS in auth-origin.ts and the cutover refusal in
+  domains.sh — a 308 host holding the redirect URI loops with the proxy's
+  307, the case ADR-0034 closed for the subdomain — rejected: the
+  issue's prose "never cutover" alone.
+- Doug's reads adjudicated on both PRs: #340 two low refuted; #341 one
+  medium (a stale RETIRED_DOMAIN reference: none exists, map and status
+  reach gcloud under set -u behind a shim) and two low refuted.
+Pointers: .github/workflows/deploy.yml (web Deploy env) · api/deploy/gcp.sh
+          web() --set-env-vars · api/tests/test_deploy_gcp.py
+          _web_passthrough_env · web/next.config.ts redirects() ·
+          web/lib/auth-origin.ts RETIRED_HOSTS · api/deploy/domains.sh
+          RETIRED_DOMAINS · web/lib/auth-entry.integration.test.mjs
+          (single-host suite) · #333 · hq
+          docs/cross-repo/one-shell/handoff-close.md · roadmap frontdoor-12.8
+
+--- shell lane (2026-09-14): ADR-0034 accepted, merged as #336 (507f8b0) ---
+
+The squash is the signature (FQ-27): ADR-0034 `proposed` to `accepted` on
+the founder's instruction in session. The registry deploy that ships the
+snapshot route landed the same day (coldworks-registry-00007-dqv), and
+Phase 0 item 6 is recorded on hq frontdoor-12.8 for the checks a remote base
+can run.
 Pointers: #323 · docs/decisions/ADR-0034-*.md · coldworks#77 · hq
-          docs/cross-repo/one-shell/handoff-s2.md (on hq design/one-shell)
+          docs/cross-repo/one-shell/handoff-s2.md
 
 --- shell lane (2026-09-11): doug D4, merged as #328 (081f03f) ---
 

@@ -102,7 +102,6 @@ max-complexity = 10
 "doug/backtest/hotspots.py" = ["RUF007"]
 "doug/check_run.py" = ["C901", "PLR0913", "PLR0915", "RET504", "T201"]
 "doug/ci_evidence.py" = ["C901"]
-"doug/convergence.py" = ["ERA001"]
 "doug/entitlements.py" = ["T201"]
 "doug/example_pack.py" = ["C901", "PLR0912", "T201", "TRY004"]
 "doug/example_pack_capture.py" = ["C901", "PLR0912", "PLR0913", "PLR0915", "S101", "T201"]

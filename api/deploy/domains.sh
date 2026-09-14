@@ -39,7 +39,10 @@ REGION=${REGION:-us-central1}
 WEB_SERVICE=${WEB_SERVICE:-doug-web}
 API_SERVICE=${API_SERVICE:-doug-api}
 DOMAIN=${DOUG_WEB_DOMAIN:?set DOUG_WEB_DOMAIN to the domain to map (the apex, coldworks.dev)}
-RETIRED_DOMAIN=doug.coldworks.dev
+# The hosts web/next.config.ts answers with a 308 to the apex: the subdomain
+# (ADR-0034 decision 1) and the www alias (doug#333). Either is mapped with
+# `map` and left there; neither is ever a sign-in host.
+RETIRED_DOMAINS="doug.coldworks.dev www.coldworks.dev"
 
 # Domain mappings are a `beta` surface and are not offered in every Cloud Run
 # region. us-central1 offers them; a region that does not fails here with an
@@ -111,13 +114,15 @@ cutover() {
   # already in use and replace ONLY the host. Whatever path the app
   # requires today is the path this carries, without this script knowing
   # what it is.
-  # ADR-0034 decision 1 retired this host as a sign-in origin, and
-  # web/lib/auth-origin.ts refuses a redirect URI on it (503, not a loop).
-  # A cutover onto it can only take sign-in down.
-  if [ "$DOMAIN" = "$RETIRED_DOMAIN" ]; then
-    echo "cutover: $DOMAIN is retired as a sign-in host (ADR-0034). Refusing." >&2
-    exit 1
-  fi
+  # ADR-0034 decision 1 and doug#333 retired these hosts as sign-in origins,
+  # and web/lib/auth-origin.ts refuses a redirect URI on either (503, not a
+  # loop). A cutover onto one can only take sign-in down.
+  for retired in $RETIRED_DOMAINS; do
+    if [ "$DOMAIN" = "$retired" ]; then
+      echo "cutover: $DOMAIN is retired as a sign-in host (ADR-0034, doug#333). Refusing." >&2
+      exit 1
+    fi
+  done
 
   local current path new_redirect
   current=$(gcloud secrets versions access latest \

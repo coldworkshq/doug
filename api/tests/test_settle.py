@@ -589,3 +589,170 @@ def test_the_claimed_name_is_the_one_written_next_to_the_claim():
     assert settle.claimed_undefined_names(
         _undef(desc="raises NameError on `LIMIT` and `RETRIES`, neither defined")
     ) == ["LIMIT", "RETRIES"]
+
+
+# ---------------------------------------------------------------------------
+# #342: a syntax-error claim the declared Python's parser disproves.
+
+PEP_758 = "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n"
+REQUIRES_314 = '[project]\nrequires-python = ">=3.14"\n'
+
+
+def _syntax(
+    slug="syntax-error",
+    desc="`except ValueError, TypeError:` is invalid Python 3 syntax",
+    file="api/doug/x.py",
+):
+    return ReaderFinding(category_slug=slug, description=desc, file=file, severity="high")
+
+
+def _requires(spec: str) -> str:
+    return f'[project]\nrequires-python = "{spec}"\n'
+
+
+def _settle_syntax(findings, files):
+    rv = ReaderVerdict(risk_score=70, rationale="x", findings=list(findings))
+    out, dropped = settle.drop_disproved_syntax_findings(rv, files.get)
+    return out.findings, dropped
+
+
+def test_a_syntax_error_claim_the_declared_python_parses_is_settled():
+    """PR #339: five high findings said PEP 758's `except A, B:` would stop
+    the module importing. The repository requires 3.14, which parses it."""
+    files = {"api/doug/x.py": PEP_758, "api/pyproject.toml": REQUIRES_314}
+    kept, dropped = _settle_syntax([_syntax()], files)
+    assert (kept, len(dropped)) == ([], 1)
+    notice = settle.syntax_settlement_notice(dropped, files.get)
+    assert notice is not None
+    assert notice.rule == "settled-syntax-error" and notice.weight == 0.0
+    assert "api/doug/x.py: syntax-error (['Python 3.14'])" in notice.label
+    assert settle.syntax_settlement_notice([], files.get) is None
+
+
+def test_the_oldest_declared_python_decides():
+    """A file that parses only on newer Pythons is broken for a supported
+    one, so the claim is true there and publishes."""
+    for spec in (">=3.13", ">=3.10,<4", "~=3.13", "==3.13.*", ">3.13"):
+        files = {"api/doug/x.py": PEP_758, "api/pyproject.toml": _requires(spec)}
+        kept, dropped = _settle_syntax([_syntax()], files)
+        assert (len(kept), dropped) == (1, []), spec
+
+
+def test_requires_python_beats_the_pin_and_the_nearest_declaration_decides():
+    files = {
+        "api/doug/x.py": PEP_758,
+        "api/pyproject.toml": _requires(">=3.13"),
+        "api/.python-version": "3.14\n",
+    }
+    assert _settle_syntax([_syntax()], files)[1] == []
+    del files["api/pyproject.toml"]
+    assert len(_settle_syntax([_syntax()], files)[1]) == 1
+    # A nearer declaration decides even where a farther one would settle.
+    files = {
+        "api/doug/x.py": PEP_758,
+        "api/doug/.python-version": "3.13\n",
+        "pyproject.toml": REQUIRES_314,
+    }
+    assert _settle_syntax([_syntax()], files)[1] == []
+
+
+def test_a_pyproject_without_requires_python_falls_through_to_the_pin():
+    files = {
+        "api/doug/x.py": PEP_758,
+        "api/pyproject.toml": "[tool.ruff]\nline-length = 100\n",
+        "api/.python-version": "3.14.7\n",
+    }
+    assert len(_settle_syntax([_syntax()], files)[1]) == 1
+
+
+def test_every_uncertainty_keeps_the_finding():
+    """The source is valid on every Python, so only the uncertainty itself
+    can keep the finding in each case."""
+    valid = {"api/doug/x.py": "x = 1\n"}
+    cases = {
+        "no declaration": {},
+        "pyproject.toml does not parse": {"api/pyproject.toml": "[project\n"},
+        "no lower bound": {"api/pyproject.toml": _requires("<4")},
+        "a clause with no operator": {"api/pyproject.toml": _requires("3.14")},
+        "another major version": {"api/pyproject.toml": _requires(">=4.0")},
+        "requires-python is not a string": {
+            "api/pyproject.toml": "[project]\nrequires-python = 3.14\n"
+        },
+        "a pin naming no version": {"api/.python-version": "system\n"},
+    }
+    for name, declaration in cases.items():
+        kept, dropped = _settle_syntax([_syntax()], {**valid, **declaration})
+        assert (len(kept), dropped) == (1, []), name
+    kept, dropped = _settle_syntax([_syntax()], {"api/pyproject.toml": REQUIRES_314})
+    assert (len(kept), dropped) == (1, []), "the file itself cannot be fetched"
+
+
+def test_the_interpreter_vouches_only_for_versions_it_can_model():
+    """feature_version models the grammar, not the compiler (`continue` in
+    `finally` was a compile error before 3.8), and no interpreter models a
+    grammar newer than itself."""
+    import sys
+
+    def declared(spec):
+        return {"api/doug/x.py": "x = 1\n", "api/pyproject.toml": _requires(spec)}
+
+    assert len(_settle_syntax([_syntax()], declared(">=3.8"))[1]) == 1
+    assert _settle_syntax([_syntax()], declared(">=3.7"))[1] == []
+    newer = f">=3.{sys.version_info.minor + 1}"
+    assert _settle_syntax([_syntax()], declared(newer))[1] == []
+
+
+def test_the_compiler_answers_what_the_parser_alone_accepts():
+    """`return` outside a function parses and does not compile. A syntax
+    error the reader was right about stays published."""
+    for source in ("return 1\n", "def f(a, a):\n    pass\n", "x = (\n", "x = 1\x00\n"):
+        files = {"api/doug/x.py": source, "api/pyproject.toml": REQUIRES_314}
+        kept, dropped = _settle_syntax([_syntax()], files)
+        assert (len(kept), dropped) == (1, []), repr(source)
+
+
+def test_a_syntax_warning_in_tenant_source_is_not_a_syntax_error():
+    """An invalid escape compiles with a SyntaxWarning. It settles, and the
+    warning is not printed once per review."""
+    import warnings
+
+    files = {"api/doug/x.py": 'PATTERN = "\\d+"\n', "api/pyproject.toml": REQUIRES_314}
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        assert len(_settle_syntax([_syntax()], files)[1]) == 1
+    assert not [w for w in seen if issubclass(w.category, SyntaxWarning)]
+
+
+def test_only_a_syntax_slug_on_a_python_file_is_a_candidate():
+    """ "literal_eval raises SyntaxError on this input" is a runtime claim
+    about a file that parses, and so is invalid SQL in a query string."""
+    files = {
+        "api/doug/x.py": "x = 1\n",
+        "api/doc.md": "# x\n",
+        "api/pyproject.toml": REQUIRES_314,
+    }
+    runtime_claims = [
+        _syntax(slug="unhandled-exception", desc="`literal_eval` raises SyntaxError here"),
+        _syntax(desc="invalid SQL syntax in the `SELECT` built on line 3"),
+        _syntax(desc="the regex pattern has invalid syntax and raises re.error"),
+        _syntax(file="api/doc.md"),
+    ]
+    kept, dropped = _settle_syntax(runtime_claims, files)
+    assert (len(kept), dropped) == (4, [])
+    for slug in ("syntax-error", "reader:invalid-syntax", "python-syntax-error", "parse-error"):
+        assert settle.looks_like_syntax_error_finding(_syntax(slug=slug)), slug
+
+
+def test_the_declaration_readers():
+    assert settle.minimum_minor(">=3.10") == 10
+    assert settle.minimum_minor(">=3.9, <3.13, !=3.11.0") == 9
+    assert settle.minimum_minor("==3.12.*") == 12
+    assert settle.minimum_minor(">=3.8,>=3.11") == 11
+    assert settle.minimum_minor("<4") is None
+    assert settle.minimum_minor(">=3") is None
+    assert settle.minimum_minor("") is None
+    assert settle.pinned_minor("3.14.7\n") == 14
+    assert settle.pinned_minor("cpython-3.12.1\n3.13\n") == 12
+    assert settle.pinned_minor("pypy3.10\n") == 10
+    assert settle.pinned_minor("# comment\n\n") is None
+    assert settle.pinned_minor("system\n") is None
