@@ -633,6 +633,7 @@ def test_a_syntax_error_claim_the_declared_python_parses_is_settled():
     kept, dropped = _settle_syntax([_syntax()], files)
     assert (kept, len(dropped)) == ([], 1)
     notice = settle.syntax_settlement_notice(dropped, files.get)
+    assert notice is not None
     assert notice.rule == "settled-syntax-error" and notice.weight == 0.0
     assert "api/doug/x.py: syntax-error (['Python 3.14'])" in notice.label
     assert settle.syntax_settlement_notice([], files.get) is None

@@ -233,6 +233,7 @@ def test_settlement_notice_grammar_is_pinned_to_settle_py():
     py_notice = settle.syntax_settlement_notice(
         dropped, {"pyproject.toml": '[project]\nrequires-python = ">=3.14"\n'}.get
     )
+    assert py_notice is not None
     assert "(['Python 3.14'])" in py_notice.label
     assert list(convergence._notice_segments(py_notice.label)) == [
         (FILE, "unhandled-exception")

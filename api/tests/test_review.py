@@ -799,7 +799,7 @@ def test_score_one_settles_a_syntax_error_the_declared_python_parses(monkeypatch
     tier, v, rv, _ = review.score_one(
         meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get
     )
-    assert tier == "reader"
+    assert tier == "reader" and rv is not None
     assert rv.findings == [] and rv.risk_score == 70
     notice = next(r for r in v.reasons if r.rule == "settled-syntax-error")
     assert notice.weight == 0.0
@@ -809,7 +809,7 @@ def test_score_one_settles_a_syntax_error_the_declared_python_parses(monkeypatch
     _, v, rv, _ = review.score_one(
         meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get
     )
-    assert len(rv.findings) == 1
+    assert rv is not None and len(rv.findings) == 1
     assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
 
 
@@ -833,7 +833,7 @@ def test_a_syntax_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, 
     tier, v, rv, _ = review.score_one(
         meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file={}.get
     )
-    assert tier == "reader" and len(rv.findings) == 1
+    assert tier == "reader" and rv is not None and len(rv.findings) == 1
     assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
     assert "syntax settlement skipped (RecursionError" in capsys.readouterr().err
 
