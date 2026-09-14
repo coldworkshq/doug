@@ -1,5 +1,30 @@
 # HANDOFF — doug
 
+--- reader lane (2026-09-14): annotate a broken-syntax deviation beside a syntax settlement, doug#345 ---
+
+State:    building — branch reader/deviation-syntax-annotation off origin/main
+          1bbade1, worktree .claude/worktrees/doug-deviation-annotate.
+          check_run.render appends SYNTAX_DEVIATION_CHIP to a deviation whose
+          description claims broken syntax, when the same verdict carries a
+          `settled-syntax-error` notice. The deviation row, text, severity,
+          band and score are untouched.
+Next:     tests, make check, mutation plants, PR closing #345.
+Blockers: none.
+Decisions this session:
+- Annotate, not drop (Andrew, 2026-09-14) — the deviations table is what
+  ADR-0007's eventual evaluation reads, so a filter would change what it
+  measures — rejected: dropping the deviation with settle.py's syntax class.
+- The chip keys on the settlement in the same verdict, not a fresh parse —
+  DeviationFinding carries no file, and parsing every changed .py file per
+  deviation costs a fetch per file (98 on #339) — rejected: parsing the PR's
+  Python files for each syntax-claiming deviation.
+- The chip states what the parser found, never that the deviation is wrong —
+  the deviation may be about a file the reader did not flag.
+- Known limit: no chip when the reader flagged nothing or its findings were
+  not settled; the deviation then stands as written.
+Pointers: api/doug/check_run.py (SYNTAX_DEVIATION_CHIP, claims_broken_syntax) ·
+          api/tests/test_check_run.py · docs/REVIEWING.md · #345 · #231 (same bullet)
+
 --- tooling lane (2026-09-13): a static gate for api/ and agent hooks, doug#337 ---
 
 State:    review — **doug#339**, branch tooling/static-gate off origin/main

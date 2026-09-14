@@ -40,7 +40,7 @@ from urllib.parse import quote
 from .models import Band, Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
-from .settle import SETTLED_REASON_CODES
+from .settle import SETTLED_REASON_CODES, SETTLED_SYNTAX_ERROR
 from .store import InstrumentSnapshot
 
 NAME = "Doug"
@@ -124,6 +124,34 @@ DEVIATION_NOTE = (
     "check (2026-07-31), so these are unvalidated observations. They do "
     "not contribute to the band or score above (ADR-0007)."
 )
+# A deviation carries no file, so no settlement class can test one, and
+# ADR-0007 keeps its row as the model wrote it. What the check run can do is
+# say, beside a deviation that claims broken syntax, what the parser already
+# established on this same review (#345): the reader's syntax-error findings
+# were disproved by parsing the files at head. Fixed words, and a statement
+# about the parser, never a verdict on the deviation.
+SYNTAX_DEVIATION_CHIP = (
+    "_Doug's parser found no syntax error in the files this review flagged "
+    "for one; see `settled-syntax-error` above_"
+)
+_SYNTAX_WORD = re.compile(r"\bsyntax\b", re.IGNORECASE)
+_SYNTAX_ERROR_WORD = re.compile(r"syntaxerror", re.IGNORECASE)
+_BREAKAGE_WORD = re.compile(
+    r"\b(?:invalid|errors?|fatal|break(?:s|ing)?|broken?|crash(?:es|ing)?|"
+    r"fail(?:s|ed|ing|ure)?|parse|parsing|import)\b",
+    re.IGNORECASE,
+)
+
+
+def claims_broken_syntax(description: str) -> bool:
+    """A deviation that says, in so many words, that the change breaks syntax:
+    `SyntaxError`, or the word syntax beside a word for breaking. "Adopts the
+    new match syntax" is a deviation about style and gets no chip."""
+    if _SYNTAX_ERROR_WORD.search(description):
+        return True
+    return bool(_SYNTAX_WORD.search(description) and _BREAKAGE_WORD.search(description))
+
+
 # settle.py drops disproved findings and leaves a weight-0 notice. Listing
 # that notice under ### Findings beneath a Flagged title reads as a remaining
 # defect. The band is the risk score; nothing survived.
@@ -1023,8 +1051,14 @@ def render(
             lines += _quote(intent_partial)
         lines += [""]
         if intent_read.findings:
+            syntax_settled = any(r.rule == SETTLED_SYNTAX_ERROR for r in verdict.reasons)
             lines += [
                 f"- `{_rule_span(d.type)}` — {_oneline(d.description)} _({_oneline(d.severity)})_"
+                + (
+                    f" · {SYNTAX_DEVIATION_CHIP}"
+                    if syntax_settled and claims_broken_syntax(d.description)
+                    else ""
+                )
                 for d in intent_read.findings
             ]
         else:
