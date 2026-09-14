@@ -316,6 +316,28 @@ does not know) contributes nothing, and nothing keeps the finding. Doug's
 own two reads of the PR that built this (#314) supplied nine of these
 vetoes; the log rows for that PR say which.
 
+The fourth class is **a syntax error the parser disproves** (#342). The
+reader judges syntax from memory, and its memory lags the language: on PR
+#339 it filed five high findings that `except A, B:` is invalid Python 3
+syntax, a form Python 3.14 accepts (PEP 758) and `ruff format` writes for any
+project that requires 3.14. `doug/settle.py`'s `drop_disproved_syntax_findings`
+settles a finding whose slug names a Python syntax error (`syntax-error`,
+`invalid-syntax`, `python-syntax-error`, `parse-error`) in a `.py` file when
+the file at head compiles under the oldest Python the repository declares:
+`requires-python` in the nearest `pyproject.toml`, else the nearest
+`.python-version`. The oldest, because a file that parses only on newer
+versions really is broken for a supported one, and that finding must publish.
+Doug runs one interpreter; `ast.parse(feature_version=…)` gives it the
+declared grammar, and `compile` then catches what the parser alone accepts,
+such as `return` outside a function. Every uncertainty keeps the finding: no
+declaration, a specifier with no readable lower bound, a minimum older than
+3.8 (`continue` inside `finally` was a compile error before 3.8, and
+`feature_version` does not model it) or newer than the running interpreter, a
+description that names another grammar (SQL, a regex, JSON, YAML, TOML,
+`literal_eval`), or a file that cannot be fetched. Same weight-0 notice
+pattern, rule `settled-syntax-error`, naming the Python version the file
+parsed as.
+
 **Doug's own review of PR #49** — the branch that added this filter — found
 three real gaps in it before merge, all verified by reproduction rather than
 taken on faith (REVIEWING.md's own rule):
