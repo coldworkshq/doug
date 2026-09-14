@@ -2,26 +2,27 @@
 
 --- shell lane (2026-09-14): D5 and the www half merged; FQ-29 landed ---
 
-State:    done in code and deployed. #340 (D5) squash-merged as 242db1a and
-          #341 (www redirects to the apex, the code half of #333) as 94cd0a5;
-          main carries both tips (checked). FQ-29 is landed: both repository
-          variables are set on this repo (values never enter it) and the
-          founder's dispatched web deploy (run 34811345583) promoted
-          doug-web-00160-lay with COLDWORKS_REGISTRY_URL and
-          DOUG_GUARDS_INSTALLATIONS non-empty. The 94cd0a5 push deploy that
-          carries the www rule follows it in the queue; the rule is inert
-          until www is mapped onto doug-web.
-Next:     Founder: after the 94cd0a5 web deploy, `domains.sh map` for www,
-          `status` until READY, never `cutover` (the script refuses it);
-          delete the registry's www mapping last, or first if the
-          certificate will not issue while the registry serves the domain,
-          the FQ-28 path. In a browser at coldworks.dev: Phase 0 items 2 to
-          5, said aloud to the agent, who dates them on hq frontdoor-12.8.
-          Agent, after www serves doug-web: the coldworks PR that removes
-          the registry's www forwards and criterion 10's local www block.
-Blockers: none in code. The registry snapshot reads stale from 2026-09-26
-          about 04:28Z; items 2 and 5 observed after that need a mirror
-          push first.
+State:    done and observed. #340 (D5) squash-merged as 242db1a and #341
+          (www redirects to the apex, the code half of #333) as 94cd0a5;
+          main carries both tips (checked). FQ-29 landed: both repository
+          variables set (values never enter this repo), doug-web-00160-lay
+          then 00162-qos carry them non-empty. www moved 2026-09-14: the
+          founder mapped www onto doug-web, the certificate would not issue
+          while the registry served the host (as at FQ-28), the registry's
+          www mapping was deleted, the certificate issued, and at 06:48Z
+          every www path answers 308 to the apex with path and query, the
+          six legacy landing and docs URLs land on 200 pages, www/sign-in
+          sets no cookie, and the apex and doug.coldworks.dev are unchanged.
+          Phase 0 items 1, 2, 3, 5, 6, 7, 8 dated on hq frontdoor-12.8;
+          item 4's on half dated, its off half (a deep-read-off repository)
+          waits on the founder.
+Next:     Founder: merge and deploy coldworks#84 (the registry's www
+          forwards leave); the off half of Phase 0 item 4; hq#29 and
+          doug#343, then the two roadmap Artifact republishes. Nothing in
+          this repo waits on an agent.
+Blockers: none. The registry snapshot reads stale from 2026-09-26 about
+          04:28Z; the T slot and Guards render the unknown chip after that
+          until the mirror is pushed again.
 Decisions this session (2026-09-14):
 - Repository variables, not secrets and not literals — neither value is a
   credential, and the mapping names an engine tenant that stays the
