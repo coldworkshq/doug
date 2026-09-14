@@ -1,30 +1,24 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-11): the one shell, doug D4 (the subdomain redirects to the apex) ---
+--- shell lane (2026-09-14): ADR-0034 accepted, the read contract signed (FQ-27) ---
 
-State:    review — doug#328, branch `shell/the-subdomain-redirects` off main
-          e32ca47, head f821797, marked ready by the founder on 2026-09-11 while
-          the apex still serves the registry (FQ-28 not done). `redirects()`
-          in `web/next.config.ts`: every path on `doug.coldworks.dev` answers
-          308 to the same path and query on `coldworks.dev`, keyed on that
-          one Host (regex-escaped), never a catch-all. Two code controls hold
-          it: `gcp.sh web()` refuses the deploy while the apex is not among
-          doug-web's mappings and promotes a candidate only when its
-          /sign-in answers 307, and `auth-origin.ts` refuses a redirect URI
-          on the retired host so the 307 and the 308 cannot loop. The
-          single-host suite in `auth-entry.integration.test.mjs` (13 cases
-          over one build, main and apex servers started together); the
-          deploy-time probe `smoke-subdomain-redirect.sh` after every web
-          promotion; `domains.sh` requires DOUG_WEB_DOMAIN, refuses a cutover
-          onto the retired host, and proves the apex routes to doug-web by
-          /scoreboard (the registry answers 404 there).
-Next:     Founder: FQ-28 (map, status, cutover), then squash #328 and check
-          main carries the tip; the agent then re-observes Phase 0 item 8
-          onto hq frontdoor-12.8 and starts coldworks S2.
-Blockers: FQ-28 gates the merge in practice; a premature squash is refused
-          at deploy by gcp.sh (the previous revision keeps serving). FQ-27
-          and FQ-29 gate the T slot, Guards, and Phase 0 item 6. Nothing in
-          D4's code needs a signature.
+State:    review — branch `shell/sign-adr-0034` off main 0ce0f34: ADR-0034
+          `proposed` to `accepted` on the founder's instruction in session
+          (2026-09-14); the squash is the signature. D3 (#327, e32ca47) and D4
+          (#328, 081f03f) are merged, FQ-28 is done (2026-09-13), and
+          coldworks S2 merged as coldworks#77 (76e6e9b). The founder started
+          the registry deploy that ships the snapshot route on 2026-09-14.
+Next:     Founder: squash this PR (closes #323). Agent: check the deployed
+          snapshot route from outside and record Phase 0 item 6 on hq
+          frontdoor-12.8; Phase 0 items 2 and 5 after FQ-29.
+Blockers: FQ-29: COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS are
+          both empty on doug-web (checked 2026-09-14), so Guards and the T
+          slot render the chip until the founder sets them. doug#333 (www).
+Pointers: #323 · docs/decisions/ADR-0034-*.md · coldworks#77 · hq
+          docs/cross-repo/one-shell/handoff-s2.md (on hq design/one-shell)
+
+--- shell lane (2026-09-11): doug D4, merged as #328 (081f03f) ---
+
 Decisions this session (2026-09-11):
 - The redirect is a build-time `redirects()` keyed on the literal retired
   host — Next reads Host and the design forbids env-keying (deploy.yml

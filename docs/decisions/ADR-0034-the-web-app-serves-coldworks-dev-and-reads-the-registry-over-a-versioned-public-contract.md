@@ -1,14 +1,17 @@
 ---
 title: The web app serves coldworks.dev and reads the registry over a versioned public contract
-status: proposed
+status: accepted
 date: 2026-09-10
 amends: ADR-0006, ADR-0019
 ---
 
-> **Proposed, not accepted.** The founder's flip of this record to `accepted`
-> is the signature on the read contract (hq#16, 2026-09-10). Until then the
-> registry does not deploy the route this record reads, and nothing in this
-> repo renders a figure from it. Number claimed on #323.
+> **Accepted 2026-09-14.** The founder accepted this record on 2026-09-14,
+> and that is the signature on the read contract (FQ-27; hq#16, 2026-09-10).
+> When it was signed, decision 1 had shipped: `coldworks.dev` serves this app
+> and `doug.coldworks.dev` redirects to it (2026-09-13). The registry's route
+> merged in coldworks#76, and the registry stopped being a customer surface in
+> coldworks#77. Who may see Guards (decision 4) is a mapping the founder sets
+> separately. Number claimed on #323.
 
 ## Context
 
@@ -146,9 +149,9 @@ Doug renders a chip with a reason when the document is missing.
   never a number on a page. The chip says why, in the registry's own words
   where it gave them.
 - The registry stops being a customer surface: its sign-in, landing, and
-  docs leave it in a later change in the engine repo, and its screens stay
-  reachable on its own host as the engine's instrument until this app
-  absorbs them one at a time.
+  docs left it in coldworks#77 (2026-09-14), and its screens stay reachable
+  on its own host as the engine's instrument until this app absorbs them one
+  at a time.
 - ADR-0006's rule that Doug does not depend on lema is not reopened. This
   record adds one runtime read of the engine's registry and nothing of
   lema's; the amendment is to the sentence in `links.ts`, recorded here so
