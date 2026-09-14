@@ -2,15 +2,17 @@
 
 --- reader lane (2026-09-14): syntax-error findings the declared Python parses, doug#342 ---
 
-State:    building — branch reader/syntax-claims-parse off origin/main 8ffb734,
-          worktree .claude/worktrees/doug-reader-syntax. settle.py's fourth
-          class, `settled-syntax-error`: a finding whose slug names a Python
-          syntax error on a .py file is dropped when the file at head passes
-          `ast.parse(feature_version=<oldest declared 3.x>)` and `compile`.
-          The declaration is the nearest requires-python, else the nearest
-          .python-version.
-Next:     ruff and the full suite, plants against known-wrong inputs, then a
-          PR closing #342.
+State:    review — **doug#344** (closes #342), branch reader/syntax-claims-parse
+          off origin/main 8ffb734, worktree .claude/worktrees/doug-reader-syntax.
+          settle.py's fourth class, `settled-syntax-error`: a finding whose slug
+          names a Python syntax error on a .py file is dropped when the file at
+          head passes `ast.parse(feature_version=<oldest declared 3.x>)` and
+          `compile`. The declaration is the nearest requires-python, else the
+          nearest .python-version. Full suite 1,953 passed at dfa7341; ruff
+          clean; 13 of 13 mutants killed; the added lines carry 0 violations
+          under #339's rules and 0 basedpyright standard errors.
+Next:     watch CI and Doug's read on #344 and answer its findings; the merge
+          is the founder's click.
 Blockers: none. Independent of #339; if #339 merges first, this branch
           rebases with `ruff format` over api/.
 Decisions this session:
