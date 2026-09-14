@@ -14,12 +14,14 @@ State:    review — branch `shell/guards-mapping-reaches-the-deploy` off main
           derived from the script's own --set-env-vars line; red on a deleted
           line and on a literal. On this branch: api 1941 pass, web 462
           pass, shell guard clean.
-Next:     Founder: squash this PR, then FQ-29 (the two `gh variable set`
-          commands in hq docs/cross-repo/one-shell/handoff-close.md, then one
-          web deploy), then Phase 0 items 2 and 5 in a browser. Agent, in
-          parallel: doug#333's code half on shell/www-redirects-to-the-apex;
-          Phase 0 item 7 on main 507f8b0; the observations onto hq
-          frontdoor-12.8.
+Next:     Founder: squash this PR (#340), then FQ-29 (the two `gh variable
+          set` commands in hq docs/cross-repo/one-shell/handoff-close.md,
+          then one web deploy), then Phase 0 items 2 and 5 in a browser;
+          squash #341 (www redirects to the apex, the code half of #333),
+          then `domains.sh map` for www, `status` until READY, never
+          `cutover`, and delete the registry's www mapping last. Phase 0
+          item 7 is dated: on main 507f8b0, api 1940 pass and web 462 pass,
+          both rc 0 (2026-09-14; hq#28 records it on frontdoor-12.8).
 Blockers: FQ-29 waits on this merge (R11 item 3; the value never enters this
           public repo). www waits on the founder's `domains.sh map` after
           the doug#333 PR merges; the registry's www mapping goes last.
