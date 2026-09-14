@@ -26,6 +26,15 @@ Decisions this session:
 - No `filterwarnings = error`: with it the suite reports 324 failures and 14
   errors, 1,129 of them ResourceWarnings from unclosed sqlite connections —
   a real leak, filed as doug#338 rather than hidden.
+- Doug's read on 9964a78 (5 high, 1 medium, 1 low), answered on #339. The
+  five `reader:syntax-error` highs are refuted: `ruff format` rewrote eight
+  clauses to PEP 758 `except A, B:`, which 3.14.7 parses and 3.13.15 rejects,
+  and api/ already needed 3.14 (507f8b0 api.py:1389 annotates a method with
+  its own class, no `from __future__ import annotations`). Filed the reader
+  false positive as doug#342 — rejected: pinning ruff to py313 to keep the
+  parentheses, which makes ruff report F821 on that annotation. Medium partly
+  valid (open branches and dependency bumps meet the gate), no code change;
+  low refuted (blocks once; stop_hook_active).
 - Formatting is its own commit — doug#331 and doug#332 touch three api/
   files and rebase with one `ruff format` — rejected: reformatting on touch,
   which spreads format noise across every later diff.
