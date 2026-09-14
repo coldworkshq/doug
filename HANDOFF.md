@@ -2,13 +2,15 @@
 
 --- reader lane (2026-09-14): annotate a broken-syntax deviation beside a syntax settlement, doug#345 ---
 
-State:    building — branch reader/deviation-syntax-annotation off origin/main
-          1bbade1, worktree .claude/worktrees/doug-deviation-annotate.
-          check_run.render appends SYNTAX_DEVIATION_CHIP to a deviation whose
-          description claims broken syntax, when the same verdict carries a
-          `settled-syntax-error` notice. The deviation row, text, severity,
-          band and score are untouched.
-Next:     tests, make check, mutation plants, PR closing #345.
+State:    review — **doug#346** (closes #345), branch
+          reader/deviation-syntax-annotation off origin/main 1bbade1, worktree
+          .claude/worktrees/doug-deviation-annotate. check_run.render appends
+          SYNTAX_DEVIATION_CHIP to a deviation whose description claims broken
+          syntax, when the same verdict carries a `settled-syntax-error`
+          notice. The deviation row, text, severity, band and score are
+          untouched. make check green; full suite 1,984 passed at 81e1efc;
+          9 of 9 mutants killed. Decision recorded on #345.
+Next:     watch CI and Doug's read on #346; the merge is the founder's click.
 Blockers: none.
 Decisions this session:
 - Annotate, not drop (Andrew, 2026-09-14) — the deviations table is what
