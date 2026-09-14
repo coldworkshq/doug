@@ -1,21 +1,53 @@
 # HANDOFF — doug
 
---- shell lane (2026-09-14): ADR-0034 accepted, the read contract signed (FQ-27) ---
+--- shell lane (2026-09-14): doug D5, the Guards mapping reaches the deploy ---
 
-State:    review — branch `shell/sign-adr-0034` off main 0ce0f34: ADR-0034
-          `proposed` to `accepted` on the founder's instruction in session
-          (2026-09-14); the squash is the signature. D3 (#327, e32ca47) and D4
-          (#328, 081f03f) are merged, FQ-28 is done (2026-09-13), and
-          coldworks S2 merged as coldworks#77 (76e6e9b). The founder started
-          the registry deploy that ships the snapshot route on 2026-09-14.
-Next:     Founder: squash this PR (closes #323). Agent: check the deployed
-          snapshot route from outside and record Phase 0 item 6 on hq
-          frontdoor-12.8; Phase 0 items 2 and 5 after FQ-29.
-Blockers: FQ-29: COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS are
-          both empty on doug-web (checked 2026-09-14), so Guards and the T
-          slot render the chip until the founder sets them. doug#333 (www).
+State:    review — branch `shell/guards-mapping-reaches-the-deploy` off main
+          507f8b0. The web Deploy step in deploy.yml sets
+          COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS from
+          repository variables (`vars.`), never literals. gcp.sh web()
+          already forwarded both to --set-env-vars declaratively, which is
+          why a value set on doug-web by hand vanished at the next merge
+          deploy and both were empty there after every merge (checked
+          2026-09-14). Pinned by
+          test_the_merge_deploy_carries_the_mapping_from_repository_variables,
+          derived from the script's own --set-env-vars line; red on a deleted
+          line and on a literal. On this branch: api 1941 pass, web 462
+          pass, shell guard clean.
+Next:     Founder: squash this PR, then FQ-29 (the two `gh variable set`
+          commands in hq docs/cross-repo/one-shell/handoff-close.md, then one
+          web deploy), then Phase 0 items 2 and 5 in a browser. Agent, in
+          parallel: doug#333's code half on shell/www-redirects-to-the-apex;
+          Phase 0 item 7 on main 507f8b0; the observations onto hq
+          frontdoor-12.8.
+Blockers: FQ-29 waits on this merge (R11 item 3; the value never enters this
+          public repo). www waits on the founder's `domains.sh map` after
+          the doug#333 PR merges; the registry's www mapping goes last.
+Decisions this session (2026-09-14):
+- Repository variables, not secrets and not literals — neither value is a
+  credential, and the mapping names an engine tenant that stays the
+  founder's setting outside a public file — rejected: a literal in
+  deploy.yml; a Secret Manager entry.
+- The two lines live on the web Deploy step, not the workflow env — only
+  `gcp.sh web` reads them, and the pin reads that step — rejected:
+  workflow-level env beside DOUG_WEB_DOMAIN.
+- The pin derives the forwarded names from gcp.sh rather than restating
+  them — a third forwarded variable is caught the day it is added —
+  rejected: two literal asserts.
+Pointers: .github/workflows/deploy.yml (web Deploy env) · api/deploy/gcp.sh
+          web() --set-env-vars · api/tests/test_deploy_gcp.py
+          _web_passthrough_env · doug#333 · hq
+          docs/cross-repo/one-shell/handoff-close.md · roadmap frontdoor-12.8
+
+--- shell lane (2026-09-14): ADR-0034 accepted, merged as #336 (507f8b0) ---
+
+The squash is the signature (FQ-27): ADR-0034 `proposed` to `accepted` on
+the founder's instruction in session. The registry deploy that ships the
+snapshot route landed the same day (coldworks-registry-00007-dqv), and
+Phase 0 item 6 is recorded on hq frontdoor-12.8 for the checks a remote base
+can run.
 Pointers: #323 · docs/decisions/ADR-0034-*.md · coldworks#77 · hq
-          docs/cross-repo/one-shell/handoff-s2.md (on hq design/one-shell)
+          docs/cross-repo/one-shell/handoff-s2.md
 
 --- shell lane (2026-09-11): doug D4, merged as #328 (081f03f) ---
 
