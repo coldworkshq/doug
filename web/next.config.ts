@@ -58,7 +58,20 @@ const nextConfig: NextConfig = {
   // `web/lib/auth-origin.ts` refuses a redirect URI on the retired host so
   // this 308 and the proxy's 307 can never chase each other. Pinned by the
   // single-host suite in `lib/auth-entry.integration.test.mjs`.
+  //
+  // `www.coldworks.dev` is the alias and redirects to the apex the same way
+  // (doug#333), once the founder maps it onto this service; until then the
+  // rule is inert, because the host never reaches this container. That host
+  // served the registry's landing and the audit CLI's docs, so its docs URLs
+  // mean the audit docs, which live at /docs/audit here: a path-preserving
+  // rule alone would send www/docs/cli.html to a 404 and www/docs/cli to
+  // Doug's own CLI page (probed on the apex 2026-09-14). The docs rules
+  // mirror the forwards the registry answers today and come before the
+  // catch-all, because the first matching rule wins. Permanent, like the
+  // subdomain's: the alias is settled, and a later move of the audit docs is
+  // the apex's own redirect to add.
   async redirects() {
+    const www = [{ type: "host" as const, value: "www\\.coldworks\\.dev" }];
     return [
       {
         source: "/:path*",
@@ -66,6 +79,10 @@ const nextConfig: NextConfig = {
         destination: `${COLDWORKS_URL}/:path*`,
         permanent: true,
       },
+      { source: "/landing.html", has: www, destination: `${COLDWORKS_URL}/`, permanent: true },
+      { source: "/docs", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
+      { source: "/docs/:path*", has: www, destination: `${COLDWORKS_URL}/docs/audit/:path*`, permanent: true },
+      { source: "/:path*", has: www, destination: `${COLDWORKS_URL}/:path*`, permanent: true },
     ];
   },
   async headers() {
