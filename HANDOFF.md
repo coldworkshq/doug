@@ -2,15 +2,17 @@
 
 --- tooling lane (2026-09-13): a static gate for api/ and agent hooks, doug#337 ---
 
-State:    building — branch tooling/static-gate off origin/main 507f8b0, in
-          the worktree .claude/worktrees/doug-static-gate. Commit 1 formats
-          api/ and changes nothing else (98 files). Then `make check`: ruff
-          format and lint with a shrink-only debt table, basedpyright
-          standard against a baseline of the errors that predate it, `uv lock
+State:    review — **doug#339**, branch tooling/static-gate off origin/main
+          507f8b0, in the worktree .claude/worktrees/doug-static-gate.
+          6aad653 formats api/ and changes nothing else (98 files); 2ac8b06
+          adds `make check`: ruff format and lint with a 195-pair debt table,
+          basedpyright standard against a 1,522-entry baseline, `uv lock
           --check`, and .github/scripts/check_ratchets.py; CI's api job and a
-          Stop hook run it.
-Next:     debt table and type baseline, show every gate red on a planted
-          input, full suite, open the PR.
+          Stop hook run it. Each gate shown red on a planted input and green
+          after restore, including debt and baseline growth in a clone whose
+          origin/main carried both. Full suite 1,966 passed.
+Next:     watch CI on #339; the merge is the founder's click. #331 and #332
+          rebase with `ruff format` on their branches.
 Blockers: none.
 Decisions this session:
 - Measured 2026-09-13 at 507f8b0: ruff format would rewrite 98 of 130
