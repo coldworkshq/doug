@@ -13,13 +13,14 @@ State:    done and observed. #340 (D5) squash-merged as 242db1a and #341
           every www path answers 308 to the apex with path and query, the
           six legacy landing and docs URLs land on 200 pages, www/sign-in
           sets no cookie, and the apex and doug.coldworks.dev are unchanged.
-          Phase 0 items 1, 2, 3, 5, 6, 7, 8 dated on hq frontdoor-12.8;
-          item 4's on half dated, its off half (a deep-read-off repository)
-          waits on the founder.
-Next:     Founder: merge and deploy coldworks#84 (the registry's www
-          forwards leave); the off half of Phase 0 item 4; hq#29 and
-          doug#343, then the two roadmap Artifact republishes. Nothing in
-          this repo waits on an agent.
+          All eight Phase 0 items are observed and dated on hq
+          frontdoor-12.8 (done); item 4's off half was observed with deep
+          read toggled off for coldworkshq/doug, which the founder turns
+          back on.
+Next:     Founder: turn deep read back on for coldworkshq/doug if it is
+          still off; merge and deploy coldworks#84 (the registry's www
+          forwards leave); merge hq#29 and this PR, then the two roadmap
+          Artifact republishes. Nothing in this repo waits on an agent.
 Blockers: none. The registry snapshot reads stale from 2026-09-26 about
           04:28Z; the T slot and Guards render the unknown chip after that
           until the mirror is pushed again.
