@@ -1,4 +1,4 @@
-.PHONY: dev api-dev web-dev console-dev test lint build docker
+.PHONY: dev api-dev web-dev console-dev test lint check typecheck typecheck-baseline ratchets ruff-debt build docker
 
 # `api/.env` for the Python service, if you have one. Nothing in `api/` reads a
 # dotenv file on its own — `uv run` ignores `.env` unless it is named — so this
@@ -37,6 +37,35 @@ lint:
 	cd api && uv run ruff check .
 	npm run lint --workspace=web
 	npm run lint --workspace=console
+
+# The static gate for api/: no database, seconds. CI and the Stop hook in
+# .claude/settings.json run exactly this. typecheck runs before ratchets
+# because basedpyright rewrites a baseline it can shrink, and ratchets fails
+# until the smaller baseline is committed.
+check:
+	cd api && uv run ruff format --check .
+	cd api && uv run ruff check .
+	$(MAKE) typecheck
+	cd api && uv lock --check
+	$(MAKE) ratchets
+
+# basedpyright in standard mode against api/.basedpyright/baseline.json, the
+# errors that predate the gate. A new error fails; a fixed one shrinks the file.
+typecheck:
+	cd api && uv run basedpyright
+
+# Records today's errors as the baseline. Only for adopting a stricter mode or
+# rule: the ratchet refuses a baseline that grew past the merge base.
+typecheck-baseline:
+	cd api && (uv run basedpyright --writebaseline > /dev/null || true) && uv run basedpyright
+
+# Shrink-only ruff debt and type baseline. CI passes RATCHETS_FLAGS=--require-base.
+ratchets:
+	cd api && uv run python ../.github/scripts/check_ratchets.py $(RATCHETS_FLAGS)
+
+# Rewrites the ruff debt table to what fires today. Run it after paying debt down.
+ruff-debt:
+	cd api && uv run python ../.github/scripts/check_ratchets.py --write-ruff-debt
 
 build:
 	npm run build --workspace=web

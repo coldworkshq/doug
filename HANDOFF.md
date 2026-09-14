@@ -1,5 +1,35 @@
 # HANDOFF — doug
 
+--- tooling lane (2026-09-13): a static gate for api/ and agent hooks, doug#337 ---
+
+State:    building — branch tooling/static-gate off origin/main 507f8b0, in
+          the worktree .claude/worktrees/doug-static-gate. Commit 1 formats
+          api/ and changes nothing else (98 files). Then `make check`: ruff
+          format and lint with a shrink-only debt table, basedpyright
+          standard against a baseline of the errors that predate it, `uv lock
+          --check`, and .github/scripts/check_ratchets.py; CI's api job and a
+          Stop hook run it.
+Next:     debt table and type baseline, show every gate red on a planted
+          input, full suite, open the PR.
+Blockers: none.
+Decisions this session:
+- Measured 2026-09-13 at 507f8b0: ruff format would rewrite 98 of 130
+  files; the extended rules report 5,870 violations (259 in doug/, 125 in
+  scripts/, the rest in tests); pyright basic reports 1,519 errors and
+  strict 19,216. Debt only shrinks — rejected: flipping any of them on.
+- basedpyright with its native baseline, not pyright — a plain run shrinks
+  the baseline when an error is fixed (measured: "went down by 1") and only
+  --writebaseline grows it, so the ratchet counts baseline entries per rule
+  against the merge base and fails a rewritten, uncommitted baseline.
+- No `filterwarnings = error`: with it the suite reports 324 failures and 14
+  errors, 1,129 of them ResourceWarnings from unclosed sqlite connections —
+  a real leak, filed as doug#338 rather than hidden.
+- Formatting is its own commit — doug#331 and doug#332 touch three api/
+  files and rebase with one `ruff format` — rejected: reformatting on touch,
+  which spreads format noise across every later diff.
+Pointers: api/pyproject.toml · Makefile `check` · .github/scripts/check_ratchets.py ·
+          .claude/{settings.json,hooks/} · api/tests/test_{check_ratchets,claude_hooks}.py
+
 --- shell lane (2026-09-14): ADR-0034 accepted, the read contract signed (FQ-27) ---
 
 State:    review — branch `shell/sign-adr-0034` off main 0ce0f34: ADR-0034

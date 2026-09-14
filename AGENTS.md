@@ -55,3 +55,17 @@ This repo has lost follow-ups three distinct ways, all of them found by accident
    document it contradicted.
 
 A prose aside in a long document is not a tracking system. An issue is.
+
+## The static gate
+
+`make check` is the static gate for `api/`: ruff format and lint, basedpyright
+in standard mode, `uv lock --check`, and `.github/scripts/check_ratchets.py`.
+It needs no database. CI's `api` job runs it before the tests, and a Stop hook
+in `.claude/settings.json` keeps an agent from finishing on a red run.
+
+**Debt only shrinks.** Existing ruff violations live in the generated
+`per-file-ignores` table in `api/pyproject.toml`, and existing type errors in
+`api/.basedpyright/baseline.json`. Fix a violation in the file you touch, then
+run `make ruff-debt` or commit the smaller baseline that basedpyright writes.
+Never add to either to get green: the ratchet fails the change against its
+merge base.

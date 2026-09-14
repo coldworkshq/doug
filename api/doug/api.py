@@ -458,7 +458,7 @@ def _example_pack_service() -> example_pack_service.ExamplePackService:
         )
     except ObjectStoreError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any client failure becomes ObjectStoreError, message withheld
         raise ObjectStoreError(f"object storage failed: {type(exc).__name__}") from None
     return example_pack_service.ExamplePackService(objects, cohort_ids=(cohort_id,))
 
