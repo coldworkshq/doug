@@ -75,9 +75,7 @@ def fold(join: dict) -> tuple[dict, dict]:
     return is_defect, carriers
 
 
-def corpus_table(
-    is_defect: dict, carriers: dict, min_prs: int = 5
-) -> tuple[list[dict], float]:
+def corpus_table(is_defect: dict, carriers: dict, min_prs: int = 5) -> tuple[list[dict], float]:
     """Per-pattern precision and lift, ranked by lift. Returns (rows, base).
 
     `clears_base` is the column that matters: ranking by lift alone floats
@@ -93,15 +91,17 @@ def corpus_table(
         hits = sum(1 for k in prs if is_defect[k])
         prec = hits / len(prs)
         lo, hi = wilson(hits, len(prs))
-        rows.append({
-            "pattern": pattern,
-            "prs": len(prs),
-            "defects": hits,
-            "precision": prec,
-            "ci_low": lo,
-            "ci_high": hi,
-            "lift": prec / base if base else 0.0,
-            "clears_base": lo > base,
-        })
+        rows.append(
+            {
+                "pattern": pattern,
+                "prs": len(prs),
+                "defects": hits,
+                "precision": prec,
+                "ci_low": lo,
+                "ci_high": hi,
+                "lift": prec / base if base else 0.0,
+                "clears_base": lo > base,
+            }
+        )
     rows.sort(key=lambda r: -r["lift"])
     return rows, base

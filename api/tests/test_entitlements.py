@@ -197,9 +197,7 @@ def test_derivation_pages_through_every_installation_and_repository(monkeypatch)
     [tenant] = entitlements.derive("github", "ghu_token")
     assert tenant.repo_ids == tuple(range(1, 251))
     # 3 pages of repositories (100 + 100 + 50), not 1.
-    assert [
-        page for path, page in fake.calls if path.endswith("/repositories")
-    ] == [1, 2, 3]
+    assert [page for path, page in fake.calls if path.endswith("/repositories")] == [1, 2, 3]
 
 
 def test_an_unknown_provider_says_so_rather_than_only_yielding_nothing(monkeypatch, capsys):

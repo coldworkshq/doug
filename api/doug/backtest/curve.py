@@ -22,7 +22,7 @@ class Curve(BaseModel):
 
     def capture_at(self, flag_rate: float) -> float:
         pts = self.points
-        for (a, b) in zip(pts, pts[1:], strict=False):
+        for a, b in zip(pts, pts[1:], strict=False):
             if a.flag_rate <= flag_rate <= b.flag_rate:
                 if b.flag_rate == a.flag_rate:
                     return b.capture_rate
@@ -48,13 +48,11 @@ def capture_curve(scored: list[tuple[float, bool]]) -> Curve:
             caught += by_score[j][1]
             j += 1
         flagged = j
-        points.append(
-            CurvePoint(flag_rate=flagged / n, capture_rate=caught / total_defects)
-        )
+        points.append(CurvePoint(flag_rate=flagged / n, capture_rate=caught / total_defects))
         i = j
 
     auc = 0.0
-    for (a, b) in zip(points, points[1:], strict=False):
+    for a, b in zip(points, points[1:], strict=False):
         auc += (b.flag_rate - a.flag_rate) * (a.capture_rate + b.capture_rate) / 2
     return Curve(points=points, auc=round(auc, 4))
 
@@ -68,9 +66,7 @@ class ClearedBand(BaseModel):
     density_lift: float
 
 
-def cleared_band(
-    curve: Curve, n: int, total_defects: int, flag_rate: float
-) -> ClearedBand:
+def cleared_band(curve: Curve, n: int, total_defects: int, flag_rate: float) -> ClearedBand:
     """What is left behind when the top `flag_rate` is routed for review.
 
     Capture measures the flagged band; this measures the other one — and the
@@ -109,9 +105,7 @@ class RuleStat(BaseModel):
     lift: float
 
 
-def rule_stats(
-    fired_rules: list[list[str]], defects: list[bool]
-) -> list[RuleStat]:
+def rule_stats(fired_rules: list[list[str]], defects: list[bool]) -> list[RuleStat]:
     n = len(defects)
     base_rate = sum(defects) / n if n else 0.0
     stats: list[RuleStat] = []

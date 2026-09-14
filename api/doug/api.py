@@ -185,9 +185,7 @@ async def lifespan(app: FastAPI):
     it could have had.
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
-        raise RuntimeError(
-            "GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github"
-        )
+        raise RuntimeError("GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github")
     if app_auth.enabled() and store.enabled():
         # A thread, not an await and not inline: Cloud Run holds the revision
         # out of rotation until the lifespan yields, and this walks every open
@@ -195,9 +193,7 @@ async def lifespan(app: FastAPI):
         # it queued. Blocking startup on that fails the health check and the
         # revision never serves at all. daemon=True so a shutdown is never
         # held open waiting for it.
-        threading.Thread(
-            target=_startup_reconcile, name=STARTUP_THREAD_NAME, daemon=True
-        ).start()
+        threading.Thread(target=_startup_reconcile, name=STARTUP_THREAD_NAME, daemon=True).start()
     yield
 
 
@@ -231,9 +227,7 @@ def _json_safe(value):
 
 
 @app.exception_handler(RequestValidationError)
-async def _validation_error_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Byte-identical to FastAPI's stock handler except for _json_safe above."""
     return JSONResponse(
         status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))}
@@ -315,7 +309,6 @@ def score_pr(pr: PRMetadata) -> Verdict:
     return score(pr)
 
 
-
 @app.post("/v1/score/read")
 def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verdict:
     """Reader-tier scoring: LLM diff-read when enabled, deterministic otherwise.
@@ -366,9 +359,7 @@ def score_pr_read(req: ReadScoreRequest, x_doug_token: str = Header("")) -> Verd
             file=sys.stderr,
         )
         fallback = score(req.pr)
-        fallback.reasons.append(
-            Reason(rule="reader-unavailable", label=str(e), weight=0.0)
-        )
+        fallback.reasons.append(Reason(rule="reader-unavailable", label=str(e), weight=0.0))
         return fallback
 
 
@@ -450,9 +441,7 @@ def _operator_only(x_doug_token: str) -> None:
 def _example_pack_only(x_doug_example_pack_token: str) -> None:
     expected = os.environ.get("DOUG_EXAMPLE_PACK_TOKEN")
     if not expected:
-        raise HTTPException(
-            status_code=503, detail="DOUG_EXAMPLE_PACK_TOKEN not configured"
-        )
+        raise HTTPException(status_code=503, detail="DOUG_EXAMPLE_PACK_TOKEN not configured")
     if not hmac.compare_digest(x_doug_example_pack_token, expected):
         raise HTTPException(status_code=403, detail="forbidden")
 
@@ -469,18 +458,19 @@ def _example_pack_service() -> example_pack_service.ExamplePackService:
         )
     except ObjectStoreError:
         raise
-    except Exception as exc:
-        raise ObjectStoreError(
-            f"object storage failed: {type(exc).__name__}"
-        ) from None
+    except Exception as exc:  # noqa: BLE001 — any client failure becomes ObjectStoreError, message withheld
+        raise ObjectStoreError(f"object storage failed: {type(exc).__name__}") from None
     return example_pack_service.ExamplePackService(objects, cohort_ids=(cohort_id,))
 
 
 def _example_pack_call(action):
     try:
         return action()
-    except (example_pack_service.UnknownCohortError, example_pack_service.UnknownPackError,
-            example_pack_service.UnknownFindingError) as exc:
+    except (
+        example_pack_service.UnknownCohortError,
+        example_pack_service.UnknownPackError,
+        example_pack_service.UnknownFindingError,
+    ) as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
     except CohortTooLarge as exc:
         raise HTTPException(status_code=413, detail="cohort exceeds pack limit") from exc
@@ -503,9 +493,7 @@ class ExamplePackAdjudicationRequest(BaseModel):
     ]
     evidence: tuple[EvidenceReceiptV0, ...] = ()
     verifier_receipts: tuple[VerifierReceiptV0, ...] = ()
-    expected_current_adjudication_id: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    expected_current_adjudication_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 @app.get("/v1/example-pack-cohorts")
@@ -522,9 +510,7 @@ def example_pack_cohort(
     x_doug_example_pack_token: str = Header(""),
 ):
     _example_pack_only(x_doug_example_pack_token)
-    return _example_pack_call(
-        lambda: _example_pack_service().cohort_detail(cohort_id)
-    )
+    return _example_pack_call(lambda: _example_pack_service().cohort_detail(cohort_id))
 
 
 @app.get("/v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}")
@@ -534,9 +520,7 @@ def example_pack_detail(
     x_doug_example_pack_token: str = Header(""),
 ):
     _example_pack_only(x_doug_example_pack_token)
-    return _example_pack_call(
-        lambda: _example_pack_service().pack_detail(cohort_id, pack_hash)
-    )
+    return _example_pack_call(lambda: _example_pack_service().pack_detail(cohort_id, pack_hash))
 
 
 @app.get("/v1/example-pack-cohorts/{cohort_id}/results")
@@ -549,8 +533,7 @@ def example_pack_results(
 
 
 @app.post(
-    "/v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}/"
-    "findings/{finding_id}/adjudications"
+    "/v1/example-pack-cohorts/{cohort_id}/packs/{pack_hash}/findings/{finding_id}/adjudications"
 )
 def example_pack_adjudicate(
     cohort_id: str,
@@ -607,9 +590,7 @@ def _rows_to_items(rows: list[dict]) -> list[QueueItem]:
     ]
 
 
-def _queue_response(
-    items: list[QueueItem], threshold: float | None
-) -> QueueResponse:
+def _queue_response(items: list[QueueItem], threshold: float | None) -> QueueResponse:
     """Band, sort and summarise. Shared by /v1/queue and
     /v1/showcase/queue so the two cannot drift on the banding rule —
     which is the one place this surface has already been wrong once
@@ -1062,7 +1043,8 @@ def _receipt_response(repo: str, pr_number: int, data: dict) -> ReceiptResponse:
             # render as an in-force document with an empty hash. Not
             # reachable via gcp.sh (it runs `set -euo pipefail`), but a
             # local/manual deploy can still set an empty value.
-            hash=prereg_hash, in_force=bool(prereg_hash)
+            hash=prereg_hash,
+            in_force=bool(prereg_hash),
         ),
         latest_verdict=_receipt_verdict(data["latest_verdict"]),
         merges=[
@@ -1266,9 +1248,7 @@ def runs(
         installation_id=installation_id,
         include_untenanted=include_untenanted,
     )
-    return RunListResponse(
-        items=[_run_item(row) for row in rows], limit=limit, offset=offset
-    )
+    return RunListResponse(items=[_run_item(row) for row in rows], limit=limit, offset=offset)
 
 
 @app.get("/v1/runs/{verdict_id}")
@@ -1328,9 +1308,7 @@ def _session_read_context(authorization: str, scope: str) -> tenancy.SessionCont
     return ctx
 
 
-def _readable_installations(
-    installation_id: int, repo_ids: frozenset[int]
-) -> frozenset[int]:
+def _readable_installations(installation_id: int, repo_ids: frozenset[int]) -> frozenset[int]:
     """Every installation whose rows this caller may READ, for these repos.
 
     Takes the id rather than a context because both scoped callers need it
@@ -1379,9 +1357,7 @@ class RepositorySettingsPatch(BaseModel):
     # needs_you_threshold too, since it would arrive as None either way.
     model_config = ConfigDict(extra="forbid")
 
-    needs_you_threshold: float | None = Field(
-        None, strict=True, allow_inf_nan=False, ge=0, le=1
-    )
+    needs_you_threshold: float | None = Field(None, strict=True, allow_inf_nan=False, ge=0, le=1)
     pr_comment: bool | None = Field(None, strict=True)
     deep_read: bool | None = Field(None, strict=True)
 
@@ -1452,9 +1428,7 @@ def set_repository_flag_line(
         )
     if "pr_comment" in fields_set:
         before_flag = pr_comment
-        if not store.set_repo_pr_comment(
-            ctx.installation_id, github_repo_id, body.pr_comment
-        ):
+        if not store.set_repo_pr_comment(ctx.installation_id, github_repo_id, body.pr_comment):
             raise _not_found()
         pr_comment = store.repo_pr_comment(ctx.installation_id, github_repo_id)
         print(
@@ -1464,9 +1438,7 @@ def set_repository_flag_line(
         )
     if "deep_read" in fields_set:
         before_read = deep_read
-        if not store.set_repo_deep_read(
-            ctx.installation_id, github_repo_id, body.deep_read
-        ):
+        if not store.set_repo_deep_read(ctx.installation_id, github_repo_id, body.deep_read):
             raise _not_found()
         deep_read = store.repo_deep_read(ctx.installation_id, github_repo_id)
         # Logged like the other two, and worth more than either: this is the
@@ -1658,10 +1630,7 @@ def session_repository_decisions(
     ctx = _session_read_context(authorization, "queue:read")
     if github_repo_id not in ctx.repo_ids:
         raise _not_found()
-    live = {
-        repo_id: full_name
-        for repo_id, full_name in store.active_repos(ctx.installation_id)
-    }
+    live = {repo_id: full_name for repo_id, full_name in store.active_repos(ctx.installation_id)}
     full_name = live.get(github_repo_id)
     if full_name is None:
         raise _not_found()
@@ -1731,8 +1700,7 @@ def session_runs(
     effective = ctx.repo_ids
     if repo != "all":
         live = {
-            full_name: repo_id
-            for repo_id, full_name in store.active_repos(ctx.installation_id)
+            full_name: repo_id for repo_id, full_name in store.active_repos(ctx.installation_id)
         }
         repo_id = live.get(repo)
         if repo_id is None or repo_id not in effective:
@@ -1744,15 +1712,11 @@ def session_runs(
         installation_ids=_readable_installations(ctx.installation_id, effective),
         repo_ids=effective,
     )
-    return RunListResponse(
-        items=[_run_item(row) for row in rows], limit=limit, offset=offset
-    )
+    return RunListResponse(items=[_run_item(row) for row in rows], limit=limit, offset=offset)
 
 
 @app.get("/v1/sessions/runs/{verdict_id}")
-def session_run_detail(
-    verdict_id: int, authorization: str = Header("")
-) -> RunDetailResponse:
+def session_run_detail(verdict_id: int, authorization: str = Header("")) -> RunDetailResponse:
     """One run, scoped in SQL before any evidence is assembled."""
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
@@ -1857,9 +1821,7 @@ def jobs(
         raise HTTPException(status_code=422, detail="view must be unhealthy or all")
     allowed = _REVIEW_STATUSES if lane == "review" else _OUTCOME_STATUSES
     if status is not None and status not in allowed:
-        raise HTTPException(
-            status_code=422, detail=f"status must be one of {sorted(allowed)}"
-        )
+        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(allowed)}")
     if status is not None and view == "unhealthy" and status in _NEVER_UNHEALTHY[lane]:
         # Not silently forced to view=all: that would hide the caller's
         # contradiction instead of reporting it.
@@ -1873,11 +1835,7 @@ def jobs(
         raise HTTPException(status_code=422, detail="offset must not be negative")
     if not store.enabled():
         raise HTTPException(status_code=503, detail="no ledger configured")
-    lease = (
-        ingest.STALL_LEASE_SECONDS
-        if lane == "review"
-        else outcome_queue.STALL_LEASE_SECONDS
-    )
+    lease = ingest.STALL_LEASE_SECONDS if lane == "review" else outcome_queue.STALL_LEASE_SECONDS
     rows = store.job_rows(
         lane=lane,
         lease_seconds=lease,
@@ -1888,20 +1846,18 @@ def jobs(
         limit=limit,
         offset=offset,
     )
-    return JobListResponse(
-        items=[JobItem(**row) for row in rows], limit=limit, offset=offset
-    )
+    return JobListResponse(items=[JobItem(**row) for row in rows], limit=limit, offset=offset)
 
 
-MAX_REPOS_PER_MINT = 20   # bounds PAT-side GitHub calls per request
-MAX_MINTS_PER_DAY = 30    # per installation per UTC day; fail-closed
+MAX_REPOS_PER_MINT = 20  # bounds PAT-side GitHub calls per request
+MAX_MINTS_PER_DAY = 30  # per installation per UTC day; fail-closed
 
 
 class TokenRequest(BaseModel):
-    selection: str | None = None          # "all" | "selected"
-    owner: str | None = None              # required for selection="all"
-    repos: list[str] | None = None        # required for selection="selected"
-    repo: str | None = None               # legacy PR #48 body — one selected repo
+    selection: str | None = None  # "all" | "selected"
+    owner: str | None = None  # required for selection="all"
+    repos: list[str] | None = None  # required for selection="selected"
+    repo: str | None = None  # legacy PR #48 body — one selected repo
     label: str | None = None
     expires_in_days: int = 0
 
@@ -1996,9 +1952,7 @@ def dispense_token(body: TokenRequest, x_github_token: str = Header("")) -> Toke
         # Lowercased on both sides: GitHub logins and repo names are
         # case-insensitive, so a GitHub-proved admin must not 404 on a
         # ledger entry that merely differs in case.
-        by_name = {
-            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
-        }
+        by_name = {full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)}
         # The ledger may lag GitHub (MT0 taught how badly); GitHub already
         # proved these repos belong to this installation, so a name the
         # ledger has not heard of yet refuses the mint rather than minting
@@ -2104,9 +2058,7 @@ def revoke_token(
         # Lowercased on both sides, mirroring dispense_token's by_name map:
         # GitHub repo names are case-insensitive, so a proven owner/Repo must
         # not 404 against a ledger entry that merely differs in case.
-        by_name = {
-            full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)
-        }
+        by_name = {full_name.lower(): rid for rid, full_name in store.active_repos(installation_id)}
         try:
             proven_ids = {by_name[full.lower()] for full in names}
         except KeyError as exc:
@@ -2185,9 +2137,7 @@ def _current_proved_row(installation_id: int, row: dict, claimed: str) -> dict:
     return current
 
 
-def _ensure_workos_binding(
-    installation_id: int, workos_user_id: str, current: dict
-) -> str:
+def _ensure_workos_binding(installation_id: int, workos_user_id: str, current: dict) -> str:
     external_id = workos_client.external_id_for(installation_id)
     bound = current["workos_org_id"]
     try:
@@ -2263,9 +2213,7 @@ def bind_installation(body: BindRequest, authorization: str = Header("")) -> Res
         with store.installation_bind_lock(installation_id):
             row, claimed = _prove_installer(installation_id, workos_user_id)
             current = _current_proved_row(installation_id, row, claimed)
-            organization_id = _ensure_workos_binding(
-                installation_id, workos_user_id, current
-            )
+            organization_id = _ensure_workos_binding(installation_id, workos_user_id, current)
             written = store.bind_installation_org(installation_id, organization_id)
             if written != organization_id:
                 raise HTTPException(
@@ -2323,9 +2271,7 @@ def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
 
             row, claimed = _prove_installer(installation_id, workos_user_id)
             current = _current_proved_row(installation_id, row, claimed)
-            organization_id = _ensure_workos_binding(
-                installation_id, workos_user_id, current
-            )
+            organization_id = _ensure_workos_binding(installation_id, workos_user_id, current)
             result = store.consume_install_flow_and_bind(
                 nonce_digest,
                 workos_user_id,
@@ -2340,9 +2286,7 @@ def _complete_install_flow_sync(body: dict, authorization: str) -> Response:
                     detail="installation is bound to another organization",
                 )
     except store.InstallFlowLockUnavailable as exc:
-        raise HTTPException(
-            status_code=503, detail="install flow temporarily unavailable"
-        ) from exc
+        raise HTTPException(status_code=503, detail="install flow temporarily unavailable") from exc
     print(
         f"doug: completed install flow for installation {installation_id} "
         f"and organization {organization_id}",
@@ -2367,16 +2311,14 @@ async def _read_complete_install_flow_body(request: Request) -> bytes:
 
 
 @app.post("/v1/installations/bind/complete", status_code=204)
-async def complete_install_flow(
-    request: Request, authorization: str = Header("")
-) -> Response:
+async def complete_install_flow(request: Request, authorization: str = Header("")) -> Response:
     """Parse the opaque proof internally, then move blocking authority work off-loop."""
     content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
     if content_type != "application/json":
         raise _not_found()
     try:
         body = json.loads(await _read_complete_install_flow_body(request))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except json.JSONDecodeError, UnicodeDecodeError:
         raise _not_found() from None
     if not isinstance(body, dict) or set(body) != {"installation_id", "flow_token"}:
         raise _not_found()
@@ -2498,9 +2440,7 @@ def session_connections(authorization: str = Header("")) -> dict:
 
 
 @app.post("/v1/sessions/entitlements", status_code=204)
-def record_entitlements(
-    body: EntitlementsRequest, authorization: str = Header("")
-) -> Response:
+def record_entitlements(body: EntitlementsRequest, authorization: str = Header("")) -> Response:
     """Derive what this signed-in user may see, and store the conclusion.
 
     WHY THIS ENDPOINT EXISTS AT ALL. `authkit-nextjs` hands the provider's
@@ -2963,10 +2903,7 @@ def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
     owner, _, name = str(_obj(base.get("repo")).get("full_name") or "").partition("/")
     carried = _text(pr.get("merge_commit_sha"), store.outcome_jobs.c.merge_commit_sha)
     can_look_up = (
-        isinstance(number, int)
-        and isinstance(installation_id, int)
-        and bool(owner)
-        and bool(name)
+        isinstance(number, int) and isinstance(installation_id, int) and bool(owner) and bool(name)
     )
     if carried is None and not allow_lookup:
         # The fast path found nothing. Say so and let the caller queue the
@@ -3005,7 +2942,9 @@ def _record_merge(payload: dict, *, allow_lookup: bool = False) -> bool:
             carried,
             column=store.outcome_jobs.c.merge_commit_sha,
             client=lambda: app_auth.installation_client(installation_id),
-            owner=owner, repo=name, number=number,
+            owner=owner,
+            repo=name,
+            number=number,
         )
     if (
         merged_at is None
@@ -3235,10 +3174,7 @@ async def github_webhook(
     handled = (
         (x_github_event == "installation" and action in INSTALLATION_STATES)
         or (x_github_event == "installation_repositories" and action in ("added", "removed"))
-        or (
-            x_github_event == "pull_request"
-            and (action in PR_ACTIONS or action == "closed")
-        )
+        or (x_github_event == "pull_request" and (action in PR_ACTIONS or action == "closed"))
         or (x_github_event == "pull_request_review" and action == "submitted")
     )
     if not handled:

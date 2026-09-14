@@ -9,14 +9,7 @@ on every rebase — these tests are what fails first.
 
 from doug import hunks, reader
 
-PATCH_A = (
-    "@@ -10,7 +10,8 @@ def f():\n"
-    " ctx_before\n"
-    "-old_line\n"
-    "+new_line\n"
-    "+added_line\n"
-    " ctx_after\n"
-)
+PATCH_A = "@@ -10,7 +10,8 @@ def f():\n ctx_before\n-old_line\n+new_line\n+added_line\n ctx_after\n"
 
 # Same +/- lines: shifted @@ numbers, different function context, different
 # context lines. The change itself is byte-identical.
@@ -30,13 +23,7 @@ PATCH_A_SHIFTED = (
     "\\ No newline at end of file\n"
 )
 
-PATCH_B = (
-    "@@ -10,7 +10,8 @@ def f():\n"
-    " ctx_before\n"
-    "-old_line\n"
-    "+entirely_different\n"
-    " ctx_after\n"
-)
+PATCH_B = "@@ -10,7 +10,8 @@ def f():\n ctx_before\n-old_line\n+entirely_different\n ctx_after\n"
 
 
 def test_hash_ignores_hunk_header_numbers_and_context():
@@ -106,7 +93,7 @@ def test_index_over_sent_slice_only():
     cov = reader.coverage(d, budget=header_b + 40)
     assert cov.file_cut == "b.py"
     assert cov.hunks is not None
-    assert set(cov.hunks) == {"a.py"}          # cut file absent, unseen absent
+    assert set(cov.hunks) == {"a.py"}  # cut file absent, unseen absent
     assert cov.hunks["a.py"] == [hunks.hash_hunk(h) for h in hunks.split_hunks(PATCH_A)]
 
 

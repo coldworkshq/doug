@@ -142,8 +142,7 @@ def _live_registration(conn, github_repo_id: int) -> tuple[int, str] | None:
         )
         .join(
             store.installations,
-            store.installations.c.installation_id
-            == store.installation_repos.c.installation_id,
+            store.installations.c.installation_id == store.installation_repos.c.installation_id,
         )
         .where(
             store.installation_repos.c.github_repo_id == github_repo_id,
@@ -176,9 +175,7 @@ def _repository_identity(conn, key: RepositoryKey) -> tuple[str | None, bool, in
 
     # Durable ledger state is the only evidence strong enough to censor.
     # Missing registry rows are the known MT0/backfill shape and must retry.
-    permanent = installation_state == "deleted" or (
-        repo is not None and repo.state != "active"
-    )
+    permanent = installation_state == "deleted" or (repo is not None and repo.state != "active")
 
     # A transfer looks EXACTLY like an uninstall from inside the old
     # installation: its junction row goes 'removed' and its installation can
@@ -308,9 +305,7 @@ def _fail_job(conn, job: dict, error: str, now: datetime, max_attempts: int) -> 
         raise LostClaim(f"outcome job {job['id']} is no longer held")
 
 
-def fail_batch(
-    batch: ClaimedBatch, error: str, max_attempts: int = MAX_ATTEMPTS
-) -> int:
+def fail_batch(batch: ClaimedBatch, error: str, max_attempts: int = MAX_ATTEMPTS) -> int:
     """Spend one attempt for every row in a repository batch."""
     engine = _engine()
     with engine.begin() as conn:

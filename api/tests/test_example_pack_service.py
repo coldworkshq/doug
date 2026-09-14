@@ -70,7 +70,7 @@ def _pack(*, pull_number: int = 1, model: str = "m") -> ExamplePackV0:
         max_output_tokens=100,
         effort="medium",
         inference_parameters=(),
-        mechanical_parameters= (
+        mechanical_parameters=(
             NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
         ),
         system_prompt_sha256="1" * 64,

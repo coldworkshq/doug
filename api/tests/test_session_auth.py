@@ -389,9 +389,7 @@ def test_successful_resolve_returns_a_session_context_with_live_intersected_scop
 ):
     _db(tmp_path, monkeypatch)
     _install(150424894, org_id="org_live")
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
     _use_fake_jwks(monkeypatch)
     store.replace_session_entitlements("user_01ABC", [(150424894, [111, 999])])
     token = _token(org_id="org_live")
@@ -413,9 +411,7 @@ def test_missing_stored_claim_yields_no_session(tmp_path, monkeypatch):
     assert session_auth.resolve_session(f"Bearer {token}") is None
 
 
-def test_session_scope_comes_from_the_matching_user_and_installation_only(
-    tmp_path, monkeypatch
-):
+def test_session_scope_comes_from_the_matching_user_and_installation_only(tmp_path, monkeypatch):
     """Changing either identity coordinate must change the answer.
 
     This fails if resolution reads another user's claim or unions the same
@@ -491,6 +487,4 @@ def test_verify_session_claims_refuses_a_forged_or_absent_token(monkeypatch):
 
     _use_fake_jwks(monkeypatch)
     assert session_auth.verify_session_claims(f"Bearer {_token(_OTHER_PRIVATE_KEY)}") is None
-    assert session_auth.verify_session_claims(
-        f"Bearer {_token(exp=int(time.time()) - 60)}"
-    ) is None
+    assert session_auth.verify_session_claims(f"Bearer {_token(exp=int(time.time()) - 60)}") is None

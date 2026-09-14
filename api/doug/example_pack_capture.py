@@ -83,12 +83,8 @@ def capture_requested(environ: Mapping[str, str] | None = None) -> bool:
     """Return whether opt-in and one storage target are present."""
 
     values = os.environ if environ is None else environ
-    return (
-        values.get("DOUG_EXAMPLE_PACK_CAPTURE") == "1"
-        and bool(
-            values.get("DOUG_EXAMPLE_PACK_DIR")
-            or values.get("DOUG_EXAMPLE_PACK_BUCKET")
-        )
+    return values.get("DOUG_EXAMPLE_PACK_CAPTURE") == "1" and bool(
+        values.get("DOUG_EXAMPLE_PACK_DIR") or values.get("DOUG_EXAMPLE_PACK_BUCKET")
     )
 
 
@@ -169,9 +165,7 @@ def configured_hosted_capture(
             "cohort_id": "DOUG_EXAMPLE_PACK_COHORT",
             "application_revision": "DOUG_APPLICATION_REVISION",
         }.get(field, field)
-        raise CaptureConfigurationError(
-            f"invalid hosted capture setting {setting}"
-        ) from None
+        raise CaptureConfigurationError(f"invalid hosted capture setting {setting}") from None
     return HostedCaptureConfigV0(
         bucket=bucket,
         manifest=manifest,
@@ -229,10 +223,7 @@ def capture_scope_if_enabled(
         scope = scope_factory()
     except Exception as exc:  # noqa: BLE001 - capture cannot break a job
         error_type = type(exc).__name__[:120]
-        _diagnostic(
-            f"doug: example-pack capture failed run_id={run_id_prefix} "
-            f"error={error_type}"
-        )
+        _diagnostic(f"doug: example-pack capture failed run_id={run_id_prefix} error={error_type}")
         token = _CAPTURE_SUPPRESSED.set(error_type)
         try:
             yield
@@ -256,15 +247,10 @@ def prepare_request_bytes(
 ) -> tuple[bytes | None, str | None]:
     """Canonicalize only capture-eligible requests and contain any failure."""
 
-    if (
-        not capture_requested()
-        or current_scope() is None
-        or capture_suppressed()
-    ):
+    if not capture_requested() or current_scope() is None or capture_suppressed():
         return None, None
     if attempt_kind == "intent" and (
-        _HOSTED_CONFIG.get() is not None
-        or bool(os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"))
+        _HOSTED_CONFIG.get() is not None or bool(os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"))
     ):
         return None, None
     try:
@@ -328,24 +314,18 @@ def record_attempt(
 
     suppressed_error = _CAPTURE_SUPPRESSED.get()
     if suppressed_error is not None:
-        return CaptureResultV0(
-            enabled=True, captured=False, error_type=suppressed_error
-        )
+        return CaptureResultV0(enabled=True, captured=False, error_type=suppressed_error)
     scope = current_scope()
     if store is None and scope is None and os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"):
         if not capture_requested():
             return CaptureResultV0(enabled=False, captured=False)
-        return CaptureResultV0(
-            enabled=True, captured=False, error_type="MissingCaptureScope"
-        )
+        return CaptureResultV0(enabled=True, captured=False, error_type="MissingCaptureScope")
     hosted = _HOSTED_CONFIG.get()
     if hosted is None and os.environ.get("DOUG_EXAMPLE_PACK_BUCKET"):
         try:
             hosted = configured_hosted_capture()
         except Exception as exc:  # noqa: BLE001 - capture cannot break a review
-            return CaptureResultV0(
-                enabled=True, captured=False, error_type=type(exc).__name__
-            )
+            return CaptureResultV0(enabled=True, captured=False, error_type=type(exc).__name__)
     if hosted is not None and attempt_kind != "risk":
         return CaptureResultV0(enabled=True, captured=False)
     try:
@@ -364,17 +344,14 @@ def record_attempt(
 
     if hosted is not None:
         if scope.review_job_id is None:
-            return CaptureResultV0(
-                enabled=True, captured=False, error_type="MissingReviewJobId"
-            )
+            return CaptureResultV0(enabled=True, captured=False, error_type="MissingReviewJobId")
         if scope.application_revision != hosted.manifest.application_revision:
             return CaptureResultV0(
                 enabled=True, captured=False, error_type="ApplicationRevisionMismatch"
             )
         if (
             scope.scope.installation_id not in hosted.manifest.installation_ids
-            or scope.scope.github_repository_id
-            not in hosted.manifest.github_repository_ids
+            or scope.scope.github_repository_id not in hosted.manifest.github_repository_ids
         ):
             return CaptureResultV0(
                 enabled=True, captured=False, error_type="CaptureIdentityNotAllowed"
@@ -383,12 +360,9 @@ def record_attempt(
     run_id = f"{scope.run_id_prefix}:{attempt_kind}"
     if request_error_type is not None:
         _diagnostic(
-            f"doug: example-pack capture failed run_id={run_id} "
-            f"error={request_error_type[:120]}"
+            f"doug: example-pack capture failed run_id={run_id} error={request_error_type[:120]}"
         )
-        return CaptureResultV0(
-            enabled=True, captured=False, error_type=request_error_type[:120]
-        )
+        return CaptureResultV0(enabled=True, captured=False, error_type=request_error_type[:120])
     try:
         if hosted is not None:
             if not isinstance(sink, HostedExamplePackRepository):
@@ -475,9 +449,7 @@ def record_attempt(
         rendered_path: str | None = str(path)
         if hosted is not None:
             assert scope.review_job_id is not None
-            member = sink.put_membership(
-                pack, review_job_id=scope.review_job_id
-            ).member
+            member = sink.put_membership(pack, review_job_id=scope.review_job_id).member
             rendered_path = None
         return CaptureResultV0(
             enabled=True,

@@ -524,11 +524,7 @@ def complete(
                 verdict_id=verdict_id,
                 finished_at=_db_now(conn),
                 error=None,
-                **(
-                    {"pr_comment_outcome": store.PR_COMMENT_OWED}
-                    if owes_comment
-                    else {}
-                ),
+                **({"pr_comment_outcome": store.PR_COMMENT_OWED} if owes_comment else {}),
             )
             .returning(store.review_jobs.c.id)
         ).scalar_one_or_none()

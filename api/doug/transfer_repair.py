@@ -114,8 +114,7 @@ def _live_installations(conn: Connection, repo_ids: set[int]) -> dict[int, int]:
         )
         .join(
             store.installations,
-            store.installations.c.installation_id
-            == store.installation_repos.c.installation_id,
+            store.installations.c.installation_id == store.installation_repos.c.installation_id,
         )
         .where(
             store.installation_repos.c.github_repo_id.in_(repo_ids),
@@ -140,20 +139,23 @@ def inspect(conn: Connection) -> RepairReport:
     every deployment, so it bounds the registry lookup rather than the other
     way round.
     """
-    candidates = conn.execute(
-        select(store.outcomes).where(
-            store.outcomes.c.kind == "censored",
-            store.outcomes.c.github_repo_id.is_not(None),
-            store.outcomes.c.installation_id.is_not(None),
+    candidates = (
+        conn.execute(
+            select(store.outcomes)
+            .where(
+                store.outcomes.c.kind == "censored",
+                store.outcomes.c.github_repo_id.is_not(None),
+                store.outcomes.c.installation_id.is_not(None),
+            )
+            .order_by(store.outcomes.c.github_repo_id, store.outcomes.c.pr_number)
         )
-        .order_by(store.outcomes.c.github_repo_id, store.outcomes.c.pr_number)
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     if not candidates:
         return RepairReport(())
 
-    live = _live_installations(
-        conn, {int(row["github_repo_id"]) for row in candidates}
-    )
+    live = _live_installations(conn, {int(row["github_repo_id"]) for row in candidates})
 
     rows: list[RepairRow] = []
     for row in candidates:
@@ -198,9 +200,7 @@ def _serialise(row) -> dict:
     return out
 
 
-def apply(
-    engine: Engine, *, expect_outcomes: int, manifest_path: Path
-) -> RepairReport:
+def apply(engine: Engine, *, expect_outcomes: int, manifest_path: Path) -> RepairReport:
     """Delete the wrong censorings and re-pend their jobs, in one transaction.
 
     `expect_outcomes` is the operator's assertion from a prior --dry-run. It
@@ -233,9 +233,11 @@ def apply(
                 return report
 
             ids = [row.outcome_id for row in report.rows]
-            deleted = conn.execute(
-                select(store.outcomes).where(store.outcomes.c.id.in_(ids))
-            ).mappings().all()
+            deleted = (
+                conn.execute(select(store.outcomes).where(store.outcomes.c.id.in_(ids)))
+                .mappings()
+                .all()
+            )
             manifest_path.write_text(
                 json.dumps([_serialise(row) for row in deleted], indent=2) + "\n"
             )
@@ -292,9 +294,7 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
     """
     rows = json.loads(manifest_path.read_text())
     if len(rows) != expect_outcomes:
-        raise RepairInvariantError(
-            f"manifest holds {len(rows)} rows, expected {expect_outcomes}"
-        )
+        raise RepairInvariantError(f"manifest holds {len(rows)} rows, expected {expect_outcomes}")
     if not rows:
         return 0
 
@@ -366,12 +366,9 @@ def rollback(engine: Engine, *, manifest_path: Path, expect_outcomes: int) -> in
                         and_(
                             store.outcomes.c.installation_id
                             == store.outcome_jobs.c.installation_id,
-                            store.outcomes.c.github_repo_id
-                            == store.outcome_jobs.c.github_repo_id,
-                            store.outcomes.c.pr_number
-                            == store.outcome_jobs.c.pr_number,
-                            store.outcomes.c.window_days
-                            == store.outcome_jobs.c.window_days,
+                            store.outcomes.c.github_repo_id == store.outcome_jobs.c.github_repo_id,
+                            store.outcomes.c.pr_number == store.outcome_jobs.c.pr_number,
+                            store.outcomes.c.window_days == store.outcome_jobs.c.window_days,
                             store.outcomes.c.id.in_([row["id"] for row in restored]),
                         )
                     )

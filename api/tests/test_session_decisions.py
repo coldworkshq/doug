@@ -26,20 +26,31 @@ from doug.api import app
 from doug.intent import IntentDoc
 
 ACCEPTED = IntentDoc(
-    id="ADR-0001", title="Cache the thing", body="Because.", status="accepted",
-    date="2026-01-02", ref="docs/decisions/ADR-0001-cache.md",
+    id="ADR-0001",
+    title="Cache the thing",
+    body="Because.",
+    status="accepted",
+    date="2026-01-02",
+    ref="docs/decisions/ADR-0001-cache.md",
 )
 SUPERSEDED = IntentDoc(
-    id="ADR-0002", title="Old", body="Was.", status="superseded",
-    date="2026-01-03", ref="docs/decisions/ADR-0002-old.md",
+    id="ADR-0002",
+    title="Old",
+    body="Was.",
+    status="superseded",
+    date="2026-01-03",
+    ref="docs/decisions/ADR-0002-old.md",
 )
 
 
 def _report(docs, *, directory="docs/decisions", seen=None, unparseable=0, unread=0):
     return intent_providers.FetchReport(
-        list(docs), directory if docs else None,
+        list(docs),
+        directory if docs else None,
         ("docs/decisions",) if docs else intent_providers.CANDIDATE_PATHS,
-        len(docs) if seen is None else seen, unparseable, unread,
+        len(docs) if seen is None else seen,
+        unparseable,
+        unread,
     )
 
 
@@ -66,6 +77,7 @@ def _get(headers, repo_id=11):
 
 def test_lists_the_records_as_written_and_counts_the_accepted_ones(scoped, monkeypatch):
     calls = []
+
     def fetch_report(gh, owner, repo, ref=None):
         calls.append((owner, repo, ref))
         return _report([ACCEPTED, SUPERSEDED])
@@ -89,7 +101,10 @@ def test_the_list_is_not_gated_by_the_flags_and_the_sentence_follows_all_three(s
     body = _get(scoped).json()
     assert body["items"], "the listing is display of the record, not the review-time read"
     assert body["reads_before_diff"] == {
-        "value": False, "deep_read": True, "allowlisted": False, "reader_enabled": False,
+        "value": False,
+        "deep_read": True,
+        "allowlisted": False,
+        "reader_enabled": False,
     }
 
     monkeypatch.setenv("DOUG_READER", "1")
@@ -148,7 +163,10 @@ def test_a_broken_read_is_a_502_that_still_carries_the_sentence(scoped, monkeypa
     # The three flags need no GitHub call, so an outage does not take the
     # sentence with it (the mutation this pins: computing them after the read).
     assert detail["reads_before_diff"] == {
-        "value": False, "deep_read": True, "allowlisted": False, "reader_enabled": True,
+        "value": False,
+        "deep_read": True,
+        "allowlisted": False,
+        "reader_enabled": True,
     }
 
 

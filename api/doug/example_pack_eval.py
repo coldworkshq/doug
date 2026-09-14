@@ -221,9 +221,7 @@ def score_packs_by_instrument(
     for instrument_id in sorted(partitions):
         selected = partitions[instrument_id]
         pack_hashes = {pack.pack_hash for pack in selected}
-        selected_overlays = [
-            overlay for overlay in overlays if overlay.pack_hash in pack_hashes
-        ]
+        selected_overlays = [overlay for overlay in overlays if overlay.pack_hash in pack_hashes]
         results.append(
             InstrumentScorecardV0(
                 instrument_id=instrument_id,

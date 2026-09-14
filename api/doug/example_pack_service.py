@@ -245,22 +245,14 @@ class ExamplePackService:
         member_identities = tuple(
             CompletedJobIdentityV0.from_membership(
                 membership,
-                repository_full_name=packs_by_hash[
-                    membership.pack_hash
-                ].scope.repository_full_name,
+                repository_full_name=packs_by_hash[membership.pack_hash].scope.repository_full_name,
             )
             for membership in cohort.memberships
         )
-        members_by_key = {
-            identity.match_key(): identity for identity in member_identities
-        }
+        members_by_key = {identity.match_key(): identity for identity in member_identities}
         missing = tuple(
             sorted(
-                (
-                    identity
-                    for key, identity in jobs_by_key.items()
-                    if key not in members_by_key
-                ),
+                (identity for key, identity in jobs_by_key.items() if key not in members_by_key),
                 key=lambda identity: identity.match_key(),
             )
         )
@@ -281,17 +273,13 @@ class ExamplePackService:
             extra=extra,
         )
 
-        membership_by_hash = {
-            membership.pack_hash: membership for membership in cohort.memberships
-        }
+        membership_by_hash = {membership.pack_hash: membership for membership in cohort.memberships}
         matched_memberships = tuple(
             membership
             for membership in cohort.memberships
             if CompletedJobIdentityV0.from_membership(
                 membership,
-                repository_full_name=packs_by_hash[
-                    membership.pack_hash
-                ].scope.repository_full_name,
+                repository_full_name=packs_by_hash[membership.pack_hash].scope.repository_full_name,
             ).match_key()
             in jobs_by_key
         )
@@ -316,24 +304,18 @@ class ExamplePackService:
         if not missing:
             matched_hashes = {pack.pack_hash for pack in matched_packs}
             overlays = tuple(
-                overlay
-                for overlay in cohort.adjudications
-                if overlay.pack_hash in matched_hashes
+                overlay for overlay in cohort.adjudications if overlay.pack_hash in matched_hashes
             )
             partitions = score_packs_by_instrument(
                 matched_packs,
                 overlays,
                 finding_cap=cohort.manifest.finding_cap,
             )
-            packs_by_instrument = {
-                pack.instrument_id: pack for pack in matched_packs
-            }
+            packs_by_instrument = {pack.instrument_id: pack for pack in matched_packs}
             instruments = tuple(
                 InstrumentResultV0(
                     instrument_id=partition.instrument_id,
-                    manifest=packs_by_instrument[
-                        partition.instrument_id
-                    ].instrument_manifest,
+                    manifest=packs_by_instrument[partition.instrument_id].instrument_manifest,
                     scorecard=partition.scorecard,
                     null_control=null_control_scorecard(
                         tuple(
@@ -357,9 +339,7 @@ class ExamplePackService:
 
         matched_hashes = {pack.pack_hash for pack in matched_packs}
         matched_overlays = tuple(
-            overlay
-            for overlay in cohort.adjudications
-            if overlay.pack_hash in matched_hashes
+            overlay for overlay in cohort.adjudications if overlay.pack_hash in matched_hashes
         )
         effective = resolve_adjudications(matched_overlays)
         total_findings = sum(len(pack.findings) for pack in matched_packs)

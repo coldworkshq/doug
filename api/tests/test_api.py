@@ -127,13 +127,15 @@ def test_example_pack_routes_cover_detail_pack_results_and_fixed_adjudicator(mon
 
     assert client.get("/v1/example-pack-cohorts/c1", headers=headers).json()["kind"] == "detail"
     assert (
-        client.get("/v1/example-pack-cohorts/c1/packs/" + "a" * 64, headers=headers)
-        .json()["pack_hash"]
+        client.get("/v1/example-pack-cohorts/c1/packs/" + "a" * 64, headers=headers).json()[
+            "pack_hash"
+        ]
         == "a" * 64
     )
-    assert client.get("/v1/example-pack-cohorts/c1/results", headers=headers).json()[
-        "kind"
-    ] == "results"
+    assert (
+        client.get("/v1/example-pack-cohorts/c1/results", headers=headers).json()["kind"]
+        == "results"
+    )
     response = client.post(
         f"/v1/example-pack-cohorts/c1/packs/{'a' * 64}/findings/{'b' * 64}/adjudications",
         headers=headers,
@@ -526,9 +528,7 @@ def test_startup_warns_when_verdicts_reference_repos_the_ledger_lacks(
     assert "DRIFT" in err and "installation_repos" in err and "MT0" in err
 
 
-def test_a_failing_drift_check_never_blocks_the_catchup_sweep(
-    tmp_path, monkeypatch, capsys
-):
+def test_a_failing_drift_check_never_blocks_the_catchup_sweep(tmp_path, monkeypatch, capsys):
     """Doug's own review of PR #50 (startup-error-path): the drift
     diagnostics shared one try with the sweep, so a diagnostic-only DB error
     skipped reconcile_all for the whole cold start — the exact silent-no-op
@@ -556,9 +556,7 @@ def test_webhook_rejects_a_delivery_with_no_signature_at_all(monkeypatch):
     """The wrong-digest case is covered above; this is the shape an
     attacker sends first, and nothing covered it."""
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
-    r = client.post(
-        "/webhooks/github", content=b'{"zen":"x"}', headers={"X-GitHub-Event": "ping"}
-    )
+    r = client.post("/webhooks/github", content=b'{"zen":"x"}', headers={"X-GitHub-Event": "ping"})
     assert r.status_code == 401
 
 
@@ -815,9 +813,7 @@ def test_installation_deleted_flips_state_without_dropping_history(tmp_path, mon
         },
     )
     assert (
-        _webhook(
-            "installation", {"action": "deleted", "installation": INSTALLATION}
-        ).status_code
+        _webhook("installation", {"action": "deleted", "installation": INSTALLATION}).status_code
         == 202
     )
 
@@ -919,9 +915,7 @@ def test_installation_created_reconciles_outcomes_too(tmp_path, monkeypatch):
     fresh install's first check run, even if it were ever slow or raised.
     """
     kicks = _hook_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        worker, "reconcile_outcomes", lambda i: kicks.append(("outcomes", i))
-    )
+    monkeypatch.setattr(worker, "reconcile_outcomes", lambda i: kicks.append(("outcomes", i)))
     _webhook(
         "installation",
         {"action": "created", "installation": INSTALLATION, "repositories": []},
@@ -944,9 +938,7 @@ def test_a_redelivered_installation_created_does_not_re_arm_a_failed_pr(
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
     assert store.enabled()
-    job_id = ingest.enqueue(
-        150424894, 987, "drewjst/doug", 7, "a" * 40, base_sha="0" * 40
-    )
+    job_id = ingest.enqueue(150424894, 987, "drewjst/doug", 7, "a" * 40, base_sha="0" * 40)
     for _ in range(3):
         claimed = ingest.claim()
         assert claimed["id"] == job_id
@@ -1223,9 +1215,7 @@ def test_a_merged_pull_request_starts_the_outcome_clock_without_buying_a_read(
     assert kicks == []
 
 
-def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(
-    tmp_path, monkeypatch
-):
+def test_a_merge_webhook_without_merge_commit_sha_still_starts_the_clock(tmp_path, monkeypatch):
     """#259 exposure 2, covered before it happens rather than after.
 
     GitHub is removing merge_commit_sha from REST pull payloads. Webhook
@@ -1356,7 +1346,8 @@ def test_the_queued_lookup_never_escapes_its_background_task(tmp_path, monkeypat
     # swallows transport errors, so a failing lookup never reaches the write —
     # this test would prove nothing if the graph were the thing that broke.
     monkeypatch.setattr(
-        api.app_auth, "installation_client",
+        api.app_auth,
+        "installation_client",
         lambda i: SimpleNamespace(
             graphql=lambda q, variables=None: {
                 "repository": {"pullRequest": {"mergeCommit": {"oid": "e" * 40}}}
@@ -1364,7 +1355,8 @@ def test_the_queued_lookup_never_escapes_its_background_task(tmp_path, monkeypat
         ),
     )
     monkeypatch.setattr(
-        api.store, "enqueue_outcome_jobs",
+        api.store,
+        "enqueue_outcome_jobs",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db is down")),
     )
 
@@ -1437,14 +1429,17 @@ def test_a_redelivered_merge_heals_a_missing_outcome_window(tmp_path, monkeypatc
     must fill its missing 60-day partner rather than treating the whole merge
     as already queued, which proves the webhook uses the plural writer."""
     _hook_env(tmp_path, monkeypatch)
-    assert store.enqueue_outcome_job(
-        150424894,
-        987,
-        7,
-        "c" * 40,
-        datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
-        "main",
-    ) is not None
+    assert (
+        store.enqueue_outcome_job(
+            150424894,
+            987,
+            7,
+            "c" * 40,
+            datetime(2020, 3, 1, 12, 0, tzinfo=UTC),
+            "main",
+        )
+        is not None
+    )
 
     assert _webhook("pull_request", _closed_payload()).status_code == 202
 
@@ -1528,9 +1523,7 @@ def test_a_merge_missing_the_facts_the_row_is_built_from_is_ignored(tmp_path, mo
     assert _table(tmp_path, store.outcome_jobs) == []
 
 
-def test_facts_too_long_for_their_columns_are_refused_rather_than_written(
-    tmp_path, monkeypatch
-):
+def test_facts_too_long_for_their_columns_are_refused_rather_than_written(tmp_path, monkeypatch):
     """Postgres answers an over-long INSERT with StringDataRightTruncation —
     a 500, and so the same redelivery loop the shape guards prevent. sqlite
     stores the long value instead, so this test asserts the guard (no row)
@@ -1604,9 +1597,7 @@ def _review_payload(
     }
 
 
-def test_an_approving_review_is_ingested_as_a_dated_external_stance(
-    tmp_path, monkeypatch
-):
+def test_an_approving_review_is_ingested_as_a_dated_external_stance(tmp_path, monkeypatch):
     """The neutral-grader lane. A third-party stance lands in the same ledger
     as Doug's verdicts, in Doug's own band vocabulary, so the two can be
     adjudicated against the same outcome — and nothing is spent doing it: no
@@ -1650,15 +1641,11 @@ def test_a_review_that_takes_no_stance_is_not_recorded(tmp_path, monkeypatch):
     land. There is nothing to grade against an outcome, so there is no row."""
     _hook_env(tmp_path, monkeypatch)
     for state in ("commented", "pending", "dismissed"):
-        assert (
-            _webhook("pull_request_review", _review_payload(state)).status_code == 202
-        )
+        assert _webhook("pull_request_review", _review_payload(state)).status_code == 202
     assert _table(tmp_path, store.verdicts) == []
 
 
-def test_a_rest_cased_review_state_bands_the_same_as_a_webhook_cased_one(
-    tmp_path, monkeypatch
-):
+def test_a_rest_cased_review_state_bands_the_same_as_a_webhook_cased_one(tmp_path, monkeypatch):
     """GitHub spells one state two ways: this webhook delivers `approved`,
     and the REST reviews endpoint returns `APPROVED` for that same review —
     which is the spelling review._review_state matches. Nothing in the
@@ -1674,9 +1661,7 @@ def test_a_rest_cased_review_state_bands_the_same_as_a_webhook_cased_one(
     assert _webhook("pull_request_review", _review_payload("APPROVED")).status_code == 202
     _webhook(
         "pull_request_review",
-        _review_payload(
-            "CHANGES_REQUESTED", submitted_at="2026-07-20T11:00:00Z", review_id=56
-        ),
+        _review_payload("CHANGES_REQUESTED", submitted_at="2026-07-20T11:00:00Z", review_id=56),
     )
     rows = _table(tmp_path, store.verdicts)
     assert [v["band"] for v in rows] == ["cleared", "flagged"]
@@ -1749,9 +1734,7 @@ def test_a_reviewer_changing_their_mind_records_both_stances(tmp_path, monkeypat
     _webhook("pull_request_review", _review_payload("approved"))
     _webhook(
         "pull_request_review",
-        _review_payload(
-            "changes_requested", submitted_at="2026-07-20T11:00:00Z", review_id=56
-        ),
+        _review_payload("changes_requested", submitted_at="2026-07-20T11:00:00Z", review_id=56),
     )
     bands = [v["band"] for v in _table(tmp_path, store.verdicts)]
     assert bands == ["cleared", "flagged"]
@@ -1779,9 +1762,7 @@ def test_a_review_on_a_fork_pull_request_is_still_ingested(tmp_path, monkeypatch
     assert _table(tmp_path, store.review_jobs) == []
 
 
-def test_a_review_missing_the_facts_it_would_be_dated_by_is_ignored(
-    tmp_path, monkeypatch
-):
+def test_a_review_missing_the_facts_it_would_be_dated_by_is_ignored(tmp_path, monkeypatch):
     """head_sha and scored_at are the row's identity and its dedup key. A
     stance that cannot be attached to a commit or to a time is not a
     gradable claim, so it is dropped rather than stored against a guess."""
@@ -1832,10 +1813,7 @@ def test_ping_is_accepted_without_an_installation(tmp_path, monkeypatch):
     rather than from an installation sends no installation key at all, so
     nothing downstream of here may reach for one."""
     _hook_env(tmp_path, monkeypatch)
-    assert (
-        _webhook("ping", {"zen": "Non-blocking is better than blocking."}).status_code
-        == 202
-    )
+    assert _webhook("ping", {"zen": "Non-blocking is better than blocking."}).status_code == 202
 
 
 def test_a_payload_with_no_usable_installation_is_ignored(tmp_path, monkeypatch):
@@ -2123,9 +2101,7 @@ def test_a_signed_body_that_is_not_json_is_ignored(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("body", [b"[1,2,3]", b"null", b'"a string"', b"7"])
-def test_a_signed_body_that_is_json_but_not_an_object_is_ignored(
-    body, tmp_path, monkeypatch
-):
+def test_a_signed_body_that_is_json_but_not_an_object_is_ignored(body, tmp_path, monkeypatch):
     """json.loads succeeds on all four, so none of them reaches the
     not-JSON branch — and every line after that branch is a dict lookup.
     `b"not json"` above is the one malformed shape that does NOT reach
@@ -2219,9 +2195,7 @@ def test_ping_answers_even_without_a_ledger(monkeypatch):
 def test_comparisons_route_is_gone(monkeypatch):
     """Dual-run soak instrument retired with the CI path (PR #54)."""
     monkeypatch.setenv("DOUG_API_TOKEN", "secret")
-    assert client.get(
-        "/v1/comparisons", headers={"X-Doug-Token": "secret"}
-    ).status_code == 404
+    assert client.get("/v1/comparisons", headers={"X-Doug-Token": "secret"}).status_code == 404
 
 
 def _api_db(tmp_path, monkeypatch) -> None:
@@ -2234,9 +2208,13 @@ def _pepper_env(monkeypatch):
 
 def _seed_verdict(*, repo, pr_number, installation_id, github_repo_id=None):
     store.save_review(
-        repo, pr_number, "reader", VERDICT_FOR_QUEUE,
+        repo,
+        pr_number,
+        "reader",
+        VERDICT_FOR_QUEUE,
         pr_meta={**PR_META, "number": pr_number},
-        installation_id=installation_id, github_repo_id=github_repo_id,
+        installation_id=installation_id,
+        github_repo_id=github_repo_id,
     )
 
 
@@ -2300,7 +2278,8 @@ def test_dispense_rejects_duplicate_repo_names_before_any_proof(tmp_path, monkey
     store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
     calls = []
     monkeypatch.setattr(
-        tenancy, "verify_admin",
+        tenancy,
+        "verify_admin",
         lambda pat, owner, repo: calls.append((owner, repo)) or 150424894,
     )
     r = client.post(
@@ -2448,11 +2427,11 @@ def test_dispense_validation_is_uniform_404(tmp_path, monkeypatch):
     store.upsert_installation(150424894, "drewjst", "User", "active")
     headers = {"X-GitHub-Token": "t"}
     for bad in (
-        {"selection": "all"},                                  # no owner
-        {"selection": "selected", "repos": []},                # empty selection
-        {"selection": "selected", "repos": ["notaslash"]},     # malformed repo
+        {"selection": "all"},  # no owner
+        {"selection": "selected", "repos": []},  # empty selection
+        {"selection": "selected", "repos": ["notaslash"]},  # malformed repo
         {"selection": "selected", "repos": [f"o/r{i}" for i in range(21)]},  # over cap
-        {"selection": "all", "owner": "acme", "expires_in_days": 400},       # out of range
+        {"selection": "all", "owner": "acme", "expires_in_days": 400},  # out of range
     ):
         r = client.post("/v1/installations/token", json=bad, headers=headers)
         assert r.status_code == 404, bad
@@ -2526,6 +2505,7 @@ def test_dispense_response_and_logs_never_carry_the_secret_twice(tmp_path, monke
     )
     token = r.json()["token"]
     from doug import keyformat
+
     secret = keyformat.parse(token).secret
     err = capsys.readouterr().err
     assert token not in err and secret not in err
@@ -2537,8 +2517,12 @@ def _tenant(tmp_path, monkeypatch, installation_id=150424894, login="drewjst"):
     _pepper_env(monkeypatch)
     store.upsert_installation(installation_id, login, "User", "active")
     minted = tenancy.mint_key(
-        installation_id, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by=login,
+        installation_id,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by=login,
     )
     return minted.token
 
@@ -2603,6 +2587,7 @@ def test_queue_refuses_a_key_lacking_queue_read_scope(tmp_path, monkeypatch):
     entirely, like a future receipts/MCP scope — must not read the queue."""
     token = _tenant(tmp_path, monkeypatch)
     from doug import keyformat
+
     parsed = keyformat.parse(token)
     row = store.installation_token_by_lookup(parsed.lookup)
     engine = store._get_engine()
@@ -2629,14 +2614,16 @@ def test_queue_selected_key_sees_only_its_repos_rows(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     monkeypatch.setenv("DOUG_API_TOKEN", "operator")
     store.upsert_installation(150424894, "drewjst", "User", "active")
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
     _seed_verdict(repo="drewjst/a", github_repo_id=111, installation_id=150424894, pr_number=1)
     _seed_verdict(repo="drewjst/b", github_repo_id=222, installation_id=150424894, pr_number=2)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     r = client.get("/v1/queue", headers={"x-doug-token": minted.token})
     assert r.status_code == 200
@@ -2654,12 +2641,14 @@ def test_repo_param_outside_the_keys_selection_is_404_not_empty(tmp_path, monkey
     _pepper_env(monkeypatch)
     monkeypatch.setenv("DOUG_API_TOKEN", "operator")
     store.upsert_installation(150424894, "drewjst", "User", "active")
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     r = client.get(
         "/v1/queue", params={"repo": "drewjst/b"}, headers={"x-doug-token": minted.token}
@@ -2682,8 +2671,12 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
     # A verdict for a repo the installation no longer covers (state flip):
     _seed_verdict(repo="drewjst/gone", github_repo_id=333, installation_id=150424894, pr_number=9)
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     unfiltered = client.get("/v1/queue", headers={"x-doug-token": minted.token}).json()
     # PRMetadata carries no `repo` field; identify rows by the URL _with_url
@@ -2700,9 +2693,11 @@ def test_queue_rows_and_repo_check_share_one_source_of_truth(tmp_path, monkeypat
     for full_name in repos_served:
         assert (
             client.get(
-                "/v1/queue", params={"repo": full_name},
+                "/v1/queue",
+                params={"repo": full_name},
                 headers={"x-doug-token": minted.token},
-            ).status_code == 200
+            ).status_code
+            == 200
         ), f"unfiltered queue served {full_name} but ?repo= refuses it"
 
 
@@ -2722,7 +2717,8 @@ def test_queue_operator_repo_filter_reaches_store_as_a_name(tmp_path, monkeypatc
 
     monkeypatch.setattr(store, "latest_reviews", spy)
     r = client.get(
-        "/v1/queue", params={"repo": "drewjst/doug"},
+        "/v1/queue",
+        params={"repo": "drewjst/doug"},
         headers={"X-Doug-Token": "operator-secret"},
     )
     assert r.status_code == 200
@@ -2747,7 +2743,9 @@ def test_queue_tenant_repo_restriction_never_reaches_store_as_a_name(tmp_path, m
 
     monkeypatch.setattr(store, "latest_reviews", spy)
     r = client.get(
-        "/v1/queue", params={"repo": "drewjst/doug"}, headers={"X-Doug-Token": token},
+        "/v1/queue",
+        params={"repo": "drewjst/doug"},
+        headers={"X-Doug-Token": token},
     )
     assert r.status_code == 200
     # installation_ids, not installation_id: a scoped caller reads its repo's
@@ -2833,8 +2831,12 @@ def test_queue_without_operator_token_configured_is_503(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     r = client.get("/v1/queue", headers={"X-Doug-Token": minted.token})
     assert r.status_code == 503
@@ -2845,24 +2847,37 @@ def test_list_tokens_requires_org_admin_and_masks(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label="dash",
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label="dash",
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     # A second, pre-revoked key: the list is an audit trail, so a dead key
     # must stay visible (with a non-null revoked_at) beside the live one.
     revoked = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label="old-ci",
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label="old-ci",
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     assert store.revoke_installation_token(revoked.token_id, 150424894)
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
-    assert client.get(
-        "/v1/installations/tokens", params={"owner": "drewjst"},
-        headers={"X-GitHub-Token": "t"},
-    ).status_code == 404
+    assert (
+        client.get(
+            "/v1/installations/tokens",
+            params={"owner": "drewjst"},
+            headers={"X-GitHub-Token": "t"},
+        ).status_code
+        == 404
+    )
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
     r = client.get(
-        "/v1/installations/tokens", params={"owner": "drewjst"},
+        "/v1/installations/tokens",
+        params={"owner": "drewjst"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200
@@ -2895,8 +2910,12 @@ def test_management_endpoints_reject_doug_tokens_as_proof(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
 
     def _boom(pat):
@@ -2904,7 +2923,8 @@ def test_management_endpoints_reject_doug_tokens_as_proof(tmp_path, monkeypatch)
 
     monkeypatch.setattr(tenancy, "_caller_client", _boom)
     r = client.get(
-        "/v1/installations/tokens", params={"owner": "drewjst"},
+        "/v1/installations/tokens",
+        params={"owner": "drewjst"},
         headers={"X-GitHub-Token": minted.token},  # a doug key is not a PAT
     )
     assert r.status_code == 404  # verify_org_admin fails on it upstream
@@ -2915,12 +2935,17 @@ def test_revoke_org_admin_can_kill_anything(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"owner": "drewjst"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"owner": "drewjst"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200 and r.json()["revoked"] is True
@@ -2935,12 +2960,17 @@ def test_revoke_org_admin_can_kill_a_selected_key(tmp_path, monkeypatch):
     store.upsert_installation(150424894, "drewjst", "User", "active")
     store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: 150424894)
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"owner": "drewjst"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"owner": "drewjst"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200 and r.json()["revoked"] is True
@@ -2951,30 +2981,35 @@ def test_revoke_repo_admin_must_cover_the_keys_selection(tmp_path, monkeypatch):
     _api_db(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111, 222], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111, 222],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
     monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
     # Proof covers only repo a → does not cover {a, b} → 404.
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"repos": "drewjst/a"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 404
     # Proof covers both → revoked.
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a,drewjst/b"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"repos": "drewjst/a,drewjst/b"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200
     # A foreign token id under valid proof: same 404 as absence.
     r = client.delete(
-        "/v1/installations/token/999999", params={"repos": "drewjst/a,drewjst/b"},
+        "/v1/installations/token/999999",
+        params={"repos": "drewjst/a,drewjst/b"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 404
@@ -2992,12 +3027,17 @@ def test_revoke_repo_admin_cannot_kill_an_all_selection_key(tmp_path, monkeypatc
     store.upsert_installation(150424894, "drewjst", "User", "active")
     store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/a"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"repos": "drewjst/a"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 404
@@ -3012,21 +3052,24 @@ def test_revoke_repo_admin_lookup_is_case_insensitive(tmp_path, monkeypatch):
     store.upsert_installation(150424894, "drewjst", "User", "active")
     store.set_installation_repos(150424894, [(111, "DrewJst/Doug")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     monkeypatch.setattr(tenancy, "verify_org_admin", lambda pat, owner: None)
     monkeypatch.setattr(tenancy, "verify_repos_admin", lambda pat, repos: 150424894)
     r = client.delete(
-        f"/v1/installations/token/{minted.token_id}", params={"repos": "drewjst/doug"},
+        f"/v1/installations/token/{minted.token_id}",
+        params={"repos": "drewjst/doug"},
         headers={"X-GitHub-Token": "t"},
     )
     assert r.status_code == 200 and r.json()["revoked"] is True
 
 
-def test_revoke_malformed_owner_never_falls_through_to_the_repos_proof(
-    tmp_path, monkeypatch
-):
+def test_revoke_malformed_owner_never_falls_through_to_the_repos_proof(tmp_path, monkeypatch):
     """A present owner is authoritative even when malformed. Before this pin,
     owner="acme/x" silently yielded to the repos branch, so precedence
     flipped on a typo — an incident responder who fat-fingers the org gets
@@ -3037,8 +3080,12 @@ def test_revoke_malformed_owner_never_falls_through_to_the_repos_proof(
     store.upsert_installation(150424894, "drewjst", "User", "active")
     store.set_installation_repos(150424894, [(111, "drewjst/doug")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     # The repos proof WOULD succeed — which is exactly why the malformed
     # owner must refuse before that branch is ever considered.
@@ -3061,10 +3108,15 @@ def test_uninstall_webhook_bulk_revokes_keys(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "active")
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     from doug.api import _record_installation
+
     _record_installation({"installation": {"id": 150424894, "account": {}}}, "deleted")
     # Reinstall: state flips back to active — the key must STAY dead.
     _record_installation({"installation": {"id": 150424894, "account": {}}}, "created")
@@ -3110,9 +3162,16 @@ def test_runs_404s_a_tenant_key(tmp_path, monkeypatch):
     """A resolving tenant key is a real credential at the wrong door, so it
     gets the same no-existence-leak 404 _operator_only gives everywhere."""
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
-        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
-    ))
+    monkeypatch.setattr(
+        tenancy,
+        "resolve",
+        lambda t: tenancy.TokenContext(
+            installation_id=99,
+            token_id=1,
+            repo_ids=None,
+            scopes=("queue:read",),
+        ),
+    )
     client = TestClient(app)
     assert client.get("/v1/runs", headers={"X-Doug-Token": "dg_tenant"}).status_code == 404
 
@@ -3122,8 +3181,14 @@ def test_runs_returns_repo_and_installation_on_every_item(tmp_path, monkeypatch)
     per repo, which is the gap this endpoint exists to close."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     client = TestClient(app)
     item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
@@ -3137,8 +3202,14 @@ def test_runs_serialises_a_missing_read_as_null_not_zero(tmp_path, monkeypatch):
     nothing of a diff it never opened — empty is not zero."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 7, "deterministic", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "deterministic",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     client = TestClient(app)
     assert client.get("/v1/runs", headers=AUTH).json()["items"][0]["coverage"] is None
@@ -3167,37 +3238,72 @@ def test_runs_503s_without_a_ledger(tmp_path, monkeypatch):
 def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     coverage = api.reader.Coverage(
-        diff_chars=100, sent_chars=80, files_sent=2,
-        files_unseen=["b.py"], file_cut="a.py",
+        diff_chars=100,
+        sent_chars=80,
+        files_sent=2,
+        files_unseen=["b.py"],
+        file_cut="a.py",
     )
     pr_meta = {
-        "number": 7, "title": "Add cache", "author": "dev", "files": ["a.py"],
-        "url": "https://github.com/o/r/pull/7", "changed_files": 12,
+        "number": 7,
+        "title": "Add cache",
+        "author": "dev",
+        "files": ["a.py"],
+        "url": "https://github.com/o/r/pull/7",
+        "changed_files": 12,
     }
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        pr_meta=pr_meta, coverage=coverage,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        pr_meta=pr_meta,
+        coverage=coverage,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(store.review_jobs.insert().values(
-            installation_id=99, github_repo_id=1, repo_full_name="o/r",
-            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
-            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
-            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
-            verdict_id=vid,
-        ))
-        conn.execute(store.outcomes.insert().values(
-            repo="o/r", pr_number=7, kind="clean", window_days=14,
-            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
-            github_repo_id=1, installation_id=99,
-        ))
-        conn.execute(store.outcomes.insert().values(
-            repo="o/r", pr_number=7, kind="revert", window_days=60,
-            observed_at=datetime(2026, 9, 30, tzinfo=UTC), source="git-labels",
-            github_repo_id=1, installation_id=99,
-        ))
+        conn.execute(
+            store.review_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                repo_full_name="o/r",
+                pr_number=7,
+                head_sha="a" * 40,
+                status="done",
+                attempts=1,
+                enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+                verdict_id=vid,
+            )
+        )
+        conn.execute(
+            store.outcomes.insert().values(
+                repo="o/r",
+                pr_number=7,
+                kind="clean",
+                window_days=14,
+                observed_at=datetime(2026, 8, 15, tzinfo=UTC),
+                source="git-labels",
+                github_repo_id=1,
+                installation_id=99,
+            )
+        )
+        conn.execute(
+            store.outcomes.insert().values(
+                repo="o/r",
+                pr_number=7,
+                kind="revert",
+                window_days=60,
+                observed_at=datetime(2026, 9, 30, tzinfo=UTC),
+                source="git-labels",
+                github_repo_id=1,
+                installation_id=99,
+            )
+        )
     client = TestClient(app)
     item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
     assert item["verdict_id"] == vid
@@ -3214,8 +3320,11 @@ def test_runs_serialises_every_key_of_the_response_contract(tmp_path, monkeypatc
     assert item["threshold"] == VERDICT.threshold
     assert item["changed_files"] == 12
     assert item["coverage"] == {
-        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
-        "files_unseen": ["b.py"], "file_cut": "a.py",
+        "diff_chars": 100,
+        "sent_chars": 80,
+        "files_sent": 2,
+        "files_unseen": ["b.py"],
+        "file_cut": "a.py",
     }
     # VERDICT's one Reason carries no severity — total counts severity-NULL
     # findings (the brief's own note on RunFindingCounts), so total=1 while
@@ -3242,8 +3351,14 @@ def test_runs_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     genuinely has no denominator."""
     _db(tmp_path, monkeypatch)
     store.save_review(
-        "o/r", 9, "deterministic", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        9,
+        "deterministic",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     client = TestClient(app)
     item = client.get("/v1/runs", headers=AUTH).json()["items"][0]
@@ -3264,9 +3379,16 @@ def test_health_404s_a_tenant_key(tmp_path, monkeypatch):
     """Health crosses every installation by design, which is exactly what no
     tenant credential may ever do."""
     _db(tmp_path, monkeypatch)
-    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
-        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
-    ))
+    monkeypatch.setattr(
+        tenancy,
+        "resolve",
+        lambda t: tenancy.TokenContext(
+            installation_id=99,
+            token_id=1,
+            repo_ids=None,
+            scopes=("queue:read",),
+        ),
+    )
     res = TestClient(app).get("/v1/health", headers={"X-Doug-Token": "dg_tenant"})
     assert res.status_code == 404
 
@@ -3396,9 +3518,7 @@ def test_jobs_does_not_leak_undocumented_columns(tmp_path, monkeypatch):
     assert set(body["items"][0].keys()) == set(JobItem.model_fields)
 
 
-def test_jobs_rejects_done_under_the_default_unhealthy_view_on_review(
-    tmp_path, monkeypatch
-):
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_review(tmp_path, monkeypatch):
     """A done review job can never be unhealthy, so status=done composed
     with the default view=unhealthy is empty by construction. 422 names the
     fix rather than returning a list indistinguishable from 'there are
@@ -3409,9 +3529,7 @@ def test_jobs_rejects_done_under_the_default_unhealthy_view_on_review(
     assert "view=all" in res.json()["detail"]
 
 
-def test_jobs_rejects_superseded_under_the_default_unhealthy_view(
-    tmp_path, monkeypatch
-):
+def test_jobs_rejects_superseded_under_the_default_unhealthy_view(tmp_path, monkeypatch):
     """Same reason as done: a superseded job means nothing went wrong."""
     _db(tmp_path, monkeypatch)
     res = TestClient(app).get("/v1/jobs?lane=review&status=superseded", headers=AUTH)
@@ -3419,9 +3537,7 @@ def test_jobs_rejects_superseded_under_the_default_unhealthy_view(
     assert "view=all" in res.json()["detail"]
 
 
-def test_jobs_rejects_done_under_the_default_unhealthy_view_on_outcome(
-    tmp_path, monkeypatch
-):
+def test_jobs_rejects_done_under_the_default_unhealthy_view_on_outcome(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     res = TestClient(app).get("/v1/jobs?lane=outcome&status=done", headers=AUTH)
     assert res.status_code == 422
@@ -3433,9 +3549,7 @@ def test_jobs_accepts_running_status_under_the_unhealthy_view(tmp_path, monkeypa
     real, non-empty composition — and must not be caught by the
     never-unhealthy rejection."""
     _db(tmp_path, monkeypatch)
-    res = TestClient(app).get(
-        "/v1/jobs?lane=review&status=running&view=unhealthy", headers=AUTH
-    )
+    res = TestClient(app).get("/v1/jobs?lane=review&status=running&view=unhealthy", headers=AUTH)
     assert res.status_code == 200
 
 
@@ -3445,9 +3559,7 @@ def test_jobs_accepts_pending_status_under_the_unhealthy_view(tmp_path, monkeypa
     'unhealthy' by store.job_rows' definition. Must not be caught by the
     never-unhealthy rejection, which names only done/superseded."""
     _db(tmp_path, monkeypatch)
-    res = TestClient(app).get(
-        "/v1/jobs?lane=review&status=pending&view=unhealthy", headers=AUTH
-    )
+    res = TestClient(app).get("/v1/jobs?lane=review&status=pending&view=unhealthy", headers=AUTH)
     assert res.status_code == 200
 
 
@@ -3516,12 +3628,25 @@ def test_run_detail_404s_a_tenant_key(tmp_path, monkeypatch):
     resolving token would see the row and this would 200."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
-    monkeypatch.setattr(tenancy, "resolve", lambda t: tenancy.TokenContext(
-        installation_id=99, token_id=1, repo_ids=None, scopes=("queue:read",),
-    ))
+    monkeypatch.setattr(
+        tenancy,
+        "resolve",
+        lambda t: tenancy.TokenContext(
+            installation_id=99,
+            token_id=1,
+            repo_ids=None,
+            scopes=("queue:read",),
+        ),
+    )
     client = TestClient(app)
     res = client.get(f"/v1/runs/{vid}", headers={"X-Doug-Token": "dg_tenant"})
     assert res.status_code == 404
@@ -3543,8 +3668,16 @@ def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatc
     that as a match would assert the frozen prompt ran when nobody knows."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     body = client_get_detail(vid)
     assert body["prompt_hash"] is None
@@ -3553,11 +3686,22 @@ def test_run_detail_reports_a_null_prompt_hash_as_unstamped(tmp_path, monkeypatc
 def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
         coverage=store.Coverage(
-            diff_chars=108200, sent_chars=18400, files_sent=4,
-            files_unseen=["api/doug/tenancy.py"], file_cut="api/doug/api.py",
+            diff_chars=108200,
+            sent_chars=18400,
+            files_sent=4,
+            files_unseen=["api/doug/tenancy.py"],
+            file_cut="api/doug/api.py",
         ),
     )
     body = client_get_detail(vid)
@@ -3567,9 +3711,7 @@ def test_run_detail_returns_findings_deviations_and_coverage(tmp_path, monkeypat
     assert body["deviations"] == []
 
 
-def test_run_detail_reason_carries_exactly_the_keys_the_client_validates(
-    tmp_path, monkeypatch
-):
+def test_run_detail_reason_carries_exactly_the_keys_the_client_validates(tmp_path, monkeypatch):
     """web/lib/session-api.ts:274-278 checks a reason against an EXACT key
     set, deliberately, so that the API and the client cannot drift unseen.
     An added key there is a rejected payload, not an ignored field.
@@ -3582,8 +3724,16 @@ def test_run_detail_reason_carries_exactly_the_keys_the_client_validates(
     """
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     body = client_get_detail(vid)
     assert sorted(body["reasons"][0]) == ["label", "rule", "severity", "weight"]
@@ -3611,8 +3761,16 @@ def test_a_head_cited_finding_adds_no_key_to_the_validated_reason(tmp_path, monk
         )
     ]
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=cited, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=cited,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     body = client_get_detail(vid)
     assert sorted(body["reasons"][0]) == ["label", "rule", "severity", "weight"]
@@ -3624,8 +3782,16 @@ def test_run_detail_reports_no_job_as_null_and_no_outcomes_as_empty(tmp_path, mo
     [], never missing. store.run_detail's docstring names both states."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     body = client_get_detail(vid)
     assert body["job"] is None
@@ -3646,8 +3812,14 @@ def test_run_detail_serialises_a_row_with_no_pr_meta(tmp_path, monkeypatch):
     write (PRMetadata's own docstring comments: 'never guessed')."""
     _db(tmp_path, monkeypatch)
     vid = store.save_review(
-        "o/r", 9, "deterministic", VERDICT,
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        "o/r",
+        9,
+        "deterministic",
+        VERDICT,
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
     )
     body = client_get_detail(vid)
     assert body["pr"] is None
@@ -3663,50 +3835,90 @@ def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monk
     review job and both outcome tables, and every key is pinned."""
     _db(tmp_path, monkeypatch)
     pr_meta = {
-        "number": 7, "title": "Add cache", "author": "dev", "files": ["cache.py"],
-        "url": "https://github.com/o/r/pull/7", "changed_files": 3,
+        "number": 7,
+        "title": "Add cache",
+        "author": "dev",
+        "files": ["cache.py"],
+        "url": "https://github.com/o/r/pull/7",
+        "changed_files": 3,
     }
     vid = store.save_review(
-        "o/r", 7, "reader", VERDICT, reader_verdict=RV, model="claude-opus-5",
+        "o/r",
+        7,
+        "reader",
+        VERDICT,
+        reader_verdict=RV,
+        model="claude-opus-5",
         pr_meta=pr_meta,
         coverage=store.Coverage(
-            diff_chars=100, sent_chars=80, files_sent=2,
-            files_unseen=["b.py"], file_cut="a.py",
+            diff_chars=100,
+            sent_chars=80,
+            files_sent=2,
+            files_unseen=["b.py"],
+            file_cut="a.py",
         ),
-        github_repo_id=1, installation_id=99, head_sha="a" * 40, source="app",
+        github_repo_id=1,
+        installation_id=99,
+        head_sha="a" * 40,
+        source="app",
         prompt_hash="sha256:abc",
     )
     store.save_deviations(
         vid,
-        [api.reader.DeviationFinding(
-            type="beyond-ticket", description="Touches billing", severity="medium",
-        )],
+        [
+            api.reader.DeviationFinding(
+                type="beyond-ticket",
+                description="Touches billing",
+                severity="medium",
+            )
+        ],
         intent_refs=["TICKET-1"],
         intent_alignment=70,
     )
     engine = store._get_engine()
     with engine.begin() as conn:
-        conn.execute(store.review_jobs.insert().values(
-            installation_id=99, github_repo_id=1, repo_full_name="o/r",
-            pr_number=7, head_sha="a" * 40, status="done", attempts=1,
-            claim_generation=2,
-            enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
-            started_at=datetime(2026, 8, 1, 0, 0, 1, tzinfo=UTC),
-            finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
-            verdict_id=vid,
-        ))
-        conn.execute(store.outcomes.insert().values(
-            repo="o/r", pr_number=7, kind="clean", window_days=14,
-            observed_at=datetime(2026, 8, 15, tzinfo=UTC), source="git-labels",
-            github_repo_id=1, installation_id=99,
-        ))
-        conn.execute(store.outcome_jobs.insert().values(
-            installation_id=99, github_repo_id=1, pr_number=7,
-            merge_commit_sha="b" * 40, merged_at=datetime(2026, 8, 1, tzinfo=UTC),
-            base_ref="main", window_days=14,
-            due_at=datetime(2026, 8, 15, tzinfo=UTC), status="pending",
-            created_at=datetime(2026, 8, 1, tzinfo=UTC),
-        ))
+        conn.execute(
+            store.review_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                repo_full_name="o/r",
+                pr_number=7,
+                head_sha="a" * 40,
+                status="done",
+                attempts=1,
+                claim_generation=2,
+                enqueued_at=datetime(2026, 8, 1, tzinfo=UTC),
+                started_at=datetime(2026, 8, 1, 0, 0, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 1, 0, 0, 5, tzinfo=UTC),
+                verdict_id=vid,
+            )
+        )
+        conn.execute(
+            store.outcomes.insert().values(
+                repo="o/r",
+                pr_number=7,
+                kind="clean",
+                window_days=14,
+                observed_at=datetime(2026, 8, 15, tzinfo=UTC),
+                source="git-labels",
+                github_repo_id=1,
+                installation_id=99,
+            )
+        )
+        conn.execute(
+            store.outcome_jobs.insert().values(
+                installation_id=99,
+                github_repo_id=1,
+                pr_number=7,
+                merge_commit_sha="b" * 40,
+                merged_at=datetime(2026, 8, 1, tzinfo=UTC),
+                base_ref="main",
+                window_days=14,
+                due_at=datetime(2026, 8, 15, tzinfo=UTC),
+                status="pending",
+                created_at=datetime(2026, 8, 1, tzinfo=UTC),
+            )
+        )
     body = client_get_detail(vid)
     assert body["verdict_id"] == vid
     assert body["repo"] == "o/r"
@@ -3727,8 +3939,11 @@ def test_run_detail_serialises_every_key_of_the_response_contract(tmp_path, monk
     assert body["band"] == VERDICT.band.value
     assert body["threshold"] == VERDICT.threshold
     assert body["coverage"] == {
-        "diff_chars": 100, "sent_chars": 80, "files_sent": 2,
-        "files_unseen": ["b.py"], "file_cut": "a.py",
+        "diff_chars": 100,
+        "sent_chars": 80,
+        "files_sent": 2,
+        "files_unseen": ["b.py"],
+        "file_cut": "a.py",
     }
     assert body["reasons"][0]["rule"] == "reader:race-condition"
     assert body["deviations"] == [
@@ -3794,8 +4009,13 @@ def test_showcase_queue_ignores_a_caller_supplied_repo(tmp_path, monkeypatch):
     # query would return a DIFFERENT (empty) result for "someone/private"
     # rather than coincidentally matching an equally-empty ledger.
     store.save_review(
-        "drewjst/doug", 1, "reader", VERDICT,
-        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+        "drewjst/doug",
+        1,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 1},
+        installation_id=1,
+        github_repo_id=1,
     )
     client = TestClient(app)
     # Reset immediately before EACH request: the route is backed by a
@@ -3891,8 +4111,13 @@ def test_showcase_queue_ignores_a_caller_supplied_threshold(tmp_path, monkeypatc
     _db(tmp_path, monkeypatch)
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
     store.save_review(
-        "drewjst/doug", 1, "reader", VERDICT,
-        pr_meta={**PR_META, "number": 1}, installation_id=1, github_repo_id=1,
+        "drewjst/doug",
+        1,
+        "reader",
+        VERDICT,
+        pr_meta={**PR_META, "number": 1},
+        installation_id=1,
+        github_repo_id=1,
     )
     client = TestClient(app)
     # Reset immediately before EACH request: the route is backed by a
@@ -3910,9 +4135,7 @@ def test_showcase_queue_ignores_a_caller_supplied_threshold(tmp_path, monkeypatc
     assert attempted == default
 
 
-def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
-    tmp_path, monkeypatch
-):
+def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(tmp_path, monkeypatch):
     """A cache dict keyed on a caller-supplied value would let
     ?threshold=0.0001, 0.0002, ... grow without bound on a public,
     unauthenticated, scale-to-zero service — trading the DB-load
@@ -3925,10 +4148,7 @@ def test_showcase_queue_cache_cannot_be_grown_by_distinct_threshold_values(
     monkeypatch.setattr(api, "_showcase_cache", None)
     client = TestClient(app)
 
-    bodies = [
-        client.get(f"/v1/showcase/queue?threshold=0.{i:04d}").json()
-        for i in range(50)
-    ]
+    bodies = [client.get(f"/v1/showcase/queue?threshold=0.{i:04d}").json() for i in range(50)]
     assert all(b == bodies[0] for b in bodies)
     # Not just "same content" — structurally one slot, not a dict a
     # caller-controlled key could have grown to 50 entries.
@@ -3964,9 +4184,7 @@ def test_showcase_scoreboard_ignores_a_caller_supplied_repo(tmp_path, monkeypatc
     monkeypatch.setenv("DOUG_SHOWCASE_REPO", "drewjst/doug")
     store.upsert_installation(1, "drewjst", "User", "active")
     store.set_installation_repos(1, [(1, "drewjst/doug")], replace=True)
-    store.enqueue_outcome_jobs(
-        1, 1, 7, "a" * 40, datetime(2026, 8, 1, tzinfo=UTC), "main"
-    )
+    store.enqueue_outcome_jobs(1, 1, 7, "a" * 40, datetime(2026, 8, 1, tzinfo=UTC), "main")
     monkeypatch.setattr(api, "_scoreboard_cache", None)
     client = TestClient(app)
     pinned = client.get("/v1/showcase/scoreboard").json()
@@ -4286,9 +4504,7 @@ def test_install_flow_completion_binds_and_persists_only_the_nonce_digest(
     assert fake.memberships == [("user_01ABC", "org_for_gh-inst-1001")]
 
 
-def test_exact_flow_replay_skips_every_workos_and_authority_side_effect(
-    tmp_path, monkeypatch
-):
+def test_exact_flow_replay_skips_every_workos_and_authority_side_effect(tmp_path, monkeypatch):
     """A lost 204 may be retried. The durable consumption is the stop sign:
     success is idempotent without another identity read, membership write, or
     installation bind."""
@@ -4311,9 +4527,7 @@ def test_exact_flow_replay_skips_every_workos_and_authority_side_effect(
     assert fake.calls == []
 
 
-def test_spent_flow_replayed_for_another_subject_is_refused_before_workos(
-    tmp_path, monkeypatch
-):
+def test_spent_flow_replayed_for_another_subject_is_refused_before_workos(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _installed(1001, installer=777)
     fake = _bind_env(monkeypatch, idp_id="777")
@@ -4373,9 +4587,7 @@ def test_install_flow_completion_rejects_chunked_body_over_4096_before_json_or_c
     monkeypatch,
 ):
     marker = "over-limit-flow-marker-that-must-not-echo"
-    payload = json.dumps(
-        {"installation_id": 1001, "flow_token": marker + "x" * 4096}
-    ).encode()
+    payload = json.dumps({"installation_id": 1001, "flow_token": marker + "x" * 4096}).encode()
     assert len(payload) > 4096
     parsed_lengths: list[int] = []
     core_calls = []
@@ -4435,9 +4647,7 @@ def test_install_flow_completion_parses_exactly_4096_bounded_bytes(monkeypatch):
 
     assert response.status_code == 204
     assert parsed_lengths == [4096]
-    assert core_calls == [
-        ({"installation_id": 1001, "flow_token": token}, "Bearer bounded")
-    ]
+    assert core_calls == [({"installation_id": 1001, "flow_token": token}, "Bearer bounded")]
 
 
 def test_install_flow_configuration_fault_is_named_before_workos(tmp_path, monkeypatch):
@@ -4479,9 +4689,7 @@ def test_install_flow_lock_checkout_exhaustion_is_token_safe_503_before_workos(
         bind_calls.append((args, kwargs))
         return "bound"
 
-    monkeypatch.setattr(
-        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
-    )
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine())
     monkeypatch.setattr(store, "consume_install_flow_and_bind", forbidden_bind)
 
     response = _complete_flow(TestClient(app), 1001, token)
@@ -4527,9 +4735,7 @@ def test_install_flow_completion_moves_blocking_authority_work_off_the_event_loo
     assert seen["ledger"] != seen["loop"]
 
 
-def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(
-    tmp_path, monkeypatch
-):
+def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(tmp_path, monkeypatch):
     """The nonce is global authority, not installation-local authority. Two
     signed flows carrying one nonce but different installation ids must be
     serialized before either caller crosses the WorkOS boundary."""
@@ -4592,9 +4798,7 @@ def test_same_nonce_cannot_reach_workos_for_two_installations_concurrently(
     assert consumed["installation_id"] == 1001
 
 
-def test_install_completions_do_not_starve_a_two_connection_main_pool(
-    tmp_path, monkeypatch
-):
+def test_install_completions_do_not_starve_a_two_connection_main_pool(tmp_path, monkeypatch):
     """Session advisory locks must not occupy the ledger pool while WorkOS
     and binding helpers need that same pool. Two connections is enough for
     two concurrent completions when locking has its own bounded engine."""
@@ -4669,9 +4873,7 @@ def test_install_completions_do_not_starve_a_two_connection_main_pool(
         main_engine.dispose()
 
 
-def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(
-    tmp_path, monkeypatch
-):
+def test_bind_refuses_an_installation_the_caller_can_read_but_not_administer(tmp_path, monkeypatch):
     """The exact claimable-tenant attack. GET /user/installations answers on
     :read, so visibility is NOT authority. A caller whose GitHub id does not
     match installed_by_github_user_id must be refused even though the
@@ -4862,9 +5064,7 @@ def test_direct_bind_lock_checkout_exhaustion_is_token_safe_before_workos_or_wri
         def connect(self):
             raise SQLAlchemyTimeoutError(f"purpose pool exhausted for {secret}")
 
-    monkeypatch.setattr(
-        store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine()
-    )
+    monkeypatch.setattr(store, "_get_install_flow_lock_engine", lambda: ExhaustedEngine())
 
     response = _bind(TestClient(app), 1001)
 
@@ -5169,9 +5369,7 @@ def test_a_first_time_user_with_no_organization_can_record_entitlements(tmp_path
 
     # The same session, through the stricter resolver, is refused — which is
     # what makes the 204 above evidence about WHICH check the route runs.
-    assert (
-        session_auth.resolve_session(_session()["Authorization"]) is None
-    )
+    assert session_auth.resolve_session(_session()["Authorization"]) is None
 
 
 # GET /v1/sessions/connections is the orgless landing read. It projects only
@@ -5212,9 +5410,7 @@ def test_connections_return_empty_for_a_provider_neutral_account(tmp_path, monke
     }
 
 
-def test_connections_project_several_installations_and_explicit_live_repos(
-    tmp_path, monkeypatch
-):
+def test_connections_project_several_installations_and_explicit_live_repos(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _use_bind_jwks(monkeypatch)
     _connection_install(
@@ -5334,9 +5530,7 @@ def test_connections_keep_unbound_setup_separate_and_drop_dead_scope(tmp_path, m
     ]
 
 
-def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
-    tmp_path, monkeypatch
-):
+def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(tmp_path, monkeypatch):
     """A scope past its TTL is reported, not deleted from the answer.
 
     THIS TEST REPLACES ONE THAT ASSERTED `{"connections": []}` HERE. That
@@ -5385,9 +5579,7 @@ def test_connections_surface_a_stale_scope_instead_of_denying_it_exists(
     }
 
 
-def test_connections_withhold_the_repository_list_of_an_expired_claim(
-    tmp_path, monkeypatch
-):
+def test_connections_withhold_the_repository_list_of_an_expired_claim(tmp_path, monkeypatch):
     """The TTL's actual privacy property, kept while the connection is surfaced.
 
     entitlements.TTL exists because GitHub-side access revocation is invisible
@@ -5418,9 +5610,7 @@ def test_connections_withhold_the_repository_list_of_an_expired_claim(
     assert "secret-repo" not in response.text
 
 
-def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(
-    tmp_path, monkeypatch
-):
+def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(tmp_path, monkeypatch):
     """Staleness changes an answer's STATUS; it never resurrects a dead one.
 
     A connection with no readable repository disappears rather than becoming an
@@ -5450,9 +5640,7 @@ def test_connections_still_drop_a_stale_scope_with_nothing_live_behind_it(
     }
 
 
-def test_connections_carry_each_repos_flag_line_and_both_process_defaults(
-    tmp_path, monkeypatch
-):
+def test_connections_carry_each_repos_flag_line_and_both_process_defaults(tmp_path, monkeypatch):
     """Production runs the reader, so the unset line on most verdicts is
     0.30, not 0.62 — printing one 'default' number is the lie
     _banding_threshold was built to end. Both are sent; the web prints both."""
@@ -5506,12 +5694,9 @@ def test_session_queue_uses_only_the_selected_users_explicit_repos(tmp_path, mon
 
     assert response.status_code == 200
     assert [item["pr"]["number"] for item in response.json()["items"]] == [11]
-    assert (
-        TestClient(app)
-        .get("/v1/queue?repo=acme/repo12", headers=headers)
-        .json()
-        == {"detail": "not found"}
-    )
+    assert TestClient(app).get("/v1/queue?repo=acme/repo12", headers=headers).json() == {
+        "detail": "not found"
+    }
 
 
 def test_session_queue_orgless_and_present_bad_bearer_fail_without_key_fallback(
@@ -5562,15 +5747,9 @@ def test_session_receipt_scopes_before_assembly_and_hides_cross_tenant_existence
     _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
     _seed_verdict(repo="acme/repo12", pr_number=12, installation_id=101, github_repo_id=12)
 
-    own = TestClient(app).get(
-        "/v1/prs/11/receipt?repo=acme/repo11", headers=headers
-    )
-    sibling = TestClient(app).get(
-        "/v1/prs/12/receipt?repo=acme/repo12", headers=headers
-    )
-    absent = TestClient(app).get(
-        "/v1/prs/999/receipt?repo=acme/repo12", headers=headers
-    )
+    own = TestClient(app).get("/v1/prs/11/receipt?repo=acme/repo11", headers=headers)
+    sibling = TestClient(app).get("/v1/prs/12/receipt?repo=acme/repo12", headers=headers)
+    absent = TestClient(app).get("/v1/prs/999/receipt?repo=acme/repo12", headers=headers)
 
     assert own.status_code == 200
     assert sibling.status_code == 404
@@ -5619,16 +5798,28 @@ def test_session_run_history_never_crosses_installations_or_the_explicit_repo_se
 def test_session_run_detail_is_query_scoped_and_uses_one_uniform_404(tmp_path, monkeypatch):
     headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
     own = store.save_review(
-        "acme/repo11", 11, "reader", VERDICT,
-        installation_id=101, github_repo_id=11,
+        "acme/repo11",
+        11,
+        "reader",
+        VERDICT,
+        installation_id=101,
+        github_repo_id=11,
     )
     sibling = store.save_review(
-        "acme/repo12", 12, "reader", VERDICT,
-        installation_id=101, github_repo_id=12,
+        "acme/repo12",
+        12,
+        "reader",
+        VERDICT,
+        installation_id=101,
+        github_repo_id=12,
     )
     cross = store.save_review(
-        "other/repo11", 99, "reader", VERDICT,
-        installation_id=202, github_repo_id=11,
+        "other/repo11",
+        99,
+        "reader",
+        VERDICT,
+        installation_id=202,
+        github_repo_id=11,
     )
 
     visible = TestClient(app).get(f"/v1/sessions/runs/{own}", headers=headers)
@@ -5652,9 +5843,7 @@ def test_session_bearer_remains_refused_on_operator_run_routes(tmp_path, monkeyp
 
 
 def _patch_line(headers, repo_id, body):
-    return TestClient(app).patch(
-        f"/v1/sessions/repositories/{repo_id}", headers=headers, json=body
-    )
+    return TestClient(app).patch(f"/v1/sessions/repositories/{repo_id}", headers=headers, json=body)
 
 
 def test_session_can_set_and_clear_a_repos_flag_line_inside_its_live_scope(
@@ -5780,9 +5969,7 @@ def test_patch_deep_read_alone_touches_neither_the_line_nor_the_comment(
     assert "pr_comment installation" not in err
 
 
-def test_deep_read_refuses_null_and_anything_that_is_not_a_json_boolean(
-    tmp_path, monkeypatch
-):
+def test_deep_read_refuses_null_and_anything_that_is_not_a_json_boolean(tmp_path, monkeypatch):
     """Same refusal as pr_comment and for the same reason: the column is a
     plain non-nullable bool, so `bool(None)` would quietly turn an explicit
     null into "stop reading this repository" — the most expensive silent
@@ -6030,9 +6217,12 @@ def test_a_body_missing_the_provider_is_refused_without_echoing_the_token(tmp_pa
     # A body with a provider and no token is the same refusal, and the full
     # pair still works — so the 400 is about what is missing, not about the
     # route being broken.
-    assert client.post(
-        "/v1/sessions/entitlements", json={"provider": "github"}, headers=_session()
-    ).status_code == 400
+    assert (
+        client.post(
+            "/v1/sessions/entitlements", json={"provider": "github"}, headers=_session()
+        ).status_code
+        == 400
+    )
     assert _record(client).status_code == 204
 
 
@@ -6067,9 +6257,7 @@ def test_receipt_reason_carries_exactly_the_keys_run_detail_does(tmp_path, monke
     headers = _session_scope(tmp_path, monkeypatch, claim=(11,))
     _seed_verdict(repo="acme/repo11", pr_number=11, installation_id=101, github_repo_id=11)
 
-    body = TestClient(app).get(
-        "/v1/prs/11/receipt?repo=acme/repo11", headers=headers
-    ).json()
+    body = TestClient(app).get("/v1/prs/11/receipt?repo=acme/repo11", headers=headers).json()
 
     reasons = body["latest_verdict"]["reasons"]
     assert reasons, "fixture must produce a reason for this to guard anything"
@@ -6095,9 +6283,7 @@ def _transferred_scope(tmp_path, monkeypatch):
     return _session(org_id="org_cw")
 
 
-def test_a_transferred_repos_history_survives_the_move_in_the_runs_list(
-    tmp_path, monkeypatch
-):
+def test_a_transferred_repos_history_survives_the_move_in_the_runs_list(tmp_path, monkeypatch):
     """The runs list answers "what has Doug done" for a REPOSITORY. Scoping
     it to the current installation makes that history begin on the transfer
     date — 261 runs across 121 PRs vanished from this repo's own dashboard
@@ -6105,21 +6291,27 @@ def test_a_transferred_repos_history_survives_the_move_in_the_runs_list(
     """
     headers = _transferred_scope(tmp_path, monkeypatch)
     before = store.save_review(
-        "coldworkshq/doug", 150, "reader", VERDICT,
-        installation_id=101, github_repo_id=11,
+        "coldworkshq/doug",
+        150,
+        "reader",
+        VERDICT,
+        installation_id=101,
+        github_repo_id=11,
     )
     after = store.save_review(
-        "coldworkshq/doug", 243, "reader", VERDICT,
-        installation_id=303, github_repo_id=11,
+        "coldworkshq/doug",
+        243,
+        "reader",
+        VERDICT,
+        installation_id=303,
+        github_repo_id=11,
     )
 
     listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
     detail = TestClient(app).get(f"/v1/sessions/runs/{before}", headers=headers)
 
     assert listed.status_code == 200
-    assert sorted(row["verdict_id"] for row in listed.json()["items"]) == sorted(
-        [before, after]
-    )
+    assert sorted(row["verdict_id"] for row in listed.json()["items"]) == sorted([before, after])
     # A row the list shows must open, or the fix is half a fix.
     assert detail.status_code == 200
     assert detail.json()["pr_number"] == 150
@@ -6133,13 +6325,21 @@ def test_the_lineage_widens_installations_but_never_repositories(tmp_path, monke
     a hidden history for a cross-repo leak."""
     headers = _transferred_scope(tmp_path, monkeypatch)
     mine = store.save_review(
-        "coldworkshq/doug", 150, "reader", VERDICT,
-        installation_id=101, github_repo_id=11,
+        "coldworkshq/doug",
+        150,
+        "reader",
+        VERDICT,
+        installation_id=101,
+        github_repo_id=11,
     )
     # Same lineage installation, a repository this session never claimed.
     not_mine = store.save_review(
-        "drewjst/private", 7, "reader", VERDICT,
-        installation_id=101, github_repo_id=12,
+        "drewjst/private",
+        7,
+        "reader",
+        VERDICT,
+        installation_id=101,
+        github_repo_id=12,
     )
 
     listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)
@@ -6149,16 +6349,18 @@ def test_the_lineage_widens_installations_but_never_repositories(tmp_path, monke
     assert refused.status_code == 404
 
 
-def test_an_installation_that_never_registered_the_repo_stays_unreadable(
-    tmp_path, monkeypatch
-):
+def test_an_installation_that_never_registered_the_repo_stays_unreadable(tmp_path, monkeypatch):
     """The other direction: a matching `github_repo_id` is not on its own a
     licence to read another installation's row. Only installations that
     provably registered THIS repository join the lineage."""
     headers = _transferred_scope(tmp_path, monkeypatch)
     stranger = store.save_review(
-        "stranger/repo", 99, "reader", VERDICT,
-        installation_id=404, github_repo_id=11,
+        "stranger/repo",
+        99,
+        "reader",
+        VERDICT,
+        installation_id=404,
+        github_repo_id=11,
     )
 
     listed = TestClient(app).get("/v1/sessions/runs?repo=all", headers=headers)

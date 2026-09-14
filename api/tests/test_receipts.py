@@ -556,9 +556,7 @@ def test_the_agreement_corpus_can_catch_each_wrong_rule(tmp_path, monkeypatch):
     correct = _governing_ids_by_scenario(url, GOVERNING_SQL)
 
     undetected = [
-        name
-        for name, sql in WRONG_RULES.items()
-        if _governing_ids_by_scenario(url, sql) == correct
+        name for name, sql in WRONG_RULES.items() if _governing_ids_by_scenario(url, sql) == correct
     ]
     assert undetected == []
 
@@ -1349,9 +1347,7 @@ def test_the_governing_verdict_is_not_silently_the_latest_one(tmp_path, monkeypa
     incident review came for."""
     url = _http_db(tmp_path, monkeypatch)
     governing = _seed_full_pr(url)
-    later = _seed_verdict(
-        url, tier="reader", band="cleared", scored_at=NOW + timedelta(hours=2)
-    )
+    later = _seed_verdict(url, tier="reader", band="cleared", scored_at=NOW + timedelta(hours=2))
     body = _get(OPERATOR).json()
     assert body["latest_verdict"]["verdict_id"] == later
     assert body["merges"][0]["governing_verdict"]["verdict_id"] == governing
@@ -1568,8 +1564,10 @@ def test_an_installation_that_never_held_the_repo_stays_unreadable(tmp_path, mon
     )
     token = _mint_for(url, _NEW_INSTALLATION_ID)
 
-    shas = [m["merge_commit_sha"] for m in
-            _get(token, pr_number=_PR_BEFORE, repo=_NEW_NAME).json()["merges"]]
+    shas = [
+        m["merge_commit_sha"]
+        for m in _get(token, pr_number=_PR_BEFORE, repo=_NEW_NAME).json()["merges"]
+    ]
     assert shas == [MERGE_SHA]
 
 

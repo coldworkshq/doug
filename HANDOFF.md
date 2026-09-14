@@ -1,5 +1,52 @@
 # HANDOFF — doug
 
+--- tooling lane (2026-09-13): a static gate for api/ and agent hooks, doug#337 ---
+
+State:    review — **doug#339**, branch tooling/static-gate off origin/main
+          507f8b0, in the worktree .claude/worktrees/doug-static-gate.
+          6aad653 formats api/ and changes nothing else (98 files); 2ac8b06
+          adds `make check`: ruff format and lint with a 195-pair debt table,
+          basedpyright standard against a 1,522-entry baseline, `uv lock
+          --check`, and .github/scripts/check_ratchets.py; CI's api job and a
+          Stop hook run it. Each gate shown red on a planted input and green
+          after restore, including debt and baseline growth in a clone whose
+          origin/main carried both. Full suite 1,966 passed.
+          2026-09-14: merged origin/main e7d65f3 (#340, #341, #343, #344).
+          HANDOFF.md was the only conflict. The merge formats #344's five
+          files and drops one stale debt entry (ERA001 in convergence.py,
+          194 pairs left); `make check` green on the merged tree.
+Next:     watch CI on #339; the merge is the founder's click. #331 and #332
+          rebase with `ruff format` on their branches. Once deep read is on
+          for this repository, Doug's next read of #339 is the first live
+          test of #344's `settled-syntax-error` on the eight PEP 758 clauses.
+Blockers: none.
+Decisions this session:
+- Measured 2026-09-13 at 507f8b0: ruff format would rewrite 98 of 130
+  files; the extended rules report 5,870 violations (259 in doug/, 125 in
+  scripts/, the rest in tests); pyright basic reports 1,519 errors and
+  strict 19,216. Debt only shrinks — rejected: flipping any of them on.
+- basedpyright with its native baseline, not pyright — a plain run shrinks
+  the baseline when an error is fixed (measured: "went down by 1") and only
+  --writebaseline grows it, so the ratchet counts baseline entries per rule
+  against the merge base and fails a rewritten, uncommitted baseline.
+- No `filterwarnings = error`: with it the suite reports 324 failures and 14
+  errors, 1,129 of them ResourceWarnings from unclosed sqlite connections —
+  a real leak, filed as doug#338 rather than hidden.
+- Doug's read on 9964a78 (5 high, 1 medium, 1 low), answered on #339. The
+  five `reader:syntax-error` highs are refuted: `ruff format` rewrote eight
+  clauses to PEP 758 `except A, B:`, which 3.14.7 parses and 3.13.15 rejects,
+  and api/ already needed 3.14 (507f8b0 api.py:1389 annotates a method with
+  its own class, no `from __future__ import annotations`). Filed the reader
+  false positive as doug#342 — rejected: pinning ruff to py313 to keep the
+  parentheses, which makes ruff report F821 on that annotation. Medium partly
+  valid (open branches and dependency bumps meet the gate), no code change;
+  low refuted (blocks once; stop_hook_active).
+- Formatting is its own commit — doug#331 and doug#332 touch three api/
+  files and rebase with one `ruff format` — rejected: reformatting on touch,
+  which spreads format noise across every later diff.
+Pointers: api/pyproject.toml · Makefile `check` · .github/scripts/check_ratchets.py ·
+          .claude/{settings.json,hooks/} · api/tests/test_{check_ratchets,claude_hooks}.py
+
 --- reader lane (2026-09-14): syntax-error findings the declared Python parses, doug#342 ---
 
 State:    review — **doug#344** (closes #342), branch reader/syntax-claims-parse

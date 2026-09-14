@@ -111,9 +111,7 @@ def test_evidenced_loader_uses_the_shared_clone_and_parser(tmp_path, monkeypatch
     monkeypatch.setattr(git_labels, "clone_treeless", clone)
     monkeypatch.setattr(git_labels, "_log_records", log_records)
 
-    result = git_labels.find_reverted_prs_evidenced(
-        "drewjst", "doug", tmp_path, token="secret"
-    )
+    result = git_labels.find_reverted_prs_evidenced("drewjst", "doug", tmp_path, token="secret")
 
     assert result == {7: commits[0]}
     assert seen == {
@@ -334,9 +332,7 @@ def test_a_repository_with_no_display_name_still_names_its_key(tmp_path, monkeyp
             .values(state="deleted")
         )
         conn.execute(
-            delete(store.installation_repos).where(
-                store.installation_repos.c.github_repo_id == 1
-            )
+            delete(store.installation_repos).where(store.installation_repos.c.github_repo_id == 1)
         )
     _github_ready(monkeypatch)
 
@@ -422,9 +418,7 @@ def test_missing_identity_retries_without_blocking_later_repositories(tmp_path, 
             .values(state="deleted")
         )
         conn.execute(
-            delete(store.installation_repos).where(
-                store.installation_repos.c.github_repo_id == 1
-            )
+            delete(store.installation_repos).where(store.installation_repos.c.github_repo_id == 1)
         )
     _github_ready(monkeypatch)
     monkeypatch.setattr(git_labels, "find_reverted_prs_evidenced", lambda *a, **k: {})
@@ -438,9 +432,7 @@ def test_missing_identity_retries_without_blocking_later_repositories(tmp_path, 
     ]
 
 
-def test_settlement_failure_escapes_without_spending_a_repository_attempt(
-    tmp_path, monkeypatch
-):
+def test_settlement_failure_escapes_without_spending_a_repository_attempt(tmp_path, monkeypatch):
     """A ledger defect is systemic, not evidence that GitHub was unavailable.
     Swallowing it would burn attempts while every Cloud Run execution looked green."""
     url = _db(tmp_path, monkeypatch)

@@ -156,12 +156,8 @@ _DOCS_DATA_SUFFIXES = (".json", ".jsonl", ".csv", ".yaml", ".yml")
 # conservative: a name here costs nothing when absent, while a missing name
 # silently demotes a customer's contract file. `openapi` and `swagger` also
 # match `openapi.v2.json` and similar via the stem check below.
-_CONTRACT_STEMS = frozenset(
-    {"openapi", "swagger", "schema", "asyncapi", "graphql", "jsonschema"}
-)
-_DEPENDENCY_TEXT_RE = re.compile(
-    r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE
-)
+_CONTRACT_STEMS = frozenset({"openapi", "swagger", "schema", "asyncapi", "graphql", "jsonschema"})
+_DEPENDENCY_TEXT_RE = re.compile(r"^(?:requirements|constraints)(?:[-_.].*)?\.txt$", re.IGNORECASE)
 
 
 def _is_prose(path: str) -> bool:
@@ -201,16 +197,10 @@ def _is_prose(path: str) -> bool:
     """
     p = PurePosixPath(path)
     name = p.name
-    if (
-        name in MANIFESTS
-        or name in _CODE_TEXT_NAMES
-        or _DEPENDENCY_TEXT_RE.fullmatch(name)
-    ):
+    if name in MANIFESTS or name in _CODE_TEXT_NAMES or _DEPENDENCY_TEXT_RE.fullmatch(name):
         return False
     lowered = name.lower()
-    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and lowered.endswith(
-        _DOCS_DATA_SUFFIXES
-    ):
+    if p.parts and p.parts[0] == _DOCS_DATA_ROOT and lowered.endswith(_DOCS_DATA_SUFFIXES):
         # `openapi.v2.json` -> "openapi": the first dot-segment, so a versioned
         # or dated contract file is still recognised as one.
         return lowered.split(".", 1)[0] not in _CONTRACT_STEMS
@@ -249,9 +239,7 @@ def _runtime_dep(files: list[str]) -> bool:
     return any(not _DEV_PATH_RE.search(f) for f in js)
 
 
-def extract_features(
-    pr: PRMetadata, extra_hotspots: set[str] | None = None
-) -> Features:
+def extract_features(pr: PRMetadata, extra_hotspots: set[str] | None = None) -> Features:
     names = [PurePosixPath(f).name for f in pr.files]
     hot = HOTSPOT_SEGMENTS | (extra_hotspots or set())
     test_files = sum(1 for f in pr.files if _is_test(f))
@@ -286,8 +274,7 @@ def extract_features(
             and pr.additions + pr.deletions >= _MIN_SHAPE_CHURN
         ),
         deletion_leaning=(
-            pr.deletions >= 1.5 * pr.additions
-            and pr.additions + pr.deletions >= _MIN_SHAPE_CHURN
+            pr.deletions >= 1.5 * pr.additions and pr.additions + pr.deletions >= _MIN_SHAPE_CHURN
         ),
         agent_authored=pr.author_type is AuthorType.AGENT or pr.author.endswith("[bot]"),
         approvals=pr.approvals,

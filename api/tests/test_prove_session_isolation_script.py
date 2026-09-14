@@ -39,17 +39,11 @@ def _jwt(payload: dict[str, object], signature: str) -> str:
 def proof_env() -> dict[str, str]:
     return {
         "DOUG_URL": "https://doug-proof.test",
-        "A_SESSION_JWT": _jwt(
-            {"sub": "user-shared", "org_id": "org-a"}, "a-signature"
-        ),
+        "A_SESSION_JWT": _jwt({"sub": "user-shared", "org_id": "org-a"}, "a-signature"),
         "A_INSTALLATION_ID": "101",
-        "B_SESSION_JWT": _jwt(
-            {"sub": "user-shared", "org_id": "org-b"}, "b-signature"
-        ),
+        "B_SESSION_JWT": _jwt({"sub": "user-shared", "org_id": "org-b"}, "b-signature"),
         "B_INSTALLATION_ID": "202",
-        "ONE_REPO_SESSION_JWT": _jwt(
-            {"sub": "user-limited", "org_id": "org-a"}, "one-signature"
-        ),
+        "ONE_REPO_SESSION_JWT": _jwt({"sub": "user-limited", "org_id": "org-a"}, "one-signature"),
         "ONE_REPO_ALLOWED": "alpha/allowed",
         "ONE_REPO_FORBIDDEN": "alpha/forbidden",
         "ORGLESS_SESSION_JWT": _jwt({"sub": "user-orgless"}, "orgless-signature"),
@@ -61,17 +55,13 @@ def proof_env() -> dict[str, str]:
             {"sub": "user-unmapped", "org_id": "org-unmapped"},
             "unmapped-signature",
         ),
-        "READ_ONLY_SESSION_JWT": _jwt(
-            {"sub": "user-read-only"}, "read-only-signature"
-        ),
+        "READ_ONLY_SESSION_JWT": _jwt({"sub": "user-read-only"}, "read-only-signature"),
         "READ_ONLY_INSTALLATION_ID": "303",
-        "DOUG_SESSION_PROOF_ACK": (
-            "I ACCEPT SCORE SPEND AND DISPOSABLE BIND 303"
-        ),
+        "DOUG_SESSION_PROOF_ACK": ("I ACCEPT SCORE SPEND AND DISPOSABLE BIND 303"),
     }
 
 
-FAKE_CURL = r'''#!/usr/bin/env python3
+FAKE_CURL = r"""#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -319,7 +309,7 @@ with log_path.open("a") as stream:
     stream.write(json.dumps(record, sort_keys=True) + "\n")
 Path(output).write_text(json.dumps(body))
 print(status, end="", flush=True)
-'''
+"""
 
 
 def _proof_process_env(
@@ -363,9 +353,7 @@ def _run_proof(
     overrides: dict[str, str | None] | None = None,
     stdin: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
-    env, log = _proof_process_env(
-        tmp_path, proof_env, mode=mode, overrides=overrides
-    )
+    env, log = _proof_process_env(tmp_path, proof_env, mode=mode, overrides=overrides)
     completed = subprocess.run(
         [str(SCRIPT)],
         cwd=API_ROOT,
@@ -382,9 +370,7 @@ def _run_proof(
         timeout=20,
     )
     requests = (
-        [json.loads(line) for line in log.read_text().splitlines() if line]
-        if log.exists()
-        else []
+        [json.loads(line) for line in log.read_text().splitlines() if line] if log.exists() else []
     )
     return completed, requests
 
@@ -427,9 +413,7 @@ def _signal_at_prompt(
     os.kill(process.pid, signal_number)
     stdout_after, stderr_after = process.communicate(timeout=5)
     requests = (
-        [json.loads(line) for line in log.read_text().splitlines() if line]
-        if log.exists()
-        else []
+        [json.loads(line) for line in log.read_text().splitlines() if line] if log.exists() else []
     )
     assert process.returncode is not None
     output = stdout_after + stderr_before_signal + stderr_after
@@ -518,11 +502,7 @@ def test_each_hostile_boundary_fails_only_its_named_gate(
         {"A_SESSION_JWT": None},
         {"DOUG_SESSION_PROOF_ACK": None},
         {"DOUG_SESSION_PROOF_ACK": "I ACCEPT SCORE SPEND"},
-        {
-            "DOUG_SESSION_PROOF_ACK": (
-                "I ACCEPT SCORE SPEND AND DISPOSABLE BIND 999"
-            )
-        },
+        {"DOUG_SESSION_PROOF_ACK": ("I ACCEPT SCORE SPEND AND DISPOSABLE BIND 999")},
         {"DOUG_URL": "http://doug-proof.test"},
         {"DOUG_URL": "https://doug-proof.test/"},
         {"DOUG_URL": "https://user@doug-proof.test"},
@@ -540,11 +520,7 @@ def test_each_hostile_boundary_fails_only_its_named_gate(
             )
         },
         {"ORGLESS_SESSION_JWT": _jwt({"sub": ""}, "orgless-empty-sub")},
-        {
-            "UNMAPPED_ORG_SESSION_JWT": _jwt(
-                {"sub": "user-unmapped"}, "unmapped-without-org"
-            )
-        },
+        {"UNMAPPED_ORG_SESSION_JWT": _jwt({"sub": "user-unmapped"}, "unmapped-without-org")},
         {
             "UNMAPPED_ORG_SESSION_JWT": _jwt(
                 {"sub": "user-unmapped", "org_id": "org-a"},
@@ -581,21 +557,9 @@ def test_each_hostile_boundary_fails_only_its_named_gate(
                 "expired-string-exp",
             )
         },
-        {
-            "B_SESSION_JWT": _jwt(
-                {"sub": "different-user", "org_id": "org-b"}, "wrong-sub"
-            )
-        },
-        {
-            "B_SESSION_JWT": _jwt(
-                {"sub": "user-shared", "org_id": "org-a"}, "same-org"
-            )
-        },
-        {
-            "ONE_REPO_SESSION_JWT": _jwt(
-                {"sub": "user-shared", "org_id": "org-a"}, "same-user"
-            )
-        },
+        {"B_SESSION_JWT": _jwt({"sub": "different-user", "org_id": "org-b"}, "wrong-sub")},
+        {"B_SESSION_JWT": _jwt({"sub": "user-shared", "org_id": "org-a"}, "same-org")},
+        {"ONE_REPO_SESSION_JWT": _jwt({"sub": "user-shared", "org_id": "org-a"}, "same-user")},
         {"ONE_REPO_ALLOWED": "not-a-full-name"},
     ],
 )
@@ -657,12 +621,10 @@ def test_operator_inventory_is_derived_from_api_and_exercised_with_bearer_only(
     end = next(
         index
         for index, item in enumerate(requests[start:], start=start)
-        if item["kind"] == "read_only"
-        and item["path"] == "/v1/sessions/connections"
+        if item["kind"] == "read_only" and item["path"] == "/v1/sessions/connections"
     )
     exercised = {
-        (str(item["method"]), urlsplit(str(item["path"])).path)
-        for item in requests[start:end]
+        (str(item["method"]), urlsplit(str(item["path"])).path) for item in requests[start:end]
     }
 
     assert exercised == _operator_only_routes()
@@ -670,13 +632,8 @@ def test_operator_inventory_is_derived_from_api_and_exercised_with_bearer_only(
     assert all(item["kind"] == "a" for item in requests[start:end])
     assert all("authorization" in item["header_names"] for item in requests)
     assert all("x-doug-token" not in item["header_names"] for item in requests)
-    assert all(
-        set(item["header_names"]) <= {"authorization", "content-type"}
-        for item in requests
-    )
-    score_probe = next(
-        item for item in requests[start:end] if item["path"] == "/v1/score/read"
-    )
+    assert all(set(item["header_names"]) <= {"authorization", "content-type"} for item in requests)
+    score_probe = next(item for item in requests[start:end] if item["path"] == "/v1/score/read")
     assert json.loads(str(score_probe["data"])) == {
         "pr": {"number": 1, "title": "session-isolation-proof", "author": "proof"},
         "diff": "",
@@ -718,9 +675,7 @@ def test_failed_restore_check_loops_until_a_nonempty_scoped_read_succeeds(
         proof_env,
         mode="delayed_restore",
         stdin=(
-            f"SUSPENDED {installation_id}\n"
-            f"RESTORED {installation_id}\n"
-            f"RESTORED {installation_id}\n"
+            f"SUSPENDED {installation_id}\nRESTORED {installation_id}\nRESTORED {installation_id}\n"
         ),
     )
 
@@ -764,12 +719,9 @@ def test_eof_at_suspend_prompt_warns_and_executes_no_later_gate(
     assert "terminal loss" in completed.stderr
     assert "operator disappearance" in completed.stderr
     assert "manual recovery" in completed.stderr
-    assert completed.stderr.index("SIGKILL") < completed.stderr.index(
-        "type exactly: SUSPENDED"
-    )
+    assert completed.stderr.index("SIGKILL") < completed.stderr.index("type exactly: SUSPENDED")
     assert not any(
-        item["kind"] in {"tampered", "expired", "unmapped", "read_only"}
-        for item in requests
+        item["kind"] in {"tampered", "expired", "unmapped", "read_only"} for item in requests
     )
     assert all(f"gate {number}" not in output for number in range(6, 10))
 
@@ -797,8 +749,7 @@ def test_signal_at_suspend_prompt_warns_and_executes_no_later_gate(
     assert f"reason=signal-{signal_name}" in output
     assert "SIGKILL" in output
     assert not any(
-        item["kind"] in {"tampered", "expired", "unmapped", "read_only"}
-        for item in requests
+        item["kind"] in {"tampered", "expired", "unmapped", "read_only"} for item in requests
     )
     assert all(f"gate {number}" not in output for number in range(6, 10))
 
@@ -855,10 +806,7 @@ def test_fake_that_never_restores_cannot_reach_a_successful_exit(
         tmp_path,
         proof_env,
         mode="never_restore",
-        stdin=(
-            f"SUSPENDED {installation_id}\n"
-            f"RESTORED {installation_id}\n"
-        ),
+        stdin=(f"SUSPENDED {installation_id}\nRESTORED {installation_id}\n"),
     )
 
     assert completed.returncode != 0

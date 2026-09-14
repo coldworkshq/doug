@@ -58,9 +58,7 @@ def resolve_token(explicit: str | None = None) -> str | None:
     if tok := os.environ.get("GITHUB_TOKEN"):
         return tok
     try:
-        out = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True, timeout=10
-        )
+        out = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10)
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
     except OSError:
@@ -100,9 +98,7 @@ async def _enrich(gh: GitHub, owner: str, repo: str, pull, sem: asyncio.Semaphor
                 gh.rest.pulls.async_list_reviews, owner=owner, repo=repo, pull_number=pull.number
             )
         ]
-    approved = sorted(
-        r.submitted_at for r in reviews if r.state == "APPROVED" and r.submitted_at
-    )
+    approved = sorted(r.submitted_at for r in reviews if r.state == "APPROVED" and r.submitted_at)
     user = pull.user
     return HarvestedPR(
         number=pull.number,
@@ -301,9 +297,7 @@ async def _backfill(
             nonlocal count
             details = await _fetch_file_details(gh, owner, repo, number, sem)
             line = (
-                json.dumps(
-                    {"number": number, "file_details": [d.model_dump() for d in details]}
-                )
+                json.dumps({"number": number, "file_details": [d.model_dump() for d in details]})
                 + "\n"
             )
             await _checkpoint(write_lock, sidecar, line)
@@ -338,9 +332,7 @@ def backfill_file_details(
         for line in sidecar.read_text().splitlines():
             if line.strip():
                 rec = json.loads(line)
-                done[rec["number"]] = [
-                    FileDetail.model_validate(d) for d in rec["file_details"]
-                ]
+                done[rec["number"]] = [FileDetail.model_validate(d) for d in rec["file_details"]]
 
     targets = [p.number for p in prs if p.file_details is None and p.number not in done]
     if targets:
@@ -349,9 +341,7 @@ def backfill_file_details(
         for line in sidecar.read_text().splitlines():
             if line.strip():
                 rec = json.loads(line)
-                done[rec["number"]] = [
-                    FileDetail.model_validate(d) for d in rec["file_details"]
-                ]
+                done[rec["number"]] = [FileDetail.model_validate(d) for d in rec["file_details"]]
 
     fetched = 0
     for pr in prs:

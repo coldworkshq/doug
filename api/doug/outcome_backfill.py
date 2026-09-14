@@ -143,7 +143,9 @@ def inspect(conn: Connection, *, now: datetime | None = None) -> BackfillReport:
             func.sum(case((has_sibling, 1), else_=0)).label("existing_60"),
             func.sum(case((missing, 1), else_=0)).label("missing"),
             func.sum(case((overdue, 1), else_=0)).label("overdue"),
-        ).select_from(job_14).where(eligible)
+        )
+        .select_from(job_14)
+        .where(eligible)
     ).one()
 
     orphan_real_installation = exists(
@@ -198,9 +200,7 @@ def inspect(conn: Connection, *, now: datetime | None = None) -> BackfillReport:
             if differs
         )
         if fields:
-            mismatches.append(
-                PairMismatch(int(pair["job_14_id"]), int(pair["job_60_id"]), fields)
-            )
+            mismatches.append(PairMismatch(int(pair["job_14_id"]), int(pair["job_60_id"]), fields))
 
     return BackfillReport(
         eligible_14=int(counts.eligible_14),
@@ -253,13 +253,9 @@ def _insert_statement(dialect_name: str):
 
 def _require_clean_before(report: BackfillReport, expected_missing: int) -> None:
     if report.mismatches:
-        raise BackfillInvariantError(
-            f"found {len(report.mismatches)} mismatched 14/60 job pairs"
-        )
+        raise BackfillInvariantError(f"found {len(report.mismatches)} mismatched 14/60 job pairs")
     if report.orphan_60:
-        raise BackfillInvariantError(
-            f"found {report.orphan_60} registered 60-day orphan jobs"
-        )
+        raise BackfillInvariantError(f"found {report.orphan_60} registered 60-day orphan jobs")
     if report.missing != expected_missing:
         raise BackfillInvariantError(
             f"expected {expected_missing} missing 60-day jobs; found {report.missing}"
@@ -344,20 +340,13 @@ def apply(
         transaction = conn.begin()
         try:
             if conn.dialect.name == "postgresql":
-                conn.execute(
-                    text("LOCK TABLE installations IN SHARE ROW EXCLUSIVE MODE")
-                )
-                conn.execute(
-                    text("LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE")
-                )
+                conn.execute(text("LOCK TABLE installations IN SHARE ROW EXCLUSIVE MODE"))
+                conn.execute(text("LOCK TABLE outcome_jobs IN SHARE ROW EXCLUSIVE MODE"))
             effective_now = _as_utc(now) if now is not None else _db_now(conn)
             before = inspect(conn, now=effective_now)
             _require_clean_before(before, expected_missing)
             inserted_rows = [
-                dict(row)
-                for row in conn.execute(
-                    _insert_statement(conn.dialect.name)
-                ).mappings()
+                dict(row) for row in conn.execute(_insert_statement(conn.dialect.name)).mappings()
             ]
             if len(inserted_rows) != expected_missing:
                 raise BackfillInvariantError(
@@ -397,9 +386,7 @@ def _load_manifest(manifest_path: Path, expected_count: int) -> list[dict]:
     if not isinstance(rows, list):
         raise BackfillInvariantError("manifest rows must be a list")
     if len(rows) != expected_count:
-        raise BackfillInvariantError(
-            f"expected {expected_count} manifest rows; found {len(rows)}"
-        )
+        raise BackfillInvariantError(f"expected {expected_count} manifest rows; found {len(rows)}")
 
     normalized = []
     seen = set()
@@ -443,9 +430,7 @@ def _manifest_predicate(rows: list[dict]):
     )
 
 
-def _require_manifest_rows(
-    conn: Connection, rows: list[dict], *, lock: bool = False
-) -> None:
+def _require_manifest_rows(conn: Connection, rows: list[dict], *, lock: bool = False) -> None:
     statement = select(store.outcome_jobs.c.id).where(_manifest_predicate(rows))
     if lock:
         statement = statement.with_for_update()
@@ -463,9 +448,7 @@ def _require_manifest_rows(
         raise BackfillInvariantError("one or more manifest rows are not untouched")
 
 
-def verify_manifest(
-    engine: Engine, *, manifest_path: Path, expected_count: int
-) -> int:
+def verify_manifest(engine: Engine, *, manifest_path: Path, expected_count: int) -> int:
     """Check exact manifest identities and untouched state on a new connection."""
     rows = _load_manifest(manifest_path, expected_count)
     with engine.connect() as conn:
@@ -479,9 +462,7 @@ def rollback(engine: Engine, *, manifest_path: Path, expected_count: int) -> int
     with engine.begin() as conn:
         _require_manifest_rows(conn, rows, lock=True)
         result = conn.execute(
-            delete(store.outcome_jobs).where(
-                _manifest_predicate(rows), _untouched_predicate()
-            )
+            delete(store.outcome_jobs).where(_manifest_predicate(rows), _untouched_predicate())
         )
         if result.rowcount != len(rows):
             raise BackfillInvariantError(

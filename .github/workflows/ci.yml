@@ -25,7 +25,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check .
+      # The same static gate an agent's Stop hook runs: ruff format and lint,
+      # basedpyright against its baseline, the lock, and the ratchets, which
+      # compare against the merge base (hence the full history above too).
+      - run: make -C .. check RATCHETS_FLAGS=--require-base
       - run: uv run pytest
 
   web:

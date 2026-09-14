@@ -114,8 +114,15 @@ def index_from_git(git_dir: str, head_sha: str) -> dict[str, list[str]] | None:
     index: dict[str, list[str]] = {}
     for name in names:
         patch = _git(
-            git_dir, "diff", "--unified=3", "--no-color", "--no-ext-diff",
-            base, head_sha, "--", name,
+            git_dir,
+            "diff",
+            "--unified=3",
+            "--no-color",
+            "--no-ext-diff",
+            base,
+            head_sha,
+            "--",
+            name,
         )
         index[name] = [hunks.hash_hunk(h) for h in hunks.split_hunks(patch)]
     return index
@@ -402,9 +409,7 @@ def evaluate(
         by_pr[group_key(verdict)].append(verdict)
 
     pairs = [
-        pair_payload(
-            prior, later, findings_by_verdict, reads_by_verdict, emulated_ids, grain_fn
-        )
+        pair_payload(prior, later, findings_by_verdict, reads_by_verdict, emulated_ids, grain_fn)
         for group in by_pr.values()
         for prior, later in consecutive_pairs(group)
     ]
@@ -458,16 +463,17 @@ def main(argv: list[str] | None = None) -> int:
     emulated_ids: set[int] = set()
     grain_fn = None
     if args.emulate_hunks:
-        emulated_ids = emulate_missing_indexes(
-            args.emulate_hunks, verdicts, reads_by_verdict
-        )
+        emulated_ids = emulate_missing_indexes(args.emulate_hunks, verdicts, reads_by_verdict)
 
         def grain_fn(prior: dict, later: dict) -> list[str] | None:
             if not (prior.get("head_sha") and later.get("head_sha")):
                 return None
             names = _git(
-                args.emulate_hunks, "diff", "--name-only",
-                prior["head_sha"], later["head_sha"],
+                args.emulate_hunks,
+                "diff",
+                "--name-only",
+                prior["head_sha"],
+                later["head_sha"],
             )
             return [n for n in names.split("\n") if n]
 

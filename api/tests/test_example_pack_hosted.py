@@ -56,7 +56,7 @@ def _instrument(*, model: str = "claude-opus-5") -> WholeInstrumentManifestV0:
         max_output_tokens=6000,
         effort="medium",
         inference_parameters=(NameVersionV0(name="temperature", version="provider-default"),),
-        mechanical_parameters= (
+        mechanical_parameters=(
             NameVersionV0(name="verify_finding.model", version="claude-sonnet-5"),
         ),
         system_prompt_sha256="1" * 64,
@@ -211,9 +211,7 @@ def test_validation_fails_the_whole_cohort_when_a_referenced_blob_is_missing():
     repository.ensure_manifest(_manifest())
     _write_pack(repository, pack)
     repository.put_membership(pack, review_job_id=41)
-    del store.objects[
-        f"cohorts/doug-dogfood-2026-08/blobs/sha256/{pack.evidence.sha256}"
-    ]
+    del store.objects[f"cohorts/doug-dogfood-2026-08/blobs/sha256/{pack.evidence.sha256}"]
 
     with pytest.raises(ExamplePackError, match="missing referenced blob"):
         repository.validate()

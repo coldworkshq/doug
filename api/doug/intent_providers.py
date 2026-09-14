@@ -132,7 +132,9 @@ def fetch_report(gh, owner: str, repo: str, ref: str | None = None) -> FetchRepo
         searched.append(directory)
         try:
             listing = gh.rest.repos.get_content(
-                owner=owner, repo=repo, path=directory,
+                owner=owner,
+                repo=repo,
+                path=directory,
                 **({"ref": ref} if ref else {}),
             ).parsed_data
         except Exception as e:  # noqa: BLE001 — classify below

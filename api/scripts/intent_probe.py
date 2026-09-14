@@ -73,8 +73,7 @@ INTENT_SCHEMA["properties"]["intent_alignment"] = {
 INTENT_SCHEMA["properties"]["deviation_findings"] = {
     "type": "array",
     "description": (
-        "Gaps between ticket intent and diff behavior; empty if the PR "
-        "does what the ticket asks."
+        "Gaps between ticket intent and diff behavior; empty if the PR does what the ticket asks."
     ),
     "items": {
         "type": "object",
@@ -208,13 +207,20 @@ def build() -> int:
     covered = set(json.loads((PROBE_1B / "findings-main.json").read_text()))
     diffonly = [_request(p, None, "do") for p, _ in sample if str(p.number) not in covered]
 
-    (DIR / "sample.json").write_text(json.dumps({
-        "prs": [p.number for p, _ in sample],
-        "defects": [p.number for p, _ in sample[:n_defects]],
-        "mismatched": [sample[i][0].number for i in mm_idx],
-        "model": MODEL, "effort": BASE_EFFORT, "seed": SEED,
-        "min_issue_body": MIN_ISSUE_BODY,
-    }, indent=2))
+    (DIR / "sample.json").write_text(
+        json.dumps(
+            {
+                "prs": [p.number for p, _ in sample],
+                "defects": [p.number for p, _ in sample[:n_defects]],
+                "mismatched": [sample[i][0].number for i in mm_idx],
+                "model": MODEL,
+                "effort": BASE_EFFORT,
+                "seed": SEED,
+                "min_issue_body": MIN_ISSUE_BODY,
+            },
+            indent=2,
+        )
+    )
     for name, reqs in [("matched", matched), ("mismatched", mismatched), ("diffonly", diffonly)]:
         (DIR / f"requests-{name}.json").write_text(json.dumps(reqs))
         print(f"{name}: {len(reqs)} requests")
@@ -286,14 +292,18 @@ def analyze() -> int:
     for n, r in sorted(matched.items(), key=lambda kv: int(kv[0])):
         devs = r.get("deviation_findings", [])
         if devs:
-            lines.append(f"\n## PR {n} · alignment {r['intent_alignment']} · risk {r['risk_score']}"
-                         f"{' · DEFECT' if int(n) in defects else ''}")
+            lines.append(
+                f"\n## PR {n} · alignment {r['intent_alignment']} · risk {r['risk_score']}"
+                f"{' · DEFECT' if int(n) in defects else ''}"
+            )
             for d in devs:
                 lines.append(f"- [{d['type']} · {d['severity']}] {d['description']}")
     (DIR / "audit-matched-deviations.md").write_text("\n".join(lines))
     n_dev = sum(len(r.get("deviation_findings", [])) for r in matched.values())
-    print(f"(b) audit file written: {n_dev} matched-arm deviation findings -> "
-          f"{DIR / 'audit-matched-deviations.md'}")
+    print(
+        f"(b) audit file written: {n_dev} matched-arm deviation findings -> "
+        f"{DIR / 'audit-matched-deviations.md'}"
+    )
 
     # (a) informational ranking delta
     do_path = DIR / "findings-diffonly.json"
@@ -308,8 +318,10 @@ def analyze() -> int:
             without.append(float(base["risk_score"]))
     a1 = capture_curve(list(zip(with_intent, y, strict=True))).auc
     a0 = capture_curve(list(zip(without, y, strict=True))).auc
-    print(f"(a) informational — {len(y)} rows, {sum(y)} defects: "
-          f"AUC diff+intent {a1:.3f} vs diff-only {a0:.3f} (no bar; tiny n)")
+    print(
+        f"(a) informational — {len(y)} rows, {sum(y)} defects: "
+        f"AUC diff+intent {a1:.3f} vs diff-only {a0:.3f} (no bar; tiny n)"
+    )
     return 0
 
 

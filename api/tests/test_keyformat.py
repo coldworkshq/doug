@@ -37,11 +37,11 @@ def test_parse_rejects_the_reserved_test_prefix():
 
 def test_parse_rejects_legacy_and_junk_shapes():
     assert keyformat.parse("") is None
-    assert keyformat.parse("doug_" + "x" * 43) is None          # PR #48 legacy shape
-    assert keyformat.parse(keyformat.PREFIX) is None            # nothing after prefix
+    assert keyformat.parse("doug_" + "x" * 43) is None  # PR #48 legacy shape
+    assert keyformat.parse(keyformat.PREFIX) is None  # nothing after prefix
     assert keyformat.parse(keyformat.PREFIX + "short_x") is None
     minted = keyformat.generate()
-    assert keyformat.parse(minted.token + "z") is None          # wrong tail length
+    assert keyformat.parse(minted.token + "z") is None  # wrong tail length
     assert keyformat.parse(minted.token.replace("_", "-", 2)) is None
 
 

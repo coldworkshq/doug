@@ -30,9 +30,7 @@ def _pull(number=1, login="dev", user_type="User", title="Fix retry"):
 
 
 def _file(name="auth.py", status="modified", patch="+ guard()"):
-    return SimpleNamespace(
-        filename=name, status=status, additions=1, deletions=0, patch=patch
-    )
+    return SimpleNamespace(filename=name, status=status, additions=1, deletions=0, patch=patch)
 
 
 class FakeGH:
@@ -48,9 +46,7 @@ class FakeGH:
 
 
 def _rv(risk_score: int, findings: list | None = None) -> reader.ReaderVerdict:
-    return reader.ReaderVerdict(
-        risk_score=risk_score, rationale="test", findings=findings or []
-    )
+    return reader.ReaderVerdict(risk_score=risk_score, rationale="test", findings=findings or [])
 
 
 def _pr_with_deterministic_score_0_79() -> PRMetadata:
@@ -84,7 +80,8 @@ def test_score_one_threads_the_repo_line_to_every_exit(monkeypatch):
 
     monkeypatch.setattr(reader, "enabled", lambda: True)
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda *a, **k: (_ for _ in ()).throw(reader.ReaderError("down")),
     )
     tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9)
@@ -92,7 +89,8 @@ def test_score_one_threads_the_repo_line_to_every_exit(monkeypatch):
     assert any(r.rule == "reader-unavailable" for r in v.reasons)
 
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda *a, **k: (_ for _ in ()).throw(reader.SpendCapExceeded("cap")),
     )
     tier, v, _, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, threshold=0.9)
@@ -121,7 +119,8 @@ def test_deep_read_off_takes_the_deterministic_tier_under_its_own_rule(monkeypat
     # If the gate leaks, this raises and the test says so loudly rather than
     # passing on a read that happened to succeed.
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("the reader was called")),
     )
 
@@ -180,13 +179,17 @@ def test_deep_read_off_also_silences_the_intent_tier(monkeypatch):
     monkeypatch.setattr(reader, "enabled", lambda: True)
     monkeypatch.setattr(intent, "enabled_for", lambda _installation: True)
     monkeypatch.setattr(
-        review.intent_providers, "fetch",
+        review.intent_providers,
+        "fetch",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("intent docs were fetched")),
     )
 
-    assert review.read_intent(
-        None, "o", "r", meta, "+ x", scope=reader.SENTINEL_SCOPE, deep_read=False
-    ) is None
+    assert (
+        review.read_intent(
+            None, "o", "r", meta, "+ x", scope=reader.SENTINEL_SCOPE, deep_read=False
+        )
+        is None
+    )
 
 
 def test_metadata_mapping_marks_bots():
@@ -242,7 +245,8 @@ def test_fetch_pr_records_the_head_commit():
     from types import SimpleNamespace
 
     p = SimpleNamespace(
-        number=7, title="Add cache",
+        number=7,
+        title="Add cache",
         user=SimpleNamespace(login="dev", type="User"),
         head=SimpleNamespace(sha="c0ffee" + "0" * 34),
         html_url="https://github.com/o/r/pull/7",
@@ -266,6 +270,7 @@ def test_fetch_pr_records_the_head_commit():
 
 
 # --- Coverage integrity: pagination + changed_files/files_dropped --------
+
 
 class PagedFakeGH:
     """list_files across N pages of 100, the shape GitHub's API actually
@@ -308,7 +313,8 @@ class PagedFakeGH:
 
 def _pull_full(number=7, changed_files=1):
     return SimpleNamespace(
-        number=number, title="Big PR",
+        number=number,
+        title="Big PR",
         user=SimpleNamespace(login="dev", type="User"),
         head=SimpleNamespace(sha="c0ffee" + "0" * 34),
         html_url="https://github.com/o/r/pull/7",
@@ -357,6 +363,7 @@ def test_fetch_open_prs_derives_changed_files_from_the_paginated_count():
 
 
 # --- Live review state (approvals no longer hardcoded 0) -----------------
+
 
 def _review(login, state, submitted_at):
     return SimpleNamespace(
@@ -463,6 +470,7 @@ def test_list_all_files_stops_at_githubs_own_file_cap():
 
 
 # --- Coverage integrity: binary files are not "dropped" -------------------
+
 
 def _binary_file(name="logo.png"):
     """GitHub reports a genuinely binary file with no patch AND no
@@ -756,8 +764,11 @@ def test_score_one_settles_against_a_green_check_at_head(monkeypatch):
 
     files = {"api/doug/x.py": "LIMIT = 3\n\ndef f():\n    return LIMIT\n"}
     tier, v, rv, _ = review.score_one(
-        meta, "+ x", scope=reader.SENTINEL_SCOPE,
-        resolve_file=files.get, resolve_ci=resolve_ci,
+        meta,
+        "+ x",
+        scope=reader.SENTINEL_SCOPE,
+        resolve_file=files.get,
+        resolve_ci=resolve_ci,
     )
     assert tier == "reader"
     assert rv.findings == [] and rv.risk_score == 70
@@ -770,9 +781,7 @@ def test_score_one_settles_against_a_green_check_at_head(monkeypatch):
     # No resolve_file: the file at head cannot be read, so nothing is
     # settled and the evidence is never fetched.
     calls.clear()
-    _, v, rv, _ = review.score_one(
-        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_ci=resolve_ci
-    )
+    _, v, rv, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_ci=resolve_ci)
     assert calls == [] and len(rv.findings) == 1
     assert not any(r.rule == "settled-ci-green" for r in v.reasons)
 
@@ -806,9 +815,7 @@ def test_score_one_settles_a_syntax_error_the_declared_python_parses(monkeypatch
     assert "api/doug/x.py: syntax-error (['Python 3.14'])" in notice.label
 
     files["api/pyproject.toml"] = '[project]\nrequires-python = ">=3.13"\n'
-    _, v, rv, _ = review.score_one(
-        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get
-    )
+    _, v, rv, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file=files.get)
     assert rv is not None and len(rv.findings) == 1
     assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
 
@@ -830,9 +837,7 @@ def test_a_syntax_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, 
         raise RecursionError("maximum recursion depth exceeded")
 
     monkeypatch.setattr(review.settle, "drop_disproved_syntax_findings", raises)
-    tier, v, rv, _ = review.score_one(
-        meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file={}.get
-    )
+    tier, v, rv, _ = review.score_one(meta, "+ x", scope=reader.SENTINEL_SCOPE, resolve_file={}.get)
     assert tier == "reader" and rv is not None and len(rv.findings) == 1
     assert not any(r.rule == "settled-syntax-error" for r in v.reasons)
     assert "syntax settlement skipped (RecursionError" in capsys.readouterr().err
@@ -921,9 +926,12 @@ def test_head_ci_evidence_is_none_wherever_it_cannot_say_all_green():
     not_found.response = SimpleNamespace(status_code=404)
     assert review.head_ci_evidence(_CiGH({}, [], dir_error=not_found), "o", "r", "b" * 40) is None
     assert review.head_ci_evidence(_CiGH({}, []), "o", "r", "b" * 40) is None
-    assert review.head_ci_evidence(
-        _CiGH({"ci.yml": CI_YML}, [_run("api")], total_count=101), "o", "r", "b" * 40
-    ) is None
+    assert (
+        review.head_ci_evidence(
+            _CiGH({"ci.yml": CI_YML}, [_run("api")], total_count=101), "o", "r", "b" * 40
+        )
+        is None
+    )
     # A red run reads fine; it is the evidence that says not-green.
     ev = review.head_ci_evidence(
         _CiGH({"ci.yml": CI_YML}, [_run("api", conclusion="failure")]), "o", "r", "b" * 40
@@ -949,8 +957,11 @@ def test_a_ci_settlement_that_raises_leaves_the_read_as_it_was(monkeypatch, caps
         raise TypeError("odd nesting")
 
     tier, v, rv, _ = review.score_one(
-        meta, "+ x", scope=reader.SENTINEL_SCOPE,
-        resolve_file={"api/doug/x.py": "LIMIT = 3\n"}.get, resolve_ci=resolve_ci,
+        meta,
+        "+ x",
+        scope=reader.SENTINEL_SCOPE,
+        resolve_file={"api/doug/x.py": "LIMIT = 3\n"}.get,
+        resolve_ci=resolve_ci,
     )
     assert tier == "reader" and len(rv.findings) == 1
     assert any(r.rule == "reader:undefined-name" for r in v.reasons)
@@ -964,16 +975,16 @@ def test_head_file_text_missing_ok_silences_only_a_404(capsys):
         e.response = SimpleNamespace(status_code=status)
         raise e
 
-    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
-        get_content=lambda **kw: _raise(404)
-    )))
+    gh = SimpleNamespace(
+        rest=SimpleNamespace(repos=SimpleNamespace(get_content=lambda **kw: _raise(404)))
+    )
     assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
     assert capsys.readouterr().err == ""
     assert review.head_file_text(gh, "o", "r", "s", "ruff.toml") is None
     assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err
-    gh = SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(
-        get_content=lambda **kw: _raise(403)
-    )))
+    gh = SimpleNamespace(
+        rest=SimpleNamespace(repos=SimpleNamespace(get_content=lambda **kw: _raise(403)))
+    )
     assert review.head_file_text(gh, "o", "r", "s", "ruff.toml", missing_ok=True) is None
     assert "settle fetch skipped for ruff.toml" in capsys.readouterr().err
 
@@ -986,12 +997,16 @@ def test_score_one_tags_a_finding_outside_the_read_before_the_verdict(monkeypatc
     diff = reader.diff_chunk("auth/session.go", "modified", 3, 1, "+ guard()")
     findings = [
         reader.ReaderFinding(
-            category_slug="missing-import", description="no sys",
-            file="api/doug/worker.py", severity="high",
+            category_slug="missing-import",
+            description="no sys",
+            file="api/doug/worker.py",
+            severity="high",
         ),
         reader.ReaderFinding(
-            category_slug="race", description="in the diff",
-            file="auth/session.go", severity="medium",
+            category_slug="race",
+            description="in the diff",
+            file="auth/session.go",
+            severity="medium",
         ),
     ]
     monkeypatch.setattr(reader, "enabled", lambda: True)

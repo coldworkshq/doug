@@ -30,8 +30,7 @@ class ReconcileSummary:
 def run() -> ReconcileSummary:
     if not app_auth.enabled():
         raise RuntimeError(
-            "DOUG_GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be configured "
-            "before reconciling"
+            "DOUG_GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be configured before reconciling"
         )
     # Per-tenant failures are best-effort (see the module docstring); a
     # missing ledger is not one of those. Without DATABASE_URL every store

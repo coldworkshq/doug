@@ -101,9 +101,7 @@ def main() -> int:
         print(f"\n{'':<22}{'AS-IS':>22}{'FILTERED':>22}")
         print(f"{'full-sample capture':<22}", end="")
         for curve, _, _, _, _ in (a, b):
-            print(
-                f"{'  '.join(f'{curve.capture_at(r):.0%}' for r in RATES):>22}", end=""
-            )
+            print(f"{'  '.join(f'{curve.capture_at(r):.0%}' for r in RATES):>22}", end="")
         print(f"\n{'full-sample AUC':<22}{a[0].auc:>22.3f}{b[0].auc:>22.3f}")
 
         print(f"{'cleared lift @20/@30':<22}", end="")

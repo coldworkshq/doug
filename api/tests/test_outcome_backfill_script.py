@@ -68,9 +68,7 @@ def test_dry_run_delegates_to_inspect_and_prints_sorted_report(monkeypatch, caps
     engine = _Engine(connection)
     report = _JsonResult({"missing": 3, "eligible_14": 4})
     calls = []
-    monkeypatch.setattr(
-        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
-    )
+    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine)
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         "inspect",
@@ -102,18 +100,19 @@ def test_apply_delegates_typed_guards_and_prints_result(monkeypatch, capsys):
     manifest = Path("/tmp/doug-60-day-test.json")
     result = _JsonResult({"inserted": 3, "manifest_path": str(manifest)})
     calls = []
-    monkeypatch.setattr(
-        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
-    )
+    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine)
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         "apply",
         lambda actual_engine, **kwargs: calls.append((actual_engine, kwargs)) or result,
     )
 
-    assert backfill_outcome_jobs.main(
-        ["--apply", "--expect-missing", "3", "--manifest", str(manifest)]
-    ) == 0
+    assert (
+        backfill_outcome_jobs.main(
+            ["--apply", "--expect-missing", "3", "--manifest", str(manifest)]
+        )
+        == 0
+    )
 
     assert calls == [(engine, {"expected_missing": 3, "manifest_path": manifest})]
     assert capsys.readouterr().out == json.dumps(result.to_dict(), sort_keys=True) + "\n"
@@ -134,31 +133,28 @@ def test_manifest_modes_delegate_typed_guards_and_print_receipts(
     engine = _Engine(connection)
     manifest = Path("/tmp/doug-60-day-test.json")
     calls = []
-    monkeypatch.setattr(
-        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine
-    )
+    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: engine)
     monkeypatch.setattr(
         backfill_outcome_jobs.outcome_backfill,
         function_name,
         lambda actual_engine, **kwargs: calls.append((actual_engine, kwargs)) or 3,
     )
 
-    assert backfill_outcome_jobs.main(
-        [mode, "--expect-count", "3", "--manifest", str(manifest)]
-    ) == 0
+    assert (
+        backfill_outcome_jobs.main([mode, "--expect-count", "3", "--manifest", str(manifest)]) == 0
+    )
 
     assert calls == [(engine, {"expected_count": 3, "manifest_path": manifest})]
-    assert capsys.readouterr().out == json.dumps(
-        {"manifest": str(manifest), receipt_key: 3}, sort_keys=True
-    ) + "\n"
+    assert (
+        capsys.readouterr().out
+        == json.dumps({"manifest": str(manifest), receipt_key: 3}, sort_keys=True) + "\n"
+    )
 
 
 def test_main_reports_missing_database_url_to_stderr(monkeypatch, capsys):
     """An operator sees the opt-in store guard instead of a misleading empty report."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr(
-        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None
-    )
+    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None)
 
     assert backfill_outcome_jobs.main(["--dry-run"]) == 1
 
@@ -178,9 +174,7 @@ def test_from_gcp_rewrites_the_secret_for_an_already_running_local_proxy(monkeyp
         return SimpleNamespace(stdout="postgresql://user:pass@/doug?host=/cloudsql/prod\n")
 
     monkeypatch.setattr(backfill_outcome_jobs.subprocess, "run", read_secret)
-    monkeypatch.setattr(
-        backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None
-    )
+    monkeypatch.setattr(backfill_outcome_jobs.store, "_get_existing_schema_engine", lambda: None)
 
     assert backfill_outcome_jobs.main(["--from-gcp", "doug-prod0", "--dry-run"]) == 1
 

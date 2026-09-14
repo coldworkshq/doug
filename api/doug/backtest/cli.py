@@ -37,9 +37,7 @@ def main() -> int:
     ap.add_argument("repo", help="owner/repo, e.g. astral-sh/ruff")
     ap.add_argument("--limit", type=int, default=300, help="merged PRs to harvest")
     ap.add_argument("--token", default=None, help="GitHub token (default: env or gh)")
-    ap.add_argument(
-        "--cache-dir", type=Path, default=Path(".backtest-cache"), help="harvest cache"
-    )
+    ap.add_argument("--cache-dir", type=Path, default=Path(".backtest-cache"), help="harvest cache")
     ap.add_argument(
         "--before",
         default=None,
@@ -115,9 +113,7 @@ def main() -> int:
 
     print(f"\n{'flag rate':>10} {'doug':>8} {'size-only':>10} {'random':>8}")
     for f in FLAG_RATES:
-        print(
-            f"{f:>10.0%} {doug.capture_at(f):>8.0%} {size.capture_at(f):>10.0%} {f:>8.0%}"
-        )
+        print(f"{f:>10.0%} {doug.capture_at(f):>8.0%} {size.capture_at(f):>10.0%} {f:>8.0%}")
     print(f"\nAUC — doug {doug.auc:.3f} · size-only {size.auc:.3f} · random 0.500")
 
     # Capture describes the flagged band. The product sells the other one:
@@ -165,16 +161,12 @@ def main() -> int:
                 f"learned hotspots={sorted(learned)[:12]}"
             )
             test_scored = replay(test, extra_hotspots=learned)
-            hold = capture_curve(
-                [(s, pr.number in test_defs) for pr, s, _ in test_scored]
-            )
+            hold = capture_curve([(s, pr.number in test_defs) for pr, s, _ in test_scored])
             print(
                 f"holdout capture @10%={hold.capture_at(0.10):.0%}  "
                 f"@20%={hold.capture_at(0.20):.0%}  AUC={hold.auc:.3f}"
             )
-            hold_bands = [
-                cleared_band(hold, len(test), len(test_defs), f) for f in FLAG_RATES
-            ]
+            hold_bands = [cleared_band(hold, len(test), len(test_defs), f) for f in FLAG_RATES]
             print(
                 "holdout cleared-band density vs base: "
                 + " · ".join(f"@{b.flag_rate:.0%} {b.density_lift:.2f}x" for b in hold_bands)
@@ -185,9 +177,7 @@ def main() -> int:
                 "train_defects": len(train_defs),
                 "test_defects": len(test_defs),
                 "learned_hotspots": sorted(learned),
-                "capture": {
-                    f"{f:.2f}": round(hold.capture_at(f), 4) for f in FLAG_RATES
-                },
+                "capture": {f"{f:.2f}": round(hold.capture_at(f), 4) for f in FLAG_RATES},
                 "auc": hold.auc,
                 "cleared_band": [b.model_dump() for b in hold_bands],
             }
@@ -208,9 +198,7 @@ def main() -> int:
                 "before": args.before,
                 "git_defects_total": len(git_defects),
                 "defects": sorted(defects),
-                "capture": {
-                    f"{f:.2f}": round(doug.capture_at(f), 4) for f in FLAG_RATES
-                },
+                "capture": {f"{f:.2f}": round(doug.capture_at(f), 4) for f in FLAG_RATES},
                 "auc": {"doug": doug.auc, "size_only": size.auc},
                 "base_defect_rate": base_rate,
                 "cleared_band": [b.model_dump() for b in bands],

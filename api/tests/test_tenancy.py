@@ -33,9 +33,7 @@ def test_resolve_rejects_junk_without_touching_storage(monkeypatch):
     matters here: a flood of garbage tokens must cost pure Python, never a
     database round trip or a false 'keys not configured' 503."""
     calls = []
-    monkeypatch.setattr(
-        tenancy, "keys_configured", lambda: calls.append("keys_configured") or True
-    )
+    monkeypatch.setattr(tenancy, "keys_configured", lambda: calls.append("keys_configured") or True)
     monkeypatch.setattr(
         store, "installation_token_by_lookup", lambda lookup: calls.append(lookup) or None
     )
@@ -58,12 +56,20 @@ def test_mint_key_scopes_writes_to_the_named_installation(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
 
     first = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     second = tenancy.mint_key(
-        999999999, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        999999999,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
 
     # Each key resolves to its own installation, not the other's.
@@ -76,19 +82,33 @@ def test_mint_key_refuses_an_installation_that_does_not_exist(tmp_path, monkeypa
     create a key that resolves to an id with no tenancy behind it."""
     _db(tmp_path, monkeypatch)
     _pepper_env(monkeypatch)
-    assert tenancy.mint_key(
-        999, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
-    ) is None
+    assert (
+        tenancy.mint_key(
+            999,
+            repo_selection="all",
+            repo_ids=[],
+            label=None,
+            expires_in_days=0,
+            minted_by="drewjst",
+        )
+        is None
+    )
 
 
 def test_disabled_storage_mints_and_resolves_nothing(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     _pepper_env(monkeypatch)
-    assert tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
-    ) is None
+    assert (
+        tenancy.mint_key(
+            150424894,
+            repo_selection="all",
+            repo_ids=[],
+            label=None,
+            expires_in_days=0,
+            minted_by="drewjst",
+        )
+        is None
+    )
     assert tenancy.resolve("doug_anything") is None
 
 
@@ -101,9 +121,7 @@ def _caller(admin: bool):
 
     def _get(owner, repo):
         return SimpleNamespace(
-            parsed_data=SimpleNamespace(
-                permissions=SimpleNamespace(admin=admin)
-            )
+            parsed_data=SimpleNamespace(permissions=SimpleNamespace(admin=admin))
         )
 
     return SimpleNamespace(rest=SimpleNamespace(repos=SimpleNamespace(get=_get)))
@@ -120,9 +138,7 @@ def _app(installation_id=150424894, calls=None):
         return SimpleNamespace(parsed_data=SimpleNamespace(id=installation_id))
 
     return SimpleNamespace(
-        rest=SimpleNamespace(
-            apps=SimpleNamespace(get_repo_installation=_get_repo_installation)
-        )
+        rest=SimpleNamespace(apps=SimpleNamespace(get_repo_installation=_get_repo_installation))
     )
 
 
@@ -337,7 +353,8 @@ def test_user_install_proof_is_pat_owner_equals_owner(monkeypatch):
     """For a User-type install the account owner IS the only admin. The
     login match is case-insensitive because GitHub logins are."""
     monkeypatch.setattr(
-        tenancy, "_caller_client",
+        tenancy,
+        "_caller_client",
         lambda pat: _org_caller(login="DrewJST", membership_raises=True),
     )
     monkeypatch.setattr(app_auth, "enabled", lambda: True)
@@ -348,7 +365,8 @@ def test_user_install_proof_is_pat_owner_equals_owner(monkeypatch):
 def test_stranger_matches_neither_login_nor_membership(monkeypatch):
     app_calls = []
     monkeypatch.setattr(
-        tenancy, "_caller_client",
+        tenancy,
+        "_caller_client",
         lambda pat: _org_caller(login="mallory", membership_raises=True),
     )
     monkeypatch.setattr(app_auth, "enabled", lambda: True)
@@ -363,7 +381,8 @@ def test_verify_org_admin_logs_why_it_denied_without_leaking_the_pat(monkeypatch
     needs to tell a GitHub outage from a genuine refusal, and the PAT must
     never be part of how they learn it."""
     monkeypatch.setattr(
-        tenancy, "_caller_client",
+        tenancy,
+        "_caller_client",
         lambda pat: _org_caller(login="mallory", membership_raises=True),
     )
 
@@ -379,16 +398,15 @@ def test_repos_proof_requires_one_installation(monkeypatch):
     """Two repos proving to two different installations is a cross-tenant
     key request; refuse before minting anything."""
     ids = iter([150424894, 999999999])
-    monkeypatch.setattr(
-        tenancy, "verify_admin", lambda pat, owner, repo: next(ids)
-    )
+    monkeypatch.setattr(tenancy, "verify_admin", lambda pat, owner, repo: next(ids))
     assert tenancy.verify_repos_admin("ghp_x", [("acme", "a"), ("acme", "b")]) is None
 
 
 def test_repos_proof_requires_a_single_owner_before_any_call(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        tenancy, "verify_admin",
+        tenancy,
+        "verify_admin",
         lambda pat, owner, repo: calls.append((owner, repo)) or 150424894,
     )
     assert tenancy.verify_repos_admin("ghp_x", [("acme", "a"), ("evil", "b")]) is None
@@ -400,12 +418,20 @@ def test_mint_key_appends_and_never_disturbs_existing_keys(tmp_path, monkeypatch
     _install()
     _pepper_env(monkeypatch)
     first = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     second = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111], label="ci",
-        expires_in_days=90, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111],
+        label="ci",
+        expires_in_days=90,
+        minted_by="drewjst",
     )
     assert first.token != second.token
     assert first.token.startswith("doug_live_")
@@ -413,6 +439,7 @@ def test_mint_key_appends_and_never_disturbs_existing_keys(tmp_path, monkeypatch
     assert store.installation_token_repo_ids(second.token_id) == {111}
     # Both rows live: nothing rotated.
     from doug import keyformat
+
     assert store.installation_token_by_lookup(keyformat.parse(first.token).lookup) is not None
 
 
@@ -422,8 +449,12 @@ def test_mint_key_without_pepper_raises_keys_not_configured(tmp_path, monkeypatc
     monkeypatch.delenv("DOUG_TOKEN_PEPPER", raising=False)
     with pytest.raises(tenancy.KeysNotConfigured):
         tenancy.mint_key(
-            150424894, repo_selection="all", repo_ids=[], label=None,
-            expires_in_days=0, minted_by="drewjst",
+            150424894,
+            repo_selection="all",
+            repo_ids=[],
+            label=None,
+            expires_in_days=0,
+            minted_by="drewjst",
         )
 
 
@@ -433,10 +464,15 @@ def test_mint_key_stores_only_the_peppered_hash(tmp_path, monkeypatch):
     _install()
     _pepper_env(monkeypatch)
     minted = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     from doug import keyformat
+
     parsed = keyformat.parse(minted.token)
     row = store.installation_token_by_lookup(parsed.lookup)
     assert parsed.secret not in row["token_hash"]
@@ -449,8 +485,12 @@ def _minted_all(monkeypatch, tmp_path, installation_id=150424894):
     _install(installation_id)
     _pepper_env(monkeypatch)
     return tenancy.mint_key(
-        installation_id, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        installation_id,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
 
 
@@ -467,10 +507,14 @@ def test_resolve_rejects_wrong_secret_same_lookup(tmp_path, monkeypatch):
     """Right lookup + wrong secret must die at the HMAC compare."""
     minted = _minted_all(monkeypatch, tmp_path)
     from doug import keyformat
+
     parsed = keyformat.parse(minted.token)
-    forged_secret = ("A" * keyformat.SECRET_LEN)
+    forged_secret = "A" * keyformat.SECRET_LEN
     forged = (
-        keyformat.PREFIX + parsed.lookup + "_" + forged_secret
+        keyformat.PREFIX
+        + parsed.lookup
+        + "_"
+        + forged_secret
         + keyformat._crc(parsed.lookup, forged_secret)
     )
     assert tenancy.resolve(forged) is None
@@ -478,6 +522,7 @@ def test_resolve_rejects_wrong_secret_same_lookup(tmp_path, monkeypatch):
 
 def test_resolve_rejects_revoked_and_expired(tmp_path, monkeypatch):
     from datetime import UTC, datetime
+
     minted = _minted_all(monkeypatch, tmp_path)
     engine = store._get_engine()
     with engine.begin() as conn:
@@ -488,8 +533,12 @@ def test_resolve_rejects_revoked_and_expired(tmp_path, monkeypatch):
         )
     assert tenancy.resolve(minted.token) is None
     second = tenancy.mint_key(
-        150424894, repo_selection="all", repo_ids=[], label=None,
-        expires_in_days=1, minted_by="drewjst",
+        150424894,
+        repo_selection="all",
+        repo_ids=[],
+        label=None,
+        expires_in_days=1,
+        minted_by="drewjst",
     )
     with engine.begin() as conn:
         conn.execute(
@@ -523,8 +572,12 @@ def test_selected_key_intersects_against_the_live_repo_ledger(tmp_path, monkeypa
     _pepper_env(monkeypatch)
     store.set_installation_repos(150424894, [(111, "drewjst/a"), (222, "drewjst/b")], replace=False)
     minted = tenancy.mint_key(
-        150424894, repo_selection="selected", repo_ids=[111, 222], label=None,
-        expires_in_days=0, minted_by="drewjst",
+        150424894,
+        repo_selection="selected",
+        repo_ids=[111, 222],
+        label=None,
+        expires_in_days=0,
+        minted_by="drewjst",
     )
     assert tenancy.resolve(minted.token).repo_ids == frozenset({111, 222})
     store.set_installation_repos(150424894, [(222, "drewjst/b")], replace=False, state="removed")
@@ -554,10 +607,9 @@ def test_resolve_runs_a_dummy_hmac_on_lookup_miss(tmp_path, monkeypatch):
     _pepper_env(monkeypatch)
     calls = []
     real = tenancy.hash_secret
-    monkeypatch.setattr(
-        tenancy, "hash_secret", lambda s, v: calls.append(v) or real(s, v)
-    )
+    monkeypatch.setattr(tenancy, "hash_secret", lambda s, v: calls.append(v) or real(s, v))
     from doug import keyformat
+
     ghost = keyformat.generate()  # never inserted → guaranteed lookup miss
     assert tenancy.resolve(ghost.token) is None
     assert calls, "lookup miss must still burn one HMAC"
@@ -601,9 +653,7 @@ def test_live_scope_drops_repos_the_installation_no_longer_covers(tmp_path, monk
     left the installation must not survive in a session's scope."""
     _db(tmp_path, monkeypatch)
     _install()
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     # The claim names two repos; only one is still active on the ledger.
     assert tenancy.live_scope(150424894, frozenset({111, 222})) == frozenset({111})
 
@@ -611,18 +661,14 @@ def test_live_scope_drops_repos_the_installation_no_longer_covers(tmp_path, monk
 def test_live_scope_returns_none_for_a_non_active_installation(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     store.upsert_installation(150424894, "drewjst", "User", "suspended")
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     assert tenancy.live_scope(150424894, frozenset({111})) is None
 
 
 def test_live_scope_returns_none_when_the_intersection_is_empty(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     _install()
-    store.set_installation_repos(
-        150424894, [(111, "drewjst/a")], replace=False
-    )
+    store.set_installation_repos(150424894, [(111, "drewjst/a")], replace=False)
     # Claimed repo is not on the live ledger at all.
     assert tenancy.live_scope(150424894, frozenset({999})) is None
 

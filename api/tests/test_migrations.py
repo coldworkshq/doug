@@ -230,9 +230,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
     indexes = {index["name"]: index for index in inspect(engine).get_indexes("installations")}
     assert indexes["ix_installations_workos_org_id"].get("unique")
     with engine.connect() as conn:
-        versions = {
-            row[0] for row in conn.execute(select(migrations.schema_migrations.c.version))
-        }
+        versions = {row[0] for row in conn.execute(select(migrations.schema_migrations.c.version))}
     assert versions == set(ALL_VERSIONS)
 
 
@@ -501,9 +499,7 @@ def test_migration_016_touches_no_existing_row(tmp_path):
 
     with engine.connect() as conn:
         rows = dict(
-            conn.exec_driver_sql(
-                "SELECT pr_number, pr_comment_outcome FROM review_jobs"
-            ).all()
+            conn.exec_driver_sql("SELECT pr_number, pr_comment_outcome FROM review_jobs").all()
         )
     assert rows == {1: None, 2: None, 3: None, 4: None}
     assert not [s for s in dict(migrations.MIGRATIONS)[16] if "UPDATE" in s.upper()]
@@ -523,9 +519,7 @@ def test_migration_008_backfills_reader_prompt_hash(tmp_path):
         )
     migrations.apply(engine)
     with engine.begin() as conn:
-        rows = dict(
-            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
-        )
+        rows = dict(conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all())
     assert rows[1] == "8bd26c677a0e087a0b8c14933203cc85e15b65e32b432c10a3ae78009a951cdf"
     assert rows[2] is None, "deterministic verdicts have no prompt"
     assert rows[3] == "already", "an existing hash is never overwritten"
@@ -558,15 +552,11 @@ def test_migration_008_backfill_is_idempotent(tmp_path):
         # between the two runs (a hand correction, a verdict scored under a
         # later prompt era). A genuinely idempotent rerun must leave it
         # alone; only the `AND prompt_hash IS NULL` guard makes that true.
-        conn.exec_driver_sql(
-            "UPDATE verdicts SET prompt_hash = 'do-not-touch' WHERE pr_number = 1"
-        )
+        conn.exec_driver_sql("UPDATE verdicts SET prompt_hash = 'do-not-touch' WHERE pr_number = 1")
         conn.exec_driver_sql("DELETE FROM schema_migrations WHERE version = 8")
     migrations.apply(engine)
     with engine.begin() as conn:
-        rows = dict(
-            conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all()
-        )
+        rows = dict(conn.exec_driver_sql("SELECT pr_number, prompt_hash FROM verdicts").all())
         count = conn.exec_driver_sql(
             "SELECT count(*) FROM verdicts WHERE prompt_hash IS NULL"
         ).scalar()
@@ -594,9 +584,10 @@ def test_migration_007_lease_timestamps_match_postgres_metadata_types():
     for column in ("started_at", "finished_at"):
         ddl = next(stmt for stmt in statements if f"ADD COLUMN {column}" in stmt)
         assert ddl.endswith("TIMESTAMP WITH TIME ZONE")
-        assert store.outcome_jobs.c[column].type.compile(
-            dialect=postgresql.dialect()
-        ) == "TIMESTAMP WITH TIME ZONE"
+        assert (
+            store.outcome_jobs.c[column].type.compile(dialect=postgresql.dialect())
+            == "TIMESTAMP WITH TIME ZONE"
+        )
 
 
 def test_migration_007_enforces_one_outcome_per_job_identity(tmp_path):
@@ -940,8 +931,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         ids = [
             r[0]
             for r in conn.exec_driver_sql(
-                "SELECT id FROM verdicts WHERE installation_id = 10 "
-                "AND tier = 'reader' ORDER BY id"
+                "SELECT id FROM verdicts WHERE installation_id = 10 AND tier = 'reader' ORDER BY id"
             )
         ]
         keeper, duplicate = ids[0], ids[1]
@@ -965,15 +955,12 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
         app_ids = [
             r[0]
             for r in conn.exec_driver_sql(
-                "SELECT id FROM verdicts WHERE installation_id = 10 "
-                "AND tier = 'reader' ORDER BY id"
+                "SELECT id FROM verdicts WHERE installation_id = 10 AND tier = 'reader' ORDER BY id"
             )
         ]
         assert app_ids == [keeper]
         assert (
-            conn.exec_driver_sql(
-                "SELECT COUNT(*) FROM verdicts WHERE tier = 'external'"
-            ).scalar()
+            conn.exec_driver_sql("SELECT COUNT(*) FROM verdicts WHERE tier = 'external'").scalar()
             == 1
         )
         assert (
@@ -988,10 +975,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
             ).scalar()
             == 0
         )
-        assert (
-            conn.exec_driver_sql("SELECT verdict_id FROM review_jobs").scalar()
-            == keeper
-        )
+        assert conn.exec_driver_sql("SELECT verdict_id FROM review_jobs").scalar() == keeper
         names = {idx["name"] for idx in inspect(engine).get_indexes("verdicts")}
         assert "uq_verdicts_app_identity" in names
 
@@ -1050,9 +1034,7 @@ def test_run_evaluates_the_driver_message_not_the_sql_echoing_str():
 
     statement = "ALTER TABLE installations DROP COLUMN token_hash"
     missing_table_orig = _Orig('relation "installations" does not exist')
-    missing_column_orig = _Orig(
-        'column "token_hash" of relation "installations" does not exist'
-    )
+    missing_column_orig = _Orig('column "token_hash" of relation "installations" does not exist')
 
     class _FakeConn:
         def __init__(self, orig):

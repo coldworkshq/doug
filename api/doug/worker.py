@@ -73,9 +73,7 @@ def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
     if not isinstance(head_sha, str) or not head_sha:
         return None
     return CaptureScopeV0(
-        run_id_prefix=(
-            f"review-job:{job['id']}:claim:{job['claim_generation']}"
-        ),
+        run_id_prefix=(f"review-job:{job['id']}:claim:{job['claim_generation']}"),
         review_job_id=job["id"],
         scope=PackScopeV0(
             installation_id=job["installation_id"],
@@ -96,16 +94,12 @@ def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
         ),
         application_revision=os.environ.get("DOUG_APPLICATION_REVISION") or None,
         runtime_revision=(
-            os.environ.get("DOUG_RUNTIME_REVISION")
-            or os.environ.get("K_REVISION")
-            or None
+            os.environ.get("DOUG_RUNTIME_REVISION") or os.environ.get("K_REVISION") or None
         ),
     )
 
 
-def _pr_comment_outcome(
-    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool
-) -> str:
+def _pr_comment_outcome(gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool) -> str:
     """Decide and perform this job's sticky-comment write, returning the
     outcome token for the log line. May raise; `_post_pr_comment` owns that.
 
@@ -173,9 +167,7 @@ def _pr_comment_outcome(
     return outcome
 
 
-def _post_pr_comment(
-    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool
-) -> None:
+def _post_pr_comment(gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool) -> None:
     """The sticky PR comment mirroring the check run (spec 2026-08-19).
 
     Posted from both review paths, immediately after `check_run.post` and
@@ -214,8 +206,7 @@ def _post_pr_comment(
         outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh)
     except Exception as e:  # noqa: BLE001 — advisory surface; the verdict is durable
         print(
-            f"doug: comment internal error on job {job['id']} "
-            f"({type(e).__name__}: {e})",
+            f"doug: comment internal error on job {job['id']} ({type(e).__name__}: {e})",
             file=sys.stderr,
         )
     finally:
@@ -252,8 +243,7 @@ def _record_and_log(job: dict, outcome: str) -> None:
         store.record_pr_comment_outcome(job["id"], outcome)
     except Exception as e:  # noqa: BLE001 — the comment is written; the job is done
         print(
-            f"doug: comment outcome not recorded for job {job['id']} "
-            f"({type(e).__name__}: {e})",
+            f"doug: comment outcome not recorded for job {job['id']} ({type(e).__name__}: {e})",
             file=sys.stderr,
         )
     print(
@@ -332,7 +322,11 @@ def _render_recorded(job: dict, existing: dict) -> tuple[str, str]:
             coverage=cov,
         )
     return check_run.render(
-        existing["tier"], verdict, intent_read, cov, instrument=_instrument(job),
+        existing["tier"],
+        verdict,
+        intent_read,
+        cov,
+        instrument=_instrument(job),
         convergence=(
             store.convergence_for(existing["id"]) if existing["tier"] == "reader" else None
         ),
@@ -432,9 +426,7 @@ def process_job(job: dict) -> int | None:
     # still said the old SHA. That mislabels a read rather than losing one,
     # which is worse: the verdict looks like evidence about a commit it
     # never saw. The SHA that overtook this one gets its own job.
-    current_pr = gh.rest.pulls.get(
-        owner=owner, repo=name, pull_number=job["pr_number"]
-    ).parsed_data
+    current_pr = gh.rest.pulls.get(owner=owner, repo=name, pull_number=job["pr_number"]).parsed_data
     current = getattr(getattr(current_pr, "head", None), "sha", None)
     if not isinstance(current, str) or not current:
         raise RuntimeError("GitHub pull response carried no usable head.sha")
@@ -526,7 +518,11 @@ def process_job(job: dict) -> int | None:
     def resolve(path: str) -> str | None:
         if path not in fetched:
             fetched[path] = review.head_file_text(
-                gh, owner, name, job["head_sha"], path,
+                gh,
+                owner,
+                name,
+                job["head_sha"],
+                path,
                 missing_ok=path.endswith(_PROBED_CONFIG_FILES),
             )
         return fetched[path]
@@ -539,8 +535,7 @@ def process_job(job: dict) -> int | None:
     pack_context = example_pack_capture.capture_scope_if_enabled(
         lambda: _example_pack_scope(job),
         run_id_prefix=(
-            f"review-job:{job.get('id', 'unknown')}:"
-            f"claim:{job.get('claim_generation', 'unknown')}"
+            f"review-job:{job.get('id', 'unknown')}:claim:{job.get('claim_generation', 'unknown')}"
         ),
         installation_id=job["installation_id"],
         github_repository_id=job["github_repo_id"],
@@ -604,9 +599,7 @@ def process_job(job: dict) -> int | None:
                 f"{job['repo_full_name']}#{job['pr_number']}@{job['head_sha'][:12]} "
                 f"(id={verdict_id}) but neither identity nor id lookup found it"
             )
-        return _replay_recorded(
-            job, gh, owner, name, peer, discarded_paid_read=True
-        )
+        return _replay_recorded(job, gh, owner, name, peer, discarded_paid_read=True)
 
     if intent_read is not None:
         try:
@@ -622,7 +615,11 @@ def process_job(job: dict) -> int | None:
             )
 
     title, summary = check_run.render(
-        tier, verdict, intent_read, cov, instrument=_instrument(job),
+        tier,
+        verdict,
+        intent_read,
+        cov,
+        instrument=_instrument(job),
         convergence=(
             store.convergence_for(verdict_id)
             if tier == "reader" and verdict_id is not None
@@ -797,9 +794,7 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
                 print(f"doug: comment skipped:no-verdict {where}", file=sys.stderr)
                 store.record_pr_comment_outcome(job["id"], "skipped:no-verdict")
                 continue
-            if not store.claim_pr_comment_retry(
-                job["id"], attempts=job["pr_comment_attempts"]
-            ):
+            if not store.claim_pr_comment_retry(job["id"], attempts=job["pr_comment_attempts"]):
                 # The other instance owns this repair, or the original worker
                 # landed its outcome between the select and here. Ordinary,
                 # not a fault: silent, the way ingest.claim's lost race is.
@@ -819,8 +814,7 @@ def retry_unposted_comments(limit: int = PR_COMMENT_RETRY_BATCH) -> int:
             _post_pr_comment(gh, owner, name, job, summary, fresh=False)
         except Exception as e:  # noqa: BLE001 — one bad job must not stop the sweep
             print(
-                f"doug: comment retry internal error on job {job['id']} "
-                f"({type(e).__name__}: {e})",
+                f"doug: comment retry internal error on job {job['id']} ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
             if posting:
@@ -1011,8 +1005,7 @@ def _instrument(job: dict):
         return store.instrument_snapshot(job["installation_id"], job["github_repo_id"])
     except Exception as e:  # noqa: BLE001 — advisory footer; verdict already durable
         print(
-            f"doug: instrument snapshot skipped for job {job['id']} "
-            f"({type(e).__name__}: {e})",
+            f"doug: instrument snapshot skipped for job {job['id']} ({type(e).__name__}: {e})",
             file=sys.stderr,
         )
         return None
@@ -1321,9 +1314,13 @@ def reconcile_outcomes(installation_id: int) -> int:
         try:
             while True:
                 batch = gh.rest.pulls.list(
-                    owner=owner, repo=name, state="closed",
-                    sort="updated", direction="desc",
-                    per_page=100, page=page,
+                    owner=owner,
+                    repo=name,
+                    state="closed",
+                    sort="updated",
+                    direction="desc",
+                    per_page=100,
+                    page=page,
                 ).parsed_data
                 if not batch:
                     break
@@ -1392,8 +1389,7 @@ def reconcile_outcomes(installation_id: int) -> int:
                 continue
             if not isinstance(base_ref, str) or not base_ref:
                 print(
-                    f"doug: outcome reconcile skipped {full_name}#{number} "
-                    "(missing base.ref)",
+                    f"doug: outcome reconcile skipped {full_name}#{number} (missing base.ref)",
                     file=sys.stderr,
                 )
                 continue
@@ -1433,7 +1429,9 @@ def reconcile_outcomes(installation_id: int) -> int:
                 carried,
                 column=store.outcome_jobs.c.merge_commit_sha,
                 client=lambda: gh,
-                owner=owner, repo=name, number=number,
+                owner=owner,
+                repo=name,
+                number=number,
             )
             if merge_commit_sha is None:
                 print(
@@ -1448,7 +1446,12 @@ def reconcile_outcomes(installation_id: int) -> int:
             if not isinstance(merged_head_sha, str):
                 merged_head_sha = None
             inserted = store.enqueue_outcome_jobs(
-                installation_id, repo_id, number, merge_commit_sha, merged_at, base_ref,
+                installation_id,
+                repo_id,
+                number,
+                merge_commit_sha,
+                merged_at,
+                base_ref,
                 merged_head_sha=merged_head_sha,
             )
             count += len(inserted)

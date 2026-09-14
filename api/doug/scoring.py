@@ -18,6 +18,8 @@ DEFAULT_THRESHOLD = 0.62
 _FAST_APPROVAL_S = 5 * 60
 _LARGE_DIFF = 400
 _MEDIUM_DIFF = 300
+
+
 def default_threshold() -> float:
     return float(os.environ.get("DOUG_THRESHOLD", DEFAULT_THRESHOLD))
 
@@ -44,12 +46,7 @@ def _rules(f: Features) -> list[Reason]:
 
     # Runtime dep bumps only — tooling bumps (eslint/jest/…) dominated the
     # false-alarm head of the sentry queue and almost never reverted.
-    if (
-        (f.lockfile or f.manifest)
-        and f.test_files == 0
-        and f.runtime_dep
-        and not f.dev_tool_dep
-    ):
+    if (f.lockfile or f.manifest) and f.test_files == 0 and f.runtime_dep and not f.dev_tool_dep:
         reasons.append(
             Reason(
                 rule="dep-change-no-test-delta",

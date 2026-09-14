@@ -132,15 +132,21 @@ FEATURES = [
     ("ns (subsystems)", "diffusion", lambda p, h: float(len(_subsystems(p.files)))),
     ("entropy", "diffusion", lambda p, h: _entropy(p)),
     ("churn per file", "size", lambda p, h: (p.additions + p.deletions) / max(1, len(p.files))),
-    ("is_fix (title)", "purpose",
-     lambda p, h: float(any(w in p.title.lower() for w in _FIX_WORDS))),
+    (
+        "is_fix (title)",
+        "purpose",
+        lambda p, h: float(any(w in p.title.lower() for w in _FIX_WORDS)),
+    ),
     ("ndev", "history", lambda p, h: float(h["ndev"])),
     ("nuc", "history", lambda p, h: float(h["nuc"])),
     ("recency", "history", lambda p, h: h["recency"]),
     ("exp (author PRs)", "experience", lambda p, h: -float(h["exp"])),
     ("sexp (subsystem)", "experience", lambda p, h: -float(h["sexp"])),
-    ("no test delta", "purpose",
-     lambda p, h: float(extract_features(to_metadata(p)).test_files == 0)),
+    (
+        "no test delta",
+        "purpose",
+        lambda p, h: float(extract_features(to_metadata(p)).test_files == 0),
+    ),
 ]
 
 
@@ -152,9 +158,7 @@ def screen(prs, defects, hist, subset=None):
     if len(pool_defects) < 4:
         return rows, len(pool), len(pool_defects)
     for name, dim, fn in FEATURES:
-        curve = capture_curve(
-            [(fn(p, hist[p.number]), p.number in pool_defects) for p in pool]
-        )
+        curve = capture_curve([(fn(p, hist[p.number]), p.number in pool_defects) for p in pool])
         rows.append((name, dim, curve.auc, curve.capture_at(0.20)))
     return rows, len(pool), len(pool_defects)
 
@@ -166,7 +170,8 @@ def main() -> int:
         by = {p.number: p for p in prs}
         dated = {n: d for n, d in find_reverted_prs_dated(owner, repo, CACHE).items() if n in by}
         defects = {
-            n for n, d in dated.items()
+            n
+            for n, d in dated.items()
             if (datetime.fromisoformat(d) - datetime.fromisoformat(by[n].merged_at)).days
             >= -TOLERANCE_DAYS
         }

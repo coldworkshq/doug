@@ -70,9 +70,18 @@ def _probe_coverage(diff: str) -> reader.Coverage:
 
 def _database_url_from_gcp(project: str) -> str:
     url = subprocess.run(
-        ["gcloud", "secrets", "versions", "access", "latest",
-         "--secret=doug-database-url", f"--project={project}"],
-        capture_output=True, text=True, check=True,
+        [
+            "gcloud",
+            "secrets",
+            "versions",
+            "access",
+            "latest",
+            "--secret=doug-database-url",
+            f"--project={project}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     # Rewrite the Cloud SQL socket host to the local auth proxy.
     return url.split("?host=")[0].replace("@/doug", "@127.0.0.1:5433/doug")
@@ -90,7 +99,9 @@ def backfill(force: bool) -> int:
     for repo, probe_dir, tag in PROBES:
         with engine.connect() as conn:
             existing = conn.execute(
-                select(func.count()).select_from(store.verdicts).where(
+                select(func.count())
+                .select_from(store.verdicts)
+                .where(
                     store.verdicts.c.repo == repo,
                     store.verdicts.c.model == MODEL,
                 )
@@ -118,23 +129,31 @@ def backfill(force: bool) -> int:
             if (diff := _rebuild_diff(pr)) is not None:
                 cov = _probe_coverage(diff)
             store.save_review(
-                repo, n, "reader", verdict_from_reader(rv), rv,
-                model=MODEL, pr_meta=to_metadata(pr).model_dump(mode="json"),
+                repo,
+                n,
+                "reader",
+                verdict_from_reader(rv),
+                rv,
+                model=MODEL,
+                pr_meta=to_metadata(pr).model_dump(mode="json"),
                 coverage=cov,
             )
             total_v += 1
             total_r += cov is not None
             observed = dated.get(n)
             with engine.begin() as conn:
-                conn.execute(store.outcomes.insert(), {
-                    "repo": repo,
-                    "pr_number": n,
-                    "kind": "revert" if n in defects else "clean",
-                    "observed_at": (
-                        datetime.fromisoformat(observed) if observed else datetime.now(UTC)
-                    ),
-                    "source": "git-labels",
-                })
+                conn.execute(
+                    store.outcomes.insert(),
+                    {
+                        "repo": repo,
+                        "pr_number": n,
+                        "kind": "revert" if n in defects else "clean",
+                        "observed_at": (
+                            datetime.fromisoformat(observed) if observed else datetime.now(UTC)
+                        ),
+                        "source": "git-labels",
+                    },
+                )
             total_o += 1
         print(f"{repo}: loaded")
     print(f"backfilled {total_v} verdicts, {total_o} outcomes, {total_r} reads")
@@ -198,6 +217,7 @@ def emit_sql(out: Path) -> int:
             )
             if verdict.reasons:
                 by_desc = {f.description: f for f in rv.findings}
+
                 def _fval(x, fmap=by_desc):
                     f = fmap.get(x.label)
                     return (

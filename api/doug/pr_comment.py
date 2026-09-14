@@ -188,7 +188,7 @@ def target_matches(gh, owner: str, repo: str, pr_number: int, github_repo_id: in
     """
     try:
         pull = gh.rest.pulls.get(owner=owner, repo=repo, pull_number=pr_number).parsed_data
-    except (RequestFailed, RequestError):
+    except RequestFailed, RequestError:
         return False
     base = getattr(pull, "base", None)
     base_repo = getattr(base, "repo", None) if base is not None else None
@@ -222,9 +222,7 @@ def upsert(
             if not store.claim_pr_comment_seq(*key, seq):
                 return "skipped-stale"
             try:
-                gh.rest.issues.update_comment(
-                    owner=owner, repo=repo, comment_id=stored, body=body
-                )
+                gh.rest.issues.update_comment(owner=owner, repo=repo, comment_id=stored, body=body)
                 return "updated"
             except RequestFailed as e:
                 if e.response.status_code != 404:
@@ -270,9 +268,7 @@ def upsert(
                 return "skipped-stale"
             if not store.claim_pr_comment_seq(*key, seq):
                 return "skipped-stale"
-            gh.rest.issues.update_comment(
-                owner=owner, repo=repo, comment_id=found.id, body=body
-            )
+            gh.rest.issues.update_comment(owner=owner, repo=repo, comment_id=found.id, body=body)
             return "updated"
 
         if not store.claim_pr_comment(*key):
@@ -280,9 +276,7 @@ def upsert(
             if other is not None:
                 if not store.claim_pr_comment_seq(*key, seq):
                     return "skipped-stale"
-                gh.rest.issues.update_comment(
-                    owner=owner, repo=repo, comment_id=other, body=body
-                )
+                gh.rest.issues.update_comment(owner=owner, repo=repo, comment_id=other, body=body)
                 return "updated"
             # Claim held by a drainer that has not created yet (or died
             # before it could). Creating is the specified direction: a

@@ -53,7 +53,5 @@ def installation_client(installation_id: int) -> GitHub:
     """A client scoped to one installation's repositories."""
     app_id, key = _credentials()
     return GitHub(
-        AppInstallationAuthStrategy(
-            app_id=app_id, private_key=key, installation_id=installation_id
-        )
+        AppInstallationAuthStrategy(app_id=app_id, private_key=key, installation_id=installation_id)
     )

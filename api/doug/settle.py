@@ -503,9 +503,7 @@ def names_read_at_runtime(source: str) -> tuple[set[str], set[str]] | None:
                             for alias in sub.names:
                                 if alias.name == "*":
                                     continue
-                                type_checking_bound.add(
-                                    alias.asname or alias.name.split(".", 1)[0]
-                                )
+                                type_checking_bound.add(alias.asname or alias.name.split(".", 1)[0])
                         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
                             type_checking_bound.add(sub.id)
                 for child in node.orelse:
@@ -801,7 +799,7 @@ def compiles_as(source: str, minor: int) -> bool:
             warnings.simplefilter("ignore")
             ast.parse(source, feature_version=(3, minor))
             compile(source, "<head>", "exec", dont_inherit=True)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
+    except SyntaxError, ValueError, RecursionError, MemoryError:
         return False
     return True
 
@@ -854,8 +852,7 @@ def syntax_settlement_notice(dropped: list[ReaderFinding], resolve_file: Resolve
     return Reason(
         rule=SETTLED_SYNTAX_ERROR,
         label=(
-            f"Dropped {len(dropped)} finding(s) disproved by parsing the file at head"
-            f" — {labels}"
+            f"Dropped {len(dropped)} finding(s) disproved by parsing the file at head — {labels}"
         ),
         weight=0.0,
     )

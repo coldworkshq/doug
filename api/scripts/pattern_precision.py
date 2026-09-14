@@ -100,8 +100,10 @@ def population_table(repo: str, carriers: dict, min_prs: int) -> tuple[list[dict
     # One resample draw shared by every pattern, so the intervals reflect a
     # common sample rather than independent luck per pattern.
     draws = [
-        (d_arr[rng.integers(0, len(d_arr), len(d_arr))],
-         c_arr[rng.integers(0, len(c_arr), len(c_arr))])
+        (
+            d_arr[rng.integers(0, len(d_arr), len(d_arr))],
+            c_arr[rng.integers(0, len(c_arr), len(c_arr))],
+        )
         for _ in range(BOOTSTRAPS)
     ]
 
@@ -114,24 +116,37 @@ def population_table(repo: str, carriers: dict, min_prs: int) -> tuple[list[dict
         prec = _pop_precision(d_hit, len(d_stratum), c_hit, len(c_stratum), pi)
         boots = [
             _pop_precision(
-                int(np.isin(d, list(prs)).sum()), len(d),
-                int(np.isin(c, list(prs)).sum()), len(c), pi,
+                int(np.isin(d, list(prs)).sum()),
+                len(d),
+                int(np.isin(c, list(prs)).sum()),
+                len(c),
+                pi,
             )
             for d, c in draws
         ]
         boots = [b for b in boots if not np.isnan(b)]
-        lo, hi = (np.percentile(boots, [2.5, 97.5]) if boots else (float("nan"),) * 2)
-        rows.append({
-            "pattern": pattern,
-            "d_hit": d_hit, "d_n": len(d_stratum),
-            "c_hit": c_hit, "c_n": len(c_stratum),
-            "precision": prec, "ci": (lo, hi),
-            "lift": prec / pi if pi else 0.0,
-            "clears_base": lo > pi,
-        })
+        lo, hi = np.percentile(boots, [2.5, 97.5]) if boots else (float("nan"),) * 2
+        rows.append(
+            {
+                "pattern": pattern,
+                "d_hit": d_hit,
+                "d_n": len(d_stratum),
+                "c_hit": c_hit,
+                "c_n": len(c_stratum),
+                "precision": prec,
+                "ci": (lo, hi),
+                "lift": prec / pi if pi else 0.0,
+                "clears_base": lo > pi,
+            }
+        )
     rows.sort(key=lambda r: -r["lift"])
-    frame = {"pi": pi, "n_newer": n_newer, "n_defects": n_def,
-             "d_n": len(d_stratum), "c_n": len(c_stratum)}
+    frame = {
+        "pi": pi,
+        "n_newer": n_newer,
+        "n_defects": n_def,
+        "d_n": len(d_stratum),
+        "c_n": len(c_stratum),
+    }
     return rows, frame
 
 

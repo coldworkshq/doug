@@ -107,16 +107,10 @@ def test_github_user_id_reads_a_data_wrapped_list(monkeypatch):
     ],
     ids=["missing-type", "wrong-type", "missing-provider", "other-provider"],
 )
-def test_github_user_id_requires_the_documented_oauth_provider_contract(
-    monkeypatch, identity
-):
+def test_github_user_id_requires_the_documented_oauth_provider_contract(monkeypatch, identity):
     """A numeric external id is not GitHub authority unless WorkOS labels
     that exact identity as its GitHub OAuth identity."""
-    fake = _Fake(
-        **{
-            "GET /user_management/users/user_01ABC/identities": _identities(identity)
-        }
-    )
+    fake = _Fake(**{"GET /user_management/users/user_01ABC/identities": _identities(identity)})
     monkeypatch.setattr(workos_client, "_request", fake)
 
     assert workos_client.github_user_id_for("user_01ABC") is None
@@ -152,11 +146,7 @@ def test_an_upstream_failure_raises_rather_than_reading_as_no_identity(monkeypat
     collapsing them would tell a tenant their credentials are wrong during
     someone else's incident."""
     fake = _Fake(
-        **{
-            "GET /user_management/users/user_01ABC/identities": [
-                httpx.Response(500, text="boom")
-            ]
-        }
+        **{"GET /user_management/users/user_01ABC/identities": [httpx.Response(500, text="boom")]}
     )
     monkeypatch.setattr(workos_client, "_request", fake)
     with pytest.raises(workos_client.WorkOSError):
@@ -310,9 +300,7 @@ def test_ensure_membership_raises_on_a_422_that_is_not_a_duplicate(monkeypatch):
     fake = _Fake(
         **{
             "POST /user_management/organization_memberships": [
-                httpx.Response(
-                    422, json={"code": "organization_membership_already_exists"}
-                )
+                httpx.Response(422, json={"code": "organization_membership_already_exists"})
             ]
         }
     )

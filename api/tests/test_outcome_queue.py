@@ -103,9 +103,7 @@ def test_claim_repository_marks_all_due_rows_for_one_repo_running(tmp_path, monk
         _job(pr_number=3, due_at=NOW + timedelta(days=1)),
     )
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert [job["pr_number"] for job in batch.jobs] == [1, 2]
     assert all(job["status"] == "running" for job in batch.jobs)
@@ -153,9 +151,7 @@ def test_backfilled_overdue_job_is_claimed_and_settled_with_its_window_identity(
     assert outcome_queue.due_repositories() == [
         outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
     ]
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     assert [(job["pr_number"], job["window_days"]) for job in batch.jobs] == [
         (old_pr, 14),
         (old_pr, 60),
@@ -193,9 +189,7 @@ def test_backfilled_overdue_job_is_claimed_and_settled_with_its_window_identity(
 def test_claim_query_compiles_to_for_update_skip_locked():
     """Without SKIP LOCKED, two manually overlapping executions block on the
     same due repository instead of dividing work safely."""
-    query = outcome_queue._claim_query(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID), NOW
-    )
+    query = outcome_queue._claim_query(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID), NOW)
     sql = str(query.compile(dialect=postgresql.dialect()))
     assert "FOR UPDATE SKIP LOCKED" in sql
 
@@ -232,9 +226,7 @@ def test_one_failure_spends_one_attempt_and_retries_next_run(tmp_path, monkeypat
     retry loop would burn all ten daily opportunities in one execution."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=1), _job(pr_number=2))
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert outcome_queue.fail_batch(batch, "repository clone failed") == 2
     rows = _rows(url, store.outcome_jobs)
@@ -249,9 +241,7 @@ def test_the_tenth_failure_is_terminal(tmp_path, monkeypatch):
     pre-registered denominator rule."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=1, attempts=9))
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     outcome_queue.fail_batch(batch, "still unreachable")
 
@@ -265,9 +255,7 @@ def test_settlement_inserts_one_outcome_and_marks_job_done_atomically(tmp_path, 
     published numerator and denominator disagree."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=7))
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     result = adjudicate(batch.jobs, {}, default_branch="main")
 
     assert outcome_queue.settle_batch(
@@ -293,9 +281,7 @@ def test_a_lost_claim_inserts_no_outcome(tmp_path, monkeypatch):
     mismatch must abort before any append-only outcome is written."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=7))
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     with create_engine(url).begin() as conn:
         conn.execute(
             update(store.outcome_jobs)
@@ -321,9 +307,7 @@ def test_an_unparseable_revert_retries_only_its_job(tmp_path, monkeypatch):
     turn the affected PR into a clean outcome."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=1), _job(pr_number=2))
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     result = adjudicate(
         batch.jobs,
         {1: Commit(sha="a" * 40, date="2026-08-01T00:00:00+24:00", subject="Revert #1")},
@@ -351,9 +335,7 @@ def test_removed_repo_is_permanent_but_missing_registry_is_not(tmp_path, monkeyp
     as permanent would censor an MT0/backfill gap in the flattering direction."""
     url = _db(tmp_path, monkeypatch)
     _seed(url, _job(pr_number=1), repo_state="removed")
-    removed = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    removed = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     assert removed.repo_full_name == REPO
     assert removed.permanently_unreachable is True
 
@@ -361,9 +343,7 @@ def test_removed_repo_is_permanent_but_missing_registry_is_not(tmp_path, monkeyp
     monkeypatch.setenv("DATABASE_URL", other_url)
     assert store.enabled()
     _seed(other_url, _job(pr_number=1), repo_state=None)
-    missing = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    missing = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
     assert missing.permanently_unreachable is False
     assert missing.repo_full_name is None
 
@@ -380,9 +360,7 @@ def test_suspended_installation_retries_instead_of_censoring(tmp_path, monkeypat
             .values(state="suspended")
         )
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert batch.permanently_unreachable is False
 
@@ -443,9 +421,7 @@ def test_a_transferred_repository_is_adjudicated_not_censored(tmp_path, monkeypa
     _seed(url, _job(pr_number=1))
     _transfer(url, old_installation_state="deleted", junction_state="removed")
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert batch.permanently_unreachable is False
     assert batch.repo_full_name == SUCCESSOR_REPO
@@ -469,17 +445,13 @@ def test_an_uninstalled_repository_with_no_successor_still_censors(tmp_path, mon
             .values(state="deleted")
         )
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert batch.permanently_unreachable is True
     assert batch.reader_installation_id == INSTALLATION_ID
 
 
-def test_a_successor_registration_under_a_dead_installation_is_not_live(
-    tmp_path, monkeypatch
-):
+def test_a_successor_registration_under_a_dead_installation_is_not_live(tmp_path, monkeypatch):
     """An active junction row under a deleted installation is stale
     registration history, not a reachable repository. Reading it as a
     successor would mint a token GitHub refuses and retry forever."""
@@ -493,9 +465,7 @@ def test_a_successor_registration_under_a_dead_installation_is_not_live(
             .values(state="deleted")
         )
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert batch.permanently_unreachable is True
     assert batch.reader_installation_id == INSTALLATION_ID
@@ -510,9 +480,7 @@ def test_a_live_installation_never_consults_the_successor_lookup(tmp_path, monke
     _seed(url, _job(pr_number=1))
     _transfer(url, old_installation_state="active", junction_state="active")
 
-    batch = outcome_queue.claim_repository(
-        outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID)
-    )
+    batch = outcome_queue.claim_repository(outcome_queue.RepositoryKey(INSTALLATION_ID, REPO_ID))
 
     assert batch.permanently_unreachable is False
     assert batch.repo_full_name == REPO

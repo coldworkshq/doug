@@ -12,14 +12,14 @@ from doug import verify
 from doug.reader import VerifyCheck
 
 FILE = (
-    "import os\n"                 # 1
-    "\n"                          # 2
-    "CAP = 4000\n"                # 3
-    "LIMIT = CAP\n"               # 4
-    "NAME = os.getenv('n')\n"     # 5
-    "\n"                          # 6
-    "def f():\n"                  # 7
-    "    return CAP\n"            # 8
+    "import os\n"  # 1
+    "\n"  # 2
+    "CAP = 4000\n"  # 3
+    "LIMIT = CAP\n"  # 4
+    "NAME = os.getenv('n')\n"  # 5
+    "\n"  # 6
+    "def f():\n"  # 7
+    "    return CAP\n"  # 8
 )
 
 

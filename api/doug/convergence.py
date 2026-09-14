@@ -281,9 +281,7 @@ def _rule5(
         if not att - prior_hashes:  # valid: a subset of the prior multiset
             if not att - later_hashes:
                 # Every hunk this finding rests on is byte-unchanged.
-                return Classification(
-                    "prior", row, PERSISTED, basis=ATTRIBUTED_SURVIVING
-                )
+                return Classification("prior", row, PERSISTED, basis=ATTRIBUTED_SURVIVING)
             if sum((att & later_hashes).values()) == 0:
                 # Every hunk this finding rests on was edited — still not
                 # fix-evidence (2/5 such calls false in Phase 0). Demoted

@@ -64,8 +64,7 @@ TITLE_LIMIT = 255
 # acts, and only one of them is honest about standing caveats each written for
 # a real misreading.
 NEUTRAL_NOTE = (
-    "**Doug never blocks a merge.** This check is always neutral, whatever "
-    "the band says."
+    "**Doug never blocks a merge.** This check is always neutral, whatever the band says."
 )
 # The first author to fix four findings and re-push read the unchanged
 # number as a bug (PR #50). The score prices the PR's shape — it routes
@@ -157,9 +156,7 @@ def _footer(instrument: InstrumentSnapshot) -> list[str]:
     # lines into that bullet instead of rendering them as their own block.
     lines = ["", "", line]
     if instrument.deep_reads is not None:
-        lines.append(
-            f"deep reads {instrument.deep_reads}/{instrument.deep_read_cap} this cycle"
-        )
+        lines.append(f"deep reads {instrument.deep_reads}/{instrument.deep_read_cap} this cycle")
     return lines
 
 
@@ -440,9 +437,7 @@ def _by_severity(risks: list) -> list:
     list that then contradicts it, on exactly the shape that carries both.
     """
     order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
-    return sorted(
-        risks, key=lambda r: (order.get(_grade(r), len(order)), _outside(r) is not None)
-    )
+    return sorted(risks, key=lambda r: (order.get(_grade(r), len(order)), _outside(r) is not None))
 
 
 # The chip beside a finding whose file the read did not hold (#308): what
@@ -622,9 +617,7 @@ def _alert(tier: str, verdict: Verdict, partial) -> list[str]:
     """
     flagged = verdict.band is Band.FLAGGED
     if tier != "reader":
-        return _alert_block(
-            _ALERT_WARNING, FALLBACK_FLAGGED_NOTE if flagged else FALLBACK_NOTE
-        )
+        return _alert_block(_ALERT_WARNING, FALLBACK_FLAGGED_NOTE if flagged else FALLBACK_NOTE)
     if partial is not None:
         # `partial.label` is reader.truncation_reason's whole sentence and it
         # splices file paths, so it goes through the same chokepoint as every
@@ -714,32 +707,43 @@ def _since_section(convergence: dict | None) -> list[str]:
         out += ["", "**Still here**", ""]
         for c in carried:
             if c.get("pair_delta") == "changed-elsewhere":
-                out.append(_line(
-                    c,
-                    f"cited file's diff is byte-unchanged since {label}; other "
-                    "code in this PR changed. Carried forward, not re-verified. "
-                    "If you addressed it elsewhere, a human should look.",
-                ))
+                out.append(
+                    _line(
+                        c,
+                        f"cited file's diff is byte-unchanged since {label}; other "
+                        "code in this PR changed. Carried forward, not re-verified. "
+                        "If you addressed it elsewhere, a human should look.",
+                    )
+                )
             else:
-                out.append(_line(
-                    c,
-                    f"cited file's diff is byte-unchanged since {label}; "
-                    "carried forward, not re-verified.",
-                ))
+                out.append(
+                    _line(
+                        c,
+                        f"cited file's diff is byte-unchanged since {label}; "
+                        "carried forward, not re-verified.",
+                    )
+                )
         for c in attributed:
-            out.append(_line(
-                c,
-                "the hunks this finding was attributed to are unchanged since "
-                f"{label}; other parts of the file changed. Carried forward, "
-                "not re-verified.",
-            ))
+            out.append(
+                _line(
+                    c,
+                    "the hunks this finding was attributed to are unchanged since "
+                    f"{label}; other parts of the file changed. Carried forward, "
+                    "not re-verified.",
+                )
+            )
     if unknowns:
         out += ["", "**Can't say**", ""]
         for c in unknowns:
-            out.append(_line(c, _UNKNOWN_SENTENCES.get(
-                c.get("unknown_reason") or "",
-                "this read could not confirm or clear it.",
-            ).format(label=label)))
+            out.append(
+                _line(
+                    c,
+                    _UNKNOWN_SENTENCES.get(
+                        c.get("unknown_reason") or "",
+                        "this read could not confirm or clear it.",
+                    ).format(label=label),
+                )
+            )
     if new_unchanged:
         out += [
             "",
@@ -764,12 +768,8 @@ _UNKNOWN_SENTENCES = {
         "part of the cited file's diff changed since {label}; this read did "
         "not confirm or clear it, and Doug has no usable attribution for it."
     ),
-    "no-hunk-index": (
-        "Doug has no hunk record for one of the two reads, so it cannot compare."
-    ),
-    "file-uncovered": (
-        "Doug did not read this file in one of the two reads (cut or unseen)."
-    ),
+    "no-hunk-index": ("Doug has no hunk record for one of the two reads, so it cannot compare."),
+    "file-uncovered": ("Doug did not read this file in one of the two reads (cut or unseen)."),
     "left-diff": (
         "no longer in this PR's diff (reverted, renamed, or landed another "
         "way); Doug cannot tell which."
@@ -778,9 +778,7 @@ _UNKNOWN_SENTENCES = {
         "Doug's own deterministic check disproved this finding at this head; "
         "not counted as your progress."
     ),
-    "identity-incomplete": (
-        "no file recorded for this finding, so Doug cannot compare it."
-    ),
+    "identity-incomplete": ("no file recorded for this finding, so Doug cannot compare it."),
 }
 
 SINCE_HEADING_FALLBACK = "### Since the previous read"
@@ -812,8 +810,7 @@ def _truncation_notice(dropped: int, total: int) -> str:
         return TRUNCATION_NOTICE
     verb = "is" if dropped == 1 else "are"
     return (
-        f"\n\n_{TRUNCATION_LEAD} {dropped} of {total} findings {verb} "
-        "missing from the list above._"
+        f"\n\n_{TRUNCATION_LEAD} {dropped} of {total} findings {verb} missing from the list above._"
     )
 
 
@@ -985,9 +982,7 @@ def render(
     # listed under "Findings" beneath a Flagged title, reading as a remaining
     # defect) for every replayed check run.
     only_settled = (
-        partial is None
-        and bool(risks)
-        and all(r.rule in SETTLED_REASON_CODES for r in risks)
+        partial is None and bool(risks) and all(r.rule in SETTLED_REASON_CODES for r in risks)
     )
     lines += ["", "### Findings", ""]
     if only_settled and verdict.band == Band.FLAGGED:
@@ -1029,8 +1024,7 @@ def render(
         lines += [""]
         if intent_read.findings:
             lines += [
-                f"- `{_rule_span(d.type)}` — {_oneline(d.description)} "
-                f"_({_oneline(d.severity)})_"
+                f"- `{_rule_span(d.type)}` — {_oneline(d.description)} _({_oneline(d.severity)})_"
                 for d in intent_read.findings
             ]
         else:

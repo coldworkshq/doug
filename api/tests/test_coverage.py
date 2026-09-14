@@ -46,8 +46,12 @@ def _pr(files=PR643):
     from doug.models import PRMetadata
 
     return PRMetadata.model_validate(
-        {"number": 643, "title": "the org-scoped read path", "author": "drewjst",
-         "files": [f for f, _ in files]}
+        {
+            "number": 643,
+            "title": "the org-scoped read path",
+            "author": "drewjst",
+            "files": [f for f, _ in files],
+        }
     )
 
 
@@ -157,7 +161,8 @@ def test_a_partial_read_says_so_on_the_verdict(monkeypatch):
     monkeypatch.setattr(reader, "DIFF_BUDGET", 30_000)
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda pr, diff, *, scope: reader.ReaderVerdict.model_validate(
             {"risk_score": 26, "rationale": "Looks fine.", "findings": []}
         ),
@@ -198,9 +203,7 @@ def test_save_read_persists_the_changed_file_receipt_fields(tmp_path, monkeypatc
     """The reader already computes these values, but until migration 007 the
     ledger cannot prove whether GitHub omitted files before prompt assembly."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/doug.db")
-    cov = reader.coverage(
-        _diff([("a.py", 400)]), changed_files=2, files_dropped=["large.txt"]
-    )
+    cov = reader.coverage(_diff([("a.py", 400)]), changed_files=2, files_dropped=["large.txt"])
     store.save_review("drewjst/doug", 63, "reader", _verdict(), coverage=cov)
 
     with create_engine(f"sqlite:///{tmp_path}/doug.db").connect() as conn:
@@ -254,6 +257,7 @@ def test_the_intent_read_sees_exactly_what_the_risk_read_saw():
 
 # --- Coverage integrity: changed_files / files_dropped -------------------
 
+
 def test_a_read_missing_no_files_is_complete_when_the_count_matches():
     """The baseline this whole feature protects: when every changed file
     made it into the diff and nothing was budget-cut, complete stays True
@@ -293,9 +297,7 @@ def test_the_notice_mentions_files_dropped_before_the_diff_even_when_nothing_was
     """A read that saw its whole diff string in full but never received
     every file must still say so — 'complete' would otherwise be a claim
     about characters sent, not about the PR."""
-    cov = reader.coverage(
-        _diff([("a.py", 400)]), changed_files=2, files_dropped=["b.bin"]
-    )
+    cov = reader.coverage(_diff([("a.py", 400)]), changed_files=2, files_dropped=["b.bin"])
     notice = reader.truncation_reason(cov)
     assert notice is not None
     assert "b.bin" in notice.label
@@ -308,17 +310,24 @@ def test_score_one_carries_the_prs_changed_files_and_dropped_list_into_coverage(
     complete."""
     monkeypatch.setenv("DOUG_READER", "1")
     monkeypatch.setattr(
-        reader, "read_diff",
+        reader,
+        "read_diff",
         lambda pr, diff, *, scope: reader.ReaderVerdict.model_validate(
             {"risk_score": 10, "rationale": "fine", "findings": []}
         ),
     )
     from doug.models import PRMetadata
 
-    pr = PRMetadata.model_validate({
-        "number": 1, "title": "t", "author": "a",
-        "files": ["a.py"], "changed_files": 2, "files_dropped": ["b.bin"],
-    })
+    pr = PRMetadata.model_validate(
+        {
+            "number": 1,
+            "title": "t",
+            "author": "a",
+            "files": ["a.py"],
+            "changed_files": 2,
+            "files_dropped": ["b.bin"],
+        }
+    )
     _tier, _verdict, _rv, cov = review.score_one(pr, _diff([("a.py", 400)]), scope=SCOPE)
     assert not cov.complete
     assert cov.files_dropped == ["b.bin"]
@@ -340,7 +349,10 @@ def test_a_mismatched_changed_files_count_alone_does_not_mark_a_read_incomplete(
 
 def _finding(path, evidence="diff"):
     return reader.ReaderFinding(
-        category_slug="missing-import", description="d", file=path, severity="high",
+        category_slug="missing-import",
+        description="d",
+        file=path,
+        severity="high",
         evidence=evidence,
     )
 
@@ -359,9 +371,10 @@ def test_read_of_names_whole_partial_and_unread_from_one_coverage():
     # A shortened spelling of a sent file is that file, not a stranger.
     assert cov.read_of("lema-api/main.go") == "whole"
     # Before the hunk index existed, nothing can be said.
-    assert reader.Coverage(diff_chars=1, sent_chars=1, files_sent=1, files_unseen=[]).read_of(
-        "x.py"
-    ) is None
+    assert (
+        reader.Coverage(diff_chars=1, sent_chars=1, files_sent=1, files_unseen=[]).read_of("x.py")
+        is None
+    )
 
 
 def test_classify_by_coverage_tags_at_emit_time_and_keeps_head_cited():
@@ -381,7 +394,11 @@ def test_classify_by_coverage_tags_at_emit_time_and_keeps_head_cited():
     )
     tagged = reader.classify_by_coverage(rv, cov)
     assert [f.evidence for f in tagged.findings] == [
-        "diff", "partial-read", "outside-read", "outside-read", "head-cited",
+        "diff",
+        "partial-read",
+        "outside-read",
+        "outside-read",
+        "head-cited",
     ]
     # Additive and total, and the tag rides onto the verdict's reasons.
     assert [f.file for f in tagged.findings] == [f.file for f in rv.findings]

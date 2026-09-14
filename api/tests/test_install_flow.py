@@ -17,9 +17,9 @@ FIXTURE_TOKEN = (
 
 
 def _signed(payload: dict) -> str:
-    segment = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":")).encode()
-    ).rstrip(b"=")
+    segment = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).rstrip(
+        b"="
+    )
     signature = base64.urlsafe_b64encode(
         hmac.new(FIXTURE_SECRET.encode(), segment, hashlib.sha256).digest()
     ).rstrip(b"=")
@@ -72,9 +72,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
         pkce_retried=False,
         secret=FIXTURE_SECRET,
     )
-    flow = install_flow.verify_install_flow(
-        token, now=1_999_999_999, secret=FIXTURE_SECRET
-    )
+    flow = install_flow.verify_install_flow(token, now=1_999_999_999, secret=FIXTURE_SECRET)
     assert flow.subject is None
 
     with pytest.raises(install_flow.InstallFlowError, match="^invalid install flow$"):
@@ -125,9 +123,7 @@ def test_pre_auth_flow_may_have_no_subject_but_cannot_satisfy_an_expected_subjec
         ),
     ],
 )
-def test_flow_verification_refuses_every_untrusted_boundary(
-    token, now, subject, installation_id
-):
+def test_flow_verification_refuses_every_untrusted_boundary(token, now, subject, installation_id):
     with pytest.raises(install_flow.InstallFlowError, match="^invalid install flow$"):
         install_flow.verify_install_flow(
             token,
@@ -166,9 +162,7 @@ def test_setup_generated_64_hex_secret_is_accepted():
         secret=secret,
     )
 
-    flow = install_flow.verify_install_flow(
-        token, now=1_999_999_999, secret=secret
-    )
+    flow = install_flow.verify_install_flow(token, now=1_999_999_999, secret=secret)
 
     assert flow.installation_id == 1001
 
@@ -182,9 +176,12 @@ def test_pkce_retry_guard_is_an_exact_signed_boolean():
         pkce_retried=True,
         secret=FIXTURE_SECRET,
     )
-    assert install_flow.verify_install_flow(
-        retried, now=1_999_999_999, secret=FIXTURE_SECRET
-    ).pkce_retried is True
+    assert (
+        install_flow.verify_install_flow(
+            retried, now=1_999_999_999, secret=FIXTURE_SECRET
+        ).pkce_retried
+        is True
+    )
 
     base = {
         "v": 1,

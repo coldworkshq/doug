@@ -23,9 +23,7 @@ def ready():
 
 
 def _f(slug="missing-import", desc="uses `threading` with no import", file="api.py"):
-    return ReaderFinding(
-        category_slug=slug, description=desc, file=file, severity="medium"
-    )
+    return ReaderFinding(category_slug=slug, description=desc, file=file, severity="medium")
 
 
 def test_drops_missing_import_when_runtime_import_exists():
@@ -38,9 +36,7 @@ def test_drops_missing_import_when_runtime_import_exists():
 def test_keeps_type_checking_only_import():
     """REVIEWING.md residual-real: TYPE_CHECKING import + runtime use."""
     rv = ReaderVerdict(risk_score=40, rationale="x", findings=[_f()])
-    out, dropped = settle.drop_disproved_import_findings(
-        rv, lambda p: TYPE_CHECKING_ONLY
-    )
+    out, dropped = settle.drop_disproved_import_findings(rv, lambda p: TYPE_CHECKING_ONLY)
     assert dropped == []
     assert len(out.findings) == 1
 
@@ -177,9 +173,7 @@ def _sf(
     desc="`installations.token_hash` has no migration and will raise on a deployed database",
     file="api/doug/store.py",
 ):
-    return ReaderFinding(
-        category_slug=slug, description=desc, file=file, severity="high"
-    )
+    return ReaderFinding(category_slug=slug, description=desc, file=file, severity="high")
 
 
 def test_claimed_columns_extracts_table_dot_column_from_backticks():
@@ -236,9 +230,7 @@ def test_drops_schema_finding_when_column_exists_in_live_schema():
 def test_keeps_schema_finding_when_column_truly_absent():
     f = _sf()
     rv = ReaderVerdict(risk_score=60, rationale="x", findings=[f])
-    out, dropped = settle.drop_disproved_schema_findings(
-        rv, lambda table: frozenset({"id"})
-    )
+    out, dropped = settle.drop_disproved_schema_findings(rv, lambda table: frozenset({"id"}))
     assert dropped == []
     assert out.findings == [f]
 
@@ -260,9 +252,7 @@ def test_does_not_settle_non_schema_findings_via_schema_filter():
         severity="high",
     )
     rv = ReaderVerdict(risk_score=70, rationale="x", findings=[f])
-    out, dropped = settle.drop_disproved_schema_findings(
-        rv, lambda table: frozenset({"anything"})
-    )
+    out, dropped = settle.drop_disproved_schema_findings(rv, lambda table: frozenset({"anything"}))
     assert dropped == []
     assert out.findings == [f]
 
@@ -734,7 +724,7 @@ def test_a_syntax_warning_in_tenant_source_is_not_a_syntax_error():
 
 
 def test_only_a_syntax_slug_on_a_python_file_is_a_candidate():
-    """"literal_eval raises SyntaxError on this input" is a runtime claim
+    """ "literal_eval raises SyntaxError on this input" is a runtime claim
     about a file that parses, and so is invalid SQL in a query string."""
     files = {
         "api/doug/x.py": "x = 1\n",

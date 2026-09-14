@@ -55,11 +55,7 @@ BOOTSTRAP = 1000
 def load(owner: str, repo: str, limit: int, before: str):
     prs = harvest(owner, repo, limit, None, CACHE, before=before)
     by = {p.number: p for p in prs}
-    dated = {
-        n: d
-        for n, d in find_reverted_prs_dated(owner, repo, CACHE).items()
-        if n in by
-    }
+    dated = {n: d for n, d in find_reverted_prs_dated(owner, repo, CACHE).items() if n in by}
     defects = {
         n
         for n, d in dated.items()
@@ -70,9 +66,7 @@ def load(owner: str, repo: str, limit: int, before: str):
 
 
 def matrix(prs, hist) -> np.ndarray:
-    return np.array(
-        [[fn(p, hist[p.number]) for _, _, fn in FEATURES] for p in prs]
-    )
+    return np.array([[fn(p, hist[p.number]) for _, _, fn in FEATURES] for p in prs])
 
 
 def report(name: str, scored: list[tuple[float, bool]]):

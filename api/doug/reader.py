@@ -119,6 +119,8 @@ def mechanical_parameters() -> tuple[NameVersionV0, ...]:
         NameVersionV0(name="attribute_findings.model", version=MECHANICAL_MODEL),
         NameVersionV0(name="attribute_findings.effort", version=MECHANICAL_EFFORT),
     )
+
+
 DEFAULT_READER_THRESHOLD = 30  # risk_score points, 0-100
 # seconds, PER HTTP ATTEMPT — not the whole read. This comment claimed "whole
 # read incl. retries' backoff" until 2026-08-23; that was false, and it was the
@@ -343,9 +345,7 @@ VERIFY_SCHEMA = {
     "additionalProperties": False,
 }
 
-VERIFY_PROMPT_HASH = hashlib.sha256(
-    (VERIFY_SYSTEM + repr(VERIFY_SCHEMA)).encode()
-).hexdigest()
+VERIFY_PROMPT_HASH = hashlib.sha256((VERIFY_SYSTEM + repr(VERIFY_SCHEMA)).encode()).hexdigest()
 
 
 class VerifyCheck(BaseModel):
@@ -541,7 +541,7 @@ def installation_from_scope(scope: str) -> int | None:
     """
     if not scope.startswith(_SCOPE_PREFIX):
         return None
-    rest = scope[len(_SCOPE_PREFIX):]
+    rest = scope[len(_SCOPE_PREFIX) :]
     if not rest.isdigit():
         return None
     value = int(rest)
@@ -607,8 +607,7 @@ def _charge(scope: str) -> None:
     cap = cap_for(scope)
     if not store.record_deep_read(scope, cap):
         raise SpendCapExceeded(
-            f"{scope} has spent its cap of {cap} deep reads for this month; "
-            "no model call was made"
+            f"{scope} has spent its cap of {cap} deep reads for this month; no model call was made"
         )
 
 
@@ -668,9 +667,7 @@ class Citation(BaseModel):
         return f"{self.path}@{self.head_sha}#L{self.line_start}-L{self.line_end}"
 
 
-def cite(
-    *, path: str, head_sha: str, text: str, line_start: int, line_end: int
-) -> Citation | None:
+def cite(*, path: str, head_sha: str, text: str, line_start: int, line_end: int) -> Citation | None:
     """Address exactly the bytes at `line_start..line_end`, or return None.
 
     Line numbers are 1-based and inclusive, matching git, every editor, and the
@@ -757,9 +754,7 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
         "messages": [{"role": "user", "content": _verify_user_text(finding)}],
     }
     try:
-        response = tracing.create(
-            client, request, kind="verify", scope=scope, pr=None
-        )
+        response = tracing.create(client, request, kind="verify", scope=scope, pr=None)
     except Exception as e:  # noqa: BLE001 — same contract as read_diff
         raise ReaderError(f"{type(e).__name__}: {e}") from e
     _report_cost(response, kind="verify", scope=scope, pr=None, model=MECHANICAL_MODEL)
@@ -824,9 +819,7 @@ def ground_findings(
 
         citations: list[Citation] = []
         for check in response.checks:
-            outcome = verify_mod.run_check(
-                check, head_sha=head_sha, resolve_file=resolve_file
-            )
+            outcome = verify_mod.run_check(check, head_sha=head_sha, resolve_file=resolve_file)
             if outcome.citation is not None:
                 citations.append(outcome.citation)
             else:
@@ -838,9 +831,7 @@ def ground_findings(
         if citations:
             grounded_count += 1
             out.append(
-                finding.model_copy(
-                    update={"evidence": "head-cited", "citations": citations}
-                )
+                finding.model_copy(update={"evidence": "head-cited", "citations": citations})
             )
         else:
             out.append(finding)
@@ -849,9 +840,9 @@ def ground_findings(
     # from the original, which restored the LENGTH while losing one finding and
     # duplicating another — the assertion passed and the corruption was silent.
     # A mutation test caught it. Compare what came out against what went in.
-    assert [f.category_slug for f in out] == [
-        f.category_slug for f in rv.findings
-    ], "grounding must be additive: every finding in, the same findings out"
+    assert [f.category_slug for f in out] == [f.category_slug for f in rv.findings], (
+        "grounding must be additive: every finding in, the same findings out"
+    )
     return rv.model_copy(update={"findings": out}), grounded_count
 
 
@@ -1201,8 +1192,10 @@ class Coverage(BaseModel):
         known = whole | set(self.files_unseen) | set(self.files_dropped)
         if self.file_cut:
             known.add(self.file_cut)
-        match = path if path in known else next(
-            (k for k in known if k.endswith("/" + path) or path.endswith("/" + k)), None
+        match = (
+            path
+            if path in known
+            else next((k for k in known if k.endswith("/" + path) or path.endswith("/" + k)), None)
         )
         if match is None:
             return "unread"
@@ -1438,10 +1431,7 @@ def _record_attempt(
     request_error_type: str | None = None,
 ) -> None:
     """One best-effort boundary: no capture error may escape into a read."""
-    if (
-        not example_pack_capture.capture_requested()
-        or example_pack_capture.capture_suppressed()
-    ):
+    if not example_pack_capture.capture_requested() or example_pack_capture.capture_suppressed():
         return
     try:
         example_pack_capture.record_attempt(
@@ -1473,12 +1463,9 @@ def _record_attempt(
         )
     except Exception as exc:  # noqa: BLE001 - defense in depth around capture
         active = example_pack_capture.current_scope()
-        run_id = (
-            f"{active.run_id_prefix}:{attempt_kind}" if active is not None else "unscoped"
-        )
+        run_id = f"{active.run_id_prefix}:{attempt_kind}" if active is not None else "unscoped"
         print(
-            f"doug: example-pack capture failed run_id={run_id} "
-            f"error={type(exc).__name__}",
+            f"doug: example-pack capture failed run_id={run_id} error={type(exc).__name__}",
             file=sys.stderr,
         )
 
@@ -1541,9 +1528,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
         request, attempt_kind="risk"
     )
     try:
-        response = tracing.create(
-            client, request, kind="risk", scope=scope, pr=pr
-        )
+        response = tracing.create(client, request, kind="risk", scope=scope, pr=pr)
     except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
         _record_attempt(
             attempt_kind="risk",
@@ -1642,9 +1627,7 @@ class IntentReaderVerdict(ReaderVerdict):
 
 def _intent_text(pr, diff: str, docs) -> str:
     """Decisions first, then the diff — same ordering the probe validated."""
-    block = "\n\n".join(
-        f"[{d.id}] {d.title}\n{d.body}" for d in docs
-    )
+    block = "\n\n".join(f"[{d.id}] {d.title}\n{d.body}" for d in docs)
     return (
         "Recorded architecture decisions this team considers binding:\n"
         f"{block}\n\n---\n" + _user_text(pr, diff)
@@ -1717,9 +1700,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
         request, attempt_kind="intent"
     )
     try:
-        response = tracing.create(
-            client, request, kind="intent", scope=scope, pr=pr
-        )
+        response = tracing.create(client, request, kind="intent", scope=scope, pr=pr)
     except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception
         _record_attempt(
             attempt_kind="intent",
@@ -1955,12 +1936,8 @@ def attribute_findings(reasons: list, diff: str, cov: Coverage, *, scope: str, c
             "system": ATTRIBUTION_SYSTEM,
             "messages": [{"role": "user", "content": "\n".join(lines)}],
         }
-        response = tracing.create(
-            client, request, kind="attribution", scope=scope, pr=None
-        )
-        _report_cost(
-            response, kind="attribution", scope=scope, pr=None, model=MECHANICAL_MODEL
-        )
+        response = tracing.create(client, request, kind="attribution", scope=scope, pr=None)
+        _report_cost(response, kind="attribution", scope=scope, pr=None, model=MECHANICAL_MODEL)
         if response.stop_reason != "end_turn":
             return 0
         text = next((b.text for b in response.content if b.type == "text"), "")

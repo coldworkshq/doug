@@ -28,6 +28,8 @@ node_modules/
 !.env.example
 .backtest-cache/
 .worktrees/
+# Claude Code worktrees live beside the checked-in .claude/settings.json.
+.claude/worktrees/
 
 # Subagent-driven-development scratch: per-plan ledgers, task briefs,
 # implementer reports and review packages. Recovery state for an in-flight

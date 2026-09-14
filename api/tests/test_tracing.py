@@ -37,9 +37,7 @@ class _RecordingMessages:
         return SimpleNamespace(
             content=[SimpleNamespace(type="text", text=text)],
             stop_reason=self._stop_reason,
-            usage=SimpleNamespace(
-                input_tokens=self._usage[0], output_tokens=self._usage[1]
-            ),
+            usage=SimpleNamespace(input_tokens=self._usage[0], output_tokens=self._usage[1]),
         )
 
 
@@ -489,9 +487,7 @@ def _langfuse_whose_auth_check(monkeypatch, outcome):
     return built
 
 
-def test_rejected_keys_turn_tracing_off_with_the_line_the_runbook_names(
-    monkeypatch, capsys
-):
+def test_rejected_keys_turn_tracing_off_with_the_line_the_runbook_names(monkeypatch, capsys):
     """A 401 is a verdict on the keys, and it is reported once, as `doug:`.
 
     Construction does not fail on a wrong key. Left alone, the SDK reports it
