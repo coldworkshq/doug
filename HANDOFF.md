@@ -37,6 +37,15 @@ Decisions this session:
   `claimed_names`; filed as #347. The `beyond-ticket` deviation (no ADR
   covers composing the chip into the line) is answered by the decision on
   #345 and docs/REVIEWING.md; an ADR is Andrew's call.
+- Doug's read of #346 at 0f862ed (3 low), answered on #346:
+  `reader:doc-code-mismatch` valid, fixed — docs/REVIEWING.md still listed
+  the old trigger words. `reader:regex-backtracking` refuted with timings:
+  33 ms on a 100,000-character adversarial description, 0.07 ms on 2,000
+  characters, and the reader's output cap keeps real descriptions far
+  shorter — rejected: an input-length guard. `reader:heuristic-false-
+  positive` accepted as the window's known miss and named in
+  docs/REVIEWING.md — rejected: a narrower window, which would miss the #339
+  wording ("fatal" nine words after "syntax").
 Pointers: api/doug/check_run.py (SYNTAX_DEVIATION_CHIP, claims_broken_syntax) ·
           api/tests/test_check_run.py · docs/REVIEWING.md · #345 · #231 (same bullet)
 
