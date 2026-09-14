@@ -38,6 +38,8 @@ const SERVER_ENV = {
 // ADR-0034 decision 1: the apex, and the subdomain that redirects to it.
 const APEX = "coldworks.dev";
 const SUBDOMAIN = "doug.coldworks.dev";
+// The alias, redirecting the same way (doug#333).
+const WWW = "www.coldworks.dev";
 const RUN_APP_HOST = "doug-web-candidate-uc.a.run.app";
 
 // The main server, with the redirect URI on its own loopback origin, and the
@@ -268,24 +270,29 @@ test("an invalid callback configuration fails closed before WorkOS", async () =>
   }
 });
 
-test("a redirect URI on the retired subdomain fails closed instead of looping", async () => {
-  // auth-origin.ts refuses the host that next.config.ts redirects. Without
-  // that, the proxy's 307 to this origin and the config's 308 to the apex
-  // would answer each other forever on every host.
-  const retired = await spawnServer({ NEXT_PUBLIC_WORKOS_REDIRECT_URI: `https://${SUBDOMAIN}/auth/callback` });
-  try {
-    await retired.ready;
-    const onApex = await requestAs(APEX, retired.origin, "/sign-in");
-    assert.equal(onApex.status, 503);
-    assert.equal(onApex.headers.location, undefined);
+for (const retiredHost of [SUBDOMAIN, WWW]) {
+  test(`a redirect URI on the retired host ${retiredHost} fails closed instead of looping`, async () => {
+    // `next.config.ts` answers every path on this host with a 308 to the apex,
+    // so a redirect URI here would make that 308 and the proxy's 307 chase
+    // each other. `auth-origin.ts` refuses the URI: /sign-in answers 503 on
+    // every host, which the deploy's candidate check turns into a refused
+    // promotion (api/deploy/gcp.sh), never a live loop.
+    const retired = await spawnServer({ NEXT_PUBLIC_WORKOS_REDIRECT_URI: `https://${retiredHost}/auth/callback` });
+    try {
+      await retired.ready;
+      const onApex = await requestAs(APEX, retired.origin, "/sign-in");
+      assert.equal(onApex.status, 503);
+      assert.equal(onApex.headers.location, undefined);
+      assert.equal(onApex.headers["set-cookie"], undefined);
 
-    const onSubdomain = await requestAs(SUBDOMAIN, retired.origin, "/sign-in");
-    assert.equal(onSubdomain.status, 308);
-    assert.equal(onSubdomain.headers.location, `https://${APEX}/sign-in`);
-  } finally {
-    await retired.stop();
-  }
-});
+      const onRetired = await requestAs(retiredHost, retired.origin, "/sign-in");
+      assert.equal(onRetired.status, 308);
+      assert.equal(onRetired.headers.location, `https://${APEX}/sign-in`);
+    } finally {
+      await retired.stop();
+    }
+  });
+}
 
 // ADR-0034 decision 1, the single host. With the redirect URI on the apex:
 // sign-in mints PKCE on the apex and nowhere else; `doug.coldworks.dev`
@@ -346,5 +353,42 @@ describe("single host: the subdomain redirects to the apex", () => {
     // `has[].value` is a regex to Next; an unescaped dot would match this.
     const response = await requestAs("dougXcoldworksXdev", apex.origin, "/");
     assert.equal(response.status, 200);
+    const alias = await requestAs("wwwXcoldworksXdev", apex.origin, "/");
+    assert.equal(alias.status, 200);
+  });
+
+  test("the www alias redirects to the apex, and its legacy docs URLs land on the audit docs", async () => {
+    // doug#333. The alias answers like the subdomain: 308, path and query
+    // preserved, sign-in redirected before any PKCE is minted.
+    const page = await requestAs(WWW, apex.origin, "/scoreboard?from=pr");
+    assert.equal(page.status, 308);
+    assert.equal(page.headers.location, `https://${APEX}/scoreboard?from=pr`);
+
+    const signIn = await requestAs(WWW, apex.origin, "/sign-in");
+    assert.equal(signIn.status, 308);
+    assert.equal(signIn.headers.location, `https://${APEX}/sign-in`);
+    assert.equal(signIn.headers["set-cookie"], undefined);
+
+    // The alias served the registry's landing and the audit CLI's docs
+    // (coldworks#77 forwards them from there today), so each of those URLs
+    // means a page that lives at /docs/audit here, not Doug's own /docs. A
+    // path-preserving rule would strand /docs/cli.html on a 404. Every
+    // destination is then fetched on the apex: a forward to a missing page
+    // is a 404 with an extra hop.
+    const legacy = [
+      ["/", ""],
+      ["/landing.html", "/"],
+      ["/docs", "/docs/audit"],
+      ["/docs/cli", "/docs/audit/cli"],
+      ["/docs/cli.html", "/docs/audit/cli.html"],
+      ["/docs/docs.css", "/docs/audit/docs.css"],
+    ];
+    for (const [from, to] of legacy) {
+      const response = await requestAs(WWW, apex.origin, from);
+      assert.equal(response.status, 308, `${WWW}${from}`);
+      assert.equal(response.headers.location, `https://${APEX}${to}`, `${WWW}${from}`);
+      const landed = await requestAs(APEX, apex.origin, to || "/");
+      assert.equal(landed.status, 200, `${APEX}${to || "/"} must serve the page ${WWW}${from} forwards to`);
+    }
   });
 });
