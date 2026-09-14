@@ -1790,10 +1790,11 @@ def test_only_the_deviation_that_claims_broken_syntax_is_annotated():
         ("beyond-ticket", PR_339_DEVIATION),
         ("contradicts-ticket", "Edits the frozen reader prompt"),
         ("beyond-ticket", "Adopts the new match syntax throughout the router"),
+        ("beyond-ticket", "The new match syntax changes the import order"),
     )
     _, summary = check_run.render("reader", _syntax_settled_verdict(), intent, WHOLE)
     chipped = [check_run.SYNTAX_DEVIATION_CHIP in line for line in _deviation_lines(summary)]
-    assert chipped == [True, False, False]
+    assert chipped == [True, False, False, False]
 
 
 def test_what_counts_as_a_claim_of_broken_syntax():
@@ -1802,6 +1803,7 @@ def test_what_counts_as_a_claim_of_broken_syntax():
         "raises SyntaxError when the module is imported",
         "the except clause is invalid syntax on Python 3",
         "breaks the module import with a syntax change",
+        "introduces a syntax error in the retry module",
     ):
         assert check_run.claims_broken_syntax(claim), claim
     for not_a_claim in (
@@ -1809,5 +1811,15 @@ def test_what_counts_as_a_claim_of_broken_syntax():
         "Changes error handling in the worker",
         "a fatal edge case in the retry loop",
         "the import order changed",
+        # Doug's reads of #346 (`reader:regex-false-positive`): syntax and a
+        # word like import, parse or failed in one description, and no claim
+        # that anything broke.
+        "the new match syntax changes the import order",
+        "changes the parse step and adopts new match syntax",
+        "the import of the syntax helper failed lint",
+        # Syntax and a word for breaking fifteen words apart are two claims,
+        # not one.
+        "adopts the new syntax for decorators across every handler in the router, "
+        "and separately a retry change could be fatal",
     ):
         assert not check_run.claims_broken_syntax(not_a_claim), not_a_claim

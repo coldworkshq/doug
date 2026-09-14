@@ -24,6 +24,19 @@ Decisions this session:
   the deviation may be about a file the reader did not flag.
 - Known limit: no chip when the reader flagged nothing or its findings were
   not settled; the deviation then stands as written.
+- Doug's reads of #346 at 81e1efc and 33e08e3, answered on #346. The
+  `reader:regex-false-positive` low is valid and fixed: the matcher now
+  wants a phrase (`SyntaxError`, "syntax error", or syntax within twelve
+  words of fatal, invalid, break, broken or crash, either order), so "the new
+  match syntax changes the import order" and "the import of the syntax
+  helper failed lint" get no chip — rejected: keeping import, parse, error
+  and fail as breakage words. `reader:semantic-mismatch` is partly valid: a
+  deviation names no file, so the chip now says the files are listed under
+  `settled-syntax-error`. `reader:missing-import` is refuted (`import re` at
+  check_run.py:35), and settlement kept it because "import time" vetoes
+  `claimed_names`; filed as #347. The `beyond-ticket` deviation (no ADR
+  covers composing the chip into the line) is answered by the decision on
+  #345 and docs/REVIEWING.md; an ADR is Andrew's call.
 Pointers: api/doug/check_run.py (SYNTAX_DEVIATION_CHIP, claims_broken_syntax) ·
           api/tests/test_check_run.py · docs/REVIEWING.md · #345 · #231 (same bullet)
 

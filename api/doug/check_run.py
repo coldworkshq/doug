@@ -132,24 +132,28 @@ DEVIATION_NOTE = (
 # about the parser, never a verdict on the deviation.
 SYNTAX_DEVIATION_CHIP = (
     "_Doug's parser found no syntax error in the files this review flagged "
-    "for one; see `settled-syntax-error` above_"
+    "for one, listed under `settled-syntax-error` above_"
 )
-_SYNTAX_WORD = re.compile(r"\bsyntax\b", re.IGNORECASE)
-_SYNTAX_ERROR_WORD = re.compile(r"syntaxerror", re.IGNORECASE)
-_BREAKAGE_WORD = re.compile(
-    r"\b(?:invalid|errors?|fatal|break(?:s|ing)?|broken?|crash(?:es|ing)?|"
-    r"fail(?:s|ed|ing|ure)?|parse|parsing|import)\b",
+# Phrases, not co-occurring words. "Syntax" and "import" anywhere in one
+# description is how "the new match syntax changes the import order" earned
+# the chip on Doug's reads of #346. A claim is `SyntaxError`, "syntax error",
+# or the word syntax within twelve words of a word for breaking, in either
+# order. "Fails" is not one of them: "the syntax helper failed lint" is about
+# lint, and the chip would answer a question nobody asked.
+_BREAKS = r"(?:fatal|invalid|break(?:s|ing)?|broken?|crash(?:es|ing)?)"
+_BROKEN_SYNTAX_RE = re.compile(
+    r"syntaxerror|\bsyntax\s+errors?\b"
+    rf"|\bsyntax\b(?:\W+\w+){{0,12}}?\W+{_BREAKS}\b"
+    rf"|\b{_BREAKS}\b(?:\W+\w+){{0,12}}?\W+syntax\b",
     re.IGNORECASE,
 )
 
 
 def claims_broken_syntax(description: str) -> bool:
-    """A deviation that says, in so many words, that the change breaks syntax:
-    `SyntaxError`, or the word syntax beside a word for breaking. "Adopts the
-    new match syntax" is a deviation about style and gets no chip."""
-    if _SYNTAX_ERROR_WORD.search(description):
-        return True
-    return bool(_SYNTAX_WORD.search(description) and _BREAKAGE_WORD.search(description))
+    """A deviation that says, in so many words, that the change breaks syntax.
+    "Adopts the new match syntax" is about style and "the new match syntax
+    changes the import order" is about ordering; neither gets the chip."""
+    return bool(_BROKEN_SYNTAX_RE.search(description))
 
 
 # settle.py drops disproved findings and leaves a weight-0 notice. Listing
