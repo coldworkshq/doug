@@ -2,14 +2,20 @@
 
 --- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
 
-State:    building — branch docs/one-docs-site off origin/main 2561e5f, worktree
-          .claude/worktrees/docs-one-docs-site. Andrew, in session: everything
-          under coldworks.dev/docs, the /docs/audit look kept, and the audit
-          maybe not its own docs page; the UI structure was left to the agent.
-Next:     port the audit docs' stylesheet into a CSS module and the four
-          static pages into routes; rebuild the nav tree; redirect
-          /docs/audit; re-pin the shell-contract, www, and design-system tests.
-Blockers: none. The merge is the founder's click.
+State:    review — the pull request from branch docs/one-docs-site (off
+          origin/main 2561e5f, worktree .claude/worktrees/docs-one-docs-site).
+          Andrew, in session: everything under coldworks.dev/docs, the
+          /docs/audit look kept, and the audit maybe not its own docs page;
+          the UI structure was left to the agent. Verified 2026-09-15: lint
+          rc 0, tsc rc 0, unit tests 459 passed, the build-and-serve
+          integration test 15 passed, 16 of 16 planted mutants killed, and a
+          production build serving the docs module CSS, the four docs fonts,
+          and the redirects.
+Next:     watch CI and Doug's read on the pull request, and answer each
+          finding in its body. The merge is the founder's click. After it,
+          coldworks/docs/design/front-door/concept.md:51 still cites the
+          deleted web/public/docs/audit/cli.html.
+Blockers: none.
 Decisions this session:
 - One docs shell: the audit is a section of /docs, not a second site with
   its own chrome and a "Doug's docs" link out — rejected: the audit pages
@@ -28,6 +34,14 @@ Decisions this session:
 - The look is a CSS module, not global CSS: globals.css already defines
   `.code`, and the audit's class names are generic. Fonts load through
   next/font/local from the landing's own woff2 files (byte-identical).
+- Doug's pages go to one column, each example after its prose — rejected:
+  a sticky rail beside a 760px reading column. One sentence followed:
+  "beside this paragraph" became "in the panel below".
+- `.code-rail` and `--docs-content-offset` left globals.css, because the
+  docs were their only users; the design-system scan's code-rail exemption
+  went with them, and a pin holds the docs' code panel to ink in both themes.
+- The top bar has a fixed 61px height: with the theme toggle and Sign in it
+  measured 61px, and a sidebar stuck at 57px slid under it.
 Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
           web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
           auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
