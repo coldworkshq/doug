@@ -7,8 +7,8 @@ State:    review — **doug#350**, branch docs/one-docs-site (off origin/main
           session: everything under coldworks.dev/docs, the /docs/audit look
           kept, and the audit maybe not its own docs page; the UI structure
           was left to the agent. Verified 2026-09-15: lint rc 0, tsc rc 0,
-          unit tests 459 passed, the build-and-serve integration test 16
-          passed, 16 of 16 planted mutants killed, and a production build
+          unit tests 463 passed, the build-and-serve integration test 16
+          passed, 29 of 29 planted mutants killed, and a production build
           serving the docs module CSS, the four docs fonts, and the
           redirects. Auto-fix is on for #350 (Andrew, 2026-09-15).
 Next:     auto-fix wakes this session on CI failures, conflicts, and review
@@ -49,18 +49,31 @@ Decisions this session:
   served overview; each failed on a planted input first. Refuted: removed
   exports (no importer anywhere, and CI built every page), the pager's
   external branch (no entry can be external), and the globals.css removals
-  (no users). Kept: the two-hop www chain, because its first hop is a
-  cached 308 and must land on a stable apex URL. The beyond-ticket
-  deviation (a second top bar) is Andrew's ADR call.
+  (no users). Kept: the two-hop www chain for the audit's home, because its
+  first hop is a cached 308 and must land on a stable apex URL; the review
+  below moved www's .html page names onto their routes in one hop. The
+  beyond-ticket deviation (a second top bar) is Andrew's ADR call, doug#358.
 - Doug's read of cecdb8e (1 medium, 4 low), answered on #350 with no code
   change: redirect-chain restates the kept two-hop chain; broken-link holds
   only for docs.css, deliberately; stale-reference restates
   css-contract-drift; duplicate-markup and semantic-drift are refuted
   (display: none hides one nav at every width, and no panel pairs Fn with
-  Ok). Every disposition from both reads is a findings-log row.
+  Ok). Every disposition from both reads is a findings-log row, the two
+  deviations included (0a0f522).
 - main merged into the branch on auto-fix: #349 and #352 changed the
   caching copy in the static cli.html and connect.html this PR deletes, so
   the wording moved into the two routes, checked equal to main's text.
+- Adversarial review at max effort, on Andrew's request: ten finder angles,
+  one verifier per candidate (18 verified in session after the 20-agent
+  cap), and a gap sweep; 42 candidates, 2 refuted (the lost <article>, and
+  the docs' chip words against lib/state-chip.ts, whose closed vocabulary
+  governs the dashboard). Fixed in 0a0f522: the index URLs, www .html in
+  one hop, the audit half's claim scope and the lede, AA inks, link
+  underlines, the long chip's wrap, a 320px top bar, the mono fallback, the
+  menu and sidebar closing, the filter, list semantics, chip tones, and new
+  pins (13 of 13 planted mutants killed, 2 of them in the integration test). Filed: #358, #359 (self-serve
+  copy), #360 (root fonts on docs routes). Not changed: DocsArticle itself,
+  DocsCrumb's client boundary, and the landing's inlined fonts.
 Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
           web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
           auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
