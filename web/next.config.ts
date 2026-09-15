@@ -24,17 +24,13 @@ const nextConfig: NextConfig = {
   // as the self-contained document it has always been (its fonts, styles and
   // lattice are inlined), rewritten onto the bare origin so the address that
   // gets pasted into an email is the origin itself. ADR-0034. Doug's own
-  // page lives one link in, at /doug. The audit CLI's docs are the same
-  // shape under /docs/audit, beside Doug's docs rather than inside them.
+  // page lives one link in, at /doug.
   //
-  // Rewrites, not redirects, and after the app's own routes: `/` has no
-  // page, so the rewrite fires; `/docs/audit/*` has no route either.
+  // A rewrite, not a redirect, and after the app's own routes: `/` has no
+  // page, so the rewrite fires. Nothing is rewritten under /docs: every docs
+  // page is a route of the docs shell (app/docs/layout.tsx).
   async rewrites() {
-    return [
-      { source: "/", destination: "/landing.html" },
-      { source: "/docs/audit", destination: "/docs/audit/index.html" },
-      { source: "/docs/audit/:page", destination: "/docs/audit/:page.html" },
-    ];
+    return [{ source: "/", destination: "/landing.html" }];
   },
   // The subdomain redirects to the apex, path-preserving (ADR-0034,
   // decision 1). `doug.coldworks.dev` keeps its Cloud Run mapping so every
@@ -66,10 +62,19 @@ const nextConfig: NextConfig = {
   // mean the audit docs, which live at /docs/audit here: a path-preserving
   // rule alone would send www/docs/cli.html to a 404 and www/docs/cli to
   // Doug's own CLI page (probed on the apex 2026-09-14). The docs rules
-  // mirror the forwards the registry answers today and come before the
-  // catch-all, because the first matching rule wins. Permanent, like the
-  // subdomain's: the alias is settled, and a later move of the audit docs is
-  // the apex's own redirect to add.
+  // mirror the forwards the registry answered and come before the catch-all,
+  // because the first matching rule wins. Permanent, like the subdomain's:
+  // the alias is settled. The apex rules after them take each forward the
+  // rest of the way.
+  //
+  // The audit's docs moved inside the one docs site on 2026-09-15: its
+  // overview is the second half of /docs, and its pages are routes. The
+  // static documents they replaced answered at /docs/audit,
+  // /docs/audit/index.html, and /docs/audit/<page>.html, and those URLs are
+  // in pull requests, issues, and the www forwards above, so each redirects
+  // to what replaced it. After the www rules, so they only ever answer the
+  // apex. Temporary: the docs' shape is new, and a 308 is cached with no
+  // expiry. No rule for the old stylesheet: no page links it.
   async redirects() {
     const www = [{ type: "host" as const, value: "www\\.coldworks\\.dev" }];
     return [
@@ -83,21 +88,23 @@ const nextConfig: NextConfig = {
       { source: "/docs", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
       { source: "/docs/:path*", has: www, destination: `${COLDWORKS_URL}/docs/audit/:path*`, permanent: true },
       { source: "/:path*", has: www, destination: `${COLDWORKS_URL}/:path*`, permanent: true },
+      { source: "/docs/audit", destination: "/docs#the-audit", permanent: false },
+      { source: "/docs/audit/index.html", destination: "/docs#the-audit", permanent: false },
+      {
+        source: "/docs/audit/:page(quickstart|connect|cli).html",
+        destination: "/docs/audit/:page",
+        permanent: false,
+      },
     ];
   },
   async headers() {
     return [
-      // The door and the audit docs are static documents served by rewrite.
-      // Next gives public files no caching of its own; a short shared max-age
-      // lets the address that gets pasted into an email serve from a cache
-      // for a few minutes and revalidate after, while a deploy still lands
-      // within the hour.
+      // The door is a static document served by rewrite. Next gives public
+      // files no caching of its own; a short shared max-age lets the address
+      // that gets pasted into an email serve from a cache for a few minutes
+      // and revalidate after, while a deploy still lands within the hour.
       {
         source: "/",
-        headers: [{ key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" }],
-      },
-      {
-        source: "/docs/audit/:path*",
         headers: [{ key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" }],
       },
       {

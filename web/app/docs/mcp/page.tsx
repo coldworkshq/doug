@@ -1,12 +1,12 @@
 import { CodeBlock, Comment, Dim, Fn, Str } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { ParamsTable } from "@/components/docs/params-table";
 import { DocsPageHeader, H2, P } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "MCP · Pattern Garden — Doug Documentation",
+  title: "MCP · Pattern Garden",
   description:
     "The Pattern Garden: an MCP server that serves outcome-anchored code patterns to an agent before it writes.",
 };
@@ -14,19 +14,19 @@ export const metadata = {
 export default function McpPatternGardenPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Coming up"
+              kicker="Doug reviews · Coming up"
               title="MCP · Pattern Garden"
               status="planned"
             >
               <i>No server exists yet.</i> The Pattern Garden is an MCP server your
               coding agent queries{" "}
-              <b className="font-semibold text-foreground">before it writes</b>.
+              <b>before it writes</b>.
               It serves{" "}
-              <b className="font-semibold text-foreground">
+              <b>
                 outcome-anchored patterns
               </b>{" "}
               distilled from public-repo history: for a given problem shape,
@@ -74,7 +74,7 @@ export default function McpPatternGardenPage() {
             </div>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="MCP · PLANNED">
             <Fn>doug.ask</Fn>
             {"("}

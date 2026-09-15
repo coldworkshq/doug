@@ -1,11 +1,11 @@
 import { Bright, CodeBlock, Comment, Str } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "What Doug gets wrong — Doug Documentation",
+  title: "What Doug gets wrong",
   description:
     "Doug reviews his own pull requests, and the team logs what he got wrong — disposition, not just a tally.",
 };
@@ -13,17 +13,17 @@ export const metadata = {
 export default function WhatDougGetsWrongPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Honesty"
+              kicker="Doug reviews · Honesty"
               title="What Doug gets wrong"
               status="available"
             >
               Doug reviews every pull request in his own repository, and we
               write down what he got wrong.{" "}
-              <b className="font-semibold text-foreground">
+              <b>
                 Just under a third of prospective findings are disproved by
                 code he wasn&rsquo;t shown
               </b>{" "}
@@ -35,14 +35,14 @@ export default function WhatDougGetsWrongPage() {
             <P>Two failure classes recur often enough to have names:</P>
             <UL>
               <li>
-                <b className="font-semibold text-foreground">
+                <b>
                   A conclusion drawn from an absence in the diff.
                 </b>{" "}
                 “This name is used and no import was added” — when the import
                 was already there, three files away.
               </li>
               <li>
-                <b className="font-semibold text-foreground">
+                <b>
                   Re-reporting a tradeoff the code already documents
                 </b>
                 , as though it were news.
@@ -52,7 +52,7 @@ export default function WhatDougGetsWrongPage() {
             <P>
               The first one produced a rule worth more than the bug it came
               from:{" "}
-              <b className="font-semibold text-foreground">
+              <b>
                 a claim about an absence cannot be settled by looking at the
                 same place the claim came from.
               </b>{" "}
@@ -65,9 +65,9 @@ export default function WhatDougGetsWrongPage() {
 
             <P>
               So every finding now gets a line at disposition time: was it{" "}
-              <b className="font-semibold text-foreground">real</b>,{" "}
-              <b className="font-semibold text-foreground">disproved</b>, or{" "}
-              <b className="font-semibold text-foreground">adjacent</b> — wrong
+              <b>real</b>,{" "}
+              <b>disproved</b>, or{" "}
+              <b>adjacent</b> — wrong
               as stated, right about something nearby — and separately, did
               anything in the codebase actually change because of it.
             </P>
@@ -87,8 +87,8 @@ export default function WhatDougGetsWrongPage() {
                 and is excluded from every rate by construction; the
                 denominator is the prospective rows, scoped to one
                 repository and one instrument, because a rate computed
-                across two of either describes neither. The counts beside this paragraph are a{" "}
-                <b className="font-semibold text-foreground">
+                across two of either describes neither. The counts in the panel below are a{" "}
+                <b>
                   dated snapshot, not a live counter
                 </b>
                 &nbsp;— the log grows every time a finding is settled, and a
@@ -102,7 +102,7 @@ export default function WhatDougGetsWrongPage() {
             </div>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="FINDINGS LOG · ONE LINE PER FINDING">
             <Bright>{"{"}</Bright>
             <Str>&quot;pr&quot;</Str>

@@ -7,8 +7,10 @@ import { GITHUB_REPO_URL } from "@/lib/links";
  *  moments, the audit, the docs. Doug reviews is a real page; Memory and
  *  Guards are their own cards on the door (#memory, #guards) until their
  *  workspace screens are the thing a stranger should see first. Every
- *  target is distinct: two labels on one anchor is one dead label. ADR-0034. */
-const NAV_LINKS = [
+ *  target is distinct: two labels on one anchor is one dead label. ADR-0034.
+ *  Exported for the docs' top bar (components/docs/docs-top-bar.tsx), which
+ *  wears these links in the docs' look rather than keeping a copy. */
+export const NAV_LINKS = [
   { href: "/doug", label: "Doug reviews" },
   { href: "/#memory", label: "Memory" },
   { href: "/#guards", label: "Guards" },
@@ -19,8 +21,9 @@ const NAV_LINKS = [
   { href: "/docs", label: "Docs" },
 ] as const;
 
-/** Floating site chrome for the public marketing surface (/, /docs/*,
- *  /scoreboard, /queue, /about).
+/** Floating site chrome for the public marketing surface (/doug,
+ *  /scoreboard, /queue, /about). /docs wears the same NAV_LINKS in its own
+ *  top bar (components/docs/docs-top-bar.tsx).
  *
  *  Deliberately NOT used on /dashboard (its own signed-in "forensic ledger"
  *  shell with a tenant/repo selector) — that chrome earned its own design
@@ -66,11 +69,6 @@ const NAV_LINKS = [
  *  session that already exists returns straight to /dashboard/overview, and
  *  reading the session here to choose a word would make every static page
  *  render per request.
- *
- *  Changing this bar's padding/height changes how much of the page it can
- *  cover while floating — /docs's sticky sidebar and its H2 scroll-margin
- *  both clear it using --docs-content-offset (globals.css); re-check that
- *  value against this component's actual rendered height if either changes.
  */
 export function SiteHeader({
   maxWidthClassName = "max-w-5xl",

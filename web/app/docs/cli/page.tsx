@@ -2,13 +2,13 @@ import Link from "next/link";
 
 import { Bright, CodeBlock, Comment, Dim } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import type { ParamRow } from "@/components/docs/params-table";
 import { ParamsTable } from "@/components/docs/params-table";
 import { DocsPageHeader, IC } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "CLI · doug-backtest — Doug Documentation",
+  title: "CLI · doug-backtest",
   description:
     "Flag reference and usage examples for doug-backtest, the CLI that replays a repo's merged history.",
 };
@@ -42,7 +42,6 @@ const FLAGS: ParamRow[] = [
         Defect label source. See{" "}
         <Link
           href="/docs/defect-labels"
-          className="text-accent-foreground hover:underline"
         >
           Defect labels
         </Link>
@@ -97,11 +96,11 @@ $ doug-backtest grafana/grafana --limit 12000 \\
 export default function CliPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Reference"
+              kicker="Doug reviews · Reference"
               title="CLI · doug-backtest"
               status="available"
             >
@@ -113,7 +112,7 @@ export default function CliPage() {
             <ParamsTable rows={FLAGS} />
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="Examples" copyText={EXAMPLES}>
             <Comment># quick look, 300 PRs</Comment>
             {"\n"}

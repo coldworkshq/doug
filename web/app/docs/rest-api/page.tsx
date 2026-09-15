@@ -1,11 +1,11 @@
 import { Bright, CodeBlock, Dim, Kw, Str } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { ParamsTable } from "@/components/docs/params-table";
 import { DocsPageHeader, IC, P } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "REST API — Doug Documentation",
+  title: "REST API",
   description:
     "Public showcase endpoints are live. Tenant queue and receipt are live, gated. A tenant scoreboard is still planned.",
 };
@@ -13,17 +13,17 @@ export const metadata = {
 export default function RestApiPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Coming up"
+              kicker="Doug reviews · Coming up"
               title="REST API"
               status="preview"
             >
               The unauthenticated showcase endpoints are live — they are what{" "}
-              <b className="font-semibold text-foreground">/queue</b> and{" "}
-              <b className="font-semibold text-foreground">/scoreboard</b>{" "}
+              <b>/queue</b> and{" "}
+              <b>/scoreboard</b>{" "}
               render. Tenant queue and receipt are live behind a session or
               a token. A scoreboard of <em>your</em> clocks is still planned.
             </DocsPageHeader>
@@ -70,7 +70,7 @@ export default function RestApiPage() {
             />
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="RESPONSE SHAPE — run it for the numbers">
             <Dim>$</Dim>{" "}
             <Bright>curl &quot;$DOUG_API_URL/v1/showcase/scoreboard&quot;</Bright>

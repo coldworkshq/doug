@@ -1,10 +1,10 @@
 import { Bright, CodeBlock, Comment, Hot, Ok } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "Risk routing — Doug Documentation",
+  title: "Risk routing",
   description:
     "How Doug's capture curve, static hotspot segments, and the mandatory size-only baseline work.",
 };
@@ -12,16 +12,16 @@ export const metadata = {
 export default function RiskRoutingPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Concepts"
+              kicker="Doug reviews · Concepts"
               title="Risk routing"
               status="available"
             >
               Doug&rsquo;s core claim is a{" "}
-              <b className="font-semibold text-foreground">capture curve</b>:
+              <b>capture curve</b>:
               reading only the top-scored <i>N</i>% of PRs (the
               &ldquo;budget&rdquo;), what share of defect-inducing PRs land
               inside that band?
@@ -29,11 +29,11 @@ export default function RiskRoutingPage() {
 
             <P>
               The capture curve is measured on the{" "}
-              <b className="font-semibold text-foreground">backtest CLI</b>
+              <b>backtest CLI</b>
               : scoring there is deterministic, and the holdout half learns
               hotspot path segments from the repo&rsquo;s own past defects.
               Live GitHub App reviews use{" "}
-              <b className="font-semibold text-foreground">
+              <b>
                 static hotspot segments
               </b>{" "}
               plus, when enabled, an LLM diff-reader (ADR-0004) — not the
@@ -42,16 +42,16 @@ export default function RiskRoutingPage() {
 
             <UL>
               <li>
-                <b className="font-semibold text-foreground">capture@budget</b>{" "}
+                <b>capture@budget</b>{" "}
                 — headline routing metric: % of defect PRs caught at a given
                 flag rate
               </li>
               <li>
-                <b className="font-semibold text-foreground">AUC</b> —
+                <b>AUC</b> —
                 budget-independent summary across all flag rates
               </li>
               <li>
-                <b className="font-semibold text-foreground">
+                <b>
                   size-only baseline
                 </b>{" "}
                 — every report shows it; if Doug can&rsquo;t beat
@@ -60,7 +60,7 @@ export default function RiskRoutingPage() {
             </UL>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="Per-rule precision (sentry backtest, train half)">
             <Bright>{"rule                    fired   hit   lift"}</Bright>
             {"\n"}

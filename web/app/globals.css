@@ -162,15 +162,6 @@
     ),
     radial-gradient(#dfe3e7 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 22px 22px;
-
-  /* The one number both the docs sidebar's sticky offset (app/docs/layout.tsx)
-     and its H2 scroll-margin (components/docs/prose.tsx) have to clear so
-     neither sits under the floating SiteHeader. Not theme-dependent — lives
-     outside the light/dark split on purpose, so it isn't a color and never
-     needs a dark-mode counterpart. Sized for SiteHeader's `top-4` plus its
-     current rendered height with margin; a header height change is the one
-     edit that requires re-checking this value against those two usages. */
-  --docs-content-offset: 7rem;
 }
 
 /* THE COUNTERPART, reached only by the toggle. Three selectors mirroring the
@@ -491,20 +482,6 @@
     background: oklch(1 0 0 / 4%);
     border: 1px solid oklch(1 0 0 / 10%);
     backdrop-filter: blur(12px);
-  }
-  /* Docs code samples: always the gh-pages docs site's "night" terminal
-     surface, regardless of site theme — same reasoning as .glass above,
-     these are fixed brand colors standing in for a real terminal, not
-     something that should go pale in light mode. */
-  .code-rail {
-    background: #101210;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #edefea;
-  }
-  .code-rail-head {
-    background: #181b18;
-    color: #9aa298;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   /* LANDING-PAGE utilities (app/page.tsx and components/landing/). Kept

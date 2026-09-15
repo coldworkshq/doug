@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [landing, config, rail, slots, overview, guards, dougPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp] = await Promise.all([
+const [landing, config, rail, slots, overview, guards, dougPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp, topBar] = await Promise.all([
   readFile(new URL("../public/landing.html", import.meta.url), "utf8"),
   readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
   readFile(new URL("../components/dashboard-rail.tsx", import.meta.url), "utf8"),
@@ -33,6 +33,7 @@ const [landing, config, rail, slots, overview, guards, dougPage, signIn, header,
   readFile(new URL("../../docs/decisions/ADR-0019-the-deep-read-is-a-per-repository-setting.md", import.meta.url), "utf8"),
   readFile(new URL("../../docs/decisions/ADR-0006-doug-does-not-depend-on-lema.md", import.meta.url), "utf8"),
   readFile(new URL("../../api/deploy/gcp.sh", import.meta.url), "utf8"),
+  readFile(new URL("../components/docs/docs-top-bar.tsx", import.meta.url), "utf8"),
 ]);
 
 test("the door is the Coldworks landing, served by a rewrite, with Doug's page one link in", () => {
@@ -124,7 +125,7 @@ test("Guards is one code path: the mapping decides the read, the reader decides 
   assert.match(guards, /state\.kind === "unknown"/);
   assert.match(guards, /state\.kind === "snapshot"/);
   assert.match(guards, /<StateChip kind="later" subject="guards" \/>/);
-  assert.match(guards, /href="\/docs\/audit"/);
+  assert.match(guards, /href="\/docs#the-audit"/);
   assert.match(guards, /section="guards"/);
   assert.equal(guards.includes("Promote"), false, "no promotion affordance");
   assert.equal(/have not run/.test(guards), false, "the chip states the subtraction claim, not a bare have-not-run line");
@@ -162,18 +163,36 @@ test("Doug's public surfaces carry their own names under the product's root meta
   assert.match(scoreboard, /title: "Scoreboard — Doug reviews"/);
 });
 
-test("the audit docs are external to the docs shell: last in order, plain anchors, never a Link", () => {
-  assert.match(docsNav, /external\?: true;/);
-  const groups = [...docsNav.matchAll(/name: "([^"]+)"/g)].map((m) => m[1]);
-  assert.equal(groups.at(-1), "The audit");
-  assert.match(sidebar, /p\.external \? \(\s*<a/);
-  assert.match(pager, /next && next\.external \? \(/);
-  assert.match(pager, /<a\s+href=\{next\.href\}/);
+test("the docs are one site: the audit is a section of /docs, never a document with its own chrome", () => {
+  // Andrew, 2026-09-15: everything under /docs, in the audit docs' look. The
+  // audit's pages were static files with a second top bar and a link back to
+  // "Doug's docs". A file under public/docs, a rewrite into /docs, or an
+  // external entry in the nav is how that split comes back.
+  assert.equal(existsSync(new URL("../public/docs", import.meta.url)), false, "public/docs/ serves a page outside the docs shell");
+  assert.equal(/destination: "\/docs/.test(config.slice(config.indexOf("async rewrites()"), config.indexOf("async redirects()"))), false, "a rewrite serves a docs URL");
+  // Code, not prose: docs-nav.ts explains in a comment that the audit pages
+  // were external anchors, and a pin that fired on that sentence would push
+  // the next author into deleting the history to get green.
+  for (const [name, source] of [["docs-nav.ts", docsNav], ["docs-sidebar.tsx", sidebar], ["docs-pager.tsx", pager]]) {
+    assert.equal(/\bexternal\??:|\.external\b/.test(source), false, `${name} can send a docs entry out of the shell`);
+  }
+  // The old URLs keep answering: the overview's audit half, and each page's
+  // route. Temporary, because a 308 is cached with no expiry.
+  assert.match(config, /\{ source: "\/docs\/audit", destination: "\/docs#the-audit", permanent: false \}/);
+  assert.match(config, /source: "\/docs\/audit\/:page\(quickstart\|connect\|cli\)\.html",\s*destination: "\/docs\/audit\/:page",\s*permanent: false/);
 });
 
-test("the door and the audit docs carry a short shared cache; the deploy env survives a second mapping", () => {
+test("the docs' top bar wears the public header's nav, never a copy of it", () => {
+  // ADR-0034: one nav, the door's. The docs present it their own way, but a
+  // second list would drift the first time a link is added to one of them.
+  assert.match(header, /export const NAV_LINKS = \[/);
+  assert.match(topBar, /import \{ NAV_LINKS \} from "@\/components\/site-header";/);
+  assert.equal((topBar.match(/NAV_LINKS\.map/g) ?? []).length, 2, "the bar and its narrow-screen menu both iterate NAV_LINKS");
+  assert.equal(/href: "\//.test(topBar), false, "the top bar declares a nav entry of its own");
+});
+
+test("the door carries a short shared cache; the deploy env survives a second mapping", () => {
   assert.match(config, /source: "\/",\s*headers: \[\{ key: "Cache-Control"/);
-  assert.match(config, /source: "\/docs\/audit\/:path\*",\s*headers: \[\{ key: "Cache-Control"/);
   assert.match(gcp, /--set-env-vars "\^;\^DOUG_API_URL=/);
   assert.match(gcp, /COLDWORKS_REGISTRY_URL=\$\{COLDWORKS_REGISTRY_URL:-\};/);
   assert.equal(gcp.includes("COLDWORKS_REGISTRY_URL:-https://coldworks.dev"), false, "the default would point the read at ourselves after the cutover");

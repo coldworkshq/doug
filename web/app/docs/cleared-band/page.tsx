@@ -1,10 +1,10 @@
 import { Bright, CodeBlock, Comment, Ok } from "@/components/docs/code-block";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, IC, P, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "The cleared band — Doug Documentation",
+  title: "The cleared band",
   description:
     "The cleared band is Doug's real sales claim: defect density among the PRs he clears, not the ones he flags.",
 };
@@ -12,17 +12,17 @@ export const metadata = {
 export default function ClearedBandPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Concepts"
+              kicker="Doug reviews · Concepts"
               title="The cleared band"
               status="available"
             >
               Capture describes the flagged band. The product actually sells
               the{" "}
-              <b className="font-semibold text-foreground">other one</b>:
+              <b>other one</b>:
               &ldquo;auto-merge what Doug cleared&rdquo; is a claim about
               defect density <i>among cleared PRs</i>.
             </DocsPageHeader>
@@ -31,9 +31,9 @@ export default function ClearedBandPage() {
               The report&rsquo;s cleared-band table answers it directly: at
               each budget, how many PRs were cleared, how many defects slipped
               through (the{" "}
-              <b className="font-semibold text-foreground">miss rate</b>), and
+              <b>miss rate</b>), and
               the cleared band&rsquo;s defect density versus merging blind —{" "}
-              <b className="font-semibold text-foreground">density_lift</b>.
+              <b>density_lift</b>.
             </P>
 
             <UL>
@@ -56,7 +56,7 @@ export default function ClearedBandPage() {
             </P>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="CLEARED BAND (SHAPE)">
             <Bright> flag  cleared  missed  miss rate  vs base</Bright>
             {"\n"}

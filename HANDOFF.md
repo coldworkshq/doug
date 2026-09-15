@@ -1,5 +1,37 @@
 # HANDOFF — doug
 
+--- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
+
+State:    building — branch docs/one-docs-site off origin/main 2561e5f, worktree
+          .claude/worktrees/docs-one-docs-site. Andrew, in session: everything
+          under coldworks.dev/docs, the /docs/audit look kept, and the audit
+          maybe not its own docs page; the UI structure was left to the agent.
+Next:     port the audit docs' stylesheet into a CSS module and the four
+          static pages into routes; rebuild the nav tree; redirect
+          /docs/audit; re-pin the shell-contract, www, and design-system tests.
+Blockers: none. The merge is the founder's click.
+Decisions this session:
+- One docs shell: the audit is a section of /docs, not a second site with
+  its own chrome and a "Doug's docs" link out — rejected: the audit pages
+  as external anchors (what shipped in D3), and product tabs, which keep
+  two trees.
+- /docs is one overview in the audit page's layout: Doug's introduction and
+  the audit overview become its two sections, and /docs/audit redirects to
+  /docs#the-audit with a 307 — rejected: a hub plus two section intros (the
+  hero sentence twice), and moving Doug's pages to /docs/doug/* (breaks the
+  PR-comment footer link and every link already written).
+- Every other URL keeps resolving: the audit pages stay at
+  /docs/audit/{quickstart,connect,cli}, and their .html forms redirect.
+- Doug reviews comes before the audit in the sidebar, in the door's order.
+- The docs wear the audit's flat top bar with the site header's NAV_LINKS,
+  theme toggle, and Sign in, so the nav keeps one source (ADR-0034 T7).
+- The look is a CSS module, not global CSS: globals.css already defines
+  `.code`, and the audit's class names are generic. Fonts load through
+  next/font/local from the landing's own woff2 files (byte-identical).
+Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
+          web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
+          auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
+
 --- reader lane (2026-09-14): annotate a broken-syntax deviation beside a syntax settlement, doug#345 ---
 
 State:    review — **doug#346** (closes #345), branch

@@ -1,36 +1,35 @@
-import { DocsSidebar } from "@/components/docs/docs-sidebar";
-import { SiteHeader } from "@/components/site-header";
+import type { Metadata } from "next";
 
-/** Shared chrome for the whole /docs surface: the same floating SiteHeader
- *  as /, then a sidebar + content grid.
+import styles from "@/components/docs/docs.module.css";
+import { DocsSidebar } from "@/components/docs/docs-sidebar";
+import { DocsTopBar } from "@/components/docs/docs-top-bar";
+import { docsBody, docsDisplay, docsMono } from "@/components/docs/fonts";
+
+export const metadata: Metadata = {
+  // Applies to every page below /docs; /docs itself names its own title,
+  // because a template never applies to its own segment's page.
+  title: { template: "%s — Coldworks docs", default: "Coldworks docs" },
+};
+
+/** Shared chrome for the whole /docs surface, in the audit docs' look: the
+ *  gradient rail at the left edge, the top bar, then a sidebar and one
+ *  reading column. Every docs page renders inside it, the audit's included;
+ *  nothing under /docs brings its own chrome.
  *
- *  Unlike the gh-pages source (sidebar hard-hidden below 900px, no
- *  replacement — see lib/docs-nav's sibling exploration notes), this
- *  degrades by falling out of the two-column grid entirely below `lg`, so
- *  the nav renders inline above the article instead of vanishing (the
- *  sidebar itself further collapses behind a toggle on top of that — see
- *  DocsSidebar).
- *
- *  The aside's sticky offset shares --docs-content-offset (globals.css) with
- *  H2's scroll-margin in components/docs/prose.tsx, so both clear the
- *  floating SiteHeader from one number instead of two independently
- *  hand-tuned ones. */
-export default function DocsLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+ *  The sidebar's sticky offset (57px) and the headings' scroll margin both
+ *  clear the top bar, in docs.module.css. Change the bar's height and check
+ *  both. */
+export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
-    <>
-      <SiteHeader maxWidthClassName="max-w-6xl" />
-      <main className="mx-auto w-full max-w-6xl px-6">
-        <div className="grid gap-10 py-12 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-16 lg:py-16">
-          <aside className="lg:sticky lg:top-[var(--docs-content-offset)] lg:h-[calc(100vh-8rem)] lg:overflow-y-auto">
-            <DocsSidebar />
-          </aside>
-          <div className="min-w-0 pb-24">{children}</div>
-        </div>
-      </main>
-    </>
+    <div className={`${styles.root} ${docsDisplay.variable} ${docsBody.variable} ${docsMono.variable}`}>
+      <div className={styles.rail} aria-hidden="true" />
+      <DocsTopBar />
+      <div className={styles.shell}>
+        <aside className={styles.side}>
+          <DocsSidebar />
+        </aside>
+        <main className={styles.doc}>{children}</main>
+      </div>
+    </div>
   );
 }

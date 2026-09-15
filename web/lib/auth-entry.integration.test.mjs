@@ -369,26 +369,38 @@ describe("single host: the subdomain redirects to the apex", () => {
     assert.equal(signIn.headers.location, `https://${APEX}/sign-in`);
     assert.equal(signIn.headers["set-cookie"], undefined);
 
-    // The alias served the registry's landing and the audit CLI's docs
-    // (coldworks#77 forwards them from there today), so each of those URLs
-    // means a page that lives at /docs/audit here, not Doug's own /docs. A
-    // path-preserving rule would strand /docs/cli.html on a 404. Every
-    // destination is then fetched on the apex: a forward to a missing page
-    // is a 404 with an extra hop.
+    // The alias served the registry's landing and the audit CLI's docs, so
+    // each of those URLs means an audit docs page, not Doug's own /docs. A
+    // path-preserving rule would strand /docs/cli.html on a 404. The www hop
+    // lands on the apex's old audit URL, and since the audit docs joined the
+    // one docs site (2026-09-15) the apex forwards that URL, temporarily, to
+    // the page that replaced it. Every chain is followed to its end on the
+    // apex: a forward to a missing page is a 404 with extra hops, and a chain
+    // that ends anywhere but the replacement lands the reader on the wrong
+    // page. The old stylesheet is not in the table: no page links it.
     const legacy = [
-      ["/", ""],
-      ["/landing.html", "/"],
-      ["/docs", "/docs/audit"],
-      ["/docs/cli", "/docs/audit/cli"],
-      ["/docs/cli.html", "/docs/audit/cli.html"],
-      ["/docs/docs.css", "/docs/audit/docs.css"],
+      ["/", "", "/"],
+      ["/landing.html", "/", "/"],
+      ["/docs", "/docs/audit", "/docs#the-audit"],
+      ["/docs/index.html", "/docs/audit/index.html", "/docs#the-audit"],
+      ["/docs/cli", "/docs/audit/cli", "/docs/audit/cli"],
+      ["/docs/cli.html", "/docs/audit/cli.html", "/docs/audit/cli"],
+      ["/docs/quickstart.html", "/docs/audit/quickstart.html", "/docs/audit/quickstart"],
+      ["/docs/connect", "/docs/audit/connect", "/docs/audit/connect"],
     ];
-    for (const [from, to] of legacy) {
+    for (const [from, to, final] of legacy) {
       const response = await requestAs(WWW, apex.origin, from);
       assert.equal(response.status, 308, `${WWW}${from}`);
       assert.equal(response.headers.location, `https://${APEX}${to}`, `${WWW}${from}`);
-      const landed = await requestAs(APEX, apex.origin, to || "/");
-      assert.equal(landed.status, 200, `${APEX}${to || "/"} must serve the page ${WWW}${from} forwards to`);
+      let at = new URL(to || "/", `https://${APEX}`);
+      for (let hops = 0; ; hops++) {
+        const landed = await requestAs(APEX, apex.origin, `${at.pathname}${at.search}`);
+        if (landed.status === 200) break;
+        assert.equal(landed.status, 307, `${APEX}${at.pathname} must serve, or forward temporarily, for ${WWW}${from}`);
+        assert.ok(hops < 2, `${WWW}${from} is still forwarding after three hops`);
+        at = new URL(landed.headers.location, at);
+      }
+      assert.equal(`${at.pathname}${at.hash}`, final, `${WWW}${from} ends on the wrong page`);
     }
   });
 });
