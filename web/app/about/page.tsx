@@ -182,7 +182,7 @@ export default function AboutPage() {
                 className="mt-4 inline-flex w-fit items-center transition-opacity hover:opacity-80"
               >
                 <img
-                  src={`https://img.shields.io/github/stars/${GITHUB_REPO_SLUG}?style=flat-square&label=stars&color=D1571E`}
+                  src={`https://img.shields.io/github/stars/${GITHUB_REPO_SLUG}?style=flat-square&label=stars&color=E0430A`}
                   alt={`GitHub stars for ${GITHUB_REPO_SLUG}`}
                   loading="lazy"
                   className="h-5"

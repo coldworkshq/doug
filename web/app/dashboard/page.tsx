@@ -622,9 +622,10 @@ function RepoCountLine({
  *
  *  THE TWO HEADERS SAY "14d" AND "60d", NOT "14d outcome", and the word they
  *  drop moved into the ⓘ beside them rather than being lost. This is
- *  arithmetic, not taste: the header sets at 10.5px in Geist Mono (0.6025em
- *  advance) with .13em tracking, so a character costs 7.69px and "14d outcome"
- *  claims 84.6px inside the 72px this column leaves after padding. It was
+ *  arithmetic, not taste: the header sets at 10.5px in IBM Plex Mono (0.6em
+ *  advance) with .13em tracking, so a character costs 7.67px and "14d outcome"
+ *  claims 84.3px inside the 72px this column leaves after padding, measured in
+ *  a browser when the face changed (ADR-0035). In Geist Mono it was
  *  overflowing 12.6px into its neighbour before anything was added to it —
  *  which is why the two labels sit shoulder to shoulder on screen with no gap
  *  between the columns. "14d" plus the dot is 41px, and the tooltip says
@@ -746,8 +747,14 @@ function RunCells({
           it is 69.2px, with 2.8px of slack. Doug caught this on PR #193
           (reader:fixed-width-overflow) and was right: the column widths above
           were measured against 11.5px text and nothing re-measured them.
-          Raising this needs the column widened past 88px first, which raises
-          the table's 876px floor and comes out of the title. */}
+          RE-MEASURED in IBM Plex Mono (ADR-0035, 2026-09-16): 72.0px at 12px
+          and 69.0px at 11.5px, holding the slack. The ○ is not in the latin
+          subset, so it renders in whatever the face falls back to, and that
+          chain is monospace by app/layout.tsx — next/font's own fallback is
+          size-adjusted Arial, which drew the ○ half again as wide and left
+          half a pixel of slack. Raising this needs the column widened past
+          88px first, which raises the table's 876px floor and comes out of
+          the title. */}
       {/* The `title` is the ⓘ's sentence for THIS row's word, so the reader
           who lands on a cell rather than on the header still gets it — and
           `truncate` means a cell can be showing `○ censore…`, where the

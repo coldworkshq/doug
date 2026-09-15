@@ -83,6 +83,19 @@ Decisions this session:
 - npm test includes lib/auth-entry.integration.test.mjs, a real next build
   and next start (459 unit tests plus 16 in the baseline of 475), so the
   production build with the new faces and palette passed in every run.
+  Checked: five of its test titles appear in the last run, 0 skipped.
+- Browser check on next dev (port 3131, .claude/launch.json in the coldworks
+  worktree), 2026-09-15: /doug, /queue, /docs render in both themes with
+  Archivo, Instrument Sans, and Plex Mono loaded and the tokens resolving;
+  the floating header bar stays white with ink text in dark, as designed.
+  Two POST /doug 500s are the AuthKit middleware's (its matcher covers only
+  /dashboard and /install); this lane changed no auth file. /dashboard shows
+  "Authentication is temporarily unavailable" with no WorkOS config, so the
+  signed-in screens are NOT seen in the new look before merge.
+- The outcome cells step from 11.5px to 11px: `○ censored` measured 71.5px
+  at 11.5px in Plex Mono against a 72px column (the ○ falls back to a wider
+  system glyph), and 68.3px at 11px — rejected: half a pixel of slack that
+  varies by platform.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,
