@@ -77,6 +77,86 @@ Decisions this session:
 Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
           web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
           auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
+--- deps lane (2026-09-15): the 17 open Dependabot alerts (6 critical, 6 high, 5 moderate) ---
+
+State:    review — **doug#354**, branch deps/dependabot-alerts-2026-09-15 off
+          origin/main 38bf6a5, worktree
+          .claude/worktrees/dependabot-alerts-2026-09-15. fcffc73: next
+          16.3.0 -> 16.3.5 in web/ and console/; the lockfile refresh takes
+          sharp 0.35.4, fast-uri 3.1.8, hono 4.13.7, js-yaml 4.3.2 and qs
+          6.16.0, all inside declared ranges, no overrides. `npm audit
+          --package-lock-only` reports 0 (6 packages on main). CI's web job
+          (464 tests) and console job (125 tests) exit 0 in node:22 (Node
+          22.23.2, npm 10.9.8), 0 skipped; both image builds exit 0. Both
+          images ship next 16.3.5 and sharp 0.35.4 and none of fast-uri,
+          hono, qs or js-yaml; main's ship 16.3.0 and 0.35.3. GitHub's
+          dependency-graph compare removes every alerted version and adds no
+          vulnerable one. e24c713, after Doug's read of fcffc73, rewrites
+          the lockfile with npm 10.9.8 (CI's npm): the same keys, versions,
+          resolved and integrity, without npm 11.6.2's 29 wrong "peer": true
+          flags. CI green on fcffc73 (6 jobs). Filed #355 (lockfile
+          integrity), #356 (doug-console redeploy after merge) and #357
+          (which npm writes the lockfile). Doug's read of fcffc73 (3 low)
+          answered in the PR body, 3 rows in docs/findings-log.jsonl. CI
+          green on 33d293c (6 jobs). Doug's read of 33d293c (2 medium, 3
+          low) answered in the PR body, 5 more rows; an amd64 build of the
+          web image was smoke-tested for it.
+Next:     push the findings-log and handoff commit. If Doug's read of that
+          head reports findings, answer them in the PR body and log one row
+          each. The merge is the founder's click. Merging deploys doug-web;
+          #356 covers doug-console.
+Blockers: none.
+Decisions this session:
+- next 16.3.5 — 16.3.3 disabled AVIF optimization, 16.3.4 re-enabled it
+  and raised sharp to ^0.35.4 (the libheif fix), 16.3.5 is the newest
+  patch, 4 days old with provenance — rejected: 16.3.3.
+- fast-uri 3.1.8 — upstream GHSA-58mr-gqgx-xq4g (high) affects exactly
+  3.1.6, the alerts' first patched version, and 3.1.7 and 3.1.8 fix three
+  upstream advisories not yet in GitHub's database. 3.1.8 was published
+  2026-09-15, so its npm tarball diff was read: it matches fastify/fast-uri
+  v3.1.7...v3.1.8 (index.js +10 -6 and one test) — rejected: 3.1.6, 3.1.7.
+- hono 4.13.7 — it fixes upstream GHSA-hxh3-vqpv-xpqv; 4.13.8 carries no
+  security fix and was published 2026-09-15, inside npm's 72-hour
+  unpublish window — rejected: plain `npm update hono`, which takes 4.13.8.
+- No overrides — each patched version satisfies every dependent's range.
+- npm's hoist is kept — qs, js-yaml, fast-uri and the 19 packages they
+  depend on move from duplicate web/ and console/ copies to one root copy.
+  Ignoring placement, no name@version pair changes outside the six alerted
+  packages, next's own dependencies and sharp's @img binaries.
+- The lockfile's integrity gap is not this lane's — #76 (010540f) unified
+  the per-app lockfiles (every entry with integrity) into one with 22 of
+  1,075 registry entries. This refresh removes none: 108 of 1,064, against
+  86 of 1,084 on main. Filed as #355.
+- `npm ls --all` lists @emnapi/runtime and @img/sharp-wasm32 as extraneous
+  on origin/main's manifests too; not touched here.
+- The lockfile is written with npm 10.9.8, not the local npm 11.6.2 — npm
+  11.6.2 sets "peer": true on 29 entries, node_modules/next among them,
+  even on a refresh of main's unchanged manifests, and `npm ci
+  --omit=peer` against that lockfile installs no next. npm 10.9.8 is what
+  CI, deploy.yml and both images run — rejected: keeping npm 11.6.2's
+  flags. Which npm writes lockfiles is Andrew's call, #357.
+- Doug's read of fcffc73 (3 low), answered on #354.
+  `reader:lockfile-resolution-change` held in part (the peer flags) and is
+  fixed in e24c713; its version claim is disproved by the name@version
+  pairs and `npm ls --all`. `reader:transitive-minor-bump` is adjacent:
+  every bump is required, but sharp's binary ships, so /_next/image was
+  smoke-tested on the web image (a 32,438-byte WebP; with sharp removed,
+  the original 148,614-byte JPEG). `reader:framework-patch-upgrade` is
+  real and was already covered by CI. Three rows in
+  docs/findings-log.jsonl.
+- Doug's read of 33d293c (2 medium, 3 low), answered on #354.
+  `reader:dependency-upgrade-behavior-change` held in part: the output
+  format is unchanged (formats ['image/webp'] at v16.3.0 and v16.3.5, and
+  the 16.3.3 and 16.3.4 toggle is AVIF input decoding), but the amd64
+  image and AVIF negotiation were unchecked, so an amd64 build of 33d293c
+  was smoke-tested (WebP for Accept: image/avif, 400 for a remote AVIF
+  URL, sharp loads). `reader:toolchain-version-drift`,
+  `reader:lockfile-integrity-gaps` (its counts inverted) and
+  `reader:deploy-coupling` restate #357, #355 and #356.
+  `reader:dependency-hoisting-change` is disproved by the image
+  inspection. Five rows in docs/findings-log.jsonl.
+Pointers: web/package.json · console/package.json · package-lock.json ·
+          docs/findings-log.jsonl · #355 · #356 · #357
 
 --- reader lane (2026-09-14): annotate a broken-syntax deviation beside a syntax settlement, doug#345 ---
 
