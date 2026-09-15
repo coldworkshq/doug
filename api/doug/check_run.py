@@ -40,7 +40,7 @@ from urllib.parse import quote
 from .models import Band, Verdict
 from .reader import Coverage, truncation_reason
 from .review import IntentRead
-from .settle import SETTLED_REASON_CODES
+from .settle import SETTLED_REASON_CODES, SETTLED_SYNTAX_ERROR
 from .store import InstrumentSnapshot
 
 NAME = "Doug"
@@ -124,6 +124,38 @@ DEVIATION_NOTE = (
     "check (2026-07-31), so these are unvalidated observations. They do "
     "not contribute to the band or score above (ADR-0007)."
 )
+# A deviation carries no file, so no settlement class can test one, and
+# ADR-0007 keeps its row as the model wrote it. What the check run can do is
+# say, beside a deviation that claims broken syntax, what the parser already
+# established on this same review (#345): the reader's syntax-error findings
+# were disproved by parsing the files at head. Fixed words, and a statement
+# about the parser, never a verdict on the deviation.
+SYNTAX_DEVIATION_CHIP = (
+    "_Doug's parser found no syntax error in the files this review flagged "
+    "for one, listed under `settled-syntax-error` above_"
+)
+# Phrases, not co-occurring words. "Syntax" and "import" anywhere in one
+# description is how "the new match syntax changes the import order" earned
+# the chip on Doug's reads of #346. A claim is `SyntaxError`, "syntax error",
+# or the word syntax within twelve words of a word for breaking, in either
+# order. "Fails" is not one of them: "the syntax helper failed lint" is about
+# lint, and the chip would answer a question nobody asked.
+_BREAKS = r"(?:fatal|invalid|break(?:s|ing)?|broken?|crash(?:es|ing)?)"
+_BROKEN_SYNTAX_RE = re.compile(
+    r"syntaxerror|\bsyntax\s+errors?\b"
+    rf"|\bsyntax\b(?:\W+\w+){{0,12}}?\W+{_BREAKS}\b"
+    rf"|\b{_BREAKS}\b(?:\W+\w+){{0,12}}?\W+syntax\b",
+    re.IGNORECASE,
+)
+
+
+def claims_broken_syntax(description: str) -> bool:
+    """A deviation that says, in so many words, that the change breaks syntax.
+    "Adopts the new match syntax" is about style and "the new match syntax
+    changes the import order" is about ordering; neither gets the chip."""
+    return bool(_BROKEN_SYNTAX_RE.search(description))
+
+
 # settle.py drops disproved findings and leaves a weight-0 notice. Listing
 # that notice under ### Findings beneath a Flagged title reads as a remaining
 # defect. The band is the risk score; nothing survived.
@@ -1023,8 +1055,14 @@ def render(
             lines += _quote(intent_partial)
         lines += [""]
         if intent_read.findings:
+            syntax_settled = any(r.rule == SETTLED_SYNTAX_ERROR for r in verdict.reasons)
             lines += [
                 f"- `{_rule_span(d.type)}` — {_oneline(d.description)} _({_oneline(d.severity)})_"
+                + (
+                    f" · {SYNTAX_DEVIATION_CHIP}"
+                    if syntax_settled and claims_broken_syntax(d.description)
+                    else ""
+                )
                 for d in intent_read.findings
             ]
         else:

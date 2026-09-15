@@ -1,5 +1,54 @@
 # HANDOFF — doug
 
+--- reader lane (2026-09-14): annotate a broken-syntax deviation beside a syntax settlement, doug#345 ---
+
+State:    review — **doug#346** (closes #345), branch
+          reader/deviation-syntax-annotation off origin/main 1bbade1, worktree
+          .claude/worktrees/doug-deviation-annotate. check_run.render appends
+          SYNTAX_DEVIATION_CHIP to a deviation whose description claims broken
+          syntax, when the same verdict carries a `settled-syntax-error`
+          notice. The deviation row, text, severity, band and score are
+          untouched. make check green; full suite 1,984 passed at 81e1efc;
+          9 of 9 mutants killed. Decision recorded on #345.
+Next:     watch CI and Doug's read on #346; the merge is the founder's click.
+Blockers: none.
+Decisions this session:
+- Annotate, not drop (Andrew, 2026-09-14) — the deviations table is what
+  ADR-0007's eventual evaluation reads, so a filter would change what it
+  measures — rejected: dropping the deviation with settle.py's syntax class.
+- The chip keys on the settlement in the same verdict, not a fresh parse —
+  DeviationFinding carries no file, and parsing every changed .py file per
+  deviation costs a fetch per file (98 on #339) — rejected: parsing the PR's
+  Python files for each syntax-claiming deviation.
+- The chip states what the parser found, never that the deviation is wrong —
+  the deviation may be about a file the reader did not flag.
+- Known limit: no chip when the reader flagged nothing or its findings were
+  not settled; the deviation then stands as written.
+- Doug's reads of #346 at 81e1efc and 33e08e3, answered on #346. The
+  `reader:regex-false-positive` low is valid and fixed: the matcher now
+  wants a phrase (`SyntaxError`, "syntax error", or syntax within twelve
+  words of fatal, invalid, break, broken or crash, either order), so "the new
+  match syntax changes the import order" and "the import of the syntax
+  helper failed lint" get no chip — rejected: keeping import, parse, error
+  and fail as breakage words. `reader:semantic-mismatch` is partly valid: a
+  deviation names no file, so the chip now says the files are listed under
+  `settled-syntax-error`. `reader:missing-import` is refuted (`import re` at
+  check_run.py:35), and settlement kept it because "import time" vetoes
+  `claimed_names`; filed as #347. The `beyond-ticket` deviation (no ADR
+  covers composing the chip into the line) is answered by the decision on
+  #345 and docs/REVIEWING.md; an ADR is Andrew's call.
+- Doug's read of #346 at 0f862ed (3 low), answered on #346:
+  `reader:doc-code-mismatch` valid, fixed — docs/REVIEWING.md still listed
+  the old trigger words. `reader:regex-backtracking` refuted with timings:
+  33 ms on a 100,000-character adversarial description, 0.07 ms on 2,000
+  characters, and the reader's output cap keeps real descriptions far
+  shorter — rejected: an input-length guard. `reader:heuristic-false-
+  positive` accepted as the window's known miss and named in
+  docs/REVIEWING.md — rejected: a narrower window, which would miss the #339
+  wording ("fatal" nine words after "syntax").
+Pointers: api/doug/check_run.py (SYNTAX_DEVIATION_CHIP, claims_broken_syntax) ·
+          api/tests/test_check_run.py · docs/REVIEWING.md · #345 · #231 (same bullet)
+
 --- tooling lane (2026-09-13): a static gate for api/ and agent hooks, doug#337 ---
 
 State:    review — **doug#339**, branch tooling/static-gate off origin/main

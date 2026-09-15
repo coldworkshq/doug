@@ -338,6 +338,23 @@ description that names another grammar (SQL, a regex, JSON, YAML, TOML,
 pattern, rule `settled-syntax-error`, naming the Python version the file
 parsed as.
 
+A deviation carries no file, so this class cannot settle one, and ADR-0007
+keeps a deviation's row as the model wrote it. On #339 the reader's six
+syntax-error findings were settled and the deviation section still called the
+same reformat "in fact fatal". So when a review carries a
+`settled-syntax-error` notice and a deviation claims broken syntax
+(`SyntaxError`, "syntax error", or the word syntax within twelve words of
+fatal, invalid, break, broken or crash, in either order), `check_run.render`
+appends fixed words to that deviation's line: Doug's parser found no syntax
+error in the files the review flagged for one, listed under
+`settled-syntax-error` (#345). Import, parse, error and fail do not count on
+their own: "the new match syntax changes the import order" is not a claim. It
+annotates and nothing else — the deviation keeps its text, severity and stored
+row, and the band and score are untouched. The window is a heuristic, and its
+known miss is the other direction: a deviation that mentions syntax and,
+within twelve words, something unrelated that broke still gets the chip,
+which then states only what the parser found.
+
 **Doug's own review of PR #49** — the branch that added this filter — found
 three real gaps in it before merge, all verified by reproduction rather than
 taken on faith (REVIEWING.md's own rule):

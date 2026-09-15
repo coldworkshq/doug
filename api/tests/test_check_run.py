@@ -1707,3 +1707,119 @@ def test_an_outside_read_finding_sorts_after_its_in_read_peers_of_the_same_sever
     findings = summary[summary.index("### Findings") :]
     order = [findings.index(x) for x in ("— ih", "— oh", "— im", "— pm")]
     assert order == sorted(order)
+
+
+# ---------------------------------------------------------------------------
+# #345: a deviation that claims broken syntax, beside a syntax settlement.
+
+# The deviation Doug posted on #339 at e60fa50, in the same verdict whose
+# `settled-syntax-error` notice had just disproved the claim it rests on.
+PR_339_DEVIATION = (
+    "The reformat sweep silently altered exception-handling syntax in six runtime modules, "
+    "which is behavioral (in fact fatal) change rather than the stated lint/type-debt "
+    "tooling scope."
+)
+
+
+def _syntax_settled_verdict():
+    notice = Reason(
+        rule="settled-syntax-error",
+        label=(
+            "Dropped 1 finding(s) disproved by parsing the file at head"
+            " — api/doug/verify.py: syntax-error (['Python 3.14'])"
+        ),
+        weight=0.0,
+    )
+    return FLAGGED.model_copy(update={"reasons": [*FLAGGED.reasons, notice]})
+
+
+def _intent(*findings: tuple[str, str]) -> IntentRead:
+    return DEVIATIONS.model_copy(
+        update={
+            "findings": [
+                reader.DeviationFinding(type=kind, description=text, severity="high")
+                for kind, text in findings
+            ]
+        }
+    )
+
+
+def _deviation_lines(summary: str) -> list[str]:
+    section = summary.split(check_run.DEVIATION_HEADING, 1)[1]
+    return [line for line in section.splitlines() if line.startswith("- `")]
+
+
+def test_a_broken_syntax_deviation_beside_a_syntax_settlement_is_annotated_not_dropped():
+    """ADR-0007 keeps a deviation as the model wrote it, so nothing is dropped
+    or re-graded: the line keeps its words and its severity, and gains the
+    parser's result from the same review beside it."""
+    _, summary = check_run.render(
+        "reader", _syntax_settled_verdict(), _intent(("beyond-ticket", PR_339_DEVIATION)), WHOLE
+    )
+    [line] = _deviation_lines(summary)
+    assert "in fact fatal" in line and "_(high)_" in line
+    assert line.endswith(f" · {check_run.SYNTAX_DEVIATION_CHIP}")
+
+
+def test_without_a_syntax_settlement_the_deviation_carries_no_chip():
+    """The chip reports what the parser established. With no settlement in
+    this verdict the parser established nothing, and the chip would be a
+    claim Doug did not check."""
+    _, summary = check_run.render(
+        "reader", FLAGGED, _intent(("beyond-ticket", PR_339_DEVIATION)), WHOLE
+    )
+    [line] = _deviation_lines(summary)
+    assert "in fact fatal" in line
+    assert check_run.SYNTAX_DEVIATION_CHIP not in summary
+
+
+def test_only_the_syntax_settlement_earns_the_chip():
+    """The chip names what the parser found. A green check or a runtime import
+    settling some other finding says nothing about syntax."""
+    for rule in sorted(SETTLED_REASON_CODES - {"settled-syntax-error"}):
+        notice = Reason(rule=rule, label=f"Dropped 1 finding(s) — a.py: x ({rule})", weight=0.0)
+        verdict = FLAGGED.model_copy(update={"reasons": [*FLAGGED.reasons, notice]})
+        _, summary = check_run.render(
+            "reader", verdict, _intent(("beyond-ticket", PR_339_DEVIATION)), WHOLE
+        )
+        assert check_run.SYNTAX_DEVIATION_CHIP not in summary, rule
+
+
+def test_only_the_deviation_that_claims_broken_syntax_is_annotated():
+    intent = _intent(
+        ("beyond-ticket", PR_339_DEVIATION),
+        ("contradicts-ticket", "Edits the frozen reader prompt"),
+        ("beyond-ticket", "Adopts the new match syntax throughout the router"),
+        ("beyond-ticket", "The new match syntax changes the import order"),
+    )
+    _, summary = check_run.render("reader", _syntax_settled_verdict(), intent, WHOLE)
+    chipped = [check_run.SYNTAX_DEVIATION_CHIP in line for line in _deviation_lines(summary)]
+    assert chipped == [True, False, False, False]
+
+
+def test_what_counts_as_a_claim_of_broken_syntax():
+    for claim in (
+        PR_339_DEVIATION,
+        "raises SyntaxError when the module is imported",
+        "the except clause is invalid syntax on Python 3",
+        "breaks the module import with a syntax change",
+        "introduces a syntax error in the retry module",
+    ):
+        assert check_run.claims_broken_syntax(claim), claim
+    for not_a_claim in (
+        "Adopts the new match syntax throughout the router",
+        "Changes error handling in the worker",
+        "a fatal edge case in the retry loop",
+        "the import order changed",
+        # Doug's reads of #346 (`reader:regex-false-positive`): syntax and a
+        # word like import, parse or failed in one description, and no claim
+        # that anything broke.
+        "the new match syntax changes the import order",
+        "changes the parse step and adopts new match syntax",
+        "the import of the syntax helper failed lint",
+        # Syntax and a word for breaking fifteen words apart are two claims,
+        # not one.
+        "adopts the new syntax for decorators across every handler in the router, "
+        "and separately a retry change could be fatal",
+    ):
+        assert not check_run.claims_broken_syntax(not_a_claim), not_a_claim
