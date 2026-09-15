@@ -9,12 +9,11 @@ State:    building — branch design/coldworks-look (worktree
           everywhere (UI, fonts, colors); dark mode stays, redrawn in Coldworks
           colors; Doug keeps its name, its mark, and the /about story. doug#351
           records the ruling, claims ADR-0035, and carries the measurements.
-Next:     PR A (type and palette, both themes), locally: one font loader;
-          Coldworks palette blocks in globals.css that docs.module.css reads;
-          Doug-named tokens renamed; the mark recolored (#214); contrast and
-          ΔE2000 computed in design-system.test.mjs (#210); console's lockstep
-          block; ADR-0035 amending ADR-0020. Push only after #350 merges,
-          rebased onto main. PR B (UI grammar) follows PR A.
+Next:     PR A is built in three commits (fonts c4b00b0, palette 0f239bd,
+          ADR-0035). Before it opens: check every page in both themes in a
+          browser, re-measure the two Plex Mono width comments, and take
+          screenshots of the two edge options for #351. Push only after #350
+          merges, rebased onto main. PR B (UI grammar) follows PR A.
 Blockers: doug#350's merge, the founder's click, before any push.
 Decisions this session:
 - Build on #350, not beside it: it changes globals.css,
@@ -69,6 +68,21 @@ Decisions this session:
   justify column widths with Geist Mono measurements; re-measure the 14d
   header and `○ censored` at 11.5px in IBM Plex Mono. PR B also owns the
   --ring glow inlined on /doug:481.
+- Mutation controls on the palette tests, run after commit 0f239bd: 16 of
+  16 planted values killed, each by its expected message, among them a
+  broken CIEDE2000 constant, the old rust accent, a retired class in a page,
+  and a figure typed back into the rule. The tree was clean after the
+  restores.
+- The data pair's floors under the two dichromacies are the replaced
+  palette's weakest figures exactly (11.6, 8.2). In normal vision the light
+  pair sits closer than the one it replaced (53.9 against 57.9), and the
+  test comment and ADR-0035 say so — rejected: "at least as separable" as
+  an unqualified claim.
+- ADR-0035 is proposed, not accepted: accepting a record is Andrew's. It
+  amends ADR-0020, which carries amended_by.
+- npm test includes lib/auth-entry.integration.test.mjs, a real next build
+  and next start (459 unit tests plus 16 in the baseline of 475), so the
+  production build with the new faces and palette passed in every run.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,

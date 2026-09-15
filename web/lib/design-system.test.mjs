@@ -490,18 +490,21 @@ test("the data pair and the chrome accent stay separable in normal vision and un
   // the figures this file used to pin reproduced under no model anyone wrote
   // down.
   //
-  // THE FLOORS. Flag against clear must stay at least as separable as the
-  // palette ADR-0035 replaced, whose weakest figures were 11.6 under
-  // deuteranopia (dark) and 8.2 under protanopia (light). Chrome against flag
-  // has to clear a floor that palette failed: its accent sat 9.2 from its flag
-  // in normal vision and 2.3 under deuteranopia, the closeness the rule's own
-  // comment warned about.
+  // THE FLOORS. Under deuteranopia and protanopia, flag against clear must stay
+  // at least as separable as the palette ADR-0035 replaced, whose weakest
+  // figures were 11.6 under deuteranopia (dark) and 8.2 under protanopia
+  // (light). In normal vision the floor is 40, far past the distance at which
+  // two colours are mistaken for each other; the Coldworks light pair sits a
+  // little closer there than the pair it replaced, and this floor does not
+  // pretend otherwise. Chrome against flag has to clear a floor that palette
+  // failed: its accent sat 9.2 from its flag in normal vision and 2.3 under
+  // deuteranopia, the closeness the rule's own comment warned about.
   for (const [lab1, lab2, want] of SHARMA_2005) {
     const got = deltaE2000(lab1, lab2);
     assert.ok(Math.abs(got - want) < 1e-4, `CIEDE2000 gives ${got.toFixed(4)} where Sharma et al. give ${want}`);
   }
   const FLOORS = {
-    data: { normal: 40, deuteranopia: 11.5, protanopia: 8 },
+    data: { normal: 40, deuteranopia: 11.6, protanopia: 8.2 },
     chrome: { normal: 20, deuteranopia: 10, protanopia: 10 },
   };
   const clears = (a, b, floors) => Object.entries(floors).every(([vision, floor]) => separation(a, b, vision) >= floor);
