@@ -1,10 +1,10 @@
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { ParamsTable } from "@/components/docs/params-table";
 import { DocsPageHeader, IC } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "Changelog — Doug Documentation",
+  title: "Changelog",
   description:
     "Dated record of what shipped, what was measured, and one design that was reviewed and cut.",
 };
@@ -12,10 +12,10 @@ export const metadata = {
 export default function ChangelogPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
-            <DocsPageHeader kicker="Meta" title="Changelog" />
+            <DocsPageHeader kicker="Doug reviews · Meta" title="Changelog" />
 
             <ParamsTable
               rows={[

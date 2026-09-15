@@ -78,7 +78,7 @@ export default async function GuardsPage() {
               <p className="mt-4 text-sm text-muted-foreground">
                 Running agents you didn&apos;t write? The audit reads the traces you already export, on
                 your own machine, with no account.{" "}
-                <a href="/docs/audit" className="text-foreground underline underline-offset-[3px]">
+                <a href="/docs#the-audit" className="text-foreground underline underline-offset-[3px]">
                   Start with the audit
                 </a>
                 .

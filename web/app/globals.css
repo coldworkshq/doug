@@ -13,7 +13,6 @@
   --color-sheen: var(--sheen);
   --color-flag: var(--flag);
   --color-clear: var(--clear);
-  --color-warn: var(--warn);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -94,9 +93,6 @@
   --sheen: #4a5a6b;
   --flag: #bf3125;
   --clear: #0f6b48;
-  /* Docs-only third status (Preview, between Available/--clear and
-     Planned/--sheen). */
-  --warn: #8a5d0f;
 
   /* ALWAYS A COLOUR, in both themes — never a gradient. 34 call sites read it
      through `text-[var(--iridescent)]`, `border-[var(--iridescent)]` and
@@ -162,15 +158,6 @@
     ),
     radial-gradient(#dfe3e7 1px, transparent 1px);
   --atmosphere-size: 100% 100%, 22px 22px;
-
-  /* The one number both the docs sidebar's sticky offset (app/docs/layout.tsx)
-     and its H2 scroll-margin (components/docs/prose.tsx) have to clear so
-     neither sits under the floating SiteHeader. Not theme-dependent — lives
-     outside the light/dark split on purpose, so it isn't a color and never
-     needs a dark-mode counterpart. Sized for SiteHeader's `top-4` plus its
-     current rendered height with margin; a header height change is the one
-     edit that requires re-checking this value against those two usages. */
-  --docs-content-offset: 7rem;
 }
 
 /* THE COUNTERPART, reached only by the toggle. Three selectors mirroring the
@@ -194,7 +181,6 @@
   --sheen: #8fa6bd;
   --flag: #f0705f;
   --clear: #4cc08c;
-  --warn: #e0a44a;
 
   /* A COLOUR here too — see the light block. The gradient this token used to
      hold in dark is the reason the console could never follow the toggle
@@ -491,20 +477,6 @@
     background: oklch(1 0 0 / 4%);
     border: 1px solid oklch(1 0 0 / 10%);
     backdrop-filter: blur(12px);
-  }
-  /* Docs code samples: always the gh-pages docs site's "night" terminal
-     surface, regardless of site theme — same reasoning as .glass above,
-     these are fixed brand colors standing in for a real terminal, not
-     something that should go pale in light mode. */
-  .code-rail {
-    background: #101210;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #edefea;
-  }
-  .code-rail-head {
-    background: #181b18;
-    color: #9aa298;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   /* LANDING-PAGE utilities (app/page.tsx and components/landing/). Kept

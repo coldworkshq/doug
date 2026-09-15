@@ -1,5 +1,82 @@
 # HANDOFF — doug
 
+--- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
+
+State:    review — **doug#350**, branch docs/one-docs-site (off origin/main
+          2561e5f, worktree .claude/worktrees/docs-one-docs-site). Andrew, in
+          session: everything under coldworks.dev/docs, the /docs/audit look
+          kept, and the audit maybe not its own docs page; the UI structure
+          was left to the agent. Verified 2026-09-15: lint rc 0, tsc rc 0,
+          unit tests 463 passed, the build-and-serve integration test 16
+          passed, 29 of 29 planted mutants killed, and a production build
+          serving the docs module CSS, the four docs fonts, and the
+          redirects. Auto-fix is on for #350 (Andrew, 2026-09-15).
+Next:     auto-fix wakes this session on CI failures, conflicts, and review
+          comments. The merge is the founder's click. coldworks#93 moves
+          concept.md's citation of the deleted cli.html to the page's URL.
+Blockers: none.
+Decisions this session:
+- One docs shell: the audit is a section of /docs, not a second site with
+  its own chrome and a "Doug's docs" link out — rejected: the audit pages
+  as external anchors (what shipped in D3), and product tabs, which keep
+  two trees.
+- /docs is one overview in the audit page's layout: Doug's introduction and
+  the audit overview become its two sections, and /docs/audit redirects to
+  /docs#the-audit with a 307 — rejected: a hub plus two section intros (the
+  hero sentence twice), and moving Doug's pages to /docs/doug/* (breaks the
+  PR-comment footer link and every link already written).
+- Every other URL keeps resolving: the audit pages stay at
+  /docs/audit/{quickstart,connect,cli}, and their .html forms redirect.
+- Doug reviews comes before the audit in the sidebar, in the door's order.
+- The docs wear the audit's flat top bar with the site header's NAV_LINKS,
+  theme toggle, and Sign in, so the nav keeps one source (ADR-0034 T7).
+- The look is a CSS module, not global CSS: globals.css already defines
+  `.code`, and the audit's class names are generic. Fonts load through
+  next/font/local from the landing's own woff2 files (byte-identical).
+- Doug's pages go to one column, each example after its prose — rejected:
+  a sticky rail beside a 760px reading column. One sentence followed:
+  "beside this paragraph" became "in the panel below".
+- `.code-rail` and `--docs-content-offset` left globals.css, because the
+  docs were their only users; the design-system scan's code-rail exemption
+  went with them, and a pin holds the docs' code panel to ink in both themes.
+- The top bar has a fixed 61px height: with the theme toggle and Sign in it
+  measured 61px, and a sidebar stuck at 57px slid under it.
+- Doug's read of 8d27bc4 (3 medium, 2 low), answered on #350. Fixed: the
+  www rule forwarded every /docs path to /docs/audit, so www/docs/report
+  was a 404 and www/docs/audit/cli went to /docs/audit/audit/cli; it now
+  forwards only the audit's legacy page names. Both URLs are in the
+  integration table, and a test reads the #the-audit heading from the
+  served overview; each failed on a planted input first. Refuted: removed
+  exports (no importer anywhere, and CI built every page), the pager's
+  external branch (no entry can be external), and the globals.css removals
+  (no users). Kept: the two-hop www chain for the audit's home, because its
+  first hop is a cached 308 and must land on a stable apex URL; the review
+  below moved www's .html page names onto their routes in one hop. The
+  beyond-ticket deviation (a second top bar) is Andrew's ADR call, doug#358.
+- Doug's read of cecdb8e (1 medium, 4 low), answered on #350 with no code
+  change: redirect-chain restates the kept two-hop chain; broken-link holds
+  only for docs.css, deliberately; stale-reference restates
+  css-contract-drift; duplicate-markup and semantic-drift are refuted
+  (display: none hides one nav at every width, and no panel pairs Fn with
+  Ok). Every disposition from both reads is a findings-log row, the two
+  deviations included (0a0f522).
+- main merged into the branch on auto-fix: #349 and #352 changed the
+  caching copy in the static cli.html and connect.html this PR deletes, so
+  the wording moved into the two routes, checked equal to main's text.
+- Adversarial review at max effort, on Andrew's request: ten finder angles,
+  one verifier per candidate (18 verified in session after the 20-agent
+  cap), and a gap sweep; 42 candidates, 2 refuted (the lost <article>, and
+  the docs' chip words against lib/state-chip.ts, whose closed vocabulary
+  governs the dashboard). Fixed in 0a0f522: the index URLs, www .html in
+  one hop, the audit half's claim scope and the lede, AA inks, link
+  underlines, the long chip's wrap, a 320px top bar, the mono fallback, the
+  menu and sidebar closing, the filter, list semantics, chip tones, and new
+  pins (13 of 13 planted mutants killed, 2 of them in the integration test). Filed: #358, #359 (self-serve
+  copy), #360 (root fonts on docs routes). Not changed: DocsArticle itself,
+  DocsCrumb's client boundary, and the landing's inlined fonts.
+Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
+          web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
+          auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
 --- deps lane (2026-09-15): the 17 open Dependabot alerts (6 critical, 6 high, 5 moderate) ---
 
 State:    review — **doug#354**, branch deps/dependabot-alerts-2026-09-15 off

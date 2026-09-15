@@ -1,12 +1,12 @@
 import { Bright, CodeBlock, Comment, Dim, Hot, Str } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { ParamsTable } from "@/components/docs/params-table";
 import { DocsPageHeader, H2, IC } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "Defect labels — Doug Documentation",
+  title: "Defect labels",
   description:
     "How Doug labels a PR defect-inducing from revert anchors in git and GitHub history.",
 };
@@ -14,16 +14,16 @@ export const metadata = {
 export default function DefectLabelsPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Concepts"
+              kicker="Doug reviews · Concepts"
               title="Defect labels"
               status="available"
             >
               A backtest is only as honest as its labels. Doug labels a PR{" "}
-              <b className="font-semibold text-foreground">defect-inducing</b>{" "}
+              <b>defect-inducing</b>{" "}
               when later history reverts it — the revert is an
               engineer&rsquo;s own on-the-record verdict that the change was
               bad.
@@ -32,8 +32,7 @@ export default function DefectLabelsPage() {
             <H2>
               Label sources (<IC>--labels</IC>)
             </H2>
-            <div className="mt-4">
-              <ParamsTable
+            <ParamsTable
                 rows={[
                   {
                     name: "git",
@@ -53,20 +52,17 @@ export default function DefectLabelsPage() {
                   },
                 ]}
               />
-            </div>
 
-            <div className="mt-6">
-              <Callout lead="Known limits, stated plainly:">
+            <Callout lead="Known limits, stated plainly:">
                 Reverts under-count defects (hotfixes without reverts are
                 missed), and ~6% of git labels on sentry show timestamp
                 anomalies we&rsquo;re still triaging. The labels are good
                 enough to rank on; we publish their weaknesses along with the
                 wins.
               </Callout>
-            </div>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="How a label is born">
             <Comment>
               # merged PR #4821 — &quot;migrate retry-queue table&quot;

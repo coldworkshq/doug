@@ -36,9 +36,9 @@ function useHasMounted(): boolean {
  *  the tree. Rendering the light icon until mounted matches the server
  *  unconditionally, then swaps to the real theme one commit later — an
  *  intentional flash-of-stale-icon, smaller than a hydration error on
- *  every fresh load for every dark-mode visitor. Now that the header
- *  floats across every public route (/, /docs/*), that is the common
- *  case, not an edge one. */
+ *  every fresh load for every dark-mode visitor. The toggle sits in the
+ *  public header (/doug, /scoreboard, /queue, /about) and in the docs' top
+ *  bar (/docs/*), so that is the common case, not an edge one. */
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
   const mounted = useHasMounted();
