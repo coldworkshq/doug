@@ -52,8 +52,10 @@
     audited together with span-level dedup across overlapping files.</p>
     <div class="tblwrap"><table class="tbl">
       <tr><th>Argument</th><th>What it does</th><th>Status</th></tr>
-      <tr><td><code>PATH</code></td><td>The export file or directory. Format is detected
-      (Langfuse, LangSmith, OTel GenAI); override with <code>--format</code>.</td>
+      <tr><td><code>PATH</code></td><td>The export file or directory. Format is detected from
+      the first record: OTel GenAI spans, Langfuse observations (verified on the API shape), or
+      the span-tree shape <code>--sample</code> writes. Override with
+      <code>--format otlp_genai|langfuse|span_tree</code>.</td>
       <td><span class="chip design">DESIGNED</span></td></tr>
       <tr><td><code>--docs DIR</code></td><td>Anchor recovered judgments to lines in your own
       documents. Files are hashed and matched locally; anchors carry the provenance line
@@ -63,8 +65,10 @@
       <tr><td><code>--diff</code></td><td>Report what changed since the last run: new repeated
       judgments, from the local ledger.</td>
       <td><span class="chip design">DESIGNED</span></td></tr>
-      <tr><td><code>--sample</code></td><td>Run on the bundled sample export and documents —
-      a full report with nothing of yours involved, labeled as sample data on every screen.</td>
+      <tr><td><code>--sample</code></td><td>Run on a sample span export the package writes
+      itself — a full report with nothing of yours involved, labeled as sample data on every
+      screen. The release-1 sample is span-only; documents arrive with <code>--docs</code> in
+      release 2.</td>
       <td><span class="chip design">DESIGNED</span></td></tr>
       <tr><td><code>--open</code></td><td>Open the HTML report when the run finishes.</td>
       <td><span class="chip design">DESIGNED</span></td></tr>
@@ -76,12 +80,21 @@
     </table></div>
 
     <h2>What the headline counts</h2>
+    <p>The report opens with one sentence: &ldquo;This report is the first step of an audit, not
+    a dashboard. Where your platform already prints this number, start from that number; what
+    this adds is the groups that disagree and the populations it could not read.&rdquo;</p>
     <ul>
       <li>Tool calls are grouped by <b>(tool name, arguments digest)</b> — exact repetition,
       not similarity.</li>
       <li>A repeat group is a <b>tier-0 cache candidate</b> only when its results agree across
       every occurrence. Disagreeing groups are reported separately as nondeterminism
-      findings.</li>
+      findings. Beside the tier-0 cache candidate label the report prints the following,
+      where N is the number of groups whose results disagree: &ldquo;Most of this figure is
+      cross-run: the same call in a later run. A session cache cannot see it. A session cache
+      scripted from this table captured 3–20% of context on the benchmark corpus and returned
+      a stale result on 17–45% of its hits. Caching these across runs is safe only where the
+      result depends on the arguments alone. This export cannot show that; the N groups below
+      show the opposite, and a file read never qualifies.&rdquo;</li>
       <li>The headline is the share of <b>context</b> &mdash; the bytes fed back to the model
       &mdash; that sits in agreeing repeat groups. It is said as a share of context, never as a
       share of calls: on the one benchmark corpus measured so far it reads &ldquo;about 23 percent
@@ -91,12 +104,15 @@
       token count of the same bytes, so a chars-per-token ratio is not computable; where the
       export carries token totals they are printed as totals, and the report says which unit
       it is in.</li>
-      <li>The <b>process share</b> and the <b>navigation share</b> are reported separately and
-      never folded into the headline. The process share is refused, with the tool list it would
+      <li>The <b>process share</b> and the <b>navigation share</b> are reported separately,
+      where a reader declares the tools they count, and never folded into the headline. No
+      release-1 reader declares them. The process share is refused, with the tool list it would
       have used printed in its place, when more than 20% of shell calls chain commands. The
       navigation share is a bracket under declared rules, not a point figure.</li>
-      <li>What the audit could not read is printed, not dropped: judgments stated only in
-      prose, and unanchorable spans, each with a count and a reason.</li>
+      <li>What the audit could not read is printed, not dropped, each with a count: records
+      that did not parse, calls that carried no arguments or no result, and repeat groups
+      without the start times to order them. Spans that cannot be anchored to a document
+      arrive with <code>--docs</code> in release 2.</li>
     </ul>
 
     <h2>Files it reads and writes</h2>

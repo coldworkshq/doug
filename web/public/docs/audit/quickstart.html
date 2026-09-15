@@ -55,14 +55,15 @@
     program that reads a file on your disk and writes a report next to it.</div>
 
     <h2>See it work before you export anything</h2>
-    <p>Empty-handed? The package bundles a sample trace export and matching documents, so the
-    first report costs you nothing but the command:</p>
+    <p>Empty-handed? The package writes a sample span export itself, so the first report costs
+    you nothing but the command:</p>
     <div class="code">
       <div class="codebar">SAMPLE RUN</div>
       <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> --sample --open</pre>
     </div>
-    <p class="dim">This renders the full report — headline, repeat groups, anchored decisions,
-    loss populations — on data we wrote, labeled as such on every screen.</p>
+    <p class="dim">This renders the full report — headline, repeat groups, nondeterminism
+    findings, loss populations — on data we wrote, labeled as such on every screen. The
+    release-1 sample is span-only; documents arrive with <code>--docs</code> in release 2.</p>
 
     <h2>Your first real audit</h2>
     <ol>
@@ -76,10 +77,13 @@
       <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> ~/Downloads/traces.jsonl --open</pre>
     </div>
     <ol start="3">
-      <li><b>Read the headline.</b> The fraction of your agent's tool calls that were exact
+      <li><b>Read the headline.</b> The share of your agent's context that sits in exact
       repeats of a judgment it already made — in your own tool vocabulary. Repeats count as
       cache candidates only when their results agree; disagreeing repeats are reported
-      separately as nondeterminism findings.</li>
+      separately as nondeterminism findings. The report opens with one sentence: &ldquo;This
+      report is the first step of an audit, not a dashboard. Where your platform already prints
+      this number, start from that number; what this adds is the groups that disagree and the
+      populations it could not read.&rdquo;</li>
     </ol>
 
     <h2>If the audit can't read your export</h2>

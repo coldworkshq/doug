@@ -54,14 +54,15 @@
       <div class="codebar">ILLUSTRATIVE — NO REAL STORE BEHIND THIS PAGE</div>
       <pre><span class="p">$</span> <span class="c">uvx coldworks-audit run</span> traces.jsonl
 
-read <b>41,218</b> spans · <b>9,406</b> tool calls · <span class="dim">your tool names, kept</span>
-<b>2,871</b> exact repeats across <b>214</b> groups
+<b>11.84%</b> of context sits in agreeing repeat groups <span class="dim">(band 11.80% to 12.02%)</span>
+Most of this figure is cross-run: the same call in a later run. A session cache cannot see it.
 
-  <span class="c">→ 1,704 tier-0 cache candidates</span>   <span class="dim">results agree on every repeat</span>
-  <span class="e">→ 1,167 repeats, results disagree</span>  <span class="dim">nondeterminism findings</span>
+  <span class="dim">214 repeat groups holding 2,871 calls · 41,218 spans · 9,406 tool calls · your tool names, kept</span>
+  <span class="c">→ tier-0 cache candidate: 131 agreeing groups holding 1,704 calls</span>
+  <span class="e">→ 83 groups holding 1,167 calls returned different results</span>  <span class="dim">nondeterminism findings</span>
 
 not counted as findings, not hidden:
-  <span class="m">322</span> judgments stated only in prose · <span class="m">118</span> unanchorable
+  <span class="m">322</span> calls carried no result · <span class="m">118</span> carried no arguments
 
 report: <span class="c">./coldworks-audit.html</span></pre>
     </div>
@@ -98,12 +99,17 @@ report: <span class="c">./coldworks-audit.html</span></pre>
     </table></div>
 
     <h2>From LangSmith</h2>
-    <p>Open the project, export runs, audit the file. Where the export carries token usage the
-    report weights the headline by tokens rather than span count.</p>
+    <p>No LangSmith reader ships in release 1, and <code>--format</code> does not list one: for
+    most plans no export file exists until a script writes one, and no LangSmith export has
+    been read. The reader follows the first LangSmith export in hand.</p>
 
     <h2>From OpenTelemetry</h2>
-    <p>Point your collector's file exporter at a directory and audit what lands there. For
-    OTel-shaped exports without usage fields, the headline stays in span counts and says so.</p>
+    <p>Point your collector's file exporter at a directory and audit what lands there.</p>
+
+    <p>Whatever the source, the headline is not token-weighted. No export measured so far pairs
+    a character count with a token count of the same bytes, so the headline is a share of
+    context in characters. Where an export carries token totals, the report prints them as
+    totals, in their unit.</p>
 
     <h2>What leaves your machine: nothing</h2>
     <div class="tblwrap"><table class="tbl">
@@ -132,9 +138,10 @@ report: <span class="c">./coldworks-audit.html</span></pre>
     changed: <b>new repeated judgments since the last run</b>. That number rising is your agent
     re-buying the same decision with fresh tokens.</p>
     <div class="note"><b>Honest limit:</b> the cron line monitors only if fresh exports keep
-    landing in that directory. Langfuse's scheduled bucket export closes the loop today; the
-    direct <code>--from langfuse</code> pull is the planned successor. There is no Coldworks
-    daemon, resident process, or phone-home in any rung.</div>
+    landing in that directory. Langfuse's scheduled bucket export, on the tiers that have it or
+    self-hosted, supplies the files; no batch export has been read yet. The direct
+    <code>--from langfuse</code> pull is the planned successor. There is no Coldworks daemon,
+    resident process, or phone-home in any rung.</div>
 
     <div class="pn">
       <a href="/docs/audit/quickstart"><em>PREVIOUS</em><b>Quickstart</b></a>
