@@ -70,7 +70,9 @@
 /* ---------- top bar ---------- */
 .top {
   position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 16px;
-  padding: 13px 28px 13px 32px; border-bottom: 1px solid var(--cw-line2);
+  /* A fixed height, not padding around whatever the controls measure: the
+     sidebar's sticky offset and the headings' scroll margin both clear it. */
+  height: 61px; padding: 0 28px 0 32px; border-bottom: 1px solid var(--cw-line2);
   background: color-mix(in srgb, var(--cw-bg) 88%, transparent); backdrop-filter: blur(10px);
 }
 .wm { font-family: var(--cw-display); font-weight: 900; letter-spacing: .14em; font-size: 14px; text-decoration: none; }
@@ -97,14 +99,14 @@
 }
 .toplink:hover { border-color: var(--cw-coolant); }
 @media (max-width: 1180px) { .navlinks { display: none; } .menu { display: block; } }
-@media (max-width: 640px) { .crumb { display: none; } .top { padding: 11px 16px 11px 20px; } }
+@media (max-width: 640px) { .crumb { display: none; } .top { padding: 0 16px 0 20px; } }
 
 /* ---------- shell: sidebar + content ---------- */
 .shell { display: grid; grid-template-columns: 252px minmax(0, 1fr); max-width: 1180px; margin: 0 auto; }
 @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } }
 .side {
   border-right: 1px solid var(--cw-line2); padding: 30px 22px 60px 32px;
-  position: sticky; top: 57px; height: calc(100vh - 57px); overflow-y: auto;
+  position: sticky; top: 61px; height: calc(100vh - 61px); overflow-y: auto;
   scrollbar-width: thin; scrollbar-color: var(--cw-line) transparent;
 }
 @media (max-width: 900px) {

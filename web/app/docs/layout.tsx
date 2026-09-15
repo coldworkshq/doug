@@ -16,9 +16,9 @@ export const metadata: Metadata = {
  *  reading column. Every docs page renders inside it, the audit's included;
  *  nothing under /docs brings its own chrome.
  *
- *  The sidebar's sticky offset (57px) and the headings' scroll margin both
- *  clear the top bar, in docs.module.css. Change the bar's height and check
- *  both. */
+ *  The top bar has a fixed height (61px), and the sidebar's sticky offset and
+ *  the headings' scroll margin both clear it, in docs.module.css. Change the
+ *  bar's height and check both. */
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className={`${styles.root} ${docsDisplay.variable} ${docsBody.variable} ${docsMono.variable}`}>
