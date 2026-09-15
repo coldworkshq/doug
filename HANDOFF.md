@@ -2,19 +2,26 @@
 
 --- look lane (2026-09-15): the web app moves to the Coldworks look, doug#351 ---
 
-State:    building — branch design/coldworks-look (worktree
-          .claude/worktrees/coldworks-look), based on doug#350's tip cecdb8e
-          with its upstream unset, so a bare push cannot reach #350's branch.
-          Andrew, in session 2026-09-15: the web app uses the Coldworks look
-          everywhere (UI, fonts, colors); dark mode stays, redrawn in Coldworks
-          colors; Doug keeps its name, its mark, and the /about story. doug#351
-          records the ruling, claims ADR-0035, and carries the measurements.
-Next:     PR A is built in three commits (fonts c4b00b0, palette 0f239bd,
-          ADR-0035). Before it opens: check every page in both themes in a
-          browser, re-measure the two Plex Mono width comments, and take
-          screenshots of the two edge options for #351. Push only after #350
-          merges, rebased onto main. PR B (UI grammar) follows PR A.
-Blockers: doug#350's merge, the founder's click, before any push.
+State:    built and verified locally, not pushed — branch
+          design/coldworks-look (worktree .claude/worktrees/coldworks-look),
+          five commits on doug#350's tip cecdb8e with the upstream unset, so a
+          bare push cannot reach #350's branch: 3ed830a handoff, c4b00b0
+          faces, 0f239bd palette and computed tests, fb02bfd ADR-0035
+          (proposed), 94d9ca3 outcome cells and favicon. npm test 477 of 477
+          (the build-and-serve integration test included), tsc 0, lint 0, 16
+          of 16 planted values killed, browser check on next dev. Andrew, in
+          session 2026-09-15: the web app uses the Coldworks look everywhere;
+          dark mode stays, redrawn in Coldworks colours; Doug keeps its name,
+          its mark, and the /about story. doug#351 records the ruling, and its
+          status comment lists the edge question and PR B's deferrals.
+Next:     Founder: merge #350; pick the edge option on #351; accept or amend
+          ADR-0035. Agent, after #350 merges: `git rebase --onto origin/main
+          cecdb8e design/coldworks-look`, re-run the suite, push, and open
+          PR A (Closes #214 and #210, refs #351), then answer Doug's read.
+          PR B (UI grammar) follows.
+Blockers: #350's merge before any push. The signed-in dashboard is unseen in
+          the new look (no WorkOS config locally), and a merge deploys, so
+          production renders it first.
 Decisions this session:
 - Build on #350, not beside it: it changes globals.css,
   design-system.test.mjs, and site-header.tsx, and carries the Coldworks
@@ -96,6 +103,12 @@ Decisions this session:
   at 11.5px in Plex Mono against a 72px column (the ○ falls back to a wider
   system glyph), and 68.3px at 11px — rejected: half a pixel of slack that
   varies by platform.
+- app/icon.svg and the /about stars badge still drew #D1571E and are molten
+  now; the design-system scan reads only `#` hexes in .ts and .tsx files, so
+  it could see neither. web/app/favicon.ico is unchanged since the scaffold
+  commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
+- The next dev server runs from the coldworks worktree's .claude/launch.json
+  (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,
