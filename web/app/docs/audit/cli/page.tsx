@@ -103,12 +103,12 @@ export default function AuditCliPage() {
           A repeat group is a <b>tier-0 cache candidate</b> only when its results agree across
           every occurrence. Disagreeing groups are reported separately as nondeterminism
           findings. Beside the tier-0 cache candidate label the report prints the following,
-          where N is the number of groups whose results disagree: &ldquo;Most of this figure is
-          cross-run: the same call in a later run. A session cache cannot see it. A session cache
-          scripted from this table captured 3–20% of context on the benchmark corpus and returned
-          a stale result on 17–45% of its hits. Caching these across runs is safe only where the
-          result depends on the arguments alone. This export cannot show that; the N groups below
-          show the opposite, and a file read never qualifies.&rdquo;
+          where N is the number of groups whose results disagree: &ldquo;On the benchmark corpus,
+          most of this figure was cross-run: the same call in a later run, which a session cache
+          cannot see. There, a session cache scripted from this table captured 3–20% of context and
+          returned a stale result on 17–45% of its hits. Caching these across runs is safe only
+          where the result depends on the arguments alone. This export cannot show that; the N
+          groups below show the opposite, and a file read never qualifies.&rdquo;
         </li>
         <li>
           The headline is the share of <b>context</b> &mdash; the bytes fed back to the model

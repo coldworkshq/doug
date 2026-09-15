@@ -45,7 +45,7 @@ export default function AuditConnectPage() {
         <b>11.84%</b>
         {" of context sits in agreeing repeat groups "}
         <Comment>(band 11.80% to 12.02%)</Comment>
-        {"\nMost of this figure is cross-run: the same call in a later run. A session cache cannot see it.\n\n  "}
+        {"\nOn the benchmark corpus, most of this figure was cross-run: the same call in a later run, which a session cache cannot see.\n\n  "}
         <Comment>
           214 repeat groups holding 2,871 calls · 41,218 spans · 9,406 tool calls · your tool names, kept
         </Comment>
