@@ -1,5 +1,49 @@
 # HANDOFF — doug
 
+--- look lane (2026-09-15): the web app moves to the Coldworks look, doug#351 ---
+
+State:    building — branch design/coldworks-look (worktree
+          .claude/worktrees/coldworks-look), based on doug#350's tip cecdb8e
+          with its upstream unset, so a bare push cannot reach #350's branch.
+          Andrew, in session 2026-09-15: the web app uses the Coldworks look
+          everywhere (UI, fonts, colors); dark mode stays, redrawn in Coldworks
+          colors; Doug keeps its name, its mark, and the /about story. doug#351
+          records the ruling, claims ADR-0035, and carries the measurements.
+Next:     PR A (type and palette, both themes), locally: one font loader;
+          Coldworks palette blocks in globals.css that docs.module.css reads;
+          Doug-named tokens renamed; the mark recolored (#214); contrast and
+          ΔE2000 computed in design-system.test.mjs (#210); console's lockstep
+          block; ADR-0035 amending ADR-0020. Push only after #350 merges,
+          rebased onto main. PR B (UI grammar) follows PR A.
+Blockers: doug#350's merge, the founder's click, before any push.
+Decisions this session:
+- Build on #350, not beside it: it changes globals.css,
+  design-system.test.mjs, and site-header.tsx, and carries the Coldworks
+  font loader and dark palette — rejected: branching off main (a second
+  palette and a certain conflict), a stacked PR on #350's branch.
+- One palette for the app and the docs. Dark values are #350's, with faint
+  on cards raised to #74878F (4.12 to 4.54 on #101E24) — rejected: a second
+  dark palette.
+- Text tokens hold AA: flag text is molten #CB3F0C in light, because brand
+  #E0430A measures 4.22 on white; ember is never small text on a light
+  ground — rejected: brand hexes as text regardless of contrast.
+- Component edges default to a Coldworks-hued border at ADR-0020's
+  separation (#C2CBCF, 1.64 on white; #2E4048, 1.56 on #101E24), with
+  screenshots of the brand line (1.28) for Andrew's pick — rejected:
+  silently undoing ADR-0020's repair.
+- The measuring script first reproduced the repo's shipped figures: the
+  Sharma CIEDE2000 pairs, 9.2, 57.9, and --dim, --rule-soft, and --border
+  in both themes. #210's CVD figures reproduce only with Machado applied
+  to gamma-encoded RGB, so the test names the model it uses.
+- Fonts: the app sets font-medium 54 times, font-semibold 39, and <b> 56,
+  and #350's Instrument Sans subset stops at 500, so the loader needs 400
+  to 700 — rejected: faux bold from the 400-500 subset.
+Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
+          globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
+          web/components/doug-logo.tsx · web/lib/{design-system,
+          console-lockstep}.test.mjs · console/app/globals.css ·
+          docs/decisions/ADR-0020
+
 --- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
 
 State:    review — **doug#350**, branch docs/one-docs-site (off origin/main
