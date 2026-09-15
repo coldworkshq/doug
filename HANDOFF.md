@@ -20,10 +20,14 @@ State:    review — **doug#354**, branch deps/dependabot-alerts-2026-09-15 off
           flags. CI green on fcffc73 (6 jobs). Filed #355 (lockfile
           integrity), #356 (doug-console redeploy after merge) and #357
           (which npm writes the lockfile). Doug's read of fcffc73 (3 low)
-          answered in the PR body, 3 rows in docs/findings-log.jsonl.
-Next:     push e24c713 and the handoff commit, then watch CI and Doug's read
-          of the new head. The merge is the founder's click. Merging deploys
-          doug-web; #356 covers doug-console.
+          answered in the PR body, 3 rows in docs/findings-log.jsonl. CI
+          green on 33d293c (6 jobs). Doug's read of 33d293c (2 medium, 3
+          low) answered in the PR body, 5 more rows; an amd64 build of the
+          web image was smoke-tested for it.
+Next:     push the findings-log and handoff commit. If Doug's read of that
+          head reports findings, answer them in the PR body and log one row
+          each. The merge is the founder's click. Merging deploys doug-web;
+          #356 covers doug-console.
 Blockers: none.
 Decisions this session:
 - next 16.3.5 — 16.3.3 disabled AVIF optimization, 16.3.4 re-enabled it
@@ -63,6 +67,17 @@ Decisions this session:
   the original 148,614-byte JPEG). `reader:framework-patch-upgrade` is
   real and was already covered by CI. Three rows in
   docs/findings-log.jsonl.
+- Doug's read of 33d293c (2 medium, 3 low), answered on #354.
+  `reader:dependency-upgrade-behavior-change` held in part: the output
+  format is unchanged (formats ['image/webp'] at v16.3.0 and v16.3.5, and
+  the 16.3.3 and 16.3.4 toggle is AVIF input decoding), but the amd64
+  image and AVIF negotiation were unchecked, so an amd64 build of 33d293c
+  was smoke-tested (WebP for Accept: image/avif, 400 for a remote AVIF
+  URL, sharp loads). `reader:toolchain-version-drift`,
+  `reader:lockfile-integrity-gaps` (its counts inverted) and
+  `reader:deploy-coupling` restate #357, #355 and #356.
+  `reader:dependency-hoisting-change` is disproved by the image
+  inspection. Five rows in docs/findings-log.jsonl.
 Pointers: web/package.json · console/package.json · package-lock.json ·
           docs/findings-log.jsonl · #355 · #356 · #357
 
