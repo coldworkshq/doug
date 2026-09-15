@@ -49,14 +49,14 @@ export function ScoreStrip({
         <YAxis type="number" dataKey="y" domain={[0, maxStack + 1]} hide />
         <ReferenceLine
           x={threshold}
-          stroke="var(--sheen)"
+          stroke="var(--ink-2)"
           strokeDasharray="4 3"
           label={{
             value: `threshold ${threshold}`,
             position: "top",
             fontSize: 10,
             fontFamily: "var(--mono-face)",
-            fill: "var(--sheen)",
+            fill: "var(--ink-2)",
           }}
         />
         <Scatter data={data} isAnimationActive={false}>

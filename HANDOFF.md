@@ -55,6 +55,20 @@ Decisions this session:
   rejected: docs-local copies of the same hexes.
 - Deferred to PR B (doug#351): the docs chips set molten and ember text on
   their soft grounds at 3.58:1 and 2.17:1 in light.
+- Surfaces are flat: the dot grid, the accent glow, and the atmosphere
+  tokens go, and the dot-grid test goes with the texture it protected —
+  rejected: a faint Coldworks dot grid (no Coldworks surface has one).
+- --radius is 0.75rem, the registry's 12px card radius. Emphasis words in
+  Doug's display headlines are text-molten (display only, 3:1); the /about
+  step numbers are text-coolant, the docs' eyebrow colour; the four rust
+  hairlines are .bg-thermal.
+- The docs read the site palette: every --cw- colour points at globals.css,
+  and only the card shadow and the terminal ink stay local. The docs' faint
+  text becomes the AA --faint.
+- Verify in a browser before PR A opens: dashboard/page.tsx:625 and :744
+  justify column widths with Geist Mono measurements; re-measure the 14d
+  header and `○ censored` at 11.5px in IBM Plex Mono. PR B also owns the
+  --ring glow inlined on /doug:481.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,

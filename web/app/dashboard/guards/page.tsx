@@ -56,7 +56,7 @@ export default async function GuardsPage() {
         />
 
         <main className="mx-auto w-full max-w-[980px] px-6 py-10">
-          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
+          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
             <span className={ROUTE_CHIP}>/guards</span>
             <span className="truncate normal-case tracking-normal text-muted-foreground">
               {connection.account_login}
@@ -111,7 +111,7 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
         )}
       </p>
 
-      <dl className="mono mt-6 grid grid-cols-3 gap-4 border-t border-border pt-4 text-[11px] uppercase tracking-[.12em] text-[var(--dim)]">
+      <dl className="mono mt-6 grid grid-cols-3 gap-4 border-t border-border pt-4 text-[11px] uppercase tracking-[.12em] text-[var(--faint)]">
         <div>
           <dt>Signatures owed</dt>
           <dd className="mt-1 text-[22px] normal-case tracking-normal text-foreground">{snapshot.counts.signatures_owed}</dd>
@@ -134,7 +134,7 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
       ) : (
         <div className="mt-6 overflow-x-auto border-t border-border">
           <table className="w-full text-left text-[12.5px]">
-            <thead className="mono text-[10px] uppercase tracking-[.12em] text-[var(--dim)]">
+            <thead className="mono text-[10px] uppercase tracking-[.12em] text-[var(--faint)]">
               <tr>
                 <th className="py-2 pr-3">State</th>
                 <th className="py-2 pr-3">Guard</th>
@@ -150,14 +150,14 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
                 const sampled = g.auditAgreed + g.auditDisagreed + g.auditInconclusive;
                 return (
                   <tr key={`${g.guardId}-${g.guardVersion}`} className="border-t border-border align-top">
-                    <td className="mono py-2 pr-3 text-[10.5px] uppercase tracking-[.1em] text-[var(--dim)]">{g.state}</td>
+                    <td className="mono py-2 pr-3 text-[10.5px] uppercase tracking-[.1em] text-[var(--faint)]">{g.state}</td>
                     <td className="mono py-2 pr-3 text-foreground">
                       {g.guardId.slice(0, 8)} v{g.guardVersion}
-                      <div className="text-[10px] text-[var(--dim)]">{g.artifactDigestAlgo}:{g.artifactDigestValue.slice(0, 12)}</div>
+                      <div className="text-[10px] text-[var(--faint)]">{g.artifactDigestAlgo}:{g.artifactDigestValue.slice(0, 12)}</div>
                     </td>
                     <td className="py-2 pr-3">
                       {g.pack}
-                      <div className="mono text-[10px] text-[var(--dim)]">{g.target}</div>
+                      <div className="mono text-[10px] text-[var(--faint)]">{g.target}</div>
                     </td>
                     <td className="mono py-2 pr-3 text-[11px]">
                       {g.enforces && g.enforces.length > 0

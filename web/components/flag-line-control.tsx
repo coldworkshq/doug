@@ -131,7 +131,7 @@ function SettingSwitch({
         role="switch"
         aria-checked={on}
         aria-label={`${label} is ${on ? "on" : "off"} — turn it ${on ? "off" : "on"}`}
-        className="flex cursor-pointer items-center gap-2.5 rounded-[4px] border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+        className="flex cursor-pointer items-center gap-2.5 rounded-[4px] border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]"
       >
         {/* --foreground, not the accent: the accent is a hair off --flag on
             this surface, and a control that is not about a verdict must not

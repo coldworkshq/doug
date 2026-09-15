@@ -10,7 +10,9 @@
   --font-sans: var(--font-instrument-sans);
   --font-mono: var(--font-plex-mono);
   --font-heading: var(--font-archivo);
-  --color-sheen: var(--sheen);
+  --color-coolant: var(--coolant);
+  --color-molten: var(--molten);
+  --color-ink-2: var(--ink-2);
   --color-flag: var(--flag);
   --color-clear: var(--clear);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -86,66 +88,71 @@
      drift the ruling was written to prevent.
      ENFORCED: lib/dashboard-contract.test.mjs.
 
-     PALETTE DIRECTION (2026-08-24). The neutrals are cool slate; the accent is
-     the only warm hue on the page. Before, both were warm — a cream ground
-     under a rust accent — and warm-on-warm is why nothing separated. Splitting
-     the temperature buys separation that costs no contrast ratio at all.
-     The measured changes, against the surface each thing renders on:
-       --card vs --background   1.03:1 -> 1.14:1  (cards had no lift at all)
-       --border vs --card       1.26:1 -> 1.64:1
-       --border vs --background 1.23:1 -> 1.43:1
-       --iridescent as text     4.01:1 -> 5.03:1  (was below AA)
-       accent chip on --accent  3.65:1 -> 5.15:1  (was below AA)
-     Body ink and the muted ramp were already AA and stayed there; they were
-     never the complaint. Raising --border is what the previous round (#193)
-     declined to do, having treated it as a fixed ceiling. */
-  --sheen: #4a5a6b;
-  --flag: #bf3125;
-  --clear: #0f6b48;
+     THE COLDWORKS PALETTE (ADR-0035). These are the landing page's and the
+     docs' values, so every page on the origin sets one palette. Where a brand
+     colour fails AA as text, the text token is a darker shade of it and the
+     brand colour stays for fills, marks, and display type: --flag is molten
+     darkened until it clears 4.5:1 on its own chip tints over the page, and
+     --faint is the brand's faint darkened until it clears 4.5:1 on the page,
+     the card, and a hovered row. No figure is typed here: every ratio and
+     separation is computed from these hexes by lib/design-system.test.mjs. */
+  --coolant: #1e56d6;
+  --coolant-soft: #e4ebfa;
+  --molten: #e0430a;
+  --molten-soft: #fbe9e0;
+  --ember: #f08c1a;
+  --ember-soft: #fceedc;
+  --ink-2: #3e4f57;
+  --faint: #617077;
+  --line: #dde5e8;
+  --line-2: #eaeff0;
+  --paper-2: #fafbfb;
 
-  /* ALWAYS A COLOUR, in both themes — never a gradient. 34 call sites read it
-     through `text-[var(--iridescent)]`, `border-[var(--iridescent)]` and
-     `color-mix(in srgb, var(--iridescent) 35%, transparent)`, and every one
-     of those is invalid CSS if the token holds a gradient: the focus ring
-     silently stops rendering rather than failing loudly. The gradient lives in
-     --brand-wash instead. ENFORCED: lib/design-system.test.mjs. */
-  --iridescent: #b0430d;
-  /* The brand gradient, for .text-iridescent / .bg-iridescent only. Solid in
-     light (matching the accent), a real gradient in dark. */
-  --brand-wash: #b0430d;
+  /* The two data colours, as text tokens. The rule they serve is the ported
+     utilities block at the end of this file. */
+  --flag: #af390f;
+  --clear: #1e764b;
 
-  --background: #eef0f2;
-  --foreground: #15181c;
+  /* Molten through ember to coolant, the order the mark reads. A gradient, so
+     no rule may read it where a colour is expected; only .bg-thermal does. */
+  --thermal: linear-gradient(90deg, #e0430a 0%, #f08c1a 38%, #1e56d6 86%);
+
+  --background: #f4f6f5;
+  --foreground: #0f1b21;
   --card: #ffffff;
-  --card-foreground: #15181c;
+  --card-foreground: #0f1b21;
   --popover: #ffffff;
-  --popover-foreground: #15181c;
-  --primary: #15181c;
-  --primary-foreground: #eef0f2;
-  --secondary: #e4e7ea;
-  --secondary-foreground: #15181c;
-  --muted: #e4e7ea;
-  --muted-foreground: #4e535a;
-  --accent: #fbe7d8;
-  --accent-foreground: #a8400c;
+  --popover-foreground: #0f1b21;
+  --primary: #0f1b21;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeff0;
+  --secondary-foreground: #0f1b21;
+  --muted: #eaeff0;
+  --muted-foreground: #5b6a72;
+  --accent: #e4ebfa;
+  --accent-foreground: #123a99;
   --destructive: var(--flag);
-  --border: #c4cbd2;
-  --input: #aab2ba;
-  --ring: #b0430d;
-  --chart-1: #15181c;
-  --chart-2: var(--sheen);
+  /* Component edges keep ADR-0020's separation from the card, in a Coldworks
+     slate. The brand's own hairline is --line, which row dividers use, because
+     a rule inside a table must stay lighter than the table's edge. Which edge
+     the app wears is the open question on doug#351. */
+  --border: #c2cbcf;
+  --input: #a6b1b6;
+  --ring: #1e56d6;
+  --chart-1: #0f1b21;
+  --chart-2: var(--ink-2);
   --chart-3: var(--flag);
-  --chart-4: #4e535a;
-  --chart-5: #aab2ba;
-  --radius: 0.875rem;
+  --chart-4: #5b6a72;
+  --chart-5: #a6b1b6;
+  --radius: 0.75rem;
   --sidebar: #ffffff;
-  --sidebar-foreground: #15181c;
-  --sidebar-primary: #15181c;
-  --sidebar-primary-foreground: #eef0f2;
-  --sidebar-accent: #fbe7d8;
-  --sidebar-accent-foreground: #a8400c;
-  --sidebar-border: #c4cbd2;
-  --sidebar-ring: #b0430d;
+  --sidebar-foreground: #0f1b21;
+  --sidebar-primary: #0f1b21;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e4ebfa;
+  --sidebar-accent-foreground: #123a99;
+  --sidebar-border: #c2cbcf;
+  --sidebar-ring: #1e56d6;
 
   /* Coverage ramp. Tokens rather than the literals the utilities used to
      carry, because a fixed light-grey track on a dark card is unreadable —
@@ -153,20 +160,11 @@
      console/app/globals.css, so the values have to move OUT of it to differ
      per theme. Neutral in both directions: coverage is a magnitude, never a
      judgement, so this ramp never borrows --flag/--clear. */
-  --cov-track: #dde1e5;
-  --cov-fill: #3f464d;
+  --cov-track: #dde5e8;
+  --cov-fill: #3e4f57;
   /* The "never read" band's hatching — the third rung of the same ramp, and a
      token for the same reason: it renders on the card in both themes. */
-  --cov-unread: #b6bec6;
-
-  --atmosphere:
-    radial-gradient(
-      50rem 26rem at 50% -8%,
-      rgba(176, 67, 13, 0.09),
-      transparent 60%
-    ),
-    radial-gradient(#dfe3e7 1px, transparent 1px);
-  --atmosphere-size: 100% 100%, 22px 22px;
+  --cov-unread: #b3bec2;
 }
 
 /* THE COUNTERPART, reached only by the toggle. Three selectors mirroring the
@@ -187,134 +185,93 @@
 .dark,
 .dark .dashboard-surface,
 .dark .surface-tokens {
-  --sheen: #8fa6bd;
-  --flag: #f0705f;
-  --clear: #4cc08c;
+  --coolant: #5b8df7;
+  --coolant-soft: #101f3c;
+  --molten: #ff5e22;
+  --molten-soft: #2c1408;
+  --ember: #ffab37;
+  --ember-soft: #2c1f08;
+  --ink-2: #b1bfc4;
+  --faint: #7c8e96;
+  --line: #1d2f37;
+  --line-2: #172730;
+  --paper-2: #0d181d;
 
-  /* A COLOUR here too — see the light block. The gradient this token used to
-     hold in dark is the reason the console could never follow the toggle
-     without every focus ring and accent border silently vanishing. */
-  --iridescent: #e8834f;
-  --brand-wash: linear-gradient(115deg, #f0a077 0%, #e8834f 45%, #d1603f 100%);
+  --flag: #ff5e22;
+  --clear: #3fb67a;
 
-  --background: #14161a;
-  --foreground: #e7e9ec;
-  --card: #1e2127;
-  --card-foreground: #e7e9ec;
-  --popover: #1e2127;
-  --popover-foreground: #e7e9ec;
-  --primary: #e7e9ec;
-  --primary-foreground: #14161a;
-  --secondary: #262a30;
-  --secondary-foreground: #e7e9ec;
-  --muted: #262a30;
-  --muted-foreground: #9ba3ac;
-  --accent: #3b2418;
-  --accent-foreground: #f0a077;
+  --thermal: linear-gradient(90deg, #ff5e22 0%, #ffab37 38%, #5b8df7 86%);
+
+  --background: #0a1317;
+  --foreground: #e9eff0;
+  --card: #101e24;
+  --card-foreground: #e9eff0;
+  --popover: #101e24;
+  --popover-foreground: #e9eff0;
+  --primary: #e9eff0;
+  --primary-foreground: #0a1317;
+  --secondary: #172730;
+  --secondary-foreground: #e9eff0;
+  --muted: #172730;
+  --muted-foreground: #93a5ad;
+  --accent: #101f3c;
+  --accent-foreground: #8db0fa;
   --destructive: var(--flag);
-  --border: #3a4149;
-  --input: #4a525b;
-  --ring: #e8834f;
-  --chart-1: #e7e9ec;
-  --chart-2: var(--sheen);
+  --border: #2e4048;
+  --input: #3f5159;
+  --ring: #5b8df7;
+  --chart-1: #e9eff0;
+  --chart-2: var(--ink-2);
   --chart-3: var(--flag);
-  --chart-4: #9ba3ac;
-  --chart-5: #4a525b;
-  --radius: 0.875rem;
-  --sidebar: #1e2127;
-  --sidebar-foreground: #e7e9ec;
-  --sidebar-primary: #e7e9ec;
-  --sidebar-primary-foreground: #14161a;
-  --sidebar-accent: #3b2418;
-  --sidebar-accent-foreground: #f0a077;
-  --sidebar-border: #3a4149;
-  --sidebar-ring: #e8834f;
+  --chart-4: #93a5ad;
+  --chart-5: #3f5159;
+  --radius: 0.75rem;
+  --sidebar: #101e24;
+  --sidebar-foreground: #e9eff0;
+  --sidebar-primary: #e9eff0;
+  --sidebar-primary-foreground: #0a1317;
+  --sidebar-accent: #101f3c;
+  --sidebar-accent-foreground: #8db0fa;
+  --sidebar-border: #2e4048;
+  --sidebar-ring: #5b8df7;
 
   /* Inverted, and still neutral: the track is the darker half here and the
      fill the lighter, so an empty ruler still reads as absence rather than as
      a filled bar in a colour nobody assigned a meaning. */
-  --cov-track: #2c3138;
-  --cov-fill: #aeb6bf;
-  --cov-unread: #5b646d;
-
-  --atmosphere:
-    radial-gradient(
-      60rem 32rem at 15% -10%,
-      rgba(232, 131, 79, 0.10),
-      transparent 60%
-    ),
-    radial-gradient(
-      50rem 28rem at 85% -5%,
-      rgba(143, 166, 189, 0.08),
-      transparent 60%
-    ),
-    radial-gradient(#22262c 1px, transparent 1px);
-  --atmosphere-size: 100% 100%, 100% 100%, 22px 22px;
+  --cov-track: #1d2f37;
+  --cov-fill: #a3b3ba;
+  --cov-unread: #51636b;
 }
 
 /* The signed-in console's own surface: the palette above (shared, not copied)
-   plus the three values the deleted dashboard.module.css carried that have NO
-   equivalent in the palette. They keep their own hex rather than being
-   substituted with globals' nearest neighbour — --rule-soft alone draws every
-   row divider in the run ledger, so "close enough" would restyle the whole
-   table.
+   plus the one value nothing else on the site draws. It keeps its own hex
+   rather than being substituted with a palette neighbour.
 
-   NOW DECLARED TWICE, once per theme, which is the change the toggle forced.
-   A single light-only declaration was safe only while the console could not
-   go dark: the moment it can, an un-inverted #eae7df divider is a near-white
-   line across a #14161a table. The dark counterparts are NOT the light values
-   darkened by eye — each was solved to the same job at the same ratio.
+   DECLARED TWICE, once per theme, because the console follows the toggle: a
+   light-only value would be a light hover tint across a dark table.
 
-   --cov-track / --cov-fill are deliberately not here: they are the coverage
-   ramp, and they now live in the palette blocks above so the utilities that
-   read them can stay character-identical to console's. */
+   --dim and --rule-soft lived here until ADR-0035. The Coldworks palette gave
+   both a home, because the docs set faint text and hairlines from the same two
+   values, so they are --faint and --line in the palette blocks above. */
 .dashboard-surface {
-  /* THE THREE-STEP CHROME RAMP, bottom rung. Everything --dim paints is
-     9–10.5px uppercase set in tracking — the rail's SPACE/REPO labels, the
-     /runs header line, the dock's block sub-labels — i.e. the smallest text on
-     the page, so it gets the tightest scrutiny, not the loosest. 4.64:1 here,
-     a clear step below --muted-foreground (6.8:1), itself below --foreground
-     (15.6:1).
-
-     --rule-soft is a row divider and must stay LIGHTER than --border, or a
-     rule inside the table outweighs the table's own edge. 1.33:1 against
-     --card, under --border's 1.64:1. That headroom is no longer the 0.02 the
-     previous round had to work inside: raising --border is exactly what this
-     change did, and the divider got the room as a result.
-
-     Figures are against the surface each renders on. */
-  --rule-soft: #dbe0e5;
-  --dim: #666c73;
-  --row-hover: #f6f7f8;
-  --surface-dot: #dfe3e7;
+  /* A hovered row: one small step off the card, so a hover reads as a hover
+     and never as a selection. */
+  --row-hover: #f5f7f8;
 
   min-height: 100vh;
   color: var(--foreground);
-  /* THE DOT GRID GETS ITS OWN TOKEN, and this is not tidying. It used to paint
-     with --border, which was harmless only while --border was 1.23:1 — at that
-     weight the dots were a texture you had to look for. Raising --border to
-     1.43:1 for the sake of separating items raised the grid with it, and 20px
-     apart across a whole viewport that reads as noise rather than as paper.
-     The two jobs moved in opposite directions the moment one of them mattered:
-     a border is meant to be seen, and this is meant to be barely felt. */
-  background: radial-gradient(var(--surface-dot) 1px, transparent 1px) var(--background);
-  background-size: 20px 20px;
+  /* Flat, as every Coldworks surface is. The dot grid and the accent glow were
+     the previous palette's paper texture. */
+  background: var(--background);
   font-family: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Same three, inverted. The ratios are held, not the hexes: --dim is 4.80:1 on
-   the dark card (light: 5.31:1 on white), and --rule-soft stays under --border
-   there too — 1.20:1 against --card where --border is 1.56:1. Splitting these
-   across two rules rather than folding them into the palette blocks keeps them
-   SCOPED: they stay undeclared on :root, so a component that drifts out of the
-   console still loses them loudly instead of borrowing a value that happens to
-   be defined site-wide.
+/* The same value, inverted. Scoped rather than folded into the palette
+   blocks, so a component that drifts out of the console loses it loudly
+   instead of borrowing a value defined site-wide.
    ENFORCED: lib/design-system.test.mjs pins both directions. */
 .dark .dashboard-surface {
-  --rule-soft: #2a2f36;
-  --dim: #858d96;
-  --row-hover: #23272d;
-  --surface-dot: #22262c;
+  --row-hover: #14252c;
 }
 
 /* THE PUBLIC SITE'S FLOATING NAV BAR, and the one surface on the marketing
@@ -341,29 +298,25 @@
    THE VALUES ARE THE LIGHT PALETTE'S, copied and not invented — same hexes as
    the `:root` block above, so the bar cannot drift into a second palette.
    The one exception is --background: the bar wants the LIFTED surface
-   (--card's #ffffff), not the page ground, because lifting is the whole point.
-   Its 90% fill over a dark page composites to roughly #e6e8ea, which is a
-   light bar and not a glare.
+   (--card's white), not the page ground, because lifting is the whole point.
 
-   CONTRAST IS UNCHANGED OR BETTER: --foreground #15181c on #ffffff is 16.6:1,
-   --muted-foreground #4e535a is 7.3:1, and the Sign in pill is the light
-   theme's own inverted pair. Nothing here is a colour this stylesheet did not
-   already ship. */
+   CONTRAST is computed rather than stated: lib/design-system.test.mjs checks
+   the bar's inks against the bar's own ground with the rest of the palette. */
 .site-bar {
   --background: #ffffff;
-  --foreground: #15181c;
-  --muted-foreground: #4e535a;
-  --border: #c4cbd2;
-  --accent: #fbe7d8;
-  --accent-foreground: #a8400c;
-  --primary: #15181c;
-  --primary-foreground: #eef0f2;
+  --foreground: #0f1b21;
+  --muted-foreground: #5b6a72;
+  --border: #c2cbcf;
+  --accent: #e4ebfa;
+  --accent-foreground: #123a99;
+  --primary: #0f1b21;
+  --primary-foreground: #ffffff;
   /* The base layer puts `outline-ring/50` on every element, so the keyboard
      focus ring inside the bar reads --ring like everything else. Left
-     undeclared it would keep the PAGE's ring — dark mode's lighter orange,
-     picked to be seen against #14161a — on a white bar. A light surface takes
-     the light theme's ring. */
-  --ring: #b0430d;
+     undeclared it would keep the PAGE's ring — dark mode's lighter coolant,
+     picked to be seen against the dark page — on a white bar. A light surface
+     takes the light theme's ring. */
+  --ring: #1e56d6;
 }
 
 /* The dashboard's per-PR history disclosure, in CSS.
@@ -422,17 +375,6 @@
     @apply bg-background text-foreground;
     position: relative;
   }
-  /* Atmosphere: a soft accent glow plus a faint texture, both theme-aware
-     via the --atmosphere custom properties above. */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: -1;
-    background: var(--atmosphere);
-    background-size: var(--atmosphere-size);
-  }
   html {
     @apply font-sans;
   }
@@ -456,22 +398,13 @@
   .animate-rise {
     animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  /* Brand wash, for display text and hairline highlights — marketing surfaces
-     only (app/page.tsx, app/about, app/scoreboard). It reads --brand-wash and
-     NOT --iridescent, and the split is load-bearing rather than cosmetic:
-     --brand-wash holds a gradient in dark mode, and `background-clip: text`
-     is the only context in this stylesheet where a gradient is a valid value
-     for what is otherwise used as a colour. Everything that needs an actual
-     colour — borders, focus rings, accent text in the console — reads
-     --iridescent, which is a colour in both themes. */
-  .text-iridescent {
-    background: var(--brand-wash);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .bg-iridescent {
-    background: var(--brand-wash);
+  /* The thermal hairline along the top of a marketing card (app/doug,
+     app/scoreboard, components/landing). It reads --thermal, the one gradient
+     token. Everything that wants a colour reads a colour token instead,
+     because a gradient is invalid wherever a colour is expected: a focus ring
+     or a border silently stops rendering. */
+  .bg-thermal {
+    background: var(--thermal);
   }
   /* Bento-style panel: solid card + hairline border, matching the
      GitHub Pages site's .cell. Used by the landing page, /queue,
@@ -542,12 +475,11 @@
      its own monospace face in --mono-face. */
   .mono { font-family: var(--mono-face); font-variant-numeric: tabular-nums; }
 
-  /* The two data colours. NEVER add a third, and never use --iridescent
-     here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
-     than any two things a reader must tell apart, and closer still under
-     deuteranopia. For scale, the pair this rule protects — --flag against
-     --clear — is ΔE2000 57.9. --iridescent is
-     chrome only (nav, focus, hover rules). */
+  /* The two data colours. NEVER add a third, and never paint a verdict in
+     the chrome accent: navigation, focus, and hover must never read as a
+     judgement. How far apart the three sit, in normal vision and under
+     deuteranopia and protanopia, is computed from web's stylesheet by
+     web/lib/design-system.test.mjs and never typed here (#210). */
   .data-flag  { color: var(--flag); }
   .data-clear { color: var(--clear); }
 

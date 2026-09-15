@@ -12,7 +12,7 @@ import { getConnections } from "@/lib/session-api";
  *  from the ledger page: `app/dashboard/page.tsx` is a route module, and
  *  importing presentation out of one route into another drags the whole module
  *  — its data reads included — into this page's graph. */
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
 
 /** Every repository this installation covers, one block each.
  *
@@ -85,7 +85,7 @@ export default async function SettingsPage() {
         />
 
         <main className="mx-auto w-full max-w-[820px] px-6 py-10">
-        <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
+        <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
           <span className={ROUTE}>/settings</span>
           <span className="truncate normal-case tracking-normal text-muted-foreground">
             {connection.account_login}

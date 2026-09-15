@@ -63,7 +63,7 @@ export default function AboutPage() {
             className="animate-rise font-heading mt-6 max-w-2xl text-5xl leading-[1.02] font-semibold tracking-tight md:text-6xl"
             style={{ animationDelay: "80ms" }}
           >
-            The dog <span className="text-iridescent">came first</span>.
+            The dog <span className="text-molten">came first</span>.
           </h1>
           <p
             className="animate-rise mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground"
@@ -169,7 +169,7 @@ export default function AboutPage() {
 
           <div className="mt-10 grid gap-4 md:grid-cols-3">
             <div className="panel flex flex-col rounded-2xl p-8">
-              <span className="text-iridescent font-mono text-sm">01</span>
+              <span className="text-coolant font-mono text-sm">01</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Star it
               </h3>
@@ -191,7 +191,7 @@ export default function AboutPage() {
             </div>
 
             <div className="panel flex flex-col rounded-2xl p-8">
-              <span className="text-iridescent font-mono text-sm">02</span>
+              <span className="text-coolant font-mono text-sm">02</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Ask Doug something
               </h3>
@@ -199,7 +199,7 @@ export default function AboutPage() {
             </div>
 
             <div className="panel flex flex-col rounded-2xl p-8">
-              <span className="text-iridescent font-mono text-sm">03</span>
+              <span className="text-coolant font-mono text-sm">03</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Tell us your story
               </h3>

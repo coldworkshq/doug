@@ -43,7 +43,7 @@ export function ThresholdGear({
         <button
           type="button"
           aria-label="Preview the ledger at a different line"
-          className="mono relative flex h-[30px] cursor-pointer items-center gap-1.5 rounded-[5px] border border-border bg-card px-2 text-[11px] text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+          className="mono relative flex h-[30px] cursor-pointer items-center gap-1.5 rounded-[5px] border border-border bg-card px-2 text-[11px] text-muted-foreground hover:border-[var(--coolant)] hover:text-foreground focus-visible:border-[var(--coolant)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]"
         >
           <svg viewBox="0 0 16 16" aria-hidden className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.4">
             <circle cx="8" cy="8" r="2.1" />
@@ -62,7 +62,7 @@ export function ThresholdGear({
               draws a full banner above the table. It is a locator for the
               control that set it, not the disclosure itself. */}
           {lens !== null && (
-            <span aria-hidden className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[var(--iridescent)]" />
+            <span aria-hidden className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[var(--coolant)]" />
           )}
         </button>
       </PopoverTrigger>

@@ -32,10 +32,10 @@ import type { RunSummary } from "@/lib/session-api";
  *  a pull request, and painting it in the miss colour would assert one. Nothing
  *  here is encoded by colour alone; every band carries its word and its count.
  *
- *  Surface-scoped tokens (--rule-soft, --dim, --row-hover) are deliberately
- *  absent: this file renders inside .dashboard-surface today, but it is a
- *  component and nothing stops it being mounted elsewhere, so it stays on the
- *  palette every surface declares. */
+ *  The surface-scoped token (--row-hover) is deliberately absent: this file
+ *  renders inside .dashboard-surface today, but it is a component and nothing
+ *  stops it being mounted elsewhere, so it stays on the palette every surface
+ *  declares. */
 
 const BLOCK = "border-b border-border px-5 py-[18px]";
 
@@ -152,7 +152,7 @@ function Histogram({ census }: { census: ReturnType<typeof bandCensus> }) {
         {census.threshold !== null && (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-y-0 w-px bg-[var(--iridescent)]"
+            className="pointer-events-none absolute inset-y-0 w-px bg-[var(--coolant)]"
             style={{ left: `${Math.min(100, Math.max(0, census.threshold * 100))}%` }}
           />
         )}
@@ -160,7 +160,7 @@ function Histogram({ census }: { census: ReturnType<typeof bandCensus> }) {
       <div className="mono mt-1.5 flex items-baseline justify-between border-t border-border pt-1.5 text-[9.5px] text-muted-foreground">
         <span>0.00</span>
         {census.threshold !== null ? (
-          <span className="text-[var(--iridescent)]">line {census.threshold.toFixed(2)}</span>
+          <span className="text-[var(--coolant)]">line {census.threshold.toFixed(2)}</span>
         ) : (
           <span>thresholds differ — no single line to draw</span>
         )}
@@ -229,7 +229,7 @@ export function CensusPanel({ runs, scope }: { runs: RunSummary[]; scope: string
   return (
     <section aria-labelledby="census-title" className="pb-16">
       <header className="border-b border-border px-5 pt-5 pb-4">
-        <h2 id="census-title" className="mono text-[10px] font-medium uppercase tracking-[.17em] text-[var(--iridescent)]">
+        <h2 id="census-title" className="mono text-[10px] font-medium uppercase tracking-[.17em] text-[var(--coolant)]">
           Ledger census
         </h2>
         <p className="mono mt-1.5 text-[10.5px] leading-[1.45] text-muted-foreground">

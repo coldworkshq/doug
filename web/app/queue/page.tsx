@@ -31,7 +31,7 @@ function marker(r: Reason): string {
 
 function severityTone(r: Reason): string {
   if (r.severity === "high") return "text-flag";
-  if (r.severity === "medium") return "text-sheen";
+  if (r.severity === "medium") return "text-ink-2";
   return "text-muted-foreground";
 }
 
@@ -67,7 +67,7 @@ export default async function QueuePage({
               >
                 {source === "live" ? (
                   <>
-                    <span className="size-1.5 rounded-full bg-sheen" /> live api
+                    <span className="size-1.5 rounded-full bg-ink-2" /> live api
                   </>
                 ) : (
                   <>
@@ -140,7 +140,7 @@ export default async function QueuePage({
                     href={pr.url ?? "#"}
                     target="_blank"
                     rel="noreferrer"
-                    className="transition-colors hover:text-sheen"
+                    className="transition-colors hover:text-ink-2"
                   >
                     <span className="mr-2 font-mono text-sm text-muted-foreground">
                       #{pr.number}
