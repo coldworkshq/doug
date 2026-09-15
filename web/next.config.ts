@@ -61,11 +61,15 @@ const nextConfig: NextConfig = {
   // served the registry's landing and the audit CLI's docs, so its docs URLs
   // mean the audit docs, which live at /docs/audit here: a path-preserving
   // rule alone would send www/docs/cli.html to a 404 and www/docs/cli to
-  // Doug's own CLI page (probed on the apex 2026-09-14). The docs rules
-  // mirror the forwards the registry answered and come before the catch-all,
+  // Doug's own CLI page (probed on the apex 2026-09-14). Only the audit's own
+  // page names are forwarded (the docs home, and index, quickstart, connect,
+  // and cli with or without .html); every other docs path keeps its path
+  // through the catch-all, so Doug's pages and the audit's routes resolve on
+  // www too. A rule on every /docs path sent www/docs/report to
+  // /docs/audit/report, a 404. The docs rules come before the catch-all,
   // because the first matching rule wins. Permanent, like the subdomain's:
-  // the alias is settled. The apex rules after them take each forward the
-  // rest of the way.
+  // the alias is settled, and each forward lands on a stable apex URL. The
+  // apex rules after them take each forward the rest of the way.
   //
   // The audit's docs moved inside the one docs site on 2026-09-15: its
   // overview is the second half of /docs, and its pages are routes. The
@@ -86,7 +90,18 @@ const nextConfig: NextConfig = {
       },
       { source: "/landing.html", has: www, destination: `${COLDWORKS_URL}/`, permanent: true },
       { source: "/docs", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
-      { source: "/docs/:path*", has: www, destination: `${COLDWORKS_URL}/docs/audit/:path*`, permanent: true },
+      {
+        source: "/docs/:page(index|quickstart|connect|cli).html",
+        has: www,
+        destination: `${COLDWORKS_URL}/docs/audit/:page.html`,
+        permanent: true,
+      },
+      {
+        source: "/docs/:page(quickstart|connect|cli)",
+        has: www,
+        destination: `${COLDWORKS_URL}/docs/audit/:page`,
+        permanent: true,
+      },
       { source: "/:path*", has: www, destination: `${COLDWORKS_URL}/:path*`, permanent: true },
       { source: "/docs/audit", destination: "/docs#the-audit", permanent: false },
       { source: "/docs/audit/index.html", destination: "/docs#the-audit", permanent: false },

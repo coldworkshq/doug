@@ -387,6 +387,11 @@ describe("single host: the subdomain redirects to the apex", () => {
       ["/docs/cli.html", "/docs/audit/cli.html", "/docs/audit/cli"],
       ["/docs/quickstart.html", "/docs/audit/quickstart.html", "/docs/audit/quickstart"],
       ["/docs/connect", "/docs/audit/connect", "/docs/audit/connect"],
+      // Only the audit's own legacy names mean the audit. Every other docs
+      // path keeps its path: Doug's pages, and the audit's routes themselves,
+      // which a rule on every /docs path sent to /docs/audit/audit/cli.
+      ["/docs/report", "/docs/report", "/docs/report"],
+      ["/docs/audit/cli", "/docs/audit/cli", "/docs/audit/cli"],
     ];
     for (const [from, to, final] of legacy) {
       const response = await requestAs(WWW, apex.origin, from);
@@ -402,5 +407,22 @@ describe("single host: the subdomain redirects to the apex", () => {
       }
       assert.equal(`${at.pathname}${at.hash}`, final, `${WWW}${from} ends on the wrong page`);
     }
+  });
+
+  test("the audit's old overview URL lands on a heading the served overview renders", async () => {
+    // /docs/audit forwards to /docs#the-audit. A fragment with no element
+    // behind it is not an error anywhere: the reader lands at the top of the
+    // overview, on Doug's half, and nothing reports it. So this reads the
+    // served HTML; lib/docs-nav.test.mjs reads only the page's source.
+    const forward = await requestAs(APEX, apex.origin, "/docs/audit");
+    assert.equal(forward.status, 307);
+    const target = new URL(forward.headers.location, `https://${APEX}`);
+    assert.equal(`${target.pathname}${target.hash}`, "/docs#the-audit");
+    const html = await (await fetch(new URL(target.pathname, apex.origin))).text();
+    assert.match(
+      html,
+      new RegExp(`<h2[^>]*\\bid="${target.hash.slice(1)}"`),
+      "the served overview has no heading for the fragment the redirect names",
+    );
   });
 });

@@ -2,19 +2,19 @@
 
 --- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
 
-State:    review — the pull request from branch docs/one-docs-site (off
-          origin/main 2561e5f, worktree .claude/worktrees/docs-one-docs-site).
-          Andrew, in session: everything under coldworks.dev/docs, the
-          /docs/audit look kept, and the audit maybe not its own docs page;
-          the UI structure was left to the agent. Verified 2026-09-15: lint
-          rc 0, tsc rc 0, unit tests 459 passed, the build-and-serve
-          integration test 15 passed, 16 of 16 planted mutants killed, and a
-          production build serving the docs module CSS, the four docs fonts,
-          and the redirects.
-Next:     watch CI and Doug's read on the pull request, and answer each
-          finding in its body. The merge is the founder's click. After it,
-          coldworks/docs/design/front-door/concept.md:51 still cites the
-          deleted web/public/docs/audit/cli.html.
+State:    review — **doug#350**, branch docs/one-docs-site (off origin/main
+          2561e5f, worktree .claude/worktrees/docs-one-docs-site). Andrew, in
+          session: everything under coldworks.dev/docs, the /docs/audit look
+          kept, and the audit maybe not its own docs page; the UI structure
+          was left to the agent. Verified 2026-09-15: lint rc 0, tsc rc 0,
+          unit tests 459 passed, the build-and-serve integration test 16
+          passed, 16 of 16 planted mutants killed, and a production build
+          serving the docs module CSS, the four docs fonts, and the
+          redirects. One round of fixes on Doug's read, on Andrew's word.
+Next:     CI on the fix push. Doug's next read gets an answer only if
+          Andrew asks for another round. The merge is the founder's click.
+          After it, coldworks/docs/design/front-door/concept.md:51 still
+          cites the deleted web/public/docs/audit/cli.html.
 Blockers: none.
 Decisions this session:
 - One docs shell: the audit is a section of /docs, not a second site with
@@ -42,6 +42,17 @@ Decisions this session:
   went with them, and a pin holds the docs' code panel to ink in both themes.
 - The top bar has a fixed 61px height: with the theme toggle and Sign in it
   measured 61px, and a sidebar stuck at 57px slid under it.
+- Doug's read of 8d27bc4 (3 medium, 2 low), answered on #350. Fixed: the
+  www rule forwarded every /docs path to /docs/audit, so www/docs/report
+  was a 404 and www/docs/audit/cli went to /docs/audit/audit/cli; it now
+  forwards only the audit's legacy page names. Both URLs are in the
+  integration table, and a test reads the #the-audit heading from the
+  served overview; each failed on a planted input first. Refuted: removed
+  exports (no importer anywhere, and CI built every page), the pager's
+  external branch (no entry can be external), and the globals.css removals
+  (no users). Kept: the two-hop www chain, because its first hop is a
+  cached 308 and must land on a stable apex URL. The beyond-ticket
+  deviation (a second top bar) is Andrew's ADR call.
 Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
           web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
           auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
