@@ -62,23 +62,24 @@ const nextConfig: NextConfig = {
   // mean the audit docs, which live at /docs/audit here: a path-preserving
   // rule alone would send www/docs/cli.html to a 404 and www/docs/cli to
   // Doug's own CLI page (probed on the apex 2026-09-14). Only the audit's own
-  // page names are forwarded (the docs home, and index, quickstart, connect,
-  // and cli with or without .html); every other docs path keeps its path
-  // through the catch-all, so Doug's pages and the audit's routes resolve on
-  // www too. A rule on every /docs path sent www/docs/report to
-  // /docs/audit/report, a 404. The docs rules come before the catch-all,
-  // because the first matching rule wins. Permanent, like the subdomain's:
-  // the alias is settled, and each forward lands on a stable apex URL. The
-  // apex rules after them take each forward the rest of the way.
+  // page names are forwarded: the docs home and index go to /docs/audit, and
+  // quickstart, connect, and cli, with or without .html, go to their routes.
+  // Every other docs path keeps its path through the catch-all, so Doug's
+  // pages and the audit's routes resolve on www too; a rule on every /docs
+  // path sent www/docs/report to /docs/audit/report, a 404. The docs rules
+  // come before the catch-all, because the first matching rule wins.
+  // Permanent, like the subdomain's: the alias is settled, and each forward
+  // lands on a stable apex URL, a route or the audit's home, never on one of
+  // the temporary forwards below.
   //
   // The audit's docs moved inside the one docs site on 2026-09-15: its
   // overview is the second half of /docs, and its pages are routes. The
   // static documents they replaced answered at /docs/audit,
-  // /docs/audit/index.html, and /docs/audit/<page>.html, and those URLs are
-  // in pull requests, issues, and the www forwards above, so each redirects
-  // to what replaced it. After the www rules, so they only ever answer the
-  // apex. Temporary: the docs' shape is new, and a 308 is cached with no
-  // expiry. No rule for the old stylesheet: no page links it.
+  // /docs/audit/index, /docs/audit/index.html, and /docs/audit/<page>.html,
+  // and those URLs are in pull requests, issues, and old www forwards, so each
+  // redirects to what replaced it. After the www rules, so they only ever
+  // answer the apex. Temporary: the docs' shape is new, and a 308 is cached
+  // with no expiry. No rule for the old stylesheet: no page links it.
   async redirects() {
     const www = [{ type: "host" as const, value: "www\\.coldworks\\.dev" }];
     return [
@@ -90,10 +91,12 @@ const nextConfig: NextConfig = {
       },
       { source: "/landing.html", has: www, destination: `${COLDWORKS_URL}/`, permanent: true },
       { source: "/docs", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
+      { source: "/docs/index", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
+      { source: "/docs/index.html", has: www, destination: `${COLDWORKS_URL}/docs/audit`, permanent: true },
       {
-        source: "/docs/:page(index|quickstart|connect|cli).html",
+        source: "/docs/:page(quickstart|connect|cli).html",
         has: www,
-        destination: `${COLDWORKS_URL}/docs/audit/:page.html`,
+        destination: `${COLDWORKS_URL}/docs/audit/:page`,
         permanent: true,
       },
       {
@@ -104,6 +107,7 @@ const nextConfig: NextConfig = {
       },
       { source: "/:path*", has: www, destination: `${COLDWORKS_URL}/:path*`, permanent: true },
       { source: "/docs/audit", destination: "/docs#the-audit", permanent: false },
+      { source: "/docs/audit/index", destination: "/docs#the-audit", permanent: false },
       { source: "/docs/audit/index.html", destination: "/docs#the-audit", permanent: false },
       {
         source: "/docs/audit/:page(quickstart|connect|cli).html",

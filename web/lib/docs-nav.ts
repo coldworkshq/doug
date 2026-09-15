@@ -94,7 +94,8 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
   },
   {
     // A design preview: `coldworks-audit` is not installable yet, and every
-    // page of the section says so.
+    // page of the section says so (lib/docs-nav.test.mjs holds the pages to
+    // it).
     name: "The audit",
     href: "/docs#the-audit",
     status: "preview",
@@ -145,16 +146,18 @@ export function adjacentDocsPages(
   return { prev: flat[i - 1] ?? null, next: flat[i + 1] ?? null };
 }
 
-/** The sidebar filter's match rule: substring, case-insensitive, title only.
- *  It never indexed body copy, so a query that reads like real search would
+/** The sidebar filter's match rule: substring, case-insensitive. It never
+ *  indexes body copy, so a query that reads like real search would
  *  over-promise. */
-export function matchesDocsQuery(title: string, query: string): boolean {
+export function matchesDocsQuery(label: string, query: string): boolean {
   const q = query.trim().toLowerCase();
-  return !q || title.toLowerCase().includes(q);
+  return !q || label.toLowerCase().includes(q);
 }
 
-/** The tree with only matching entries. A group with none left is dropped,
- *  and a section with no group left is dropped, never shown empty. */
+/** The tree with only matching entries. An entry matches on its title or its
+ *  section's name, so "audit" finds every page of the audit, including the
+ *  Quickstart whose title does not say so. A group with none left is
+ *  dropped, and a section with no group left is dropped, never shown empty. */
 export function filterDocsNav(
   query: string,
   sections: readonly DocsSection[] = DOCS_SECTIONS,
@@ -164,7 +167,10 @@ export function filterDocsNav(
     .map((s) => ({
       ...s,
       groups: s.groups
-        .map((g) => ({ ...g, entries: g.entries.filter((e) => matchesDocsQuery(e.title, query)) }))
+        .map((g) => ({
+          ...g,
+          entries: g.entries.filter((e) => matchesDocsQuery(`${s.name} ${e.title}`, query)),
+        }))
         .filter((g) => g.entries.length > 0),
     }))
     .filter((s) => s.groups.length > 0);
@@ -198,11 +204,7 @@ export function docsPageLabel(
   sections: readonly DocsSection[] = DOCS_SECTIONS,
 ): string | null {
   if (pathname === DOCS_HOME.href) return DOCS_HOME.title;
-  for (const s of sections) {
-    for (const g of s.groups) {
-      const page = g.entries.filter(isDocsPage).find((p) => p.href === pathname);
-      if (page) return `${s.name} · ${page.title}`;
-    }
-  }
-  return null;
+  const section = docsSectionOf(pathname, sections);
+  const page = flattenDocsNav(sections).find((p) => p.href === pathname);
+  return section && page ? `${section.name} · ${page.title}` : null;
 }

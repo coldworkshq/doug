@@ -7,7 +7,7 @@ import { Bright, Cmd, CodeBlock, Comment, Dim, Fn, Prompt, Str } from "@/compone
 import { DocsPager } from "@/components/docs/docs-pager";
 import { DocsPageHeader, H2, H3, IC, P } from "@/components/docs/prose";
 import { Table } from "@/components/docs/table";
-import { AUDIT_PREVIEW_LABEL } from "@/lib/docs-nav";
+import { AUDIT_PREVIEW_LABEL, DOCS_SECTIONS } from "@/lib/docs-nav";
 
 export const metadata = {
   title: "Coldworks docs",
@@ -15,25 +15,29 @@ export const metadata = {
     "Documentation for Coldworks: Doug, the risk-routed code reviewer, and the audit that reads your agents' traces on your own machine.",
 };
 
+const [DOUG, AUDIT] = DOCS_SECTIONS;
+
 /** The one overview. Doug's introduction and the audit's overview are its
  *  two halves, each under the anchor its sidebar section links to
- *  (lib/docs-nav.ts); /docs/audit redirects to the second. */
+ *  (lib/docs-nav.ts); /docs/audit redirects to the second. A claim in either
+ *  half is about that half: the audit's sentences say "the audit" or "these
+ *  pages", never "Coldworks" or "these docs", because Doug's half describes a
+ *  hosted service. */
 export default function DocsOverviewPage() {
   return (
     <>
       <DocsPageHeader kicker="Documentation" title="Use AI to need less AI.">
-        Coldworks reviews your pull requests, remembers what your team decided, and turns the
-        judgments it keeps repeating into checks you own. These docs cover two parts of it:{" "}
-        <b>Doug</b>, the reviewer, and <b>the audit</b>, which reads the traces your agents
-        already produce.
+        These docs cover two parts of Coldworks: <b>Doug</b>, the reviewer, and{" "}
+        <b>the audit</b>, which reads the traces your agents already produce. Each part says what
+        works today and what does not exist yet.
       </DocsPageHeader>
 
       <Cards columns={2}>
-        <Card href="/docs#doug-reviews" title="Doug reviews" cta="Read the section">
+        <Card href={DOUG.href} title={DOUG.name} cta="Read the section">
           Risk-routed code review for the agent era. He scores every pull request, clears the
           majority, and routes the risky few to a human.
         </Card>
-        <Card href="/docs#the-audit" title="The audit" cta="Read the section">
+        <Card href={AUDIT.href} title={AUDIT.name} cta="Read the section">
           Reads your trace exports on your machine and finds the judgments your agents keep
           re-buying. A design preview: not installable yet.
         </Card>
@@ -119,9 +123,9 @@ export default function DocsOverviewPage() {
 
       <H3 id="the-shape-of-it">The shape of it</H3>
       <P>
-        Everything below runs on <b>your</b> machine. Coldworks hosts one thing: a read-only
-        registry page for figures you choose to publish. It cannot receive your traces, your
-        documents, or your code — by architecture, not by policy.
+        Everything below runs on <b>your</b> machine. For the audit, Coldworks hosts one thing: a
+        read-only registry page for figures you choose to publish. That page cannot receive your
+        traces, your documents, or your code — by architecture, not by policy.
       </P>
       <CodeBlock title="The whole pipeline">
         <Comment>your trace store</Comment>
@@ -140,12 +144,12 @@ export default function DocsOverviewPage() {
       </CodeBlock>
 
       <H3 id="what-is-real-right-now">What is real right now</H3>
-      <P dim>These docs hold themselves to the same rule as the audit: states are answers.</P>
+      <P dim>These pages hold themselves to the same rule as the audit: states are answers.</P>
       <Table
         head={["Claim", "State"]}
         rows={[
           [
-            "The connection flow in these docs is the front-door design under review.",
+            "The connection flow in these pages is the front-door design under review.",
             <Chip key="s" tone="ember">DESIGNED</Chip>,
           ],
           [
@@ -163,7 +167,7 @@ export default function DocsOverviewPage() {
             <Chip key="s" tone="open">GATED · NEXT STEP</Chip>,
           ],
           [
-            "Anything in these docs uploads your data.",
+            "Anything in the audit uploads your data.",
             <Chip key="s" tone="molten">NO — BY DESIGN</Chip>,
           ],
         ]}

@@ -65,13 +65,11 @@ export default function QuickstartPage() {
               </li>
             </UL>
 
-            <div className="mt-6">
-              <Callout lead="Tip — dodge right-censoring:">
+            <Callout lead="Tip — dodge right-censoring:">
                 Young PRs haven&rsquo;t had time to be reverted yet. Pass{" "}
                 <IC>--before</IC> with a date at least a few weeks back so
                 every PR in the window had a fair chance to fail.
               </Callout>
-            </div>
           </>
         }
         examples={

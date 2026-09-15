@@ -15,6 +15,7 @@ import {
 } from "./docs-nav.ts";
 
 const overview = await readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8");
+const pageSource = (href) => readFile(new URL(`../app${href}/page.tsx`, import.meta.url), "utf8");
 
 test("every doc href is unique — a duplicate would make prev/next and the active-link check ambiguous", () => {
   const hrefs = flattenDocsNav().map((p) => p.href);
@@ -39,6 +40,34 @@ test("each section's href lands on its own half of the overview", () => {
     assert.equal(path, "/docs", `${section.name} is introduced somewhere other than the overview`);
     assert.ok(id, `${section.name} names no anchor`);
     assert.match(overview, new RegExp(`id="${id}"`), `the overview has no element with id="${id}"`);
+  }
+});
+
+test("every page's pager is told its own route — a copied page would page from someone else's place", async () => {
+  // DocsPager takes the current href as a string each page types. A page
+  // copied from another that keeps the other's href shows the wrong neighbors,
+  // and a typo shows none; neither fails anything else.
+  for (const { href } of flattenDocsNav()) {
+    const source = await pageSource(href);
+    assert.match(source, new RegExp(`<DocsPager currentHref="${href}" />`), `app${href}/page.tsx pages from somewhere else`);
+  }
+});
+
+test("every page's header states its nav status, and the audit's pages say what their preview means", async () => {
+  // When coldworks-audit ships, its status changes here first. A page that
+  // still says "preview", or still prints "has not shipped", would then fail
+  // this test instead of shipping a stale claim.
+  for (const section of DOCS_SECTIONS) {
+    for (const group of section.groups) {
+      for (const entry of group.entries) {
+        if (!entry.href || !entry.status) continue;
+        const source = await pageSource(entry.href);
+        assert.match(source, new RegExp(`status="${entry.status}"`), `app${entry.href}/page.tsx does not state ${entry.status}`);
+        const labelled = source.includes("statusLabel={AUDIT_PREVIEW_LABEL}");
+        const shouldLabel = section.name === "The audit" && entry.status === "preview";
+        assert.equal(labelled, shouldLabel, `app${entry.href}/page.tsx ${shouldLabel ? "omits" : "prints"} the audit's preview label`);
+      }
+    }
   }
 });
 
@@ -90,6 +119,17 @@ test("an empty query returns every section unfiltered", () => {
 test("filtering is case-insensitive and matches mid-title", () => {
   const titles = filterDocsNav("CLEARED").flatMap((s) => s.groups.flatMap((g) => g.entries.map((e) => e.title)));
   assert.deepEqual(titles, ["The cleared band"]);
+});
+
+test("a query for a section's name finds every page of it, even where the title does not say so", () => {
+  // The audit's pages lost their "Audit ·" prefixes when they joined the one
+  // site; a title-only filter then hid the audit's Quickstart under a section
+  // header that still looked complete.
+  const sections = filterDocsNav("audit");
+  assert.deepEqual(sections.map((s) => s.name), ["The audit"]);
+  const found = sections[0].groups.flatMap((g) => g.entries.map((e) => e.title));
+  const all = DOCS_SECTIONS[1].groups.flatMap((g) => g.entries.map((e) => e.title));
+  assert.deepEqual(found, all);
 });
 
 test("a query reaches both sections, so a shared title is not hidden in one", () => {

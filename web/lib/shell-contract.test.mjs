@@ -169,7 +169,13 @@ test("the docs are one site: the audit is a section of /docs, never a document w
   // "Doug's docs". A file under public/docs, a rewrite into /docs, or an
   // external entry in the nav is how that split comes back.
   assert.equal(existsSync(new URL("../public/docs", import.meta.url)), false, "public/docs/ serves a page outside the docs shell");
-  assert.equal(/destination: "\/docs/.test(config.slice(config.indexOf("async rewrites()"), config.indexOf("async redirects()"))), false, "a rewrite serves a docs URL");
+  // A rewrite is keyed by its source: a docs URL rewritten onto a static file
+  // anywhere in public/ is the split, whatever the destination is called.
+  const rewrites = config.slice(config.indexOf("async rewrites()"), config.indexOf("async redirects()"));
+  const rewriteSources = [...rewrites.matchAll(/source: "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(rewriteSources.length > 0, "the rewrites were not read");
+  assert.deepEqual(rewriteSources.filter((s) => s.startsWith("/docs")), [], "a rewrite serves a docs URL");
+  assert.equal(/destination: [`"]\/docs/.test(rewrites), false, "a rewrite serves another URL from the docs");
   // Code, not prose: docs-nav.ts explains in a comment that the audit pages
   // were external anchors, and a pin that fired on that sentence would push
   // the next author into deleting the history to get green.
@@ -182,13 +188,34 @@ test("the docs are one site: the audit is a section of /docs, never a document w
   assert.match(config, /source: "\/docs\/audit\/:page\(quickstart\|connect\|cli\)\.html",\s*destination: "\/docs\/audit\/:page",\s*permanent: false/);
 });
 
-test("the docs' top bar wears the public header's nav, never a copy of it", () => {
+test("the docs' top bar wears the public header's nav, links nothing the header does not, and reads no session", async () => {
   // ADR-0034: one nav, the door's. The docs present it their own way, but a
   // second list would drift the first time a link is added to one of them.
   assert.match(header, /export const NAV_LINKS = \[/);
   assert.match(topBar, /import \{ NAV_LINKS \} from "@\/components\/site-header";/);
   assert.equal((topBar.match(/NAV_LINKS\.map/g) ?? []).length, 2, "the bar and its narrow-screen menu both iterate NAV_LINKS");
   assert.equal(/href: "\//.test(topBar), false, "the top bar declares a nav entry of its own");
+  // Every target the bar links, in either form a JSX href takes, is one the
+  // public header links too; a link only the docs carry is the drift.
+  const targets = (source) => new Set([...source.matchAll(/href=(?:"([^"]+)"|\{([^}]+)\})/g)].map((m) => m[1] ?? m[2]));
+  const headerTargets = targets(header);
+  const barTargets = [...targets(topBar)];
+  assert.ok(barTargets.length >= 4, "the bar's links were not read");
+  assert.deepEqual(barTargets.filter((t) => !headerTargets.has(t)), [], "the docs top bar links a target the public header does not");
+  // GitHub and About sit in both of the bar's navs, as they do in SiteHeader's.
+  const menuAt = topBar.indexOf("<DocsMenu>");
+  assert.ok(menuAt !== -1, "the narrow-screen menu is gone");
+  const wide = topBar.slice(0, menuAt);
+  const narrow = topBar.slice(menuAt, topBar.indexOf("</DocsMenu>"));
+  for (const marker of ["href={GITHUB_REPO_URL}", 'href="/about"']) {
+    assert.ok(wide.includes(marker) && narrow.includes(marker), `${marker} must be in both of the bar's navs`);
+  }
+  // ADR-0019: reading the request in the docs chrome turns every static docs
+  // page into a per-request render to choose between two words.
+  const docsLayout = await readFile(new URL("../app/docs/layout.tsx", import.meta.url), "utf8");
+  for (const [name, source] of [["docs-top-bar.tsx", topBar], ["app/docs/layout.tsx", docsLayout]]) {
+    assert.equal(/withAuth|cookies\(\)|headers\(\)/.test(source), false, `${name} reads the request`);
+  }
 });
 
 test("the door carries a short shared cache; the deploy env survives a second mapping", () => {

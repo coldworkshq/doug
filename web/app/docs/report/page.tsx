@@ -55,13 +55,11 @@ export default function ReportPage() {
               </li>
             </UL>
 
-            <div className="mt-6">
-              <Callout lead="Schema stability:">
+            <Callout lead="Schema stability:">
                 early preview — field names may still move. The printed tables
                 are the stable contract for now; treat the JSON as
                 versioned-by-commit.
               </Callout>
-            </div>
           </>
         }
         examples={

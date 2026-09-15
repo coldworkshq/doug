@@ -81,8 +81,7 @@ export default function WhatDougGetsWrongPage() {
               a single score would grade that as failure.
             </P>
 
-            <div className="mt-6">
-              <Callout lead="There is no rate here yet, and that is the point.">
+            <Callout lead="There is no rate here yet, and that is the point.">
                 Backfill was reconstructed from write-ups after the fact
                 and is excluded from every rate by construction; the
                 denominator is the prospective rows, scoped to one
@@ -99,7 +98,6 @@ export default function WhatDougGetsWrongPage() {
                 quantity from whether it <i>predicted a defect</i>, and a
                 finding can be true and worthless or false and load-bearing.
               </Callout>
-            </div>
           </>
         }
         examples={

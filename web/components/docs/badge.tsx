@@ -4,9 +4,13 @@ import type { DocsStatus } from "@/lib/docs-nav";
 
 import styles from "./docs.module.css";
 
-export type ChipTone = "coolant" | "ember" | "molten" | "open";
+/** One meaning per tone, across every docs page: `clear` works today,
+ *  `coolant` is planned or built but unreleased, `ember` is designed or in
+ *  preview, `molten` is no or never, and `open` is gated or does not exist. */
+export type ChipTone = "clear" | "coolant" | "ember" | "molten" | "open";
 
 const TONE: Record<ChipTone, string> = {
+  clear: styles.chipClear,
   coolant: styles.chipCoolant,
   ember: styles.chipEmber,
   molten: styles.chipMolten,
@@ -21,9 +25,9 @@ export function Chip({ tone, children }: { tone: ChipTone; children: ReactNode }
 }
 
 const STATUS: Record<DocsStatus, { label: string; tone: ChipTone }> = {
-  available: { label: "Available", tone: "coolant" },
+  available: { label: "Available", tone: "clear" },
   preview: { label: "Preview", tone: "ember" },
-  planned: { label: "Planned", tone: "open" },
+  planned: { label: "Planned", tone: "coolant" },
 };
 
 /** The chip beside a page's eyebrow: "this claim is live," "this is a

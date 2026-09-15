@@ -64,14 +64,12 @@ export default function McpPatternGardenPage() {
               ]}
             />
 
-            <div className="mt-6">
-              <Callout lead="Status, honestly:">
+            <Callout lead="Status, honestly:">
                 The garden is gated on our own evidence bar — patterns ship
                 only after their outcome deltas replicate across repos. First
                 domain: schema migrations. No dates promised until the probes
                 pass.
               </Callout>
-            </div>
           </>
         }
         examples={

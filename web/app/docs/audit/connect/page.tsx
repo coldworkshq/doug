@@ -123,7 +123,7 @@ export default function AuditConnectPage() {
 
       <H2>What leaves your machine: nothing</H2>
       <Table
-        head={["Thing", "Where it goes", ""]}
+        head={["Thing", "Where it goes", "Status"]}
         rows={[
           [
             <b key="t">Your traces</b>,

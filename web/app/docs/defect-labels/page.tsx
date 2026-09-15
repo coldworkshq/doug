@@ -32,8 +32,7 @@ export default function DefectLabelsPage() {
             <H2>
               Label sources (<IC>--labels</IC>)
             </H2>
-            <div className="mt-4">
-              <ParamsTable
+            <ParamsTable
                 rows={[
                   {
                     name: "git",
@@ -53,17 +52,14 @@ export default function DefectLabelsPage() {
                   },
                 ]}
               />
-            </div>
 
-            <div className="mt-6">
-              <Callout lead="Known limits, stated plainly:">
+            <Callout lead="Known limits, stated plainly:">
                 Reverts under-count defects (hotfixes without reverts are
                 missed), and ~6% of git labels on sentry show timestamp
                 anomalies we&rsquo;re still triaging. The labels are good
                 enough to rank on; we publish their weaknesses along with the
                 wins.
               </Callout>
-            </div>
           </>
         }
         examples={

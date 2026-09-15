@@ -453,18 +453,57 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
 });
 
-test("the docs' code panels are ink in both themes, from a token each theme declares", async () => {
+const docsCssUrl = new URL("../components/docs/docs.module.css", import.meta.url);
+
+/** WCAG 2.x contrast ratio of two #rrggbb colours. */
+function contrast(a, b) {
+  const lum = (hex) => {
+    const [r, g, bl] = [1, 3, 5]
+      .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Innermost rules of comment-free CSS as { selector, body }; an @media
+ *  wrapper contributes the rules inside it, not itself. */
+function cssRules(css) {
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
+}
+
+test("the docs' code panels are ink in both themes, dark enough to read their own text", async () => {
   // A terminal that goes pale in light mode is not one; that is why the docs'
   // code samples were exempt from the scan above while their colours lived in
-  // components. The panel reads --cw-ink-panel, and the light scope and the
-  // dark scope each declare it, so neither theme falls back to no ground.
-  const css = await readFile(new URL("../components/docs/docs.module.css", import.meta.url), "utf8");
-  assert.match(ruleBody(code(css), ".code") ?? "", /background:\s*var\(--cw-ink-panel\)/);
-  for (const selector of [".root {", ":global(.dark) .root {"]) {
-    const at = css.indexOf(`\n${selector}`);
-    assert.ok(at >= 0, `the ${selector} token scope is gone`);
-    assert.match(css.slice(at, css.indexOf("\n}", at)), /--cw-ink-panel:\s*#/, `${selector} leaves --cw-ink-panel undeclared`);
+  // components. The panel reads --cw-ink-panel, both theme scopes declare it,
+  // and the value must stay dark: the panel's own ink needs 7:1 on it. A
+  // declaration that exists only inside a comment does not count.
+  const css = code(await readFile(docsCssUrl, "utf8"));
+  assert.match(ruleBody(css, ".code") ?? "", /background:\s*var\(--cw-ink-panel\)/);
+  for (const selector of [".root", ":global(.dark) .root"]) {
+    const scope = ruleBody(css, selector);
+    assert.ok(scope, `the ${selector} token scope is gone`);
+    const panel = scope.match(/--cw-ink-panel:\s*(#[0-9a-f]{6})\b/i)?.[1];
+    const ink = scope.match(/--cw-ink-panel-fg:\s*(#[0-9a-f]{6})\b/i)?.[1];
+    assert.ok(panel && ink, `${selector} leaves the panel or its ink undeclared`);
+    const ratio = contrast(panel, ink);
+    assert.ok(ratio >= 7, `${selector}: ink ${ink} on panel ${panel} is ${ratio.toFixed(2)}:1, a pale terminal`);
   }
+});
+
+test("the docs module paints theme colours only through its tokens", async () => {
+  // The hex scan above reads components, not stylesheets. In docs.module.css
+  // a literal colour belongs in the two token scopes, or on the code panel,
+  // whose ink is fixed in both themes, or in the selection highlight's white
+  // text. Anywhere else it paints one theme's colour into the other.
+  const rules = cssRules(code(await readFile(docsCssUrl, "utf8")));
+  assert.ok(rules.length > 50, `the rule walk found only ${rules.length} rules`);
+  const allowed = /^(\.root|:global\(\.dark\) \.root|\.root ::selection|\.code b|\.codebar|\.t[A-Z]\w*|\.copy|\.copy:hover)$/;
+  const offenders = rules
+    .filter((r) => /#[0-9a-f]{3,8}\b/i.test(r.body) && !allowed.test(r.selector))
+    .map((r) => r.selector);
+  assert.deepEqual(offenders, [], "a docs rule paints a literal colour outside the token scopes and the code panel");
 });
 
 test("the console's dot grid does not ride on --border", async () => {

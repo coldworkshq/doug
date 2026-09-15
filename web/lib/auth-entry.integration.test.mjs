@@ -372,20 +372,35 @@ describe("single host: the subdomain redirects to the apex", () => {
     // The alias served the registry's landing and the audit CLI's docs, so
     // each of those URLs means an audit docs page, not Doug's own /docs. A
     // path-preserving rule would strand /docs/cli.html on a 404. The www hop
-    // lands on the apex's old audit URL, and since the audit docs joined the
-    // one docs site (2026-09-15) the apex forwards that URL, temporarily, to
-    // the page that replaced it. Every chain is followed to its end on the
-    // apex: a forward to a missing page is a 404 with extra hops, and a chain
-    // that ends anywhere but the replacement lands the reader on the wrong
-    // page. The old stylesheet is not in the table: no page links it.
+    // is permanent, so it lands on a stable apex URL: an audit page's route,
+    // or the audit's home at /docs/audit, which forwards temporarily to its
+    // half of the overview (the audit docs joined the one docs site on
+    // 2026-09-15). Every chain is followed to its end on the apex: a forward
+    // to a missing page is a 404 with extra hops, and a chain that ends
+    // anywhere but the replacement lands the reader on the wrong page. The old
+    // stylesheet is not in the table: no page links it.
+    //
+    // The apex's own old audit URLs forward, temporarily and in one hop, to
+    // what replaced them.
+    for (const [from, to] of [
+      ["/docs/audit/index", "/docs#the-audit"],
+      ["/docs/audit/index.html", "/docs#the-audit"],
+      ["/docs/audit/connect.html", "/docs/audit/connect"],
+    ]) {
+      const forward = await requestAs(APEX, apex.origin, from);
+      assert.equal(forward.status, 307, `${APEX}${from}`);
+      const target = new URL(forward.headers.location, `https://${APEX}`);
+      assert.equal(`${target.pathname}${target.hash}`, to, `${APEX}${from}`);
+    }
     const legacy = [
       ["/", "", "/"],
       ["/landing.html", "/", "/"],
       ["/docs", "/docs/audit", "/docs#the-audit"],
-      ["/docs/index.html", "/docs/audit/index.html", "/docs#the-audit"],
+      ["/docs/index", "/docs/audit", "/docs#the-audit"],
+      ["/docs/index.html", "/docs/audit", "/docs#the-audit"],
       ["/docs/cli", "/docs/audit/cli", "/docs/audit/cli"],
-      ["/docs/cli.html", "/docs/audit/cli.html", "/docs/audit/cli"],
-      ["/docs/quickstart.html", "/docs/audit/quickstart.html", "/docs/audit/quickstart"],
+      ["/docs/cli.html", "/docs/audit/cli", "/docs/audit/cli"],
+      ["/docs/quickstart.html", "/docs/audit/quickstart", "/docs/audit/quickstart"],
       ["/docs/connect", "/docs/audit/connect", "/docs/audit/connect"],
       // Only the audit's own legacy names mean the audit. Every other docs
       // path keeps its path: Doug's pages, and the audit's routes themselves,
