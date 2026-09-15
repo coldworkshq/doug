@@ -10,11 +10,10 @@ State:    review — **doug#350**, branch docs/one-docs-site (off origin/main
           unit tests 459 passed, the build-and-serve integration test 16
           passed, 16 of 16 planted mutants killed, and a production build
           serving the docs module CSS, the four docs fonts, and the
-          redirects. One round of fixes on Doug's read, on Andrew's word.
-Next:     CI on the fix push. Doug's next read gets an answer only if
-          Andrew asks for another round. The merge is the founder's click.
-          After it, coldworks/docs/design/front-door/concept.md:51 still
-          cites the deleted web/public/docs/audit/cli.html.
+          redirects. Auto-fix is on for #350 (Andrew, 2026-09-15).
+Next:     auto-fix wakes this session on CI failures, conflicts, and review
+          comments. The merge is the founder's click. coldworks#93 moves
+          concept.md's citation of the deleted cli.html to the page's URL.
 Blockers: none.
 Decisions this session:
 - One docs shell: the audit is a section of /docs, not a second site with
@@ -53,6 +52,15 @@ Decisions this session:
   (no users). Kept: the two-hop www chain, because its first hop is a
   cached 308 and must land on a stable apex URL. The beyond-ticket
   deviation (a second top bar) is Andrew's ADR call.
+- Doug's read of cecdb8e (1 medium, 4 low), answered on #350 with no code
+  change: redirect-chain restates the kept two-hop chain; broken-link holds
+  only for docs.css, deliberately; stale-reference restates
+  css-contract-drift; duplicate-markup and semantic-drift are refuted
+  (display: none hides one nav at every width, and no panel pairs Fn with
+  Ok). Every disposition from both reads is a findings-log row.
+- main merged into the branch on auto-fix: #349 and #352 changed the
+  caching copy in the static cli.html and connect.html this PR deletes, so
+  the wording moved into the two routes, checked equal to main's text.
 Pointers: web/app/docs/ · web/components/docs/ · web/lib/docs-nav.ts ·
           web/next.config.ts · web/lib/{shell-contract,docs-nav,design-system,
           auth-entry.integration}.test.mjs · web/public/docs/audit/ (removed)
