@@ -166,7 +166,7 @@ export default async function Home() {
               )}
             </p>
             <h1
-              className="animate-rise display-condensed font-heading mt-7 max-w-2xl text-6xl leading-[0.94] font-semibold tracking-[-0.03em] md:text-8xl"
+              className="animate-rise font-heading mt-7 max-w-2xl text-6xl leading-[0.94] font-semibold tracking-[-0.03em] md:text-8xl"
               style={{ animationDelay: "80ms" }}
             >
               Most PRs <span className="text-iridescent">don&rsquo;t</span>{" "}
@@ -481,7 +481,7 @@ export default async function Home() {
                 "radial-gradient(40rem 16rem at 50% 120%, var(--ring), transparent 70%)",
             }}
           />
-          <h2 className="display-condensed font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
+          <h2 className="font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
             Watch the queue <span className="text-iridescent">thin out</span>.
           </h2>
           <p className="mx-auto mt-5 max-w-md text-muted-foreground">

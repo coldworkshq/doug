@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import styles from "@/components/docs/docs.module.css";
 import { DocsSidebar } from "@/components/docs/docs-sidebar";
 import { DocsTopBar } from "@/components/docs/docs-top-bar";
-import { docsBody, docsDisplay, docsMono } from "@/components/docs/fonts";
 
 export const metadata: Metadata = {
   // Applies to every page below /docs; /docs itself names its own title,
@@ -20,7 +19,7 @@ export const metadata: Metadata = {
  *  sidebar's sticky offset and the headings' scroll margin both read. */
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className={`${styles.root} ${docsDisplay.variable} ${docsBody.variable} ${docsMono.variable}`}>
+    <div className={styles.root}>
       <div className={styles.rail} aria-hidden="true" />
       <DocsTopBar />
       <div className={styles.shell}>

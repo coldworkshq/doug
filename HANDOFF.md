@@ -35,9 +35,26 @@ Decisions this session:
   Sharma CIEDE2000 pairs, 9.2, 57.9, and --dim, --rule-soft, and --border
   in both themes. #210's CVD figures reproduce only with Machado applied
   to gamma-encoded RGB, so the test names the model it uses.
-- Fonts: the app sets font-medium 54 times, font-semibold 39, and <b> 56,
-  and #350's Instrument Sans subset stops at 500, so the loader needs 400
-  to 700 — rejected: faux bold from the 400-500 subset.
+- Fonts load through next/font/google in the root layout (Archivo and
+  Instrument Sans variable, Plex Mono 400 to 700), and /docs reads the same
+  variables: the app sets font-medium 54 times, font-semibold 39, and <b>
+  56, and #350's Instrument Sans subset stops at 500 — rejected: faux bold
+  from the subset, and a second loader for the docs.
+- The shared utilities block names --mono-face, which each app declares, so
+  the lockstep with console holds while the two apps set different faces —
+  rejected: web declaring a --font-geist-mono that holds Plex Mono.
+- Data colors hold AA on their chip tints over the page, which Doug's
+  shipped flag never did (3.98 on the queue's 15% tint): light flag #AF390F
+  and clear #1E764B, at least 4.51 on every ground. Separation stays above
+  the shipped floors under CVD: 15.3 deuteranopia, 12.9 protanopia —
+  rejected: #C33D0D, at 4.21 on the queue's chip over a card, where Doug's
+  passes.
+- --dim and --rule-soft become the palette's --faint and --line, because
+  the docs need both page-wide and design-system.test.mjs says a value that
+  gains a palette home leaves the surface block. --row-hover stays scoped —
+  rejected: docs-local copies of the same hexes.
+- Deferred to PR B (doug#351): the docs chips set molten and ember text on
+  their soft grounds at 3.58:1 and 2.17:1 in light.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,

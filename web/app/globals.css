@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-bricolage);
+  --font-sans: var(--font-instrument-sans);
+  --font-mono: var(--font-plex-mono);
+  --font-heading: var(--font-archivo);
   --color-sheen: var(--sheen);
   --color-flag: var(--flag);
   --color-clear: var(--clear);
@@ -49,6 +49,15 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* The face .mono sets numbers in. The ported utilities block at the end of
+   this file is character-identical to console's (lib/console-lockstep.test.mjs),
+   and the two apps load different faces, so the block names this variable and
+   each app declares it. A face, not a colour, so it sits outside the two theme
+   blocks below. */
+:root {
+  --mono-face: var(--font-plex-mono);
 }
 
 :root,
@@ -290,7 +299,7 @@
      a border is meant to be seen, and this is meant to be barely felt. */
   background: radial-gradient(var(--surface-dot) 1px, transparent 1px) var(--background);
   background-size: 20px 20px;
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 /* Same three, inverted. The ratios are held, not the hexes: --dim is 4.80:1 on
@@ -467,7 +476,7 @@
   /* Bento-style panel: solid card + hairline border, matching the
      GitHub Pages site's .cell. Used by the landing page, /queue,
      /scoreboard, and the shared loading skeleton.
-     console/app/globals.css:162 is this rule's twin — same declarations,
+     console/app/globals.css carries this rule's twin — same declarations,
      kept in lockstep with the data utilities below. */
   .panel {
     background: var(--card);
@@ -481,15 +490,6 @@
 
   /* LANDING-PAGE utilities (app/page.tsx and components/landing/). Kept
      above the ported block below so the lockstep guard's slice is untouched. */
-
-  /* The hero's display cut. Bricolage's width axis pulled to 85 so the
-     headline sets like the lettering on an instrument dial rather than the
-     default cut every site loads. Optical size stays automatic — a variation
-     setting lists only the axes it names, so opsz still follows font-size.
-     The axis only exists because app/layout.tsx asks for it. */
-  .display-condensed {
-    font-variation-settings: "wdth" 85;
-  }
 
   /* A bordered group whose cells share ONE hairline between them, so a 3-up
      reads as one instrument with divisions rather than three cards floating
@@ -530,7 +530,7 @@
     }
   }
 
-  /* Data utilities ported from console/app/globals.css:164-179 — comments
+  /* Data utilities ported from console/app/globals.css — comments
      verbatim, because they are the spec. Keep the two files in lockstep —
      ENFORCED: lib/console-lockstep.test.mjs asserts this block is
      character-identical to console's, so an edit to either side fails.
@@ -538,8 +538,9 @@
      web renders the evidence seam yet, and unused CSS is not a port.) */
 
   /* Tabular numerals are mandatory on every column of numbers — a score
-     column that does not align is unreadable at 34px rows. */
-  .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+     column that does not align is unreadable at 34px rows. Each app names
+     its own monospace face in --mono-face. */
+  .mono { font-family: var(--mono-face); font-variant-numeric: tabular-nums; }
 
   /* The two data colours. NEVER add a third, and never use --iridescent
      here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
