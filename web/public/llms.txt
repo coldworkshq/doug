@@ -8,6 +8,10 @@
 > PREVIEW — public surfaces: /queue, /scoreboard, hosted /docs, GitHub App
 > check runs. The self-serve measurement tool is the backtest CLI. Docs:
 > /docs · Repo: https://github.com/coldworkshq/doug
+>
+> The docs also cover the local audit, a design preview (`coldworks-audit`
+> is not installable yet): /docs/audit/quickstart, /docs/audit/connect, and
+> /docs/audit/cli. Its overview is the second half of /docs.
 
 ## Status legend
 - AVAILABLE: works today

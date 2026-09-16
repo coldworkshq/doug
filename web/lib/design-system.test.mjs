@@ -408,21 +408,21 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
    *  false PASS on a line that is already comment-shaped. */
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-  // TWO EXEMPTIONS, EACH BECAUSE THE COLOUR IS DELIBERATELY NOT THEMED — not
-  // because the file is inconvenient to fix. Both are asserted to still earn
-  // it below, so an exemption cannot outlive its reason.
+  // ONE EXEMPTION, BECAUSE THE COLOUR IS DELIBERATELY NOT THEMED — not
+  // because the file is inconvenient to fix. It is asserted to still earn it
+  // below, so the exemption cannot outlive its reason.
   //
-  //  - The docs code samples render on `.code-rail`, which globals.css fixes to
-  //    the gh-pages docs site's "night" terminal in BOTH themes: it stands in
-  //    for a real terminal, and a terminal that goes pale in light mode is not
-  //    one. Its syntax colours are picked against that fixed ground.
   //  - The Doug mark is a logo. It carries its own white ground, which is why
   //    it has always rendered correctly on the dark public pages, and a dog
   //    that changes colour with the page is not a brand mark. Its rust is
   //    nonetheless now a different orange from --iridescent — see issue #214.
-  const CODE_RAIL = ["components/docs/code-block.tsx", "components/docs/copy-button.tsx"];
+  //
+  // The docs' code panels were a second exemption until 2026-09-15. Their
+  // fixed terminal ink moved into components/docs/docs.module.css with the
+  // rest of the docs' look, so no component paints a literal colour to draw a
+  // terminal, and the next test holds the panel to ink in both themes.
   const BRAND_MARK = "components/doug-logo.tsx";
-  const exempt = new Set([...CODE_RAIL, BRAND_MARK]);
+  const exempt = new Set([BRAND_MARK]);
 
   const offenders = [];
   for (const rel of sources) {
@@ -438,27 +438,8 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
     "a rendered file paints a literal colour, which cannot invert with the theme",
   );
 
-  // The exemptions still earn themselves. Without this, "exempt" becomes a
-  // place to put a file that simply failed.
-  // A file earns the terminal exemption by rendering the rail OR by being
-  // rendered inside one — copy-button.tsx paints in the rail's ink without
-  // ever naming the class, because code-block.tsx puts it in the rail's head.
-  // Asserting only the first form is what made the first cut of this pin fail.
-  const railRenderers = [];
-  for (const rel of sources) {
-    const text = await readFile(new URL(rel, dir), "utf8");
-    if (/["'`\s]code-rail/.test(text)) railRenderers.push({ rel, text });
-  }
-  assert.ok(railRenderers.length > 0, "nothing renders .code-rail any more");
-  for (const rel of CODE_RAIL) {
-    const own = await readFile(new URL(rel, dir), "utf8");
-    const name = rel.split("/").pop().replace(/\.tsx?$/, "");
-    const nested = railRenderers.some((r) => r.rel !== rel && r.text.includes(name));
-    assert.ok(
-      /["'`\s]code-rail/.test(own) || nested,
-      `${rel} is exempt as fixed terminal ink but neither renders the rail nor sits inside one`,
-    );
-  }
+  // The exemption still earns itself. Without this, "exempt" becomes a place
+  // to put a file that simply failed.
   const mark = await readFile(new URL(BRAND_MARK, dir), "utf8");
   assert.match(mark, /<svg/, "the brand-mark exemption no longer points at a mark");
   assert.match(
@@ -470,6 +451,59 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   // And the walk actually walked. Without this, a rename that empties `sources`
   // turns the whole assertion into a tautology.
   assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
+});
+
+const docsCssUrl = new URL("../components/docs/docs.module.css", import.meta.url);
+
+/** WCAG 2.x contrast ratio of two #rrggbb colours. */
+function contrast(a, b) {
+  const lum = (hex) => {
+    const [r, g, bl] = [1, 3, 5]
+      .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Innermost rules of comment-free CSS as { selector, body }; an @media
+ *  wrapper contributes the rules inside it, not itself. */
+function cssRules(css) {
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
+}
+
+test("the docs' code panels are ink in both themes, dark enough to read their own text", async () => {
+  // A terminal that goes pale in light mode is not one; that is why the docs'
+  // code samples were exempt from the scan above while their colours lived in
+  // components. The panel reads --cw-ink-panel, both theme scopes declare it,
+  // and the value must stay dark: the panel's own ink needs 7:1 on it. A
+  // declaration that exists only inside a comment does not count.
+  const css = code(await readFile(docsCssUrl, "utf8"));
+  assert.match(ruleBody(css, ".code") ?? "", /background:\s*var\(--cw-ink-panel\)/);
+  for (const selector of [".root", ":global(.dark) .root"]) {
+    const scope = ruleBody(css, selector);
+    assert.ok(scope, `the ${selector} token scope is gone`);
+    const panel = scope.match(/--cw-ink-panel:\s*(#[0-9a-f]{6})\b/i)?.[1];
+    const ink = scope.match(/--cw-ink-panel-fg:\s*(#[0-9a-f]{6})\b/i)?.[1];
+    assert.ok(panel && ink, `${selector} leaves the panel or its ink undeclared`);
+    const ratio = contrast(panel, ink);
+    assert.ok(ratio >= 7, `${selector}: ink ${ink} on panel ${panel} is ${ratio.toFixed(2)}:1, a pale terminal`);
+  }
+});
+
+test("the docs module paints theme colours only through its tokens", async () => {
+  // The hex scan above reads components, not stylesheets. In docs.module.css
+  // a literal colour belongs in the two token scopes, or on the code panel,
+  // whose ink is fixed in both themes, or in the selection highlight's white
+  // text. Anywhere else it paints one theme's colour into the other.
+  const rules = cssRules(code(await readFile(docsCssUrl, "utf8")));
+  assert.ok(rules.length > 50, `the rule walk found only ${rules.length} rules`);
+  const allowed = /^(\.root|:global\(\.dark\) \.root|\.root ::selection|\.code b|\.codebar|\.t[A-Z]\w*|\.copy|\.copy:hover)$/;
+  const offenders = rules
+    .filter((r) => /#[0-9a-f]{3,8}\b/i.test(r.body) && !allowed.test(r.selector))
+    .map((r) => r.selector);
+  assert.deepEqual(offenders, [], "a docs rule paints a literal colour outside the token scopes and the code panel");
 });
 
 test("the console's dot grid does not ride on --border", async () => {

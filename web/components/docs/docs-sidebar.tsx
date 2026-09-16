@@ -1,150 +1,145 @@
 "use client";
 
-import { ChevronDown, FileText, Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 
-import { filterDocsNav, flattenDocsNav } from "@/lib/docs-nav";
+import {
+  DOCS_HOME,
+  docsPageLabel,
+  filterDocsNav,
+  isDocsPage,
+  matchesDocsQuery,
+  sidebarTag,
+} from "@/lib/docs-nav";
 
-import { StatusDot } from "./badge";
+import styles from "./docs.module.css";
 
-/** The left nav: grouped links with status dots, plus a client-side title
- *  filter. Matches the gh-pages site's actual contract, not an upgraded
- *  one — that "Filter sections…" input only ever substring-matched link
- *  labels, never page content, and this doesn't either. A real search
- *  would need an index this app doesn't have yet.
+/** The left nav: the overview, then each section with its groups, plus a
+ *  client-side filter over page titles and their section names. It never
+ *  indexes page content; a real search would need an index this app does not
+ *  have.
  *
- *  Below `lg` the full section list collapses behind a "Sections · <current
- *  page>" toggle instead of always rendering inline above the article — a
- *  fifteen-link list ahead of any actual content read as a layout defect on
- *  a phone. Collapsed by default, and closes again on navigation (a Link tap
- *  changes the route and Next scrolls to top; leaving it open would land the
- *  reader back at the nav instead of the page they just chose). `lg:block`
- *  unconditionally overrides the mobile `hidden` at that breakpoint, so
- *  desktop is untouched regardless of `mobileOpen`. */
+ *  Below 900px the list collapses behind a "Sections · <section · page>"
+ *  toggle rather than rendering seventeen entries ahead of the article. It
+ *  is collapsed by default and closes when a link in it is followed: a tap on
+ *  a page changes the route, and a tap on a section header only moves to an
+ *  anchor on the same page, so closing on a pathname change alone would leave
+ *  it open for the second. */
 export function DocsSidebar() {
   const pathname = usePathname();
   const [query, setQuery] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const groups = useMemo(() => filterDocsNav(query), [query]);
-  const currentTitle = useMemo(
-    () => flattenDocsNav().find((p) => p.href === pathname)?.title,
-    [pathname],
-  );
+  const sections = useMemo(() => filterDocsNav(query), [query]);
+  const showHome = matchesDocsQuery(DOCS_HOME.title, query);
+  const current = docsPageLabel(pathname);
 
-  // Close the mobile panel on navigation — adjusted during render, not in an
-  // effect (react-hooks/set-state-in-effect rejects the latter here, and
-  // this is the React-documented shape for "reset state when a prop
-  // changes": https://react.dev/learn/you-might-not-need-an-effect). A Link
-  // tap changes `pathname` and Next scrolls to top; leaving the panel open
-  // would land the reader back at the nav instead of the page they chose.
+  // Back and forward change the pathname without a tap on a link, so reset on
+  // that too, adjusted during render rather than in an effect
+  // (react-hooks/set-state-in-effect rejects the latter; this is the
+  // React-documented shape for resetting state when a prop changes).
   const [lastPathname, setLastPathname] = useState(pathname);
   if (pathname !== lastPathname) {
     setLastPathname(pathname);
     setMobileOpen(false);
   }
 
+  const closeOnLink = (e: MouseEvent<HTMLDivElement>) => {
+    if ((e.target as Element).closest("a")) setMobileOpen(false);
+  };
+
+  const pageClass = (active: boolean) => (active ? `${styles.page} ${styles.on}` : styles.page);
+
   return (
-    <nav aria-label="Docs sections" className="text-sm">
+    <nav aria-label="Docs sections">
       <button
         type="button"
         onClick={() => setMobileOpen((open) => !open)}
         aria-expanded={mobileOpen}
         aria-controls="docs-sidebar-sections"
-        className="mb-4 flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground lg:hidden"
+        className={styles.sideToggle}
       >
-        <span className="truncate">
-          Sections{currentTitle ? ` · ${currentTitle}` : ""}
-        </span>
+        <span>Sections{current ? ` · ${current}` : ""}</span>
         <ChevronDown
-          className={
-            "size-3.5 shrink-0 text-muted-foreground transition-transform" +
-            (mobileOpen ? " rotate-180" : "")
-          }
+          className="size-3.5 shrink-0"
+          style={mobileOpen ? { transform: "rotate(180deg)" } : undefined}
           aria-hidden="true"
         />
       </button>
 
-      <div
-        id="docs-sidebar-sections"
-        className={(mobileOpen ? "block" : "hidden") + " lg:block"}
-      >
-        <div className="relative mb-5">
-          <Search
-            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter sections…"
-            aria-label="Filter docs sections"
-            className="w-full rounded-lg border border-border bg-background py-1.5 pr-3 pl-8 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none"
-          />
-        </div>
+      <div id="docs-sidebar-sections" className={styles.sideBody} data-open={mobileOpen} onClick={closeOnLink}>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter sections…"
+          aria-label="Filter docs sections"
+          className={styles.filter}
+        />
 
-        <div className="space-y-6">
-          {groups.map((g) => (
-            <div key={g.name}>
-              <p className="mb-2 px-2.5 font-mono text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-                {g.name}
-              </p>
-              <ul className="space-y-0.5">
-                {g.pages.map((p) => {
-                  const active = pathname === p.href;
-                  return (
-                    <li key={p.href}>
-                      {/* An external page (docs-nav.ts) is a plain anchor:
-                          a full navigation out of the shell, nothing
-                          prefetched for a route that does not exist. */}
-                      {p.external ? (
-                        <a
-                          href={p.href}
-                          className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-                        >
-                          <StatusDot status={p.status} />
-                          <span className="truncate">{p.title}</span>
-                          <span aria-hidden className="ml-auto text-[10px] text-muted-foreground">↗</span>
-                        </a>
-                      ) : (
-                      <Link
-                        href={p.href}
-                        aria-current={active ? "page" : undefined}
-                        className={
-                          "flex items-center gap-2 rounded-md px-2.5 py-1.5 transition-colors " +
-                          (active
-                            ? "bg-accent font-medium text-accent-foreground"
-                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")
-                        }
-                      >
-                        <StatusDot status={p.status} />
-                        <span className="truncate">{p.title}</span>
-                      </Link>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-
-          {groups.length === 0 && (
-            <p className="px-2.5 text-xs text-muted-foreground">
-              No sections match “{query}.”
-            </p>
-          )}
-        </div>
-
-        <div className="mt-8 border-t border-border pt-4">
-          <a
-            href="/llms.txt"
-            className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+        {showHome && (
+          <Link
+            href={DOCS_HOME.href}
+            aria-current={pathname === DOCS_HOME.href ? "page" : undefined}
+            className={pageClass(pathname === DOCS_HOME.href)}
           >
-            <FileText className="size-3.5" aria-hidden="true" />
-            View as llms.txt
-          </a>
+            {DOCS_HOME.title}
+          </Link>
+        )}
+
+        {sections.map((section) => (
+          <div key={section.name}>
+            {/* The top bar also links "Doug reviews" and "The audit", to the
+                door; the hidden word keeps this link's name distinct. */}
+            <Link href={section.href} className={styles.section}>
+              {section.name}
+              <span className="sr-only"> docs</span>
+              {section.status && <span className={styles.soon}> · {section.status}</span>}
+            </Link>
+            {section.groups.map((group) => (
+              <div key={group.name}>
+                <div className={styles.sec}>{group.name}</div>
+                <ul className={styles.entries}>
+                  {group.entries.map((entry) => {
+                    const tag = sidebarTag(entry, section);
+                    if (!isDocsPage(entry)) {
+                      // Named, not linked: the page is not written yet.
+                      return (
+                        <li key={entry.title}>
+                          <span className={`${styles.page} ${styles.dead}`}>
+                            {entry.title}
+                            {tag && <span className={styles.soon}>{tag}</span>}
+                          </span>
+                        </li>
+                      );
+                    }
+                    const active = pathname === entry.href;
+                    return (
+                      <li key={entry.href}>
+                        <Link
+                          href={entry.href}
+                          aria-current={active ? "page" : undefined}
+                          className={pageClass(active)}
+                        >
+                          {entry.title}
+                          {tag && <span className={styles.soon}>{tag}</span>}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {!showHome && sections.length === 0 && (
+          <p className={styles.empty}>No sections match “{query}.”</p>
+        )}
+
+        <div className={styles.sideFoot}>
+          <a href="/llms.txt">View as llms.txt</a>
         </div>
       </div>
     </nav>

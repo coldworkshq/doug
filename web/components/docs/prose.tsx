@@ -1,86 +1,72 @@
 import type { ReactNode } from "react";
 
-import { StatusBadge } from "./badge";
 import type { DocsStatus } from "@/lib/docs-nav";
 
-/** Kicker + H1 + status badge + optional dek, repeated at the top of every
- *  doc page. Kept as one component so the eleven pages can't drift on
- *  spacing or heading scale relative to each other. */
+import { StatusBadge } from "./badge";
+import styles from "./docs.module.css";
+
+/** Eyebrow, status chip, H1, and lede, repeated at the top of every doc page.
+ *  One component, so the pages cannot drift on spacing or heading scale
+ *  relative to each other. `hot` sets the eyebrow in molten, for a page that
+ *  is a published contract rather than a description. */
 export function DocsPageHeader({
   kicker,
   title,
   status,
+  statusLabel,
+  hot = false,
   children,
 }: {
   kicker?: string;
   title: string;
   status?: DocsStatus;
+  statusLabel?: string;
+  hot?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <header className="mb-10">
-      {kicker && (
-        <p className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          {kicker}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-          {title}
-        </h1>
-        {status && <StatusBadge status={status} />}
-      </div>
-      {children && (
-        <div className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
-          {children}
+    <header>
+      {(kicker || status) && (
+        <div className={styles.eyebrowRow}>
+          {kicker && (
+            <span className={hot ? `${styles.eyebrow} ${styles.hot}` : styles.eyebrow}>{kicker}</span>
+          )}
+          {status && <StatusBadge status={status} label={statusLabel} />}
         </div>
       )}
+      <h1>{title}</h1>
+      {children && <div className={styles.lede}>{children}</div>}
     </header>
   );
 }
 
+/** A section heading. Its scroll margin clears the sticky top bar, so an
+ *  anchor link (/docs#the-audit) lands on the heading, not under the bar. */
 export function H2({ id, children }: { id?: string; children: ReactNode }) {
-  return (
-    <h2
-      id={id}
-      // scroll-mt shares --docs-content-offset (globals.css) with the docs
-      // sidebar's sticky offset (app/docs/layout.tsx) — both exist to clear
-      // the floating SiteHeader, from one number rather than two. Currently
-      // unexercised: no page links to an in-page #id yet, so this only
-      // matters the day one does.
-      className="font-heading mt-12 scroll-mt-[var(--docs-content-offset)] text-xl font-semibold tracking-tight first:mt-0 sm:text-2xl"
-    >
-      {children}
-    </h2>
-  );
+  return <h2 id={id}>{children}</h2>;
 }
 
-export function H3({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="font-heading mt-8 text-base font-semibold">{children}</h3>
-  );
+export function H3({ id, children }: { id?: string; children: ReactNode }) {
+  return <h3 id={id}>{children}</h3>;
 }
 
-export function P({ children }: { children: ReactNode }) {
-  return (
-    <p className="mt-4 text-[15px] leading-relaxed text-muted-foreground">
-      {children}
-    </p>
-  );
+export function P({ dim = false, children }: { dim?: boolean; children: ReactNode }) {
+  return <p className={dim ? styles.dim : undefined}>{children}</p>;
+}
+
+/** Fine print under a panel or a table. */
+export function Small({ children }: { children: ReactNode }) {
+  return <p className={styles.small}>{children}</p>;
 }
 
 export function UL({ children }: { children: ReactNode }) {
-  return (
-    <ul className="mt-4 list-disc space-y-2 pl-5 text-[15px] leading-relaxed text-muted-foreground marker:text-border">
-      {children}
-    </ul>
-  );
+  return <ul>{children}</ul>;
+}
+
+export function OL({ start, children }: { start?: number; children: ReactNode }) {
+  return <ol start={start}>{children}</ol>;
 }
 
 export function IC({ children }: { children: ReactNode }) {
-  return (
-    <code className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-accent-foreground">
-      {children}
-    </code>
-  );
+  return <code>{children}</code>;
 }

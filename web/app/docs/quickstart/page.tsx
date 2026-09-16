@@ -1,11 +1,11 @@
 import { Bright, CodeBlock, Comment, Dim, Ok } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, H2, IC, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "Quickstart — Doug Documentation",
+  title: "Quickstart · Doug reviews",
   description:
     "Backtest any public repository in one command — no account, no server.",
 };
@@ -21,11 +21,11 @@ $ uv run doug-backtest getsentry/sentry \\
 export default function QuickstartPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Getting started"
+              kicker="Doug reviews · Getting started"
               title="Quickstart"
               status="available"
             >
@@ -50,7 +50,7 @@ export default function QuickstartPage() {
             <UL>
               <li>
                 Labels defect-inducing PRs from{" "}
-                <b className="font-semibold text-foreground">
+                <b>
                   revert anchors in git history
                 </b>{" "}
                 (dense, zero API quota)
@@ -65,16 +65,14 @@ export default function QuickstartPage() {
               </li>
             </UL>
 
-            <div className="mt-6">
-              <Callout lead="Tip — dodge right-censoring:">
+            <Callout lead="Tip — dodge right-censoring:">
                 Young PRs haven&rsquo;t had time to be reverted yet. Pass{" "}
                 <IC>--before</IC> with a date at least a few weeks back so
                 every PR in the window had a fair chance to fail.
               </Callout>
-            </div>
           </>
         }
-        rail={
+        examples={
           <>
             <CodeBlock title="Terminal" copyText={TERMINAL}>
               <Comment># install (from the repo, for now)</Comment>

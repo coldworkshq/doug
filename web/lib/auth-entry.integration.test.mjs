@@ -369,26 +369,75 @@ describe("single host: the subdomain redirects to the apex", () => {
     assert.equal(signIn.headers.location, `https://${APEX}/sign-in`);
     assert.equal(signIn.headers["set-cookie"], undefined);
 
-    // The alias served the registry's landing and the audit CLI's docs
-    // (coldworks#77 forwards them from there today), so each of those URLs
-    // means a page that lives at /docs/audit here, not Doug's own /docs. A
-    // path-preserving rule would strand /docs/cli.html on a 404. Every
-    // destination is then fetched on the apex: a forward to a missing page
-    // is a 404 with an extra hop.
+    // The alias served the registry's landing and the audit CLI's docs, so
+    // each of those URLs means an audit docs page, not Doug's own /docs. A
+    // path-preserving rule would strand /docs/cli.html on a 404. The www hop
+    // is permanent, so it lands on a stable apex URL: an audit page's route,
+    // or the audit's home at /docs/audit, which forwards temporarily to its
+    // half of the overview (the audit docs joined the one docs site on
+    // 2026-09-15). Every chain is followed to its end on the apex: a forward
+    // to a missing page is a 404 with extra hops, and a chain that ends
+    // anywhere but the replacement lands the reader on the wrong page. The old
+    // stylesheet is not in the table: no page links it.
+    //
+    // The apex's own old audit URLs forward, temporarily and in one hop, to
+    // what replaced them.
+    for (const [from, to] of [
+      ["/docs/audit/index", "/docs#the-audit"],
+      ["/docs/audit/index.html", "/docs#the-audit"],
+      ["/docs/audit/connect.html", "/docs/audit/connect"],
+    ]) {
+      const forward = await requestAs(APEX, apex.origin, from);
+      assert.equal(forward.status, 307, `${APEX}${from}`);
+      const target = new URL(forward.headers.location, `https://${APEX}`);
+      assert.equal(`${target.pathname}${target.hash}`, to, `${APEX}${from}`);
+    }
     const legacy = [
-      ["/", ""],
-      ["/landing.html", "/"],
-      ["/docs", "/docs/audit"],
-      ["/docs/cli", "/docs/audit/cli"],
-      ["/docs/cli.html", "/docs/audit/cli.html"],
-      ["/docs/docs.css", "/docs/audit/docs.css"],
+      ["/", "", "/"],
+      ["/landing.html", "/", "/"],
+      ["/docs", "/docs/audit", "/docs#the-audit"],
+      ["/docs/index", "/docs/audit", "/docs#the-audit"],
+      ["/docs/index.html", "/docs/audit", "/docs#the-audit"],
+      ["/docs/cli", "/docs/audit/cli", "/docs/audit/cli"],
+      ["/docs/cli.html", "/docs/audit/cli", "/docs/audit/cli"],
+      ["/docs/quickstart.html", "/docs/audit/quickstart", "/docs/audit/quickstart"],
+      ["/docs/connect", "/docs/audit/connect", "/docs/audit/connect"],
+      // Only the audit's own legacy names mean the audit. Every other docs
+      // path keeps its path: Doug's pages, and the audit's routes themselves,
+      // which a rule on every /docs path sent to /docs/audit/audit/cli.
+      ["/docs/report", "/docs/report", "/docs/report"],
+      ["/docs/audit/cli", "/docs/audit/cli", "/docs/audit/cli"],
     ];
-    for (const [from, to] of legacy) {
+    for (const [from, to, final] of legacy) {
       const response = await requestAs(WWW, apex.origin, from);
       assert.equal(response.status, 308, `${WWW}${from}`);
       assert.equal(response.headers.location, `https://${APEX}${to}`, `${WWW}${from}`);
-      const landed = await requestAs(APEX, apex.origin, to || "/");
-      assert.equal(landed.status, 200, `${APEX}${to || "/"} must serve the page ${WWW}${from} forwards to`);
+      let at = new URL(to || "/", `https://${APEX}`);
+      for (let hops = 0; ; hops++) {
+        const landed = await requestAs(APEX, apex.origin, `${at.pathname}${at.search}`);
+        if (landed.status === 200) break;
+        assert.equal(landed.status, 307, `${APEX}${at.pathname} must serve, or forward temporarily, for ${WWW}${from}`);
+        assert.ok(hops < 2, `${WWW}${from} is still forwarding after three hops`);
+        at = new URL(landed.headers.location, at);
+      }
+      assert.equal(`${at.pathname}${at.hash}`, final, `${WWW}${from} ends on the wrong page`);
     }
+  });
+
+  test("the audit's old overview URL lands on a heading the served overview renders", async () => {
+    // /docs/audit forwards to /docs#the-audit. A fragment with no element
+    // behind it is not an error anywhere: the reader lands at the top of the
+    // overview, on Doug's half, and nothing reports it. So this reads the
+    // served HTML; lib/docs-nav.test.mjs reads only the page's source.
+    const forward = await requestAs(APEX, apex.origin, "/docs/audit");
+    assert.equal(forward.status, 307);
+    const target = new URL(forward.headers.location, `https://${APEX}`);
+    assert.equal(`${target.pathname}${target.hash}`, "/docs#the-audit");
+    const html = await (await fetch(new URL(target.pathname, apex.origin))).text();
+    assert.match(
+      html,
+      new RegExp(`<h2[^>]*\\bid="${target.hash.slice(1)}"`),
+      "the served overview has no heading for the fragment the redirect names",
+    );
   });
 });

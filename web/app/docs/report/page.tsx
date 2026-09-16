@@ -1,11 +1,11 @@
 import { CodeBlock, Dim, Kw, Str } from "@/components/docs/code-block";
 import { Callout } from "@/components/docs/callout";
 import { DocsPager } from "@/components/docs/docs-pager";
-import { DocsTwoCol } from "@/components/docs/docs-two-col";
+import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, H2, IC, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "The report — Doug Documentation",
+  title: "The report",
   description:
     "The four tables every doug-backtest run prints, and the JSON shape behind them.",
 };
@@ -13,11 +13,11 @@ export const metadata = {
 export default function ReportPage() {
   return (
     <>
-      <DocsTwoCol
+      <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Reference"
+              kicker="Doug reviews · Reference"
               title="The report"
               status="available"
             >
@@ -30,23 +30,23 @@ export default function ReportPage() {
             <H2>Sections</H2>
             <UL>
               <li>
-                <b className="font-semibold text-foreground">Capture curve</b> —
+                <b>Capture curve</b> —
                 doug vs size-only vs random, at each flag rate, plus AUC
               </li>
               <li>
-                <b className="font-semibold text-foreground">Cleared band</b> —
+                <b>Cleared band</b> —
                 cleared count, missed defects, miss rate, density_lift per
                 budget
               </li>
               <li>
-                <b className="font-semibold text-foreground">
+                <b>
                   Per-rule precision
                 </b>{" "}
                 — every scoring rule: fired / hit / precision / lift. Dead rules
                 stay in the table
               </li>
               <li>
-                <b className="font-semibold text-foreground">
+                <b>
                   Time-split holdout
                 </b>{" "}
                 — hotspots learned on the older half only, scored on the newer
@@ -55,16 +55,14 @@ export default function ReportPage() {
               </li>
             </UL>
 
-            <div className="mt-6">
-              <Callout lead="Schema stability:">
+            <Callout lead="Schema stability:">
                 early preview — field names may still move. The printed tables
                 are the stable contract for now; treat the JSON as
                 versioned-by-commit.
               </Callout>
-            </div>
           </>
         }
-        rail={
+        examples={
           <CodeBlock title="report.json (sketch)">
             {"{\n  "}
             <Str>&quot;repo&quot;</Str>
