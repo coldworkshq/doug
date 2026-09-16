@@ -198,6 +198,13 @@
   --line-2: #172730;
   --paper-2: #0d181d;
 
+  /* The flag is the brand's molten here, byte for byte. Dark molten already
+     clears AA as text, and a second orange a shade away would read as a
+     mistake rather than as a distinction. What the data-colour rule protects
+     is that CHROME — the accent, the ring, the focus — never reads as a
+     verdict, and lib/design-system.test.mjs measures the accent against both
+     the flag and molten. Doug's read of 360a71f,
+     reader:design-token-collision. */
   --flag: #ff5e22;
   --clear: #3fb67a;
 

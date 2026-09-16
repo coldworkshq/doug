@@ -520,6 +520,14 @@ test("the data pair and the chrome accent stay separable in normal vision and un
       assert.ok(data >= FLOORS.data[vision], `${theme}: --flag against --clear is ΔE2000 ${data.toFixed(1)} in ${vision}, under ${FLOORS.data[vision]}`);
       const chrome = separation(palette.coolant, palette.flag, vision);
       assert.ok(chrome >= FLOORS.chrome[vision], `${theme}: --coolant against --flag is ΔE2000 ${chrome.toFixed(1)} in ${vision}, under ${FLOORS.chrome[vision]}`);
+      // The accent is measured against the brand's display colour too. In dark
+      // --flag IS --molten, byte for byte, which Doug read as the rule
+      // weakening (360a71f, reader:design-token-collision): it is deliberate,
+      // because both are the brand's heat and a second orange a shade away
+      // reads as a mistake. The rule is about chrome, so chrome is what has to
+      // stay far from both.
+      const display = separation(palette.coolant, palette.molten, vision);
+      assert.ok(display >= FLOORS.chrome[vision], `${theme}: --coolant against --molten is ΔE2000 ${display.toFixed(1)} in ${vision}, under ${FLOORS.chrome[vision]}`);
     }
   }
 });

@@ -218,6 +218,16 @@ test("light is the console's default, and dark is reachable on purpose", async (
     }
   }
 
+  // …and the two that left this block are checked where they now live. Both
+  // palette blocks declare them, or the ledger loses its row dividers or its
+  // smallest labels in whichever theme forgot — the same silent failure, one
+  // scope up (Doug's read of 360a71f, reader:test-contract-loosened).
+  for (const [label, block] of [["light", light[1]], ["dark", dark[1]]]) {
+    for (const token of ["--line", "--faint"]) {
+      assert.match(block, new RegExp(`${token}:\\s*#`), `${label} palette leaves ${token} undeclared`);
+    }
+  }
+
   // The 1440px canvas — the reference layout width the design was measured at.
   assert.match(page, /max-w-\[1440px\]/);
 });
