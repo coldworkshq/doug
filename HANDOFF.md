@@ -2,26 +2,21 @@
 
 --- look lane (2026-09-15): the web app moves to the Coldworks look, doug#351 ---
 
-State:    built and verified locally, not pushed — branch
-          design/coldworks-look (worktree .claude/worktrees/coldworks-look),
-          five commits on doug#350's tip cecdb8e with the upstream unset, so a
-          bare push cannot reach #350's branch: 3ed830a handoff, c4b00b0
-          faces, 0f239bd palette and computed tests, fb02bfd ADR-0035
-          (proposed), 94d9ca3 outcome cells and favicon. npm test 477 of 477
-          (the build-and-serve integration test included), tsc 0, lint 0, 16
-          of 16 planted values killed, browser check on next dev. Andrew, in
-          session 2026-09-15: the web app uses the Coldworks look everywhere;
-          dark mode stays, redrawn in Coldworks colours; Doug keeps its name,
-          its mark, and the /about story. doug#351 records the ruling, and its
-          status comment lists the edge question and PR B's deferrals.
-Next:     Founder: merge #350; pick the edge option on #351; accept or amend
-          ADR-0035. Agent, after #350 merges: `git rebase --onto origin/main
-          cecdb8e design/coldworks-look`, re-run the suite, push, and open
-          PR A (Closes #214 and #210, refs #351), then answer Doug's read.
-          PR B (UI grammar) follows.
-Blockers: #350's merge before any push. The signed-in dashboard is unseen in
-          the new look (no WorkOS config locally), and a merge deploys, so
-          production renders it first.
+State:    rebased onto main and ready to push — branch design/coldworks-look
+          (worktree .claude/worktrees/coldworks-look), five commits on main
+          22cd356 now that doug#350 has merged: b8b389e handoff, 78aeb44
+          faces, dbe7542 palette and computed tests, fb8b85e ADR-0035,
+          953d2e7 the outcome cells and the favicon. npm test 481 of 481 (the
+          build-and-serve integration test included), tsc 0, lint 0, console
+          125 of 125, 16 of 16 planted values killed, browser check on next
+          dev. Andrew, in session: the web app wears the Coldworks look
+          everywhere (2026-09-15); the card border keeps ADR-0020's
+          separation, and ADR-0035 is accepted (2026-09-16).
+Next:     Push and open PR A (Closes #214 and #210, refs #351), then answer CI
+          and Doug's read. PR B (UI grammar) follows, and #351 carries its
+          list.
+Blockers: The signed-in dashboard is unseen in the new look (no WorkOS config
+          locally), and a merge deploys, so production renders it first.
 Decisions this session:
 - Build on #350, not beside it: it changes globals.css,
   design-system.test.mjs, and site-header.tsx, and carries the Coldworks
@@ -109,6 +104,20 @@ Decisions this session:
   commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
 - The next dev server runs from the coldworks worktree's .claude/launch.json
   (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
+- Andrew, 2026-09-16: the card border keeps today's default (#c2cbcf light,
+  #2e4048 dark), not the brand hairline, and ADR-0035 is accepted.
+- The mono face needs its own monospace fallback chain: next/font lists a
+  size-adjusted Arial (134.59%) straight after the face, which drew the
+  ledger's ○ and the docs' arrows half again as wide. With the chain,
+  `○ censored` is 69.0px at 11.5px against its 72px column, where it was
+  71.5px without, so the cells keep their size — rejected: stepping them down
+  to 11px, which treated the symptom.
+- The rebase keeps #350's own AA work: its docs chip inks (--cw-molten-ink,
+  --cw-ember-ink, --cw-clear-ink) stay local to the docs module, and its two
+  docs tests sit beside the computed palette tests. The docs-chip item listed
+  on #351 is therefore already done.
+- The console carries the same size-adjusted Arial on its Geist Mono, so its
+  ledger draws the same oversized ○. Out of this PR; listed on #351.
 Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
           globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
           web/components/doug-logo.tsx · web/lib/{design-system,

@@ -1,6 +1,6 @@
 ---
 title: The web app wears the Coldworks look in both themes
-status: proposed
+status: accepted
 date: 2026-09-15
 amends: ADR-0020
 ---
@@ -92,7 +92,8 @@ itself quoted ("ΔE 6.1") reproduced under no formula (#210).
 - The UI grammar is still Doug's: uppercase tracked labels, Doug's card
   shapes, and the header. doug#351 owns that as its second PR.
 - Component edges keep ADR-0020's separation from the card (`--border`), and
-  row dividers use the brand's hairline (`--line`). Whether edges become the
-  brand hairline is Andrew's call on doug#351.
+  row dividers use the brand's hairline (`--line`). Andrew ruled on 2026-09-16
+  (doug#351) that the app keeps that separation rather than the lighter brand
+  hairline.
 - The console keeps its own palette and faces. Only the utilities block it
   shares with web changed.

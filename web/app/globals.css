@@ -134,8 +134,9 @@
   --destructive: var(--flag);
   /* Component edges keep ADR-0020's separation from the card, in a Coldworks
      slate. The brand's own hairline is --line, which row dividers use, because
-     a rule inside a table must stay lighter than the table's edge. Which edge
-     the app wears is the open question on doug#351. */
+     a rule inside a table must stay lighter than the table's edge. Andrew
+     ruled on 2026-09-16 (doug#351) that the app keeps this separation rather
+     than the lighter brand hairline. */
   --border: #c2cbcf;
   --input: #a6b1b6;
   --ring: #1e56d6;
