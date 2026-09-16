@@ -9,13 +9,19 @@ State:    review — **doug#363** from branch design/coldworks-grammar off main
           integration test included), tsc 0, lint 0 errors, console 125 of
           125, 11 of 11 planted values killed by the assertion written for
           each, browser pass on six pages in both themes.
-Next:     Answer any further read on #363 in the PR body. CI passes on every
-          job and Doug's read of 2a07e78 is answered. The merge is the
+Next:     Answer any further read on #363 in the PR body. Two reads answered
+          (2a07e78 at 0.42, 75f7504 at 0.28), thirteen rows logged. The merge is the
           founder's click, and it deploys. Then #362, which asks whether
           /docs comes onto the type rule or is ruled out of it — Andrew's
           call, not a lane's.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
+- Doug's read of 75f7504 (cleared, 0.28, six findings): one real —
+  --font-archivo is minted by next/font and mounted on <html>, not declared
+  in the stylesheet, so nothing failed if the layout dropped it. 6435bdb
+  fails on that and on --mono-face losing its declaration. The layout
+  regression is disproved by measurement: 14 .lbl on /doug, none
+  overflowing, and the dock's headings are 54 to 251px in 360px.
 - Doug's read of 2a07e78 (cleared, 0.42, seven findings): two mediums are
   factually wrong about the stylesheet — --color-ink-2 is in @theme inline
   and --ink-2 is declared in both palette blocks, neither in this diff. The
