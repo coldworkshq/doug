@@ -697,6 +697,29 @@ test("the docs' code panels are ink in both themes, dark enough to read their ow
   }
 });
 
+test("the docs' token scope never re-points a site token it also reads", async () => {
+  // Doug's read of c17ec52, reader:css-variable-cycle. Before ADR-0035 the docs
+  // pointed --foreground at --cw-fg; now --cw-fg reads --foreground, and
+  // declaring both on .root would be a cycle. CSS resolves a cycle by voiding
+  // BOTH properties, so the docs would lose their ink with no error anywhere.
+  // The re-points that remain are one-way: they read --cw- tokens that read
+  // palette tokens.
+  const css = code(await readFile(docsCssUrl, "utf8"));
+  const root = ruleBody(css, ".root");
+  assert.ok(root, "the docs token scope is gone");
+  const value = (name) => new RegExp(`--${name}:\\s*([^;]+);`).exec(root)?.[1]?.trim();
+  for (const [, name, raw] of root.matchAll(/--([\w-]+):\s*([^;]+);/g)) {
+    const read = /^var\(--([\w-]+)\)$/.exec(raw.trim())?.[1];
+    if (!read) continue;
+    const back = /^var\(--([\w-]+)\)$/.exec(value(read) ?? "")?.[1];
+    assert.notEqual(back, name, `--${name} reads --${read}, which reads --${name} back: a cycle voids both`);
+  }
+  // …and the two that would cycle are not declared here at all.
+  for (const [token, through] of [["foreground", "--cw-fg"], ["muted-foreground", "--cw-muted"]]) {
+    assert.equal(value(token), undefined, `.root re-points --${token}, which ${through} reads`);
+  }
+});
+
 test("the docs module paints theme colours only through its tokens", async () => {
   // The hex scan above reads components, not stylesheets. In docs.module.css
   // a literal colour belongs in the two token scopes, or on the code panel,
