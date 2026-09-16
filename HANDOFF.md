@@ -9,12 +9,20 @@ State:    review — **doug#363** from branch design/coldworks-grammar off main
           integration test included), tsc 0, lint 0 errors, console 125 of
           125, 11 of 11 planted values killed by the assertion written for
           each, browser pass on six pages in both themes.
-Next:     Watch CI and Doug's read on #363, and answer each read in the PR
-          body. The merge is the founder's click, and it deploys. Then #362,
-          which asks whether /docs comes onto the type rule or is ruled out
-          of it — Andrew's call, not a lane's.
+Next:     Answer any further read on #363 in the PR body. CI passes on every
+          job and Doug's read of 2a07e78 is answered. The merge is the
+          founder's click, and it deploys. Then #362, which asks whether
+          /docs comes onto the type rule or is ruled out of it — Andrew's
+          call, not a lane's.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
+- Doug's read of 2a07e78 (cleared, 0.42, seven findings): two mediums are
+  factually wrong about the stylesheet — --color-ink-2 is in @theme inline
+  and --ink-2 is declared in both palette blocks, neither in this diff. The
+  third is measured wrong: dropping --radius-xl does not remove the utility,
+  Tailwind's own default fills it at 12px, and no call site exists anyway.
+  Its residue is real, so 49880a0 guards the call sites and the scale. The
+  responsive finding is the change's own subject. Seven rows logged.
 - PR B branches off main, not off design/coldworks-look: #361 squash-merged
   at 21e1231, so its branch is closed — rejected: pushing to a merged branch.
 - The type rule is a CLASS, not a convention: `.vocab` in globals.css is the
