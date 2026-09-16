@@ -9,7 +9,16 @@ State:    review — **doug#363** from branch design/coldworks-grammar off main
           integration test included), tsc 0, lint 0 errors, console 125 of
           125, 11 of 11 planted values killed by the assertion written for
           each, browser pass on six pages in both themes.
-Next:     ANDREW: the favicon is yours. doug#351 records that the .ico is a
+Next:     ANDREW, PRODUCTION FIRST: Doug's hosted reader is out of Anthropic
+          credit. Its read of 0f49562 at 05:5x UTC returned HTTP 400 "Your
+          credit balance is too low" on BOTH the reader and the intent model,
+          and the check still posted "Cleared · risk 0.04" — a vacuous clear
+          on every PR it touches until the balance is topped up. The read of
+          c488c7c minutes earlier ran normally, so it ran out inside this
+          session. Spend is R11; this lane did not act on it. R1 says a
+          tenant-visible incident pauses every lane, and this one is
+          tenant-visible on every repo Doug is installed on.
+          Then: the favicon is yours. doug#351 records that the .ico is a
           brand call, and this lane changed it without a ruling — 901fddc is
           one commit and drops cleanly if you want a different mark. Four
           reads answered (0.42, 0.28, 0.26, 0.29), 25 rows logged. The merge is the
@@ -18,6 +27,9 @@ Next:     ANDREW: the favicon is yours. doug#351 records that the .ico is a
           call, not a lane's.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
+- Doug's read of 0f49562 is not evidence about the change: both the reader
+  and the intent model returned a billing 400, so the 0.04 clear is vacuous.
+  Logged as such and surfaced rather than treated as a pass.
 - Doug's read of c488c7c found a real one: font-normal on the three <th>
   cells under <tr className="lbl"> cancelled the class, because an inherited
   weight loses to a child's own declaration, so that header rendered Archivo
