@@ -2,11 +2,17 @@
 
 --- look lane (2026-09-16): PR B, the UI grammar, doug#351 ---
 
-State:    building — branch design/coldworks-grammar off main 21e1231, which
-          is PR A (doug#361) merged. PR B is the second half of doug#351:
-          the typographic rule, the registry's card/stat/rail/pill shapes,
-          and the four items PR A carried forward.
-Next:     Screenshots in both themes, then open the PR.
+State:    review — **doug#363** from branch design/coldworks-grammar off main
+          21e1231 (PR A, doug#361, merged). Three commits: 1ea9371 the type
+          rule and its guard, b954201 the door's shapes and the bar's own
+          ink, 901fddc the tab icon. npm test 488 of 488 (the build-and-serve
+          integration test included), tsc 0, lint 0 errors, console 125 of
+          125, 11 of 11 planted values killed by the assertion written for
+          each, browser pass on six pages in both themes.
+Next:     Watch CI and Doug's read on #363, and answer each read in the PR
+          body. The merge is the founder's click, and it deploys. Then #362,
+          which asks whether /docs comes onto the type rule or is ruled out
+          of it — Andrew's call, not a lane's.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
 - PR B branches off main, not off design/coldworks-look: #361 squash-merged
