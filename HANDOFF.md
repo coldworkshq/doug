@@ -9,13 +9,25 @@ State:    review — **doug#363** from branch design/coldworks-grammar off main
           integration test included), tsc 0, lint 0 errors, console 125 of
           125, 11 of 11 planted values killed by the assertion written for
           each, browser pass on six pages in both themes.
-Next:     Answer any further read on #363 in the PR body. Two reads answered
-          (2a07e78 at 0.42, 75f7504 at 0.28), thirteen rows logged. The merge is the
+Next:     ANDREW: the favicon is yours. doug#351 records that the .ico is a
+          brand call, and this lane changed it without a ruling — 901fddc is
+          one commit and drops cleanly if you want a different mark. Three
+          reads answered (0.42, 0.28, 0.26), twenty rows logged. The merge is the
           founder's click, and it deploys. Then #362, which asks whether
           /docs comes onto the type rule or is ruled out of it — Andrew's
           call, not a lane's.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
+- Doug's read of 7fc3295 (cleared, 0.26, seven findings) caught a real one
+  that is mine, not the code's: doug#351 records the .ico as a brand call,
+  which is R11, and this lane changed it anyway. Kept in its own commit and
+  handed to Andrew rather than reverted, because Vercel's mark ships until
+  he rules either way.
+- The layout-overflow finding is backwards, measured on the three columns
+  it names: dropping caps and .12em tracking costs more width than 1-2px of
+  size buys back, so every fixed-width label got NARROWER. Ledger heads
+  38.3 to 29.5px in 42; the receipt's 92px column unchanged to the pixel
+  (mono advance does not vary with case); census tallies 61.6 to 59.4 in 81.
 - Doug's read of 75f7504 (cleared, 0.28, six findings): one real —
   --font-archivo is minted by next/font and mounted on <html>, not declared
   in the stylesheet, so nothing failed if the layout dropped it. 6435bdb
