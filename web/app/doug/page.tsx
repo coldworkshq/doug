@@ -314,14 +314,21 @@ export default async function Home() {
                 <col className="w-[44%]" />
               </colgroup>
               <thead>
+                {/* `font-normal` used to sit on all three cells, to keep the
+                    tracked uppercase mono off bold. Under the label grammar it
+                    cancelled the class on the row above it instead: an
+                    inherited weight loses to the child's own declaration, so
+                    the header rendered Archivo at 400 (Doug's read of
+                    c488c7c, reader:cascade-conflict). The ink override on the
+                    third cell stays — that column is the emphasis. */}
                 <tr className="lbl">
-                  <th className="px-5 py-3 text-left font-normal">
+                  <th className="px-5 py-3 text-left">
                     Per pull request
                   </th>
-                  <th className="px-5 py-3 text-left font-normal">
+                  <th className="px-5 py-3 text-left">
                     A model review of everything
                   </th>
-                  <th className="border-l border-border bg-background/60 px-5 py-3 text-left font-normal text-foreground">
+                  <th className="border-l border-border bg-background/60 px-5 py-3 text-left text-foreground">
                     Doug
                   </th>
                 </tr>
