@@ -121,8 +121,8 @@ export function CoverageRuler({
         <div className="cov-fill min-w-0.5 rounded-[2px]" style={{ flex: `${seenShare} 1 0` }} />
         {coverage.file_cut && (
           <div className="relative -my-[7px] mx-[3px] w-px flex-none bg-foreground">
-            <span className="mono absolute left-[-2px] top-[calc(100%+4px)] whitespace-nowrap text-[9px] uppercase tracking-[.08em]">
-              budget cut ↑
+            <span className="mono absolute left-[-2px] top-[calc(100%+4px)] whitespace-nowrap text-[11px]">
+              Budget cut ↑
             </span>
           </div>
         )}
@@ -162,7 +162,7 @@ export function CoverageRuler({
         </span>
       </div>
 
-      <div className="mono border-t border-border pt-3 text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+      <div className="mono border-t border-border pt-3 text-[11.5px] text-muted-foreground">
         Unseen — {coverage.files_unseen.length} files
       </div>
       <ul>
@@ -181,7 +181,7 @@ export function CoverageRuler({
               chars, no place in files_unseen or the bar. Naming the cause
               here is what keeps this from reading as a second, contradictory
               "unseen" claim. */}
-          <div className="mono mt-4 border-t border-border pt-3 text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+          <div className="mono mt-4 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
             Never fetched — GitHub sent no patch (too large to inline) — {filesDropped.length} files
           </div>
           <ul>

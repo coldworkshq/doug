@@ -59,9 +59,9 @@ export default async function OverviewPage() {
         />
 
         <main className="mx-auto w-full max-w-[820px] px-6 py-10">
-          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
+          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] text-[var(--faint)]">
             <span className={ROUTE_CHIP}>/overview</span>
-            <span className="truncate normal-case tracking-normal text-muted-foreground">
+            <span className="truncate text-muted-foreground">
               {connection.account_login}
             </span>
             <span className="h-px flex-1 bg-border" />

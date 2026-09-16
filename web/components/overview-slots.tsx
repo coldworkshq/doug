@@ -14,7 +14,7 @@ export function OverviewSlots({ slots }: { slots: Slot[] }) {
     <div className="mt-8 grid grid-cols-1 gap-0 border-t border-border sm:grid-cols-2">
       {slots.map((slot) => (
         <div key={slot.key} data-slot={slot.key} className="border-b border-border py-5 sm:pr-8">
-          <Link href={slot.href} className="mono text-[10.5px] uppercase tracking-[.15em] text-muted-foreground no-underline hover:text-foreground">
+          <Link href={slot.href} className="lbl text-muted-foreground no-underline hover:text-foreground">
             {slot.label}
           </Link>
           {slot.figure !== null ? (

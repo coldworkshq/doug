@@ -8,9 +8,9 @@ export default function Loading() {
   return (
     <main className="mx-auto w-full max-w-5xl px-6">
       <section className="space-y-3 py-10">
-        <div className="panel h-28 animate-pulse rounded-2xl" />
-        <div className="panel h-28 animate-pulse rounded-2xl opacity-70" />
-        <div className="panel h-28 animate-pulse rounded-2xl opacity-40" />
+        <div className="panel h-28 animate-pulse rounded-lg" />
+        <div className="panel h-28 animate-pulse rounded-lg opacity-70" />
+        <div className="panel h-28 animate-pulse rounded-lg opacity-40" />
       </section>
     </main>
   );

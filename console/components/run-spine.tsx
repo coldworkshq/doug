@@ -48,7 +48,7 @@ export function RunSpine({ run }: { run: RunDetail }) {
   const changedFiles = run.pr?.changed_files ?? null;
   return (
     <aside className="border-r border-border pr-6 pt-5">
-      <h2 className="mono mb-4 text-[11px] font-medium uppercase tracking-[.16em] text-muted-foreground">
+      <h2 className="mono mb-4 text-[11.5px] font-medium text-muted-foreground">
         The run
       </h2>
       <ol>

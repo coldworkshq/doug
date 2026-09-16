@@ -40,8 +40,8 @@ import type { RunSummary } from "@/lib/session-api";
 const BLOCK = "border-b border-border px-5 py-[18px]";
 
 const HEADING =
-  "mono mb-3 flex items-baseline gap-2 text-[10px] font-medium uppercase tracking-[.17em] " +
-  "text-muted-foreground [&_span]:ml-auto [&_span]:text-[9.5px] [&_span]:tracking-[.04em] [&_span]:normal-case";
+  "lbl mb-3 flex items-baseline gap-2 " +
+  "[&_span]:ml-auto [&_span]:text-[11px] [&_span]:font-normal [&_span]:text-[var(--faint)]";
 
 const FIGURE = "mono text-[21px] font-medium leading-none tabular-nums";
 
@@ -76,7 +76,7 @@ function Tally({
   return (
     <div className="flex min-w-0 flex-col gap-1" title={title}>
       <span className={`${FIGURE} ${colour}`}>{value}</span>
-      <span className="mono truncate text-[9.5px] uppercase tracking-[.12em] text-muted-foreground">{word}</span>
+      <span className="mono truncate text-[11px] text-muted-foreground">{word}</span>
     </div>
   );
 }
@@ -229,7 +229,7 @@ export function CensusPanel({ runs, scope }: { runs: RunSummary[]; scope: string
   return (
     <section aria-labelledby="census-title" className="pb-16">
       <header className="border-b border-border px-5 pt-5 pb-4">
-        <h2 id="census-title" className="mono text-[10px] font-medium uppercase tracking-[.17em] text-[var(--coolant)]">
+        <h2 id="census-title" className="lbl text-[var(--coolant)]">
           Ledger census
         </h2>
         <p className="mono mt-1.5 text-[10.5px] leading-[1.45] text-muted-foreground">
@@ -376,7 +376,7 @@ export function CensusPanel({ runs, scope }: { runs: RunSummary[]; scope: string
         <div className={BLOCK}>
           <h3 className={HEADING}>By repository<span>{repos.length} in view</span></h3>
           <div className="mono flex flex-col text-[10.5px]">
-            <div className="flex items-baseline gap-2.5 text-[9px] uppercase tracking-[.1em] text-muted-foreground">
+            <div className="flex items-baseline gap-2.5 text-[10.5px] text-muted-foreground">
               <span className="min-w-0 flex-1">repo</span>
               <span className="w-[30px] flex-none text-right">run</span>
               <span className="w-[30px] flex-none text-right">flag</span>

@@ -65,7 +65,7 @@ export function CheckRunCard({
   const folded = reasons.length - shown.length;
 
   return (
-    <figure className="panel relative overflow-hidden rounded-2xl text-sm shadow-xl shadow-black/[0.05] dark:shadow-black/40">
+    <figure className="panel relative overflow-hidden rounded-lg text-sm shadow-xl shadow-black/[0.05] dark:shadow-black/40">
       <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
 
       {/* Check-run chrome: what GitHub puts around the summary. */}
@@ -99,7 +99,7 @@ export function CheckRunCard({
               ["Findings", findingCounts(reasons), ""],
             ].map(([k, v, tone]) => (
               <div key={k} className="min-w-0 bg-card px-2.5 py-2">
-                <dt className="text-[10px] tracking-wider text-muted-foreground uppercase">{k}</dt>
+                <dt className="text-[11.5px] text-muted-foreground">{k}</dt>
                 <dd className={`mt-0.5 font-medium break-words ${tone}`}>{v}</dd>
               </div>
             ))}
@@ -131,7 +131,7 @@ export function CheckRunCard({
 
         {shown.length > 0 ? (
           <div className="mt-4">
-            <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+            <p className="text-[11.5px] text-muted-foreground">
               Findings
             </p>
             <ul className="mt-1.5 space-y-1 font-mono text-xs">

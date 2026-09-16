@@ -4,6 +4,7 @@
 // properties below are honesty rules that a future edit could quietly break.
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
+import { inflateSync } from "node:zlib";
 import test from "node:test";
 
 const cssUrl = new URL("../app/globals.css", import.meta.url);
@@ -474,10 +475,39 @@ test("every ink clears AA on the grounds it renders on, in both themes", async (
   }
   // The floating bar is light in both themes and declares its own inks.
   const bar = tokens(css, ".site-bar");
-  for (const [ink, ground] of [["foreground", "background"], ["muted-foreground", "background"], ["accent-foreground", "accent"], ["primary-foreground", "primary"]]) {
+  for (const [ink, ground] of [["foreground", "background"], ["muted-foreground", "background"], ["ink-2", "background"], ["accent-foreground", "accent"], ["primary-foreground", "primary"]]) {
     const ratio = contrast(bar[ink], bar[ground]);
     assert.ok(ratio >= AA, `.site-bar: --${ink} on --${ground} is ${ratio.toFixed(2)}:1, under AA`);
   }
+});
+
+test("the floating bar declares every colour token its markup paints with", async () => {
+  // The bar does not invert with the theme, so a token it does NOT declare
+  // keeps the PAGE's value: in dark mode that is a near-white ink on this
+  // white bar, at 1.86:1. It happened to --ink-2 the day the nav took the
+  // door's grammar, and the loop above could not catch it — that loop checks
+  // the tokens someone remembered to list.
+  //
+  // This reads the markup instead. Every Tailwind colour utility in the header
+  // and in the theme toggle it cannot pass classes into, whose name is a
+  // palette token, must be declared inside the .site-bar block.
+  const css = await readFile(cssUrl, "utf8");
+  const light = tokens(css, LIGHT);
+  const bar = ruleBody(code(css), ".site-bar") ?? "";
+  const sources = await Promise.all(
+    ["../components/site-header.tsx", "../components/theme-toggle.tsx"].map((rel) =>
+      readFile(new URL(rel, import.meta.url), "utf8"),
+    ),
+  );
+  const used = new Set();
+  for (const src of sources) {
+    for (const [, name] of src.matchAll(/\b(?:text|bg|border|fill|stroke|outline|ring|decoration|from|via|to)-([a-z0-9-]+)/g)) {
+      if (name in light) used.add(name);
+    }
+  }
+  assert.ok(used.size >= 6, `only ${used.size} palette tokens found in the bar's markup — the scan is broken`);
+  const undeclared = [...used].filter((name) => !new RegExp(`--${name}\\s*:`).test(bar)).sort();
+  assert.deepEqual(undeclared, [], "the bar paints with a token it does not declare, so dark mode keeps the page's value");
 });
 
 test("the data pair and the chrome accent stay separable in normal vision and under deuteranopia and protanopia", async () => {
@@ -676,6 +706,126 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   // And the walk actually walked. Without this, a rename that empties `sources`
   // turns the whole assertion into a tautology.
   assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
+});
+
+test("the radius scale is the door's three, and nothing reaches past it", async () => {
+  // MEASURED, because the obvious reading is wrong. Dropping --radius-xl and
+  // the three above it from @theme does NOT delete `rounded-xl`: Tailwind's
+  // own default theme still carries the namespace, so the class keeps working
+  // and quietly takes 12px where this app's scale gave it 16.8. Planted on
+  // /queue and read in a browser on 2026-09-16: `rounded-xl` computed to
+  // 12px, and the compiled stylesheet carried Tailwind's `--radius-xl: .75rem`
+  // beside this file's `--radius-md: 10px`.
+  //
+  // So the guard is on the CALL SITES, not on the absence of the tokens. The
+  // app draws at 12, 10, 8 and a pill; a class whose value would come from
+  // Tailwind's defaults instead of from here is off the scale by definition,
+  // and silently — which is the only kind of drift worth a test.
+  const css = code(await readFile(cssUrl, "utf8"));
+  const theme = ruleBody(css, "@theme inline") ?? css.slice(css.indexOf("@theme inline"), css.indexOf("\n}", css.indexOf("@theme inline")));
+  const declared = [...theme.matchAll(/--radius-([a-z0-9]+):/g)].map((m) => m[1]);
+  assert.deepEqual(declared.sort(), ["lg", "md", "sm"], "the radius scale is no longer the door's three");
+
+  const dir = new URL("../", import.meta.url);
+  const offenders = [];
+  async function walk(rel) {
+    for (const entry of await readdir(new URL(rel, dir), { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const next = `${rel}${entry.name}${entry.isDirectory() ? "/" : ""}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (/\.(tsx?|css)$/.test(entry.name)) {
+        const found = (await readFile(new URL(next, dir), "utf8")).match(/\brounded(?:-[a-z]+)?-(?:xs|xl|2xl|3xl|4xl)\b/);
+        if (found) offenders.push(`${next}: ${found[0]}`);
+      }
+    }
+  }
+  await walk("app/");
+  await walk("components/");
+  assert.deepEqual(offenders, [], "a radius is off the door's scale and takes Tailwind's default value instead");
+});
+
+/** The pixels of a PNG inside the .ico, as [r,g,b,a] rows. Deliberately
+ *  minimal: 8-bit RGBA, non-interlaced, which is what a canvas writes. */
+function decodePng(png) {
+  let i = 8, idat = [], hdr = null;
+  while (i < png.length) {
+    const len = png.readUInt32BE(i);
+    const type = png.toString("ascii", i + 4, i + 8);
+    if (type === "IHDR") hdr = { w: png.readUInt32BE(i + 8), h: png.readUInt32BE(i + 12), depth: png[i + 16], color: png[i + 17], interlace: png[i + 20] };
+    if (type === "IDAT") idat.push(png.subarray(i + 8, i + 8 + len));
+    i += 12 + len;
+  }
+  assert.ok(hdr && hdr.depth === 8 && hdr.color === 6 && hdr.interlace === 0, "the icon is not 8-bit RGBA");
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = hdr.w * 4;
+  const px = Buffer.alloc(stride * hdr.h);
+  for (let y = 0, p = 0; y < hdr.h; y++) {
+    const filter = raw[p++];
+    const line = px.subarray(y * stride, (y + 1) * stride);
+    raw.copy(line, 0, p, p + stride);
+    p += stride;
+    const prev = y ? px.subarray((y - 1) * stride, y * stride) : Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= 4 ? line[x - 4] : 0;
+      const b = prev[x];
+      const c = x >= 4 ? prev[x - 4] : 0;
+      if (filter === 1) line[x] = (line[x] + a) & 255;
+      else if (filter === 2) line[x] = (line[x] + b) & 255;
+      else if (filter === 3) line[x] = (line[x] + ((a + b) >> 1)) & 255;
+      else if (filter === 4) {
+        const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+        line[x] = (line[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+      }
+    }
+  }
+  return { ...hdr, px };
+}
+
+test("both tab icons are the Doug mark, in the palette's own molten and ink", async () => {
+  // THE .ico WAS create-next-app's. It landed in the scaffold commit and was
+  // never touched again, so every client that prefers /favicon.ico over the
+  // SVG — Safari, a link unfurl, a feed reader — showed Vercel's mark as
+  // Doug's, on a public product site, for as long as this app has existed.
+  // It is now rasterised FROM app/icon.svg at 16, 32 and 48, which is why
+  // this test can hold the two files to the same two colours.
+  //
+  // The hexes are read from the stylesheet, never typed here: the mark's
+  // exemption in the scan above says its colours ARE the palette's molten and
+  // ink, and this is where that claim is checked against the palette rather
+  // than against a memory of it.
+  const light = tokens(await readFile(cssUrl, "utf8"), LIGHT);
+  const molten = light.molten;
+  const ink = light.foreground;
+
+  const svg = await readFile(new URL("../app/icon.svg", import.meta.url), "utf8");
+  assert.ok(svg.includes(molten), `app/icon.svg does not paint the palette's molten (${molten})`);
+  assert.ok(svg.includes(ink), `app/icon.svg does not paint the palette's ink (${ink})`);
+
+  const ico = await readFile(new URL("../app/favicon.ico", import.meta.url));
+  assert.equal(ico.readUInt16LE(2), 1, "app/favicon.ico is not an icon file");
+  const count = ico.readUInt16LE(4);
+  assert.ok(count >= 3, `the icon carries ${count} sizes; 16, 32 and 48 are the legacy sizes that need it`);
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    const e = 6 + i * 16;
+    entries.push({ size: ico[e] || 256, len: ico.readUInt32LE(e + 8), off: ico.readUInt32LE(e + 12) });
+  }
+  assert.deepEqual(entries.map((e) => e.size), [16, 32, 48]);
+
+  const biggest = entries[entries.length - 1];
+  const { w, h, px } = decodePng(ico.subarray(biggest.off, biggest.off + biggest.len));
+  assert.equal(w, biggest.size);
+  assert.equal(h, biggest.size);
+  const seen = new Set();
+  let opaque = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] <= 200) continue;
+    opaque++;
+    seen.add(`#${px.subarray(i, i + 3).toString("hex")}`);
+  }
+  assert.ok(opaque > 500, `only ${opaque} opaque pixels — the icon decoded to nothing`);
+  assert.ok(seen.has(molten), `the .ico paints no molten (${molten}); it is not the mark the SVG is`);
+  assert.ok(seen.has(ink), `the .ico paints no ink (${ink})`);
 });
 
 const docsCssUrl = new URL("../components/docs/docs.module.css", import.meta.url);

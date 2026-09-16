@@ -1,150 +1,104 @@
 # HANDOFF — doug
 
---- look lane (2026-09-15): the web app moves to the Coldworks look, doug#351 ---
+--- look lane (2026-09-16): PR B, the UI grammar, doug#351 ---
 
-State:    review — **doug#361** from branch design/coldworks-look off main
-          22cd356, six commits: b8b389e handoff, 78aeb44 faces, dbe7542
-          palette and computed tests, fb8b85e ADR-0035, 953d2e7 the outcome
-          cells and the favicon, c08e3a3 the two rulings. npm test 481 of 481
-          (the build-and-serve integration test included), tsc 0, lint 0,
-          console 125 of 125, 16 of 16 planted values killed, browser check on
-          next dev. Andrew, in session: the app wears the Coldworks look
-          everywhere (2026-09-15); the card border keeps ADR-0020's separation
-          and ADR-0035 is accepted (2026-09-16).
-Next:     Watch CI and Doug's read on #361, and answer each read in the PR
-          body. The merge is the founder's click, and it deploys. Then PR B
-          (UI grammar); #351 carries its list.
-Blockers: The signed-in dashboard is unseen in the new look (no WorkOS config
-          locally), and a merge deploys, so production renders it first.
+State:    review — **doug#363** from branch design/coldworks-grammar off main
+          21e1231 (PR A, doug#361, merged). Three commits: 1ea9371 the type
+          rule and its guard, b954201 the door's shapes and the bar's own
+          ink, 901fddc the tab icon. npm test 488 of 488 (the build-and-serve
+          integration test included), tsc 0, lint 0 errors, console 125 of
+          125, 11 of 11 planted values killed by the assertion written for
+          each, browser pass on six pages in both themes.
+Next:     ANDREW, PRODUCTION FIRST: Doug's hosted reader is out of Anthropic
+          credit. Its read of 0f49562 at 05:5x UTC returned HTTP 400 "Your
+          credit balance is too low" on BOTH the reader and the intent model,
+          and the check still posted "Cleared · risk 0.04" — a vacuous clear
+          on every PR it touches until the balance is topped up. The read of
+          c488c7c minutes earlier ran normally, so it ran out inside this
+          session. Spend is R11; this lane did not act on it. R1 says a
+          tenant-visible incident pauses every lane, and this one is
+          tenant-visible on every repo Doug is installed on.
+          Then: the favicon is yours. doug#351 records that the .ico is a
+          brand call, and this lane changed it without a ruling — 901fddc is
+          one commit and drops cleanly if you want a different mark. Four
+          reads answered (0.42, 0.28, 0.26, 0.29), 25 rows logged. The merge is the
+          founder's click, and it deploys. Then #362, which asks whether
+          /docs comes onto the type rule or is ruled out of it — Andrew's
+          call, not a lane's.
+Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
-- Build on #350, not beside it: it changes globals.css,
-  design-system.test.mjs, and site-header.tsx, and carries the Coldworks
-  font loader and dark palette — rejected: branching off main (a second
-  palette and a certain conflict), a stacked PR on #350's branch.
-- One palette for the app and the docs. Dark values are #350's, with faint
-  on cards raised to #74878F (4.12 to 4.54 on #101E24) — rejected: a second
-  dark palette.
-- Text tokens hold AA: flag text is molten #CB3F0C in light, because brand
-  #E0430A measures 4.22 on white; ember is never small text on a light
-  ground — rejected: brand hexes as text regardless of contrast.
-- Component edges default to a Coldworks-hued border at ADR-0020's
-  separation (#C2CBCF, 1.64 on white; #2E4048, 1.56 on #101E24), with
-  screenshots of the brand line (1.28) for Andrew's pick — rejected:
-  silently undoing ADR-0020's repair.
-- The measuring script first reproduced the repo's shipped figures: the
-  Sharma CIEDE2000 pairs, 9.2, 57.9, and --dim, --rule-soft, and --border
-  in both themes. #210's CVD figures reproduce only with Machado applied
-  to gamma-encoded RGB, so the test names the model it uses.
-- Fonts load through next/font/google in the root layout (Archivo and
-  Instrument Sans variable, Plex Mono 400 to 700), and /docs reads the same
-  variables: the app sets font-medium 54 times, font-semibold 39, and <b>
-  56, and #350's Instrument Sans subset stops at 500 — rejected: faux bold
-  from the subset, and a second loader for the docs.
-- The shared utilities block names --mono-face, which each app declares, so
-  the lockstep with console holds while the two apps set different faces —
-  rejected: web declaring a --font-geist-mono that holds Plex Mono.
-- Data colors hold AA on their chip tints over the page, which Doug's
-  shipped flag never did (3.98 on the queue's 15% tint): light flag #AF390F
-  and clear #1E764B, at least 4.51 on every ground. Separation stays above
-  the shipped floors under CVD: 15.3 deuteranopia, 12.9 protanopia —
-  rejected: #C33D0D, at 4.21 on the queue's chip over a card, where Doug's
-  passes.
-- --dim and --rule-soft become the palette's --faint and --line, because
-  the docs need both page-wide and design-system.test.mjs says a value that
-  gains a palette home leaves the surface block. --row-hover stays scoped —
-  rejected: docs-local copies of the same hexes.
-- Deferred to PR B (doug#351): the docs chips set molten and ember text on
-  their soft grounds at 3.58:1 and 2.17:1 in light.
-- Surfaces are flat: the dot grid, the accent glow, and the atmosphere
-  tokens go, and the dot-grid test goes with the texture it protected —
-  rejected: a faint Coldworks dot grid (no Coldworks surface has one).
-- --radius is 0.75rem, the registry's 12px card radius. Emphasis words in
-  Doug's display headlines are text-molten (display only, 3:1); the /about
-  step numbers are text-coolant, the docs' eyebrow colour; the four rust
-  hairlines are .bg-thermal.
-- The docs read the site palette: every --cw- colour points at globals.css,
-  and only the card shadow and the terminal ink stay local. The docs' faint
-  text becomes the AA --faint.
-- Verify in a browser before PR A opens: dashboard/page.tsx:625 and :744
-  justify column widths with Geist Mono measurements; re-measure the 14d
-  header and `○ censored` at 11.5px in IBM Plex Mono. PR B also owns the
-  --ring glow inlined on /doug:481.
-- Mutation controls on the palette tests, run after commit 0f239bd: 16 of
-  16 planted values killed, each by its expected message, among them a
-  broken CIEDE2000 constant, the old rust accent, a retired class in a page,
-  and a figure typed back into the rule. The tree was clean after the
-  restores.
-- The data pair's floors under the two dichromacies are the replaced
-  palette's weakest figures exactly (11.6, 8.2). In normal vision the light
-  pair sits closer than the one it replaced (53.9 against 57.9), and the
-  test comment and ADR-0035 say so — rejected: "at least as separable" as
-  an unqualified claim.
-- ADR-0035 is proposed, not accepted: accepting a record is Andrew's. It
-  amends ADR-0020, which carries amended_by.
-- npm test includes lib/auth-entry.integration.test.mjs, a real next build
-  and next start (459 unit tests plus 16 in the baseline of 475), so the
-  production build with the new faces and palette passed in every run.
-  Checked: five of its test titles appear in the last run, 0 skipped.
-- Browser check on next dev (port 3131, .claude/launch.json in the coldworks
-  worktree), 2026-09-15: /doug, /queue, /docs render in both themes with
-  Archivo, Instrument Sans, and Plex Mono loaded and the tokens resolving;
-  the floating header bar stays white with ink text in dark, as designed.
-  Two POST /doug 500s are the AuthKit middleware's (its matcher covers only
-  /dashboard and /install); this lane changed no auth file. /dashboard shows
-  "Authentication is temporarily unavailable" with no WorkOS config, so the
-  signed-in screens are NOT seen in the new look before merge.
-- The outcome cells step from 11.5px to 11px: `○ censored` measured 71.5px
-  at 11.5px in Plex Mono against a 72px column (the ○ falls back to a wider
-  system glyph), and 68.3px at 11px — rejected: half a pixel of slack that
-  varies by platform.
-- app/icon.svg and the /about stars badge still drew #D1571E and are molten
-  now; the design-system scan reads only `#` hexes in .ts and .tsx files, so
-  it could see neither. web/app/favicon.ico is unchanged since the scaffold
-  commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
-- The next dev server runs from the coldworks worktree's .claude/launch.json
-  (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
-- Doug's third read, of e7ecd2a (cleared, risk 0.38): six findings, none new
-  and none true. The woff2 subsets are deleted with their loader (git
-  ls-files finds neither), the dropped docs --ring re-point changes no value
-  (the app's ring is the coolant in both themes), and the rest restate the
-  first two reads. No further replies unless a read raises something new.
-- Doug's second read, of 360a71f (cleared, risk 0.42): the two mediums
-  restate the first read, and its new premise was checked — no route renders
-  outside the root layout, so the font variables always apply. Two lows
-  changed the branch (1e68cb7): dark --flag is molten byte for byte, which is
-  deliberate, so the separation test now measures the accent against molten
-  as well; and dashboard-contract requires --line and --faint in each palette
-  block, the guard the surface block lost. Both shown failing on planted
-  values.
-- Doug's read of c17ec52 (cleared, risk 0.42, 68% of the diff): three
-  disproved — no retired token or class survives web/, web/app/page.tsx does
-  not exist (/ is the static landing behind a rewrite), and Plex Mono's
-  0.600em advance is narrower than Geist Mono's 0.6025em; one adjacent and
-  unchanged — the build already fetched faces from Google, and what is new is
-  /docs sharing that path; one adjacent with a new control — the docs token
-  scope may not re-point a site token it reads (1ea8a4a), shown failing on a
-  planted re-point and on a two-token cycle. docs/findings-log.jsonl carries
-  all five.
-- Andrew, 2026-09-16: the card border keeps today's default (#c2cbcf light,
-  #2e4048 dark), not the brand hairline, and ADR-0035 is accepted.
-- The mono face needs its own monospace fallback chain: next/font lists a
-  size-adjusted Arial (134.59%) straight after the face, which drew the
-  ledger's ○ and the docs' arrows half again as wide. With the chain,
-  `○ censored` is 69.0px at 11.5px against its 72px column, where it was
-  71.5px without, so the cells keep their size — rejected: stepping them down
-  to 11px, which treated the symptom.
-- The rebase keeps #350's own AA work: its docs chip inks (--cw-molten-ink,
-  --cw-ember-ink, --cw-clear-ink) stay local to the docs module, and its two
-  docs tests sit beside the computed palette tests. The docs-chip item listed
-  on #351 is therefore already done.
-- The console carries the same size-adjusted Arial on its Geist Mono, so its
-  ledger draws the same oversized ○. Out of this PR; listed on #351.
-Pointers: doug#351 · doug#350 · #214 · #210 · #216 · web/app/{layout.tsx,
-          globals.css} · web/components/docs/{fonts.ts,docs.module.css} ·
-          web/components/doug-logo.tsx · web/lib/{design-system,
-          console-lockstep}.test.mjs · console/app/globals.css ·
-          docs/decisions/ADR-0020
-
+- Doug's read of 0f49562 is not evidence about the change: both the reader
+  and the intent model returned a billing 400, so the 0.04 clear is vacuous.
+  Logged as such and surfaced rather than treated as a pass.
+- Doug's read of c488c7c found a real one: font-normal on the three <th>
+  cells under <tr className="lbl"> cancelled the class, because an inherited
+  weight loses to a child's own declaration, so that header rendered Archivo
+  at 400. Dropped; all three measure 700 in a browser. Ink overrides
+  elsewhere are per-site choices — .lbl's colour is a default, its weight is
+  not.
+- Doug's read of 7fc3295 (cleared, 0.26, seven findings) caught a real one
+  that is mine, not the code's: doug#351 records the .ico as a brand call,
+  which is R11, and this lane changed it anyway. Kept in its own commit and
+  handed to Andrew rather than reverted, because Vercel's mark ships until
+  he rules either way.
+- The layout-overflow finding is backwards, measured on the three columns
+  it names: dropping caps and .12em tracking costs more width than 1-2px of
+  size buys back, so every fixed-width label got NARROWER. Ledger heads
+  38.3 to 29.5px in 42; the receipt's 92px column unchanged to the pixel
+  (mono advance does not vary with case); census tallies 61.6 to 59.4 in 81.
+- Doug's read of 75f7504 (cleared, 0.28, six findings): one real —
+  --font-archivo is minted by next/font and mounted on <html>, not declared
+  in the stylesheet, so nothing failed if the layout dropped it. 6435bdb
+  fails on that and on --mono-face losing its declaration. The layout
+  regression is disproved by measurement: 14 .lbl on /doug, none
+  overflowing, and the dock's headings are 54 to 251px in 360px.
+- Doug's read of 2a07e78 (cleared, 0.42, seven findings): two mediums are
+  factually wrong about the stylesheet — --color-ink-2 is in @theme inline
+  and --ink-2 is declared in both palette blocks, neither in this diff. The
+  third is measured wrong: dropping --radius-xl does not remove the utility,
+  Tailwind's own default fills it at 12px, and no call site exists anyway.
+  Its residue is real, so 49880a0 guards the call sites and the scale. The
+  responsive finding is the change's own subject. Seven rows logged.
+- PR B branches off main, not off design/coldworks-look: #361 squash-merged
+  at 21e1231, so its branch is closed — rejected: pushing to a merged branch.
+- The type rule is a CLASS, not a convention: `.vocab` in globals.css is the
+  only rule in web/ that says uppercase, and ui-grammar.test.mjs fails on the
+  word anywhere under app/ or components/. Redefining one rule is how the
+  grammar reaches every screen at once — rejected: 92 hand edits with nothing
+  stopping the 93rd, which is how the registry surface had to do it.
+- Words the store spells lowercase render lowercase — facet labels, column
+  heads, the receipt's field list. Sentence case is for English prose
+  ("Setup required", "Clear filters") — rejected: title-casing the store's
+  own vocabulary, which would have meant editing console's facets.ts too.
+- coverage-ruler and run-spine are ported components under a character-
+  identical lockstep, so their edits went into console's copies as well and
+  use no web-only class — rejected: exempting them, which would have left a
+  real violation on the list of things the rule does not cover.
+- /docs keeps the look #350 shipped: its caps are Archivo section markers in
+  a reading surface, and the rule is about tracked mono. Filed as doug#362
+  rather than changed inside a look Andrew signed off three days ago.
+- The nav moved from `sm` to `lg` because the bar was MEASURED: 775px of
+  content needs 861px of viewport, and the nav appeared at 640, so every
+  public page scrolled sideways between the two. The face change was not the
+  cause — 562px of nav in tracked mono against 563px in the door's face —
+  and the pin now reads the two breakpoints as a complement rather than
+  naming one — rejected: leaving a 220px band of widths scrolling.
+- The bar declares --ink-2 like every other ink it paints with, and a new
+  test reads the header's markup and fails on a token the bar does not
+  declare: undeclared, the dark palette's near-white would land on the white
+  bar at 1.86:1 — rejected: a second hand-listed loop nobody updates.
+- The .ico is rasterised from app/icon.svg at 16, 32 and 48 rather than
+  deleted: it was create-next-app's, committed in the scaffold and never
+  touched, so every client preferring /favicon.ico over the SVG showed
+  Vercel's mark as Doug's — rejected: deleting it, which leaves a link
+  unfurl with no icon at all.
+- The docs chips already clear AA (4.63 and 4.71 on their soft grounds):
+  #350's --cw-molten-ink and --cw-ember-ink landed with the rebase, so PR A's
+  deferred item was already closed and needs no change here.
+- The ledger's two outcome headers were re-measured in the new face: "14d
+  outcome" 68.8px, "60d outcome" 72.3px in the 72px column. They disagree
+  now that the digits are proportional, so both stay short — rejected:
+  restoring the word on the one that fits.
 --- docs lane (2026-09-15): one docs site at /docs, in the audit docs' look ---
 
 State:    review — **doug#350**, branch docs/one-docs-site (off origin/main

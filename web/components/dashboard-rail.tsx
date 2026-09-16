@@ -22,7 +22,7 @@ export const SWITCH_CONTROL =
   "focus-within:border-[var(--coolant)] focus-within:outline-2 focus-within:outline-offset-2 " +
   "focus-within:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]";
 
-export const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--faint)]";
+export const SWITCH_LABEL = "text-[10px] text-[var(--faint)]";
 
 export const SWITCH_SELECT =
   "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
@@ -30,7 +30,7 @@ export const SWITCH_SELECT =
 /** The breadcrumb's route chip, shared by every workspace screen that
  *  wears the rail. The ledger and the receipt keep their own copies for the
  *  reason those files give; the shell's screens import this one. */
-export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
+export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--accent-foreground)]";
 
 export const SUBMIT_BUTTON =
   "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
@@ -55,8 +55,8 @@ const MENU_ITEM =
  *  and the accent is the one colour on this page that is not allowed to mean
  *  anything about a verdict. */
 const RAIL_ITEM =
-  "mono relative flex items-center gap-2 border-l-2 border-transparent py-[7px] pr-2 pl-[13px] " +
-  "text-[11px] uppercase tracking-[.09em] text-[var(--faint)] no-underline " +
+  "relative flex items-center gap-2 border-l-2 border-transparent py-[7px] pr-2 pl-[13px] " +
+  "text-[13px] font-medium text-ink-2 no-underline " +
   "hover:bg-[var(--row-hover)] hover:text-foreground " +
   "aria-[current]:border-l-[var(--coolant)] aria-[current]:bg-accent " +
   "aria-[current]:font-semibold aria-[current]:text-foreground";
@@ -155,9 +155,9 @@ export function DashboardRail({
           className="flex flex-col border-b border-border bg-card max-lg:flex-row max-lg:flex-wrap max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-2 max-lg:px-4 max-lg:py-2.5 lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-y-auto lg:border-r lg:border-b-0"
         >
           <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
-            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
+            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold tracking-[-.01em] text-inherit no-underline">
               Coldworks
-              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--coolant)]">workspace</span>
+              <span className="ml-0.5 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-[var(--accent-foreground)]">Workspace</span>
             </Link>
           </div>
 
@@ -199,8 +199,8 @@ export function DashboardRail({
               >Reviews</Link>
               <Link
                 href="/scoreboard"
-                className="mono flex items-center pr-3 text-[8px] uppercase tracking-[.12em] text-[var(--faint)] no-underline hover:text-foreground"
-              >scoreboard</Link>
+                className="flex items-center pr-3 text-[11px] text-[var(--faint)] no-underline hover:text-foreground"
+              >Scoreboard</Link>
             </div>
             <Link
               href={repositoriesHref}
@@ -226,7 +226,7 @@ export function DashboardRail({
             {/* Still not built, and still said so. A nav entry that navigates
                 nowhere is a lie about the product; one that names itself as
                 unbuilt is a roadmap. */}
-            <span className={RAIL_ITEM}>Evidence <small className="ml-auto text-[8px] tracking-normal normal-case">later</small></span>
+            <span className={RAIL_ITEM}>Evidence <small className="ml-auto text-[10px] text-[var(--faint)]">later</small></span>
             {/* Docs is a REAL destination and the only entry here that leaves
                 the dashboard, so it sits below a rule rather than in the run of
                 sections — and it takes no `aria-current`, because no /dashboard

@@ -209,7 +209,7 @@ export default async function Home() {
         </section>
 
         {/* ── The instrument: today's queue ───────────────────────────── */}
-        <section className="hairline-grid rounded-2xl md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <section className="hairline-grid rounded-lg md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-2">
             {[
               ["open", summary.open, ""],
@@ -218,7 +218,7 @@ export default async function Home() {
               ["flag line", summary.threshold.toFixed(2), ""],
             ].map(([k, v, tone]) => (
               <div key={k} className="bg-card p-6">
-                <dt className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+                <dt className="lbl">
                   {k}
                 </dt>
                 <dd className={`mono mt-2 text-4xl font-medium ${tone}`}>{v}</dd>
@@ -227,7 +227,7 @@ export default async function Home() {
           </dl>
           <div className="p-6">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+              <p className="lbl">
                 {live ? "The open queue, pinned by risk" : "A sample queue, pinned by risk"}
               </p>
               <p className="font-mono text-xs text-muted-foreground">
@@ -248,7 +248,7 @@ export default async function Home() {
 
         {/* ── How it works ────────────────────────────────────────────── */}
         <section className="py-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             One pull request, start to finish
           </p>
           <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -267,13 +267,13 @@ export default async function Home() {
 
         {/* ── Why: the three rules ────────────────────────────────────── */}
         <section className="pb-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             Three rules, in writing
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             Built so nobody wants to switch it off.
           </h2>
-          <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
+          <div className="hairline-grid mt-10 rounded-lg md:grid-cols-3">
             {RULES.map((r) => (
               <div key={r.title} className="p-8">
                 <h3 className="font-heading text-xl font-semibold">{r.title}</h3>
@@ -287,7 +287,7 @@ export default async function Home() {
 
         {/* ── The cost of reviewing everything ────────────────────────── */}
         <section className="pb-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             The cost of reviewing everything
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -306,7 +306,7 @@ export default async function Home() {
             your attention only above your flag line.
           </p>
 
-          <div className="panel mt-10 overflow-x-auto rounded-2xl">
+          <div className="panel mt-10 overflow-x-auto rounded-lg">
             <table className="w-full min-w-[40rem] table-fixed text-sm [&_td]:align-top [&_th]:align-top [&_tbody_tr]:border-t [&_tbody_tr]:border-border">
               <colgroup>
                 <col className="w-[20%]" />
@@ -314,14 +314,21 @@ export default async function Home() {
                 <col className="w-[44%]" />
               </colgroup>
               <thead>
-                <tr className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
-                  <th className="px-5 py-3 text-left font-normal">
+                {/* `font-normal` used to sit on all three cells, to keep the
+                    tracked uppercase mono off bold. Under the label grammar it
+                    cancelled the class on the row above it instead: an
+                    inherited weight loses to the child's own declaration, so
+                    the header rendered Archivo at 400 (Doug's read of
+                    c488c7c, reader:cascade-conflict). The ink override on the
+                    third cell stays — that column is the emphasis. */}
+                <tr className="lbl">
+                  <th className="px-5 py-3 text-left">
                     Per pull request
                   </th>
-                  <th className="px-5 py-3 text-left font-normal">
+                  <th className="px-5 py-3 text-left">
                     A model review of everything
                   </th>
-                  <th className="border-l border-border bg-background/60 px-5 py-3 text-left font-normal text-foreground">
+                  <th className="border-l border-border bg-background/60 px-5 py-3 text-left text-foreground">
                     Doug
                   </th>
                 </tr>
@@ -358,9 +365,9 @@ export default async function Home() {
         </section>
 
         {/* ── What the reader sees / what is measured ─────────────────── */}
-        <section className="hairline-grid rounded-2xl md:grid-cols-2">
+        <section className="hairline-grid rounded-lg md:grid-cols-2">
           <div className="p-8 md:p-10">
-            <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl">
               What the reader is given
             </p>
             <ul className="mt-5 flex flex-wrap gap-2">
@@ -373,7 +380,7 @@ export default async function Home() {
                 </li>
               ))}
             </ul>
-            <p className="mt-8 font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl mt-8">
               What the reader is not told
             </p>
             <ul className="mt-5 flex flex-wrap gap-2">
@@ -402,7 +409,7 @@ export default async function Home() {
 
           <div className="relative overflow-hidden p-8 md:p-10">
             <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
-            <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl">
               What&rsquo;s actually measured
             </p>
             <p className="text-molten font-heading mt-4 text-6xl font-semibold">
@@ -424,7 +431,7 @@ export default async function Home() {
               measured by it.
             </p>
             <div className="mt-6 border-t border-border pt-5">
-              <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+              <p className="lbl">
                 Published miss rate
               </p>
               <p className="font-heading mt-2 text-3xl font-semibold text-muted-foreground">
@@ -447,17 +454,17 @@ export default async function Home() {
 
         {/* ── Memory: what accrues ────────────────────────────────────── */}
         <section className="py-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             Others learn what reviewers say
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             Doug grades what production did, remembers it, and will tell your
             agents <span className="text-molten">before they type</span>.
           </h2>
-          <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
+          <div className="hairline-grid mt-10 rounded-lg md:grid-cols-3">
             {LAYERS.map((l) => (
               <div key={l.title} className="p-8">
-                <span className="rounded-full border border-border px-2.5 py-1 font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+                <span className="rounded-full border border-border px-2.5 py-1 text-[12.5px] font-medium text-muted-foreground">
                   {l.tag}
                 </span>
                 <h3 className="font-heading mt-5 text-xl font-semibold">
@@ -472,15 +479,13 @@ export default async function Home() {
         </section>
 
         {/* ── Close ───────────────────────────────────────────────────── */}
-        <section className="panel relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
+        <section className="panel relative mb-16 overflow-hidden rounded-lg p-10 text-center md:p-16">
+          {/* The thermal hairline is the whole decoration. The glow that used
+              to sit behind this panel went with the dot grid and the
+              atmosphere (ADR-0035): no Coldworks surface has one, and it was
+              painted in --ring, which is the focus ring's colour and owes its
+              value to a control nobody is focusing here. */}
           <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
-          <div
-            className="pointer-events-none absolute inset-0 opacity-20"
-            style={{
-              background:
-                "radial-gradient(40rem 16rem at 50% 120%, var(--ring), transparent 70%)",
-            }}
-          />
           <h2 className="font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
             Watch the queue <span className="text-molten">thin out</span>.
           </h2>

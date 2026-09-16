@@ -387,7 +387,7 @@ test("repository connection and every pending setup remain reachable in all dash
   // and a reachability regression cannot be confused for one another.
   assert.match(page, /action=\{finishSetupAction\}/);
   assert.match(page, /name="installation_id"/);
-  assert.match(page, />finish setup<\/button>/);
+  assert.match(page, />Finish setup<\/button>/);
 });
 
 test("every filter the dashboard offers lives in the URL, not in client memory", async () => {
@@ -671,7 +671,11 @@ test("the runs table does not spend a column on scoring tier", async () => {
     `RunCells has ${cellCount} cells against COLUMNS' ${headerCount} headers`,
   );
 
-  assert.match(page, /<dt className="uppercase text-muted-foreground">tier<\/dt>/);
+  // The label, not the styling: the dock still says what tier scored the run.
+  // ADR-0035's grammar pass took the caps off this list, and a pin that read
+  // the className would have failed a surviving-affordance guarantee for a
+  // typographic reason.
+  assert.match(page, /<dt [^>]*>tier<\/dt>/);
 
   // 154px was the slack 940 carried above fixed+160 with the tier column
   // still in COLUMNS. Deleting the column and leaving min-w at 940 would

@@ -47,13 +47,13 @@ import { SessionApiError, getReceipt } from "@/lib/session-api";
 const CANVAS = "mx-auto w-full max-w-[1440px]";
 
 const BLOCK_HEADING =
-  "mono mb-3 flex items-center gap-2.5 text-[11px] font-medium uppercase tracking-[.16em] " +
-  "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
+  "lbl mb-3 flex items-baseline gap-2.5 " +
+  "[&_span]:text-[11px] [&_span]:font-normal " +
   "[&_span]:text-[var(--faint)]";
 
 const BLOCK = "border-b border-border py-[22px]";
 
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
+const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--accent-foreground)]";
 
 const EMPTY_PAGE = "mx-auto max-w-[760px] px-6 py-[110px]";
 const EMPTY_HEADING =
@@ -75,7 +75,7 @@ type Failure = "missing" | "unauthorized" | "unavailable" | "unreachable" | "uns
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
-      <dt className="uppercase text-muted-foreground">{label}</dt>
+      <dt className="text-muted-foreground">{label}</dt>
       {/* break-words, not break-all: a 40-character sha has to be able to
           wrap, and the publication note in the same column is prose that must
           not break mid-word to make room for it. */}
@@ -100,8 +100,8 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
           className="font-heading flex items-center gap-2 text-base font-bold text-inherit no-underline"
         >
           Coldworks{" "}
-          <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[.12em] text-[var(--coolant)]">
-            receipt
+          <span className="ml-0.5 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-[var(--accent-foreground)]">
+            Receipt
           </span>
         </Link>
         <Link
@@ -206,7 +206,7 @@ function Unloadable({ failure }: { failure: Failure }) {
   const copy = UNLOADABLE[failure];
   return (
     <main className={EMPTY_PAGE}>
-      <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>{copy.route}</p>
+      <p className={`mono inline-block text-[10px] ${ROUTE}`}>{copy.route}</p>
       <h1 className={EMPTY_HEADING}>{copy.heading}</h1>
       <p className={EMPTY_BODY}>{copy.body}</p>
       <Link
@@ -234,8 +234,8 @@ function VerdictCard({ verdict }: { verdict: ReceiptVerdict }) {
     <div className="panel rounded-[6px] p-4">
       <div className="mono flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
         <strong className="text-[28px] font-medium">{verdict.score.toFixed(2)}</strong>
-        <span className="text-[11px] uppercase tracking-[.1em] text-muted-foreground">
-          {verdict.band} · threshold {verdict.threshold.toFixed(2)}
+        <span className="text-[11.5px] text-muted-foreground">
+          <span className="vocab">{verdict.band}</span> · threshold {verdict.threshold.toFixed(2)}
         </span>
       </div>
       <dl className={`${DL} mt-3.5`}>
@@ -383,7 +383,7 @@ function ReceiptDocument({ receipt }: { receipt: ReceiptResponse }) {
   return (
     <main>
       <div
-        className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[11px] uppercase tracking-[.15em] text-muted-foreground`}
+        className={`mono ${CANVAS} flex items-center gap-3 px-5 pt-[26px] pb-3 text-[11px] text-muted-foreground`}
       >
         <span className={ROUTE}>/prs/{receipt.pr_number}</span> Receipt
         <span className="h-px flex-1 bg-border" />

@@ -16,7 +16,7 @@ export function StateChip({
   const gloss = chipGloss(kind, subject, detail);
   return (
     <span data-chip={kind} className="inline-flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
-      <span className="mono rounded-[3px] border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+      <span className="vocab rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
         {kind}
       </span>
       <span className="text-[12.5px]">{gloss}</span>

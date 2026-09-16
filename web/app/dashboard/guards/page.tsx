@@ -56,9 +56,9 @@ export default async function GuardsPage() {
         />
 
         <main className="mx-auto w-full max-w-[980px] px-6 py-10">
-          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
+          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] text-[var(--faint)]">
             <span className={ROUTE_CHIP}>/guards</span>
-            <span className="truncate normal-case tracking-normal text-muted-foreground">
+            <span className="truncate text-muted-foreground">
               {connection.account_login}
             </span>
             <span className="h-px flex-1 bg-border" />
@@ -111,18 +111,18 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
         )}
       </p>
 
-      <dl className="mono mt-6 grid grid-cols-3 gap-4 border-t border-border pt-4 text-[11px] uppercase tracking-[.12em] text-[var(--faint)]">
+      <dl className="mono mt-6 grid grid-cols-3 gap-4 border-t border-border pt-4 text-[12px] text-muted-foreground">
         <div>
           <dt>Signatures owed</dt>
-          <dd className="mt-1 text-[22px] normal-case tracking-normal text-foreground">{snapshot.counts.signatures_owed}</dd>
+          <dd className="mt-1 text-[22px] text-foreground">{snapshot.counts.signatures_owed}</dd>
         </div>
         <div>
           <dt>Unproven</dt>
-          <dd className="mt-1 text-[22px] normal-case tracking-normal text-foreground">{snapshot.counts.unproven}</dd>
+          <dd className="mt-1 text-[22px] text-foreground">{snapshot.counts.unproven}</dd>
         </div>
         <div>
           <dt>In flight</dt>
-          <dd className="mt-1 text-[22px] normal-case tracking-normal text-foreground">{snapshot.counts.in_flight}</dd>
+          <dd className="mt-1 text-[22px] text-foreground">{snapshot.counts.in_flight}</dd>
         </div>
       </dl>
 
@@ -134,7 +134,7 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
       ) : (
         <div className="mt-6 overflow-x-auto border-t border-border">
           <table className="w-full text-left text-[12.5px]">
-            <thead className="mono text-[10px] uppercase tracking-[.12em] text-[var(--faint)]">
+            <thead className="text-[11.5px] font-medium text-muted-foreground">
               <tr>
                 <th className="py-2 pr-3">State</th>
                 <th className="py-2 pr-3">Guard</th>
@@ -150,7 +150,7 @@ function GuardsRegistry({ snapshot }: { snapshot: RegistrySnapshotV1 }) {
                 const sampled = g.auditAgreed + g.auditDisagreed + g.auditInconclusive;
                 return (
                   <tr key={`${g.guardId}-${g.guardVersion}`} className="border-t border-border align-top">
-                    <td className="mono py-2 pr-3 text-[10.5px] uppercase tracking-[.1em] text-[var(--faint)]">{g.state}</td>
+                    <td className="vocab py-2 pr-3 text-[10.5px] text-[var(--faint)]">{g.state}</td>
                     <td className="mono py-2 pr-3 text-foreground">
                       {g.guardId.slice(0, 8)} v{g.guardVersion}
                       <div className="text-[10px] text-[var(--faint)]">{g.artifactDigestAlgo}:{g.artifactDigestValue.slice(0, 12)}</div>

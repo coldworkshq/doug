@@ -120,8 +120,20 @@ test("the header's public routes survive below the sm breakpoint", () => {
   // NAV_LINKS, a phone cannot reach Dashboard, Docs, Scoreboard, or Queue
   // from the chrome — and the request that produced this pin came from a
   // phone.
-  assert.match(header, /hidden sm:flex/);
-  assert.match(header, /<details className="[^"]*sm:hidden/);
+  //
+  // Pinned as a COMPLEMENT rather than at one breakpoint. The nav moved from
+  // `sm` to `lg` when the bar was measured (site-header.tsx says why), and a
+  // pin on the literal `sm` would have failed that for the wrong reason while
+  // missing the failure that matters: a nav that appears at one stop and a
+  // disclosure that hides at another leave a band of widths with neither.
+  const navStop = header.match(/hidden items-center[^"]*\b(\w+):flex/)?.[1];
+  const menuStop = header.match(/<details className="[^"]*\b(\w+):hidden/)?.[1];
+  assert.ok(navStop, "the desktop nav is no longer `hidden …:flex`");
+  assert.equal(
+    menuStop,
+    navStop,
+    `the nav appears at ${navStop} and the disclosure hides at ${menuStop} — one band of widths gets neither`,
+  );
   const maps = header.match(/NAV_LINKS\.map/g) ?? [];
   assert.equal(
     maps.length,
