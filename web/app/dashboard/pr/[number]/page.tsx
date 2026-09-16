@@ -49,11 +49,11 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
 const BLOCK_HEADING =
   "mono mb-3 flex items-center gap-2.5 text-[11px] font-medium uppercase tracking-[.16em] " +
   "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
-  "[&_span]:text-[var(--dim)]";
+  "[&_span]:text-[var(--faint)]";
 
 const BLOCK = "border-b border-border py-[22px]";
 
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
 
 const EMPTY_PAGE = "mx-auto max-w-[760px] px-6 py-[110px]";
 const EMPTY_HEADING =
@@ -100,7 +100,7 @@ function Frame({ email, children }: { email: string; children: React.ReactNode }
           className="font-heading flex items-center gap-2 text-base font-bold text-inherit no-underline"
         >
           Coldworks{" "}
-          <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">
+          <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[.12em] text-[var(--coolant)]">
             receipt
           </span>
         </Link>
@@ -254,7 +254,7 @@ function VerdictCard({ verdict }: { verdict: ReceiptVerdict }) {
   );
 }
 
-/** Chrome colours — `--iridescent` over `bg-accent` — never `--flag`.
+/** Chrome colours — `--coolant` over `bg-accent` — never `--flag`.
  *  The gap between what Doug says now and what was standing at the merge is
  *  a fact about two verdicts, not a verdict about the PR, and painting it in
  *  the miss colour would read as an alarm about the code.
@@ -269,8 +269,8 @@ function VerdictCard({ verdict }: { verdict: ReceiptVerdict }) {
  *  exercise it. What is true is narrower and is what it now says. */
 function GapBanner({ gap }: { gap: VerdictGap }) {
   return (
-    <div className="mono mt-4 flex flex-col gap-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-2.5 text-[11.5px]">
-      <span className="font-medium text-[var(--iridescent)]">
+    <div className="mono mt-4 flex flex-col gap-1 rounded-[5px] border border-[var(--coolant)] bg-accent px-3 py-2.5 text-[11.5px]">
+      <span className="font-medium text-[var(--coolant)]">
         The latest verdict is not the one that governed publication.
       </span>
       <span className="break-words text-muted-foreground">

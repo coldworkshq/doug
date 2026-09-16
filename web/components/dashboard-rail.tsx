@@ -19,10 +19,10 @@ const LEMA_LABEL = "Lema — separate product";
  *  side-by-side label would leave the org name six characters wide. */
 export const SWITCH_CONTROL =
   "mono flex w-full flex-col gap-[3px] rounded-[5px] border border-border bg-card px-2 py-[5px] " +
-  "focus-within:border-[var(--iridescent)] focus-within:outline-2 focus-within:outline-offset-2 " +
-  "focus-within:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
+  "focus-within:border-[var(--coolant)] focus-within:outline-2 focus-within:outline-offset-2 " +
+  "focus-within:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]";
 
-export const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--dim)]";
+export const SWITCH_LABEL = "text-[9px] uppercase tracking-[.14em] text-[var(--faint)]";
 
 export const SWITCH_SELECT =
   "w-full max-w-full border-0 bg-transparent text-[12px] text-foreground outline-0";
@@ -30,12 +30,12 @@ export const SWITCH_SELECT =
 /** The breadcrumb's route chip, shared by every workspace screen that
  *  wears the rail. The ledger and the receipt keep their own copies for the
  *  reason those files give; the shell's screens import this one. */
-export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+export const ROUTE_CHIP = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
 
 export const SUBMIT_BUTTON =
   "mono cursor-pointer rounded-[4px] border border-border bg-card px-2 py-[5px] text-[11px] " +
-  "text-muted-foreground hover:border-[var(--iridescent)] hover:text-foreground " +
-  "focus-visible:border-[var(--iridescent)] focus-visible:text-foreground";
+  "text-muted-foreground hover:border-[var(--coolant)] hover:text-foreground " +
+  "focus-visible:border-[var(--coolant)] focus-visible:text-foreground";
 
 /** One row of the settings menu — the connect link and the sign-out button
  *  share it so a <Link> and a <button type="submit"> render as one list.
@@ -47,8 +47,8 @@ export const SUBMIT_BUTTON =
 const MENU_ITEM =
   "mono block w-full cursor-pointer rounded-[3px] border-0 bg-transparent px-2 py-[7px] " +
   "text-left text-[11px] text-muted-foreground no-underline hover:bg-accent " +
-  "hover:text-[var(--iridescent)] focus-visible:bg-accent focus-visible:outline-2 " +
-  "focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]";
+  "hover:text-[var(--coolant)] focus-visible:bg-accent focus-visible:outline-2 " +
+  "focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]";
 
 /** A rail entry. The current section is marked by a filled tick in the left
  *  gutter AND by weight and ink — three carriers, because the tick is 2px wide
@@ -56,9 +56,9 @@ const MENU_ITEM =
  *  anything about a verdict. */
 const RAIL_ITEM =
   "mono relative flex items-center gap-2 border-l-2 border-transparent py-[7px] pr-2 pl-[13px] " +
-  "text-[11px] uppercase tracking-[.09em] text-[var(--dim)] no-underline " +
+  "text-[11px] uppercase tracking-[.09em] text-[var(--faint)] no-underline " +
   "hover:bg-[var(--row-hover)] hover:text-foreground " +
-  "aria-[current]:border-l-[var(--iridescent)] aria-[current]:bg-accent " +
+  "aria-[current]:border-l-[var(--coolant)] aria-[current]:bg-accent " +
   "aria-[current]:font-semibold aria-[current]:text-foreground";
 
 export function connectionLabel(connection: RepositoryConnection): string {
@@ -157,7 +157,7 @@ export function DashboardRail({
           <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
             <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
               Coldworks
-              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--iridescent)]">workspace</span>
+              <span className="mono ml-0.5 rounded-[3px] bg-accent px-1.5 py-0.5 text-[8.5px] font-medium uppercase tracking-[.12em] text-[var(--coolant)]">workspace</span>
             </Link>
           </div>
 
@@ -199,7 +199,7 @@ export function DashboardRail({
               >Reviews</Link>
               <Link
                 href="/scoreboard"
-                className="mono flex items-center pr-3 text-[8px] uppercase tracking-[.12em] text-[var(--dim)] no-underline hover:text-foreground"
+                className="mono flex items-center pr-3 text-[8px] uppercase tracking-[.12em] text-[var(--faint)] no-underline hover:text-foreground"
               >scoreboard</Link>
             </div>
             <Link
@@ -282,7 +282,7 @@ export function DashboardRail({
             <details className="flex-none">
               <summary
                 aria-label="Account"
-                className="flex cursor-pointer list-none items-center rounded-[4px] border border-transparent p-1 text-muted-foreground hover:border-border hover:text-foreground focus-visible:border-[var(--iridescent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)] [&::-webkit-details-marker]:hidden"
+                className="flex cursor-pointer list-none items-center rounded-[4px] border border-transparent p-1 text-muted-foreground hover:border-border hover:text-foreground focus-visible:border-[var(--coolant)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)] [&::-webkit-details-marker]:hidden"
               >
                 {/* The same cog the threshold gear draws, at the same weight —
                     two gears on one screen that were drawn differently would

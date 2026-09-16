@@ -144,12 +144,12 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
 const BLOCK_HEADING =
   "mono mb-3 flex items-center gap-2.5 text-[10px] font-medium uppercase tracking-[.16em] " +
   "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
-  "[&_span]:text-[var(--dim)]";
+  "[&_span]:text-[var(--faint)]";
 
 const BLOCK = "border-b border-border px-5 py-[18px]";
 
 /** The route chip — a monospace breadcrumb in the accent wash. */
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--iridescent)] tracking-[.06em]";
+const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
 
 const EMPTY_PAGE = "mx-auto max-w-[760px] px-6 py-[110px]";
 const EMPTY_HEADING =
@@ -159,7 +159,7 @@ const EMPTY_BODY = "mt-4 max-w-[620px] text-base text-muted-foreground";
 const EMPTY_NOTE = "text-xs text-muted-foreground";
 
 /** A finding or a deviation: the marker column, then the rule and its words. */
-const FINDING = "grid grid-cols-[54px_minmax(0,1fr)] gap-2.5 border-t border-[var(--rule-soft)] py-[10px]";
+const FINDING = "grid grid-cols-[54px_minmax(0,1fr)] gap-2.5 border-t border-[var(--line)] py-[10px]";
 
 type DashboardParams = Record<string, string | string[] | undefined>;
 
@@ -195,13 +195,13 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
       aria-labelledby="pending-connections-title"
     >
       <div className="flex flex-col justify-center gap-[3px]">
-        <span id="pending-connections-title" className="text-[10.5px] uppercase tracking-[.12em] text-[var(--iridescent)]">setup required</span>
+        <span id="pending-connections-title" className="text-[10.5px] uppercase tracking-[.12em] text-[var(--coolant)]">setup required</span>
         <small className="text-[10.5px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
       </div>
       <div className="flex flex-col">
         {pending.map((connection) => (
           <div
-            className="flex min-h-[38px] items-center justify-between gap-4 border-t border-[var(--rule-soft)] py-[5px] first:border-t-0"
+            className="flex min-h-[38px] items-center justify-between gap-4 border-t border-[var(--line)] py-[5px] first:border-t-0"
             key={connection.installation_id}
           >
             <span className="flex min-w-0 flex-col gap-0.5">
@@ -212,7 +212,7 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
               <input type="hidden" name="installation_id" value={connection.installation_id} />
               <button
                 type="submit"
-                className="cursor-pointer rounded-[3px] border border-[var(--iridescent)] bg-transparent px-2 py-[5px] text-[10.5px] uppercase text-[var(--iridescent)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--iridescent)_30%,transparent)]"
+                className="cursor-pointer rounded-[3px] border border-[var(--coolant)] bg-transparent px-2 py-[5px] text-[10.5px] uppercase text-[var(--coolant)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_30%,transparent)]"
               >finish setup</button>
             </form>
           </div>
@@ -243,7 +243,7 @@ function RailReadout({ runs, scope }: { runs: RunSummary[]; scope: string }) {
   ];
   return (
     <div className="px-4 py-3.5" title={scope}>
-      <p className="mono mb-2 text-[9px] uppercase tracking-[.15em] text-[var(--dim)]">In view</p>
+      <p className="mono mb-2 text-[9px] uppercase tracking-[.15em] text-[var(--faint)]">In view</p>
       <dl className="mono m-0 flex flex-col gap-[5px] text-[10.5px]">
         {rows.map((row) => (
           <div key={row.word} className="flex items-baseline gap-2">
@@ -303,7 +303,7 @@ function FilterChip({
 }) {
   return (
     <Link
-      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[11.5px] text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
+      className="mono rounded-[4px] border border-border bg-card px-[9px] py-1 text-[11.5px] text-muted-foreground no-underline hover:border-[var(--coolant)] hover:text-foreground [&[data-active]]:border-foreground [&[data-active]]:bg-foreground [&[data-active]]:text-background"
       data-active={active || undefined}
       href={target}
     >{children}</Link>
@@ -381,7 +381,7 @@ function FacetBar({
               different question (how many, and over what population), and
               overwriting it with a definition would trade a number the
               operator is mid-way through reading for one they are not. */}
-          <span className="mono inline-flex items-center text-[10px] uppercase tracking-[.13em] text-[var(--dim)]">
+          <span className="mono inline-flex items-center text-[10px] uppercase tracking-[.13em] text-[var(--faint)]">
             {facet.label}
             {outcomeWindow !== undefined && (
               <InfoDot label={facet.label} hint={outcomeWindowHint(outcomeWindow)} />
@@ -395,8 +395,8 @@ function FacetBar({
             // resolves that collision by stylesheet order, not by the order of
             // the class attribute.
             const frame = on
-              ? "border-[var(--iridescent)] bg-accent"
-              : "border-border bg-card hover:border-[var(--iridescent)]";
+              ? "border-[var(--coolant)] bg-accent"
+              : "border-border bg-card hover:border-[var(--coolant)]";
             // The two data colours, each still carrying its word — the pill's
             // label IS the secondary encoding the CVD floor requires, exactly
             // as in BandChip. No third data colour enters here: every other
@@ -439,7 +439,7 @@ function FacetBar({
 
 /** The lens, said out loud.
  *
- *  `--iridescent` and `bg-accent` — chrome, never `--flag`/`--clear`. The two
+ *  `--coolant` and `bg-accent` — chrome, never `--flag`/`--clear`. The two
  *  data colours are verdicts, and which line the reader is *looking through* is
  *  not one. A banner painted in the miss colour would read as an alarm about
  *  the runs rather than a statement about the view.
@@ -462,8 +462,8 @@ function LensBanner({
   params: DashboardParams;
 }) {
   return (
-    <div className="mono mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--iridescent)] bg-accent px-3 py-1.5 text-[11px] text-foreground">
-      <span className="font-medium text-[var(--iridescent)]">Viewing at {lens.toFixed(2)}</span>
+    <div className="mono mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[5px] border border-[var(--coolant)] bg-accent px-3 py-1.5 text-[11px] text-foreground">
+      <span className="font-medium text-[var(--coolant)]">Viewing at {lens.toFixed(2)}</span>
       <span className="text-muted-foreground">
         {/* The count is of rows the lens MOVED, not of rows it flagged — the
             size of the lens's effect, so the banner cannot report a ledger's
@@ -492,7 +492,7 @@ function LensBanner({
       </span>
       <Link
         href={href(params, thresholdChanges(null))}
-        className="ml-auto underline decoration-dotted underline-offset-[3px] hover:text-[var(--iridescent)] max-[900px]:ml-0"
+        className="ml-auto underline decoration-dotted underline-offset-[3px] hover:text-[var(--coolant)] max-[900px]:ml-0"
       >Clear the lens</Link>
     </div>
   );
@@ -622,9 +622,10 @@ function RepoCountLine({
  *
  *  THE TWO HEADERS SAY "14d" AND "60d", NOT "14d outcome", and the word they
  *  drop moved into the ⓘ beside them rather than being lost. This is
- *  arithmetic, not taste: the header sets at 10.5px in Geist Mono (0.6025em
- *  advance) with .13em tracking, so a character costs 7.69px and "14d outcome"
- *  claims 84.6px inside the 72px this column leaves after padding. It was
+ *  arithmetic, not taste: the header sets at 10.5px in IBM Plex Mono (0.6em
+ *  advance) with .13em tracking, so a character costs 7.67px and "14d outcome"
+ *  claims 84.3px inside the 72px this column leaves after padding, measured in
+ *  a browser when the face changed (ADR-0035). In Geist Mono it was
  *  overflowing 12.6px into its neighbour before anything was added to it —
  *  which is why the two labels sit shoulder to shoulder on screen with no gap
  *  between the columns. "14d" plus the dot is 41px, and the tooltip says
@@ -661,7 +662,7 @@ const TH =
  *  with 10.5px in the job column. The two outcome cells are the exception that
  *  did not grow — they are width-bound, not height-bound, and the measurement
  *  is in the comment on the cells themselves. */
-const TD = "h-[38px] border-b border-[var(--rule-soft)] px-2 align-middle";
+const TD = "h-[38px] border-b border-[var(--line)] px-2 align-middle";
 
 /** The eight cells of one run. Children render the identical columns — an
  *  older run is a full verdict, not a summary of one — and are marked as
@@ -689,7 +690,7 @@ function RunCells({
             over it makes "selected" and "hovered" the same colour at the exact
             moment a reader is moving between them. Chrome, never a data
             colour — which run you are reading is not a verdict about it. */}
-        {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-[var(--iridescent)]" />}
+        {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-[var(--coolant)]" />}
         <span className={"mono text-[14.5px] font-semibold " + (run.band === "flagged" ? "data-flag" : "data-clear")}>
           {run.score.toFixed(2)}
         </span>
@@ -746,8 +747,14 @@ function RunCells({
           it is 69.2px, with 2.8px of slack. Doug caught this on PR #193
           (reader:fixed-width-overflow) and was right: the column widths above
           were measured against 11.5px text and nothing re-measured them.
-          Raising this needs the column widened past 88px first, which raises
-          the table's 876px floor and comes out of the title. */}
+          RE-MEASURED in IBM Plex Mono (ADR-0035, 2026-09-16): 72.0px at 12px
+          and 69.0px at 11.5px, holding the slack. The ○ is not in the latin
+          subset, so it renders in whatever the face falls back to, and that
+          chain is monospace by app/layout.tsx — next/font's own fallback is
+          size-adjusted Arial, which drew the ○ half again as wide and left
+          half a pixel of slack. Raising this needs the column widened past
+          88px first, which raises the table's 876px floor and comes out of
+          the title. */}
       {/* The `title` is the ⓘ's sentence for THIS row's word, so the reader
           who lands on a cell rather than on the header still gets it — and
           `truncate` means a cell can be showing `○ censore…`, where the
@@ -849,7 +856,7 @@ function RunTable({
                   // evidence, which is why it is a second link rather than a
                   // section of the first one's target.
                   <Link
-                    className="mono ml-auto flex-none text-[10.5px] text-muted-foreground no-underline underline-offset-[3px] hover:text-[var(--iridescent)] hover:underline"
+                    className="mono ml-auto flex-none text-[10.5px] text-muted-foreground no-underline underline-offset-[3px] hover:text-[var(--coolant)] hover:underline"
                     aria-label={`Receipt for ${group.repo} #${group.prNumber}`}
                     href={`/dashboard/pr/${group.prNumber}?repo=${encodeURIComponent(group.repo)}`}
                   >receipt</Link>
@@ -937,7 +944,7 @@ function FlagLineCell({
   setting: FlagLineSetting | null;
   defaults: { reader: number; fallback: number };
 }) {
-  if (!setting) return <span className="mono text-[12px] text-[var(--dim)]">—</span>;
+  if (!setting) return <span className="mono text-[12px] text-[var(--faint)]">—</span>;
   return (
     <FlagLineControl
       githubRepoId={setting.id}
@@ -1002,7 +1009,7 @@ function RepositoryTable({
                     marker sits against the name and the slack falls after both. */}
                 <Link
                   href={href(params, { repo: row.repo, view: null, page: null })}
-                  className="mono min-w-0 truncate text-[12px] text-foreground no-underline hover:text-[var(--iridescent)] hover:underline underline-offset-[3px]"
+                  className="mono min-w-0 truncate text-[12px] text-foreground no-underline hover:text-[var(--coolant)] hover:underline underline-offset-[3px]"
                 >{row.repo}</Link>
                 {/* Runs exist for a repository the installation no longer
                     lists. The verdicts are real; the row says why it looks
@@ -1016,19 +1023,19 @@ function RepositoryTable({
                 )}
               </div>
             </TableCell>
-            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.runs === 0 ? "text-[var(--dim)]" : "text-foreground")}>{row.runs}</TableCell>
-            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.prs === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.prs}</TableCell>
-            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.flagged > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.flagged}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.runs === 0 ? "text-[var(--faint)]" : "text-foreground")}>{row.runs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.prs === 0 ? "text-[var(--faint)]" : "text-muted-foreground")}>{row.prs}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.flagged > 0 ? "data-flag font-medium" : "text-[var(--faint)]")}>{row.flagged}</TableCell>
             <TableCell className={TD}>
               <FlagLineCell setting={settings.get(row.repo) ?? null} defaults={defaults} />
             </TableCell>
-            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.findings === 0 ? "text-[var(--dim)]" : "text-muted-foreground")}>{row.findings}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.findings === 0 ? "text-[var(--faint)]" : "text-muted-foreground")}>{row.findings}</TableCell>
             <TableCell className={TD}>
               {/* Chars, on the neutral ramp, and null renders "—". A repository
                   Doug has never read and one it read nothing of are different
                   facts, and 0% asserts the second. */}
               {row.coveragePct === null ? (
-                <span className="mono text-[11px] text-[var(--dim)]">—</span>
+                <span className="mono text-[11px] text-[var(--faint)]">—</span>
               ) : (
                 <div className="mono flex items-center gap-[6px] text-[11px] text-foreground" title="share of changed characters sent to the reader">
                   <span className="cov-track block h-1.5 w-[46px]">
@@ -1038,7 +1045,7 @@ function RepositoryTable({
                 </div>
               )}
             </TableCell>
-            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.errored > 0 ? "data-flag font-medium" : "text-[var(--dim)]")}>{row.errored}</TableCell>
+            <TableCell className={`mono ${TD} text-right text-[12px] ` + (row.errored > 0 ? "data-flag font-medium" : "text-[var(--faint)]")}>{row.errored}</TableCell>
           </TableRow>
         ))}
       </tbody>
@@ -1049,7 +1056,7 @@ function RepositoryTable({
 function Pager({ window, params }: { window: PageWindow<unknown>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
-    return <p className="mono mt-2.5 text-[10.5px] uppercase tracking-[.12em] text-[var(--dim)]">Showing {label}</p>;
+    return <p className="mono mt-2.5 text-[10.5px] uppercase tracking-[.12em] text-[var(--faint)]">Showing {label}</p>;
   }
   const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
   const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
@@ -1097,7 +1104,7 @@ function Evidence({
 }) {
   const action =
     "mono rounded-[3px] border border-border px-[7px] py-[3px] text-[10px] uppercase tracking-[.08em] " +
-    "text-muted-foreground no-underline hover:border-[var(--iridescent)] hover:text-[var(--iridescent)]";
+    "text-muted-foreground no-underline hover:border-[var(--coolant)] hover:text-[var(--coolant)]";
   return (
     <section aria-labelledby="run-evidence-title" className="pb-16">
       <header className="border-b border-border px-5 pt-5 pb-4">
@@ -1214,7 +1221,7 @@ function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) 
       <div className="mt-7 flex flex-col gap-px">
         {connections.map((connection) => (
           <div
-            className="mono flex items-center gap-3 border-t border-[var(--rule-soft)] py-2.5 text-[11px] first:border-t-0"
+            className="mono flex items-center gap-3 border-t border-[var(--line)] py-2.5 text-[11px] first:border-t-0"
             key={connection.installation_id}
           >
             <span className="flex flex-col gap-0.5">
@@ -1556,7 +1563,7 @@ export default async function DashboardPage({
                   scroll is the only one on this column and the dock beside it
                   never moves. */}
               <section className="flex min-w-0 flex-col px-5 pt-4 pb-5 min-[1620px]:h-screen">
-                <div className="mono mb-2.5 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
+                <div className="mono mb-2.5 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
                   {/* `door.current`, not the hoisted `current`: only the
                       discriminated union narrows away null on this arm, which is
                       the reason #99 gave one member per state instead of
@@ -1630,7 +1637,7 @@ export default async function DashboardPage({
                       name="q"
                       defaultValue={query}
                       placeholder="Search repo, PR, title…"
-                      className="mono h-[32px] w-[220px] rounded-[5px] border border-border bg-card px-2.5 text-[12.5px] text-foreground min-[1400px]:w-[300px] focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                      className="mono h-[32px] w-[220px] rounded-[5px] border border-border bg-card px-2.5 text-[12.5px] text-foreground min-[1400px]:w-[300px] focus:border-[var(--coolant)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]"
                     />
                     {/* Matched to the input's new 32px rather than left at
                         SUBMIT_BUTTON's natural 28: the two are one control,

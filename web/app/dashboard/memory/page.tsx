@@ -86,7 +86,7 @@ export default async function MemoryPage({
         />
 
         <main className="mx-auto w-full max-w-[820px] px-6 py-10">
-          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--dim)]">
+          <div className="mono mb-6 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
             <span className={ROUTE_CHIP}>/memory</span>
             <span className="truncate normal-case tracking-normal text-muted-foreground">
               {connection.account_login}
@@ -133,7 +133,7 @@ export default async function MemoryPage({
                     name="q"
                     defaultValue={query}
                     placeholder="id, title, or body"
-                    className="mono h-[32px] w-[220px] rounded-[5px] border border-border bg-card px-2.5 text-[12.5px] text-foreground focus:border-[var(--iridescent)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--iridescent)_35%,transparent)]"
+                    className="mono h-[32px] w-[220px] rounded-[5px] border border-border bg-card px-2.5 text-[12.5px] text-foreground focus:border-[var(--coolant)] focus:outline-2 focus:outline-offset-2 focus:outline-[color-mix(in_srgb,var(--coolant)_35%,transparent)]"
                   />
                 </label>
                 <button type="submit" className={`${SUBMIT_BUTTON} h-[32px]`}>show</button>
@@ -169,7 +169,7 @@ export default async function MemoryPage({
 
               {loaded && !loaded.matched_nothing && (
                 <>
-                  <p className="mono mt-6 text-[11px] uppercase tracking-[.12em] text-[var(--dim)]">
+                  <p className="mono mt-6 text-[11px] uppercase tracking-[.12em] text-[var(--faint)]">
                     {loaded.count_accepted} {loaded.binding_status} of {loaded.items.length} on record
                     {loaded.directory ? ` in ${loaded.directory}` : ""}
                     {fileAccounting(loaded)}
@@ -183,9 +183,9 @@ export default async function MemoryPage({
                       {shown.map((record) => (
                         <li key={record.ref} className="border-b border-border py-4">
                           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                            <span className="mono text-[11px] text-[var(--dim)]">{record.id}</span>
+                            <span className="mono text-[11px] text-[var(--faint)]">{record.id}</span>
                             <h2 className="text-[15px] font-medium text-foreground">{record.title}</h2>
-                            <span className="mono ml-auto text-[10px] uppercase tracking-[.12em] text-[var(--dim)]">
+                            <span className="mono ml-auto text-[10px] uppercase tracking-[.12em] text-[var(--faint)]">
                               {record.status}{record.date ? ` · ${record.date}` : ""}
                             </span>
                           </div>

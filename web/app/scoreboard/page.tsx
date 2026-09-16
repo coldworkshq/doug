@@ -30,7 +30,7 @@ export default async function ScoreboardPage() {
         >
           {live ? (
             <>
-              <span className="size-1.5 rounded-full bg-sheen" /> live · {scoreboard.repo}
+              <span className="size-1.5 rounded-full bg-ink-2" /> live · {scoreboard.repo}
             </>
           ) : (
             <>
@@ -52,7 +52,7 @@ export default async function ScoreboardPage() {
         </p>
 
         <dl className="panel relative mt-10 grid gap-6 overflow-hidden rounded-2xl p-8 sm:grid-cols-2">
-          <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
+          <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
           <div>
             <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Adjudicated

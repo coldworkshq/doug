@@ -155,7 +155,7 @@ export default async function Home() {
             >
               {live ? (
                 <>
-                  <span className="size-1.5 rounded-full bg-sheen" /> the
+                  <span className="size-1.5 rounded-full bg-ink-2" /> the
                   reader is live · scoring its own pull requests
                 </>
               ) : (
@@ -166,10 +166,10 @@ export default async function Home() {
               )}
             </p>
             <h1
-              className="animate-rise display-condensed font-heading mt-7 max-w-2xl text-6xl leading-[0.94] font-semibold tracking-[-0.03em] md:text-8xl"
+              className="animate-rise font-heading mt-7 max-w-2xl text-6xl leading-[0.94] font-semibold tracking-[-0.03em] md:text-8xl"
               style={{ animationDelay: "80ms" }}
             >
-              Most PRs <span className="text-iridescent">don&rsquo;t</span>{" "}
+              Most PRs <span className="text-molten">don&rsquo;t</span>{" "}
               need you.
             </h1>
             <p
@@ -253,7 +253,7 @@ export default async function Home() {
           </p>
           <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             Read once. Route. Then{" "}
-            <span className="text-iridescent">wait and see</span>.
+            <span className="text-molten">wait and see</span>.
           </h2>
           <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
             Everything to the left of the merge is what a reviewer does.
@@ -292,7 +292,7 @@ export default async function Home() {
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             A review on every PR costs{" "}
-            <span className="text-iridescent">a review on every PR</span>.
+            <span className="text-molten">a review on every PR</span>.
           </h2>
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground">
             Coding agents multiplied pull requests. Tools that answer with a
@@ -401,11 +401,11 @@ export default async function Home() {
           </div>
 
           <div className="relative overflow-hidden p-8 md:p-10">
-            <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-60" />
+            <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
             <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
               What&rsquo;s actually measured
             </p>
-            <p className="text-iridescent font-heading mt-4 text-6xl font-semibold">
+            <p className="text-molten font-heading mt-4 text-6xl font-semibold">
               0.69
               <span className="ml-2 text-2xl text-muted-foreground">
                 / 0.67
@@ -452,7 +452,7 @@ export default async function Home() {
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             Doug grades what production did, remembers it, and will tell your
-            agents <span className="text-iridescent">before they type</span>.
+            agents <span className="text-molten">before they type</span>.
           </h2>
           <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
             {LAYERS.map((l) => (
@@ -473,7 +473,7 @@ export default async function Home() {
 
         {/* ── Close ───────────────────────────────────────────────────── */}
         <section className="panel relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
-          <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-70" />
+          <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
           <div
             className="pointer-events-none absolute inset-0 opacity-20"
             style={{
@@ -481,8 +481,8 @@ export default async function Home() {
                 "radial-gradient(40rem 16rem at 50% 120%, var(--ring), transparent 70%)",
             }}
           />
-          <h2 className="display-condensed font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
-            Watch the queue <span className="text-iridescent">thin out</span>.
+          <h2 className="font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
+            Watch the queue <span className="text-molten">thin out</span>.
           </h2>
           <p className="mx-auto mt-5 max-w-md text-muted-foreground">
             {live

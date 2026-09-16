@@ -66,7 +66,7 @@ export function CheckRunCard({
 
   return (
     <figure className="panel relative overflow-hidden rounded-2xl text-sm shadow-xl shadow-black/[0.05] dark:shadow-black/40">
-      <div className="bg-iridescent absolute inset-x-0 top-0 h-px opacity-70" />
+      <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
 
       {/* Check-run chrome: what GitHub puts around the summary. */}
       <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3 font-mono text-xs">
@@ -110,7 +110,7 @@ export function CheckRunCard({
           <p
             className={`mt-4 border-l-2 pl-3 text-[13px] leading-relaxed ${
               item.verdict.band === "flagged"
-                ? "border-[var(--iridescent)] text-foreground"
+                ? "border-[var(--coolant)] text-foreground"
                 : "border-border text-muted-foreground"
             }`}
           >

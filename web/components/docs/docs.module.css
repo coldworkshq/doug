@@ -2,7 +2,8 @@
    THE DOCS LOOK: every page under /docs, one stylesheet.
    Ported from the audit docs' static stylesheet
    (public/docs/audit/docs.css, removed with this port), whose tokens
-   are public/landing.html's. How they are reached changed:
+   are public/landing.html's. Those values are the site palette in
+   globals.css now (ADR-0035). How they are reached changed:
 
    - A CSS module, not global CSS. globals.css already defines `.code`,
      and the ported names (.top, .side, .card, .note, .chip) are generic
@@ -31,29 +32,33 @@
    ============================================================ */
 
 .root {
-  --cw-bg: #F4F6F5; --cw-bg2: #FFFFFF; --cw-bg3: #FAFBFB;
-  --cw-fg: #0F1B21; --cw-muted: #5B6A72; --cw-faint: #8A9AA1;
-  --cw-line: #DDE5E8; --cw-line2: #EAEFF0;
-  --cw-molten: #E0430A; --cw-ember: #F08C1A; --cw-coolant: #1E56D6;
-  --cw-molten-soft: #FBE9E0; --cw-ember-soft: #FCEEDC; --cw-coolant-soft: #E4EBFA;
+  /* The palette is globals.css's, in both themes (ADR-0035): these names are
+     the ones the rules below were written against, and the dark values follow
+     from `.dark` on <html>. What stays local is what only the docs draw: the
+     chip inks that meet AA on their grounds, the card shadow, and the code
+     panel's fixed terminal ink. */
+  --cw-bg: var(--background); --cw-bg2: var(--card); --cw-bg3: var(--paper-2);
+  --cw-fg: var(--foreground); --cw-muted: var(--muted-foreground); --cw-faint: var(--faint);
+  --cw-line: var(--line); --cw-line2: var(--line-2);
+  --cw-molten: var(--molten); --cw-ember: var(--ember); --cw-coolant: var(--coolant);
+  --cw-molten-soft: var(--molten-soft); --cw-ember-soft: var(--ember-soft); --cw-coolant-soft: var(--coolant-soft);
   --cw-molten-ink: #C03A09; --cw-ember-ink: #9F590A;
   --cw-clear-ink: #0F6B48; --cw-clear-soft: #E3F1EA;
   --cw-shadow: 0 18px 40px -28px rgba(15,27,33,.55);
   --cw-ink-panel: #0F1B21; --cw-ink-panel-fg: #E9EFF0; --cw-ink-panel-line: #243740;
-  --cw-display: var(--cw-font-display), 'Archivo Black', ui-sans-serif, system-ui, sans-serif;
-  --cw-body: var(--cw-font-body), ui-sans-serif, system-ui, sans-serif;
-  --cw-mono: var(--cw-font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --cw-display: var(--font-archivo), 'Archivo Black', ui-sans-serif, system-ui, sans-serif;
+  --cw-body: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --cw-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   --cw-top-h: 61px;
 
-  /* The site tokens the reused ThemeToggle and any page-level utility read,
-     pointed at this palette so nothing inside the docs paints in the
-     other one. */
-  --foreground: var(--cw-fg);
-  --muted-foreground: var(--cw-muted);
+  /* The site tokens the reused ThemeToggle reads, where the docs differ from
+     the app: a hover lifts to the docs' third surface rather than to the
+     accent tint, and edges are the brand hairline. The inks are not
+     re-pointed: --cw-fg reads --foreground, so pointing --foreground back at
+     it would be a cycle, and a cycle voids both. */
   --accent: var(--cw-bg3);
   --accent-foreground: var(--cw-fg);
   --border: var(--cw-line);
-  --ring: var(--cw-coolant);
 
   flex: 1;
   min-height: 100vh;
@@ -65,11 +70,6 @@
   -webkit-font-smoothing: antialiased;
 }
 :global(.dark) .root {
-  --cw-bg: #0A1317; --cw-bg2: #101E24; --cw-bg3: #0D181D;
-  --cw-fg: #E9EFF0; --cw-muted: #93A5AD; --cw-faint: #6C8089;
-  --cw-line: #1D2F37; --cw-line2: #172730;
-  --cw-molten: #FF5E22; --cw-ember: #FFAB37; --cw-coolant: #5B8DF7;
-  --cw-molten-soft: #2C1408; --cw-ember-soft: #2C1F08; --cw-coolant-soft: #101F3C;
   --cw-molten-ink: #FF5E22; --cw-ember-ink: #FFAB37;
   --cw-clear-ink: #4CC08C; --cw-clear-soft: #0F2A20;
   --cw-shadow: 0 18px 44px -26px rgba(0,0,0,.8);

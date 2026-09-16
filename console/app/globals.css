@@ -151,6 +151,14 @@
   --atmosphere-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
 }
 
+/* The face .mono sets numbers in. The utilities block below is
+   character-identical to web/app/globals.css (web/lib/console-lockstep.test.mjs),
+   and the two apps load different faces, so the block names this variable
+   and each app declares it. */
+:root {
+  --mono-face: var(--font-geist-mono);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -168,15 +176,15 @@
   .panel { background: var(--card); border: 1px solid var(--border); }
 
   /* Tabular numerals are mandatory on every column of numbers — a score
-     column that does not align is unreadable at 34px rows. */
-  .mono { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+     column that does not align is unreadable at 34px rows. Each app names
+     its own monospace face in --mono-face. */
+  .mono { font-family: var(--mono-face); font-variant-numeric: tabular-nums; }
 
-  /* The two data colours. NEVER add a third, and never use --iridescent
-     here: it sits ΔE2000 9.2 from --flag in NORMAL vision, closer
-     than any two things a reader must tell apart, and closer still under
-     deuteranopia. For scale, the pair this rule protects — --flag against
-     --clear — is ΔE2000 57.9. --iridescent is
-     chrome only (nav, focus, hover rules). */
+  /* The two data colours. NEVER add a third, and never paint a verdict in
+     the chrome accent: navigation, focus, and hover must never read as a
+     judgement. How far apart the three sit, in normal vision and under
+     deuteranopia and protanopia, is computed from web's stylesheet by
+     web/lib/design-system.test.mjs and never typed here (#210). */
   .data-flag  { color: var(--flag); }
   .data-clear { color: var(--clear); }
 

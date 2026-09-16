@@ -174,7 +174,7 @@ test("light is the console's default, and dark is reachable on purpose", async (
     "the console scope no longer shares :root's light palette block — its default theme is now whatever :root inherits",
   );
   // The exact reference values, not an approximation.
-  assert.match(light[1], /--background:\s*#eef0f2/);
+  assert.match(light[1], /--background:\s*#f4f6f5/);
   assert.match(light[1], /--card:\s*#ffffff/);
 
   // (2) DARK, claimed deliberately. `.dark .dashboard-surface` is (0,2,0)
@@ -187,7 +187,7 @@ test("light is the console's default, and dark is reachable on purpose", async (
     dark,
     "the dark palette no longer claims the console scope — the toggle cannot reach the dashboard",
   );
-  assert.match(dark[1], /--background:\s*#14161a/);
+  assert.match(dark[1], /--background:\s*#0a1317/);
 
   // (3) The mechanism is only real if the page mounts it.
   assert.match(page, /className="dashboard-surface/);
@@ -205,14 +205,26 @@ test("light is the console's default, and dark is reachable on purpose", async (
   );
 
   // Neither theme may leave a surface-scoped token undeclared. The failure is
-  // silent and visual: `var(--rule-soft)` with no value simply stops drawing
-  // every row divider in the ledger, and nothing in this suite renders.
+  // silent and visual: `var(--row-hover)` with no value simply stops tinting a
+  // hovered row in the ledger, and nothing in this suite renders. --rule-soft
+  // and --dim left this list with ADR-0035, as the palette's --line and
+  // --faint, which design-system.test.mjs checks in both themes.
   for (const [label, selector] of [["light", "\n.dashboard-surface {"], ["dark", "\n.dark .dashboard-surface {"]]) {
     const at = css.indexOf(selector);
     assert.ok(at >= 0, `the ${label} surface-token block is gone`);
     const body = css.slice(at, css.indexOf("\n}", at));
-    for (const token of ["--rule-soft", "--dim", "--row-hover"]) {
+    for (const token of ["--row-hover"]) {
       assert.match(body, new RegExp(`${token}:\\s*#`), `${label} leaves ${token} undeclared`);
+    }
+  }
+
+  // …and the two that left this block are checked where they now live. Both
+  // palette blocks declare them, or the ledger loses its row dividers or its
+  // smallest labels in whichever theme forgot — the same silent failure, one
+  // scope up (Doug's read of 360a71f, reader:test-contract-loosened).
+  for (const [label, block] of [["light", light[1]], ["dark", dark[1]]]) {
+    for (const token of ["--line", "--faint"]) {
+      assert.match(block, new RegExp(`${token}:\\s*#`), `${label} palette leaves ${token} undeclared`);
     }
   }
 

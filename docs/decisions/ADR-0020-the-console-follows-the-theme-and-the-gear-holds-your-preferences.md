@@ -3,6 +3,7 @@ title: The console follows the theme toggle, and the account gear holds your pre
 status: accepted
 date: 2026-08-25
 amends: ADR-0019
+amended_by: ADR-0035
 ---
 
 ## Context

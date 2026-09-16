@@ -360,8 +360,8 @@ test("sorting agrees with console's original", () => {
 
 test("the ported CSS utilities stay character-identical to console's", async () => {
   // web/app/globals.css also claims lockstep with console's. The comments in
-  // that block are the spec (never a third data colour; --iridescent fails CVD
-  // separation at ΔE 6.1; coverage is a magnitude), so a silent edit to either
+  // that block are the spec (never a third data colour; no verdict painted in
+  // the chrome accent; coverage is a magnitude), so a silent edit to either
   // stylesheet is the same class of defect as a silent edit to a module.
   const [webCss, conCss] = await Promise.all([
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),

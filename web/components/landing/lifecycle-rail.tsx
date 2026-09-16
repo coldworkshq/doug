@@ -55,7 +55,7 @@ export function LifecycleRail() {
         className="pointer-events-none absolute top-[7px] right-0 left-0 hidden h-px md:block"
       >
         <div className="absolute inset-y-0 left-0 w-1/2 bg-border" />
-        <div className="animate-draw absolute inset-y-0 left-1/2 w-1/2 bg-[var(--iridescent)]" />
+        <div className="animate-draw absolute inset-y-0 left-1/2 w-1/2 bg-[var(--coolant)]" />
       </div>
       {STATIONS.map((s, i) => {
         const clock = i >= 3;
@@ -64,13 +64,13 @@ export function LifecycleRail() {
             <span
               aria-hidden="true"
               className={`relative z-10 mt-[3px] block size-2.5 shrink-0 rounded-full border-2 bg-card md:mt-0 ${
-                clock ? "border-[var(--iridescent)]" : "border-muted-foreground"
+                clock ? "border-[var(--coolant)]" : "border-muted-foreground"
               }`}
             />
             <div className="min-w-0 md:mt-4">
               <p
                 className={`font-mono text-[11px] tracking-wider uppercase ${
-                  clock ? "text-[var(--iridescent)]" : "text-muted-foreground"
+                  clock ? "text-[var(--coolant)]" : "text-muted-foreground"
                 }`}
               >
                 {s.mark}

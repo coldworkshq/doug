@@ -131,8 +131,7 @@ export type OutcomeTone = "clear" | "flag" | "neutral";
  *
  *  Neutral is `text-muted-foreground`: the ABSENCE of a data colour, never a
  *  third one. globals.css is the authority — "The two data colours. NEVER
- *  add a third, and never use --iridescent here: it fails CVD separation
- *  against --flag at ΔE 6.1 in NORMAL vision". */
+ *  add a third, and never paint a verdict in the chrome accent". */
 export function outcomeToneClass(tone: OutcomeTone): string {
   if (tone === "clear") return "data-clear";
   if (tone === "flag") return "data-flag";
