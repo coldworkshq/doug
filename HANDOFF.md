@@ -103,6 +103,11 @@ Decisions this session:
   commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
 - The next dev server runs from the coldworks worktree's .claude/launch.json
   (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
+- Doug's third read, of e7ecd2a (cleared, risk 0.38): six findings, none new
+  and none true. The woff2 subsets are deleted with their loader (git
+  ls-files finds neither), the dropped docs --ring re-point changes no value
+  (the app's ring is the coolant in both themes), and the rest restate the
+  first two reads. No further replies unless a read raises something new.
 - Doug's second read, of 360a71f (cleared, risk 0.42): the two mediums
   restate the first read, and its new premise was checked — no route renders
   outside the root layout, so the font variables always apply. Two lows
