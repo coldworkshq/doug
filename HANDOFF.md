@@ -6,8 +6,7 @@ State:    building — branch design/coldworks-grammar off main 21e1231, which
           is PR A (doug#361) merged. PR B is the second half of doug#351:
           the typographic rule, the registry's card/stat/rail/pill shapes,
           and the four items PR A carried forward.
-Next:     Mutation controls on the bar guard, screenshots in both themes,
-          then the PR.
+Next:     Screenshots in both themes, then open the PR.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
 - PR B branches off main, not off design/coldworks-look: #361 squash-merged
@@ -38,6 +37,11 @@ Decisions this session:
   test reads the header's markup and fails on a token the bar does not
   declare: undeclared, the dark palette's near-white would land on the white
   bar at 1.86:1 — rejected: a second hand-listed loop nobody updates.
+- The .ico is rasterised from app/icon.svg at 16, 32 and 48 rather than
+  deleted: it was create-next-app's, committed in the scaffold and never
+  touched, so every client preferring /favicon.ico over the SVG showed
+  Vercel's mark as Doug's — rejected: deleting it, which leaves a link
+  unfurl with no icon at all.
 - The docs chips already clear AA (4.63 and 4.71 on their soft grounds):
   #350's --cw-molten-ink and --cw-ember-ink landed with the rebase, so PR A's
   deferred item was already closed and needs no change here.

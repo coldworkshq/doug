@@ -4,6 +4,7 @@
 // properties below are honesty rules that a future edit could quietly break.
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
+import { inflateSync } from "node:zlib";
 import test from "node:test";
 
 const cssUrl = new URL("../app/globals.css", import.meta.url);
@@ -705,6 +706,90 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   // And the walk actually walked. Without this, a rename that empties `sources`
   // turns the whole assertion into a tautology.
   assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
+});
+
+/** The pixels of a PNG inside the .ico, as [r,g,b,a] rows. Deliberately
+ *  minimal: 8-bit RGBA, non-interlaced, which is what a canvas writes. */
+function decodePng(png) {
+  let i = 8, idat = [], hdr = null;
+  while (i < png.length) {
+    const len = png.readUInt32BE(i);
+    const type = png.toString("ascii", i + 4, i + 8);
+    if (type === "IHDR") hdr = { w: png.readUInt32BE(i + 8), h: png.readUInt32BE(i + 12), depth: png[i + 16], color: png[i + 17], interlace: png[i + 20] };
+    if (type === "IDAT") idat.push(png.subarray(i + 8, i + 8 + len));
+    i += 12 + len;
+  }
+  assert.ok(hdr && hdr.depth === 8 && hdr.color === 6 && hdr.interlace === 0, "the icon is not 8-bit RGBA");
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = hdr.w * 4;
+  const px = Buffer.alloc(stride * hdr.h);
+  for (let y = 0, p = 0; y < hdr.h; y++) {
+    const filter = raw[p++];
+    const line = px.subarray(y * stride, (y + 1) * stride);
+    raw.copy(line, 0, p, p + stride);
+    p += stride;
+    const prev = y ? px.subarray((y - 1) * stride, y * stride) : Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= 4 ? line[x - 4] : 0;
+      const b = prev[x];
+      const c = x >= 4 ? prev[x - 4] : 0;
+      if (filter === 1) line[x] = (line[x] + a) & 255;
+      else if (filter === 2) line[x] = (line[x] + b) & 255;
+      else if (filter === 3) line[x] = (line[x] + ((a + b) >> 1)) & 255;
+      else if (filter === 4) {
+        const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+        line[x] = (line[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+      }
+    }
+  }
+  return { ...hdr, px };
+}
+
+test("both tab icons are the Doug mark, in the palette's own molten and ink", async () => {
+  // THE .ico WAS create-next-app's. It landed in the scaffold commit and was
+  // never touched again, so every client that prefers /favicon.ico over the
+  // SVG — Safari, a link unfurl, a feed reader — showed Vercel's mark as
+  // Doug's, on a public product site, for as long as this app has existed.
+  // It is now rasterised FROM app/icon.svg at 16, 32 and 48, which is why
+  // this test can hold the two files to the same two colours.
+  //
+  // The hexes are read from the stylesheet, never typed here: the mark's
+  // exemption in the scan above says its colours ARE the palette's molten and
+  // ink, and this is where that claim is checked against the palette rather
+  // than against a memory of it.
+  const light = tokens(await readFile(cssUrl, "utf8"), LIGHT);
+  const molten = light.molten;
+  const ink = light.foreground;
+
+  const svg = await readFile(new URL("../app/icon.svg", import.meta.url), "utf8");
+  assert.ok(svg.includes(molten), `app/icon.svg does not paint the palette's molten (${molten})`);
+  assert.ok(svg.includes(ink), `app/icon.svg does not paint the palette's ink (${ink})`);
+
+  const ico = await readFile(new URL("../app/favicon.ico", import.meta.url));
+  assert.equal(ico.readUInt16LE(2), 1, "app/favicon.ico is not an icon file");
+  const count = ico.readUInt16LE(4);
+  assert.ok(count >= 3, `the icon carries ${count} sizes; 16, 32 and 48 are the legacy sizes that need it`);
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    const e = 6 + i * 16;
+    entries.push({ size: ico[e] || 256, len: ico.readUInt32LE(e + 8), off: ico.readUInt32LE(e + 12) });
+  }
+  assert.deepEqual(entries.map((e) => e.size), [16, 32, 48]);
+
+  const biggest = entries[entries.length - 1];
+  const { w, h, px } = decodePng(ico.subarray(biggest.off, biggest.off + biggest.len));
+  assert.equal(w, biggest.size);
+  assert.equal(h, biggest.size);
+  const seen = new Set();
+  let opaque = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] <= 200) continue;
+    opaque++;
+    seen.add(`#${px.subarray(i, i + 3).toString("hex")}`);
+  }
+  assert.ok(opaque > 500, `only ${opaque} opaque pixels — the icon decoded to nothing`);
+  assert.ok(seen.has(molten), `the .ico paints no molten (${molten}); it is not the mark the SVG is`);
+  assert.ok(seen.has(ink), `the .ico paints no ink (${ink})`);
 });
 
 const docsCssUrl = new URL("../components/docs/docs.module.css", import.meta.url);
