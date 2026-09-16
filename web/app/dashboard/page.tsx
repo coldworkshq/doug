@@ -142,14 +142,13 @@ const CANVAS = "mx-auto w-full max-w-[1440px]";
  *  provenance sub-label, styled here rather than at the call site so the
  *  headings' own markup stays the plain sentence it claims to be. */
 const BLOCK_HEADING =
-  "mono mb-3 flex items-center gap-2.5 text-[10px] font-medium uppercase tracking-[.16em] " +
-  "text-muted-foreground [&_span]:text-[9.5px] [&_span]:normal-case [&_span]:tracking-[.04em] " +
-  "[&_span]:text-[var(--faint)]";
+  "lbl mb-3 flex items-baseline gap-2.5 " +
+  "[&_span]:text-[11px] [&_span]:font-normal [&_span]:text-[var(--faint)]";
 
 const BLOCK = "border-b border-border px-5 py-[18px]";
 
 /** The route chip — a monospace breadcrumb in the accent wash. */
-const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--coolant)] tracking-[.06em]";
+const ROUTE = "rounded-[3px] bg-accent px-[7px] py-0.5 text-[var(--accent-foreground)]";
 
 const EMPTY_PAGE = "mx-auto max-w-[760px] px-6 py-[110px]";
 const EMPTY_HEADING =
@@ -195,7 +194,7 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
       aria-labelledby="pending-connections-title"
     >
       <div className="flex flex-col justify-center gap-[3px]">
-        <span id="pending-connections-title" className="text-[10.5px] uppercase tracking-[.12em] text-[var(--coolant)]">setup required</span>
+        <span id="pending-connections-title" className="text-[11.5px] font-medium text-[var(--coolant)]">Setup required</span>
         <small className="text-[10.5px] leading-[1.35] text-muted-foreground">Finish binding these installations before opening their run ledger.</small>
       </div>
       <div className="flex flex-col">
@@ -212,8 +211,8 @@ function PendingConnections({ connections }: { connections: RepositoryConnection
               <input type="hidden" name="installation_id" value={connection.installation_id} />
               <button
                 type="submit"
-                className="cursor-pointer rounded-[3px] border border-[var(--coolant)] bg-transparent px-2 py-[5px] text-[10.5px] uppercase text-[var(--coolant)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_30%,transparent)]"
-              >finish setup</button>
+                className="cursor-pointer rounded-[3px] border border-[var(--coolant)] bg-transparent px-2.5 py-[5px] text-[11.5px] text-[var(--coolant)] hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--coolant)_30%,transparent)]"
+              >Finish setup</button>
             </form>
           </div>
         ))}
@@ -243,7 +242,7 @@ function RailReadout({ runs, scope }: { runs: RunSummary[]; scope: string }) {
   ];
   return (
     <div className="px-4 py-3.5" title={scope}>
-      <p className="mono mb-2 text-[9px] uppercase tracking-[.15em] text-[var(--faint)]">In view</p>
+      <p className="mb-2 text-[11px] text-[var(--faint)]">In view</p>
       <dl className="mono m-0 flex flex-col gap-[5px] text-[10.5px]">
         {rows.map((row) => (
           <div key={row.word} className="flex items-baseline gap-2">
@@ -381,7 +380,7 @@ function FacetBar({
               different question (how many, and over what population), and
               overwriting it with a definition would trade a number the
               operator is mid-way through reading for one they are not. */}
-          <span className="mono inline-flex items-center text-[10px] uppercase tracking-[.13em] text-[var(--faint)]">
+          <span className="mono inline-flex items-center text-[11px] text-[var(--faint)]">
             {facet.label}
             {outcomeWindow !== undefined && (
               <InfoDot label={facet.label} hint={outcomeWindowHint(outcomeWindow)} />
@@ -430,8 +429,8 @@ function FacetBar({
       {active && (
         <Link
           href={href(params, facetClearChanges())}
-          className="mono ml-auto text-[11px] uppercase tracking-[.1em] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
-        >clear filters</Link>
+          className="ml-auto text-[11.5px] text-muted-foreground underline decoration-dotted underline-offset-[3px] hover:text-foreground"
+        >Clear filters</Link>
       )}
     </div>
   );
@@ -622,16 +621,28 @@ function RepoCountLine({
  *
  *  THE TWO HEADERS SAY "14d" AND "60d", NOT "14d outcome", and the word they
  *  drop moved into the ⓘ beside them rather than being lost. This is
- *  arithmetic, not taste: the header sets at 10.5px in IBM Plex Mono (0.6em
- *  advance) with .13em tracking, so a character costs 7.67px and "14d outcome"
- *  claims 84.3px inside the 72px this column leaves after padding, measured in
- *  a browser when the face changed (ADR-0035). In Geist Mono it was
- *  overflowing 12.6px into its neighbour before anything was added to it —
- *  which is why the two labels sit shoulder to shoulder on screen with no gap
- *  between the columns. "14d" plus the dot is 41px, and the tooltip says
- *  "outcome" in its first six words. Widening instead was the alternative and
- *  was refused: 60px of table width would have come out of the one flexible
- *  column, which holds the title and is already the column that truncates. */
+ *  arithmetic, not taste, and the arithmetic has been redone twice.
+ *
+ *  Under Doug's grammar the header was tracked uppercase mono: 10.5px IBM Plex
+ *  Mono (0.6em advance) at .13em, so a character cost 7.67px and "14d outcome"
+ *  claimed 84.3px inside the 72px this column leaves after padding — measured
+ *  in a browser when the face changed (ADR-0035), and 12.6px worse again in
+ *  Geist Mono before it. That is why the two labels sit shoulder to shoulder
+ *  on screen with no gap between the columns.
+ *
+ *  ADR-0035's grammar pass then took the caps and the tracking off every
+ *  column head, and this one now sets at 11.5px in Instrument Sans at weight
+ *  500. Measured the same way on 2026-09-16, the two labels STOP AGREEING
+ *  about whether they fit: "14d outcome" claims 68.8px and "60d outcome"
+ *  72.3px, because a header's digits are proportional where the column of
+ *  figures below it is not. One of a matched pair cannot be labelled in full
+ *  while its twin overflows, so both stay short — and a label that fits by
+ *  3.2px in one face is one face away from the overflow this column already
+ *  had twice. The tooltip says "outcome" in its first six words.
+ *
+ *  Widening instead was the alternative and was refused: 60px of table width
+ *  would have come out of the one flexible column, which holds the title and
+ *  is already the column that truncates. */
 const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey; hint?: string }> = [
   { label: "score", cls: "w-[58px] text-right", sort: "score" },
   { label: "pull request", cls: "" },
@@ -652,8 +663,8 @@ const COLUMNS: Array<{ label: string; cls: string; sort?: SortKey; hint?: string
  *  the SEPARATED border model (see RunTable): in the collapsed model the
  *  border belongs to the table, and a sticky header leaves it behind. */
 const TH =
-  "mono sticky top-0 z-10 border-b border-border bg-background px-2 pt-[8px] pb-[7px] text-left " +
-  "text-[10.5px] font-medium uppercase tracking-[.13em] text-muted-foreground";
+  "sticky top-0 z-10 border-b border-border bg-background px-2 pt-[8px] pb-[7px] text-left " +
+  "text-[11.5px] font-medium text-muted-foreground";
 
 /** 38px, up from 34. The divider between two rows is capped at 1.20:1 by
  *  --border (see globals.css), so contrast cannot be what separates them —
@@ -1018,8 +1029,8 @@ function RepositoryTable({
                 {!row.connected && (
                   <span
                     title="This repository has runs in the ledger but the installation no longer lists it — renamed, removed, or access revoked."
-                    className="mono flex-none rounded-[3px] border border-border px-1.5 py-px text-[9.5px] uppercase tracking-[.08em] text-muted-foreground"
-                  >not connected</span>
+                    className="flex-none rounded-full border border-border px-2 py-px text-[10.5px] text-muted-foreground"
+                  >Not connected</span>
                 )}
               </div>
             </TableCell>
@@ -1056,12 +1067,12 @@ function RepositoryTable({
 function Pager({ window, params }: { window: PageWindow<unknown>; params: DashboardParams }) {
   const label = pageRangeLabel(window);
   if (window.pageCount <= 1) {
-    return <p className="mono mt-2.5 text-[10.5px] uppercase tracking-[.12em] text-[var(--faint)]">Showing {label}</p>;
+    return <p className="mono mt-2.5 text-[11px] text-[var(--faint)]">Showing {label}</p>;
   }
   const step = (page: number) => href(params, { page: page <= 1 ? null : String(page) });
   const control = "rounded-[4px] border border-border px-2 py-1 no-underline";
   return (
-    <div className="mono mt-2.5 flex flex-wrap items-center gap-3 text-[10.5px] uppercase tracking-[.12em] text-muted-foreground">
+    <div className="mono mt-2.5 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
       <span>Showing {label}</span>
       <span className="h-px flex-1 bg-border" />
       {/* At a boundary the control renders as text, not a disabled link: a
@@ -1103,7 +1114,7 @@ function Evidence({
   params: DashboardParams;
 }) {
   const action =
-    "mono rounded-[3px] border border-border px-[7px] py-[3px] text-[10px] uppercase tracking-[.08em] " +
+    "rounded-[4px] border border-border px-[9px] py-[3px] text-[11.5px] " +
     "text-muted-foreground no-underline hover:border-[var(--coolant)] hover:text-[var(--coolant)]";
   return (
     <section aria-labelledby="run-evidence-title" className="pb-16">
@@ -1124,9 +1135,9 @@ function Evidence({
         </div>
         <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
           {summary.url && (
-            <a href={summary.url} target="_blank" rel="noreferrer" className={action}>open pull request ↗</a>
+            <a href={summary.url} target="_blank" rel="noreferrer" className={action}>Open pull request ↗</a>
           )}
-          <Link href={`/dashboard/pr/${detail.pr_number}?repo=${encodeURIComponent(detail.repo)}`} className={action}>receipt</Link>
+          <Link href={`/dashboard/pr/${detail.pr_number}?repo=${encodeURIComponent(detail.repo)}`} className={action}>Receipt</Link>
         </div>
       </header>
 
@@ -1156,12 +1167,12 @@ function Evidence({
             breaks that made 11px worth trying. The label column stays 92px —
             the widest label is `prompt hash` and it fits. */}
         <dl className="mono grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[12px] leading-[1.5]">
-          <dt className="uppercase text-muted-foreground">tier</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.tier}</dd>
-          <dt className="uppercase text-muted-foreground">model</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
-          <dt className="uppercase text-muted-foreground">prompt hash</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
-          <dt className="uppercase text-muted-foreground">risk score</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.risk_score ?? "not recorded"}</dd>
-          <dt className="uppercase text-muted-foreground">head sha</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.head_sha ?? "not recorded"}</dd>
-          <dt className="uppercase text-muted-foreground">rationale</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.rationale ?? "No rationale was recorded."}</dd>
+          <dt className="text-muted-foreground">tier</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.tier}</dd>
+          <dt className="text-muted-foreground">model</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.model ?? "not recorded"}</dd>
+          <dt className="text-muted-foreground">prompt hash</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.prompt_hash ?? "not stamped"}</dd>
+          <dt className="text-muted-foreground">risk score</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.risk_score ?? "not recorded"}</dd>
+          <dt className="text-muted-foreground">head sha</dt><dd className="m-0 break-all whitespace-pre-wrap">{detail.head_sha ?? "not recorded"}</dd>
+          <dt className="text-muted-foreground">rationale</dt><dd className="m-0 break-words whitespace-pre-wrap">{detail.rationale ?? "No rationale was recorded."}</dd>
         </dl>
       </div>
 
@@ -1169,7 +1180,7 @@ function Evidence({
         <h3 className={BLOCK_HEADING}>Findings <span>{detail.reasons.length}</span></h3>
         {detail.reasons.map((reason) => (
           <div className={FINDING} key={`${reason.rule}-${reason.label}`}>
-            <span className="mono data-flag text-[10px] uppercase">{reason.severity ?? "rule"}</span>
+            <span className="vocab data-flag text-[10px]">{reason.severity ?? "rule"}</span>
             <div><code className="mono text-[11px] break-words">{reason.rule}</code><p className="mt-[3px] text-[12.5px] text-muted-foreground">{reason.label}</p></div>
           </div>
         ))}
@@ -1180,7 +1191,7 @@ function Evidence({
         <h3 className={BLOCK_HEADING}>Deviations <span>separate stream</span></h3>
         {detail.deviations.map((deviation) => (
           <div className={FINDING} key={`${deviation.type}-${deviation.description}`}>
-            <span className="mono data-flag text-[10px] uppercase">{deviation.severity}</span>
+            <span className="vocab data-flag text-[10px]">{deviation.severity}</span>
             <div><code className="mono text-[11px] break-words">{deviation.type}</code><p className="mt-[3px] text-[12.5px] text-muted-foreground">{deviation.description}</p></div>
           </div>
         ))}
@@ -1211,7 +1222,7 @@ function Evidence({
 function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) {
   return (
     <main className={EMPTY_PAGE}>
-      <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
+      <p className={`mono inline-block text-[10px] ${ROUTE}`}>/spaces</p>
       <h1 className={EMPTY_HEADING}>Sign back in to refresh this.</h1>
       <p className={EMPTY_BODY}>
         Doug still has your connection. What expired is the repository scope
@@ -1252,7 +1263,7 @@ function NoConnection({
 }) {
   return (
     <main className={EMPTY_PAGE}>
-      <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/account</p>
+      <p className={`mono inline-block text-[10px] ${ROUTE}`}>/account</p>
       <h1 className={EMPTY_HEADING}>{userLabel}, you&apos;re in.</h1>
       <p className={EMPTY_BODY}>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
       {/* This screen otherwise claims "you have not connected anything", which
@@ -1342,7 +1353,7 @@ function LedgerUnreachable({ failure }: { failure: LedgerFailure }) {
   return (
     <div className="dashboard-surface">
       <main className={EMPTY_PAGE}>
-        <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>{copy.route}</p>
+        <p className={`mono inline-block text-[10px] ${ROUTE}`}>{copy.route}</p>
         <h1 className={EMPTY_HEADING}>{copy.heading}</h1>
         <p className={EMPTY_BODY}>{copy.body}</p>
         {/* Only the arm whose cause sign-out can actually address offers it.
@@ -1552,7 +1563,7 @@ export default async function DashboardPage({
             : door.state === "reauthorize" ? <ScopeExpired connections={door.expired} />
             : door.state === "choose" ? (
             <main className={`${CANVAS} ${EMPTY_PAGE}`}>
-              <p className={`mono inline-block text-[10px] uppercase ${ROUTE}`}>/spaces</p>
+              <p className={`mono inline-block text-[10px] ${ROUTE}`}>/spaces</p>
               <h1 className={EMPTY_HEADING}>Choose a connected space.</h1>
               <p className={EMPTY_BODY}>Each space stays separate. Runs from one installation never join another.</p>
               <div className="mt-7 max-w-[320px]"><ScopePicker connections={connections} current={null} /></div>
@@ -1563,7 +1574,7 @@ export default async function DashboardPage({
                   scroll is the only one on this column and the dock beside it
                   never moves. */}
               <section className="flex min-w-0 flex-col px-5 pt-4 pb-5 min-[1620px]:h-screen">
-                <div className="mono mb-2.5 flex items-center gap-3 text-[10.5px] uppercase tracking-[.15em] text-[var(--faint)]">
+                <div className="mono mb-2.5 flex items-center gap-3 text-[10.5px] text-[var(--faint)]">
                   {/* `door.current`, not the hoisted `current`: only the
                       discriminated union narrows away null on this arm, which is
                       the reason #99 gave one member per state instead of
@@ -1572,7 +1583,7 @@ export default async function DashboardPage({
                   <span className={ROUTE}>{view === "repositories" ? "/repositories" : "/runs"}</span>
                   <span className="truncate">{connectionLabel(door.current)}</span>
                   <span className="h-px flex-1 bg-border" />
-                  <span className="mono flex-none normal-case tracking-normal text-muted-foreground">
+                  <span className="mono flex-none text-muted-foreground">
                     {view === "repositories" ? (
                       // TWO SOURCES, SAID OUT LOUD. The repository count is
                       // authoritative — it is the installation's own list. Every

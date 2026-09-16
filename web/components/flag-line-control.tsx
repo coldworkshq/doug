@@ -148,7 +148,7 @@ function SettingSwitch({
             }`}
           />
         </span>
-        <span className="mono text-[10.5px] uppercase tracking-[.08em] text-muted-foreground">{label}</span>
+        <span className="mono text-[11px] text-muted-foreground">{label}</span>
         <span className={`mono text-[10.5px] ${on ? "font-medium text-foreground" : "text-muted-foreground"}`}>
           {on ? "on" : "off"}
         </span>
@@ -199,7 +199,7 @@ export function FlagLineControl({
         <>
           <form action={setFlagLineAction} className="flex items-center gap-2">
             <input type="hidden" name="github_repo_id" value={githubRepoId} />
-            <label className="mono text-[10.5px] uppercase tracking-[.08em] text-muted-foreground">
+            <label className="mono text-[11px] text-muted-foreground">
               flag line
               <input
                 name="needs_you_threshold"

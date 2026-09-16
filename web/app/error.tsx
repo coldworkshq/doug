@@ -17,7 +17,7 @@ export default function ErrorPage({
 }) {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col items-center justify-center px-6 text-center">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+      <p className="lbl">
         Something broke
       </p>
       <h1 className="font-heading mt-4 max-w-md text-4xl font-semibold tracking-tight">

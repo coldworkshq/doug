@@ -39,7 +39,7 @@ export default async function ScoreboardPage() {
             </>
           )}
         </p>
-        <p className="font-mono mt-8 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+        <p className="lbl mt-8">
           Prospective
         </p>
         <h1 className="font-heading mt-2 max-w-xl text-4xl font-semibold tracking-tight md:text-5xl">
@@ -54,7 +54,7 @@ export default async function ScoreboardPage() {
         <dl className="panel relative mt-10 grid gap-6 overflow-hidden rounded-2xl p-8 sm:grid-cols-2">
           <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
           <div>
-            <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <dt className="lbl">
               Adjudicated
             </dt>
             <dd className="font-heading mt-2 text-5xl font-semibold">
@@ -62,7 +62,7 @@ export default async function ScoreboardPage() {
             </dd>
           </div>
           <div>
-            <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <dt className="lbl">
               Pending
             </dt>
             <dd className="font-heading mt-2 text-5xl font-semibold">
@@ -70,19 +70,19 @@ export default async function ScoreboardPage() {
             </dd>
           </div>
           <div>
-            <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <dt className="lbl">
               As of
             </dt>
             <dd className="mt-2 font-mono text-lg">{day(scoreboard.as_of)}</dd>
           </div>
           <div>
-            <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <dt className="lbl">
               First due
             </dt>
             <dd className="mt-2 font-mono text-lg">{day(scoreboard.first_due)}</dd>
           </div>
           <div className="sm:col-span-2">
-            <dt className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <dt className="lbl">
               Deep reads this cycle
             </dt>
             <dd className="mt-2 font-mono text-lg">

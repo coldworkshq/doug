@@ -76,7 +76,7 @@ export default async function QueuePage({
                   </>
                 )}
               </p>
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              <p className="lbl">
                 Review queue
               </p>
               <h1 className="font-heading mt-2 text-4xl font-semibold tracking-tight md:text-5xl">
@@ -87,7 +87,7 @@ export default async function QueuePage({
               </h1>
             </div>
             <div className="panel flex items-center gap-1 rounded-full p-1.5 font-mono text-xs">
-              <span className="px-2 uppercase tracking-widest text-muted-foreground">
+              <span className="px-2 text-muted-foreground">
                 threshold
               </span>
               {presets(queue.summary.threshold).map((t) => (
@@ -170,7 +170,7 @@ export default async function QueuePage({
               </div>
               <span
                 className={
-                  "h-fit self-start rounded-full px-3 py-1 font-mono text-xs uppercase tracking-wide " +
+                  "vocab h-fit self-start rounded-full px-3 py-1 text-[11.5px] " +
                   (verdict.band === "flagged"
                     ? "bg-flag/15 text-flag"
                     : "bg-clear/10 text-clear")

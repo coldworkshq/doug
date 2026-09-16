@@ -375,6 +375,47 @@
   }
 }
 
+/* ------------------------------------------------------ THE ONE TYPE RULE
+
+   Uppercase tracked mono is reserved for CLOSED MACHINE VOCABULARIES and
+   nothing else: a chip whose word came out of a CHECK constraint (a run's
+   band, a guard's state, a finding's severity). English goes in sentence
+   case. Before this rule the app set a section heading, a nav entry and a
+   refusal-to-measure identically, which is the confusion the surface exists
+   to prevent — caps now carry a meaning instead of decorating a label.
+
+   The rule is a CLASS, not a convention: `.vocab` below is the only place in
+   web/ that may say `uppercase`, and web/lib/ui-grammar.test.mjs fails on the
+   word appearing anywhere else under app/ or components/. Redefining one rule
+   is also how the grammar reaches every screen at once — a page cannot be
+   left behind wearing the old one, which is what happened when the registry
+   surface made this same change by hand (coldworks, 2026-09-09).
+
+   `components`, not `utilities`: Tailwind's own utilities layer comes after
+   this one, so a call site that needs a different size or ink still writes
+   `text-[11px]` and wins, without an `!important` anywhere. */
+@layer components {
+  /* A section label, a nav entry, a column head, a figure's caption: the
+     display face at the weight that separates it from body copy, and NEVER
+     the tracked-out mono that now means something else. */
+  .lbl {
+    font-family: var(--font-archivo);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    color: var(--ink-2);
+  }
+  /* A word out of a closed vocabulary. The tracking is the registry's .07em,
+     and the size is the call site's business — a chip in a 38px ledger row
+     and a chip in a page header are the same grammar at two densities. */
+  .vocab {
+    font-family: var(--mono-face);
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

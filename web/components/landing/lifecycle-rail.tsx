@@ -69,7 +69,7 @@ export function LifecycleRail() {
             />
             <div className="min-w-0 md:mt-4">
               <p
-                className={`font-mono text-[11px] tracking-wider uppercase ${
+                className={`font-mono text-[12px] ${
                   clock ? "text-[var(--coolant)]" : "text-muted-foreground"
                 }`}
               >

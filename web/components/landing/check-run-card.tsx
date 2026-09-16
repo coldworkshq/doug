@@ -99,7 +99,7 @@ export function CheckRunCard({
               ["Findings", findingCounts(reasons), ""],
             ].map(([k, v, tone]) => (
               <div key={k} className="min-w-0 bg-card px-2.5 py-2">
-                <dt className="text-[10px] tracking-wider text-muted-foreground uppercase">{k}</dt>
+                <dt className="text-[11.5px] text-muted-foreground">{k}</dt>
                 <dd className={`mt-0.5 font-medium break-words ${tone}`}>{v}</dd>
               </div>
             ))}
@@ -131,7 +131,7 @@ export function CheckRunCard({
 
         {shown.length > 0 ? (
           <div className="mt-4">
-            <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+            <p className="text-[11.5px] text-muted-foreground">
               Findings
             </p>
             <ul className="mt-1.5 space-y-1 font-mono text-xs">

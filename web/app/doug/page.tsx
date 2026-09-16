@@ -218,7 +218,7 @@ export default async function Home() {
               ["flag line", summary.threshold.toFixed(2), ""],
             ].map(([k, v, tone]) => (
               <div key={k} className="bg-card p-6">
-                <dt className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+                <dt className="lbl">
                   {k}
                 </dt>
                 <dd className={`mono mt-2 text-4xl font-medium ${tone}`}>{v}</dd>
@@ -227,7 +227,7 @@ export default async function Home() {
           </dl>
           <div className="p-6">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+              <p className="lbl">
                 {live ? "The open queue, pinned by risk" : "A sample queue, pinned by risk"}
               </p>
               <p className="font-mono text-xs text-muted-foreground">
@@ -248,7 +248,7 @@ export default async function Home() {
 
         {/* ── How it works ────────────────────────────────────────────── */}
         <section className="py-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             One pull request, start to finish
           </p>
           <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -267,7 +267,7 @@ export default async function Home() {
 
         {/* ── Why: the three rules ────────────────────────────────────── */}
         <section className="pb-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             Three rules, in writing
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -287,7 +287,7 @@ export default async function Home() {
 
         {/* ── The cost of reviewing everything ────────────────────────── */}
         <section className="pb-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             The cost of reviewing everything
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -314,7 +314,7 @@ export default async function Home() {
                 <col className="w-[44%]" />
               </colgroup>
               <thead>
-                <tr className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+                <tr className="lbl">
                   <th className="px-5 py-3 text-left font-normal">
                     Per pull request
                   </th>
@@ -360,7 +360,7 @@ export default async function Home() {
         {/* ── What the reader sees / what is measured ─────────────────── */}
         <section className="hairline-grid rounded-2xl md:grid-cols-2">
           <div className="p-8 md:p-10">
-            <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl">
               What the reader is given
             </p>
             <ul className="mt-5 flex flex-wrap gap-2">
@@ -373,7 +373,7 @@ export default async function Home() {
                 </li>
               ))}
             </ul>
-            <p className="mt-8 font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl mt-8">
               What the reader is not told
             </p>
             <ul className="mt-5 flex flex-wrap gap-2">
@@ -402,7 +402,7 @@ export default async function Home() {
 
           <div className="relative overflow-hidden p-8 md:p-10">
             <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
-            <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+            <p className="lbl">
               What&rsquo;s actually measured
             </p>
             <p className="text-molten font-heading mt-4 text-6xl font-semibold">
@@ -424,7 +424,7 @@ export default async function Home() {
               measured by it.
             </p>
             <div className="mt-6 border-t border-border pt-5">
-              <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+              <p className="lbl">
                 Published miss rate
               </p>
               <p className="font-heading mt-2 text-3xl font-semibold text-muted-foreground">
@@ -447,7 +447,7 @@ export default async function Home() {
 
         {/* ── Memory: what accrues ────────────────────────────────────── */}
         <section className="py-24">
-          <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
+          <p className="lbl">
             Others learn what reviewers say
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
@@ -457,7 +457,7 @@ export default async function Home() {
           <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
             {LAYERS.map((l) => (
               <div key={l.title} className="p-8">
-                <span className="rounded-full border border-border px-2.5 py-1 font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
+                <span className="rounded-full border border-border px-2.5 py-1 text-[12.5px] font-medium text-muted-foreground">
                   {l.tag}
                 </span>
                 <h3 className="font-heading mt-5 text-xl font-semibold">
