@@ -103,6 +103,15 @@ Decisions this session:
   commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
 - The next dev server runs from the coldworks worktree's .claude/launch.json
   (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
+- Doug's read of c17ec52 (cleared, risk 0.42, 68% of the diff): three
+  disproved — no retired token or class survives web/, web/app/page.tsx does
+  not exist (/ is the static landing behind a rewrite), and Plex Mono's
+  0.600em advance is narrower than Geist Mono's 0.6025em; one adjacent and
+  unchanged — the build already fetched faces from Google, and what is new is
+  /docs sharing that path; one adjacent with a new control — the docs token
+  scope may not re-point a site token it reads (1ea8a4a), shown failing on a
+  planted re-point and on a two-token cycle. docs/findings-log.jsonl carries
+  all five.
 - Andrew, 2026-09-16: the card border keeps today's default (#c2cbcf light,
   #2e4048 dark), not the brand hairline, and ADR-0035 is accepted.
 - The mono face needs its own monospace fallback chain: next/font lists a
