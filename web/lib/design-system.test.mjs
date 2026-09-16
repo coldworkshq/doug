@@ -708,6 +708,42 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   assert.ok(sources.length >= 40, `the scan only found ${sources.length} files — the walk is broken`);
 });
 
+test("the radius scale is the door's three, and nothing reaches past it", async () => {
+  // MEASURED, because the obvious reading is wrong. Dropping --radius-xl and
+  // the three above it from @theme does NOT delete `rounded-xl`: Tailwind's
+  // own default theme still carries the namespace, so the class keeps working
+  // and quietly takes 12px where this app's scale gave it 16.8. Planted on
+  // /queue and read in a browser on 2026-09-16: `rounded-xl` computed to
+  // 12px, and the compiled stylesheet carried Tailwind's `--radius-xl: .75rem`
+  // beside this file's `--radius-md: 10px`.
+  //
+  // So the guard is on the CALL SITES, not on the absence of the tokens. The
+  // app draws at 12, 10, 8 and a pill; a class whose value would come from
+  // Tailwind's defaults instead of from here is off the scale by definition,
+  // and silently — which is the only kind of drift worth a test.
+  const css = code(await readFile(cssUrl, "utf8"));
+  const theme = ruleBody(css, "@theme inline") ?? css.slice(css.indexOf("@theme inline"), css.indexOf("\n}", css.indexOf("@theme inline")));
+  const declared = [...theme.matchAll(/--radius-([a-z0-9]+):/g)].map((m) => m[1]);
+  assert.deepEqual(declared.sort(), ["lg", "md", "sm"], "the radius scale is no longer the door's three");
+
+  const dir = new URL("../", import.meta.url);
+  const offenders = [];
+  async function walk(rel) {
+    for (const entry of await readdir(new URL(rel, dir), { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const next = `${rel}${entry.name}${entry.isDirectory() ? "/" : ""}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (/\.(tsx?|css)$/.test(entry.name)) {
+        const found = (await readFile(new URL(next, dir), "utf8")).match(/\brounded(?:-[a-z]+)?-(?:xs|xl|2xl|3xl|4xl)\b/);
+        if (found) offenders.push(`${next}: ${found[0]}`);
+      }
+    }
+  }
+  await walk("app/");
+  await walk("components/");
+  assert.deepEqual(offenders, [], "a radius is off the door's scale and takes Tailwind's default value instead");
+});
+
 /** The pixels of a PNG inside the .ico, as [r,g,b,a] rows. Deliberately
  *  minimal: 8-bit RGBA, non-interlaced, which is what a canvas writes. */
 function decodePng(png) {
