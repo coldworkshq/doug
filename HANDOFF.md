@@ -103,6 +103,14 @@ Decisions this session:
   commit 14f2ca1 (2026-07-27) and is listed on #351 as a brand call.
 - The next dev server runs from the coldworks worktree's .claude/launch.json
   (doug-web-coldworks-look, port 3131). Stop it when the lane closes.
+- Doug's second read, of 360a71f (cleared, risk 0.42): the two mediums
+  restate the first read, and its new premise was checked — no route renders
+  outside the root layout, so the font variables always apply. Two lows
+  changed the branch (1e68cb7): dark --flag is molten byte for byte, which is
+  deliberate, so the separation test now measures the accent against molten
+  as well; and dashboard-contract requires --line and --faint in each palette
+  block, the guard the surface block lost. Both shown failing on planted
+  values.
 - Doug's read of c17ec52 (cleared, risk 0.42, 68% of the diff): three
   disproved — no retired token or class survives web/, web/app/page.tsx does
   not exist (/ is the static landing behind a rewrite), and Plex Mono's
