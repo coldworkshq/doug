@@ -2,19 +2,18 @@
 
 --- look lane (2026-09-15): the web app moves to the Coldworks look, doug#351 ---
 
-State:    rebased onto main and ready to push — branch design/coldworks-look
-          (worktree .claude/worktrees/coldworks-look), five commits on main
-          22cd356 now that doug#350 has merged: b8b389e handoff, 78aeb44
-          faces, dbe7542 palette and computed tests, fb8b85e ADR-0035,
-          953d2e7 the outcome cells and the favicon. npm test 481 of 481 (the
-          build-and-serve integration test included), tsc 0, lint 0, console
-          125 of 125, 16 of 16 planted values killed, browser check on next
-          dev. Andrew, in session: the web app wears the Coldworks look
-          everywhere (2026-09-15); the card border keeps ADR-0020's
-          separation, and ADR-0035 is accepted (2026-09-16).
-Next:     Push and open PR A (Closes #214 and #210, refs #351), then answer CI
-          and Doug's read. PR B (UI grammar) follows, and #351 carries its
-          list.
+State:    review — **doug#361** from branch design/coldworks-look off main
+          22cd356, six commits: b8b389e handoff, 78aeb44 faces, dbe7542
+          palette and computed tests, fb8b85e ADR-0035, 953d2e7 the outcome
+          cells and the favicon, c08e3a3 the two rulings. npm test 481 of 481
+          (the build-and-serve integration test included), tsc 0, lint 0,
+          console 125 of 125, 16 of 16 planted values killed, browser check on
+          next dev. Andrew, in session: the app wears the Coldworks look
+          everywhere (2026-09-15); the card border keeps ADR-0020's separation
+          and ADR-0035 is accepted (2026-09-16).
+Next:     Watch CI and Doug's read on #361, and answer each read in the PR
+          body. The merge is the founder's click, and it deploys. Then PR B
+          (UI grammar); #351 carries its list.
 Blockers: The signed-in dashboard is unseen in the new look (no WorkOS config
           locally), and a merge deploys, so production renders it first.
 Decisions this session:
