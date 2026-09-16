@@ -101,6 +101,50 @@ test("no page sets uppercase or tracks a label out on its own", async () => {
   assert.deepEqual(offenders, [], "a page is wearing the retired grammar");
 });
 
+test("the two grammar classes name faces that reach them", async () => {
+  // `.lbl` reads --font-archivo and `.vocab` reads --mono-face, and NEITHER is
+  // a colour: a face that does not resolve does not fall back to a wrong
+  // value, it falls back to the default face and the label just looks a bit
+  // off. That is the kind of regression a screenshot review misses.
+  //
+  // The two variables are declared in different places, which is the reason
+  // this test reads both files. --mono-face is in globals.css, on :root,
+  // because the utilities block it serves is under a lockstep with console and
+  // each app declares its own face. --font-archivo is not in the stylesheet at
+  // all: next/font mints it and app/layout.tsx mounts it on <html>. Move that
+  // className to <body>, or drop a font from it, and every `.lbl` on the site
+  // silently loses the display face.
+  const css = await readFile(new URL("app/globals.css", dir), "utf8");
+  const layout = await readFile(new URL("app/layout.tsx", dir), "utf8");
+  const bare = code(css);
+
+  const needed = new Set();
+  for (const cls of [".lbl", ".vocab"]) {
+    const body = bare.match(new RegExp(`\\${cls}\\s*\\{([^}]*)\\}`))?.[1];
+    assert.ok(body, `${cls} is gone from the stylesheet`);
+    for (const [, name] of body.matchAll(/var\(--([a-z0-9-]+)\)/g)) needed.add(name);
+  }
+  assert.ok(needed.has("font-archivo") && needed.has("mono-face"), `the two classes read ${[...needed]}`);
+
+  const mounted = [...layout.matchAll(/variable:\s*"--([a-z0-9-]+)"/g)].map((m) => m[1]);
+  const onHtml = layout.match(/<html[\s\S]*?className=\{`([^`]*)`\}/)?.[1] ?? "";
+  for (const name of needed) {
+    const declared = new RegExp(`--${name}\\s*:`).test(bare);
+    const minted = mounted.includes(name);
+    assert.ok(declared || minted, `.lbl or .vocab reads --${name}, which nothing declares`);
+    if (minted) {
+      // A minted variable only exists where its className is mounted, and the
+      // dashboard surface is below <html>, never beside it.
+      const binding = layout.match(new RegExp(`const (\\w+) = [^;]*variable:\\s*"--${name}"`, "s"))?.[1];
+      assert.ok(binding, `--${name} is minted by no named loader`);
+      assert.ok(
+        onHtml.includes(`${binding}.variable`),
+        `--${name} is minted but <html> does not carry ${binding}.variable, so the classes that read it fall back to the default face`,
+      );
+    }
+  }
+});
+
 /** Every `.vocab` on the surface, with the vocabulary it renders and where
  *  that vocabulary is closed. A new entry here is a claim that a CHECK
  *  constraint, a union type or the store's own column decides the word — not
