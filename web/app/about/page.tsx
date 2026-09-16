@@ -106,7 +106,7 @@ export default function AboutPage() {
             {PHOTOS.map((p) => (
               <figure
                 key={p.src}
-                className="panel group overflow-hidden rounded-2xl"
+                className="panel group overflow-hidden rounded-lg"
               >
                 <img
                   src={p.src}
@@ -168,7 +168,7 @@ export default function AboutPage() {
           </h2>
 
           <div className="mt-10 grid gap-4 md:grid-cols-3">
-            <div className="panel flex flex-col rounded-2xl p-8">
+            <div className="panel flex flex-col rounded-lg p-8">
               <span className="text-coolant font-mono text-sm">01</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Star it
@@ -190,7 +190,7 @@ export default function AboutPage() {
               </a>
             </div>
 
-            <div className="panel flex flex-col rounded-2xl p-8">
+            <div className="panel flex flex-col rounded-lg p-8">
               <span className="text-coolant font-mono text-sm">02</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Ask Doug something
@@ -198,7 +198,7 @@ export default function AboutPage() {
               <DougFactButton className="mt-3" />
             </div>
 
-            <div className="panel flex flex-col rounded-2xl p-8">
+            <div className="panel flex flex-col rounded-lg p-8">
               <span className="text-coolant font-mono text-sm">03</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Tell us your story

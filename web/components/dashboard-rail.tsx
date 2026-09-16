@@ -155,7 +155,7 @@ export function DashboardRail({
           className="flex flex-col border-b border-border bg-card max-lg:flex-row max-lg:flex-wrap max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-2 max-lg:px-4 max-lg:py-2.5 lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-y-auto lg:border-r lg:border-b-0"
         >
           <div className="border-b border-border px-4 py-3.5 max-lg:border-0 max-lg:p-0">
-            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold text-inherit no-underline">
+            <Link href="/" className="font-heading flex items-center gap-2 text-[15px] font-bold tracking-[-.01em] text-inherit no-underline">
               Coldworks
               <span className="ml-0.5 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-[var(--accent-foreground)]">Workspace</span>
             </Link>

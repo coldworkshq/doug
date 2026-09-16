@@ -65,7 +65,7 @@ export function CheckRunCard({
   const folded = reasons.length - shown.length;
 
   return (
-    <figure className="panel relative overflow-hidden rounded-2xl text-sm shadow-xl shadow-black/[0.05] dark:shadow-black/40">
+    <figure className="panel relative overflow-hidden rounded-lg text-sm shadow-xl shadow-black/[0.05] dark:shadow-black/40">
       <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
 
       {/* Check-run chrome: what GitHub puts around the summary. */}

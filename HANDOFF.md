@@ -6,8 +6,8 @@ State:    building — branch design/coldworks-grammar off main 21e1231, which
           is PR A (doug#361) merged. PR B is the second half of doug#351:
           the typographic rule, the registry's card/stat/rail/pill shapes,
           and the four items PR A carried forward.
-Next:     Mutation controls on ui-grammar.test.mjs, then the registry's card,
-          stat and pill shapes, then the four items PR A carried.
+Next:     Mutation controls on the bar guard, screenshots in both themes,
+          then the PR.
 Blockers: none. The signed-in dashboard is still unseen in the new look.
 Decisions this session:
 - PR B branches off main, not off design/coldworks-look: #361 squash-merged
@@ -28,6 +28,19 @@ Decisions this session:
 - /docs keeps the look #350 shipped: its caps are Archivo section markers in
   a reading surface, and the rule is about tracked mono. Filed as doug#362
   rather than changed inside a look Andrew signed off three days ago.
+- The nav moved from `sm` to `lg` because the bar was MEASURED: 775px of
+  content needs 861px of viewport, and the nav appeared at 640, so every
+  public page scrolled sideways between the two. The face change was not the
+  cause — 562px of nav in tracked mono against 563px in the door's face —
+  and the pin now reads the two breakpoints as a complement rather than
+  naming one — rejected: leaving a 220px band of widths scrolling.
+- The bar declares --ink-2 like every other ink it paints with, and a new
+  test reads the header's markup and fails on a token the bar does not
+  declare: undeclared, the dark palette's near-white would land on the white
+  bar at 1.86:1 — rejected: a second hand-listed loop nobody updates.
+- The docs chips already clear AA (4.63 and 4.71 on their soft grounds):
+  #350's --cw-molten-ink and --cw-ember-ink landed with the rebase, so PR A's
+  deferred item was already closed and needs no change here.
 - The ledger's two outcome headers were re-measured in the new face: "14d
   outcome" 68.8px, "60d outcome" 72.3px in the 72px column. They disagree
   now that the digits are proportional, so both stay short — rejected:

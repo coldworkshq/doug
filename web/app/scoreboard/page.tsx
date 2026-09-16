@@ -51,13 +51,13 @@ export default async function ScoreboardPage() {
           is not mixed into these numbers.
         </p>
 
-        <dl className="panel relative mt-10 grid gap-6 overflow-hidden rounded-2xl p-8 sm:grid-cols-2">
+        <dl className="panel relative mt-10 grid gap-6 overflow-hidden rounded-lg p-8 sm:grid-cols-2">
           <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-60" />
           <div>
             <dt className="lbl">
               Adjudicated
             </dt>
-            <dd className="font-heading mt-2 text-5xl font-semibold">
+            <dd className="font-heading mt-2 text-5xl font-extrabold tracking-[-.02em] tabular-nums">
               {scoreboard.adjudicated}
             </dd>
           </div>
@@ -65,7 +65,7 @@ export default async function ScoreboardPage() {
             <dt className="lbl">
               Pending
             </dt>
-            <dd className="font-heading mt-2 text-5xl font-semibold">
+            <dd className="font-heading mt-2 text-5xl font-extrabold tracking-[-.02em] tabular-nums">
               {scoreboard.pending}
             </dd>
           </div>

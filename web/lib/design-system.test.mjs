@@ -474,10 +474,39 @@ test("every ink clears AA on the grounds it renders on, in both themes", async (
   }
   // The floating bar is light in both themes and declares its own inks.
   const bar = tokens(css, ".site-bar");
-  for (const [ink, ground] of [["foreground", "background"], ["muted-foreground", "background"], ["accent-foreground", "accent"], ["primary-foreground", "primary"]]) {
+  for (const [ink, ground] of [["foreground", "background"], ["muted-foreground", "background"], ["ink-2", "background"], ["accent-foreground", "accent"], ["primary-foreground", "primary"]]) {
     const ratio = contrast(bar[ink], bar[ground]);
     assert.ok(ratio >= AA, `.site-bar: --${ink} on --${ground} is ${ratio.toFixed(2)}:1, under AA`);
   }
+});
+
+test("the floating bar declares every colour token its markup paints with", async () => {
+  // The bar does not invert with the theme, so a token it does NOT declare
+  // keeps the PAGE's value: in dark mode that is a near-white ink on this
+  // white bar, at 1.86:1. It happened to --ink-2 the day the nav took the
+  // door's grammar, and the loop above could not catch it — that loop checks
+  // the tokens someone remembered to list.
+  //
+  // This reads the markup instead. Every Tailwind colour utility in the header
+  // and in the theme toggle it cannot pass classes into, whose name is a
+  // palette token, must be declared inside the .site-bar block.
+  const css = await readFile(cssUrl, "utf8");
+  const light = tokens(css, LIGHT);
+  const bar = ruleBody(code(css), ".site-bar") ?? "";
+  const sources = await Promise.all(
+    ["../components/site-header.tsx", "../components/theme-toggle.tsx"].map((rel) =>
+      readFile(new URL(rel, import.meta.url), "utf8"),
+    ),
+  );
+  const used = new Set();
+  for (const src of sources) {
+    for (const [, name] of src.matchAll(/\b(?:text|bg|border|fill|stroke|outline|ring|decoration|from|via|to)-([a-z0-9-]+)/g)) {
+      if (name in light) used.add(name);
+    }
+  }
+  assert.ok(used.size >= 6, `only ${used.size} palette tokens found in the bar's markup — the scan is broken`);
+  const undeclared = [...used].filter((name) => !new RegExp(`--${name}\\s*:`).test(bar)).sort();
+  assert.deepEqual(undeclared, [], "the bar paints with a token it does not declare, so dark mode keeps the page's value");
 });
 
 test("the data pair and the chrome accent stay separable in normal vision and under deuteranopia and protanopia", async () => {

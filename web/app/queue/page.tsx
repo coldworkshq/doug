@@ -106,7 +106,7 @@ export default async function QueuePage({
               ))}
             </div>
           </div>
-          <div className="panel mt-8 rounded-2xl p-6">
+          <div className="panel mt-8 rounded-lg p-6">
             <ScoreStrip
               points={queue.items.map((i) => ({
                 score: i.verdict.score,
@@ -122,7 +122,7 @@ export default async function QueuePage({
             <article
               key={pr.number}
               className={
-                "panel grid gap-3 rounded-2xl p-6 transition-transform hover:-translate-y-0.5 md:grid-cols-[5rem_1fr_auto] " +
+                "panel grid gap-3 rounded-lg p-6 transition-transform hover:-translate-y-0.5 md:grid-cols-[5rem_1fr_auto] " +
                 (verdict.band === "flagged" ? "border-flag/30" : "")
               }
             >
@@ -170,7 +170,7 @@ export default async function QueuePage({
               </div>
               <span
                 className={
-                  "vocab h-fit self-start rounded-full px-3 py-1 text-[11.5px] " +
+                  "vocab h-fit self-start justify-self-start rounded-full px-3 py-1 text-[11.5px] " +
                   (verdict.band === "flagged"
                     ? "bg-flag/15 text-flag"
                     : "bg-clear/10 text-clear")

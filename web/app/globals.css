@@ -44,13 +44,14 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  /* The door's scale (web/public/landing.html): a card is 12, a control is
+     10, a small control is 8, and a pill is rounded-full. The multiplied
+     shadcn ratios put md and sm at 9.6px and 7.2px — values no Coldworks
+     surface draws — and the four sizes above lg have no card to wear them
+     now that the marketing cards are 12 as well. */
+  --radius-sm: 8px;
+  --radius-md: 10px;
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 /* The face .mono sets numbers in. The ported utilities block at the end of
@@ -314,6 +315,13 @@
   --background: #ffffff;
   --foreground: #0f1b21;
   --muted-foreground: #5b6a72;
+  /* The nav links, in the door's own grammar (landing.html .navlinks: the
+     body face at 500 in --ink2). Undeclared here it would be the DARK
+     palette's near-white on this white bar at 1.86:1 — which is the failure
+     this whole block exists to prevent, and it is now checked rather than
+     remembered: design-system.test.mjs reads every colour token the header
+     paints with and fails on one the bar does not declare. */
+  --ink-2: #3e4f57;
   --border: #c2cbcf;
   --accent: #e4ebfa;
   --accent-foreground: #123a99;

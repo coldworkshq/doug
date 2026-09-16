@@ -80,13 +80,13 @@ export function SiteHeader({
       <div className="site-bar flex items-center justify-between text-foreground gap-3 rounded-full border border-border bg-background/90 py-2 pr-2.5 pl-4 shadow-lg shadow-black/[0.06] backdrop-blur-md dark:shadow-black/40">
         <Link
           href="/"
-          className="font-heading flex shrink-0 items-center gap-2 text-base font-semibold tracking-tight"
+          className="font-heading flex shrink-0 items-center gap-2 text-[17px] font-bold tracking-[-.01em]"
         >
           Coldworks
         </Link>
 
         <div className="flex items-center gap-1">
-          <nav className="hidden items-center gap-0.5 font-mono text-xs text-muted-foreground sm:flex">
+          <nav className="hidden items-center gap-0.5 text-[13px] font-medium text-ink-2 lg:flex">
             {NAV_LINKS.map((l) => (
               <Link
                 key={l.href}
@@ -112,34 +112,44 @@ export function SiteHeader({
 
           {/* Native disclosure, not a client menu: works without JS, matches
               the dashboard's no-JS ethic, and is the only way Dashboard /
-              Scoreboard / Queue / Docs exist below `sm` — the nav above is
-              `hidden sm:flex`. */}
-          <details className="relative sm:hidden">
-            <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
+              Scoreboard / Queue / Docs exist below `lg` — the nav above is
+              `hidden lg:flex`.
+
+              `lg`, NOT `sm`, and the stop was measured rather than chosen: the
+              bar's content is 775px wide with eight links on it, which needs
+              861px of viewport once the bar's padding and the page's gutter
+              are paid. The nav used to appear at 640, so every public page
+              scrolled sideways between 640 and 861 — an iPad in portrait, and
+              a laptop with a window beside it. Measured on 2026-09-16 in a
+              browser, before and after the face changed: 562px of nav in
+              tracked mono, 563px in the door's own face, so this is the
+              breakpoint's bug and not the type's. */}
+          <details className="relative lg:hidden">
+            <summary className="cursor-pointer list-none rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
               Menu
             </summary>
             <nav
               aria-label="Site sections"
-              className="absolute top-[calc(100%+0.5rem)] right-0 z-50 flex w-44 flex-col rounded-2xl border border-border bg-background/95 p-1.5 shadow-lg shadow-black/[0.06] backdrop-blur-md dark:shadow-black/40"
+              className="absolute top-[calc(100%+0.5rem)] right-0 z-50 flex w-44 flex-col rounded-lg border border-border bg-background/95 p-1.5 shadow-lg shadow-black/[0.06] backdrop-blur-md dark:shadow-black/40"
             >
               {NAV_LINKS.map((l) => (
                 <Link
                   key={l.href}
                   href={l.href}
-                  className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-accent hover:text-accent-foreground"
                 >
                   {l.label}
                 </Link>
               ))}
               <a
                 href={GITHUB_REPO_URL}
-                className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 GitHub
               </a>
               <Link
                 href="/about"
-                className="rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 About
               </Link>
@@ -147,7 +157,7 @@ export function SiteHeader({
           </details>
 
           <span
-            className="mx-1 hidden h-4 border-l border-border sm:block"
+            className="mx-1 hidden h-4 border-l border-border lg:block"
             aria-hidden="true"
           />
 
@@ -155,7 +165,7 @@ export function SiteHeader({
 
           <Link
             href="/sign-in"
-            className="ml-1 rounded-full bg-primary px-4 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-primary-foreground transition-transform hover:-translate-y-0.5"
+            className="ml-1 rounded-full bg-primary px-4 py-1.5 text-[13px] font-medium whitespace-nowrap text-primary-foreground transition-transform hover:-translate-y-0.5"
           >
             Sign in
           </Link>

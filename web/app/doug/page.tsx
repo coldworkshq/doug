@@ -209,7 +209,7 @@ export default async function Home() {
         </section>
 
         {/* ── The instrument: today's queue ───────────────────────────── */}
-        <section className="hairline-grid rounded-2xl md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <section className="hairline-grid rounded-lg md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-2">
             {[
               ["open", summary.open, ""],
@@ -273,7 +273,7 @@ export default async function Home() {
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
             Built so nobody wants to switch it off.
           </h2>
-          <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
+          <div className="hairline-grid mt-10 rounded-lg md:grid-cols-3">
             {RULES.map((r) => (
               <div key={r.title} className="p-8">
                 <h3 className="font-heading text-xl font-semibold">{r.title}</h3>
@@ -306,7 +306,7 @@ export default async function Home() {
             your attention only above your flag line.
           </p>
 
-          <div className="panel mt-10 overflow-x-auto rounded-2xl">
+          <div className="panel mt-10 overflow-x-auto rounded-lg">
             <table className="w-full min-w-[40rem] table-fixed text-sm [&_td]:align-top [&_th]:align-top [&_tbody_tr]:border-t [&_tbody_tr]:border-border">
               <colgroup>
                 <col className="w-[20%]" />
@@ -358,7 +358,7 @@ export default async function Home() {
         </section>
 
         {/* ── What the reader sees / what is measured ─────────────────── */}
-        <section className="hairline-grid rounded-2xl md:grid-cols-2">
+        <section className="hairline-grid rounded-lg md:grid-cols-2">
           <div className="p-8 md:p-10">
             <p className="lbl">
               What the reader is given
@@ -454,7 +454,7 @@ export default async function Home() {
             Doug grades what production did, remembers it, and will tell your
             agents <span className="text-molten">before they type</span>.
           </h2>
-          <div className="hairline-grid mt-10 rounded-2xl md:grid-cols-3">
+          <div className="hairline-grid mt-10 rounded-lg md:grid-cols-3">
             {LAYERS.map((l) => (
               <div key={l.title} className="p-8">
                 <span className="rounded-full border border-border px-2.5 py-1 text-[12.5px] font-medium text-muted-foreground">
@@ -472,15 +472,13 @@ export default async function Home() {
         </section>
 
         {/* ── Close ───────────────────────────────────────────────────── */}
-        <section className="panel relative mb-16 overflow-hidden rounded-3xl p-10 text-center md:p-16">
+        <section className="panel relative mb-16 overflow-hidden rounded-lg p-10 text-center md:p-16">
+          {/* The thermal hairline is the whole decoration. The glow that used
+              to sit behind this panel went with the dot grid and the
+              atmosphere (ADR-0035): no Coldworks surface has one, and it was
+              painted in --ring, which is the focus ring's colour and owes its
+              value to a control nobody is focusing here. */}
           <div className="bg-thermal absolute inset-x-0 top-0 h-px opacity-70" />
-          <div
-            className="pointer-events-none absolute inset-0 opacity-20"
-            style={{
-              background:
-                "radial-gradient(40rem 16rem at 50% 120%, var(--ring), transparent 70%)",
-            }}
-          />
           <h2 className="font-heading mx-auto max-w-2xl text-4xl font-semibold tracking-tight md:text-6xl">
             Watch the queue <span className="text-molten">thin out</span>.
           </h2>
