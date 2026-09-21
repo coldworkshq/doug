@@ -159,8 +159,10 @@ export default function AuditConnectPage() {
 
       <H2>Day 2: make it standing</H2>
       <P>
-        When <IC>PATH</IC> is a directory, the report footer prints one line for your scheduler —
-        cron, GitHub Actions, or GitLab CI — naming the directory and never its full path.
+        When <IC>PATH</IC> is a directory under your working directory, the report footer prints
+        one line for your scheduler — cron, GitHub Actions, or GitLab CI — naming the directory
+        relative to it. The report never prints a full path, so a directory somewhere else gets no
+        line: one that named it <IC>./exports</IC> would re-audit the wrong place.
         A shell command in your infrastructure; never an app you install or a marketplace
         listing.
       </P>
