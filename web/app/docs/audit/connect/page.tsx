@@ -82,7 +82,7 @@ export default function AuditConnectPage() {
               Traces → Export in the Langfuse UI, then <IC>coldworks-audit run</IC> on the
               downloaded file.
             </>,
-            <Chip key="s" tone="ember">DESIGNED</Chip>,
+            <Chip key="s" tone="coolant">BUILT · API SHAPE ONLY</Chip>,
           ],
           [
             <b key="r">Standing file</b>,
@@ -91,7 +91,7 @@ export default function AuditConnectPage() {
               bucket on its own timer; your cron line re-audits whatever lands. Two schedulers,
               both yours — there is no Coldworks daemon.
             </>,
-            <Chip key="s" tone="ember">DESIGNED</Chip>,
+            <Chip key="s" tone="coolant">BUILT · NOT RELEASED</Chip>,
           ],
           [
             <b key="r">Direct pull</b>,
@@ -159,7 +159,10 @@ export default function AuditConnectPage() {
 
       <H2>Day 2: make it standing</H2>
       <P>
-        The report footer prints one line for your scheduler — cron, GitHub Actions, or GitLab CI.
+        When <IC>PATH</IC> is a directory under your working directory, the report footer prints
+        one line for your scheduler — cron, GitHub Actions, or GitLab CI — naming the directory
+        relative to it. The report never prints a full path, so a directory somewhere else gets no
+        line: one that named it <IC>./exports</IC> would re-audit the wrong place.
         A shell command in your infrastructure; never an app you install or a marketplace
         listing.
       </P>
@@ -170,8 +173,10 @@ export default function AuditConnectPage() {
         {" ./exports --diff >> audit.log"}
       </CodeBlock>
       <P>
-        Each run appends to a local append-only ledger, and <IC>--diff</IC> reports what changed:{" "}
-        <b>new repeated judgments since the last run</b>. That number rising is your agent
+        Each run appends to a local append-only ledger, and <IC>--diff</IC> reports what changed
+        against the previous entry:{" "}
+        <b>new agreeing repeat groups, groups that stopped agreeing, and the change in the
+        headline share</b>. A count of new agreeing groups that keeps rising is your agent
         re-buying the same decision with fresh tokens.
       </P>
       <Callout lead="Honest limit:">

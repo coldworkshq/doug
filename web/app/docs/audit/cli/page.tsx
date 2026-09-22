@@ -13,6 +13,9 @@ export const metadata = {
 };
 
 const designed = <Chip tone="ember">DESIGNED</Chip>;
+// Built and tested in the source repository, and not on PyPI: the package has
+// not been uploaded, which is what the page's preview label says.
+const built = <Chip tone="coolant">BUILT · NOT RELEASED</Chip>;
 
 export default function AuditCliPage() {
   return (
@@ -35,8 +38,12 @@ export default function AuditCliPage() {
         {" <PATH> [--docs DIR] [--diff] [--sample] [--open] [--format NAME]"}
       </CodeBlock>
       <P>
-        Audits the export at <IC>PATH</IC> — a file, or a directory whose newest exports are
-        audited together with span-level dedup across overlapping files.
+        Audits the export at <IC>PATH</IC> — a file, or a directory whose <IC>.json</IC> and{" "}
+        <IC>.jsonl</IC> exports are audited together, with span-level dedup across overlapping
+        files. An observation that arrives twice under one run and span id is counted once, and
+        the report says how many it dropped. Where an export carries no span ids, the report says
+        &ldquo;dedup unavailable: this export carries no span ids; overlapping files count
+        twice.&rdquo;
       </P>
       <Table
         head={["Argument", "What it does", "Status"]}
@@ -49,7 +56,7 @@ export default function AuditCliPage() {
               <IC>--sample</IC> writes. Override with{" "}
               <IC>--format otlp_genai|langfuse|span_tree</IC>.
             </>,
-            designed,
+            built,
           ],
           [
             <IC key="a">--docs DIR</IC>,
@@ -63,19 +70,26 @@ export default function AuditCliPage() {
           ],
           [
             <IC key="a">--diff</IC>,
-            "Report what changed since the last run: new repeated judgments, from the local ledger.",
-            designed,
+            <>
+              Report what changed against the previous entry in the local ledger: new agreeing
+              repeat groups, groups that stopped agreeing, and the change in the headline share.
+              A first run, and an entry another reader wrote, are answers and not errors: the
+              report says there is nothing to compare, and exits 0.
+            </>,
+            built,
           ],
           [
             <IC key="a">--sample</IC>,
             <>
               Run on a sample span export the package writes itself — a full report with nothing
               of yours involved, labeled as sample data on every screen. The release-1 sample is
-              span-only; documents arrive with <IC>--docs</IC> in release 2.
+              span-only; documents arrive with <IC>--docs</IC> in release 2. It takes the place
+              of <IC>PATH</IC>, and it is not recorded in the ledger, so your first{" "}
+              <IC>--diff</IC> still compares your own runs.
             </>,
-            designed,
+            built,
           ],
-          [<IC key="a">--open</IC>, "Open the HTML report when the run finishes.", designed],
+          [<IC key="a">--open</IC>, "Open the HTML report when the run finishes.", built],
           [
             <IC key="a">--from langfuse</IC>,
             <>
@@ -156,11 +170,20 @@ export default function AuditCliPage() {
             "The report. Self-contained, built to be forwarded — by you.",
           ],
           [
+            <IC key="f">./coldworks-audit-sample.jsonl</IC>,
+            "writes",
+            <>
+              Only with <IC>--sample</IC>: the sample export, written so you can open the shape
+              the report describes.
+            </>,
+          ],
+          [
             <IC key="f">./.coldworks/audit/ledger.jsonl</IC>,
             "appends",
             <>
-              Derived figures per run, append-only. What <IC>--diff</IC> reads. Delete it any
-              time; you lose history, nothing else.
+              Derived figures per run, append-only: the report&apos;s own figures and its
+              repeat groups by tool name and arguments digest. It names no file and no path.
+              What <IC>--diff</IC> reads. Delete it any time; you lose history, nothing else.
             </>,
           ],
         ]}
@@ -180,7 +203,11 @@ export default function AuditCliPage() {
           [<IC key="c">0</IC>, "Audit completed — including an honest zero with a field census."],
           [
             <IC key="c">1</IC>,
-            "The export could not be parsed at all; the error names the first unreadable record.",
+            <>
+              The export could not be parsed at all; the error names the first unreadable record.
+              A record that parses and is not in its reader&apos;s shape is not this: it is
+              counted, with the location of the first, and the audit completes.
+            </>,
           ],
           [<IC key="c">2</IC>, "Usage error; help printed."],
         ]}
