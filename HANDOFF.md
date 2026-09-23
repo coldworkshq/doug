@@ -2,29 +2,27 @@
 
 --- carry lane (2026-09-23 UTC): the author's rulings carried forward within a PR, doug#369 ---
 
-State:    review — three stacked PRs, all built dark. Lane claimed under R5
-          at 2026-09-23T06:45Z; ADR-0036 claimed on doug#369
-          (issuecomment-5790274380). Worktree
+State:    review. Lane claimed under R5 at 2026-09-23T06:45Z; ADR-0036
+          claimed on doug#369 (issuecomment-5790274380). Worktree
           .claude/worktrees/doug-369-carry-rulings.
-          - doug#377 (PR 1, claude/doug-369-rulings-parser, base main):
-            ADR-0036 proposed, rulings.py, store.prior_reader_findings.
-            Two Doug reads: bc42b46 (1 medium real, fixed) and 8fd40f7 (4
-            low, nothing at medium or above: pushing stopped).
-          - doug#378 (PR 2, claude/doug-369-carry-pass, base PR 1): the carry
-            pass behind DOUG_CARRY_INSTALLATIONS (empty), migration 018
-            findings.carry. Doug's read of 76ede29: 1 medium, disproved.
-          - PR 3 (claude/doug-369-carry-render, base PR 2): rendering and
-            docs/REVIEWING.md.
-          Controls: 24 + 29 + 18 planted mutants killed, suite green after
+          - doug#377 (PR 1): MERGED 2026-09-23T15:14Z as aded2cc, the
+            parser and ADR-0036 (proposed).
+          - doug#378 (PR 2, claude/doug-369-carry-pass): rebased onto
+            aded2cc and retargeted to main 2026-09-23 UTC, same tree as
+            808ae76. The carry pass behind DOUG_CARRY_INSTALLATIONS (empty),
+            migration 018 findings.carry. Its description holds its
+            doug-rulings block.
+          - doug#379 (PR 3, claude/doug-369-carry-render, base #378's
+            branch): rendering, docs/REVIEWING.md, and #378's two real low
+            fixes. Its description holds its doug-rulings block.
+          - doug#381 (draft): findings-log rows for the later reads. Merge
+            last, after a rebase.
+          Controls: 24 + 29 + 22 planted mutants killed, suite green after
           each restore. PROMPT_HASH 8bd26c67…9a951cdf unchanged;
           api/tests/test_reader.py untouched on every branch.
-Next:     ANDREW: merge #377, then retarget #378 to main and merge it, then
-          PR 3. Each merge deploys (ADR-0025) with the flag off. After #377
-          merges, the lane fills a doug-rulings block by hand in #378 and PR
-          3. The findings-log rows for #377's second read are on local
-          branch docs/findings-log-doug-369 (ed88118), in worktree
-          .claude/worktrees/doug-369-findings-log, unpushed until the last
-          reads are in.
+Next:     ANDREW: merge #378. Then the lane rebases #379 onto main,
+          retargets it, and Andrew merges it; then #381. Each merge deploys
+          (ADR-0025) with the flag off.
 Blockers: three R11 decisions, parked on doug#369: the model tier
           (issuecomment-5790617496; CARRY_MODEL sends the mechanical tier
           until Andrew rules), the findings-log shape of a carried finding,
