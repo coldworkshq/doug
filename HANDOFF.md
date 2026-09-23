@@ -8,16 +8,33 @@ State:    building — claimed under R5 at 2026-09-23T06:45Z on branch
           doug#369 (issuecomment-5790274380) after checking origin/main,
           every remote and local branch, every worktree, and open PRs and
           issues: nothing named 0036.
-Next:     PR 1: ADR-0036 (status: proposed) and api/doug/rulings.py, the
-          doug-rulings block parser. Then PR 2 (the carry pass, dark behind
-          DOUG_CARRY_INSTALLATIONS, empty by default) and PR 3 (rendering and
+          PR 1 built: ADR-0036 (proposed), api/doug/rulings.py,
+          store.prior_reader_findings, review.pr_description. make check rc
+          0; api suite 2017 passed, 0 skipped; 19 of 19 planted mutants
+          killed, suite green after restore.
+Next:     open PR 1 as a draft; then PR 2 (the carry pass, dark behind
+          DOUG_CARRY_INSTALLATIONS, empty by default, migration 018 for
+          findings.carry) off PR 1's branch, and PR 3 (rendering and
           docs/REVIEWING.md).
 Blockers: none for the build. Three R11 decisions stay parked on doug#369:
           the pass's model tier, the findings-log shape of a carried
           finding, and the measured run's bars and corpus. The flag stays
           off and the measured run waits until Andrew freezes the bars.
 Decisions this session:
-- (none yet)
+- The description comes from the pulls.get the worker already makes for
+  the head check (review.pr_description), not from a new fetch_pr return
+  value — rejected: changing fetch_pr's 2-tuple, which touches 20 call
+  sites and monkeypatches for no new information.
+- Two doug-rulings blocks read as no rulings; an unclosed block reads as no
+  rows — rejected: merging or picking one, both guesses. Reading none
+  renders every finding fresh, the safe direction.
+- Each ruling is anchored to a stored reader finding with the same rule
+  (spelling folded) on the same file of the named read, and the pass will
+  offer a finding only same-file rulings — rejected: resolving rulings by
+  model alone, which lets author text decide what a ruling covers.
+- Carry decisions will be stored on findings.carry (migration 018) so a
+  replayed check run matches — rejected: recomputing on replay (a second
+  paid pass) or not storing (unauditable).
 
 --- look lane (2026-09-16): PR B, the UI grammar, doug#351 ---
 
