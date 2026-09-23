@@ -68,9 +68,14 @@ Before the pass runs, code resolves every row against the PR's stored
 reader-tier verdicts. A row survives only if its `read` is a prefix of
 exactly one stored head sha of this PR, and that read stored a `reader:`
 finding with the same rule (spelling folded by `patterns.slugify`) on the
-same file. Anything else is skipped and named. The resolved ruling carries
-the stored finding's own label, so the pass compares Doug's earlier words
-with Doug's current words, and the author's reason rides beside them.
+same file. A path the author shortens matches a stored path that ends with
+it, but a path that matches stored findings on two files is skipped, because
+anchoring to either one is a guess. Anything else is skipped and named.
+
+The resolved ruling carries the path exactly as Doug stored it and the stored
+finding's own label. The pass matches findings against that stored path, not
+the author's spelling, and compares Doug's earlier words with Doug's current
+words, with the author's reason beside them.
 
 An author therefore can't rule on a finding that Doug never raised, and a
 ruling can't cover a file that its finding didn't name.
@@ -88,8 +93,8 @@ charged call per reader-tier read that has at least one resolved ruling.
   list means the finding repeats nothing. More than one id, an id out of
   range, a repeated finding id, or a ruling on another file carries nothing.
 - **Only same-file rulings are candidates.** Code lists, for each finding,
-  only the rulings on the file it names. The model can't carry a finding
-  across files.
+  only the rulings anchored to the exact file it names. The model can't carry
+  a finding across files.
 - **`changed: true` never carries.** A finding that repeats such a ruling
   renders fresh, labeled as raised again after a fix at that read. The label
   is a signal, not proof.
@@ -130,6 +135,26 @@ the author's reason and a note that it's the author's ruling, not verified by
 Doug. The finding counts show carried findings separately. Doug has no
 `resolved` state (`convergence.py`), and a carried finding is settled by the
 author's word and says so.
+
+### How this relates to ADR-0010 and ADR-0015
+
+This record extends the check-run surface the way ADR-0015 did. ADR-0010
+confined the surface to the risk verdict and the labeled deviations, and
+ADR-0015 added the `### Since` section. This record adds the carried
+findings section. Unlike the `### Since` section, it shows the author's
+claim and not Doug's measurement, and it labels itself that way.
+
+It adds no `resolved` state. ADR-0015 rules that edit-evidence never
+resolves and that Doug never stops carrying a finding on its own inference.
+A carried finding isn't resolved and isn't Doug's inference. It stays in the
+check run and the counts, and it says whose word collapsed it. Doug's own
+paths to a future `resolved` stay the two that ADR-0015 pre-registered.
+
+If this record is accepted, ADR-0010 and ADR-0015 each gain an
+`amended_by: ADR-0036` line in the same change, and this record gains
+`amends: ADR-0010, ADR-0015`. `docs/decisions/README.md` requires both sides
+to be marked. Neither side is marked while this record is proposed, so no
+accepted record points at an unaccepted one.
 
 ### What doesn't change
 

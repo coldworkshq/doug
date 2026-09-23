@@ -104,11 +104,13 @@ class PriorFinding:
 @dataclass(frozen=True)
 class ResolvedRuling:
     """A ruling anchored to what Doug stored. `head_sha` is the full sha of
-    the ruled read, and `raised` is Doug's own label for every finding that
-    read stored under this rule on this file."""
+    the ruled read, `file` is the path exactly as that read stored it, and
+    `raised` is Doug's own label for every finding that read stored under
+    this rule on that file."""
 
     ruling: Ruling
     head_sha: str
+    file: str
     raised: tuple[str, ...]
 
 
@@ -118,16 +120,21 @@ class Resolved:
     skipped: tuple[Skipped, ...]
 
 
-def _blocks(description: str) -> tuple[list[list[str]], int]:
-    """Every `doug-rulings` block's lines, and how many blocks never closed.
+def _blocks(description: str) -> tuple[list[list[str]], int, int]:
+    """Every `doug-rulings` block's lines, how many blocks never closed, and
+    how many an earlier unclosed fence swallowed.
 
     Fences are tracked the way CommonMark tracks them, so a `doug-rulings`
     block shown as an example inside a longer fence is example text, not a
     block. A fence closes on a line of the same character, at least as long
-    as its opener, with nothing after it.
+    as its opener, with nothing after it. An unclosed fence runs to the end
+    of the description, as GitHub renders it; a `doug-rulings` opener inside
+    one is counted as swallowed, so the author is told why nothing was read
+    rather than seeing the pass silently not run.
     """
     blocks: list[list[str]] = []
     unclosed = 0
+    swallowed = 0
     lines = description.splitlines()
     i = 0
     while i < len(lines):
@@ -151,12 +158,19 @@ def _blocks(description: str) -> tuple[list[list[str]], int]:
             body.append(lines[i])
             i += 1
         if info != BLOCK_INFO:
+            if not closed and any(_opens_block(line) for line in body):
+                swallowed += 1
             continue
         if closed:
             blocks.append(body)
         else:
             unclosed += 1
-    return blocks, unclosed
+    return blocks, unclosed, swallowed
+
+
+def _opens_block(line: str) -> bool:
+    m = _FENCE_RE.match(line)
+    return m is not None and m.group(2).strip() == BLOCK_INFO
 
 
 def _text_error(name: str, value: object, limit: int) -> str | None:
@@ -212,6 +226,23 @@ def _row(raw: object, row: int) -> Ruling | Skipped:
     )
 
 
+def _unread_block(found: int, *, unclosed: int, swallowed: int) -> str | None:
+    """Why the block that is present cannot be read, or None when it can."""
+    if found > 1:
+        return (
+            f"the description has {found} doug-rulings blocks; "
+            "keep one, and no ruling is read until then"
+        )
+    if swallowed:
+        return (
+            "an earlier code fence is never closed, so the doug-rulings block "
+            "after it is read as code"
+        )
+    if unclosed:
+        return "the doug-rulings block is never closed"
+    return None
+
+
 def parse(description: str | None) -> Block | None:
     """The description's rulings block, or None when it has none.
 
@@ -221,22 +252,12 @@ def parse(description: str | None) -> Block | None:
     """
     if not description:
         return None
-    blocks, unclosed = _blocks(description)
-    if not blocks and not unclosed:
+    blocks, unclosed, swallowed = _blocks(description)
+    found = len(blocks) + unclosed + swallowed
+    if not found:
         return None
-    if len(blocks) + unclosed > 1:
-        return Block(
-            (),
-            (
-                Skipped(
-                    None,
-                    f"the description has {len(blocks) + unclosed} doug-rulings blocks; "
-                    "keep one, and no ruling is read until then",
-                ),
-            ),
-        )
-    if unclosed:
-        return Block((), (Skipped(None, "the doug-rulings block is never closed"),))
+    if unread := _unread_block(found, unclosed=unclosed, swallowed=swallowed):
+        return Block((), (Skipped(None, unread),))
     rulings: list[Ruling] = []
     skipped: list[Skipped] = []
     counted = 0
@@ -317,15 +338,29 @@ def resolve(block: Block, reads: Mapping[str, Sequence[PriorFinding]]) -> Resolv
             )
             continue
         (sha,) = shas
-        raised = tuple(
-            f.label
+        matches = [
+            f
             for f in reads[sha]
             if _same_rule(f.rule, r.rule) and f.file is not None and same_path(f.file, r.file)
-        )
-        if not raised:
+        ]
+        files = sorted({f.file for f in matches if f.file is not None})
+        if not files:
             skipped.append(
                 Skipped(r.row, f"read {sha[:12]} stored no {r.rule} finding on {r.file}")
             )
             continue
-        kept.append(ResolvedRuling(ruling=r, head_sha=sha, raised=raised))
+        if len(files) > 1:
+            # `util.py` against `a/util.py` and `b/util.py`: the ruling could
+            # anchor to either file's finding, and picking one is a guess.
+            skipped.append(
+                Skipped(
+                    r.row,
+                    f"file {r.file} matches {len(files)} files read {sha[:12]} stored "
+                    f"{r.rule} on; give the full path",
+                )
+            )
+            continue
+        (file,) = files
+        raised = tuple(f.label for f in matches)
+        kept.append(ResolvedRuling(ruling=r, head_sha=sha, file=file, raised=raised))
     return Resolved(tuple(kept), tuple(skipped))

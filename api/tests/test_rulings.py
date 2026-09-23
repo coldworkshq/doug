@@ -168,6 +168,22 @@ def test_a_real_block_after_an_example_is_still_read():
     assert len(block.rulings) == 1
 
 
+def test_a_block_swallowed_by_an_earlier_unclosed_fence_is_named():
+    """GitHub renders everything after an unclosed fence as code, and the
+    block with it. The pass not running is right; running silently is not,
+    so the author is told why (Doug's read of bc42b46)."""
+    desc = "````python\nx = 1\n\n" + _desc(_row())
+    block = rulings.parse(desc)
+    assert block is not None
+    assert block.rulings == ()
+    (skip,) = block.skipped
+    assert skip.row is None
+    assert "never closed" in skip.reason
+    assert "read as code" in skip.reason
+    # An unclosed fence with no rulings opener inside is just prose.
+    assert rulings.parse("````python\nx = 1\n") is None
+
+
 def test_rows_past_the_cap_are_not_read_and_the_cap_is_named():
     desc = _desc(*[_row() for _ in range(rulings.MAX_ROWS + 5)])
     block = rulings.parse(desc)
@@ -188,7 +204,16 @@ def test_crlf_descriptions_parse_like_lf():
 
 @pytest.mark.parametrize(
     "rule",
-    ["reader:quadratic-scaling", "reader:Quadratic", "quadratic", "reader:a_b", "x:y", ":y"],
+    [
+        "reader:quadratic-scaling",
+        "reader:Quadratic",
+        "quadratic",
+        "reader:a_b",
+        "x:y",
+        ":y",
+        # `$` matches before a trailing newline, so re.match took this.
+        "reader:quadratic-scaling\n",
+    ],
 )
 def test_a_ruling_rule_is_valid_exactly_when_the_findings_log_accepts_it(rule):
     """A ruling moves into docs/findings-log.jsonl by transcription. A rule
@@ -303,6 +328,29 @@ def test_the_file_matches_across_a_path_prefix_but_not_a_name_suffix():
     block = rulings.parse(_desc(_row(file="al.py")))
     assert block is not None
     assert rulings.resolve(block, {SHA_A: [_prior(file="journal.py")]}).rulings == ()
+
+
+def test_a_short_path_that_matches_two_stored_files_is_skipped():
+    """`util.py` against `a/util.py` and `b/util.py` on one read: anchoring
+    to either is a guess, and the anchor decides which findings the ruling
+    can later carry (Doug's read of bc42b46, `reader:loose-matching-heuristic`)."""
+    block = rulings.parse(_desc(_row(file="util.py")))
+    assert block is not None
+    two = [_prior(file="a/util.py"), _prior(file="b/util.py")]
+    out = rulings.resolve(block, {SHA_A: two})
+    assert out.rulings == ()
+    assert "matches 2 files" in out.skipped[0].reason
+    one = rulings.resolve(block, {SHA_A: [_prior(file="a/util.py")]})
+    assert [r.file for r in one.rulings] == ["a/util.py"]
+
+
+def test_the_resolved_ruling_names_the_path_as_doug_stored_it():
+    """The pass later matches findings against this path exactly, not
+    against the author's spelling."""
+    block = rulings.parse(_desc(_row(file="coldworks_local/journal.py")))
+    assert block is not None
+    (r,) = rulings.resolve(block, {SHA_A: [_prior()]}).rulings
+    assert r.file == JOURNAL
 
 
 def test_parse_skips_come_through_resolve_first():
