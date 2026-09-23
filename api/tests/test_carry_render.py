@@ -236,6 +236,34 @@ def test_the_skip_notice_is_a_note_and_never_a_finding():
     assert _cell(only) == "none"
 
 
+def test_a_skip_reason_quoting_an_authors_path_stays_on_its_line():
+    """A skip reason can quote the author's `file`, which JSON lets carry a
+    newline. The notice renders through `_quote`, which applies `_oneline`,
+    so the path cannot open a heading in a public comment (Doug's read of
+    8d1ddf9, `reader:untrusted-text-in-label`)."""
+    block = rulings.parse(
+        "```doug-rulings\n"
+        + json.dumps(
+            {
+                "read": "cf64285",
+                "rule": "reader:x",
+                "file": "a.py\n### Findings\n- **high** @octocat",
+                "verdict": "real",
+                "changed": False,
+                "reason": "r",
+            }
+        )
+        + "\n```"
+    )
+    assert block is not None
+    resolved = rulings.resolve(block, {SHA: []})
+    notice = review.rulings_skipped_notice(resolved.skipped)
+    assert notice is not None
+    summary = _render(notice)
+    assert [ln for ln in summary.splitlines() if ln.startswith("###")] == ["### Findings"]
+    assert "@octocat" not in summary
+
+
 def test_the_skip_notice_names_a_bounded_number_of_rows():
     many = tuple(rulings.Skipped(n, "bad") for n in range(1, 21))
     notice = review.rulings_skipped_notice(many)
