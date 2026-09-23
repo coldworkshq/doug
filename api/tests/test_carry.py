@@ -371,15 +371,18 @@ def test_no_candidate_buys_no_call():
     assert client.requests == []
 
 
-def test_index_drift_carries_nothing():
+def test_index_drift_carries_nothing_and_spends_nothing(monkeypatch):
     """The hunks shown must be the hunks the stored index describes. If the
-    diff no longer re-derives them, the pass stops rather than showing the
-    model something else."""
+    diff no longer re-derives them, the pass stops before it charges a read,
+    rather than paying for a call it cannot make honestly."""
+    charged: list[str] = []
+    monkeypatch.setattr(store, "record_deep_read", lambda scope, cap: charged.append(scope) or True)
     diff, cov, reasons = _fixture()
     drifted = cov.model_copy(update={"hunks": {**(cov.hunks or {}), "journal.py": ["0" * 64]}})
     client = _Client(_decide((0, [0], False)))
     assert _carry(reasons, [_resolved()], diff, drifted, client) == 0
     assert client.requests == []
+    assert charged == []
 
 
 # --- score_one: the risk read cannot tell the pass exists ----------------------
