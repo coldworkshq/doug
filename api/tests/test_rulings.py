@@ -143,10 +143,19 @@ def test_an_unclosed_block_yields_no_rows():
     assert block.skipped == (rulings.Skipped(None, "the doug-rulings block is never closed"),)
 
 
-def test_a_block_shown_as_an_example_inside_a_longer_fence_is_not_a_block():
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "```doug-rulings\n{row}\n```",
+        # A plain three-backtick fence inside the example closes nothing but
+        # itself: a fence closes only on a run at least as long as its opener.
+        "```python\nx = 1\n```\n```doug-rulings\n{row}\n```",
+    ],
+)
+def test_a_block_shown_as_an_example_inside_a_longer_fence_is_not_a_block(inner):
     """doug#369 itself shows the block inside a four-backtick fence. A
     description that quotes the spec must not rule on anything."""
-    desc = "Example:\n\n````\n```doug-rulings\n" + _row() + "\n```\n````\n"
+    desc = "Example:\n\n````\n" + inner.format(row=_row()) + "\n````\n"
     assert rulings.parse(desc) is None
 
 
