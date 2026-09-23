@@ -2150,14 +2150,21 @@ def carry_findings(
 ) -> int:
     """Attach validated carry decisions to reader-finding Reasons, in place.
 
-    Returns how many findings carried. A finding is a candidate only when its
-    file arrived in full (so its hunks can be shown) and at least one ruling
-    names the same file; the model is offered only those rulings. Every
-    failure (spend cap, transport, stop reason, parse, a malformed response,
-    index drift) carries nothing and touches no Reason.
+    Returns how many findings carried. A finding that repeats a ruling but
+    renders fresh (RAISED_AGAIN, BASIS_CHANGED) also gets a decision, and is
+    not counted: the decision is its label on the check run, not a carry.
+
+    A finding is a candidate only when its file arrived in full (so its hunks
+    can be shown) and at least one ruling is anchored to the same path; the
+    model is offered only those rulings. Every failure (spend cap, transport,
+    stop reason, parse, a malformed response, index drift) carries nothing and
+    touches no Reason.
     """
-    candidates: list = []
-    options: list[list[int]] = []
+    # One list of (finding, the ruling ids it may repeat), so a finding and
+    # its options cannot fall out of step: the model's `finding` id indexes
+    # both at once, and a drift between two parallel lists would put one
+    # finding's ruling on another, which is a false carry.
+    offers: list[tuple[Reason, str, list[int]]] = []
     for r in reasons:
         file = getattr(r, "file", None)
         if not (r.rule.startswith("reader:") and file and cov.hunks and cov.hunks.get(file)):
@@ -2166,9 +2173,8 @@ def carry_findings(
         # `file` is a diff header path here (cov.hunks is keyed by them).
         same_file = [n for n, rr in enumerate(resolved) if rr.file == file]
         if same_file:
-            candidates.append(r)
-            options.append(same_file)
-    if not candidates:
+            offers.append((r, file, same_file))
+    if not offers:
         return 0
     patches = _sent_file_patches(diff, cov)
     if patches is None:
@@ -2177,15 +2183,15 @@ def carry_findings(
         _charge(scope)
         if client is None:
             client = _verify_client()
-        offered = sorted({n for opts in options for n in opts})
+        offered = sorted({n for _, _, opts in offers for n in opts})
         lines = ["## RULINGS", ""]
         for n in offered:
             lines += _carry_ruling_lines(n, resolved[n])
         lines += ["## FINDINGS", ""]
-        for i, r in enumerate(candidates):
-            lines.append(f"### FINDING id={i} [{r.rule}] on {r.file}: {r.label}")
-            lines.append(f"RULING ids it may repeat: {', '.join(str(n) for n in options[i])}")
-            for k, h in enumerate(hunks.split_hunks(patches[r.file]), 1):
+        for i, (r, file, opts) in enumerate(offers):
+            lines.append(f"### FINDING id={i} [{r.rule}] on {file}: {r.label}")
+            lines.append(f"RULING ids it may repeat: {', '.join(str(n) for n in opts)}")
+            for k, h in enumerate(hunks.split_hunks(patches[file]), 1):
                 lines.append(f"#### Hunk {k}")
                 lines.append(h)
             lines.append("")
@@ -2204,7 +2210,7 @@ def carry_findings(
         if response.stop_reason != "end_turn":
             return 0
         text = next((b.text for b in response.content if b.type == "text"), "")
-        decisions = _carry_decisions(json.loads(text), options, resolved)
+        decisions = _carry_decisions(json.loads(text), [opts for _, _, opts in offers], resolved)
     except Exception as e:  # noqa: BLE001 — fail soft; a fresh finding beats a false carry
         print(
             f"doug: carry failed ({type(e).__name__}: {str(e)[:120]}); every finding renders fresh",
@@ -2213,7 +2219,7 @@ def carry_findings(
         return 0
     for i, (state, rr) in decisions.items():
         r = rr.ruling
-        candidates[i].carry = {
+        offers[i][0].carry = {
             "state": state,
             "read": rr.head_sha,
             "rule": r.rule,
