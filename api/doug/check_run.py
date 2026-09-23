@@ -666,7 +666,7 @@ def _countable(reason) -> bool:
     nobody wrote. See `_finding_counts` for why settlement notices are not
     findings.
     """
-    return reason.rule not in SETTLED_REASON_CODES and reason.rule != SKIPPED_RULE
+    return reason.rule not in SETTLED_REASON_CODES
 
 
 def _finding_counts(risks: list) -> str:

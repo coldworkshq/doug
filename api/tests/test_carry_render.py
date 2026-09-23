@@ -92,6 +92,16 @@ def test_carried_findings_are_counted_apart_and_never_as_none():
     assert "<summary>2 findings the author already ruled on</summary>" in only
 
 
+def test_a_carried_finding_is_not_read_as_nothing_surviving():
+    """SETTLED_NOTE says every finding was disproved. With a carried finding
+    beside the settled notices, one survived, collapsed, and the note would
+    say otherwise."""
+    settled = Reason(rule="settled-missing-import", label="settled", weight=0.0)
+    summary = _render(settled, _finding(carry=_decision()))
+    assert check_run.SETTLED_NOTE not in summary
+    assert check_run.SETTLED_NOTE in _render(settled)
+
+
 def test_the_sticky_comment_carries_the_same_section():
     """ADR-0014: the comment is the check run's summary, byte for byte."""
     summary = _render(_finding(carry=_decision()))
@@ -136,11 +146,14 @@ def test_a_changed_basis_renders_fresh_and_says_so():
     ],
 )
 def test_a_stored_decision_this_module_cannot_read_renders_fresh(bad):
-    """Never hide a finding on a record that fails validation."""
+    """Never hide a finding on a record that fails validation, and never
+    label it with a ruling this module could not read."""
     summary = _render(_finding(carry=_decision(**bad)))
     assert _cell(summary) == "1 medium"
     assert "already ruled on" not in summary
     assert "Every append rescans the whole chain" in summary
+    assert "the author ruled on this" not in summary
+    assert "raised again" not in summary
 
 
 def test_a_failed_pass_renders_every_finding_fresh(monkeypatch):
