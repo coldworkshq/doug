@@ -290,6 +290,16 @@ def test_a_pick_that_breaks_the_contract_carries_nothing(payload):
     assert all(r.carry is None for r in reasons)
 
 
+def test_a_boolean_is_never_read_as_a_ruling_id():
+    """JSON true is not 1. With two rulings offered, a pick of true would
+    otherwise name ruling 1."""
+    diff, cov, reasons = _fixture()
+    resolved = [_resolved(), _resolved()]
+    client = _Client(_decide((0, [True], False)))
+    assert _carry(reasons, resolved, diff, cov, client) == 0
+    assert reasons[0].carry is None
+
+
 def test_a_ruling_on_another_file_cannot_be_picked():
     """Finding 0 is on journal.py. Ruling 1 is on other.py and is offered
     only to other.py's finding, so naming it for finding 0 carries nothing."""
