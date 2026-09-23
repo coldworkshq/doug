@@ -59,7 +59,7 @@ from .example_pack import (
     sha256_hex,
 )
 from .models import Band, Reason, Verdict
-from .rulings import ResolvedRuling, same_path
+from .rulings import ResolvedRuling
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 6000
@@ -2075,7 +2075,7 @@ def _carry_ruling_lines(i: int, rr: ResolvedRuling) -> list[str]:
     r = rr.ruling
     return [
         f"### RULING id={i}",
-        f"Earlier review {rr.head_sha[:12]} raised [{r.rule}] on {r.file}:",
+        f"Earlier review {rr.head_sha[:12]} raised [{r.rule}] on {rr.file}:",
         *(f"- {label}" for label in rr.raised),
         f"Author's verdict: {r.verdict}. Author changed the code for it: "
         f"{'yes' if r.changed else 'no'}.",
@@ -2162,7 +2162,9 @@ def carry_findings(
         file = getattr(r, "file", None)
         if not (r.rule.startswith("reader:") and file and cov.hunks and cov.hunks.get(file)):
             continue
-        same_file = [n for n, rr in enumerate(resolved) if same_path(rr.ruling.file, file)]
+        # Exact: rr.file is the path as Doug stored it on the ruled read, and
+        # `file` is a diff header path here (cov.hunks is keyed by them).
+        same_file = [n for n, rr in enumerate(resolved) if rr.file == file]
         if same_file:
             candidates.append(r)
             options.append(same_file)
