@@ -403,6 +403,90 @@ two tables for it. Whether a finding is *true* is a different quantity from whet
 *predicted a defect* — a finding can be true and worthless, or false and load-bearing. Never
 report a rate from this log as precision, and never put the two in the same table.
 
+## Keep your rulings in the PR description, where Doug can read them mid-PR
+
+Every push starts a fresh read that knows nothing about what you already ruled on. On
+coldworkshq/coldworks#105, 9 of Doug's 26 findings repeated a ruling from an earlier read
+of the same PR (#369). ADR-0036 lets you record each ruling once, in a fenced
+`doug-rulings` block in the PR description, so a later read can show a repeat collapsed
+instead of as new.
+
+Keep one block. Add a row for each finding when you rule on it:
+
+````
+```doug-rulings
+{"read": "cf64285", "rule": "reader:quadratic-scaling", "file": "packages/coldworks-local/src/coldworks_local/journal.py", "verdict": "real", "changed": false, "ref": "coldworkshq/coldworks#106", "reason": "the full-chain scan is what refuses to extend a corrupt journal"}
+```
+````
+
+Each row is one line of JSON with these fields:
+
+| Field | Required | What to write |
+|---|---|---|
+| `read` | Yes | The head sha of the read that raised the finding: the `head=` in Doug's comment, or its first 7 or more characters. Lowercase hex. |
+| `rule` | Yes | The finding's rule, as the findings log spells it: `<prefix>:<slug>`, both kebab-case. |
+| `file` | Yes | The file the finding names, as Doug's comment shows it. |
+| `verdict` | Yes | `real`, `disproved`, or `adjacent`, with the meanings in the preceding section. |
+| `changed` | Yes | `true` if you changed the code for it. |
+| `ref` | No | Where the finding is held, such as an issue. |
+| `reason` | Yes | Your reason, in one line of 600 characters or fewer. |
+
+### What Doug does with the block
+
+Code reads the block, and it never guesses:
+
+- A malformed row is skipped, and the check run names the row and the reason.
+- Two blocks read as no block, and so does a block that is never closed or that sits
+  after an unclosed code fence. The check run says which.
+- A row is used only if its `read` names exactly one earlier read of this PR, and that
+  read raised a `reader:` finding with the same rule on the same file. You can rule only
+  on a finding Doug raised.
+
+A post-read pass then asks, for each finding on a file with a ruling, whether it repeats
+that ruling. The pass has its own frozen prompt and never touches the risk read: your
+rulings can't move the score, the band, or the flag line (ADR-0036). A finding that
+repeats a ruling renders in a collapsed section, settled on the read you named as your
+verdict, followed by your reason and a note that it's your ruling, not verified by Doug.
+It stays in the check run and in the counts, which show carried findings separately.
+
+Two kinds of repeat never collapse:
+
+- **You marked the ruling `changed: true`.** If the finding comes back, the fix didn't
+  hold or the defect recurred. It renders fresh, labeled as raised again after your fix.
+- **The diff since your ruling changes what the ruling rested on.** It renders fresh,
+  labeled with the read you ruled on.
+
+The pass is dark. It runs only for an installation on `DOUG_CARRY_INSTALLATIONS`, which is
+empty, and no installation joins it until the measured run in #369 is scored against bars
+Andrew froze first. Keep the block anyway: the measured run and every later read use it.
+
+### Move each row into the findings log
+
+The block is working state for the PR, and `docs/findings-log.jsonl` stays the record. A
+ruling row moves into the log field for field:
+
+| Block field | Log field |
+|---|---|
+| `rule` | `rule` |
+| `verdict` | `verdict` |
+| `changed` | `--changed` or `--no-changed` |
+| `reason`, and `ref` if present | `settled_by` |
+| `read` | `note`, as `read <sha>` |
+
+The PR number, the repository, and the date come from the PR, not the block. Date the row
+in UTC, because the CLI's default is the local date:
+
+```sh
+cd api && uv run python -m doug.findings_log append --pr 105 --layer doug --repo coldworks \
+  --rule reader:quadratic-scaling --verdict real --no-changed \
+  --settled-by "the full-chain scan is what refuses to extend a corrupt journal; held as coldworkshq/coldworks#106" \
+  --note "read cf64285" --date "$(date -u +%F)"
+```
+
+The log keeps one row per finding per read. A finding that carried on a later read is
+still a finding on that read, and it still gets its row. Whether that row says it carried,
+and how, is Andrew's decision (#369); until he rules, log it like any other finding.
+
 ## A shared commit SHA does not make two delivery paths the same idempotency domain
 
 During App-vs-CI dual-run soak (retired with PR #54), a shared head SHA did not
