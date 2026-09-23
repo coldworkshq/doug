@@ -122,6 +122,11 @@ findings = Table(
     # the convergence classifier degrades NULL to unknown(not-reconfirmed)
     # and never re-derives it.
     Column("hunks", JSON),
+    # Migration 018 (ADR-0036). The carry pass's validated decision, written
+    # only by reader.carry_findings through the Reason. NULL = no decision:
+    # the pass was off, failed, or found no repeat, and the finding renders
+    # fresh. Convergence never reads it.
+    Column("carry", JSON),
 )
 
 # Written by the outcome-sync job (revert/hotfix anchoring), joined against
@@ -955,6 +960,8 @@ def save_review(
                     # Migration 014: the validated attribution the Reason
                     # carried in from reader.attribute_findings, or None.
                     "hunks": getattr(r, "hunks", None),
+                    # Migration 018: the carry decision, or None (ADR-0036).
+                    "carry": getattr(r, "carry", None),
                 }
                 for r in verdict.reasons
             ]
