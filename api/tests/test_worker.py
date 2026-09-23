@@ -3746,7 +3746,11 @@ def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatc
     _wire(monkeypatch)
     resolved = rulings.Resolved(rulings=(), skipped=())
     pulls: list = []
-    monkeypatch.setattr(worker, "_carry_rulings", lambda job, pull: pulls.append(pull) or resolved)
+    monkeypatch.setattr(
+        worker,
+        "_carry_rulings",
+        lambda job, pull, *, deep_read: pulls.append((pull, deep_read)) or resolved,
+    )
     fake = review.score_one
     seen: list = []
 
@@ -3760,4 +3764,8 @@ def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatc
     assert claimed is not None
     worker.process_job(claimed)
     assert seen == [resolved]
-    assert pulls[0].head.sha == JOB["head_sha"]
+    ((pull, deep_read),) = pulls
+    assert pull.head.sha == JOB["head_sha"]
+    # The repository's own deep-read setting, read in the same breath as the
+    # line, so a repository that turned the reader off buys no rulings query.
+    assert deep_read is True
