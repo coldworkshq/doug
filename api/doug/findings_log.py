@@ -54,6 +54,13 @@ VERDICTS = frozenset({"real", "disproved", "adjacent"})
 SOURCES = frozenset({"prospective", "backfill"})
 
 
+def valid_rule(rule: str) -> bool:
+    """Whether `rule` has the shape `parse_row` accepts. `rulings.py` checks
+    the author's rulings block with this, so a row the log would refuse is
+    refused there too and a ruling always transcribes into the log."""
+    return bool(_RULE_RE.match(rule))
+
+
 def default_log_path() -> Path:
     # api/doug/findings_log.py → repo/docs/findings-log.jsonl
     return Path(__file__).resolve().parents[2] / "docs" / "findings-log.jsonl"

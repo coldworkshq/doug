@@ -59,7 +59,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
-from . import convergence, migrations
+from . import convergence, migrations, rulings
 from .models import Band, Verdict
 from .reader import Coverage, ReaderVerdict, installation_scope
 
@@ -2478,6 +2478,49 @@ def find_verdict_by_id(verdict_id: int) -> dict | None:
         if v is None:
             return None
         return _verdict_bundle(conn, v)
+
+
+def prior_reader_findings(
+    installation_id: int, github_repo_id: int, pr_number: int, *, current_head_sha: str
+) -> dict[str, list[rulings.PriorFinding]] | None:
+    """Every earlier reader-tier read of this PR, by full head sha, with the
+    findings it stored. The input `rulings.resolve` anchors the author's
+    rulings against (ADR-0036).
+
+    Keyed on the same App identity `convergence_for` pairs by, and
+    reader-tier only, because only a reader read raises findings an author
+    can rule on. `current_head_sha` is left out: the read being made has not
+    been stored, and a replayed row for it must not count as an earlier read.
+
+    None when storage is disabled, so the caller cannot tell "no earlier
+    reads" from "no ledger" by accident: both carry nothing, but only one is
+    a fact about the PR.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    q = (
+        select(verdicts.c.head_sha, findings.c.rule, findings.c.file, findings.c.label)
+        .select_from(verdicts.outerjoin(findings, findings.c.verdict_id == verdicts.c.id))
+        .where(
+            verdicts.c.installation_id == installation_id,
+            verdicts.c.github_repo_id == github_repo_id,
+            verdicts.c.pr_number == pr_number,
+            verdicts.c.tier == "reader",
+            verdicts.c.head_sha.is_not(None),
+            verdicts.c.head_sha != current_head_sha,
+        )
+        .order_by(verdicts.c.id, findings.c.id)
+    )
+    out: dict[str, list[rulings.PriorFinding]] = {}
+    with engine.connect() as conn:
+        for row in conn.execute(q).mappings():
+            got = out.setdefault(row["head_sha"], [])
+            if row["rule"] is not None:
+                got.append(
+                    rulings.PriorFinding(rule=row["rule"], file=row["file"], label=row["label"])
+                )
+    return out
 
 
 def convergence_for(verdict_id: int) -> dict | None:

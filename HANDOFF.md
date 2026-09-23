@@ -1,5 +1,24 @@
 # HANDOFF — doug
 
+--- carry lane (2026-09-23 UTC): the author's rulings carried forward within a PR, doug#369 ---
+
+State:    building — claimed under R5 at 2026-09-23T06:45Z on branch
+          claude/doug-369-rulings-parser off origin/main 060d989, worktree
+          .claude/worktrees/doug-369-carry-rulings. ADR-0036 claimed on
+          doug#369 (issuecomment-5790274380) after checking origin/main,
+          every remote and local branch, every worktree, and open PRs and
+          issues: nothing named 0036.
+Next:     PR 1: ADR-0036 (status: proposed) and api/doug/rulings.py, the
+          doug-rulings block parser. Then PR 2 (the carry pass, dark behind
+          DOUG_CARRY_INSTALLATIONS, empty by default) and PR 3 (rendering and
+          docs/REVIEWING.md).
+Blockers: none for the build. Three R11 decisions stay parked on doug#369:
+          the pass's model tier, the findings-log shape of a carried
+          finding, and the measured run's bars and corpus. The flag stays
+          off and the measured run waits until Andrew freezes the bars.
+Decisions this session:
+- (none yet)
+
 --- look lane (2026-09-16): PR B, the UI grammar, doug#351 ---
 
 State:    review — **doug#363** from branch design/coldworks-grammar off main

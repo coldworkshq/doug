@@ -65,6 +65,20 @@ def _html_url(p) -> str | None:
     return url if isinstance(url, str) else None
 
 
+def pr_description(p) -> str | None:
+    """The PR description, tolerant of what the field actually is.
+
+    Read from the `pulls.get` response the worker already fetches to check
+    the head, and returned on its own rather than on PRMetadata: `pr_meta` is
+    stored at every tier, and a description is author text that doesn't
+    belong in that row. Its one consumer is `rulings.parse` (ADR-0036).
+    githubkit models an absent field as UNSET and an empty description as
+    None; anything that is not a string is no description.
+    """
+    body = getattr(p, "body", None)
+    return body if isinstance(body, str) else None
+
+
 GITHUB_MAX_PR_FILES = 3000  # GitHub's own documented list_files cap
 _MAX_PAGES = GITHUB_MAX_PR_FILES // 100
 
