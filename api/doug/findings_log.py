@@ -54,6 +54,13 @@ VERDICTS = frozenset({"real", "disproved", "adjacent"})
 SOURCES = frozenset({"prospective", "backfill"})
 
 
+def valid_rule(rule: str) -> bool:
+    """Whether `rule` has the shape `parse_row` accepts. `rulings.py` checks
+    the author's rulings block with this, so a row the log would refuse is
+    refused there too and a ruling always transcribes into the log."""
+    return bool(_RULE_RE.fullmatch(rule))
+
+
 def default_log_path() -> Path:
     # api/doug/findings_log.py → repo/docs/findings-log.jsonl
     return Path(__file__).resolve().parents[2] / "docs" / "findings-log.jsonl"
@@ -120,7 +127,9 @@ def parse_row(raw: Any, *, line_no: int | None = None) -> FindingRow:
     for key in ("date", "rule", "settled_by"):
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise FindingsLogError(f"{where}: {key} must be a non-empty string")
-    if not _RULE_RE.match(raw["rule"]):
+    # fullmatch, not match: `$` also matches before a trailing newline, so
+    # match() accepted "reader:x\n" as a rule.
+    if not _RULE_RE.fullmatch(raw["rule"]):
         raise FindingsLogError(
             f"{where}: rule must be <prefix>:<slug>, both kebab-case, e.g. "
             f"reader:missing-import (got {raw['rule']!r}). The prefix names the "
