@@ -2127,11 +2127,12 @@ def _carry_decisions(
             state = BASIS_CHANGED
         else:
             state = CARRIED
-            picked_by.setdefault(ruling_id, []).append(i)
+        picked_by.setdefault(ruling_id, []).append(i)
         decisions[i] = (state, rr)
     # A ruling anchors a fixed number of stored findings (rr.raised). More
-    # findings carrying under it than it anchors means at least one carry is
-    # wrong, and code cannot say which, so none of them carries.
+    # findings naming it than it anchors means at least one pick is wrong,
+    # and code cannot say which, so none of them stands: no carry, and no
+    # label either, because a label names the ruling as this finding's too.
     for ruling_id, finding_ids in picked_by.items():
         if len(finding_ids) > len(resolved[ruling_id].raised):
             for i in finding_ids:

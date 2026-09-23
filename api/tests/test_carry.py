@@ -271,6 +271,16 @@ def test_two_findings_cannot_carry_under_a_ruling_that_anchors_one():
     assert _carry(reasons, [two], diff, cov, client) == 2
 
 
+def test_a_label_counts_against_the_ruling_too():
+    """One finding carrying and another labeled under a ruling that anchors
+    one stored finding is two claims on it. Neither stands, the carry
+    included (Doug's read of 808ae76, `reader:incomplete-validation-guard`)."""
+    diff, cov, reasons = _fixture()
+    client = _Client(_decide((0, [0], False), (1, [0], True)))
+    assert _carry(reasons, [_resolved()], diff, cov, client) == 0
+    assert [r.carry for r in reasons] == [None, None, None, None]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -563,17 +573,37 @@ BLOCK = (
 )
 
 
-def test_an_installation_off_the_list_costs_no_parse_and_no_query(monkeypatch):
+@pytest.fixture
+def _reader_on(monkeypatch):
+    monkeypatch.setenv("DOUG_READER", "1")
+
+
+@pytest.mark.parametrize(
+    ("allow", "reader_on", "deep_read"),
+    [(None, True, True), ("99", False, True), ("99", True, False)],
+)
+def test_a_job_the_pass_cannot_run_on_costs_no_parse_and_no_query(
+    monkeypatch, allow, reader_on, deep_read
+):
+    """Off the list, with no reader, or with the repository's deep read off,
+    the job never reaches the pass, so it must not pay for its inputs
+    (Doug's read of 808ae76, `reader:unnecessary-work-in-hot-path`)."""
     from doug import worker
 
-    monkeypatch.delenv(reader.CARRY_ALLOWLIST_ENV, raising=False)
-    monkeypatch.setattr(rulings, "parse", lambda d: pytest.fail("parsed off the list"))
-    monkeypatch.setattr(
-        store, "prior_reader_findings", lambda *a, **k: pytest.fail("queried off the list")
-    )
-    assert worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK)) is None
+    if allow is None:
+        monkeypatch.delenv(reader.CARRY_ALLOWLIST_ENV, raising=False)
+    else:
+        monkeypatch.setenv(reader.CARRY_ALLOWLIST_ENV, allow)
+    if reader_on:
+        monkeypatch.setenv("DOUG_READER", "1")
+    else:
+        monkeypatch.delenv("DOUG_READER", raising=False)
+    monkeypatch.setattr(rulings, "parse", lambda d: pytest.fail("parsed"))
+    monkeypatch.setattr(store, "prior_reader_findings", lambda *a, **k: pytest.fail("queried"))
+    assert worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK), deep_read=deep_read) is None
 
 
+@pytest.mark.usefixtures("_reader_on")
 def test_no_block_means_no_pass(monkeypatch):
     """doug#369's third parser case, at the worker: no block, no query, and
     score_one gets None, so the pass is never called."""
@@ -583,10 +613,13 @@ def test_no_block_means_no_pass(monkeypatch):
     monkeypatch.setattr(
         store, "prior_reader_findings", lambda *a, **k: pytest.fail("queried without a block")
     )
-    assert worker._carry_rulings(JOB, SimpleNamespace(body="No rulings here.")) is None
-    assert worker._carry_rulings(JOB, SimpleNamespace(body=None)) is None
+    assert (
+        worker._carry_rulings(JOB, SimpleNamespace(body="No rulings here."), deep_read=True) is None
+    )
+    assert worker._carry_rulings(JOB, SimpleNamespace(body=None), deep_read=True) is None
 
 
+@pytest.mark.usefixtures("_reader_on")
 def test_the_worker_resolves_against_earlier_reads_and_names_each_skip(monkeypatch, capsys):
     from doug import worker
 
@@ -598,7 +631,7 @@ def test_the_worker_resolves_against_earlier_reads_and_names_each_skip(monkeypat
         return {SHA_A: [rulings.PriorFinding("reader:quadratic-scaling", "journal.py", "x")]}
 
     monkeypatch.setattr(store, "prior_reader_findings", _reads)
-    out = worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK))
+    out = worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK), deep_read=True)
     assert out is not None
     assert [r.head_sha for r in out.rulings] == [SHA_A]
     assert asked == [(99, 1, 7, "b" * 40)]
@@ -608,6 +641,7 @@ def test_the_worker_resolves_against_earlier_reads_and_names_each_skip(monkeypat
 
 
 @pytest.mark.parametrize("failure", ["no-ledger", "raises"])
+@pytest.mark.usefixtures("_reader_on")
 def test_the_worker_carries_nothing_when_the_ledger_cannot_answer(monkeypatch, failure):
     from doug import worker
 
@@ -618,4 +652,4 @@ def test_the_worker_carries_nothing_when_the_ledger_cannot_answer(monkeypatch, f
             raise RuntimeError("db down")
 
     monkeypatch.setattr(store, "prior_reader_findings", _reads)
-    assert worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK)) is None
+    assert worker._carry_rulings(JOB, SimpleNamespace(body=BLOCK), deep_read=True) is None
