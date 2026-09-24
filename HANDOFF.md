@@ -12,11 +12,14 @@ State:    review. Lane claimed under R5 at 2026-09-23T06:45Z; ADR-0036
             was never retargeted after #378 merged. Re-landed on branch
             claude/doug-369-carry-render-reland off 60ed1f3, same tree as
             cc55a87, as its own PR.
-          - doug#381: findings-log rows for the later reads, rebased onto
-            60ed1f3 (618 rows, check ok).
+          - doug#381: MERGED 2026-09-24 as eb1c66e, the findings-log rows
+            for the later reads.
+          - doug#382 (the re-land): rebased onto eb1c66e 2026-09-24 UTC and
+            marked ready; also carries 14 rows for Doug's reads of the
+            rebased #378 (c4fa32a) and #379 (856ccea), none real.
           PROMPT_HASH 8bd26c67…9a951cdf unchanged; api/tests/test_reader.py
           untouched.
-Next:     ANDREW: merge the re-land PR and #381. Each merge deploys
+Next:     ANDREW: merge #382 after its read. Each merge deploys
           (ADR-0025) with the flag off. A stacked PR's base must move to
           main before its merge click, or the merge lands on the dead
           branch.
