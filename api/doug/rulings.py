@@ -42,6 +42,10 @@ from .patterns import RULE_PREFIX, slugify
 Verdict = Literal["real", "disproved", "adjacent"]
 
 BLOCK_INFO = "doug-rulings"
+# The weight-0 notice that says which rows, or which block, Doug did not read.
+# A notice, never a finding: the check run counts it nowhere, and convergence
+# excludes it because it is not a `reader:` rule.
+SKIPPED_RULE = "rulings-skipped"
 # Bounds on untrusted text. Each ruling can reach a model prompt and the check
 # run, so a row that exceeds a bound is skipped rather than truncated: a cut
 # reason is a reason the author did not write.

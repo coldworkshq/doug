@@ -3737,16 +3737,22 @@ def test_a_broken_comment_sweep_cannot_stop_the_queue_being_worked(tmp_path, mon
     )
 
 
-def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatch):
+@pytest.mark.parametrize("repo_deep_read", [True, False])
+def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatch, repo_deep_read):
     """ADR-0036: the worker resolves the rulings from the pulls.get response
     it already fetched, and score_one is the one place the pass runs. A
     worker that dropped the argument would leave the pass dark for an
     installation that was switched on."""
     _db(tmp_path, monkeypatch)
     _wire(monkeypatch)
+    monkeypatch.setattr(store, "repo_deep_read", lambda i, r: repo_deep_read)
     resolved = rulings.Resolved(rulings=(), skipped=())
     pulls: list = []
-    monkeypatch.setattr(worker, "_carry_rulings", lambda job, pull: pulls.append(pull) or resolved)
+    monkeypatch.setattr(
+        worker,
+        "_carry_rulings",
+        lambda job, pull, *, deep_read: pulls.append((pull, deep_read)) or resolved,
+    )
     fake = review.score_one
     seen: list = []
 
@@ -3760,4 +3766,8 @@ def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatc
     assert claimed is not None
     worker.process_job(claimed)
     assert seen == [resolved]
-    assert pulls[0].head.sha == JOB["head_sha"]
+    ((pull, deep_read),) = pulls
+    assert pull.head.sha == JOB["head_sha"]
+    # The repository's own deep-read setting, read in the same breath as the
+    # line, so a repository that turned the reader off buys no rulings query.
+    assert deep_read is repo_deep_read

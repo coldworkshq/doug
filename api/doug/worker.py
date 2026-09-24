@@ -384,17 +384,18 @@ def _replay_recorded(
     return existing["id"]
 
 
-def _carry_rulings(job, pull) -> rulings.Resolved | None:
+def _carry_rulings(job, pull, *, deep_read: bool) -> rulings.Resolved | None:
     """The author's rulings for this read, resolved, or None (ADR-0036).
 
     None whenever the carry pass must not run: the installation is not on
-    DOUG_CARRY_INSTALLATIONS, the description holds no rulings block, there is
-    no ledger, or anything here fails. The allowlist is read first, so an
-    installation that is not on it costs no parse and no query. The
-    description comes from `pull`, the response the head check above already
-    fetched, and it is never stored.
+    DOUG_CARRY_INSTALLATIONS, this job will not reach the reader tier (the
+    service has no reader, or the repository turned its deep read off), the
+    description holds no rulings block, there is no ledger, or anything here
+    fails. The switches are read first, so a job the pass cannot run on costs
+    no parse and no query. The description comes from `pull`, the response
+    the head check above already fetched, and it is never stored.
     """
-    if not reader.carry_enabled_for(job["installation_id"]):
+    if not (reader.carry_enabled_for(job["installation_id"]) and reader.enabled() and deep_read):
         return None
     try:
         block = rulings.parse(review.pr_description(pull))
@@ -528,7 +529,6 @@ def process_job(job: dict) -> int | None:
         return None
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
-    carry = _carry_rulings(job, current_pr)
     # The one paid entry point that has tenancy, so it is the one that
     # charges a real tenant: both reads below come out of this
     # installation's monthly budget rather than the shared sentinel one.
@@ -541,6 +541,7 @@ def process_job(job: dict) -> int | None:
     # read off on a repo with no line of its own also moves the band from
     # DOUG_READER_THRESHOLD to DOUG_THRESHOLD.
     deep_read = store.repo_deep_read(job["installation_id"], job["github_repo_id"])
+    carry = _carry_rulings(job, current_pr, deep_read=deep_read)
     # Settle resolution findings against the reviewed head — not the PR tip
     # pulls.get might now show (we already refused a moved head above).
     # One fetch per path per job: the settlements and the verify read ask

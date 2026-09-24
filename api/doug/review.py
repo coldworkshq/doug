@@ -389,6 +389,33 @@ def head_ci_evidence(gh, owner: str, repo: str, sha: str) -> ci_evidence.CiEvide
     return ci_evidence.evidence(jobs, checks)
 
 
+# The notice names at most this many skipped rows, then counts the rest, so a
+# block of malformed rows cannot fill the check run with Doug's own refusals.
+MAX_SKIPS_NAMED = 8
+
+
+def rulings_skipped_notice(skipped) -> Reason | None:
+    """A weight-0 notice naming the rulings Doug did not read, or None.
+
+    Each skip names its row and why, in the parser's own words, so the author
+    can fix the block. The row's file and read are author text; the check run
+    renders the label through `_oneline` like every other label.
+    """
+    if not skipped:
+        return None
+    named = [
+        (f"row {s.row}: " if s.row is not None else "") + s.reason
+        for s in skipped[:MAX_SKIPS_NAMED]
+    ]
+    if len(skipped) > MAX_SKIPS_NAMED:
+        named.append(f"and {len(skipped) - MAX_SKIPS_NAMED} more")
+    return Reason(
+        rule=rulings.SKIPPED_RULE,
+        label="Rulings Doug did not read — " + "; ".join(named),
+        weight=0.0,
+    )
+
+
 def score_one(
     meta: PRMetadata,
     diff: str,
@@ -614,6 +641,12 @@ def score_one(
                         file=sys.stderr,
                     )
             carry_installation = reader.installation_from_scope(scope)
+            if (
+                carry is not None
+                and reader.carry_enabled_for(carry_installation)
+                and (skipped := rulings_skipped_notice(carry.skipped))
+            ):
+                verdict.reasons.append(skipped)
             if carry is not None and carry.rulings and reader.carry_enabled_for(carry_installation):
                 # After verdict_from_reader and every settlement: the pass
                 # reads the finished findings and writes only Reason.carry.
