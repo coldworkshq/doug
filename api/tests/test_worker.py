@@ -22,6 +22,7 @@ from doug import (
     pr_comment,
     reader,
     review,
+    rulings,
     store,
     worker,
 )
@@ -184,6 +185,7 @@ def _wire(
         resolve_file=None,
         resolve_schema=None,
         resolve_ci=None,
+        carry=None,
     ):
         if scopes is not None:
             scopes.append(("risk", scope))
@@ -1410,6 +1412,7 @@ def test_worker_passes_the_repos_line_into_scoring_and_logs_its_source(
         resolve_file=None,
         resolve_schema=None,
         resolve_ci=None,
+        carry=None,
     ):
         seen.append(threshold)
         v = VERDICT.model_copy(deep=True)
@@ -3732,3 +3735,29 @@ def test_a_broken_comment_sweep_cannot_stop_the_queue_being_worked(tmp_path, mon
     assert "doug: comment retry sweep failed (RuntimeError: ledger down)" in (
         capsys.readouterr().err
     )
+
+
+def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatch):
+    """ADR-0036: the worker resolves the rulings from the pulls.get response
+    it already fetched, and score_one is the one place the pass runs. A
+    worker that dropped the argument would leave the pass dark for an
+    installation that was switched on."""
+    _db(tmp_path, monkeypatch)
+    _wire(monkeypatch)
+    resolved = rulings.Resolved(rulings=(), skipped=())
+    pulls: list = []
+    monkeypatch.setattr(worker, "_carry_rulings", lambda job, pull: pulls.append(pull) or resolved)
+    fake = review.score_one
+    seen: list = []
+
+    def _capture(meta, diff, *, carry=None, **kw):
+        seen.append(carry)
+        return fake(meta, diff, carry=carry, **kw)
+
+    monkeypatch.setattr(review, "score_one", _capture)
+    ingest.enqueue(150424894, 987, "drewjst/doug", 7, "a" * 40, base_sha="0" * 40)
+    claimed = ingest.claim()
+    assert claimed is not None
+    worker.process_job(claimed)
+    assert seen == [resolved]
+    assert pulls[0].head.sha == JOB["head_sha"]

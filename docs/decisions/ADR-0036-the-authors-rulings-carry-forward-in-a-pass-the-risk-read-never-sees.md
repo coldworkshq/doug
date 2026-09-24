@@ -95,9 +95,17 @@ charged call per reader-tier read that has at least one resolved ruling.
 - **Only same-file rulings are candidates.** Code lists, for each finding,
   only the rulings anchored to the exact file it names. The model can't carry
   a finding across files.
-- **`changed: true` never carries.** A finding that repeats such a ruling
+- **`changed: true` never carries.** Such a ruling is still offered, so the
+  pass can say a finding repeats it, but code never carries that finding. It
   renders fresh, labeled as raised again after a fix at that read. The label
   is a signal, not proof.
+- **A ruling carries no more findings than it anchors.** A ruling anchors the
+  findings its read stored under that rule on that file. If more findings
+  than that pick it, at least one pick is wrong and code can't say which, so
+  none of them carries.
+- **Decisions apply all at once.** Code validates the whole response before
+  it writes any decision, so a failure carries nothing rather than part of a
+  response.
 - **A changed basis never carries.** A finding whose ruling the model says
   the diff at head undermines renders fresh.
 - **Author text is untrusted input.** It enters the prompt quoted, with its
@@ -124,7 +132,10 @@ the way `findings.hunks` stores attribution. This does two things:
   from stored rows and never buys a second pass.
 
 Convergence doesn't read the column. The `### Since` section and its
-identities are unchanged.
+identities are unchanged. The pass isn't named in
+`reader.mechanical_parameters()`, the instrument manifest ADR-0027 C3 added
+for passes whose output enters convergence identity, because this one's
+output doesn't.
 
 ### Rendering
 

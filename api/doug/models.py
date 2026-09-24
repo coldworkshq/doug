@@ -104,6 +104,14 @@ class Reason(BaseModel):
     # predate this field, and the lock says no wire, API, or web change —
     # store.save_review reads the attribute directly.
     hunks: list[str] | None = Field(default=None, exclude=True)
+    # ADR-0036: the carry pass's validated decision for this finding, set by
+    # reader.carry_findings and written to findings.carry by save_review in the
+    # same transaction. It names the ruled read, the author's verdict and
+    # reason, what the pick means (`state`), and the CARRY_PROMPT_HASH that
+    # produced it. None = no decision (pass off, failed, or no repeat), and a
+    # finding with None renders fresh. Off the wire like `hunks`: the author's
+    # reason reaches the check run, and nothing else needs it.
+    carry: dict | None = Field(default=None, exclude=True)
     # What the read held of the file this finding names — the finding's own
     # `evidence` class (reader.ReaderFinding.evidence), copied where the
     # finding is still in hand so the check run can say "cites code Doug

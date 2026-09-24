@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from . import ci_evidence, features, intent, intent_providers, reader, settle
+from . import ci_evidence, features, intent, intent_providers, reader, rulings, settle
 from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict, is_bot_author
 from .scoring import score
@@ -399,6 +399,7 @@ def score_one(
     resolve_file: settle.ResolveFile | None = None,
     resolve_schema: settle.ResolveSchema | None = None,
     resolve_ci: settle.ResolveCI | None = None,
+    carry: rulings.Resolved | None = None,
 ):
     """Tier dispatch: (tier, verdict, reader_verdict|None, coverage|None).
 
@@ -450,6 +451,13 @@ def score_one(
     parse and compile under the oldest Python the repository declares
     (#342, settle.py's fourth class). A declaration or a file it cannot read
     keeps the finding.
+
+    `carry`, when given, is the author's rulings already resolved against
+    this PR's stored reads (rulings.resolve). The carry pass runs on it after
+    the verdict is built, so it cannot move the score, the band, or the flag
+    line, and only for an installation on DOUG_CARRY_INSTALLATIONS: the
+    switch is checked here as well as by the caller, so passing rulings
+    cannot turn the pass on (ADR-0036).
     """
     reader_line = None if threshold is None else round(threshold * 100)
     if reader.enabled() and not deep_read:
@@ -603,6 +611,29 @@ def score_one(
                 if attributed:
                     print(
                         f"doug: attributed {attributed} finding(s) to sent hunks",
+                        file=sys.stderr,
+                    )
+            carry_installation = reader.installation_from_scope(scope)
+            if carry is not None and carry.rulings and reader.carry_enabled_for(carry_installation):
+                # After verdict_from_reader and every settlement: the pass
+                # reads the finished findings and writes only Reason.carry.
+                # carry_findings fails soft on its own; the guard here is for
+                # a defect in it, because a ReaderError escaping into this
+                # try would drop a paid read to the deterministic tier.
+                try:
+                    carried = reader.carry_findings(
+                        verdict.reasons,
+                        carry.rulings,
+                        diff,
+                        cov,
+                        scope=reader.carry_scope(carry_installation),
+                    )
+                except Exception as e:  # noqa: BLE001 — the carry pass never fails a review
+                    carried = 0
+                    print(f"doug: carry skipped ({type(e).__name__}: {e})", file=sys.stderr)
+                if carried:
+                    print(
+                        f"doug: carried {carried} finding(s) under the author's rulings",
                         file=sys.stderr,
                     )
             return "reader", verdict, rv, cov

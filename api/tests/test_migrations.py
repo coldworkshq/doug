@@ -219,7 +219,7 @@ def test_apply_fills_version_9_gap_after_version_10_was_recorded(tmp_path):
             ],
         )
 
-    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16, 17]
+    assert migrations.apply(engine) == [9, 11, 12, 13, 14, 15, 16, 17, 18]
     # Not just "the version was recorded": the index migration 16 exists for
     # has to actually be on the table. See the stub's comment for how this
     # passed while it was not (issue #205).
@@ -950,7 +950,7 @@ def test_migration_005_dedupes_existing_app_identity_rows_before_indexing(tmp_pa
     # store.metadata.create_all() above already built the current table shapes,
     # so migrations 6 through 13 all find their ALTER/CREATE work satisfied
     # and still record their versions alongside migration 5.
-    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    assert migrations.apply(engine) == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     with engine.connect() as conn:
         app_ids = [
             r[0]

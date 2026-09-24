@@ -33,6 +33,7 @@ from . import (
     pr_comment,
     reader,
     review,
+    rulings,
     store,
     tracing,
 )
@@ -383,6 +384,40 @@ def _replay_recorded(
     return existing["id"]
 
 
+def _carry_rulings(job, pull) -> rulings.Resolved | None:
+    """The author's rulings for this read, resolved, or None (ADR-0036).
+
+    None whenever the carry pass must not run: the installation is not on
+    DOUG_CARRY_INSTALLATIONS, the description holds no rulings block, there is
+    no ledger, or anything here fails. The allowlist is read first, so an
+    installation that is not on it costs no parse and no query. The
+    description comes from `pull`, the response the head check above already
+    fetched, and it is never stored.
+    """
+    if not reader.carry_enabled_for(job["installation_id"]):
+        return None
+    try:
+        block = rulings.parse(review.pr_description(pull))
+        if block is None:
+            return None
+        reads = store.prior_reader_findings(
+            job["installation_id"],
+            job["github_repo_id"],
+            job["pr_number"],
+            current_head_sha=job["head_sha"],
+        )
+        if reads is None:
+            return None
+        resolved = rulings.resolve(block, reads)
+    except Exception as e:  # noqa: BLE001 — the carry pass never fails a review
+        print(f"doug: rulings unread ({type(e).__name__}: {e})", file=sys.stderr)
+        return None
+    for skip in resolved.skipped:
+        where = "block" if skip.row is None else f"row {skip.row}"
+        print(f"doug: rulings {where} skipped: {skip.reason}", file=sys.stderr)
+    return resolved
+
+
 def process_job(job: dict) -> int | None:
     """Run one job. Returns the verdict id — the recorded one on a replay,
     a freshly scored one otherwise — or None when the job's head SHA no
@@ -493,6 +528,7 @@ def process_job(job: dict) -> int | None:
         return None
 
     meta, diff = review.fetch_pr(gh, owner, name, job["pr_number"])
+    carry = _carry_rulings(job, current_pr)
     # The one paid entry point that has tenancy, so it is the one that
     # charges a real tenant: both reads below come out of this
     # installation's monthly budget rather than the shared sentinel one.
@@ -550,6 +586,7 @@ def process_job(job: dict) -> int | None:
             resolve_file=resolve,
             resolve_schema=store.columns_of,
             resolve_ci=resolve_ci,
+            carry=carry,
         )
         intent_result = review.read_intent(
             gh, owner, name, meta, diff, scope=scope, deep_read=deep_read

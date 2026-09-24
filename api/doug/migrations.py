@@ -457,6 +457,16 @@ MIGRATIONS: list[tuple[int, tuple[str, ...]]] = [
             "WHERE repo_full_name='drewjst/doug'",
         ),
     ),
+    (
+        18,
+        (
+            # ADR-0036 (doug#369): the carry pass's decision for one finding.
+            # Nullable JSON meaning "no decision" when NULL, which is the
+            # honest value for every row before this column and for every
+            # read the pass does not run on, so there is nothing to backfill.
+            "ALTER TABLE findings ADD COLUMN carry JSON",
+        ),
+    ),
 ]
 
 # Research-corpus quarantine convention (no data change — no research rows
