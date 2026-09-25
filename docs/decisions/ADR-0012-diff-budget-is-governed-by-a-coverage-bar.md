@@ -3,8 +3,26 @@ title: Keep the reader prompt and schema frozen; govern DIFF_BUDGET by a coverag
 status: accepted
 date: 2026-08-06
 supersedes: ADR-0002
-amended_by: ADR-0018, ADR-0028, ADR-0029
+amended_by: ADR-0018, ADR-0028, ADR-0029, ADR-0037
 ---
+
+> **Amendment, 2026-09-25 (ADR-0037): `MODEL` is no longer frozen.**
+>
+> The Decision below keeps `MODEL` frozen byte-identical to
+> `scripts/llm_probe.py`. It is not: `reader.MODEL` is `"claude-opus-5-5"`
+> against the probe's `"claude-opus-5"`, moved by Andrew's direction for price
+> and without a run. The `MODEL` assertion has left
+> `test_reader_and_probe_share_the_validated_prompt_bytes` for
+> `test_model_diverges_from_the_probe_on_purpose`. Three constants stay
+> frozen: `SYSTEM`, `SCHEMA` and `MAX_TOKENS`.
+>
+> Where the amendments below say `MODEL` "does not move" or is "unchanged",
+> they describe the transport decisions of 2026-08-28 and were true then.
+> `MODEL` still reaches the wire verbatim with no transport mapping.
+>
+> **`DIFF_BUDGET`'s coverage bar is untouched and still binding.** Read
+> ADR-0037 before citing the Decision below; it records that `MODEL` ships
+> governed by nothing.
 
 > **Amendment, 2026-08-28 (ADR-0028): the freeze governs the constants, not the
 > transport that carries them.**

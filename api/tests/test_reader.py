@@ -1002,7 +1002,7 @@ def test_every_read_line_names_the_model_that_produced_it(capsys):
         _pr(), "+ x", DOCS, scope=SCOPE, client=FakeClient(payload=INTENT_PAYLOAD)
     )
 
-    assert all("model=claude-opus-5" in line for line in _read_lines(capsys))
+    assert all("model=claude-opus-5-5 " in line for line in _read_lines(capsys))
 
 
 def test_the_mechanical_passes_run_their_own_model_and_say_so(capsys):
@@ -1277,9 +1277,9 @@ def test_the_two_paid_reads_did_not_follow_the_mechanical_tier_down():
     intent = FakeClient(payload=INTENT_PAYLOAD)
     reader.read_with_decisions(_pr(), "+ x", DOCS, scope=SCOPE, client=intent)
 
-    assert reader.MODEL == "claude-opus-5" != reader.MECHANICAL_MODEL
+    assert reader.MODEL == "claude-opus-5-5" != reader.MECHANICAL_MODEL
     for client in (risk, intent):
-        assert client.messages.last_kwargs["model"] == "claude-opus-5"
+        assert client.messages.last_kwargs["model"] == "claude-opus-5-5"
         assert client.messages.last_kwargs["output_config"]["effort"] == reader.EFFORT
 
 
@@ -1367,13 +1367,14 @@ def test_reader_and_probe_share_the_validated_prompt_bytes():
     instrument under a validated instrument's claimed AUC.
 
     ADR-0012 supersedes ADR-0002 and narrowed the freeze to five constants;
-    ADR-0018 narrows it again to FOUR. DIFF_BUDGET is governed by a coverage
-    bar and EFFORT by a pre-registration, and both are asserted separately
-    below as deliberate divergences rather than dropped from the file.
+    ADR-0018 narrowed it to four and ADR-0037 to THREE. DIFF_BUDGET is
+    governed by a coverage bar, EFFORT by a pre-registration, and MODEL by
+    nothing, and all three are asserted separately below as deliberate
+    divergences rather than dropped from the file.
 
-    Dropping an assertion is how a freeze quietly becomes four constants that
+    Dropping an assertion is how a freeze quietly becomes three constants that
     nobody decided on. Each removal here has an ADR and a replacement
-    assertion; if you are removing a fifth, write the ADR first."""
+    assertion; if you are removing a fourth, write the ADR first."""
     import sys
     from pathlib import Path
 
@@ -1382,8 +1383,36 @@ def test_reader_and_probe_share_the_validated_prompt_bytes():
 
     assert reader.SYSTEM == llm_probe.SYSTEM
     assert reader.SCHEMA == llm_probe.SCHEMA
-    assert reader.MODEL == llm_probe.MODEL
     assert reader.MAX_TOKENS == llm_probe.MAX_TOKENS
+
+
+def test_model_diverges_from_the_probe_on_purpose():
+    """ADR-0037, in the shape ADR-0018's divergence already uses.
+
+    The probe stays on the claude-opus-5 it actually measured; the shipped
+    reader runs claude-opus-5-5, by the founder's direction, for price.
+    Asserting BOTH sides against literals is what makes the divergence
+    intentional: `reader.MODEL != llm_probe.MODEL` would stay green if someone
+    moved the probe too, which is precisely the move that destroys the probe's
+    ability to report what it measured.
+
+    The consequence this encodes, which ADR-0037 states in full: MODEL is
+    UNMEASURED on this prompt, so no claim about accuracy attaches to it. The
+    mechanical tier did not move, and scripts/intent_probe.py imports the
+    probe's MODEL, so pinning the probe pins it too.
+    """
+    import importlib
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    # By name, not `import llm_probe`: the static import is unresolvable to
+    # basedpyright, and its baseline holds the three that predate this test.
+    llm_probe = importlib.import_module("llm_probe")
+
+    assert reader.MODEL == "claude-opus-5-5"
+    assert llm_probe.MODEL == "claude-opus-5"
+    assert reader.MECHANICAL_MODEL == "claude-sonnet-5"
 
 
 def test_effort_diverges_from_the_probe_on_purpose():
