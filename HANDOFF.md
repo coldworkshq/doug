@@ -1,5 +1,34 @@
 # HANDOFF — doug
 
+--- reader-model lane (2026-09-25 UTC): MODEL moves to claude-opus-5-5, ADR-0037 ---
+
+State:    review — claimed under R5 at 2026-09-25T03:39Z on branch
+          claude/reader-opus-5-5 off origin/main eb1c66e, worktree
+          .claude/worktrees/reader-opus-5-5. ADR-0037 claimed after checking
+          origin/main, every remote branch, and open PRs: nothing named 0037.
+          Opened as a DRAFT PR. `reader.MODEL` is claude-opus-5-5; the
+          probe, the intent probe, and MECHANICAL_MODEL did not move.
+          ADR-0037 amends ADR-0012 and ADR-0016, banners on both sides.
+          `make check` 0; api suite 2074 passed, 0 skipped; 5 of 5 mutants
+          killed (reader back, probe follows, mechanical follows, each paid
+          request site on MECHANICAL_MODEL).
+Next:     Founder, before the merge (a merge to main deploys): confirm
+          `GET /v1/models/claude-opus-5-5` returns 200 with the org's
+          credential. If it does not, every read falls back. Then
+          `gh pr ready`, and merge.
+Blockers: Model availability is unverified: no local credential reaches
+          the Models API.
+Decisions this session:
+- MODEL leaves the freeze by the founder's direction (2026-09-25), for
+  price, without a run — rejected: measuring first, which ADR-0018 costs
+  at about a day of blind dispositioning.
+- No server-side model fallback on refusal — rejected: a silent rescue on
+  another model would record one model and score with another.
+- The new test imports the probe by name (importlib) — rejected: a fourth
+  static `import llm_probe`, which grows the basedpyright baseline.
+Pointers: api/doug/reader.py MODEL · api/tests/test_reader.py
+          test_model_diverges_from_the_probe_on_purpose · docs/decisions/ADR-0037
+
 --- carry lane (2026-09-23 UTC): the author's rulings carried forward within a PR, doug#369 ---
 
 State:    building — claimed under R5 at 2026-09-23T06:45Z on branch
