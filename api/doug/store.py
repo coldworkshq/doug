@@ -2372,6 +2372,11 @@ def _verdict_bundle(conn, v) -> dict:
                 "weight": r["weight"],
                 "severity": r["severity"],
                 "file": r["file"],
+                # ADR-0036. Off the wire for the same reason as `file`:
+                # `Reason.carry` is exclude=True. The replayed check run
+                # needs it to render a carried finding the way the paid read
+                # did, without buying the pass again.
+                "carry": r["carry"],
             }
             for r in reason_rows
         ],

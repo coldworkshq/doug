@@ -2,39 +2,54 @@
 
 --- carry lane (2026-09-23 UTC): the author's rulings carried forward within a PR, doug#369 ---
 
-State:    building — claimed under R5 at 2026-09-23T06:45Z on branch
-          claude/doug-369-rulings-parser off origin/main 060d989, worktree
-          .claude/worktrees/doug-369-carry-rulings. ADR-0036 claimed on
-          doug#369 (issuecomment-5790274380) after checking origin/main,
-          every remote and local branch, every worktree, and open PRs and
-          issues: nothing named 0036.
-          PR 1 built: ADR-0036 (proposed), api/doug/rulings.py,
-          store.prior_reader_findings, review.pr_description. make check rc
-          0; api suite 2017 passed, 0 skipped; 19 of 19 planted mutants
-          killed, suite green after restore.
-Next:     open PR 1 as a draft; then PR 2 (the carry pass, dark behind
-          DOUG_CARRY_INSTALLATIONS, empty by default, migration 018 for
-          findings.carry) off PR 1's branch, and PR 3 (rendering and
-          docs/REVIEWING.md).
-Blockers: none for the build. Three R11 decisions stay parked on doug#369:
-          the pass's model tier, the findings-log shape of a carried
-          finding, and the measured run's bars and corpus. The flag stays
-          off and the measured run waits until Andrew freezes the bars.
+State:    review. Lane claimed under R5 at 2026-09-23T06:45Z; ADR-0036
+          claimed on doug#369 (issuecomment-5790274380). Worktree
+          .claude/worktrees/doug-369-carry-rulings.
+          - doug#377 (PR 1): MERGED 2026-09-23T15:14Z as aded2cc.
+          - doug#378 (PR 2): MERGED 2026-09-24T04:02Z as 60ed1f3.
+          - doug#379 (PR 3): merged 2026-09-24T04:03Z into its base,
+            claude/doug-369-carry-pass (cc55a87), NOT into main: its base
+            was never retargeted after #378 merged. Re-landed on branch
+            claude/doug-369-carry-render-reland off 60ed1f3, same tree as
+            cc55a87, as its own PR.
+          - doug#381: MERGED 2026-09-24 as eb1c66e, the findings-log rows
+            for the later reads.
+          - doug#382 (the re-land): rebased onto eb1c66e 2026-09-24 UTC and
+            marked ready; also carries 14 rows for Doug's reads of the
+            rebased #378 (c4fa32a) and #379 (856ccea), none real.
+          PROMPT_HASH 8bd26c67…9a951cdf unchanged; api/tests/test_reader.py
+          untouched.
+Next:     ANDREW: merge #382 after its read. Each merge deploys
+          (ADR-0025) with the flag off. A stacked PR's base must move to
+          main before its merge click, or the merge lands on the dead
+          branch.
+Blockers: three R11 decisions, parked on doug#369: the model tier
+          (issuecomment-5790617496; CARRY_MODEL sends the mechanical tier
+          until Andrew rules), the findings-log shape of a carried finding,
+          and the measured run's bars and corpus. The flag stays off and the
+          measured run waits until the bars are frozen in writing.
 Decisions this session:
 - The description comes from the pulls.get the worker already makes for
   the head check (review.pr_description), not from a new fetch_pr return
   value — rejected: changing fetch_pr's 2-tuple, which touches 20 call
   sites and monkeypatches for no new information.
-- Two doug-rulings blocks read as no rulings; an unclosed block reads as no
-  rows — rejected: merging or picking one, both guesses. Reading none
-  renders every finding fresh, the safe direction.
+- Two doug-rulings blocks read as no rulings; an unclosed block, or one an
+  earlier unclosed fence swallows, reads as no rows and says why —
+  rejected: merging or picking one, both guesses.
 - Each ruling is anchored to a stored reader finding with the same rule
-  (spelling folded) on the same file of the named read, and the pass will
-  offer a finding only same-file rulings — rejected: resolving rulings by
-  model alone, which lets author text decide what a ruling covers.
-- Carry decisions will be stored on findings.carry (migration 018) so a
-  replayed check run matches — rejected: recomputing on replay (a second
-  paid pass) or not storing (unauditable).
+  (spelling folded) on the same file of the named read, and resolves to the
+  path Doug stored; a short path matching two stored files is skipped; the
+  pass offers a finding only rulings anchored to its exact path — rejected:
+  resolving rulings by model alone, and suffix matching in the pass (Doug's
+  read of bc42b46).
+- Carry decisions are stored on findings.carry (migration 018) and ride the
+  replay bundle — rejected: recomputing on replay (a second paid pass) or
+  not storing (unauditable).
+- A changed: true ruling is offered to the model but never carries, so the
+  finding can be labeled raised again; a ruling never carries more findings
+  than it anchors; decisions apply only after the whole response validates.
+- The skip notice is a weight-0 rulings-skipped reason, shown as a note and
+  never counted — rejected: stderr only, which the author never sees.
 
 --- look lane (2026-09-16): PR B, the UI grammar, doug#351 ---
 

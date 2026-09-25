@@ -38,8 +38,9 @@ from typing import NamedTuple
 from urllib.parse import quote
 
 from .models import Band, Verdict
-from .reader import Coverage, truncation_reason
+from .reader import BASIS_CHANGED, CARRIED, RAISED_AGAIN, Coverage, truncation_reason
 from .review import IntentRead
+from .rulings import SKIPPED_RULE
 from .settle import SETTLED_REASON_CODES, SETTLED_SYNTAX_ERROR
 from .store import InstrumentSnapshot
 
@@ -580,7 +581,75 @@ def _bullet(reason, source: Source | None) -> str:
     parts.append(f"`{_rule_span(reason.rule)}`")
     if chip := _outside(reason):
         parts.append(chip)
+    if chip := _carry_chip(reason):
+        parts.append(chip)
     return f"- {' · '.join(parts)} — {_oneline(reason.label)}"
+
+
+# ADR-0036. A carry decision is stored JSON whose reason is author text, so
+# every field is checked here again before it renders. A decision that fails
+# the check renders its finding fresh: never hide a finding on a record this
+# module cannot read.
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_RULED = ("real", "disproved", "adjacent")
+CARRIED_NOTE = "This is the author's ruling, not verified by Doug."
+
+
+def _carry(reason) -> dict | None:
+    """The finding's carry decision, if it is well-formed, else None."""
+    c = getattr(reason, "carry", None)
+    if not isinstance(c, dict):
+        return None
+    read, verdict, why = c.get("read"), c.get("verdict"), c.get("reason")
+    if not (isinstance(read, str) and _SHA_RE.match(read)):
+        return None
+    if verdict not in _RULED or not isinstance(why, str) or not why.strip():
+        return None
+    if c.get("state") not in (CARRIED, RAISED_AGAIN, BASIS_CHANGED):
+        return None
+    return c
+
+
+def _is_carried(reason) -> bool:
+    c = _carry(reason)
+    return c is not None and c["state"] == CARRIED
+
+
+def _carry_chip(reason) -> str | None:
+    """The label beside a finding that repeats a ruling but renders fresh.
+
+    Fixed words and a sha this module validated; no author text, because
+    the finding is live and the author's reason did not settle it.
+    """
+    c = _carry(reason)
+    if c is None or c["state"] == CARRIED:
+        return None
+    sha = c["read"][:12]
+    if c["state"] == RAISED_AGAIN:
+        return f"_raised again after the author's fix at `{sha}`_"
+    return f"_the author ruled on this at `{sha}`; the code it rested on has changed_"
+
+
+def _carried_lines(reason, source: Source | None) -> list[str]:
+    """A carried finding: its bullet, then the author's ruling beneath it.
+
+    The bullet is `_bullet`'s, unchanged, so the finding reads exactly as it
+    would fresh. The second line is indented into the same list item. The
+    sha and verdict are validated by `_carry`; the reason and ref are author
+    text and go through `_oneline`.
+    """
+    c = _carry(reason)
+    if c is None:
+        # render() passes only reasons _is_carried accepted; if that ever
+        # drifts, the finding renders as a plain bullet rather than vanishing.
+        return [_bullet(reason, source)]
+    ref = c.get("ref")
+    held = f" ({_oneline(ref)})" if isinstance(ref, str) and ref.strip() else ""
+    return [
+        _bullet(reason, source),
+        f"  Settled on read `{c['read'][:12]}` as **{c['verdict']}**: "
+        f"{_oneline(c['reason'])}{held}. {CARRIED_NOTE}",
+    ]
 
 
 def _read_cell(tier: str) -> str:
@@ -626,6 +695,20 @@ def _finding_counts(risks: list) -> str:
         buckets = {s: graded.count(s) for s in _SEVERITY_ORDER if s in graded}
         return " · ".join(f"{n} {s}" for s, n in buckets.items())
     return "1 finding" if len(countable) == 1 else f"{len(countable)} findings"
+
+
+def _findings_cell(risks: list, carried: list) -> str:
+    """The Findings cell, with carried findings counted apart (ADR-0036).
+
+    `N carried` is this module's own words, so the cell stays free of model
+    and author text. A read whose findings all carried reads `N carried`,
+    never `none`: the findings are there, collapsed.
+    """
+    cell = _finding_counts(risks)
+    if not carried:
+        return cell
+    count = f"{len(carried)} carried"
+    return count if cell == "none" else f"{cell} · {count}"
 
 
 def _alert(tier: str, verdict: Verdict, partial) -> list[str]:
@@ -977,6 +1060,12 @@ def render(
     # lines, because the summary table's Findings cell counts this list.
     skip = {"read-truncated"} if partial is not None else set()
     risks = [r for r in verdict.reasons if r.rule not in skip]
+    # ADR-0036. Carried findings leave the fresh list for a collapsed section
+    # of their own, and the skip notice renders as a note, not a finding.
+    # Both stay on the surface; nothing here removes a reason.
+    carried = [r for r in risks if _is_carried(r)]
+    notices = [r for r in risks if r.rule == SKIPPED_RULE]
+    risks = [r for r in risks if not _is_carried(r) and r.rule != SKIPPED_RULE]
 
     # The numbers, as a table. Every cell is either a float this module
     # formatted or a string from a fixed vocabulary — see _finding_counts on
@@ -987,7 +1076,7 @@ def render(
         "| Risk | Flag line | Read | Findings |",
         "|:--|:--|:--|:--|",
         f"| **{verdict.score:.2f}** | {verdict.threshold:.2f} "
-        f"| {_read_cell(tier)} | {_finding_counts(risks)} |",
+        f"| {_read_cell(tier)} | {_findings_cell(risks, carried)} |",
     ]
     lines += _alert(tier, verdict, partial)
     if verdict.band is Band.CLEARED:
@@ -1014,7 +1103,10 @@ def render(
     # listed under "Findings" beneath a Flagged title, reading as a remaining
     # defect) for every replayed check run.
     only_settled = (
-        partial is None and bool(risks) and all(r.rule in SETTLED_REASON_CODES for r in risks)
+        partial is None
+        and bool(risks)
+        and all(r.rule in SETTLED_REASON_CODES for r in risks)
+        and not carried
     )
     lines += ["", "### Findings", ""]
     if only_settled and verdict.band == Band.FLAGGED:
@@ -1039,8 +1131,20 @@ def render(
             fold_bullets = [_bullet(r, source) for r in folded]
             lines += _fold(f"{len(folded)} low finding{plural}", fold_bullets)
             counted += [b for r, b in zip(folded, fold_bullets, strict=True) if _countable(r)]
-    else:
+    elif not carried:
         lines.append("- none")
+    if carried:
+        # Collapsed, never absent: the author's ruling is a claim, and a
+        # reader who doubts it opens the fold and sees the finding whole.
+        plural = "" if len(carried) == 1 else "s"
+        carried_body = [_carried_lines(r, source) for r in _by_severity(carried)]
+        lines += _fold(
+            f"{len(carried)} finding{plural} the author already ruled on",
+            [line for pair in carried_body for line in pair],
+        )
+        counted += [pair[0] for pair in carried_body]
+    for notice in notices:
+        lines += _quote(notice)
 
     if intent_read is not None:
         # IntentRead reads the same diff at the same DIFF_BUDGET the risk
