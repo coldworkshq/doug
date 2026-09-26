@@ -1,17 +1,19 @@
 """LLM diff-reader — descended from the tier the Phase-1 probes validated.
 
-SYSTEM, SCHEMA, MODEL and MAX_TOKENS remain byte-identical to
+SYSTEM, SCHEMA and MAX_TOKENS remain byte-identical to
 scripts/llm_probe.py as of commit 0064e6b. The probe's AUC 0.687 sentry /
 0.668 grafana and its ReDef polarity result belong to its 30k diff-budget
-configuration. The shipped DIFF_BUDGET is 100k under ADR-0012 and its files
-are tier-ordered, so those AUC figures do not validate the larger, reordered
-live read. The four frozen parameters are load-bearing evidence — changing
-one is a new experiment, not a tweak.
+configuration on claude-opus-5. The shipped DIFF_BUDGET is 100k under
+ADR-0012, its files are tier-ordered, and MODEL is claude-opus-5-5 under
+ADR-0037, so those AUC figures do not validate the live read. The three
+frozen parameters are load-bearing evidence — changing one is a new
+experiment, not a tweak.
 
-ADR-0002 froze six. TWO have left: DIFF_BUDGET (ADR-0012, governed by a
-coverage bar) and EFFORT (ADR-0018, governed by an unrun pre-registration).
-Four remain, and 2 + 4 = 6 — an earlier version of this paragraph said
-"three have left" alongside "four remain", which Doug caught on b767f2e.
+ADR-0002 froze six. THREE have left: DIFF_BUDGET (ADR-0012, governed by a
+coverage bar), EFFORT (ADR-0018, governed by an unrun pre-registration), and
+MODEL (ADR-0037, governed by nothing). Three remain, and 3 + 3 = 6 — an
+earlier version of this paragraph said "three have left" alongside "four
+remain", which Doug caught on b767f2e.
 Each divergence is pinned on BOTH sides by test, so nobody can re-anchor the
 instrument by "fixing the drift".
 
@@ -61,7 +63,11 @@ from .example_pack import (
 from .models import Band, Reason, Verdict
 from .rulings import ResolvedRuling
 
-MODEL = "claude-opus-5"
+# ADR-0037. Left the freeze by the founder's direction, for price: $4 / $20
+# per million input / output tokens against claude-opus-5's $5 / $25, on the
+# same tokenizer. UNMEASURED on this prompt, like EFFORT. scripts/llm_probe.py
+# stays on claude-opus-5, because it must go on reporting what it measured.
+MODEL = "claude-opus-5-5"
 MAX_TOKENS = 6000
 # ADR-0018. The API default is "high"; the probe chose "medium" and this
 # inherited it, so the shipped reader ran one step below the provider default.
@@ -1120,8 +1126,8 @@ def _user_text(pr, diff: str) -> str:
 # of its other findings was never sent at all.
 #
 # These functions only observe the cut. DIFF_BUDGET is governed by
-# ADR-0012's coverage bar and EFFORT by ADR-0018; SYSTEM, SCHEMA, MODEL and
-# MAX_TOKENS remain frozen to the validated probe. A partial read therefore
+# ADR-0012's coverage bar, EFFORT by ADR-0018, and MODEL by ADR-0037; SYSTEM,
+# SCHEMA and MAX_TOKENS remain frozen to the validated probe. A partial read therefore
 # stops looking like a complete one.
 
 

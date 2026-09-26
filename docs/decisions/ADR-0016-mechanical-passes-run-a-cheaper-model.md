@@ -2,8 +2,16 @@
 title: The verify and attribution passes run their own model, not the frozen one
 status: accepted
 date: 2026-08-23
-amended_by: ADR-0027
+amended_by: ADR-0027, ADR-0037
 ---
+
+> **Amended 2026-09-25 (ADR-0037): the literal is now `"claude-opus-5-5"`.**
+>
+> The table below says the second and third tests assert the literal
+> `"claude-opus-5"`. They assert `"claude-opus-5-5"`, because `MODEL` moved.
+> The rule is unchanged: a literal, never `reader.MODEL`, so that
+> `MODEL = MECHANICAL_MODEL` cannot make them tautologically true.
+> `MECHANICAL_MODEL` did not move.
 
 > **Amended 2026-08-28 (ADR-0027): the scope claim below is RATIFIED, and the
 > tier may leave Anthropic.**
